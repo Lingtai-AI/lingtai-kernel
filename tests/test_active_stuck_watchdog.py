@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -41,16 +42,17 @@ class TestProgressBookkeeping:
 
     def test_state_change_bumps_progress_and_state_change_clocks(self, tmp_path):
         from lingtai.kernel import BaseAgent, AgentState
+        clock = make_test_lifecycle_clock()
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=clock, source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         before = agent._last_progress_at
-        time.sleep(0.01)
+        clock.advance_wall(0.01)
         agent._set_state(AgentState.ACTIVE, reason="test")
         assert agent._last_progress_at > before
         assert agent._state_changed_at > before
@@ -63,7 +65,7 @@ class TestProgressBookkeeping:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         assert agent._active_turn_kind == "pending"
@@ -77,7 +79,7 @@ class TestProgressBookkeeping:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._log("llm_call")
@@ -91,7 +93,7 @@ class TestProgressBookkeeping:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._log("tool_call", tool_call_id="call_abc123")
@@ -106,7 +108,7 @@ class TestProgressBookkeeping:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._log("tool_call", tool_call_id="call_abc")
@@ -130,7 +132,7 @@ class TestDeferredNotificationsCounter:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         assert agent._deferred_notifications_count == 0
         agent._log("notification_deferred_active", sources=["telegram"])
@@ -147,7 +149,7 @@ class TestDeferredNotificationsCounter:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._log("notification_deferred_active", sources=["telegram"])
         agent._log("notification_deferred_active", sources=["telegram"])
@@ -169,7 +171,7 @@ class TestStatusJsonExposesActiveTurn:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         status = agent.status()
         runtime = status["runtime"]
@@ -188,7 +190,7 @@ class TestStatusJsonExposesActiveTurn:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         # IDLE — no active_turn block
         assert "active_turn" not in agent.status()
@@ -210,7 +212,7 @@ class TestStatusJsonExposesActiveTurn:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         assert "deferred_notifications" not in agent.status()
         agent._log("notification_deferred_active", sources=["telegram"])
@@ -231,6 +233,7 @@ class TestWatchdogFires:
 
         from lingtai.kernel import BaseAgent, AgentState
         journal = _RecordingEventJournal()
+        clock = make_test_lifecycle_clock()
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -238,13 +241,13 @@ class TestWatchdogFires:
             working_dir=tmp_path / "test_agent",
             event_journal=journal,
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=clock, source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         # Simulate: agent is ACTIVE, no progress for >> threshold.
         # Use a low env threshold via clamp (min 30) and rewind the
         # progress clock instead of sleeping for a test-friendly run.
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._last_progress_at = time.time() - 120  # 2 minutes ago
+        agent._last_progress_at = clock.wall_seconds() - 120  # 2 minutes ago
 
         logged = journal.events
 
@@ -267,13 +270,14 @@ class TestWatchdogFires:
         monkeypatch.setenv("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "30")
 
         from lingtai.kernel import BaseAgent, AgentState
+        clock = make_test_lifecycle_clock()
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=clock, source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._write_status_snapshot()
         stale_status = json.loads((agent._working_dir / ".status.json").read_text())
@@ -281,7 +285,7 @@ class TestWatchdogFires:
 
         agent._set_state(AgentState.ACTIVE, reason="test")
         agent._log("tool_call", tool_call_id="call_active")
-        agent._last_progress_at = time.time() - 120
+        agent._last_progress_at = clock.wall_seconds() - 120
 
         try:
             agent._start_heartbeat()
@@ -300,6 +304,7 @@ class TestWatchdogFires:
 
         from lingtai.kernel import BaseAgent, AgentState
         journal = _RecordingEventJournal()
+        clock = make_test_lifecycle_clock()
         agent = BaseAgent(
             intrinsics=_TEST_INTRINSICS,
             service=make_mock_service(),
@@ -307,10 +312,10 @@ class TestWatchdogFires:
             working_dir=tmp_path / "test_agent",
             event_journal=journal,
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=clock, source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
-        agent._last_progress_at = time.time() - 120
+        agent._last_progress_at = clock.wall_seconds() - 120
 
         logged = journal.events
 
@@ -336,7 +341,7 @@ class TestWatchdogFires:
             working_dir=tmp_path / "test_agent",
             event_journal=journal,
             workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._last_progress_at = time.time() - 120  # rewind
 

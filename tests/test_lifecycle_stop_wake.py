@@ -27,6 +27,7 @@ import queue
 import threading
 
 from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from lingtai.kernel import BaseAgent, AgentState
 from lingtai.kernel.message import _make_message, MSG_TC_WAKE
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
@@ -51,6 +52,7 @@ def _make_agent(tmp_path):
         source_revision_port=make_test_source_revision_port(),
         notification_store=notification_store_for(workdir),
         agent_presence=PosixAgentPresenceStoreAdapter(workdir),
+        lifecycle_clock=make_test_lifecycle_clock(),
     )
 
 

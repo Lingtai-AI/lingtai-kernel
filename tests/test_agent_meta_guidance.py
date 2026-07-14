@@ -8,6 +8,7 @@ from lingtai.agent import Agent
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -249,7 +250,7 @@ def test_base_agent_seeds_body_only_from_frontmatter_mirror(tmp_path):
         agent_name="ba-test",
         working_dir=workdir,
         workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(workdir),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(workdir),
     )
     section = agent._prompt_manager.read_section("substrate")
     assert section == "SUBSTRATE-BODY-ONLY\n"

@@ -20,6 +20,7 @@ from lingtai.kernel.services.logging import (
 )
 from tests._service_helpers import make_tool_result_mock_service as make_mock_service
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -172,7 +173,7 @@ class TestBaseAgentLoggingIntegration:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent.add_tool("greet", schema={"type": "object", "properties": {}}, handler=lambda args: {"status": "ok"})
 
@@ -212,7 +213,7 @@ class TestBaseAgentLoggingIntegration:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent.add_tool("greet", schema={"type": "object", "properties": {}}, handler=lambda args: {"status": "ok"})
 
@@ -245,7 +246,7 @@ class TestBaseAgentLoggingIntegration:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._set_state(AgentState.ACTIVE, reason="test")
 
@@ -387,7 +388,7 @@ class TestSQLiteEventIndex:
             agent_name="test",
             working_dir=tmp_path / "test_agent",
             event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         agent._log("custom", value=123)
         agent._event_journal.close()

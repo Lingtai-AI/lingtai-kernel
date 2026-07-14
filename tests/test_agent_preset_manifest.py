@@ -19,6 +19,7 @@ from lingtai.kernel.base_agent import BaseAgent, _build_identity_section
 from lingtai.kernel.base_agent.identity import _build_manifest, _safe_llm_from_service
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -82,7 +83,7 @@ def test_kernel_manifest_includes_llm_from_service(tmp_path):
         agent_name="alice",
         working_dir=tmp_path / "alice",
         workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "alice"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "alice"),
     )
     data = _build_manifest(agent)
     assert data["llm"] == {
@@ -100,7 +101,7 @@ def test_kernel_manifest_omits_base_url_when_none(tmp_path):
         agent_name="bob",
         working_dir=tmp_path / "bob",
         workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "bob"),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "bob"),
     )
     data = _build_manifest(agent)
     assert data["llm"] == {"provider": "openai", "model": "gpt-4.6"}
@@ -109,7 +110,7 @@ def test_kernel_manifest_omits_base_url_when_none(tmp_path):
 
 def test_kernel_manifest_drops_mock_attrs(tmp_path):
     svc = MagicMock()
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="ghost", working_dir=tmp_path / "ghost", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ghost"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="ghost", working_dir=tmp_path / "ghost", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ghost"))
     data = _build_manifest(agent)
     if "llm" in data:
         for v in data["llm"].values():

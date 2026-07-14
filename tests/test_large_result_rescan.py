@@ -33,6 +33,7 @@ from lingtai.kernel.base_agent.messaging import (
 )
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -144,7 +145,7 @@ def test_base_agent_has_rescan_method(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
     assert callable(agent._rescan_large_tool_results)
     assert agent._rescan_large_tool_results() == 0
 
@@ -158,7 +159,7 @@ def test_base_agent_rescan_with_chat_session_publishes_nothing(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan-chat", working_dir=tmp_path / "ag2", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag2"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan-chat", working_dir=tmp_path / "ag2", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag2"))
     agent._summarize_notification_threshold = 100
 
     iface = ChatInterface()
@@ -198,7 +199,7 @@ def test_enqueue_skip_if_ref_id_exists(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-dedup", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-dedup", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
     ev1 = _enqueue_system_notification(
         agent,
@@ -234,7 +235,7 @@ def test_enqueue_no_skip_publishes_twice(tmp_path):
     svc.provider = "gemini"
     svc.model = "gemini-test"
 
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-nodedup", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-nodedup", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
     ev1 = _enqueue_system_notification(
         agent,

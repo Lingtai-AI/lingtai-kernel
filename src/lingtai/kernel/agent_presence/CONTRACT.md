@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/adapters/posix/agent_presence.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/lifecycle.py
+  - src/lingtai/kernel/lifecycle_clock/CONTRACT.md
   - src/lingtai/kernel/handshake.py
   - src/lingtai/agent.py
   - src/lingtai/cli.py
@@ -125,9 +126,10 @@ Core never imports the adapter package.
    `is_agent` / `is_human` / `is_alive` / `manifest` presence functions are
    removed, with no shim, Path-or-Port overload, or dual route.
 5. Own-heartbeat publication writes exactly `str(wall_seconds)` with no newline;
-   withdrawal is best-effort/idempotent. The direct wall clock (`time.time()`)
-   feeding `publish_heartbeat` is a deliberate S7a temporary; S7b extracts the
-   clocks.
+   withdrawal is best-effort/idempotent. The wall value feeding `publish_heartbeat`
+   is now read from the injected Core `LifecycleClockPort.wall_seconds()` (see
+   `src/lingtai/kernel/lifecycle_clock/CONTRACT.md`) and passed through unchanged;
+   presence keeps ownership of the exact bytes and the wall/liveness semantics.
 6. The presence Core keeps no service locator, module singleton, hidden adapter
    construction, nullable store, fifth operation family, or foreign/own split.
 

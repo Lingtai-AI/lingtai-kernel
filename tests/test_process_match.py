@@ -13,6 +13,7 @@ import pytest
 from lingtai.kernel.process_match import match_agent_run
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -61,7 +62,7 @@ def _watcher_match_agent_run(tmp_path):
 
     working_dir = tmp_path / "agent"
     working_dir.mkdir()
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=service, agent_name="alice", working_dir=working_dir, workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(working_dir))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=service, agent_name="alice", working_dir=working_dir, workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(working_dir))
     agent._build_launch_cmd = lambda: ["python", "-c", "print('relaunch sentinel')"]
 
     with patch("subprocess.Popen") as mock_popen:

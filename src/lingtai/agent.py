@@ -182,6 +182,16 @@ class Agent(BaseAgent):
                     kwargs["working_dir"]
                 )
 
+            # BaseAgent requires a lifecycle clock. As the composition root for
+            # direct ``lingtai.Agent`` callers, construct the portable system
+            # adapter (no working_dir needed). A caller may inject its own.
+            if "lifecycle_clock" not in kwargs:
+                from lingtai.adapters.lifecycle_clock import (
+                    SystemLifecycleClockAdapter,
+                )
+
+                kwargs["lifecycle_clock"] = SystemLifecycleClockAdapter()
+
             # Compose the two required snapshot/revision capabilities outside Core.
             # Separate instances intentionally target the workdir and running source.
             if "snapshot_port" not in kwargs and "working_dir" in kwargs:

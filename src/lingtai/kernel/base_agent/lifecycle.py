@@ -108,7 +108,7 @@ def _start(agent) -> None:
     # Capture startup time for uptime tracking
     from datetime import datetime, timezone
     agent._started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    agent._uptime_anchor = time.monotonic()
+    agent._uptime_anchor = agent._lifecycle_clock.monotonic_seconds()
 
     # Export assembled system prompt to system/system.md
     agent._flush_system_prompt()
@@ -240,7 +240,7 @@ def _start(agent) -> None:
 
 def _reset_uptime(agent) -> None:
     """Reset the uptime anchor used for runtime uptime reporting."""
-    agent._uptime_anchor = time.monotonic()
+    agent._uptime_anchor = agent._lifecycle_clock.monotonic_seconds()
 
 
 def _stop(agent, timeout: float = 5.0) -> None:
@@ -568,7 +568,7 @@ def _heartbeat_loop(agent) -> None:
             )
 
         if agent._state == AgentState.STUCK:
-            now = time.monotonic()
+            now = agent._lifecycle_clock.monotonic_seconds()
             if agent._aed_start is None:
                 agent._aed_start = now
             if now - agent._aed_start > agent._config.aed_timeout:
@@ -595,7 +595,7 @@ def _heartbeat_loop(agent) -> None:
         # repeatable bug behind silent retries.
         if agent._state == AgentState.ACTIVE and not agent._active_stuck_logged:
             threshold = _active_stuck_threshold_s()
-            no_progress_for = time.time() - agent._last_progress_at
+            no_progress_for = agent._lifecycle_clock.wall_seconds() - agent._last_progress_at
             if no_progress_for > threshold:
                 agent._log(
                     "active_without_progress",
@@ -612,7 +612,7 @@ def _heartbeat_loop(agent) -> None:
 
         # Periodic snapshot (Time Machine) — off by default
         if agent._config.snapshot_interval is not None:
-            now_mono = time.monotonic()
+            now_mono = agent._lifecycle_clock.monotonic_seconds()
             if now_mono - agent._last_snapshot >= agent._config.snapshot_interval:
                 agent._snapshot_port.snapshot()
                 agent._last_snapshot = now_mono
@@ -637,7 +637,7 @@ def _maybe_sleep_after_idle_timeout(agent, *, now_mono: float | None = None) -> 
     if agent._state != AgentState.IDLE:
         return
 
-    now = time.monotonic() if now_mono is None else now_mono
+    now = agent._lifecycle_clock.monotonic_seconds() if now_mono is None else now_mono
     idle_since = getattr(agent, "_idle_since_monotonic", None)
     if idle_since is None:
         agent._idle_since_monotonic = now
@@ -659,13 +659,14 @@ def _maybe_sleep_after_idle_timeout(agent, *, now_mono: float | None = None) -> 
 
 def _write_heartbeat_tick(agent) -> None:
     """Write one real runtime heartbeat and best-effort status snapshot."""
-    # time.time() (wall clock), not time.monotonic(). Deliberate:
+    # Wall clock (``lifecycle_clock.wall_seconds()``), not monotonic. Deliberate:
     # heartbeat is written to a file and read by the presence store's liveness
-    # observation in a DIFFERENT process. S7a keeps this direct wall clock as a
-    # temporary measure; S7b extracts the wall/monotonic clocks. Publication of
-    # the value now goes through the injected AgentPresenceStorePort (best-effort
-    # inside the adapter), not a direct file write.
-    agent._heartbeat = time.time()
+    # observation in a DIFFERENT process, so it must be a cross-process wall
+    # timestamp. The clock is now the injected Core LifecycleClockPort (see
+    # kernel/lifecycle_clock/CONTRACT.md). Publication of the raw float goes
+    # through the injected AgentPresenceStorePort (best-effort inside the
+    # adapter), which writes exactly ``str(value)`` with no newline.
+    agent._heartbeat = agent._lifecycle_clock.wall_seconds()
 
     agent._agent_presence.publish_heartbeat(agent._heartbeat)
 
