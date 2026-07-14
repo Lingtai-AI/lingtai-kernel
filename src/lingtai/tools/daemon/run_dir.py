@@ -74,8 +74,9 @@ class DaemonRunDir:
         # Every live writer for this run shares one re-entrant transaction lock.
         # It covers the in-memory mutation, daemon.json replacement, and any
         # paired event/heartbeat write; per-run ownership avoids serializing
-        # unrelated daemon runs. RLock permits the terminal-notification guard
-        # and owner helpers to compose without lock-order surprises.
+        # unrelated daemon runs. Terminal-notification methods acquire their
+        # separate guard before this lock; RLock lets owner helpers compose
+        # without reversing that lock order.
         self._state_writer_lock = threading.RLock()
         self._terminal_notification_lock = threading.Lock()
         started_at_iso = self._now_iso()
@@ -934,48 +935,58 @@ class DaemonRunDir:
         remains retryable. A crash with only a pending claim is intentionally
         treated as unpublished by startup reconciliation.
         """
+        # All live terminal-notification state transitions use one lock order:
+        # terminal-notification lock -> per-run state-writer lock.
         with self._terminal_notification_lock:
-            if self._state.get("terminal_notified") is True:
-                return None
-            if isinstance(self._state.get("terminal_notification_claim"), dict):
-                return None
-            key = self.terminal_notification_idempotency_key(self._run_id)
-            self._state["terminal_notification_claim"] = {
-                "status": "pending",
-                "terminal_status": status,
-                "idempotency_key": key,
-                "claimed_at": self._now_iso(),
-            }
-            self._safe_state(
-                "claim_terminal_notification",
-                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
-            )
-            return key
+            with self._state_writer_lock:
+                if self._state.get("terminal_notified") is True:
+                    return None
+                if isinstance(self._state.get("terminal_notification_claim"), dict):
+                    return None
+                key = self.terminal_notification_idempotency_key(self._run_id)
+                self._state["terminal_notification_claim"] = {
+                    "status": "pending",
+                    "terminal_status": status,
+                    "idempotency_key": key,
+                    "claimed_at": self._now_iso(),
+                }
+                self._safe(
+                    "claim_terminal_notification",
+                    lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+                )
+                return key
 
     def clear_terminal_notification_claim(self) -> None:
         """Clear a failed pending terminal-notification attempt."""
+        # Keep the same terminal-notification lock -> state-writer order as
+        # claim_terminal_notification and mark_terminal_notification_published.
         with self._terminal_notification_lock:
-            if self._state.get("terminal_notified") is True:
-                return
-            self._state["terminal_notification_claim"] = None
-            self._safe_state(
-                "clear_terminal_notification_claim",
-                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
-            )
+            with self._state_writer_lock:
+                if self._state.get("terminal_notified") is True:
+                    return
+                self._state["terminal_notification_claim"] = None
+                self._safe(
+                    "clear_terminal_notification_claim",
+                    lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+                )
 
     def mark_terminal_notification_published(self, idempotency_key: str) -> None:
         """Persist the durable terminal-notification receipt after publication."""
+        # Keep the single terminal-notification lock -> state-writer order. All
+        # receipt decisions, mutations, and daemon.json persistence stay in the
+        # owner transaction so live writers cannot observe a partial transition.
         with self._terminal_notification_lock:
-            self._state["terminal_notified"] = True
-            self._state["terminal_notification_claim"] = None
-            self._state["terminal_notification_receipt"] = {
-                "idempotency_key": idempotency_key,
-                "published_at": self._now_iso(),
-            }
-            self._safe_state(
-                "mark_terminal_notification_published",
-                lambda: self._atomic_write_json(self.daemon_json_path, self._state),
-            )
+            with self._state_writer_lock:
+                self._state["terminal_notified"] = True
+                self._state["terminal_notification_claim"] = None
+                self._state["terminal_notification_receipt"] = {
+                    "idempotency_key": idempotency_key,
+                    "published_at": self._now_iso(),
+                }
+                self._safe(
+                    "mark_terminal_notification_published",
+                    lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+                )
 
     @classmethod
     def mark_terminal_notification_published_on_disk(

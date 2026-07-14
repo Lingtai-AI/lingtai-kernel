@@ -633,15 +633,13 @@ def test_mimocode_concurrent_initial_and_resume_usage_persistence_is_atomic(tmp_
     """Live progress and terminal writers cannot erase resumed MiMo usage.
 
     The initial stream accepts one part and remains active while ``ask`` starts
-    the resume stream.  The initial stream then reaches its real ``mark_done``
+    the resume stream.  The initial worker then reaches the real ``mark_done``
     writer while the resume stream is paused before its distinct part.  The
-    atomic-write rendezvous stages that terminal writer's pre-resume snapshot;
-    the old MiMo-only repair lets the resume stream complete and then allows the
-    stale terminal snapshot to replace the combined state.  The owner-layer
-    writer transaction makes the resume writer wait instead, so the terminal
-    snapshot is published first and the resumed transaction publishes the final
-    combined state.  The production ``mark_done`` and progress writers remain
-    live; only subprocess output is event-controlled.
+    atomic-write rendezvous holds that terminal operation in flight; the owner
+    transaction makes the resumed live writer wait, so the terminal snapshot is
+    published first and the resumed transaction publishes the final combined
+    state.  The production ``mark_done`` and progress writers remain live; only
+    subprocess output is event-controlled.
     """
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
@@ -651,6 +649,7 @@ def test_mimocode_concurrent_initial_and_resume_usage_persistence_is_atomic(tmp_
     resume_duplicate_seen = threading.Event()
     resume_part_release = threading.Event()
     terminal_snapshot_staged = threading.Event()
+    terminal_snapshot_release = threading.Event()
     resume_terminal_done = threading.Event()
     initial_errors: list[BaseException] = []
 
@@ -674,8 +673,9 @@ def test_mimocode_concurrent_initial_and_resume_usage_persistence_is_atomic(tmp_
         resume_duplicate_seen.set()
         assert resume_part_release.wait(timeout=5)
         yield json.dumps(resume_part) + "\n"
-        # This is a live production progress writer; the runner then invokes
-        # the real terminal writer for the resumed stream.
+        # This is a live production progress writer; the resumed runner then
+        # publishes a follow-up result, not another ``mark_done`` terminal
+        # state transition.
         yield json.dumps({"type": "text", "part": {"text": "resume answer"}}) + "\n"
 
     class ActiveFakeProc:
@@ -706,20 +706,13 @@ def test_mimocode_concurrent_initial_and_resume_usage_persistence_is_atomic(tmp_
             first_usage_written.set()
             return result
 
-        # The initial mark_done is the non-usage writer whose snapshot is
-        # deliberately staged before the resumed distinct part.  On the fixed
-        # owner-layer path this callback owns the re-entrant writer lock, so it
-        # must complete before resume can acquire that lock.  On the old
-        # MiMo-only path it does not own a writer lock; letting resume finish
-        # first reproduces the stale terminal snapshot replacement.  This is an
-        # owner-boundary rendezvous, not a usage-lock assertion.
+        # The initial mark_done is the non-usage writer whose terminal
+        # operation is deliberately held in flight before the resumed distinct
+        # part.  The owner transaction must keep the real resume writer from
+        # serializing shared state until this operation boundary is released.
         if data.get("state") == "done" and calls == 1:
-            stale_snapshot = deepcopy(data)
             terminal_snapshot_staged.set()
-            if run_dir._state_writer_lock._is_owned():
-                return original_atomic(path, stale_snapshot)
-            assert resume_terminal_done.wait(timeout=5)
-            return original_atomic(path, stale_snapshot)
+            assert terminal_snapshot_release.wait(timeout=5)
 
         return original_atomic(path, data)
 
@@ -775,6 +768,11 @@ def test_mimocode_concurrent_initial_and_resume_usage_persistence_is_atomic(tmp_
         initial_release.set()
         assert terminal_snapshot_staged.wait(timeout=5)
         resume_part_release.set()
+        # The follow-up has a real live writer, but it must remain blocked while
+        # the initial worker's real mark_done transaction is in flight.
+        resume_finished_while_terminal = resume_terminal_done.wait(timeout=1)
+        terminal_snapshot_release.set()
+        assert not resume_finished_while_terminal
         assert resume_terminal_done.wait(timeout=5)
 
         initial_thread.join(timeout=5)
