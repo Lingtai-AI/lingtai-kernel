@@ -99,6 +99,16 @@ If rediscovering a workflow would be painful, make or update a skill immediately
 Use `skills-manual` before authoring/publishing. Keep private project facts in
 knowledge and reusable procedures in skills.
 
+### Preset Swap and Daemon Task Preset
+
+To switch your own model/capabilities, call `system(action="presets")` for
+your exact `allowed` paths, then `system(action="refresh", preset=<path>)` (or
+`revert_preset=true`) — a config/prompt/MCP edit needs this refresh, not
+`summarize`. For a daemon task, pass `tasks[].preset` as an explicit path or
+omit it to inherit the parent's regular surface; that explicit path does not
+reuse your `allowed` list. External CLI daemon backends skip LingTai preset
+resolution entirely. See `system-manual` → `reference/substrate-manual/SKILL.md` §11.
+
 ### Use the Right Body
 
 Use bash for one-off deterministic host work, daemons for disposable parallel
