@@ -5,6 +5,8 @@ import re
 import time
 from pathlib import Path
 
+import pytest
+
 from lingtai.tools.daemon.run_dir import DaemonRunDir
 
 
@@ -81,6 +83,8 @@ def test_initial_daemon_json_fields(tmp_path):
     assert data["tokens"] == {"input": 0, "output": 0, "thinking": 0, "cached": 0}
     assert data["result_preview"] is None
     assert data["error"] is None
+    assert data["execution_owner"] is None
+    assert data["deadline_at"] is None
     # started_at is ISO 8601 UTC
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", data["started_at"])
 
@@ -558,6 +562,78 @@ def test_mark_timeout_writes_state(tmp_path):
     assert data["state"] == "timeout"
     last = json.loads(rd.events_path.read_text().splitlines()[-1])
     assert last["event"] == "daemon_timeout"
+
+
+def test_set_execution_owner_persists_dict_verbatim(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    owner = {
+        "schema_version": 1, "generation": "20260101-000000-abcdef", "nonce": "a" * 32,
+        "pid": 999, "start_ticks": 111, "sequence": 1, "owned_run_ids": [rd.run_id],
+    }
+    rd.set_execution_owner(owner)
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["execution_owner"] == owner
+
+
+def test_clear_execution_owner_on_rollback_resets_to_none(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    owner = {
+        "schema_version": 1, "generation": "20260101-000000-abcdef", "nonce": "a" * 32,
+        "pid": 999, "start_ticks": 111, "sequence": 1, "owned_run_ids": [rd.run_id],
+    }
+    rd.set_execution_owner(owner)
+    rd.clear_execution_owner_on_rollback()
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["execution_owner"] is None
+
+
+def test_set_execution_owner_propagates_oserror_not_swallowed(tmp_path, monkeypatch):
+    """Unlike every other mutator in this class, set_execution_owner must
+    NOT go through _safe — refresh_host.tag_owned_runs' all-or-nothing
+    rollback contract depends on a real write failure reaching the caller
+    as a real exception, never being silently swallowed."""
+    rd = _make_run_dir(tmp_path)
+
+    def _boom(*args, **kwargs):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr("lingtai.tools.daemon.run_dir.atomic_write_json", _boom)
+    with pytest.raises(OSError, match="simulated disk failure"):
+        rd.set_execution_owner({
+            "schema_version": 1, "generation": "g", "nonce": "a" * 32,
+            "pid": 1, "start_ticks": 1, "sequence": 1, "owned_run_ids": [rd.run_id],
+        })
+
+
+def test_clear_execution_owner_on_rollback_propagates_oserror_not_swallowed(tmp_path, monkeypatch):
+    rd = _make_run_dir(tmp_path)
+
+    def _boom(*args, **kwargs):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr("lingtai.tools.daemon.run_dir.atomic_write_json", _boom)
+    with pytest.raises(OSError, match="simulated disk failure"):
+        rd.clear_execution_owner_on_rollback()
+
+
+def test_set_deadline_persists_value(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    rd.set_deadline("2026-01-01T00:05:00Z")
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["deadline_at"] == "2026-01-01T00:05:00Z"
+
+
+def test_set_deadline_swallows_oserror_like_other_ordinary_mutators(tmp_path, monkeypatch):
+    """Unlike set_execution_owner, set_deadline IS an ordinary best-effort
+    mutator (uses _safe) — a failed deadline persist is a staleness risk,
+    not a correctness break, so it must not raise."""
+    rd = _make_run_dir(tmp_path)
+
+    def _boom(*args, **kwargs):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr("lingtai.tools.daemon.run_dir.atomic_write_json", _boom)
+    rd.set_deadline("2026-01-01T00:05:00Z")  # must not raise
 
 
 def test_terminal_markers_idempotent_safe(tmp_path):

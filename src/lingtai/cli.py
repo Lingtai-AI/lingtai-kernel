@@ -23,6 +23,7 @@ from lingtai.init_schema import validate_init
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai.agent import Agent
 from lingtai.kernel.process_match import match_agent_run
+from lingtai.tools.daemon.refresh_host import is_verified_refresh_host
 
 
 def load_init(working_dir: Path) -> dict:
@@ -226,6 +227,9 @@ def _check_duplicate_process(working_dir: Path) -> None:
             continue
         if match_agent_run(command, abs_dir) is None:
             continue
+        candidate_pid = int(pid_str)
+        if is_verified_refresh_host(candidate_pid, working_dir):
+            continue  # exact verified live drain host — not a duplicate
         print(
             f"error: another lingtai agent is already running in {abs_dir}\n"
             f"  PID {pid_str}: {trimmed}\n"

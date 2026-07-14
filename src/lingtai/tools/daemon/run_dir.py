@@ -132,6 +132,22 @@ class DaemonRunDir:
             "preset_model": preset_model,
             "backend": backend,
             "claude_session_id": None,
+            # Durable ownership binding to a committed RefreshHostMarker (see
+            # refresh_host.tag_owned_runs) — None until/unless this run is
+            # ever tagged as part of a refresh-drain handoff. Distinct from
+            # `parent_pid` above, which remains provenance ("who created this
+            # run") and is never overwritten; `execution_owner` is the
+            # current-authority binding a drain-host/successor protocol
+            # reasons about, and IS expected to be set exactly once per
+            # handoff (never mutated afterward — the owning marker is
+            # immutable once committed).
+            "execution_owner": None,
+            # Absolute UTC deadline for this run's current watchdog/timeout
+            # window, so a successor can idempotently request a timeout for
+            # overdue host-owned work without itself terminal-writing. None
+            # until first set; format matches RefreshHostMarker's canonical
+            # `_now_iso()` shape (`_validate_prepared_at`-compatible).
+            "deadline_at": None,
         }
 
         self._atomic_write_json(self.daemon_json_path, self._state)
@@ -897,6 +913,49 @@ class DaemonRunDir:
     def mark_timeout(self) -> None:
         """Watchdog timeout. Sets state=timeout."""
         self._mark_terminal("timeout", "daemon_timeout")
+
+    def set_execution_owner(self, execution_owner: dict) -> None:
+        """Durably tag this run with an ``ExecutionOwner`` dict (see
+        ``refresh_host.ExecutionOwner.to_dict()``), as part of committing one
+        ``RefreshHostMarker`` via ``refresh_host.tag_owned_runs``.
+
+        Deliberately does NOT go through ``_safe``: ``tag_owned_runs``'
+        all-or-nothing rollback contract depends on a real write failure
+        propagating as a real exception here, not being swallowed — a
+        caller that never sees the failure could not know to roll back the
+        other runs it already tagged in the same call. This is the one
+        mutator in this class that must raise ``OSError`` rather than
+        best-effort log it.
+        """
+        self._state["execution_owner"] = execution_owner
+        self._atomic_write_json(self.daemon_json_path, self._state)
+
+    def clear_execution_owner_on_rollback(self) -> None:
+        """Undo a ``set_execution_owner`` call whose enclosing marker commit
+        did not complete — the narrow, explicitly authorized exception to
+        "execution_owner is set exactly once and never mutated": a rollback
+        of an owner tag that was never actually backed by a durably
+        committed marker is not a mutation of a real ownership binding, it
+        is erasing a tag that should never have persisted. Also does not use
+        ``_safe`` — ``tag_owned_runs`` must see a real rollback failure to
+        raise ``OwnerTaggingAmbiguousError`` rather than silently believing
+        the rollback succeeded.
+        """
+        self._state["execution_owner"] = None
+        self._atomic_write_json(self.daemon_json_path, self._state)
+
+    def set_deadline(self, deadline_at: str) -> None:
+        """Persist an absolute UTC watchdog/timeout deadline for this run, so
+        a successor observing an overdue host-owned run can idempotently
+        request a timeout without itself terminal-writing. Best-effort like
+        every other ordinary state mutator (uses ``_safe``) — a failure to
+        persist a deadline update is not a correctness break, only a
+        staleness risk for the successor's overdue-check.
+        """
+        def _write():
+            self._state["deadline_at"] = deadline_at
+            self._atomic_write_json(self.daemon_json_path, self._state)
+        self._safe("set_deadline", _write)
 
     def claim_terminal_notification(self, status: str) -> str | None:
         """Claim a temporary terminal-notification attempt for this run.

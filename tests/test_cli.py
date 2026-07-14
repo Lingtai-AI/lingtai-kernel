@@ -583,3 +583,199 @@ def test_check_duplicate_process_excludes_own_pid(tmp_path):
     ps_out = _ps_line(os.getpid(), codex.resolve()) + "\n"
     with patch("subprocess.check_output", return_value=ps_out):
         _check_duplicate_process(codex)
+
+
+# ---------------------------------------------------------------------------
+# _check_duplicate_process — verified refresh-host exemption
+# ---------------------------------------------------------------------------
+
+
+def _commit_live_marker_for(working_dir, *, pid, command_label="module", start_ticks=1):
+    """Commit a marker for ``pid`` at ``working_dir`` using the accepted
+    ``refresh_host`` primitives — no fake/shortcut marker construction.
+
+    ``start_ticks`` is caller-supplied (not probed) so the marker's claimed
+    identity can be tested against a monkeypatched liveness probe, exactly
+    as the accepted ``test_daemon_refresh_survival.py`` suite already does
+    for stale/dead/mismatched pids.
+    """
+    from lingtai.tools.daemon.refresh_host import RefreshHostMarker, commit_marker
+
+    marker = RefreshHostMarker.build(
+        pid=pid, start_ticks=start_ticks, command_label=command_label,
+        working_dir=str(working_dir), owned_run_ids=["em-test"],
+    )
+    commit_marker(working_dir, marker)
+
+
+def test_check_duplicate_process_allows_verified_refresh_host(tmp_path, monkeypatch):
+    """An exact verified live refresh-host PID must not abort boot."""
+    from lingtai.cli import _check_duplicate_process
+    import lingtai.tools.daemon.refresh_host as refresh_host_module
+
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    host_pid = 55001
+    _commit_live_marker_for(codex.resolve(), pid=host_pid)
+
+    monkeypatch.setattr(
+        refresh_host_module, "probe_process_start_identity",
+        lambda pid: refresh_host_module.ProcessStartIdentity(pid=pid, start_ticks=1),
+    )
+    monkeypatch.setattr(
+        refresh_host_module, "_read_cmdline",
+        lambda pid: f"python -m lingtai run {codex.resolve()}" if pid == host_pid else None,
+    )
+    ps_out = _ps_line(host_pid, codex.resolve()) + "\n"
+    with patch("subprocess.check_output", return_value=ps_out):
+        # Must NOT raise SystemExit — this exact pid is a verified host.
+        _check_duplicate_process(codex)
+
+
+def test_check_duplicate_process_rejects_unverified_pid_despite_marker_dir(tmp_path, monkeypatch):
+    """A same-workdir duplicate with NO live marker remains fatal even when the
+    hosts directory exists for an unrelated pid (ordinary behavior unchanged)."""
+    from lingtai.cli import _check_duplicate_process
+    import lingtai.tools.daemon.refresh_host as refresh_host_module
+
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    # Marker exists for a different pid than the one in `ps`.
+    _commit_live_marker_for(codex.resolve(), pid=55002)
+    monkeypatch.setattr(
+        refresh_host_module, "probe_process_start_identity",
+        lambda pid: refresh_host_module.ProcessStartIdentity(pid=pid, start_ticks=1)
+        if pid == 55002 else None,
+    )
+    monkeypatch.setattr(
+        refresh_host_module, "_read_cmdline",
+        lambda pid: f"python -m lingtai run {codex.resolve()}" if pid == 55002 else None,
+    )
+    rogue_pid = 99998
+    ps_out = _ps_line(rogue_pid, codex.resolve()) + "\n"
+    with patch("subprocess.check_output", return_value=ps_out):
+        with pytest.raises(SystemExit):
+            _check_duplicate_process(codex)
+
+
+def test_check_duplicate_process_rejects_stale_marker_pid(tmp_path, monkeypatch):
+    """A marker whose pid is no longer live (stale/dead) never exempts that pid
+    — the ordinary fatal-duplicate path still applies."""
+    from lingtai.cli import _check_duplicate_process
+    import lingtai.tools.daemon.refresh_host as refresh_host_module
+
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    dead_pid = 55003
+    _commit_live_marker_for(codex.resolve(), pid=dead_pid)
+    # Marker pid is dead now (probe returns None for it).
+    monkeypatch.setattr(refresh_host_module, "probe_process_start_identity", lambda pid: None)
+
+    ps_out = _ps_line(dead_pid, codex.resolve()) + "\n"
+    with patch("subprocess.check_output", return_value=ps_out):
+        with pytest.raises(SystemExit):
+            _check_duplicate_process(codex)
+
+
+def test_check_duplicate_process_rejects_duplicate_marker_claim(tmp_path, monkeypatch):
+    """Two distinct valid markers naming the SAME pid fail closed — the
+    ambiguous pid is never exempted from the fatal-duplicate path."""
+    from lingtai.cli import _check_duplicate_process
+    from lingtai.tools.daemon.refresh_host import RefreshHostMarker, commit_marker
+    import lingtai.tools.daemon.refresh_host as refresh_host_module
+
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    dup_pid = 55004
+    monkeypatch.setattr(
+        refresh_host_module, "probe_process_start_identity",
+        lambda pid: refresh_host_module.ProcessStartIdentity(pid=pid, start_ticks=1),
+    )
+    monkeypatch.setattr(
+        refresh_host_module, "_read_cmdline",
+        lambda pid: f"python -m lingtai run {codex.resolve()}",
+    )
+    first = RefreshHostMarker.build(
+        pid=dup_pid, start_ticks=1, command_label="module",
+        working_dir=str(codex.resolve()), owned_run_ids=["em-1"],
+    )
+    second = RefreshHostMarker.build(
+        pid=dup_pid, start_ticks=1, command_label="module",
+        working_dir=str(codex.resolve()), owned_run_ids=["em-2"],
+    )
+    commit_marker(codex.resolve(), first)
+    commit_marker(codex.resolve(), second)
+
+    ps_out = _ps_line(dup_pid, codex.resolve()) + "\n"
+    with patch("subprocess.check_output", return_value=ps_out):
+        with pytest.raises(SystemExit):
+            _check_duplicate_process(codex)
+
+
+def test_check_duplicate_process_verified_host_plus_rogue_still_rejects(tmp_path, monkeypatch):
+    """A verified host coexisting with an additional rogue same-workdir pid
+    must still reject boot — regardless of `ps` row order."""
+    from lingtai.cli import _check_duplicate_process
+    import lingtai.tools.daemon.refresh_host as refresh_host_module
+
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    host_pid = 55005
+    rogue_pid = 55006
+    _commit_live_marker_for(codex.resolve(), pid=host_pid)
+    monkeypatch.setattr(
+        refresh_host_module, "probe_process_start_identity",
+        lambda pid: refresh_host_module.ProcessStartIdentity(pid=pid, start_ticks=1)
+        if pid == host_pid else None,
+    )
+    monkeypatch.setattr(
+        refresh_host_module, "_read_cmdline",
+        lambda pid: f"python -m lingtai run {codex.resolve()}" if pid == host_pid else None,
+    )
+
+    # Verified-host row first, rogue row second.
+    ps_out = (
+        _ps_line(host_pid, codex.resolve()) + "\n"
+        + _ps_line(rogue_pid, codex.resolve()) + "\n"
+    )
+    with patch("subprocess.check_output", return_value=ps_out):
+        with pytest.raises(SystemExit):
+            _check_duplicate_process(codex)
+
+    # Rogue row first, verified-host row second — order must not matter.
+    ps_out_reordered = (
+        _ps_line(rogue_pid, codex.resolve()) + "\n"
+        + _ps_line(host_pid, codex.resolve()) + "\n"
+    )
+    with patch("subprocess.check_output", return_value=ps_out_reordered):
+        with pytest.raises(SystemExit):
+            _check_duplicate_process(codex)
+
+
+def test_check_duplicate_process_matching_pid_plus_discovery_failure_still_rejects(
+    tmp_path, monkeypatch
+):
+    """A same-workdir candidate PID whose marker discovery/enumeration
+    itself fails (e.g. an unreadable hosts directory) must still hit the
+    ordinary fatal duplicate-process path — the CLI relies on
+    is_verified_refresh_host's own fail-closed contract (Correction 2) to
+    never raise out of a realistic enumeration failure, so this exercises
+    the real, unmocked call chain: CLI must NOT crash boot with the
+    discovery exception, and must NOT silently exempt the candidate."""
+    from lingtai.cli import _check_duplicate_process
+    import lingtai.tools.daemon.refresh_host as refresh_host_module
+
+    codex = tmp_path / "codex"
+    codex.mkdir()
+    candidate_pid = 55007
+
+    def _boom(_parent_working_dir):
+        raise OSError("simulated enumeration failure")
+        yield  # pragma: no cover - unreachable, keeps this a generator
+
+    monkeypatch.setattr(refresh_host_module, "iter_marker_paths", _boom)
+
+    ps_out = _ps_line(candidate_pid, codex.resolve()) + "\n"
+    with patch("subprocess.check_output", return_value=ps_out):
+        with pytest.raises(SystemExit):
+            _check_duplicate_process(codex)

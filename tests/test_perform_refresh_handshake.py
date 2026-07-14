@@ -656,3 +656,174 @@ def test_refresh_watcher_cleanup_then_success_does_not_write_failure_alert(tmp_p
     assert "refresh_watcher_stale_duplicate_terminate" in event_types
     assert "refresh_watcher_success" in event_types
     assert "refresh_failed_permanent" not in event_types
+
+
+# ---------------------------------------------------------------------------
+# Verified refresh-host exemption in the stale-duplicate cleanup path
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_watcher_never_signals_a_verified_refresh_host(tmp_path):
+    """A same-workdir duplicate PID with a real, committed, live, correctly
+    labeled refresh-host marker must never be SIGTERM'd/SIGKILL'd by the
+    detached watcher's stale-duplicate cleanup, even though its heartbeat is
+    stale/missing (the ordinary condition that would otherwise mark it for
+    termination). This proves the *effect* (process survives, no signal
+    sent) via a real OS-level process — not a string-contains assertion.
+    """
+    from lingtai.tools.daemon.refresh_host import RefreshHostMarker, commit_marker
+
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    wd = agent._working_dir
+
+    # A real, long-lived process whose ps cmdline matches match_agent_run's
+    # "console" launch form for this exact working_dir.
+    fake_console = tmp_path / "lingtai-agent"
+    fake_console.write_text("#!/bin/sh\nsleep 60\n", encoding="utf-8")
+    fake_console.chmod(0o755)
+    host_proc = subprocess.Popen(
+        [str(fake_console), "run", str(wd)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        import lingtai.tools.daemon.refresh_host as refresh_host_module
+
+        identity = refresh_host_module.probe_process_start_identity(host_proc.pid)
+        assert identity is not None, "host_proc must be alive and probeable"
+        marker = RefreshHostMarker.build(
+            pid=host_proc.pid, start_ticks=identity.start_ticks,
+            command_label="console", working_dir=str(wd), owned_run_ids=["em-host"],
+        )
+        commit_marker(wd, marker)
+
+        launch_code = textwrap.dedent(
+            f"""
+            import pathlib
+            import sys
+            wd = pathlib.Path({str(wd)!r})
+            counter = wd / 'refresh_attempt_counter'
+            n = int(counter.read_text()) + 1 if counter.exists() else 1
+            counter.write_text(str(n), encoding='utf-8')
+            sys.stderr.write('another lingtai agent is already running\\n')
+            sys.stderr.write('PID {host_proc.pid}: same agent\\n')
+            sys.exit(1)
+            """
+        )
+        agent._build_launch_cmd = lambda: [sys.executable, "-c", launch_code]
+
+        script = _capture_watcher_script(agent)
+        script = (
+            script
+            .replace("MAX_ATTEMPTS = 12", "MAX_ATTEMPTS = 2")
+            .replace("HEALTH_CHECK_WAIT = 10", "HEALTH_CHECK_WAIT = 0.1")
+            .replace("deadline = time.time() + 60", "deadline = time.time() + 1")
+            .replace("deadline = time.time() + 5", "deadline = time.time() + 0.05")
+        )
+        agent._workdir_lease.release()
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        # The watcher exhausts both attempts (launch always fails) and
+        # reaches terminal failure — it must NOT have killed the real host.
+        assert result.returncode == 0, result.stderr
+        assert host_proc.poll() is None, (
+            "verified refresh host process must still be alive — "
+            "the watcher must never signal it"
+        )
+
+        events = [
+            json.loads(line)
+            for line in (wd / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        event_types = [event["type"] for event in events]
+        assert "refresh_watcher_stale_duplicate_terminate" not in event_types
+        assert "refresh_watcher_stale_duplicate_killed" not in event_types
+        assert "refresh_watcher_stale_duplicate_gone" not in event_types
+    finally:
+        try:
+            host_proc.terminate()
+            host_proc.wait(timeout=1)
+        except Exception:
+            host_proc.kill()
+            host_proc.wait(timeout=1)
+
+
+def test_refresh_watcher_invalid_marker_does_not_suppress_ordinary_cleanup(tmp_path):
+    """An unverifiable marker (wrong command_label — the recorded launch form
+    does not match the real observed one) must NOT protect the duplicate PID:
+    ordinary stale-cleanup (SIGTERM) must still fire exactly as before this
+    guard existed.
+    """
+    from lingtai.tools.daemon.refresh_host import RefreshHostMarker, commit_marker
+
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    wd = agent._working_dir
+    fake_console = tmp_path / "lingtai-agent"
+    fake_console.write_text("#!/bin/sh\nsleep 60\n", encoding="utf-8")
+    fake_console.chmod(0o755)
+    duplicate = subprocess.Popen(
+        [str(fake_console), "run", str(wd)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        import lingtai.tools.daemon.refresh_host as refresh_host_module
+
+        identity = refresh_host_module.probe_process_start_identity(duplicate.pid)
+        assert identity is not None
+        # command_label is "module", but the real observed launch form for
+        # this fake_console process is "console" — a genuine mismatch.
+        marker = RefreshHostMarker.build(
+            pid=duplicate.pid, start_ticks=identity.start_ticks,
+            command_label="module", working_dir=str(wd), owned_run_ids=["em-mismatch"],
+        )
+        commit_marker(wd, marker)
+
+        launch_code = textwrap.dedent(
+            f"""
+            import pathlib
+            import sys
+            wd = pathlib.Path({str(wd)!r})
+            counter = wd / 'refresh_attempt_counter'
+            if not counter.exists():
+                counter.write_text('1', encoding='utf-8')
+                sys.stderr.write('another lingtai agent is already running\\n')
+                sys.stderr.write('PID {duplicate.pid}: same agent\\n')
+                sys.exit(1)
+            import time
+            (wd / '.agent.heartbeat').write_text(str(time.time()), encoding='utf-8')
+            """
+        )
+        agent._build_launch_cmd = lambda: [sys.executable, "-c", launch_code]
+
+        script = _fast_watcher_script(_capture_watcher_script(agent))
+        agent._workdir_lease.release()
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    finally:
+        try:
+            duplicate.terminate()
+            duplicate.wait(timeout=1)
+        except Exception:
+            duplicate.kill()
+            duplicate.wait(timeout=1)
+
+    assert result.returncode == 0, result.stderr
+    events = [
+        json.loads(line)
+        for line in (wd / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    event_types = [event["type"] for event in events]
+    assert "refresh_watcher_stale_duplicate_terminate" in event_types
+    assert "refresh_watcher_success" in event_types

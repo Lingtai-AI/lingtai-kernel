@@ -46,6 +46,21 @@ from .runtime import (
     mark_cancelled_or_timeout as _mark_cancelled_or_timeout,
     spawn_stderr_drainer as _spawn_stderr_drainer,
 )
+from .refresh_host import (
+    CommitAmbiguousError,
+    ControlAck,
+    ExecutionOwner,
+    RefreshHostMarker,
+    commit_marker,
+    load_marker,
+    match_agent_run,
+    probe_process_start_identity,
+    read_pending_control_requests,
+    refresh_hosts_dir,
+    tag_owned_runs,
+    verify_marker_live,
+    write_control_ack,
+)
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
@@ -965,8 +980,124 @@ class DaemonManager:
             max_workers=max(1, max_emanations),
             thread_name_prefix="daemon-cli-ask",
         )
+        # Set only while a refresh-drain PREPARE is actually computing the
+        # fixed owned run set — see _prepare_refresh_host. New `emanate`
+        # submission must be rejected for the whole window between "the
+        # owned run set was read" and "the marker (if any) was durably
+        # committed or the attempt cleanly failed", otherwise a run created
+        # after the set was fixed would never be tagged/owned by the
+        # committed marker yet would still be running when interactive
+        # liveness is withdrawn.
+        self._refresh_prepare_frozen = False
+        # Ordering is mandatory (brief): host discovery/owner validation runs
+        # BEFORE ordinary orphan reaping and before terminal-receipt
+        # reconciliation. A record with an execution_owner belonging to a
+        # STILL-LIVE verified host must never be orphan-reaped/reconciled by
+        # this fresh (successor) manager; a record whose owning host is
+        # confirmed dead must be reaped here, correctly, as DaemonHostLost —
+        # not left for the ordinary reaper to mislabel as DaemonOrphaned.
+        self._reap_host_lost_daemon_records()
         self._reap_dead_parent_daemon_records()
         self._reconcile_terminal_notifications()
+
+    def _reap_host_lost_daemon_records(self) -> None:
+        """HOST_LOST detection: reap every nonterminal, execution-owner-
+        tagged run whose owning marker is confirmed dead/invalid, and leave
+        every one whose owning marker is still verified live completely
+        untouched.
+
+        A record with NO ``execution_owner`` (legacy, or a run this exact
+        manager created itself before this construction) is out of scope
+        for this method entirely — it remains the existing
+        ``_reap_dead_parent_daemon_records``'s territory, unchanged.
+
+        For an owned record: loads the exact marker its ``execution_owner``
+        claims (by generation, under this same working dir) and calls
+        :func:`refresh_host.verify_marker_live` — the SAME strict predicate
+        (live PID + matching start identity + exact command-label match)
+        the CLI duplicate guard and the control-plane dispatcher use. A
+        marker that fails to load (missing/malformed/wrong-workdir) is
+        treated as dead — a marker this manager cannot itself verify grants
+        no protection, matching the module's own fail-closed contract.
+        ``ExecutionOwner.proves_membership_of`` additionally confirms the
+        tag itself was genuinely produced by that exact marker (generation
+        AND nonce match) before trusting it — a run whose tag does not
+        match the marker it claims is treated exactly like host-lost too
+        (an unproven ownership claim grants no protection either).
+
+        Only after BOTH checks fail does this method become the terminal
+        writer: marks the run ``failed`` with ``error.type="DaemonHostLost"``
+        (never ``DaemonOrphaned`` — a distinct, honestly-labeled cause),
+        clears ``current_tool``, then reconciles its terminal notification
+        exactly once via the same no-live-instance publish path
+        ``_reconcile_terminal_notifications`` already uses for legacy
+        records — this successor becomes the writer only now, because the
+        former sole writer is proven gone. Never replays: this run's own
+        result/side-effect content is never re-executed here, only its
+        terminal bookkeeping is written.
+        """
+        daemons_dir = self._agent._working_dir / "daemons"
+        if not daemons_dir.is_dir():
+            return
+
+        for daemon_json_path in daemons_dir.glob("*/daemon.json"):
+            try:
+                state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if not isinstance(state, dict):
+                continue
+
+            daemon_state = state.get("state")
+            if not isinstance(daemon_state, str) or daemon_state.lower() not in {"running", "active"}:
+                continue
+            if state.get("finished_at") not in (None, ""):
+                continue
+
+            execution_owner_dict = state.get("execution_owner")
+            if not isinstance(execution_owner_dict, dict):
+                continue  # legacy/unowned — not this method's territory
+
+            try:
+                owner = ExecutionOwner.from_dict(execution_owner_dict)
+                marker_path = (
+                    refresh_hosts_dir(self._agent._working_dir) / f"{owner.generation}.json"
+                )
+                marker = load_marker(marker_path, expected_working_dir=self._agent._working_dir)
+                is_live = owner.proves_membership_of(
+                    state.get("run_id") or daemon_json_path.parent.name, marker
+                ) and verify_marker_live(marker)
+            except Exception:
+                is_live = False
+            if is_live:
+                continue
+
+            run_id = str(state.get("run_id") or daemon_json_path.parent.name)
+            state["state"] = "failed"
+            state["finished_at"] = DaemonRunDir._now_iso()
+            state["current_tool"] = None
+            state["error"] = {
+                "type": "DaemonHostLost",
+                "message": (
+                    f"Reaped run because its owning refresh-drain host "
+                    f"(execution_owner generation={execution_owner_dict.get('generation')!r}) "
+                    "could not be verified live at successor startup."
+                ),
+            }
+            try:
+                atomic_write_json(daemon_json_path, state, ensure_ascii=False, indent=2)
+            except OSError:
+                continue
+
+            key = DaemonRunDir.terminal_notification_idempotency_key(run_id)
+            text = self._terminal_notification_text_from_state(state, daemon_json_path.parent)
+            if self._publish_daemon_notification(
+                run_id, status="failed", text=text, run_state=state,
+                run_path=daemon_json_path.parent, idempotency_key=key,
+            ):
+                DaemonRunDir.mark_terminal_notification_published_on_disk(
+                    daemon_json_path, idempotency_key=key,
+                )
 
     def _reap_dead_parent_daemon_records(self) -> None:
         """Mark stale running daemon.json records failed after parent restart."""
@@ -1057,6 +1188,302 @@ class DaemonManager:
                 DaemonRunDir.mark_terminal_notification_published_on_disk(
                     daemon_json_path, idempotency_key=key,
                 )
+
+    def _prepare_refresh_host(self) -> "RefreshHostMarker | None":
+        """PREPARE: attempt to become a verified refresh-drain host for every
+        currently nonterminal run this manager owns.
+
+        Returns ``None`` immediately (ordinary refresh — nothing to protect)
+        when there is no nonterminal ``_emanations`` entry; this is the
+        common case and must be indistinguishable from calling this method
+        before the refresh-drain feature existed at all.
+
+        Otherwise: freezes new ``emanate`` submission for the whole window
+        (see ``_refresh_prepare_frozen``), computes the FIXED owned run-id
+        set from a single snapshot of ``_emanations`` (never re-read after
+        this point — a run created after this snapshot must never be
+        silently absorbed into this marker), probes this process's own PID
+        and start identity, determines the exact command label this process
+        was launched under (mirroring ``verify_marker_live``'s read side, so
+        a later liveness check of this exact marker succeeds), builds the
+        marker, atomically tags every owned run via
+        ``refresh_host.tag_owned_runs`` (all-or-nothing — see that
+        function's own rollback contract), then durably commits the marker.
+
+        On success, returns the committed, immutable ``RefreshHostMarker``
+        and leaves ``_refresh_prepare_frozen`` set to ``True`` — the caller
+        (the lifecycle refresh-handoff hook) is responsible for the
+        remaining handoff ordering (stop interactive loops, withdraw
+        heartbeat, release lease) and for entering the drain loop; this
+        method's job ends at "the marker is durably committed."
+
+        On ``CommitAmbiguousError``: propagates uncaught. This is explicitly
+        NOT ordinary failure — the caller must not assume no marker exists
+        and must not silently resume ordinary interactive operation, per the
+        brief. The freeze flag is deliberately left set in this case too:
+        the true on-disk marker state is unknown, so allowing new `emanate`
+        submission while that ambiguity is unresolved could let new work
+        start under a manager that may or may not already be a committed
+        drain host.
+
+        On any other exception (an ordinary precommit failure — a plain
+        ``OSError``/``MarkerValidationError`` from tagging or commit):
+        unfreezes emanate submission and re-raises, so the caller falls back
+        to today's ordinary refresh path with interactive operation
+        provably intact — no run was left mid-tagged, and no marker was
+        left partially committed (``tag_owned_runs`` itself guarantees the
+        former; ``commit_marker`` guarantees the latter for anything short
+        of ``CommitAmbiguousError``).
+        """
+        owned_run_ids = tuple(
+            em_id for em_id, entry in self._emanations.items()
+            if not entry["future"].done()
+        )
+        if not owned_run_ids:
+            return None
+
+        self._refresh_prepare_frozen = True
+        try:
+            own_pid = os.getpid()
+            identity = probe_process_start_identity(own_pid)
+            if identity is None:
+                raise RuntimeError(
+                    "cannot prepare a refresh-drain host: this platform/process "
+                    "has no provable process-start identity"
+                )
+            cmdline = self._own_cmdline_for_refresh_host()
+            command_label = match_agent_run(cmdline, str(self._agent._working_dir))
+            if command_label is None:
+                raise RuntimeError(
+                    "cannot prepare a refresh-drain host: this process's own "
+                    "command line does not match any recognized agent-run "
+                    "launch form for its working directory"
+                )
+            marker = RefreshHostMarker.build(
+                pid=own_pid,
+                start_ticks=identity.start_ticks,
+                command_label=command_label,
+                working_dir=str(self._agent._working_dir),
+                owned_run_ids=owned_run_ids,
+            )
+            run_dirs = {
+                em_id: self._emanations[em_id]["run_dir"] for em_id in owned_run_ids
+            }
+            tag_owned_runs(marker, run_dirs)
+            commit_marker(self._agent._working_dir, marker)
+        except CommitAmbiguousError:
+            raise
+        except Exception:
+            self._refresh_prepare_frozen = False
+            raise
+        return marker
+
+    def _own_cmdline_for_refresh_host(self) -> str:
+        """Best-effort flat command-line string for THIS process.
+
+        Delegates entirely to ``refresh_host._read_cmdline`` — the exact same
+        function ``verify_marker_live`` uses to read back an arbitrary
+        marker's claimed PID — rather than inventing a second command-line
+        representation (e.g. a ``sys.argv`` reconstruction). Using the same
+        function for both "build a marker's command_label" and "verify a
+        marker's command_label later" is what makes the two sides agree: a
+        marker this process commits for itself must observe its own
+        ``command_label`` exactly as any later verifier (a duplicate guard,
+        the watcher, a successor) would recompute it from the same PID.
+        """
+        from . import refresh_host as _refresh_host_module
+        return _refresh_host_module._read_cmdline(os.getpid()) or ""
+
+    def _now_iso_refresh_host(self) -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _dispatch_control_request(self, request, marker: "RefreshHostMarker"):
+        """Validate and execute exactly one durable control request against
+        this DRAINING host's OWN still-live in-memory state, returning one
+        honest ``ControlAck``. Does no file I/O itself — the drain loop
+        (``_run_drain_loop``) wraps this with ``write_control_ack`` so the
+        exclusive-create idempotency contract lives at exactly one call
+        site, not duplicated here.
+
+        Validation order (fail closed on the first mismatch, never partially
+        act): generation identity, then per-target run ownership (every
+        ``request.target_run_ids`` entry must be in ``marker.owned_run_ids``
+        — a request naming even one unowned run is rejected in full, not
+        partially serviced), then per-target terminal state.
+
+        ``ask`` invokes the host's OWN existing ``_handle_ask`` — the exact
+        same code path an interactive parent would use — so CLI
+        session/parser/pipes and the LingTai follow-up buffer stay entirely
+        host-owned; this function adds no second implementation of "how to
+        ask a run something."
+
+        ``reclaim``/``timeout`` are scoped to their exact target run(s), not
+        manager-global: they set only that run's own ``cancel_event`` (and,
+        for ``timeout``, ``timeout_event``) — never call
+        ``shutdown_for_agent_stop``/``_shutdown_runtime_resources``, which
+        would clear ``_emanations`` and every other owned/unowned run's
+        state before their own terminal callbacks necessarily complete (the
+        brief's explicit prohibition). A CLI process group is killed only
+        when EVERY run sharing that ``group_id`` is also in this exact
+        marker's owned set — a batch that mixes an owned and an unowned run
+        (e.g. a sibling from a different generation) must never have its
+        CLI group killed by a request that only targeted the owned member,
+        since that would terminate an unowned run's process out from under
+        it. Acknowledges signal ACCEPTANCE only ("accepted"), never asserts
+        the work has actually stopped — the host's own watchdog/callback
+        remains the sole authority on terminal completion.
+        """
+        if request.generation != marker.generation or request.nonce != marker.nonce:
+            return ControlAck(
+                schema_version=1, request_id=request.request_id, generation=marker.generation,
+                target_run_ids=request.target_run_ids, status="rejected",
+                responded_at=self._now_iso_refresh_host(),
+                detail={"reason": "generation_or_nonce_mismatch"},
+            )
+        unowned = [rid for rid in request.target_run_ids if rid not in marker.owned_run_ids]
+        if unowned:
+            return ControlAck(
+                schema_version=1, request_id=request.request_id, generation=marker.generation,
+                target_run_ids=request.target_run_ids, status="rejected",
+                responded_at=self._now_iso_refresh_host(),
+                detail={"reason": "target_run_not_owned", "unowned": unowned},
+            )
+
+        terminal_run_ids = [
+            rid for rid in request.target_run_ids
+            if rid not in self._emanations or self._emanations[rid]["future"].done()
+        ]
+        if terminal_run_ids:
+            return ControlAck(
+                schema_version=1, request_id=request.request_id, generation=marker.generation,
+                target_run_ids=request.target_run_ids, status="already-terminal",
+                responded_at=self._now_iso_refresh_host(),
+                detail={"terminal_run_ids": terminal_run_ids},
+            )
+
+        if request.operation == "ask":
+            message = request.payload.get("message", "")
+            # Every target already validated live/owned above; ask is
+            # single-target by construction at the caller level, but this
+            # loop covers a hypothetical future multi-target ask honestly.
+            results = {
+                rid: self._handle_ask(rid, message) for rid in request.target_run_ids
+            }
+            return ControlAck(
+                schema_version=1, request_id=request.request_id, generation=marker.generation,
+                target_run_ids=request.target_run_ids, status="accepted",
+                responded_at=self._now_iso_refresh_host(), detail={"results": results},
+            )
+
+        if request.operation in ("reclaim", "timeout"):
+            for rid in request.target_run_ids:
+                entry = self._emanations[rid]
+                if request.operation == "timeout":
+                    entry["timeout_event"].set()
+                entry["cancel_event"].set()
+            self._maybe_kill_exclusive_cli_groups(request.target_run_ids, marker, reason=request.operation)
+            self._log(
+                "daemon_refresh_host_control_dispatched", operation=request.operation,
+                request_id=request.request_id, target_run_ids=list(request.target_run_ids),
+            )
+            return ControlAck(
+                schema_version=1, request_id=request.request_id, generation=marker.generation,
+                target_run_ids=request.target_run_ids, status="accepted",
+                responded_at=self._now_iso_refresh_host(), detail={},
+            )
+
+        return ControlAck(
+            schema_version=1, request_id=request.request_id, generation=marker.generation,
+            target_run_ids=request.target_run_ids, status="rejected",
+            responded_at=self._now_iso_refresh_host(),
+            detail={"reason": "unknown_operation", "operation": request.operation},
+        )
+
+    def _maybe_kill_exclusive_cli_groups(
+        self, target_run_ids, marker: "RefreshHostMarker", *, reason: str
+    ) -> None:
+        """Kill only CLI groups whose EVERY member run is in ``marker``'s
+        owned set — see ``_dispatch_control_request``'s docstring for why a
+        mixed group must never be killed by a request naming only its owned
+        member(s). A run with no ``group_id`` (the in-process LingTai
+        backend, or an ungrouped CLI ask follow-up) has nothing to kill here
+        — its cancellation is fully handled by the per-run ``cancel_event``/
+        ``timeout_event`` already set by the caller.
+        """
+        owned_set = set(marker.owned_run_ids)
+        group_ids_to_check: set[str] = set()
+        for rid in target_run_ids:
+            entry = self._emanations.get(rid)
+            group_id = entry.get("group_id") if entry else None
+            if group_id is not None:
+                group_ids_to_check.add(group_id)
+        for group_id in group_ids_to_check:
+            members = {
+                em_id for em_id, entry in self._emanations.items()
+                if entry.get("group_id") == group_id
+            }
+            if members and members.issubset(owned_set):
+                self._kill_cli_group(group_id, reason=reason)
+
+    def _owned_runs_quiescent(self, marker: "RefreshHostMarker") -> bool:
+        """True once every run in ``marker.owned_run_ids`` is terminal (its
+        future is ``done()``) — the condition that lets ``_run_drain_loop``
+        stop polling and lets the caller transition to ``HOST_EXITING``. A
+        run id present in ``owned_run_ids`` but no longer in
+        ``self._emanations`` (already cleaned up elsewhere) counts as
+        terminal — its work is unambiguously over.
+        """
+        for run_id in marker.owned_run_ids:
+            entry = self._emanations.get(run_id)
+            if entry is not None and not entry["future"].done():
+                return False
+        return True
+
+    def _run_drain_loop(
+        self, marker: "RefreshHostMarker", *, poll_interval: float = 0.5, max_ticks: int | None = None,
+    ) -> None:
+        """DRAINING: bounded polling loop over this host's own generation's
+        durable control-request directory, running on the calling thread.
+
+        Each tick: reads every currently-pending request (never-yet-acked,
+        via ``read_pending_control_requests``' own ack-exclusion), dispatches
+        each through ``_dispatch_control_request`` against this host's real
+        in-memory state, and durably publishes the ack via
+        ``write_control_ack``'s exclusive-create contract. A ``FileExistsError``
+        from that publish (another writer raced this exact request_id/ack —
+        not expected in the single-host design, but handled rather than
+        crashing the loop) is treated as "someone else already acked it,"
+        i.e. skipped rather than retried or treated as loop-fatal.
+
+        Stops as soon as ``_owned_runs_quiescent`` is true (every owned run
+        terminal) — checked at the END of each tick, after that tick's
+        pending requests were drained, so a request that arrives in the same
+        tick a run finishes is still serviced before the loop exits. Also
+        stops after ``max_ticks`` polls if given (an escape hatch for bounded
+        tests and any future caller-supplied deadline; ``None`` — the
+        default — means "no tick ceiling, run until quiescent," which is
+        what the real drain-host process uses).
+
+        This method does not itself perform ``HOST_EXITING``/exit-process
+        behavior — see the CLI/lifecycle wiring (deferred; report §5) for
+        what happens after this returns.
+        """
+        ticks = 0
+        while True:
+            for request in list(read_pending_control_requests(
+                self._agent._working_dir, marker.generation
+            )):
+                ack = self._dispatch_control_request(request, marker)
+                try:
+                    write_control_ack(self._agent._working_dir, ack)
+                except FileExistsError:
+                    pass
+            if self._owned_runs_quiescent(marker):
+                return
+            ticks += 1
+            if max_ticks is not None and ticks >= max_ticks:
+                return
+            time.sleep(poll_interval)
 
     def _terminal_notification_text_from_state(
         self, state: dict, run_path: Path
@@ -2852,6 +3279,10 @@ class DaemonManager:
         backend = _normalize_backend(backend)
         if not tasks:
             return {"status": "error", "message": "No tasks provided"}
+        if self._refresh_prepare_frozen:
+            return {"status": "error",
+                    "message": "New daemon runs are frozen: a refresh-drain "
+                                "handoff is currently being prepared"}
 
         # Per-batch limit overrides — capped at the manager's ceilings.
         # Author-set ceilings (self._max_turns, self._timeout) are the upper

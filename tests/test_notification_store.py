@@ -7,8 +7,11 @@ suite's source semantics.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import json
+import os
+import secrets
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -574,3 +577,417 @@ class TestCompositionAndProvenance:
         assert manager.__class__ is Manager
         assert captured["manager_kwargs"]["notification_store"] is sentinel_store
         assert captured["manager_kwargs"]["working_dir"] == working_dir
+
+
+# ---------------------------------------------------------------------------
+# Interprocess mutation serialization — INDEPENDENT PosixNotificationStoreAdapter
+# instances in SEPARATE OS processes (not threads sharing one interpreter/GIL
+# and one in-process threading.Lock). Reuses the same barrier-synchronized
+# real-subprocess design already proven in
+# tests/test_daemon_refresh_survival.py::_run_subprocess_race: every child
+# completes setup (imports, adapter construction) BEFORE signaling ready, then
+# all children wait at a real filesystem barrier and are released as close to
+# simultaneously as the OS scheduler allows, so the race window is genuinely
+# simultaneous rather than merely sequentially-compatible.
+# ---------------------------------------------------------------------------
+
+_STORE_BARRIER_CHILD_SCRIPT = """
+import os, sys, time
+
+barrier_dir = sys.argv[1]
+
+# --- setup_body: imports and adapter construction — completes BEFORE the
+# --- ready signal, so none of it can stagger/serialize the actual
+# --- post-release race operation below.
+{setup_body}
+
+ready_path = os.path.join(barrier_dir, 'ready.' + str(os.getpid()))
+release_path = os.path.join(barrier_dir, 'release')
+open(ready_path, 'x').close()
+deadline = time.monotonic() + {timeout!r}
+while not os.path.exists(release_path):
+    if time.monotonic() > deadline:
+        print('ERR:barrier_timeout')
+        sys.exit(1)
+    time.sleep(0.001)
+
+# --- race_body: the narrow, race-sensitive Store operation only. Nothing
+# --- above this point runs after release; nothing below it ran before it.
+{race_body}
+"""
+
+
+def _run_store_subprocess_race(
+    setup_body: str, race_body: str, n_procs: int, tmp_path, timeout: float = 15.0
+) -> list:
+    """Spawn ``n_procs`` real Python subprocesses that all race the SAME
+    Store operation against the SAME workdir, synchronized by a real start
+    barrier. See ``_STORE_BARRIER_CHILD_SCRIPT`` and the module-level
+    docstring above for the exact ordering guarantee this provides.
+    """
+    import subprocess as _subprocess
+    import sys as _sys
+    import time as _time
+
+    barrier_dir = tmp_path / f"store-barrier-{secrets.token_hex(4)}"
+    barrier_dir.mkdir()
+    full_script = _STORE_BARRIER_CHILD_SCRIPT.format(
+        setup_body=setup_body, race_body=race_body, timeout=timeout
+    )
+    env = {**os.environ, "PYTHONPATH": os.environ.get("PYTHONPATH", "src")}
+
+    procs = [
+        _subprocess.Popen(
+            [_sys.executable, "-c", full_script, str(barrier_dir)],
+            stdout=_subprocess.PIPE, stderr=_subprocess.PIPE, text=True,
+            env=env,
+        )
+        for _ in range(n_procs)
+    ]
+    try:
+        ready_deadline = _time.monotonic() + timeout
+        while True:
+            ready_count = len(list(barrier_dir.glob("ready.*")))
+            if ready_count >= n_procs:
+                break
+            if _time.monotonic() > ready_deadline:
+                raise TimeoutError(
+                    f"only {ready_count}/{n_procs} child processes reached the start barrier "
+                    f"within {timeout}s"
+                )
+            for p in procs:
+                if p.poll() is not None:
+                    raise RuntimeError(
+                        f"child process exited before reaching the barrier (returncode={p.returncode})"
+                    )
+            _time.sleep(0.005)
+        release_fd = os.open(str(barrier_dir / "release"), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        try:
+            os.close(release_fd)
+        except OSError:
+            pass
+        results = []
+        for p in procs:
+            out, err = p.communicate(timeout=timeout)
+            results.append((out.strip(), err))
+        return results
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.kill()
+                p.wait(timeout=5.0)
+
+
+class TestInterprocessMutationSerialization:
+    def test_independent_processes_compare_update_one_channel_without_lost_updates(
+        self, tmp_path
+    ):
+        """N separate OS processes, each with its OWN
+        ``PosixNotificationStoreAdapter`` instance (no shared in-process
+        lock possible), concurrently ``compare_update_channel`` the SAME
+        channel with an unconditional increment. Without Store-owned
+        interprocess serialization, two processes can race
+        read-modify-write and lose an update. The final count must equal
+        exactly N — proving no lost update under real process concurrency.
+        """
+        workdir = tmp_path / "interprocess-channel"
+        workdir.mkdir()
+        n_procs = 8
+        setup_body = (
+            "import sys; sys.path.insert(0, 'src'); "
+            "from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter; "
+            "from lingtai.kernel.notification_store import UNCONDITIONAL; "
+            f"workdir = {str(workdir)!r}; "
+            "store = PosixNotificationStoreAdapter(workdir)"
+        )
+        race_body = (
+            "store.compare_update_channel(\n"
+            "    'system', UNCONDITIONAL,\n"
+            "    lambda current: ({'count': int(current.get('count', 0)) + 1}, True, None),\n"
+            ")\n"
+            "print('done')\n"
+        )
+        results = _run_store_subprocess_race(setup_body, race_body, n_procs, tmp_path)
+        for out, err in results:
+            assert out == "done", f"child did not complete cleanly: out={out!r} err={err!r}"
+
+        final_store = PosixNotificationStoreAdapter(workdir)
+        final = final_store.snapshot(_allow_all)["system"]["count"]
+        assert final == n_procs, (
+            f"expected exactly {n_procs} (no lost updates), got {final}"
+        )
+
+    def test_independent_processes_union_distinct_ack_refs_without_lost_updates(
+        self, tmp_path
+    ):
+        """N separate OS processes, each with its OWN
+        ``PosixNotificationStoreAdapter`` instance, concurrently
+        ``update_ack_refs`` to add a DISTINCT ref each. The final ack-ref
+        set must contain every distinct ref — proving no lost update
+        under real process concurrency for family 7 (read/mutate/write-or-
+        clear), not just family 3/5 (channel compare-update).
+        """
+        workdir = tmp_path / "interprocess-acks"
+        workdir.mkdir()
+        n_procs = 8
+        setup_body = (
+            "import sys; sys.path.insert(0, 'src'); "
+            "from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter; "
+            f"workdir = {str(workdir)!r}; "
+            "store = PosixNotificationStoreAdapter(workdir); "
+            "my_ref = 'ref-' + str(os.getpid())"
+        )
+        race_body = (
+            "store.update_ack_refs(\n"
+            "    lambda current: (current | {my_ref}, True, None),\n"
+            ")\n"
+            "print('done')\n"
+        )
+        results = _run_store_subprocess_race(setup_body, race_body, n_procs, tmp_path)
+        for out, err in results:
+            assert out == "done", f"child did not complete cleanly: out={out!r} err={err!r}"
+
+        final_store = PosixNotificationStoreAdapter(workdir)
+        final_refs = final_store.load_ack_refs()
+        assert len(final_refs) == n_procs, (
+            f"expected {n_procs} distinct refs (no lost updates), got {len(final_refs)}: {final_refs}"
+        )
+        assert all(ref.startswith("ref-") for ref in final_refs)
+
+
+class TestInterprocessLockFileInvariants:
+    def test_lock_file_persists_and_is_never_unlinked_after_mutation(self, tmp_path):
+        """The interprocess lock authority must be a PERSISTENT file under
+        ``.notification/`` — never unlinked after use (split-inode lock
+        authority is forbidden per the design brief), and must not be
+        picked up by snapshot/fingerprint's ``*.json`` channel glob (it
+        must not carry a JSON-shaped name)."""
+        workdir = tmp_path / "lock-file-invariant"
+        store = _posix_store(workdir)
+        store.publish("system", {"header": "hello"})
+        store.clear("system")
+        store.compare_update_channel(
+            "system", UNCONDITIONAL, lambda current: ({"a": 1}, True, None)
+        )
+        store.update_ack_refs(lambda current: (current | {"x"}, True, None))
+
+        notif_dir = workdir / ".notification"
+        lock_candidates = [
+            p for p in notif_dir.iterdir()
+            if p.is_file() and not p.name.endswith(".json")
+        ]
+        assert lock_candidates, "expected a persistent non-JSON lock file under .notification/"
+        for candidate in lock_candidates:
+            assert candidate.exists(), "lock file must not be unlinked after mutation"
+
+        # The lock file must never be picked up as a channel by snapshot/
+        # fingerprint (both glob only *.json).
+        snap = store.snapshot(_allow_all)
+        assert all(name == "system" for name in snap.keys())
+        fp = store.fingerprint(_allow_all)
+        assert all(entry[0].endswith(".json") for entry in fp)
+
+    def test_two_adapter_instances_same_process_still_serialize(self, tmp_path):
+        """Same-process counterexample: TWO separate adapter INSTANCES (not
+        the same instance, so the in-process ``threading.Lock`` on either
+        instance alone cannot serialize the other) sharing one workdir must
+        still be mutually exclusive via the shared interprocess lock file,
+        proving the new lock authority — not merely the existing per-
+        instance thread lock — is what provides cross-instance safety."""
+        workdir = tmp_path / "two-instances-one-process"
+        workdir.mkdir()
+        store_a = PosixNotificationStoreAdapter(workdir)
+        store_b = PosixNotificationStoreAdapter(workdir)
+        # 20 worker threads + this main thread's own barrier.wait() below.
+        barrier = threading.Barrier(21)
+
+        def increment(store) -> None:
+            barrier.wait()
+            store.compare_update_channel(
+                "system", UNCONDITIONAL,
+                lambda current: ({"count": int(current.get("count", 0)) + 1}, True, None),
+            )
+
+        threads = [
+            threading.Thread(target=increment, args=(store_a if i % 2 == 0 else store_b,))
+            for i in range(20)
+        ]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+        assert store_a.snapshot(_allow_all)["system"]["count"] == 20
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="os.fork unavailable on this platform")
+class TestForkedAdapterMutationSerialization:
+    """Parent's real counterexample: forcing the lock fd open in the parent
+    (via one real mutation) BEFORE fork, then inheriting the SAME adapter
+    object into several children, must not silently split the lock
+    authority. Before the PID-aware fix, every child inherited the parent's
+    already-open flock fd (not mutually exclusive with the parent/siblings)
+    and the parent's process-wide ``threading.Lock`` objects (unsafe if held
+    at fork time) — this reproduced exactly as
+    ``[2, 2, 2, 1, 2, 2, 1, 1, 1, 1]`` instead of 12 across 10 iterations.
+    """
+
+    def _run_fork_race(self, workdir: Path, n_children: int, barrier_dir: Path) -> list[int]:
+        """Fork ``n_children`` real child processes, all using the SAME
+        pre-forked, already-mutated adapter object, synchronized by a
+        file-based barrier (a `threading.Barrier` does not survive fork).
+        Returns each child's exit code; raises if any child hangs past a
+        bounded deadline (proving no inherited-lock deadlock)."""
+        import signal
+        import time
+
+        store = _posix_store(workdir)
+        # Force the flock fd open and the process-wide lock object created
+        # in the PARENT before any fork — this is the exact precondition
+        # the parent's counterexample requires.
+        store.publish("system", {"count": 0})
+        store.compare_update_channel(
+            "system", UNCONDITIONAL, lambda current: ({"count": 0}, True, None)
+        )
+
+        child_pids = []
+        for i in range(n_children):
+            pid = os.fork()
+            if pid == 0:
+                # Child: wait for the release barrier, then race the SAME
+                # inherited adapter object's compare_update_channel once.
+                ready_path = barrier_dir / f"ready.{os.getpid()}"
+                release_path = barrier_dir / "release"
+                ready_path.touch()
+                deadline = time.monotonic() + 15.0
+                while not release_path.exists():
+                    if time.monotonic() > deadline:
+                        os._exit(2)
+                    time.sleep(0.001)
+                try:
+                    store.compare_update_channel(
+                        "system", UNCONDITIONAL,
+                        lambda current: ({"count": int(current.get("count", 0)) + 1}, True, None),
+                    )
+                except Exception:
+                    os._exit(3)
+                os._exit(0)
+            child_pids.append(pid)
+
+        ready_deadline = time.monotonic() + 15.0
+        while len(list(barrier_dir.glob("ready.*"))) < n_children:
+            if time.monotonic() > ready_deadline:
+                for pid in child_pids:
+                    with contextlib.suppress(OSError):
+                        os.kill(pid, signal.SIGKILL)
+                raise TimeoutError("not all forked children reached the start barrier")
+            time.sleep(0.005)
+        (barrier_dir / "release").touch()
+
+        exit_codes = []
+        try:
+            for pid in child_pids:
+                _, status = os.waitpid(pid, 0)
+                exit_codes.append(os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1)
+        finally:
+            for pid in child_pids:
+                with contextlib.suppress(ProcessLookupError, OSError):
+                    os.kill(pid, signal.SIGKILL)
+        return exit_codes
+
+    def test_forked_children_sharing_pre_forked_adapter_do_not_lose_updates(self, tmp_path):
+        n_children = 12
+        for iteration in range(10):
+            workdir = tmp_path / f"fork-race-{iteration}"
+            workdir.mkdir()
+            barrier_dir = tmp_path / f"fork-barrier-{iteration}"
+            barrier_dir.mkdir()
+
+            exit_codes = self._run_fork_race(workdir, n_children, barrier_dir)
+            assert exit_codes == [0] * n_children, (
+                f"iteration {iteration}: not every forked child exited 0: {exit_codes}"
+            )
+
+            final_store = PosixNotificationStoreAdapter(workdir)
+            final_count = final_store.snapshot(_allow_all)["system"]["count"]
+            assert final_count == n_children, (
+                f"iteration {iteration}: expected {n_children} (no lost updates "
+                f"across forked children sharing one pre-forked adapter), got {final_count}"
+            )
+
+    def test_forked_child_does_not_deadlock_on_guard_held_at_fork_time(self, tmp_path):
+        """Genuine held-lock-at-fork proof (replaces an earlier, insufficient
+        version of this test that only forked AFTER every lock had already
+        been released, which proved nothing about fork-while-locked safety).
+
+        The PARENT thread directly acquires and KEEPS HOLDING
+        `_PROCESS_LOCKS_GUARD` itself (the actual global guard object, not
+        merely a `Store.held()` call that would release it) across the real
+        `os.fork()` syscall, while the CHILD — which inherits that exact
+        guard already locked, with no thread in the child that could ever
+        release it — attempts one real Store mutation. Without the
+        `os.register_at_fork(after_in_child=...)` reset, the child's first
+        `_process_wide_lock()` call would try to acquire the inherited,
+        permanently-locked guard and hang forever; this test proves it does
+        not, under a bounded deadline, and kills+fails (rather than hanging
+        the whole test run) if it ever does.
+        """
+        import signal
+        import time
+
+        from lingtai.adapters.posix import notification_store as ns_module
+
+        workdir = tmp_path / "fork-guard-held-at-fork"
+        workdir.mkdir()
+        store = _posix_store(workdir)
+        store.publish("system", {"count": 0})
+
+        # Acquire the REAL module-level guard directly and hold it open
+        # across fork — this is the exact danger case the brief requires:
+        # some parent thread holds `_PROCESS_LOCKS_GUARD` at fork time.
+        ns_module._PROCESS_LOCKS_GUARD.acquire()
+        try:
+            pid = os.fork()
+            if pid == 0:
+                # Child: the at-fork callback must already have replaced
+                # its inherited (locked) guard with a fresh unlocked one
+                # before this line runs — otherwise this call hangs forever
+                # on a lock only the (nonexistent-in-this-process) parent
+                # thread could release.
+                try:
+                    store.compare_update_channel(
+                        "system", UNCONDITIONAL,
+                        lambda current: ({"count": int(current.get("count", 0)) + 1}, True, None),
+                    )
+                except Exception:
+                    os._exit(3)
+                os._exit(0)
+
+            deadline = time.monotonic() + 10.0
+            child_finished = False
+            while time.monotonic() < deadline:
+                done_pid, status = os.waitpid(pid, os.WNOHANG)
+                if done_pid == pid:
+                    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, (
+                        f"forked child did not exit 0: status={status}"
+                    )
+                    child_finished = True
+                    break
+                time.sleep(0.01)
+            if not child_finished:
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+                pytest.fail(
+                    "forked child deadlocked while the parent held "
+                    "_PROCESS_LOCKS_GUARD across fork — the at-fork reset "
+                    "did not take effect"
+                )
+        finally:
+            # Release the guard the PARENT itself acquired, so this test
+            # never leaves real global lock state held past its own scope.
+            ns_module._PROCESS_LOCKS_GUARD.release()
+
+        final_count = store.snapshot(_allow_all)["system"]["count"]
+        assert final_count == 1
