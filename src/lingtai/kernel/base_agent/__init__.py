@@ -32,6 +32,7 @@ from ..workdir_lease import WorkdirLeasePort
 from ..notification_store import NotificationStorePort
 from ..agent_presence import AgentPresenceStorePort
 from ..lifecycle_clock import LifecycleClockPort
+from ..refresh_watcher import RefreshWatcherPort
 from ..snapshot import SnapshotPort, SourceRevisionPort
 from ..message import Message
 from ..prompt import SystemPromptManager
@@ -351,6 +352,19 @@ class BaseAgent:
         - ``source_revision_port`` (SourceRevisionPort): Bounded running-source
           revision and tracked-dirty queries used by identity and drift policy.
 
+    Conditionally required:
+        - ``refresh_watcher`` (RefreshWatcherPort | None): Detached-process
+          handoff for the generated relaunch watcher script, used by
+          ``_perform_refresh`` after the ``.refresh``/``.refresh.taken``
+          handshake completes. Composition roots (``lingtai.Agent``,
+          ``lingtai.cli``) always inject the production adapter; there is no
+          no-op watcher and Core never constructs the concrete adapter. A raw
+          ``BaseAgent`` built without one (e.g. most non-refresh tests)
+          constructs successfully — omitting it only fails loudly inside
+          ``_perform_refresh``, and only once a real launch command exists,
+          before any handshake or shutdown mutation. The no-launch-cmd path
+          (``_build_launch_cmd()`` returns ``None``) works without it.
+
     Services (all optional):
         - ``service`` (LLMService): The brain — thinking, generating text.
         - ``file_io`` (FileIOService): File access — backs read/edit/write/glob/grep.
@@ -388,6 +402,7 @@ class BaseAgent:
         lifecycle_clock: LifecycleClockPort,
         snapshot_port: SnapshotPort,
         source_revision_port: SourceRevisionPort,
+        refresh_watcher: RefreshWatcherPort | None = None,
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
         file_io: Any | None = None,
         mail_service: Any | None = None,
@@ -427,6 +442,15 @@ class BaseAgent:
         # Core receives both snapshot/revision capabilities as required Ports.
         self._snapshot_port = snapshot_port
         self._source_revision_port = source_revision_port
+        # Core receives the refresh-watcher Port; the concrete detached-process
+        # mechanism (a POSIX subprocess adapter today) is composed outside.
+        # There is no no-op fallback, but construction itself does not require
+        # it: composition roots always inject the production adapter, while a
+        # raw BaseAgent (most non-refresh tests) may omit it and construct
+        # successfully. `_perform_refresh` fails loudly if it is absent, but
+        # only once a real launch command exists and before any handshake or
+        # shutdown mutation (see kernel/refresh_watcher/CONTRACT.md).
+        self._refresh_watcher = refresh_watcher
         self._runtime_identity_event_fields = runtime_identity_event_fields(
             self._source_revision_port
         )

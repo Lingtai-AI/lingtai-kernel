@@ -192,6 +192,16 @@ class Agent(BaseAgent):
 
                 kwargs["lifecycle_clock"] = SystemLifecycleClockAdapter()
 
+            # BaseAgent requires a refresh-watcher Port for the detached relaunch
+            # subprocess handoff. As the composition root, construct the
+            # production POSIX adapter. A caller may inject its own.
+            if kwargs.get("refresh_watcher") is None:
+                from lingtai.adapters.posix.refresh_watcher import (
+                    PosixRefreshWatcherAdapter,
+                )
+
+                kwargs["refresh_watcher"] = PosixRefreshWatcherAdapter()
+
             # Compose the two required snapshot/revision capabilities outside Core.
             # Separate instances intentionally target the workdir and running source.
             if "snapshot_port" not in kwargs and "working_dir" in kwargs:

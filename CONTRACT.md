@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/kernel/notification_store/CONTRACT.md
   - src/lingtai/kernel/agent_presence/CONTRACT.md
   - src/lingtai/kernel/lifecycle_clock/CONTRACT.md
+  - src/lingtai/kernel/refresh_watcher/CONTRACT.md
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/kernel/snapshot/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md

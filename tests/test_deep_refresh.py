@@ -826,14 +826,16 @@ def test_refresh_watcher_receives_parent_captured_runtime_identity(tmp_path):
         return_value=["lingtai-agent", "run", str(tmp_path)]
     )
 
-    with patch("subprocess.Popen") as popen:
-        _perform_refresh(
-            agent,
-            skip_chat_history_save=True,
-            skip_save_reason="identity-handoff-test",
-        )
+    from tests._refresh_watcher_helpers import make_test_refresh_watcher
 
-    script = popen.call_args.args[0][2]
+    agent._refresh_watcher = make_test_refresh_watcher()
+    _perform_refresh(
+        agent,
+        skip_chat_history_save=True,
+        skip_save_reason="identity-handoff-test",
+    )
+
+    script = agent._refresh_watcher.last_script
     tree = ast.parse(script)
 
     identity_assignments = [
