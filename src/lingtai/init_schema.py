@@ -111,12 +111,15 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "timezone_awareness": bool,
     "pseudo_agent_subscriptions": list,
     "preset": dict,
-    # Large-result notification threshold.  When a tool result's serialized
-    # length exceeds this value it becomes a pending large-result case; the
-    # system-channel notification fires only once the combined length of all
-    # pending large-result cases exceeds 50000 chars (the total-length gate).
-    # Default: 3000.  0 disables notifications.  Runtime mutation via the system
-    # tool is not supported — change this field and refresh.
+    # Large-result hint threshold.  `current_tool_result_chars` always ranks
+    # tool results over a fixed 1000-char floor into
+    # `_meta.agent_meta.current_tool_result_chars.top_results` as summarize
+    # candidates, regardless of this value (see `tools/system/ANATOMY.md`).
+    # This field only gates `over_threshold_count` in that same block and the
+    # inline `tool_meta.comment.overflow` hint in ToolExecutor. Default: 3000.
+    # 0 disables the threshold comparison and the inline overflow hint (the
+    # fixed-floor top_results ranking still runs). Runtime mutation via the
+    # system tool is not supported — change this field and refresh.
     "summarize_notification_threshold": int,
 }
 

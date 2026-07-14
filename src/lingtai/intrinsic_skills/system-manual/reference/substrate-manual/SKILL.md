@@ -7,12 +7,15 @@ description: >
   lifecycle states (ACTIVE/IDLE/STUCK/ASLEEP/SUSPENDED), the `system` tool,
   notification/read/dismiss discipline, communication channels, memory layers,
   molt model, runtime log routing, collaboration topology, MCP/addon ownership,
-  idle/soul behavior, preset tiers, and resident substrate maintenance. This is
+  idle/soul behavior, preset tiers, the detailed preset runtime model (raw vs
+  resolved init.json, preset identity, TUI/library vs main-agent allowed-only
+  catalogs, swap/revert/refresh, daemon task explicit/omitted/CLI-skip paths),
+  and resident substrate maintenance. This is
   a nested skill-reference under `system-manual`, not a standalone catalog skill;
   its folder may carry scripts/assets as the substrate reference grows.
-version: 1.0.2
-tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp]
-last_changed_at: "2026-07-12T20:20:43-07:00"
+version: 1.1.0
+tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp, preset]
+last_changed_at: "2026-07-13T00:00:00-07:00"
 ---
 
 # Substrate Manual
@@ -117,7 +120,9 @@ are cost/quality hints, not moral rankings:
 - tier 1: opportunistic/free use.
 
 Prefer the cheapest preset that can reliably perform the task; switch back when
-experimentation is done.
+experimentation is done. For the detailed preset runtime model — raw versus
+resolved `init.json`, path identity, the two catalogs, main-agent swap/revert,
+and the daemon task/CLI distinction — see §11 below.
 
 ### Notifications and dismiss → the `notification` tool
 
@@ -356,3 +361,174 @@ not examples or long rationale. When a substrate section grows into recipes,
 troubleshooting trees, or extended explanation, move the detail here or into a
 more specific `system-manual/reference/*.md` node and leave a short resident
 route behind.
+
+## 11. Preset runtime model — `init.json` composition and the preset lifecycle
+
+`init.json` is a distributed composition document, not a single independently
+governed component: its schema, migration, active-preset materialization,
+prompt reload, capability/MCP setup, identity projection, and main-agent versus
+daemon-task selection are owned by several existing boundaries (schema
+`init_schema.py`, migration `kernel/migrate`, preset core `kernel/presets.py`,
+composition roots `cli.py`/`agent.py`, main-agent operations
+`tools/system/preset.py`, and the daemon task path). This section is the single
+canonical detailed reference for that composition and for the preset runtime
+model specifically; `system-manual`'s router points here, and resident
+`substrate`/`procedures` carry only compact routing cues.
+
+**Coding agents:** the structural/code-navigation twin of this section is
+`src/lingtai/ANATOMY.md` (its Connections/Notes cite the exact `agent.py`/
+`cli.py`/`kernel/presets.py` symbols this section describes). A change to
+`init.json` composition, preset materialization, or the daemon-task preset
+path must re-check all four surfaces together in the same PR: that Anatomy's
+citations, this canonical reference, the resident `substrate`/`procedures`
+routing cues, and `tests/test_preset_runtime_model_docs.py` — not just the
+code or a single doc layer.
+
+### Raw `init.json` versus the derived resolved manifest
+
+A raw, operator-owned `init.json` is not itself the running configuration. On
+every boot and refresh it is composed:
+
+```text
+raw operator-owned init.json
+  → migration / deprecated-field cleanup
+  → active-preset materialization
+  → schema validation + path resolution
+  → derived system/manifest.resolved.json
+  → boot or refresh composition (LLM/config, prompts, capabilities/MCP, identity)
+```
+
+- **Raw `init.json`** is the durable source an operator or the preset-swap path
+  writes. Within the boot/refresh/preset-composition lifecycle this section
+  describes, reads (boot, refresh, prompt-only reload) never write it back
+  except the explicit exceptions below.
+- **`system/manifest.resolved.json`** is a **derived** runtime artifact: the
+  fully materialized, validated, path-resolved manifest with secret-bearing
+  keys removed, regenerated on every boot/refresh/molt-reload. It exists so
+  consumers can read the actual running configuration without reimplementing
+  preset resolution. It is never a write-back source and must not be described
+  as one.
+- Within this boot/refresh/preset-composition lifecycle, the raw-`init.json`
+  writers are explicit: preset activation/swap (atomic write of the new
+  active/default/allowed and materialized llm/capabilities), default-preset
+  update on a named swap, CLI/agent migration or deprecated-field cleanup, and
+  CLI boot's managed `venv_path` writeback (`cli.run` resolves the venv and writes `data["venv_path"]` back
+  to `init.json` when the boot-selected/resolved venv differs from the raw
+  value or is absent). Everything else
+  covered by *this lifecycle* (LLM service state, prompt mirrors under
+  `system/*.md`, `.agent.json` identity projection, MCP clients) is derived,
+  in-memory-or-mirrored runtime state, not a second source of truth for
+  `init.json` itself.
+- **This list is scoped to the boot/refresh/preset-composition lifecycle
+  above — it is not a repository-wide inventory of every raw-`init.json`
+  writer.** Other owner-local features persist their own settings to raw
+  `init.json` outside this lifecycle; document those under their owning
+  tool/manual, not here. For example, `soul(action="config")` and
+  `soul(action="voice")` persist `manifest.soul.*` (delay,
+  consultation_past_count, voice, voice_prompt) directly to the agent's own
+  `init.json` via `tools/soul/config.py`'s `_persist_soul_config` /
+  `_persist_soul_voice`, independent of boot/refresh/preset-swap.
+
+Top-level prompt/env/venv/addons/MCP/manifest field groups follow the same raw
+→ derived shape but are owned elsewhere; do not duplicate their detail here:
+
+| Field group | Real owner | Materialization / derived state | Refresh / restart |
+|---|---|---|---|
+| Prompt pairs (`covenant`, `pad`, `lingtai`, `base_prompt`, `comment`) | Prompt reload (`agent.py` `_reload_prompt_sections`); kernel-owned `principle`/`substrate`/`procedures` ignore init overrides | `system/<section>.md` mirrors, prompt-manager sections | Reloaded on boot/refresh/molt |
+| `env_file`, `venv_path` | CLI boot / `venv_resolve.py` | Resolved process environment, venv marker state | Boot resolves; refresh/restart reuse |
+| `addons`, `mcp` | MCP registry/addon decompression, capability setup | MCP clients, `_mcp_init_specs`, registry records | Boot loads; refresh retries failed then reloads |
+| `manifest` (LLM, capabilities, agent identity, limits) | Schema + composition roots + capability registry | LLM service, `AgentConfig`, `.agent.json` sanitized projection | Boot/refresh reconstruct; some fields need full refresh, not summarize |
+
+For the exact fields, validation, and per-field lifecycle detail, read
+`init_schema.py`, `kernel/presets.py`, and `agent.py` directly (`_read_init`,
+`_activate_preset`, `_reload_prompt_sections`) rather than expecting this
+manual to restate a full field table. Some runtime gaps (`streaming`,
+`pseudo_agent_subscriptions`, root-vs-LLM `context_limit` semantics, exact MCP
+reload/venv/prompt persistence detail) are open implementation questions, not
+resolved by this reference — do not infer a guarantee from a name alone.
+
+### Preset identity and the two catalogs
+
+A preset is one `.json`/`.jsonc` file; its identity is its exact path.
+Accepted forms are absolute, `~`-relative, and workdir-relative — there is no
+stem lookup, implicit extension, or implicit directory search.
+
+There are two distinct catalog concepts, plus a separate worker path (below):
+
+1. **TUI/library discovery** (`discover_presets_in_dirs()`) enumerates preset
+   files in configured directories so a human authoring workflow can choose
+   what to allow. This is a **TUI/library authoring helper, not runtime
+   authorization**, and it is **not** a directory scan available at agent
+   runtime.
+2. **Main-agent catalog** (`system(action="presets")`) reads only
+   `manifest.preset.allowed` and returns those exact paths with
+   description/LLM/capability metadata and fresh connectivity. It is
+   **allowed-only**: it must never be described as "all presets in the
+   library," and it performs no directory scan or fallback beyond the
+   `allowed` list.
+
+`manifest.preset.active` is the preset currently selected/materialized for the
+main agent. `manifest.preset.default` is the durable home/revert/fallback
+target. `manifest.preset.allowed` is the explicit main-agent swap set. Schema
+requires both `active` and `default` to be members of `allowed`.
+
+### Main-agent swap, revert, and refresh sequence
+
+1. Call `system(action="presets")` and choose an exact returned path — not a
+   shorthand or a name outside `allowed`.
+2. Call `system(action="refresh", preset=<path>)` for a named swap, or
+   `revert_preset=true` to read `manifest.preset.default` instead. An empty
+   optional `preset` string normalizes to absent; supplying both a non-empty
+   `preset` and `revert_preset` is a conflict.
+3. The refresh path checks the requested path's `allowed` membership, checks
+   the target preset's context limit fits the current conversation, activates
+   atomically (writes raw `init.json`), persists the new selected default for
+   a named swap, best-effort retries failed MCPs, then rebuilds the runtime
+   (LLM/config/capabilities/MCP/prompt reconstruction, preserving conversation
+   history where a live session exists).
+4. A config, prompt, MCP, or capability edit needs `refresh` to take effect;
+   `system(action="summarize")` alone does not reconstruct the runtime and
+   must not be used as a refresh substitute.
+
+### Daemon task worker path — explicit, omitted, and external CLI
+
+The daemon/task-worker preset path is a **separate explicit path**, not the
+main-agent catalog operation, and it does **not** consult or inherit the
+main-agent `manifest.preset.allowed` gate:
+
+- `tasks[].preset` is an optional explicit `.json`/`.jsonc` path for an
+  in-process LingTai daemon task. The daemon schema recommends using a path
+  returned by `system(action="presets")`, but the worker boundary is
+  independent: an explicit path is loaded, connectivity-checked, and has its
+  capabilities preflight-instantiated before dispatch. **This preflight does
+  not check the path against the parent main agent's `manifest.preset.allowed`
+  list.** Documenting or assuming that inheritance is a drift to avoid.
+- Omitting `tasks[].preset` means the daemon task inherits the **parent's
+  regular (non-MCP) effective surface** — a parent-derived preset, not a fresh
+  independent default. A no-preset LingTai daemon still gets a fresh
+  daemon-scoped service rather than reusing the parent's live service
+  instance.
+- **External CLI backends** (`claude-p`, `codex`, `opencode`, and other
+  CLI-driven backends) **skip LingTai preset resolution entirely.** The
+  external CLI owns its own model/tools/permissions, and the daemon `tools`
+  field is ignored for that path. Do not describe a CLI-backend task as using
+  the LingTai preset/allowed model.
+
+This divergence (explicit daemon paths not consulting main-agent `allowed`) is
+a documented **current** behavior, not an authorization policy proposal. Do not
+change it here; a future authorization change is a separate, explicitly
+authorized decision.
+
+### Failure and authorization boundaries
+
+- An unauthorized main-agent swap path (not in `allowed`) is rejected before
+  any runtime change.
+- A target whose context limit cannot hold the current conversation is
+  rejected before activation.
+- If the active preset file is missing, materialization may fall back to a
+  different loadable default; if an existing active preset is malformed,
+  materialization fails rather than silently substituting another preset.
+- Daemon explicit-path preflight failure (unloadable path, failed
+  connectivity, failed capability instantiation) prevents dispatch of that
+  task; it is not a main-agent authorization decision and does not consult
+  `allowed`.

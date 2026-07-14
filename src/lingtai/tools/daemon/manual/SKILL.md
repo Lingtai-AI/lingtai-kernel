@@ -6,8 +6,8 @@ description: >
   hunch, understand `daemon(action="list")`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.5.2
-last_changed_at: "2026-07-03T10:53:00-07:00"
+version: 0.6.0
+last_changed_at: "2026-07-13T00:00:00-07:00"
 ---
 
 # Daemon Manual — Router
@@ -128,7 +128,16 @@ files, not standalone top-level skills.
     the hard terminal-success contract: only `finish(status="done")` permits
     `done`; `failed`/`incomplete`, missing finish, or invalid completion prevents
     silent success. Secret `env`/`headers` values are redacted in prompts.
-  - `preset`: optional body/model/tool-shape override for this daemon.
+  - `preset`: optional body/model/tool-shape override for this daemon — an
+    explicit `.json`/`.jsonc` path, checked for loadability/connectivity/
+    capability before dispatch. It does **not** consult the parent agent's
+    `manifest.preset.allowed` list. Omitting it inherits the parent's regular
+    (non-MCP) effective surface instead of a fresh independent default.
+    External CLI backends skip LingTai preset resolution entirely and use
+    their own model/tools/permissions. For the full preset runtime model
+    (raw vs resolved `init.json`, preset identity, main-agent catalog vs this
+    worker path), read `system-manual` →
+    `reference/substrate-manual/SKILL.md` §11.
   - `backend_options`: raw CLI flags for CLI backends only.
 - Treat `system_prompt` as the parent's behavioral contract for **all** tools
   and selected skills/MCP context, not only for communication. If a daemon receives `bash`,

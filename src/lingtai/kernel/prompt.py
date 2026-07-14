@@ -17,9 +17,9 @@ reference (parameter names, types, one-line action descriptions),
 substrate carries the operational wisdom (tool tiers, data-flow
 topology, life states, channel discipline, attention model — patterns
 that span multiple tools). The kernel ships `lingtai/prompts/substrate/substrate.md`
-as the packaged default (v1); the `Agent` subclass copies it to
-`system/substrate.md` on first boot, where the agent (or human) can
-edit it freely.
+as the packaged default; the `Agent` subclass mirrors it to
+`system/substrate.md` on every boot/refresh, overwriting any local edits —
+the on-disk file is a read-only mirror/debug artifact, not an editable override.
 
 build_system_prompt() assembles the kernel-owned principle section,
 wrapper-level base_prompt material, and rendered prompt sections. Principle
