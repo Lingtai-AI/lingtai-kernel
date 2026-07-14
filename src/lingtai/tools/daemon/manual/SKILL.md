@@ -6,8 +6,8 @@ description: >
   hunch, understand `daemon(action="list")`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.6.0
-last_changed_at: "2026-07-13T00:00:00-07:00"
+version: 0.7.0
+last_changed_at: "2026-07-14T00:00:00-07:00"
 ---
 
 # Daemon Manual — Router
@@ -129,14 +129,20 @@ files, not standalone top-level skills.
     `done`; `failed`/`incomplete`, missing finish, or invalid completion prevents
     silent success. Secret `env`/`headers` values are redacted in prompts.
   - `preset`: optional body/model/tool-shape override for this daemon — an
-    explicit `.json`/`.jsonc` path, checked for loadability/connectivity/
-    capability before dispatch. It does **not** consult the parent agent's
-    `manifest.preset.allowed` list. Omitting it inherits the parent's regular
-    (non-MCP) effective surface instead of a fresh independent default.
-    External CLI backends skip LingTai preset resolution entirely and use
-    their own model/tools/permissions. For the full preset runtime model
-    (raw vs resolved `init.json`, preset identity, main-agent catalog vs this
-    worker path), read `system-manual` →
+    explicit `.json`/`.jsonc` path. On the LingTai backend it must already be
+    a member of the parent agent's resolved `manifest.preset.allowed` set
+    (the same fail-closed normalized path check `system(action="refresh")`
+    uses); an unauthorized path is refused before load/connectivity/capability
+    checks, run-dir creation, scheduling, or dispatch. Being present in the
+    saved/library directory is not by itself authorization — call
+    `system(action="presets")` first and pass one of the exact paths it
+    returns. Omitting `preset` inherits the parent's regular (non-MCP)
+    effective surface instead of a fresh independent default, and does not
+    perform this allowlist check at all. External CLI backends skip LingTai
+    preset resolution entirely and use their own model/tools/permissions. For
+    the full preset runtime model (raw vs resolved `init.json`, preset
+    identity, main-agent catalog vs this worker path, and how to authorize a
+    new preset for this path), read `system-manual` →
     `reference/substrate-manual/SKILL.md` §11.
   - `backend_options`: raw CLI flags for CLI backends only.
 - Treat `system_prompt` as the parent's behavioral contract for **all** tools

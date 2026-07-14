@@ -13,9 +13,9 @@ description: >
   and resident substrate maintenance. This is
   a nested skill-reference under `system-manual`, not a standalone catalog skill;
   its folder may carry scripts/assets as the substrate reference grows.
-version: 1.1.0
+version: 1.2.0
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp, preset]
-last_changed_at: "2026-07-13T00:00:00-07:00"
+last_changed_at: "2026-07-14T00:00:00-07:00"
 ---
 
 # Substrate Manual
@@ -493,31 +493,62 @@ requires both `active` and `default` to be members of `allowed`.
 ### Daemon task worker path — explicit, omitted, and external CLI
 
 The daemon/task-worker preset path is a **separate explicit path**, not the
-main-agent catalog operation, and it does **not** consult or inherit the
-main-agent `manifest.preset.allowed` gate:
+main-agent catalog operation, but on the LingTai backend an explicit
+`tasks[].preset` must still resolve inside the main-agent
+`manifest.preset.allowed` set — merely existing in the saved/library
+directory is not authorization:
 
 - `tasks[].preset` is an optional explicit `.json`/`.jsonc` path for an
-  in-process LingTai daemon task. The daemon schema recommends using a path
-  returned by `system(action="presets")`, but the worker boundary is
-  independent: an explicit path is loaded, connectivity-checked, and has its
-  capabilities preflight-instantiated before dispatch. **This preflight does
-  not check the path against the parent main agent's `manifest.preset.allowed`
-  list.** Documenting or assuming that inheritance is a drift to avoid.
+  in-process LingTai daemon task. Before any LingTai-side effect (preset
+  load, connectivity/provider probing, capability construction, run-dir
+  creation, scheduling, or dispatch), the requested path must already be a
+  member of the parent agent's resolved `manifest.preset.allowed` set. The
+  check uses the same fail-closed normalized path-membership comparison as
+  the main-agent swap gate (`_preset_ref_in` in
+  `src/lingtai/kernel/presets.py`), so `~`-relative, absolute, and
+  workdir-relative forms of an authorized path all pass. An unauthorized path
+  is refused with a clear error before the gate reads or resolves anything
+  else. The allowlist is read at all only when at least one task in the batch
+  actually requests an explicit preset — the daemon schema recommends using a
+  path returned by `system(action="presets")`, and that returned path is
+  exactly what passes the gate.
 - Omitting `tasks[].preset` means the daemon task inherits the **parent's
   regular (non-MCP) effective surface** — a parent-derived preset, not a fresh
-  independent default. A no-preset LingTai daemon still gets a fresh
-  daemon-scoped service rather than reusing the parent's live service
+  independent default — and this path never reads or consults
+  `manifest.preset.allowed` at all. A no-preset LingTai daemon still gets a
+  fresh daemon-scoped service rather than reusing the parent's live service
   instance.
 - **External CLI backends** (`claude-p`, `codex`, `opencode`, and other
-  CLI-driven backends) **skip LingTai preset resolution entirely.** The
-  external CLI owns its own model/tools/permissions, and the daemon `tools`
-  field is ignored for that path. Do not describe a CLI-backend task as using
-  the LingTai preset/allowed model.
+  CLI-driven backends) **skip LingTai preset resolution entirely** and are
+  unaffected by this gate. The external CLI owns its own
+  model/tools/permissions, and the daemon `tools` field is ignored for that
+  path. Do not describe a CLI-backend task as using the LingTai
+  preset/allowed model. Task MCP registrations remain separate from LingTai
+  preset resolution on every backend.
 
-This divergence (explicit daemon paths not consulting main-agent `allowed`) is
-a documented **current** behavior, not an authorization policy proposal. Do not
-change it here; a future authorization change is a separate, explicitly
-authorized decision.
+### Authorizing a saved preset for daemon use
+
+A saved `.json`/`.jsonc` preset is not usable from `tasks[].preset` until the
+owning agent's config explicitly allows it. This is a config-owner action —
+the daemon call itself cannot mutate `manifest.preset.allowed`:
+
+1. Identify the preset's exact path (for example the path shown by the
+   preset-library screen, or wherever the `.json`/`.jsonc` file was saved).
+2. Ask whoever owns the agent's `init.json` to add that exact path as a new
+   entry in `manifest.preset.allowed`, preserving every existing entry and
+   the existing `active`/`default` values — `allowed` must remain a
+   non-empty list containing both `active` and `default`.
+3. Have the agent refresh (`system(action="refresh")`) so the edited
+   `init.json` is re-read and the new entry takes effect.
+4. Call `system(action="presets")` and confirm the exact path now appears in
+   the allowed-only catalog it returns.
+5. Pass that exact returned path — not a shorthand, not the pre-authorization
+   path string, and not a directory-scan result — in `tasks[].preset`.
+
+Skipping step 2 (for example, saving the file into the library directory
+without editing `allowed`) does not authorize it: `system(action="presets")`
+still will not list it, and an `emanate` call using its path is refused by
+the gate above.
 
 ### Failure and authorization boundaries
 
@@ -528,7 +559,9 @@ authorized decision.
 - If the active preset file is missing, materialization may fall back to a
   different loadable default; if an existing active preset is malformed,
   materialization fails rather than silently substituting another preset.
-- Daemon explicit-path preflight failure (unloadable path, failed
-  connectivity, failed capability instantiation) prevents dispatch of that
-  task; it is not a main-agent authorization decision and does not consult
-  `allowed`.
+- An unauthorized explicit `tasks[].preset` (not in `manifest.preset.allowed`)
+  is rejected before load, connectivity/capability preflight, run-dir
+  creation, scheduling, or dispatch of that task.
+- Once past the allowlist gate, daemon explicit-path preflight failure
+  (unloadable path, failed connectivity, failed capability instantiation)
+  still prevents dispatch of that task.

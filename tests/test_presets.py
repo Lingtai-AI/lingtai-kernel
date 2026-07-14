@@ -618,6 +618,49 @@ def test_resolve_allowed_presets_skips_non_string_entries(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# _preset_ref_in — shared normalized membership primitive
+# ---------------------------------------------------------------------------
+
+def test_preset_ref_in_tilde_and_absolute_are_equivalent(tmp_path, monkeypatch):
+    from lingtai.kernel.presets import _preset_ref_in
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    abs_path = str((home / "presets" / "alpha.json").resolve())
+    tilde = "~/presets/alpha.json"
+    assert _preset_ref_in(tilde, [abs_path])
+    assert _preset_ref_in(abs_path, [tilde])
+    assert _preset_ref_in(tilde, [tilde])
+
+
+def test_preset_ref_in_working_dir_relative_matches_absolute(tmp_path):
+    from lingtai.kernel.presets import _preset_ref_in
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    abs_path = str((wd / "presets" / "beta.json").resolve())
+    assert _preset_ref_in("./presets/beta.json", [abs_path], working_dir=wd)
+    assert _preset_ref_in(abs_path, ["./presets/beta.json"], working_dir=wd)
+
+
+def test_preset_ref_in_unrelated_path_denies(tmp_path):
+    from lingtai.kernel.presets import _preset_ref_in
+    assert not _preset_ref_in("~/presets/alpha.json", ["/other/foo.json"])
+
+
+def test_preset_ref_in_empty_or_non_string_request_denies():
+    from lingtai.kernel.presets import _preset_ref_in
+    assert not _preset_ref_in("", ["~/presets/alpha.json"])
+    assert not _preset_ref_in(None, ["~/presets/alpha.json"])
+
+
+def test_preset_ref_in_malformed_refs_denies():
+    from lingtai.kernel.presets import _preset_ref_in
+    assert not _preset_ref_in("~/presets/alpha.json", None)
+    assert not _preset_ref_in("~/presets/alpha.json", "not-a-list")
+    assert not _preset_ref_in("~/presets/alpha.json", {})
+
+
+# ---------------------------------------------------------------------------
 # discover_presets across multiple libraries
 # ---------------------------------------------------------------------------
 

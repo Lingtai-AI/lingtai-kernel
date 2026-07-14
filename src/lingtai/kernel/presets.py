@@ -174,6 +174,48 @@ def resolve_allowed_presets(manifest: dict, working_dir: Path) -> list[Path]:
     return resolved
 
 
+def _preset_ref_in(name: str, refs: list, *, working_dir: Path | None = None) -> bool:
+    """Membership test on a list of preset path strings, normalized so
+    `~/...`, absolute, and working-dir-relative forms compare equal.
+
+    Fails closed: a non-string/empty ``name`` or a non-list ``refs``
+    returns False rather than raising or scanning anything.
+
+    ``working_dir`` resolves relative entries the same way `load_preset`
+    does (defaults to `Path.cwd()` for direct callers/tests; system/daemon
+    callers should pass the agent's working dir).
+    """
+    if not isinstance(name, str) or not name:
+        return False
+    if not isinstance(refs, list):
+        return False
+
+    base = working_dir if working_dir is not None else Path.cwd()
+
+    def _resolve(value: str) -> Path | None:
+        try:
+            p = Path(value).expanduser()
+            if not p.is_absolute():
+                p = base / p
+            return p.resolve(strict=False)
+        except (ValueError, OSError, RuntimeError):
+            return None
+
+    target = _resolve(name)
+
+    for ref in refs:
+        if not isinstance(ref, str) or not ref:
+            continue
+        if ref == name:
+            return True
+        if target is None:
+            continue
+        resolved_ref = _resolve(ref)
+        if resolved_ref is not None and resolved_ref == target:
+            return True
+    return False
+
+
 def discover_presets_in_dirs(
     dirs: Path | str | list[Path | str],
     *,

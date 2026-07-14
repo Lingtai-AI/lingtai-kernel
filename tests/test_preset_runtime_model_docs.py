@@ -93,29 +93,33 @@ def test_substrate_reference_contains_required_preset_anchors():
         assert anchor in text_lower, f"missing anchor: {anchor}"
 
 
-def test_substrate_reference_daemon_does_not_inherit_main_agent_allowed():
+def test_substrate_reference_daemon_explicit_preset_must_be_allowed():
     text = _read(SUBSTRATE_REFERENCE)
-    assert "does not consult" in text
+    assert "manifest.preset.allowed" in text
+    assert "_preset_ref_in" in text
 
 
 def test_substrate_reference_omitted_daemon_preset_is_parent_derived():
     text = _read(SUBSTRATE_REFERENCE)
     assert "parent-derived" in text
+    # Omitting preset is the one path that still skips the allowlist check.
+    assert "never reads or consults" in text or "skips this check entirely" in text or "skip that check entirely" in text
 
 
 # ---------------------------------------------------------------------------
 # 3. No accidental "directory scan" / "all presets in the library" claims,
-#    and no daemon-inherits-allowed claim, anywhere in the canonical surface.
+#    and no stale claim that the daemon path never checks `allowed` for an
+#    explicit preset, anywhere in the canonical surface.
 # ---------------------------------------------------------------------------
 
 FORBIDDEN_CATALOG_PHRASES = [
     "all presets in the library",
 ]
 
-FORBIDDEN_DAEMON_INHERITANCE_PHRASES = [
-    "tasks[].preset inherits",
-    "daemon task path inherits the main-agent",
-    "daemon inherits allowed",
+FORBIDDEN_DAEMON_BYPASS_PHRASES = [
+    "does not consult",
+    "does not check the path against",
+    "not check the path against",
 ]
 
 
@@ -126,10 +130,10 @@ def test_no_canonical_text_claims_unrestricted_directory_scan_catalog():
             assert phrase not in text, f"{path} claims: {phrase}"
 
 
-def test_no_route_claims_daemon_inherits_main_agent_allowed_gate():
+def test_no_route_claims_daemon_explicit_preset_bypasses_allowed_gate():
     for path in CANONICAL_SURFACE:
         text = _read(path).lower()
-        for phrase in FORBIDDEN_DAEMON_INHERITANCE_PHRASES:
+        for phrase in FORBIDDEN_DAEMON_BYPASS_PHRASES:
             assert phrase not in text, f"{path} claims: {phrase}"
 
 

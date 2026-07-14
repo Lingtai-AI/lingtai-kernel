@@ -48,6 +48,15 @@ def _make_agent(tmp_path, capabilities=None, presets_dir=None):
                 "llm": {"provider": "mock", "model": "mock-model"},
             }
         }
+        # The daemon authorization gate reads the raw allowlist via
+        # `_read_preset_from_init` (side-effect-free, no loader/probe/
+        # capability setup) rather than `_read_init`. Wire it directly so
+        # these positive fixtures stay authorized.
+        agent._read_preset_from_init = lambda: {
+            "active": active,
+            "default": active,
+            "allowed": allowed_paths or [active],
+        }
     return agent
 
 
