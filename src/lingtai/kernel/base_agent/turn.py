@@ -16,6 +16,7 @@ from ..safety_limits import (
     ACTIVE_TURN_TOOL_CALL_EMERGENCY_LIMIT,
 )
 from ..tool_executor import ToolExecutor
+from ..tool_result_artifacts import CompactionStats, compact_oversized_history
 from ..meta_block import (
     attach_active_notifications,
     attach_active_runtime,
@@ -387,21 +388,99 @@ def _is_over_window_error(exc: Exception) -> bool:
     """Return True for provider errors whose cause is wire length.
 
     Routed to the deterministic AED branch (not transient) because the
-    same wire will fail the same way no matter how many retries we burn:
-    the kernel does not retroactively shrink historical tool-result
-    content (only an explicit ``summarize`` replacement may replace a
-    historical tool-result body — see
-    ``lingtai.tools.system.summarize``), so an unresolved over-window
-    condition fails identically on every AED attempt until
-    ``max_aed_attempts`` is exhausted and the existing preset-fallback /
-    ASLEEP path takes over. This is deterministic fail-loud behavior, not
-    a hang: recovery requires an explicit summarize, not a silent kernel
-    rewrite.
+    same wire will fail the same way no matter how many retries we burn.
+    Retroactive compaction MUST run before the rebuilt session replays
+    the transcript — otherwise we will send the AED recovery prompt into
+    an unchanged over-window wire and trip the same error.
     """
     if isinstance(exc, EmptyLLMResponseError):
         return False
     msg = (str(exc) or "").lower()
     return any(fragment in msg for fragment in _OVER_WINDOW_MSG_FRAGMENTS)
+
+
+def _compact_history_before_retry(agent, *, source: str) -> "CompactionStats | None":
+    """Retroactively spill oversized tool results before an AED retry.
+
+    Walks ``agent._session.chat.interface._entries`` and replaces any
+    ``ToolResultBlock.content`` larger than the retroactive cap (default
+    5K chars — tighter than the preventive 200K cap because we want to
+    actually free provider tokens before retry) with a spill manifest.
+    Entries, ordering, ids, and ``tool_call``/``tool_result`` pairing are
+    untouched.  Already-compacted manifests are skipped.
+
+    When at least one block is rewritten, calls
+    ``agent._save_chat_history(ledger_source="retroactive_compaction")``
+    so the persisted ``history/chat_history.jsonl`` matches the compacted
+    wire before the session rebuild / retry replays it.
+
+    Logs a single bounded ``aed_history_compacted`` event on every call
+    (including the noop case, so operators can correlate AED firings with
+    compaction activity).  The event name is intentionally distinct from
+    the per-block ``tool_result_compacted_retroactively`` emitted by
+    ``compact_oversized_history`` itself.
+
+    Safe no-op if the agent has no working_dir, no live chat, or the
+    interface is in an unexpected shape — AED is the recovery path and
+    must never become the cause of further failures.  Any exception
+    raised by attribute access or the underlying helper is swallowed and
+    logged (best-effort) instead of propagating.  Returns the
+    ``CompactionStats`` for the caller's convenience, or ``None`` on
+    failure.
+    """
+    stats: CompactionStats | None = None
+    try:
+        chat = agent._session.chat if agent._session is not None else None
+        if chat is None:
+            return None
+        interface = getattr(chat, "interface", None)
+        working_dir = getattr(agent, "_working_dir", None)
+        stats = compact_oversized_history(
+            interface,
+            working_dir=working_dir,
+            logger_fn=getattr(agent, "_log", None),
+        )
+    except Exception as exc:  # noqa: BLE001 — recovery path, never re-raise
+        try:
+            agent._log(
+                "tool_result_compaction_failed",
+                source=source,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        except Exception:
+            pass
+        return None
+
+    log_fn = getattr(agent, "_log", None)
+    if log_fn is not None:
+        try:
+            log_fn(
+                "aed_history_compacted",
+                source=source,
+                **stats.to_log_fields(),
+            )
+        except Exception:
+            pass
+
+    if stats.compacted_blocks > 0:
+        # Persist the shrunk wire so the rebuilt session and any later
+        # snapshot load see the same compacted history the LLM will see
+        # on the retry replay.
+        save_fn = getattr(agent, "_save_chat_history", None)
+        if save_fn is not None:
+            try:
+                save_fn(ledger_source="retroactive_compaction")
+            except Exception as exc:  # noqa: BLE001
+                if log_fn is not None:
+                    try:
+                        log_fn(
+                            "retroactive_compaction_save_failed",
+                            source=source,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                    except Exception:
+                        pass
+    return stats
 
 
 def _restore_tool_results_after_continuation_failure(
@@ -604,43 +683,9 @@ def _run_loop(agent) -> None:
                     transient_attempts = 0
                     break  # success (chat saved after each session.send inside)
                 except Exception as e:
-                    from ..llm_utils import TerminalProviderHistoryError, WorkerStillRunningError
+                    from ..llm_utils import WorkerStillRunningError
 
                     err_desc = str(e) or repr(e)
-
-                    if isinstance(e, TerminalProviderHistoryError):
-                        # The provider rejected recorded history itself as
-                        # unverifiable/unusable (e.g. Codex's encrypted-reasoning
-                        # verifier). Every normal recovery action — closing
-                        # pending tool calls, rebuilding the session, injecting an
-                        # AED recovery prompt, retrying, preset fallback — would
-                        # resend that SAME unmodified history and fail identically,
-                        # or would require silently mutating/substituting historical
-                        # content, which only an explicit ``summarize`` replacement
-                        # may do. Report it through the existing terminal
-                        # observable path and go straight to ASLEEP: no AED
-                        # attempt spent, no close-pending synthesis, no
-                        # ``_rebuild_session``, no recovery prompt, no preset
-                        # fallback, no further provider request.
-                        agent._log(
-                            "terminal_provider_history_error",
-                            error=err_desc[:300],
-                            provider=getattr(e, "provider", None),
-                        )
-                        agent._set_state(AgentState.STUCK, reason=err_desc)
-                        _report_api_error_to_task_card(
-                            agent, e,
-                            attempt=1,
-                            max_attempts=1,
-                            terminal=True,
-                        )
-                        agent._asleep.set()
-                        agent._set_state(
-                            AgentState.ASLEEP,
-                            reason="terminal provider history error; no recovery action is safe",
-                        )
-                        sleep_state = AgentState.ASLEEP
-                        break
 
                     if isinstance(e, WorkerStillRunningError):
                         # Worker future is still alive — ChatInterface is
@@ -688,16 +733,13 @@ def _run_loop(agent) -> None:
                     # Issue #144: over-window / context-pressure errors must
                     # take the deterministic AED branch, not transient
                     # retry — the same wire will fail the same way under
-                    # any number of retries.  There is no retroactive
-                    # compaction: _rebuild_session below replays the SAME
-                    # unshrunk history, so an unresolved over-window
-                    # condition fails identically on every attempt until
-                    # max_aed_attempts / preset-fallback takes over (see the
-                    # no-rebuild-mutation invariant note further below).
-                    # This is the dedicated over-window recovery path; if we
-                    # ever add a hard pre-send gate (compact *before* the
-                    # first send rather than after the first failure), it
-                    # would slot in at _handle_message — see TODO below.
+                    # any number of retries.  Retroactive compaction below
+                    # shrinks the transcript before _rebuild_session
+                    # replays it.  This is the dedicated over-window
+                    # recovery path; if we ever add a hard pre-send gate
+                    # (compact *before* the first send rather than after
+                    # the first failure), it would slot in at
+                    # _handle_message — see TODO below.
                     over_window = _is_over_window_error(e)
                     if over_window:
                         agent._log(
@@ -715,6 +757,10 @@ def _run_loop(agent) -> None:
                                     reason=f"transient_retry: {err_desc[:200]}",
                                     tool_completed=True,
                                 )
+                            # Issue #144: shrink oversized historical tool
+                            # results to manifests before the retry so the
+                            # next send doesn't ship the same too-big wire.
+                            _compact_history_before_retry(agent, source="aed_transient")
                             agent._log(
                                 "aed_transient_retry",
                                 attempt=transient_attempts,
@@ -744,6 +790,13 @@ def _run_loop(agent) -> None:
                             attempts=transient_attempts,
                             error=err_desc[:300],
                         )
+                    # TODO(issue #144 follow-up): add a hard pre-send gate
+                    # in _handle_message that runs retroactive compaction
+                    # whenever ``_serialized_len(interface.entries) >
+                    # context_limit_threshold``, so we don't need a failed
+                    # send to discover over-window.  Out of scope for this
+                    # PR — current behavior is "compact on first failure
+                    # then rebuild" which is correct but reactive.
 
                     aed_attempts += 1
 
@@ -818,21 +871,17 @@ def _run_loop(agent) -> None:
                         agent._asleep.set()
                         break
 
-                    # Issue #144 / literal no-rebuild-mutation invariant: an
-                    # over-window error means the wire is genuinely too
-                    # large, but the kernel has no license to silently
-                    # discard historical tool-result content to fix that —
-                    # only an explicit ``summarize`` replacement may replace
-                    # a historical tool-result body (see
-                    # ``lingtai.tools.system.summarize``). Retrying without
-                    # retroactive compaction means an unresolved over-window
-                    # condition fails the SAME way on every attempt
-                    # (deterministic, not a hang) until ``max_aed_attempts``
-                    # is reached and the existing ``aed_exhausted`` /
-                    # preset-fallback / ASLEEP path above takes over —
-                    # fail-loud, fully logged/observable, and requires an
-                    # explicit agent- or operator-driven summarize to
-                    # actually recover.
+                    # Issue #144: compact oversized historical tool results
+                    # before rebuilding the session so the replayed history
+                    # fits.  Runs after close_pending_tool_calls (above) and
+                    # before _rebuild_session so the rebuilt session sees
+                    # the already-shrunk wire.  Over-window errors get a
+                    # distinct source tag so AED logs make the cause
+                    # auditable.
+                    _compact_history_before_retry(
+                        agent,
+                        source="aed_over_window" if over_window else "aed_deterministic",
+                    )
 
                     # Rebuild session with current config, preserving history
                     if agent._session.chat is not None:
@@ -1712,20 +1761,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             # IDLE/ASLEEP injects synthesized notification + MSG_TC_WAKE; a later
             # ACTIVE tool-result batch stamps the notification normally.
             if agent._notification_live_holder is not None:
-                from ..meta_block import (
-                    note_email_clear_intent_before_holder_destroyed,
-                    skeletonize_notification_holder,
-                )
-                # The live holder here can be a SYNTHESIZED IDLE/ASLEEP-wake
-                # pair carrying a live email persistent snapshot.
-                # skeletonize_notification_holder only releases live tracking
-                # (the recorded content is never mutated), so losing the LIVE
-                # reference is still the moment the clear obligation must be
-                # captured. Preserve it (content-free — a boolean intent
-                # only) before that release, so a later current-zero batch
-                # can still stamp the durable tombstone instead of silently
-                # losing the only evidence email had gone stale.
-                note_email_clear_intent_before_holder_destroyed(agent)
+                from ..meta_block import skeletonize_notification_holder
                 skeletonize_notification_holder(agent)
         else:
             _prior_holder = agent._notification_live_holder

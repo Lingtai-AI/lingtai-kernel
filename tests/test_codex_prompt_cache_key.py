@@ -232,16 +232,11 @@ def test_codex_prompt_cache_key_is_stable_across_requests():
     assert keys == ["lingtai-codex:gpt-5.5:v1", "lingtai-codex:gpt-5.5:v1"]
 
 
-def test_codex_unverifiable_encrypted_reasoning_fails_loud_no_retry():
-    """A stale Codex encrypted reasoning blob is a terminal provider failure.
+def test_codex_self_heals_unverifiable_encrypted_reasoning_replay():
+    """A stale Codex encrypted reasoning blob is stripped and retried once.
 
-    The kernel has no license to resend history with a different
-    representation of a recorded item: the raw
-    ``ThinkingBlock.provider_data`` reasoning item is NEVER mutated or
-    substituted, and the provider error propagates unconditionally with no
-    second request — matching the literal provider-context rebuild/replay
-    invariant (only an explicit ``summarize`` replacement may replace
-    historical content).
+    The visible assistant transcript remains replayable: raw encrypted provider
+    state is removed, but the summary text survives as summary_text reasoning.
     """
 
     error = RuntimeError(
@@ -277,79 +272,36 @@ def test_codex_unverifiable_encrypted_reasoning_fails_loud_no_retry():
         provider="codex",
     )
 
-    try:
-        session.send("continue")
-        assert False, "expected the provider error to propagate"
-    except RuntimeError as exc:
-        assert "could not be verified" in str(exc)
+    response = session.send("continue")
 
-    # Exactly one request was ever sent — no second, altered-content retry.
-    assert len(session._client.responses.kwargs) == 1
+    assert len(session._client.responses.kwargs) == 2
     first_input = session._client.responses.kwargs[0]["input"]
+    second_input = session._client.responses.kwargs[1]["input"]
     assert any(
         item.get("type") == "reasoning"
         and item.get("encrypted_content") == "opaque-broken-ciphertext"
         for item in first_input
     )
-
+    assert not any(
+        item.get("type") == "reasoning" and "encrypted_content" in item
+        for item in second_input
+    )
+    assert any(
+        item.get("type") == "reasoning"
+        and item.get("summary") == [{"type": "summary_text", "text": "safe summary"}]
+        for item in second_input
+    )
+    assert any(
+        item.get("role") == "assistant" and item.get("content") == "visible answer"
+        for item in second_input
+    )
     prior_assistant = [e for e in session._interface.entries if e.role == "assistant"][0]
     prior_thinking = next(
         block for block in prior_assistant.content if isinstance(block, ThinkingBlock)
     )
-    # Canonical content is untouched by the failed attempt.
-    assert (
-        prior_thinking.provider_data["openai_responses_reasoning_item"]["encrypted_content"]
-        == "opaque-broken-ciphertext"
-    )
-    assert not hasattr(session, "_unreplayable_reasoning_ids")
-
-
-def test_codex_raw_reasoning_item_identical_ordinary_manual_and_epoch_reset():
-    """The recorded raw reasoning item renders identically on every replay path.
-
-    Ordinary send, an explicit ``request_history_rebuild()``, and a forced
-    websocket epoch reset must all serialize the exact same
-    ``openai_responses_reasoning_item`` for a historical ``ThinkingBlock`` —
-    there is no rebuild-conditioned substitution.
-    """
-    from lingtai.llm.interface_converters import to_responses_input
-
-    session = CodexResponsesSession(
-        client=FakeClient([_completed()]),
-        model="gpt-5.5",
-        instructions="system",
-        tools=None,
-        tool_choice=None,
-        extra_kwargs={},
-    )
-    session._interface.add_user_message("prior user")
-    session._interface.add_assistant_message(
-        [
-            ThinkingBlock(
-                text="safe summary",
-                provider_data={
-                    "openai_responses_reasoning_item": {
-                        "type": "reasoning",
-                        "id": "rs_ok",
-                        "summary": [{"type": "summary_text", "text": "safe summary"}],
-                        "encrypted_content": "opaque-good-ciphertext",
-                    }
-                },
-            ),
-        ],
-        model="gpt-5.5",
-        provider="codex",
-    )
-
-    ordinary = to_responses_input(session._interface)
-    session._reset_ws_epoch("test_forced_reset")
-    after_reset = to_responses_input(session._interface)
-
-    def _reasoning_item(items):
-        return next(item for item in items if item.get("type") == "reasoning")
-
-    assert _reasoning_item(ordinary) == _reasoning_item(after_reset)
-    assert _reasoning_item(ordinary)["encrypted_content"] == "opaque-good-ciphertext"
+    assert "openai_responses_reasoning_item" not in prior_thinking.provider_data
+    assert response.usage.extra["codex_request_mode"] == "rest_full_self_heal"
+    assert response.usage.extra["codex_fallback_error_type"] == "RuntimeError"
 
 
 def test_lone_prompt_cache_key_stays_body_only_no_headers():

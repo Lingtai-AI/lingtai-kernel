@@ -385,7 +385,8 @@ class AnthropicChatSession(ChatSession):
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
 
-        # Build kwargs from current interface state.
+        # Build kwargs from current interface state — re-runs inside the
+        # overflow-recovery loop so each retry sees the post-trim interface.
         def _do_call():
             self._interface.enforce_tool_pairing()
             candidate_msgs = to_anthropic(self._interface)
@@ -394,7 +395,7 @@ class AnthropicChatSession(ChatSession):
             return self._client.messages.create(**kwargs)
 
         try:
-            raw, _total_dropped, _rounds = self._run_with_overflow_recovery(_do_call)
+            raw, total_dropped, rounds = self._run_with_overflow_recovery(_do_call)
         except Exception:
             # Revert the interface on error - drop the last user entry,
             # but only when this call appended one.  ``message is None``
@@ -403,6 +404,10 @@ class AnthropicChatSession(ChatSession):
             if message is not None:
                 self._interface.drop_trailing(lambda e: e.role == "user")
             raise
+
+        # If recovery fired (entries were dropped), inject the molt notice.
+        if rounds > 0:
+            self._inject_overflow_notice(total_dropped=total_dropped, rounds=rounds)
 
         # Parse response and add to interface
         response = _parse_response(raw)
@@ -510,13 +515,17 @@ class AnthropicChatSession(ChatSession):
             return final_message
 
         try:
-            raw_result, _total_dropped, _rounds = self._run_with_overflow_recovery(_do_stream)
+            raw_result, total_dropped, rounds = self._run_with_overflow_recovery(_do_stream)
         except Exception:
             # Revert the interface on error — drop the last user entry
             # only if this call appended one.
             if message is not None:
                 self._interface.drop_trailing(lambda e: e.role == "user")
             raise
+
+        # If recovery fired (entries were dropped), inject the molt notice.
+        if rounds > 0:
+            self._inject_overflow_notice(total_dropped=total_dropped, rounds=rounds)
 
         # Extract usage from final message (includes cache metrics)
         # Same normalisation as _parse_response — see comment there.

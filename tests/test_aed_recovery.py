@@ -20,7 +20,7 @@ import pytest
 from lingtai.kernel.base_agent import turn
 from lingtai.kernel.llm import LLMResponse
 from lingtai.kernel.llm.base import UsageMetadata
-from lingtai.kernel.llm_utils import TerminalProviderHistoryError, WorkerStillRunningError
+from lingtai.kernel.llm_utils import WorkerStillRunningError
 from lingtai.kernel.message import _make_message, MSG_REQUEST
 from lingtai.kernel.state import AgentState
 
@@ -167,87 +167,6 @@ def test_worker_hang_request_artifact_is_bounded_and_redacted(tmp_path):
         "previews_redacted": True,
         "max_preview_chars": 500,
     }
-
-
-# ---------------------------------------------------------------------------
-# TerminalProviderHistoryError fail-closed handling in the AED loop (B1) —
-# e.g. Codex's encrypted-reasoning verifier rejecting recorded history as
-# unverifiable. Every normal recovery action would resend the SAME
-# unmodified history and fail identically, or require silently
-# mutating/substituting historical content, so this must be terminal
-# BEFORE any AED attempt/close-pending/rebuild/recovery-prompt/preset
-# fallback/second provider request.
-# ---------------------------------------------------------------------------
-
-
-def test_run_loop_treats_terminal_provider_history_error_as_immediate_terminal(
-    tmp_path, monkeypatch
-):
-    """Full BaseAgent._run_loop regression at default-shaped max_aed_attempts.
-
-    Exactly one _handle_message (== one provider request) is made; no AED
-    attempt is spent, no close_pending_tool_calls/_rebuild_session happens,
-    no recovery prompt is injected, and the original provider exception
-    survives as __cause__ — matching a fake REST/WS adapter raising the
-    Codex unverifiable-encrypted-content error exactly once.
-    """
-    agent = _make_run_loop_agent(tmp_path)
-    agent._config.max_aed_attempts = 3  # default-shaped, not artificially 1
-    calls = {"n": 0}
-    raised: list[TerminalProviderHistoryError] = []
-    original_exc = RuntimeError(
-        "400: The encrypted content for item rs_abc could not be verified"
-    )
-
-    def fake_handle(_agent, _msg):
-        calls["n"] += 1
-        exc = TerminalProviderHistoryError(
-            provider="codex",
-            detail="encrypted reasoning content could not be verified",
-            cause=original_exc,
-        )
-        raised.append(exc)
-        raise exc
-
-    monkeypatch.setattr(turn, "_handle_message", fake_handle)
-
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
-
-    turn._run_loop(agent)
-
-    # Exactly one provider request total — no outer AED replay.
-    assert calls["n"] == 1
-    # No AED attempt was spent, no rebuild, no transient retry.
-    assert not any(name == "aed_attempt" for name, _ in agent._logs)
-    assert not any(name == "aed_transient_retry" for name, _ in agent._logs)
-    assert not any(name == "aed_exhausted" for name, _ in agent._logs)
-    assert getattr(agent, "rebuilds", 0) == 0
-    # close_pending_tool_calls was never invoked (no synthetic close-pending).
-    assert agent._session.chat.interface.heals == []
-    # No refresh/preset-fallback path was taken.
-    assert agent.refresh_calls == []
-    # Terminal error was logged, observably, distinct from generic AED logs.
-    terminal_logs = [fields for name, fields in agent._logs if name == "terminal_provider_history_error"]
-    assert len(terminal_logs) == 1
-    assert terminal_logs[0]["provider"] == "codex"
-    # Original provider exception preserved as cause (never swallowed).
-    assert len(raised) == 1
-    assert raised[0].__cause__ is original_exc
-    # Agent ends up STUCK then ASLEEP, never a fresh ACTIVE recovery state.
-    assert AgentState.STUCK in agent._states
-    assert AgentState.ASLEEP in agent._states
-    assert agent._asleep.is_set()
-
-
-def test_terminal_provider_history_error_preserves_cause():
-    original_exc = ValueError("encrypted content for item rs_x could not be verified")
-    err = TerminalProviderHistoryError(
-        provider="codex", detail="encrypted reasoning content could not be verified",
-        cause=original_exc,
-    )
-    assert err.__cause__ is original_exc
-    assert err.provider == "codex"
 
 
 # ---------------------------------------------------------------------------

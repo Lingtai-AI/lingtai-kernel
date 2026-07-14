@@ -400,64 +400,157 @@ class ChatSession(ABC):
         return 0
 
     # -----------------------------------------------------------------------
-    # Context-overflow fail-loud detection (shared across all providers)
+    # Context-overflow auto-recovery (shared across all providers)
     # -----------------------------------------------------------------------
     #
     # When the provider rejects a request because the context exceeds its
-    # hard token limit, this is a genuinely too-large wire — the kernel has
-    # no license to silently discard historical canonical entries to fix
-    # that (only an explicit ``summarize`` replacement may replace a
-    # historical tool-result body; see ``lingtai.tools.system.summarize``
-    # and the provider-context rebuild/replay invariant in
-    # ``lingtai.llm.interface_converters``). ``_is_context_overflow_error()``
-    # only classifies the error for logging/diagnostics; canonical and
-    # rendered history are never trimmed here. The error propagates to the
-    # existing AED over-window recovery path
-    # (``lingtai.kernel.base_agent.turn._is_over_window_error`` /
-    # ``aed_over_window_detected`` / ``aed_exhausted``), which is
-    # deterministic, fully logged, and requires an explicit agent- or
-    # operator-driven summarize/molt to actually recover.
+    # hard token limit, the session trims ~10% of the oldest non-system
+    # entries from the canonical ChatInterface and retries — up to
+    # ``_OVERFLOW_MAX_ROUNDS`` times.  Each provider only needs to
+    # implement ``_is_context_overflow_error()`` to opt in.
     #
-    # This lives on ChatSession (not LLMAdapter) because each provider only
-    # needs to implement ``_is_context_overflow_error()`` to opt in to the
-    # classification; the call sites that invoke ``_run_with_overflow_recovery``
-    # wrap the provider-specific ``send()`` / ``send_stream()`` call.
+    # This lives on ChatSession (not LLMAdapter) because the trim
+    # operates on ``self._interface._entries`` and the retry wraps the
+    # provider-specific ``send()`` / ``send_stream()`` call.
+
+    _OVERFLOW_MAX_ROUNDS: int = 10
+    _OVERFLOW_DROP_FRACTION: float = 0.10
 
     @staticmethod
     def _is_context_overflow_error(exc: Exception) -> bool:
         """Return True if *exc* is a provider context-length-exceeded error.
 
-        Default returns False.  Override in subclasses that want this
-        classified/logged distinctly. Never triggers trimming or a retry —
-        see the module comment above.
+        Default returns False (no recovery).  Override in subclasses that
+        want overflow auto-recovery.
         """
         return False
 
+    def _trim_context_one_round(self) -> int:
+        """Drop ~``_OVERFLOW_DROP_FRACTION`` of non-system entries from the
+        **front** of the canonical interface.
+
+        Snaps the cut point forward so we never split an
+        ``assistant[ToolCallBlock]`` from its matching
+        ``user[ToolResultBlock]`` — the resulting wire payload would be
+        invalid for strict providers.
+
+        Returns the number of entries dropped (0 if none could be dropped
+        — caller should treat that as terminal).
+        """
+        from .interface import ToolCallBlock, ToolResultBlock
+
+        entries = self._interface._entries  # canonical list, mutated in place
+        if not entries:
+            return 0
+        # Index of first non-system entry.
+        first_conv = 0
+        if entries[0].role == "system":
+            first_conv = 1
+        conv_len = len(entries) - first_conv
+        if conv_len <= 1:
+            return 0
+        drop_n = max(1, int(conv_len * self._OVERFLOW_DROP_FRACTION))
+        cut = first_conv + drop_n  # entries[first_conv:cut] get dropped
+
+        # Snap cut forward past any assistant[tool_calls] / user[tool_results]
+        # boundary so we never strand a tool_call without its result.
+        max_cut = len(entries)
+        while cut < max_cut:
+            # If the entry just *before* the cut is assistant[tool_calls],
+            # advance until we're past its matching user[tool_results].
+            if cut == 0:
+                break
+            prev = entries[cut - 1]
+            if prev.role == "assistant" and any(
+                isinstance(b, ToolCallBlock) for b in prev.content
+            ):
+                cut += 1
+                continue
+            # If the entry at the cut is a user[tool_results-only], advance
+            # past it so we don't leave dangling results without their call.
+            cur = entries[cut]
+            if cur.role == "user" and cur.content and all(
+                isinstance(b, ToolResultBlock) for b in cur.content
+            ):
+                cut += 1
+                continue
+            break
+
+        if cut >= max_cut:
+            # Snap consumed everything — refuse to drop the entire conversation.
+            return 0
+
+        dropped = cut - first_conv
+        # Mutate in place: keep system + everything from cut onward.
+        del entries[first_conv:cut]
+        return dropped
+
+    def _inject_overflow_notice(self, total_dropped: int, rounds: int) -> None:
+        """Append a single user-role kernel notice after successful recovery.
+
+        We use the user role (universally supported) with an explicit
+        ``[kernel]`` prefix — same pattern as our synthesized tool aborts.
+        The notice strongly recommends molting since context pressure is
+        now demonstrably above the model's hard ceiling.
+        """
+        from .interface import TextBlock
+
+        notice = (
+            f"[kernel] Context exceeded the provider's hard token limit. "
+            f"To recover, the kernel dropped {total_dropped} oldest entries "
+            f"across {rounds} retry round(s). Detail from earlier turns may "
+            f"be lost — re-read recent context before acting on it. "
+            f"**Strongly recommend triggering a molt soon** — the conversation "
+            f"is past the model's safe limit and further growth will overflow "
+            f"again."
+        )
+        self._interface._append("user", [TextBlock(text=notice)])
+
     def _run_with_overflow_recovery(self, do_call):
-        """Run an API call, classifying and propagating context-overflow errors.
+        """Run an API call with context-overflow auto-recovery.
 
         ``do_call`` is a zero-arg callable performing one full attempt
-        (build kwargs from current interface state + invoke the API).
+        (build kwargs from current interface state + invoke the API). It
+        is re-called after each trim so the request reflects the post-trim
+        canonical interface.
 
-        Returns ``(result, total_dropped, rounds)`` with ``total_dropped``
-        and ``rounds`` always 0 on success — no entries are ever trimmed.
-        On a provider context-overflow error, logs it as such and
-        re-raises immediately (no retry with a shortened wire); the caller
-        propagates into the existing AED over-window recovery. On any
-        other error, re-raises immediately.
+        Returns ``(result, total_dropped, rounds)``. ``total_dropped`` is 0
+        and ``rounds`` is 0 when no recovery was needed. On non-overflow
+        errors, re-raises immediately. On terminal failure (cannot trim
+        further, or max rounds hit), re-raises the original error.
         """
-        try:
-            result = do_call()
-            return result, 0, 0
-        except Exception as exc:
-            if self._is_context_overflow_error(exc):
+        total_dropped = 0
+        rounds = 0
+        while True:
+            try:
+                result = do_call()
+                return result, total_dropped, rounds
+            except Exception as exc:
+                if not self._is_context_overflow_error(exc):
+                    raise
+                if rounds >= self._OVERFLOW_MAX_ROUNDS:
+                    logger.warning(
+                        "[overflow-recovery] giving up after %d rounds "
+                        "(dropped %d entries total) — re-raising provider error.",
+                        rounds, total_dropped,
+                    )
+                    raise
+                dropped = self._trim_context_one_round()
+                if dropped == 0:
+                    logger.warning(
+                        "[overflow-recovery] cannot trim further "
+                        "(dropped %d entries across %d rounds) — re-raising.",
+                        total_dropped, rounds,
+                    )
+                    raise
+                total_dropped += dropped
+                rounds += 1
                 logger.warning(
-                    "[overflow] provider context-length-exceeded error; "
-                    "preserving full canonical history and propagating "
-                    "(no trim, no retry): %s",
-                    str(exc)[:300],
+                    "[overflow-recovery] round %d: dropped %d entries "
+                    "(running total %d). Retrying.",
+                    rounds, dropped, total_dropped,
                 )
-            raise
+                continue
 
 
 

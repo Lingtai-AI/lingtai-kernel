@@ -92,22 +92,6 @@ def _active_stuck_threshold_s() -> float:
         return 600.0
 
 
-class EmailReconciliationUnresolvedError(RuntimeError):
-    """Startup could not establish canonical email persistent-lane state
-    before the first full-history render becomes possible.
-
-    Raised from ``_start()`` when ``meta_block.reconcile_email_persistent_history``
-    returns ``RECONCILE_UNRESOLVED`` (source-read/parse failure, a malformed
-    restored interface, or a pending-tool-call append refusal), or when
-    anything else unexpected fails in that reconciliation block. The main
-    message-loop thread (``agent._thread``) is never created in this case, so
-    no render is possible with unknown email state; propagating this instead
-    of logging-and-continuing makes the failure visible to the caller of
-    ``agent.start()`` rather than silently risking a stale historical
-    snapshot being presented as current.
-    """
-
-
 def _start(agent) -> None:
     """Start the agent's main loop thread."""
     from ..token_ledger import sum_token_ledger
@@ -135,17 +119,20 @@ def _start(agent) -> None:
     agent._heartbeat_runtime_ready = False
     _start_heartbeat(agent)
 
-    # Restore chat session and token state from filesystem if available.
-    # Restored spill manifests are recorded exactly as they were persisted —
-    # no startup rewrite of historical artifact_state/artifact_expired_at
-    # based on current sidecar file-existence (that was a restore-conditioned
-    # canonical mutation with no explicit ``summarize`` replacement; see
-    # ``tool_result_artifacts.py`` module docstring). Current sidecar
-    # availability is a read-time/UI concern, not something backfilled into
-    # provider-visible history.
+    # Restore chat session and token state from filesystem if available
     chat_history_file = agent._working_dir / "history" / "chat_history.jsonl"
     if chat_history_file.is_file():
         try:
+            # Mark stale spill manifests before the LLM sees them so
+            # expired sidecar files are flagged honestly.
+            from ..tool_result_artifacts import mark_expired_spill_manifests
+            try:
+                expired = mark_expired_spill_manifests(agent._working_dir)
+                if expired:
+                    agent._log("spill_manifests_expired_on_restore", count=expired)
+            except Exception:
+                pass  # best-effort; don't block startup
+
             messages = [
                 json.loads(line)
                 for line in chat_history_file.read_text(encoding="utf-8").splitlines()
@@ -157,55 +144,6 @@ def _start(agent) -> None:
         except Exception as e:
             from ..logging import get_logger
             get_logger().warning(f"[{agent.agent_name}] Failed to restore chat history: {e}")
-
-    # Bridge the email whole-snapshot persistent lane across this
-    # restart/refresh, BEFORE the first full-history render can happen (`agent
-    # ._thread` is only created later in this function). Without this, a
-    # legacy `notification_persistent.email` snapshot could remain the
-    # newest wire-visible email state forever, even after current unread went
-    # to zero, since a mere in-memory flag cannot help a render that can
-    # happen before any tool call exists. See
-    # `meta_block.reconcile_email_persistent_history` (RECONCILE_RECONCILED /
-    # RECONCILE_NOOP / RECONCILE_UNRESOLVED) and `LICC_NOTIFICATION_CONTRACT.md`.
-    #
-    # Fail-closed pre-render barrier for RECONCILE_UNRESOLVED (source-read
-    # failure, malformed interface, or a pending-tool-call append refusal):
-    # `_start()` raises before `agent._thread` is created, so a stale
-    # historical snapshot is never risked as the newest wire-visible state.
-    # ANY exception in this block — an unexpected import/reconciliation
-    # failure, or the intentional unresolved raise below — is treated the
-    # same way: heartbeat was already started above (`_start_heartbeat`,
-    # published early so external observers see this process as live during
-    # the heavier restore work) and is the one BACKGROUND resource already
-    # running by this point, so on failure here it is rolled back via the
-    # existing `_stop_heartbeat` teardown primitive before re-raising — no
-    # heartbeat thread or `.agent.heartbeat` liveness survives an
-    # unsuccessful start(). This is not a generic transaction framework:
-    # the main loop thread (`agent._thread`) does not exist yet regardless
-    # of outcome, and an in-memory `agent._chat` restored just above (if
-    # any) owns no thread/socket of its own — it is inert object state, not
-    # a background resource, and is simply discarded with the rest of this
-    # `BaseAgent` instance by the caller of the now-failed `start()`.
-    try:
-        from ..meta_block import (
-            RECONCILE_UNRESOLVED,
-            reconcile_email_persistent_history,
-        )
-        outcome = reconcile_email_persistent_history(agent)
-        if outcome == RECONCILE_UNRESOLVED:
-            agent._log("email_persistent_history_unresolved")
-            raise EmailReconciliationUnresolvedError(
-                f"[{agent.agent_name}] email persistent history reconciliation "
-                "unresolved before first render; refusing to start"
-            )
-    except Exception as e:
-        _stop_heartbeat(agent)
-        if isinstance(e, EmailReconciliationUnresolvedError):
-            raise
-        raise EmailReconciliationUnresolvedError(
-            f"[{agent.agent_name}] email persistent history reconciliation "
-            f"failed before first render; refusing to start: {e}"
-        ) from e
 
     # Rehydrate any still-open WorkerStillRunning recovery artifacts into a
     # high-priority notification so the next process re-surfaces the unfinished

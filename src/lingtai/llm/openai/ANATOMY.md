@@ -37,10 +37,10 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 
 | Class | Lines | Role |
 |-------|-------|------|
-| `OpenAIChatSession` | `adapter.py:1210` | Chat Completions session with context-overflow fail-loud propagation (no trim); sends optional `prompt_cache_key` |
+| `OpenAIChatSession` | `adapter.py:1210` | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
 | `OpenAIResponsesSession` | `adapter.py:1725` | Responses API session. Official OpenAI mode is server-stateful via `previous_response_id`; custom/OpenAI-compatible mode can be internally stateless (`stateless_replay=True`) and replays full canonical history via `to_responses_input` while recording assistant turns and exposing no resume id (`adapter.py:1749-1750`, `adapter.py:1881-1886`, `adapter.py:1917-1918`, `adapter.py:1928-1929`, `adapter.py:2035-2046`). |
 | `OpenAIAdapter` | `adapter.py:2069` | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key`; carries the internal `_responses_stateless_replay` constructor mode into Responses sessions (`adapter.py:2092`, `adapter.py:2127`, `adapter.py:2264-2277`). |
-| `CodexResponsesSession` | `adapter.py:2492` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay (always the recorded raw item, never substituted), fail-loud propagation on unverifiable encrypted content, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
+| `CodexResponsesSession` | `adapter.py:2492` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
 | `CodexOpenAIAdapter` | `adapter.py:4307` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. Maps an omitted/`default` thinking level to an explicit `reasoning.effort = "xhigh"` in its `_create_responses_session` (Codex-only default — omitting the field would fall back to the backend's lower default; explicit levels pass through unchanged, and the generic `OpenAIAdapter` keeps omit-on-default). `codex-pool` reuses this adapter, so it inherits the same default. |
 
 ### adapter.py helpers
@@ -87,7 +87,7 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting. Ca
 
 1. Record user input into `ChatInterface` (str → `add_user_message`; list → `add_tool_results`)
 2. `_build_kwargs()`: enforce tool pairing → serialize via `_build_messages()` → `_pair_orphan_tool_calls()` wire guard
-3. `_run_with_overflow_recovery(_do_call)` — classifies/logs 400 context-length errors and propagates them unconditionally (no trim, no retry)
+3. `_run_with_overflow_recovery(_do_call)` — retries with context trimming on 400 context-length errors
 4. On success: record assistant response into interface via `_record_assistant_response()`
 
 ### Responses API session flow (`OpenAIResponsesSession.send`, `adapter.py:1888`)
@@ -142,31 +142,23 @@ Flow:
    - WebSocket (`codex_ws`): `full` sends the full input; `incremental` sends the
      strict-additive delta plus `previous_response_id`.
 5. If Codex rejects a full replay with `The encrypted content for item ... could
-   not be verified`, that is a terminal provider-side condition for this
-   request: `_is_codex_unverifiable_encrypted_content_error` (`adapter.py:62`)
-   only classifies/logs it. The recorded raw `ThinkingBlock.provider_data`
-   reasoning item is NEVER mutated or substituted — `to_responses_input`
-   (`src/lingtai/llm/interface_converters.py`) always emits every recorded
-   reasoning item as-is, ordinary send or rebuild alike, matching the literal
-   provider-context rebuild/replay invariant (only an explicit `summarize`
-   replacement may replace historical content; see that module's docstring).
-   The error propagates unconditionally — no second request with a different
-   historical representation is ever sent — into the existing AED
-   over-window recovery path (`base_agent/turn.py`), which is deterministic,
-   fully logged, and requires an explicit agent- or operator-driven
-   summarize/molt to actually recover.
+   not be verified`, treat it as stale raw reasoning state: `_strip_codex_encrypted_reasoning_items`
+   (`adapter.py:3575`) removes replay-only `encrypted_content` anchors from
+   `ThinkingBlock.provider_data`, `_reset_ws_epoch` (`adapter.py:3163`) clears
+   stale baselines/response-id state, and the adapter retries the same visible
+   transcript once as `rest_full_self_heal` / `stateless_full_self_heal`
+   (`adapter.py:4019-4038`). Summary text, assistant text, and tool calls remain
+   in the canonical interface; only the opaque provider blob is dropped.
 6. After success: record the assistant response into the interface and recompute
    the converter-stable delta baseline (`_ws_record_baseline_from_interface`) so the
    next turn can strict-prefix-match and stay incremental.
 **Usage metadata axes:** `UsageMetadata.extra` carries `codex_transport`
 (`rest`/`websocket`), `codex_transfer_mode` (`full`/`incremental`), and the
 transport-qualified `codex_request_mode` (`rest_full` / `rest_incremental` /
-`ws_full` / `ws_incremental` / `rest_full_fallback`), plus the safe delta-decision
+`ws_full` / `ws_incremental` / `rest_full_fallback` / `rest_full_self_heal` / `stateless_full_self_heal`), plus the safe delta-decision
 diagnostic (`codex_ws_delta_reason` and counts — never prompt/secret content). The
 WS-named `codex_ws_*` diagnostic keys are reused on REST (transport-neutral
-metadata); `codex_request_mode` never reads `ws_*` on a REST request. There is
-no self-heal request mode: an unverifiable-encrypted-content error propagates
-instead of triggering a second request.
+metadata); `codex_request_mode` never reads `ws_*` on a REST request.
 
 ### Prompt cache key (`prompt_cache_key`)
 
@@ -238,12 +230,12 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 | `TextBlock` | `content` string on assistant message | `{type: "output_text", text}` inside message content |
 | `ThinkingBlock` | Emitted as `reasoning_content` on assistant message (DeepSeek and MiMo thinking-mode round-trip; other CC providers ignore the field). Captured back from `message.reasoning_content` / `message.reasoning` into a ThinkingBlock by `_record_assistant_response` (non-streaming) and the streaming finalize path. | Replayed as a top-level `{type: "reasoning", summary: [{type: "summary_text", text: ...}]}` item before assistant text/calls by `to_responses_input` (`../interface_converters.py:233-258`) so stateless Codex can retain summarized reasoning context. Responses streaming captures `response.reasoning_summary_text.*` into thoughts and Codex persists those thoughts as ThinkingBlocks before tool calls. |
 
-### Context overflow fail-loud
+### Context overflow auto-recovery
 
-`OpenAIChatSession._run_with_overflow_recovery()` is inherited from `ChatSession` (`lingtai/kernel/llm/base.py`) and wraps any API call:
-- Detects 400 `context_length_exceeded` via `_is_context_overflow_error()` (`adapter.py:1267`) — checks both canonical OpenAI code and loose string heuristics for compatible vendors — purely for logging/diagnostics.
-- No canonical or rendered history is ever trimmed here (the former `_trim_context_one_round()` front-drop and its up-to-10-round retry loop were removed): the kernel has no license to silently discard historical tool-result content to fix an overflow — only an explicit `summarize` replacement may replace a historical tool-result body (see `lingtai.tools.system.summarize` and the provider-context rebuild/replay invariant in `lingtai/llm/interface_converters.py`).
-- The provider error is logged and re-raised immediately, unconditionally, into the caller's existing AED over-window recovery path (`base_agent/turn.py`'s `_is_over_window_error` / `aed_over_window_detected` / `aed_exhausted`), which is deterministic, fully logged, and requires an explicit agent- or operator-driven summarize/molt to actually recover. No fake success notice is appended.
+`OpenAIChatSession._run_with_overflow_recovery()` is inherited from `ChatSession` (`lingtai/kernel/llm/base.py:384`) and wraps any API call in a retry loop:
+- Detects 400 `context_length_exceeded` via `_is_context_overflow_error()` (`adapter.py:1267`) — checks both canonical OpenAI code and loose string heuristics for compatible vendors.
+- `_trim_context_one_round()` (`lingtai/kernel/llm/base.py:303`) drops ~10% of non-system entries from the FRONT of the interface. Snaps cut point to never split `assistant[ToolCallBlock]` from `user[ToolResultBlock]`.
+- Max 10 rounds (`lingtai/kernel/llm/base.py:291`). On successful recovery, injects a `[kernel]` molt notice via `_inject_overflow_notice()` (`lingtai/kernel/llm/base.py:363`).
 
 ### Wire-layer orphan guard
 
@@ -267,7 +259,7 @@ In-flight official/stateful Responses and Codex sessions keep no-op prompt/tool 
 
 - **CC streaming** (`adapter.py:1555`) — `stream=True, stream_options={include_usage: True}`. Uses `StreamingAccumulator` for text + tool deltas. Reasoning deltas captured from `delta.reasoning` or `delta.reasoning_content`. Overflow recovery wraps stream open + first chunk in the Chat Completions send-stream path.
 - **Responses streaming** (`adapter.py:1938`) — event types: `response.reasoning_summary_text.delta/done` (summary thoughts only), `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.added/done`, `response.completed`. Custom/stateless mode snapshots before staging, replays full canonical history, records the finalized assistant turn, and restores the pre-send snapshot on enforce, serialization, stream-open, iteration, callback, finalize, or record failure (`adapter.py:1945-2026`).
-- **Codex streaming** — forces `stream=True` even on `send()`. Runs the `full`/`incremental` planner per request over the selected transport (REST default / WebSocket opt-in): REST carries the whole converted interface in both modes; WebSocket carries the whole interface for `full` and delta + `previous_response_id` for `incremental`. Captured summary thoughts and raw encrypted reasoning items are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls, always emitting the raw recorded `openai_responses_reasoning_item` as-is — there is no session-local unreplayable-ID set and no retry with a summary/plain-transcript substitute. If Codex rejects a raw encrypted item as unverifiable (`_is_codex_unverifiable_encrypted_content_error`, both REST and WS transports), that is a terminal provider-side condition for the current recorded history: canonical `ThinkingBlock.provider_data` is never mutated or replaced, and the adapter raises `TerminalProviderHistoryError` (`lingtai.kernel.llm_utils`) instead of retrying with a different historical representation. `_run_loop` (`base_agent/turn.py`) treats that error as immediately terminal — no AED attempt spent, no rebuild, no preset fallback — logging `terminal_provider_history_error` and moving the agent STUCK then ASLEEP. Optional diagnostics (`LINGTAI_CODEX_RESPONSES_TRACE=1`) append safe per-event metadata to `logs/codex_responses_trace.jsonl` without changing accumulator/persistence behavior.
+- **Codex streaming** — forces `stream=True` even on `send()`. Runs the `full`/`incremental` planner per request over the selected transport (REST default / WebSocket opt-in): REST carries the whole converted interface in both modes; WebSocket carries the whole interface for `full` and delta + `previous_response_id` for `incremental`. Captured summary thoughts and raw encrypted reasoning items are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls; if Codex later rejects a raw encrypted item as unverifiable, the adapter strips only that opaque replay state and retries once with summary/plain transcript. Optional diagnostics (`LINGTAI_CODEX_RESPONSES_TRACE=1`) append safe per-event metadata to `logs/codex_responses_trace.jsonl` without changing accumulator/persistence behavior.
 
 ### Authentication paths
 

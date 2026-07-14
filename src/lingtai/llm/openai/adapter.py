@@ -41,7 +41,6 @@ from lingtai.kernel.llm.base import (
 from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
-from lingtai.kernel.llm_utils import TerminalProviderHistoryError
 from ..interface_converters import to_openai, to_responses_input
 from lingtai.kernel.llm.streaming import StreamingAccumulator
 from lingtai.llm.identity_headers import lingtai_user_agent, merge_lingtai_identity_headers
@@ -65,12 +64,9 @@ def _is_codex_unverifiable_encrypted_content_error(exc: BaseException) -> bool:
 
     The ChatGPT Codex Responses endpoint may reject a replayed reasoning item
     with messages like ``The encrypted content for item rs_... could not be
-    verified``. This is a terminal provider-side condition for that request:
-    the recorded raw reasoning item is preserved unchanged (never mutated or
-    substituted), and the caller must fail loud and propagate the original
-    error into the existing AED/recovery path rather than retry with a
-    different historical representation. Used only to make that failure
-    observable and distinguishable in logs/diagnostics.
+    verified``.  That is a narrow history-state failure: the opaque encrypted
+    reasoning blob is no longer accepted, but the visible transcript can usually
+    continue if we fall back to summary/plain replay.
     """
 
     parts = [str(exc)]
@@ -574,14 +570,10 @@ def _freeze_responses_outputs(
 
     The same ``call_id``'s ``function_call_output.output`` may serialize
     differently on a later turn even though, semantically, the model already
-    saw that result: the ONE sanctioned in-place canonical rewrite (an
-    explicit ``summarize`` replacement's marker/status flip) is faithfully
-    re-serialized by the shared converter
-    (``interface_converters.to_responses_input``). Nothing else in canonical
-    history is rewritten in place — synthesized notification/email holders
-    are append-only (see ``lingtai.kernel.meta_block.
-    skeletonize_notification_holder``) and are frozen here for the same
-    strict-prefix reason, not because their content changes.
+    saw that result: in-place canonical rewrites exist (summarize markers,
+    pending→done flips, placeholder overwrites, AED compaction,
+    synthesized-pair skeletons) that the shared converter
+    (``interface_converters.to_responses_input``) faithfully re-serializes.
 
     For Codex's stateful WS delta path the next request's converted input must
     strict-prefix-match the prior baseline. A changed older
@@ -606,18 +598,6 @@ def _freeze_responses_outputs(
     older holders remain in replay as historical traces the model must not
     act on (see ``lingtai.kernel.meta_block``).
 
-    The cache is reused ONLY while the freshly converted canonical output is
-    byte-identical to what was frozen. The one sanctioned in-place canonical
-    rewrite — an explicit ``summarize`` replacement — changes the converted
-    ``output`` string; when that happens the frozen entry no longer describes
-    the current canonical content, so it is refreshed to the new value and the
-    new value is what serializes, both here and on every subsequent call in
-    the epoch. This keeps ordinary continuation, manual rebuild, and forced
-    epoch reset semantically identical for the same recorded history: the
-    cache is a stable-representation optimization for genuinely-unchanged
-    output, never a vehicle for replaying pre-summarize content after
-    canonical history has moved on.
-
     Pure and content-free: returns a new list (shallow-copying only the rewritten
     items), never mutates the caller's items, and records nothing to diagnostics.
     Non-``function_call_output`` items and outputs missing a ``call_id`` pass
@@ -637,14 +617,9 @@ def _freeze_responses_outputs(
             and not _ws_is_synthesized_orphan_output(item)
         ):
             call_id = item["call_id"]
-            current = item.get("output")
             cached = frozen.get(call_id)
-            if cached is None or cached != current:
-                # First sight of this call_id in the epoch, OR the canonical
-                # output has genuinely changed since it was frozen (e.g. an
-                # explicit summarize replacement) — (re)freeze to the fresh
-                # value instead of replaying a now-stale cached string.
-                frozen[call_id] = current
+            if cached is None:
+                frozen[call_id] = item.get("output")
                 out.append(item)
             else:
                 replayed = dict(item)
@@ -1324,7 +1299,8 @@ class OpenAIChatSession(ChatSession):
             )
         )
 
-    # _run_with_overflow_recovery is inherited from ChatSession (base class).
+    # _trim_context_one_round, _run_with_overflow_recovery, and
+    # _inject_overflow_notice are inherited from ChatSession (base class).
     # Only _is_context_overflow_error needs to be provider-specific.
 
     def _pair_orphan_tool_calls(self, messages: list[dict]) -> list[dict]:
@@ -1449,17 +1425,21 @@ class OpenAIChatSession(ChatSession):
                 kw["timeout"] = _build_http_timeout(self._request_timeout)
             return kw
 
-        # 3. Make the API call; revert interface on any error (context
-        #    overflow is classified/logged and propagated, never trimmed).
+        # 3. Make the API call (with auto-recovery on context overflow);
+        #    revert interface on any other error.
         def _do_call():
             return self._client.chat.completions.create(**_build_kwargs())
 
         try:
-            raw, _total_dropped, _rounds = self._run_with_overflow_recovery(_do_call)
+            raw, total_dropped, rounds = self._run_with_overflow_recovery(_do_call)
         except Exception:
             if message is not None:
                 self._interface.drop_trailing(lambda e: e.role == "user")
             raise
+
+        # 3b. If recovery fired (entries were dropped), inject the molt notice.
+        if rounds > 0:
+            self._inject_overflow_notice(total_dropped=total_dropped, rounds=rounds)
 
         # 4. Record assistant response into interface
         self._record_assistant_response(raw)
@@ -1623,13 +1603,11 @@ class OpenAIChatSession(ChatSession):
         acc = StreamingAccumulator()
         usage = UsageMetadata()
 
-        # Streaming overflow classification: most providers raise the 400
-        # either when ``create()`` returns or on the first iteration of the
-        # stream — before any content has been emitted to ``on_chunk``. We
-        # open the stream and pull the first chunk inside the classification
-        # wrapper; once that succeeds, we hand off to the regular streaming
-        # loop. A context-overflow error is logged and propagated, never
-        # trimmed/retried.
+        # Streaming overflow-recovery: most providers raise the 400 either
+        # when ``create()`` returns or on the first iteration of the stream
+        # — before any content has been emitted to ``on_chunk``. We open the
+        # stream and pull the first chunk inside the recovery wrapper; once
+        # that succeeds, we hand off to the regular streaming loop.
         def _open_and_first_chunk():
             stream = self._client.chat.completions.create(**_build_kwargs())
             it = iter(stream)
@@ -1641,9 +1619,13 @@ class OpenAIChatSession(ChatSession):
 
         # 3. Stream; revert interface on error
         try:
-            (stream, it, first_chunk), _total_dropped, _rounds = (
+            (stream, it, first_chunk), total_dropped, rounds = (
                 self._run_with_overflow_recovery(_open_and_first_chunk)
             )
+            if rounds > 0:
+                self._inject_overflow_notice(
+                    total_dropped=total_dropped, rounds=rounds,
+                )
             # Re-stitch: first chunk + remaining iterator.
             def _chunks():
                 if first_chunk is not None:
@@ -2589,13 +2571,12 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._ws_pending_baseline_input: list[dict[str, Any]] | None = None
         # Per-session freeze of model-facing ``function_call_output.output`` strings
         # keyed by ``call_id``. A result's converted ``output`` can change after
-        # it was first sent (an explicit ``summarize`` marker/status flip, or a
-        # synthesized orphan-call placeholder being superseded once the real
-        # result arrives), which would break the strict-prefix WS delta
-        # baseline on replay. Freezing the first-seen output per call_id keeps
-        # ordinary replay byte-identical while the freshest result still
-        # carries live meta (it is first-seen on its own turn). See
-        # ``_freeze_responses_outputs``.
+        # it was first sent (summary markers, placeholder overwrites, AED spill
+        # manifests), which would break the
+        # strict-prefix WS delta baseline on replay. Freezing the first-seen
+        # output per call_id keeps ordinary replay byte-identical while the
+        # freshest result still carries live meta (it is first-seen on its own
+        # turn). See ``_freeze_responses_outputs``.
         self._ws_frozen_outputs: dict[str, str] = {}
         # Last websocket delta decision diagnostic (safe metadata only): why the
         # request went ``ws_incremental`` vs ``ws_full``. Surfaced in usage.extra.
@@ -3704,6 +3685,50 @@ class CodexResponsesSession(OpenAIResponsesSession):
         """Legacy compatibility hook; Codex adapter comments are disabled."""
         return None
 
+    def _strip_codex_encrypted_reasoning_items(self) -> int:
+        """Remove replay-only encrypted reasoning blobs from canonical history.
+
+        Codex encrypted reasoning items are opaque provider state.  When the
+        backend says one cannot be verified, replaying the same blobs will fail
+        forever (AED loops).  Keep the assistant transcript/tool calls intact and
+        preserve any summary text, but drop the raw encrypted replay anchors so
+        ``to_responses_input`` emits summary_text-only reasoning or omits empty
+        thought blocks.
+        """
+
+        stripped = 0
+        for entry in self._interface.entries:
+            if entry.role != "assistant":
+                continue
+            for block in entry.content:
+                if not isinstance(block, ThinkingBlock):
+                    continue
+                provider_data = block.provider_data
+                if not isinstance(provider_data, dict):
+                    continue
+                raw_item = provider_data.get("openai_responses_reasoning_item")
+                encrypted_content = (
+                    raw_item.get("encrypted_content")
+                    if isinstance(raw_item, dict)
+                    else None
+                )
+                if not (
+                    isinstance(raw_item, dict)
+                    and raw_item.get("type") == "reasoning"
+                    and isinstance(encrypted_content, str)
+                    and encrypted_content
+                    and encrypted_content != "<REDACTED:secret>"
+                ):
+                    continue
+                provider_data.pop("openai_responses_reasoning_item", None)
+                stripped += 1
+        if stripped:
+            # Baselines/previous_response_id chains may still contain the removed
+            # raw reasoning items.  Rebase the next request from sanitized local
+            # history instead of trying to continue the poisoned epoch.
+            self._reset_ws_epoch("encrypted_reasoning_self_heal")
+        return stripped
+
     def reset_provider_turn_state(self) -> None:
         self.reset_ws_turn()
 
@@ -3723,22 +3748,15 @@ class CodexResponsesSession(OpenAIResponsesSession):
 
         Routes every Codex WS conversion through ``_freeze_responses_outputs`` so
         the model-facing ``function_call_output.output`` for a given ``call_id``
-        stays byte-identical across turns ONLY while the freshly converted
-        canonical content is unchanged. When canonical content is genuinely
-        rewritten in place (the one sanctioned case: an explicit ``summarize``
-        marker/status flip), the freeze refreshes to the new converted value —
-        it never keeps replaying a stale pre-summarize string — and that
-        refresh may force an honest ``ws_full`` / prefix-mismatch replay rather
-        than a silently mismatched delta. All three WS conversion sites (full
-        replay, per-turn delta, baseline tail) share ``self._ws_frozen_outputs``
-        so the baseline and the next full request remain strict-prefix
-        comparable. After an epoch reset the cleared freeze map re-freezes from
-        ``to_responses_input``'s shared serialization, so the rebuilt replay
-        does not strip any historical ``_meta.agent_meta`` / ``guidance`` /
-        ``notifications`` / ``notification_guidance`` copy, without mutating
-        canonical history. Every recorded ``ThinkingBlock``'s raw reasoning
-        item is always passed through as-is; there is no per-session
-        substitution.
+        stays byte-identical across turns, even when canonical content was
+        rewritten in place (summarize markers, placeholder overwrites). All
+        three WS conversion sites (full replay, per-turn delta, baseline tail)
+        share ``self._ws_frozen_outputs`` so the baseline and the next full
+        request remain strict-prefix comparable. After an epoch reset the
+        cleared freeze map re-freezes from ``to_responses_input``'s shared
+        serialization, so the rebuilt replay does not strip any historical
+        ``_meta.agent_meta`` / ``guidance`` / ``notifications`` /
+        ``notification_guidance`` copy, without mutating canonical history.
         """
         return _freeze_responses_outputs(
             to_responses_input(iface),
@@ -3989,42 +4007,59 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 try:
                     stream = self._client.responses.create(**kwargs)
                 except Exception as exc:
-                    # The Codex encrypted-reasoning verifier can reject a replayed
-                    # raw reasoning item as unverifiable. This is a terminal
-                    # provider-side condition for the CURRENT recorded history: the
-                    # recorded item is preserved exactly as-is (never mutated or
-                    # replaced with a different representation), and re-sending the
-                    # same unmodified history — whether via the continuation
-                    # full-replay fallback below or an outer AED retry — would
-                    # fail identically. Raise a dedicated kernel-visible terminal
-                    # error (preserving this as its cause) so it reaches
-                    # ``_run_loop`` before AED/rebuild/preset-fallback spend a
-                    # second provider request; propagate it here rather than
-                    # attempting the in-adapter fallback or retrying with altered
-                    # historical content.
-                    if _is_codex_unverifiable_encrypted_content_error(exc):
-                        logger.info(
-                            "Codex reported unverifiable encrypted reasoning content; "
-                            "propagating as a terminal failure without retrying "
-                            "with altered historical content: %s: %s",
-                            type(exc).__name__,
-                            str(exc)[:240],
-                        )
-                        if rest_continuation:
-                            self._ws_session.last_request = rest_prev_last_request
-                            self._ws_session.last_response = rest_prev_last_response
-                            self._ws_pending_baseline_input = None
-                        raise TerminalProviderHistoryError(
-                            provider="codex",
-                            detail="encrypted reasoning content could not be verified",
-                            cause=exc,
-                        ) from exc
                     if not (previous_response_id or request_store):
-                        if rest_continuation:
-                            self._ws_session.last_request = rest_prev_last_request
-                            self._ws_session.last_response = rest_prev_last_response
-                            self._ws_pending_baseline_input = None
-                        raise
+                        # No continuation was in flight (first full turn): usually a
+                        # real error, not a recoverable incremental rejection.  The
+                        # Codex encrypted-reasoning verifier is the narrow exception:
+                        # a stale opaque reasoning blob can brick every replay until
+                        # it is removed from local history, while visible transcript
+                        # text/tool calls remain valid.
+                        if _is_codex_unverifiable_encrypted_content_error(exc):
+                            stripped_reasoning_items = self._strip_codex_encrypted_reasoning_items()
+                            if stripped_reasoning_items:
+                                fallback_error_type = type(exc).__name__
+                                fallback_error_message = str(exc)
+                                logger.info(
+                                    "Codex encrypted reasoning replay failed; stripped %s raw reasoning item(s) and retrying full replay",
+                                    stripped_reasoning_items,
+                                )
+                                retry_full_replay_input_items = self._frozen_responses_input(
+                                    self._interface
+                                )
+                                retry_full_replay_input_items.extend(prebuilt_items)
+                                retry_kwargs = dict(kwargs)
+                                retry_kwargs["input"] = retry_full_replay_input_items
+                                retry_kwargs["store"] = False
+                                retry_kwargs.pop("previous_response_id", None)
+                                request_mode = (
+                                    "rest_full_self_heal"
+                                    if self._transport == "rest"
+                                    else "stateless_full_self_heal"
+                                )
+                                previous_response_id = None
+                                request_store = False
+                                full_replay_input_items = retry_full_replay_input_items
+                                if rest_continuation:
+                                    self._ws_session.last_request = self._ws_frame_request(
+                                        retry_kwargs, retry_full_replay_input_items
+                                    )
+                                    self._ws_pending_baseline_input = list(
+                                        retry_full_replay_input_items
+                                    )
+                                    continuation_turn_recorded = True
+                                stream = self._client.responses.create(**retry_kwargs)
+                            else:
+                                if rest_continuation:
+                                    self._ws_session.last_request = rest_prev_last_request
+                                    self._ws_session.last_response = rest_prev_last_response
+                                    self._ws_pending_baseline_input = None
+                                raise
+                        else:
+                            if rest_continuation:
+                                self._ws_session.last_request = rest_prev_last_request
+                                self._ws_session.last_response = rest_prev_last_response
+                                self._ws_pending_baseline_input = None
+                            raise
                     else:
                         fallback_error_type = type(exc).__name__
                         fallback_error_message = str(exc)
@@ -4175,34 +4210,12 @@ class CodexResponsesSession(OpenAIResponsesSession):
                                 ws_diag=(self._ws_last_diag if self._continuation_enabled else None),
                             ),
                         )
-        except Exception as exc:
+        except Exception:
             # Revert the trailing user entry we just added so the next retry
             # doesn't double-record it. Mirrors OpenAIChatSession.send's
             # error path. ToolResultBlock entries also revert — the executor
             # will re-supply them when AED rebuilds the loop.
             self._interface.drop_trailing(lambda e: e.role == "user")
-            # The REST branch above already converts a verifier rejection to
-            # ``TerminalProviderHistoryError`` before it reaches here (bare
-            # ``raise`` preserves it unchanged). The WebSocket transport raises
-            # the raw provider exception from inside ``_events()`` instead, so
-            # classify it here too — same terminal condition, same "exactly
-            # one request" requirement, regardless of transport.
-            if (
-                not isinstance(exc, TerminalProviderHistoryError)
-                and _is_codex_unverifiable_encrypted_content_error(exc)
-            ):
-                logger.info(
-                    "Codex reported unverifiable encrypted reasoning content; "
-                    "propagating as a terminal failure without retrying "
-                    "with altered historical content: %s: %s",
-                    type(exc).__name__,
-                    str(exc)[:240],
-                )
-                raise TerminalProviderHistoryError(
-                    provider="codex",
-                    detail="encrypted reasoning content could not be verified",
-                    cause=exc,
-                ) from exc
             raise
 
         result = acc.finalize(usage=usage)
