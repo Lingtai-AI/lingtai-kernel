@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 import platform
 import sys
-import time
 
 
 def _set_name(agent, name: str) -> None:
@@ -191,7 +190,11 @@ def _status(agent) -> dict:
     if agent._mail_service is not None and agent._mail_service.address:
         mail_addr = agent._mail_service.address
 
-    uptime = time.monotonic() - agent._uptime_anchor if agent._uptime_anchor is not None else 0.0
+    uptime = (
+        agent._lifecycle_clock.monotonic_seconds() - agent._uptime_anchor
+        if agent._uptime_anchor is not None
+        else 0.0
+    )
 
     usage = agent.get_token_usage()
 
@@ -215,7 +218,7 @@ def _status(agent) -> dict:
     last_progress_at = getattr(agent, "_last_progress_at", None)
     no_progress_seconds = None
     if last_progress_at is not None:
-        no_progress_seconds = round(max(0.0, time.time() - last_progress_at), 1)
+        no_progress_seconds = round(max(0.0, agent._lifecycle_clock.wall_seconds() - last_progress_at), 1)
 
     active_turn_block: dict | None = None
     active_kind = getattr(agent, "_active_turn_kind", None)
@@ -223,7 +226,7 @@ def _status(agent) -> dict:
         started_at = getattr(agent, "_active_turn_started_at", None)
         elapsed = None
         if started_at is not None:
-            elapsed = round(max(0.0, time.time() - started_at), 1)
+            elapsed = round(max(0.0, agent._lifecycle_clock.wall_seconds() - started_at), 1)
         active_turn_block = {
             "kind": active_kind,
             "id": getattr(agent, "_active_turn_id", None),
@@ -243,7 +246,7 @@ def _status(agent) -> dict:
     heartbeat = float(getattr(agent, "_heartbeat", 0.0) or 0.0)
     heartbeat_age_seconds = None
     if heartbeat > 0:
-        heartbeat_age_seconds = round(max(0.0, time.time() - heartbeat), 3)
+        heartbeat_age_seconds = round(max(0.0, agent._lifecycle_clock.wall_seconds() - heartbeat), 3)
 
     runtime_block = scrub_time_fields(
         agent,

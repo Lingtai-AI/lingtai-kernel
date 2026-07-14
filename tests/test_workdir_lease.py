@@ -26,6 +26,7 @@ from lingtai.adapters.workdir_lease import select_workdir_lease
 
 from ._workdir_lease_helpers import FakeWorkdirLease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -357,7 +358,7 @@ def test_base_agent_acquires_the_lease_exactly_once_with_ten_seconds(tmp_path):
         service=MagicMock(),
         working_dir=tmp_path / "agent",
         workdir_lease=lease,
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
     )
     assert lease.acquires == [10]
     assert lease.releases == 0  # healthy construction never releases
@@ -379,7 +380,7 @@ def test_base_agent_releases_the_lease_when_construction_fails(tmp_path):
 
     recording = RecordingWorkdirLease()
     with pytest.raises(FileExistsError):
-        BaseAgent(service=object(), working_dir=workdir, workdir_lease=recording, snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(workdir))
+        BaseAgent(service=object(), working_dir=workdir, workdir_lease=recording, snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(workdir))
     assert recording.acquires == [10]  # original exception (not a release error) propagated
     assert recording.releases == 1  # rolled back exactly once
 
@@ -388,7 +389,7 @@ def test_base_agent_releases_the_lease_when_construction_fails(tmp_path):
     real = PosixWorkdirLeaseAdapter(workdir)
     real.acquire(10)
     with pytest.raises(FileExistsError):
-        BaseAgent(service=object(), working_dir=workdir, workdir_lease=real, snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(workdir))
+        BaseAgent(service=object(), working_dir=workdir, workdir_lease=real, snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(workdir))
     real2 = PosixWorkdirLeaseAdapter(workdir)
     real2.acquire(0)  # must not raise — the failed construction released the lock
     real2.release()

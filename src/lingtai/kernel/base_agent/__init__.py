@@ -31,6 +31,7 @@ from ..workdir import WorkingDir
 from ..workdir_lease import WorkdirLeasePort
 from ..notification_store import NotificationStorePort
 from ..agent_presence import AgentPresenceStorePort
+from ..lifecycle_clock import LifecycleClockPort
 from ..snapshot import SnapshotPort, SourceRevisionPort
 from ..message import Message
 from ..prompt import SystemPromptManager
@@ -340,6 +341,11 @@ class BaseAgent:
           withdraw and foreign-address presence observation, bound to this
           agent's working directory. Required and explicit; there is no
           nullable/no-op path and Core never constructs the concrete adapter.
+        - ``lifecycle_clock`` (LifecycleClockPort): The two lifecycle time
+          sources — wall-clock seconds for persisted/cross-process timestamps
+          and ages, monotonic seconds for process-local elapsed intervals.
+          Required and explicit; there is no default/no-op/optional path and
+          Core never constructs the concrete adapter.
         - ``snapshot_port`` (SnapshotPort): Best-effort workdir initialization,
           capture, and maintenance used by lifecycle policy.
         - ``source_revision_port`` (SourceRevisionPort): Bounded running-source
@@ -379,6 +385,7 @@ class BaseAgent:
         workdir_lease: WorkdirLeasePort,
         notification_store: "NotificationStorePort",
         agent_presence: AgentPresenceStorePort,
+        lifecycle_clock: LifecycleClockPort,
         snapshot_port: SnapshotPort,
         source_revision_port: SourceRevisionPort,
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
@@ -405,9 +412,14 @@ class BaseAgent:
         self._preset_loader: Callable[..., dict] | None = None
         self._context = context
         self._admin = admin or {}
+        # Core receives the lifecycle clock as a required Port and binds it
+        # before the first monotonic/wall sample below. Core never imports or
+        # constructs the concrete adapter; the wall/monotonic domains stay
+        # distinct (see kernel/lifecycle_clock/CONTRACT.md).
+        self._lifecycle_clock = lifecycle_clock
         self._cancel_event = threading.Event()
         self._state = AgentState.IDLE
-        self._idle_since_monotonic: float | None = time.monotonic()
+        self._idle_since_monotonic: float | None = self._lifecycle_clock.monotonic_seconds()
         self._started_at: str = ""
         self._last_usage = None  # UsageMetadata from last LLM call, for ledger
         self._created_at: str = ""
@@ -743,7 +755,8 @@ class BaseAgent:
         # Issue #164 — ACTIVE-without-progress watchdog.
         #
         # ``_state_changed_at`` records when the agent last transitioned
-        # state (wall-clock seconds, ``time.time()``). ``_last_progress_at``
+        # state (wall-clock seconds, ``self._lifecycle_clock.wall_seconds()``).
+        # ``_last_progress_at``
         # is bumped by any of the kernel's progress events — ``wake``,
         # ``tc_wake_continue``, ``llm_call``, ``llm_response``, ``tool_call``,
         # ``tool_result``, ``notification_pair_injected``, and state
@@ -760,7 +773,7 @@ class BaseAgent:
         # visible and let admin or .clear handle recovery." Auto-restart
         # without understanding the underlying race could mask real bugs
         # behind retries.
-        now_wall = time.time()
+        now_wall = self._lifecycle_clock.wall_seconds()
         self._state_changed_at: float = now_wall
         self._last_progress_at: float = now_wall
         self._active_turn_kind: str | None = None
@@ -969,7 +982,7 @@ class BaseAgent:
         # Soul timer + hidden idle-timeout bookkeeping: IDLE-only.  Start on
         # entering IDLE, cancel/clear on leaving. No-op when soul is absent.
         if new_state == AgentState.IDLE:
-            self._idle_since_monotonic = time.monotonic()
+            self._idle_since_monotonic = self._lifecycle_clock.monotonic_seconds()
             if _start_soul_timer is not None:
                 _start_soul_timer(self)
         elif old == AgentState.IDLE:
@@ -981,7 +994,7 @@ class BaseAgent:
         # forward progress, so reset the no-progress clock. The
         # one-shot stuck-logged latch is cleared whenever we leave ACTIVE
         # so the next stuck episode can be reported.
-        now_wall = time.time()
+        now_wall = self._lifecycle_clock.wall_seconds()
         self._state_changed_at = now_wall
         self._last_progress_at = now_wall
         if new_state == AgentState.ACTIVE:
@@ -1018,7 +1031,7 @@ class BaseAgent:
         """
         self._deferred_notifications_count += 1
         if self._deferred_notifications_oldest_at is None:
-            self._deferred_notifications_oldest_at = time.time()
+            self._deferred_notifications_oldest_at = self._lifecycle_clock.wall_seconds()
 
         if fp == getattr(self, "_notification_deferred_log_fp", ()):
             return
@@ -1045,7 +1058,7 @@ class BaseAgent:
         # Watchdog bookkeeping — done before the actual log write so the
         # bookkeeping is in place even if the log service raises.
         if event_type in _PROGRESS_EVENTS:
-            self._last_progress_at = time.time()
+            self._last_progress_at = self._lifecycle_clock.wall_seconds()
             kind = _PROGRESS_EVENTS[event_type]
             if kind is not None:
                 self._active_turn_kind = kind
@@ -1060,7 +1073,7 @@ class BaseAgent:
             if not deferred_counter_already_updated:
                 self._deferred_notifications_count += 1
                 if self._deferred_notifications_oldest_at is None:
-                    self._deferred_notifications_oldest_at = time.time()
+                    self._deferred_notifications_oldest_at = self._lifecycle_clock.wall_seconds()
         elif event_type == "agent_state":
             # Successful injection / state transitions reset the deferral
             # storm counter — the very next state change after a deferral
@@ -1074,7 +1087,7 @@ class BaseAgent:
                 "type": event_type,
                 "address": self._working_dir.name,
                 "agent_name": self.agent_name,
-                "ts": time.time(),
+                "ts": self._lifecycle_clock.wall_seconds(),
                 **self._runtime_identity_event_fields,
                 **fields,
             })

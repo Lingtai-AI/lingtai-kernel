@@ -74,8 +74,10 @@ Persistent state is the existing `.agent.json` manifest and `.agent.heartbeat`
 files under each agent working directory. The POSIX adapter holds only its bound
 `WorkdirLayout`; it keeps no long-lived handle or lock. Core retains the freshness
 threshold and human-alive policy, not the adapter. The heartbeat wall-clock value
-is supplied by the caller (`base_agent/lifecycle` `time.time()`), a deliberate
-S7a temporary the S7b clocks will extract.
+is supplied by the caller: `base_agent/lifecycle` now reads it from the injected
+Core `LifecycleClockPort.wall_seconds()` (see
+`src/lingtai/kernel/lifecycle_clock/CONTRACT.md`) and passes the raw float through
+to `publish_heartbeat` unchanged.
 
 ## Notes
 

@@ -23,6 +23,7 @@ import textwrap
 from unittest.mock import MagicMock, patch
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -52,7 +53,7 @@ def _make_agent_with_launch_cmd(tmp_path, agent_name="alice", launch_cmd=None):
         service=make_mock_service(),
         agent_name=agent_name,
         working_dir=wd, workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd),
     )
     # BaseAgent._build_launch_cmd returns None; rebind to a sentinel
     # list so the handshake/signal code runs.
@@ -262,7 +263,7 @@ def test_perform_refresh_no_launch_cmd_skips_handshake(tmp_path):
         service=make_mock_service(),
         agent_name="alice",
         working_dir=wd, workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd),
     )
     # Default _build_launch_cmd returns None — do not override.
 

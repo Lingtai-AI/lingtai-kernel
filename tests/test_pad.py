@@ -13,6 +13,7 @@ from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
 from lingtai.kernel.base_agent import BaseAgent
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -47,7 +48,7 @@ def test_psyche_in_all_intrinsics():
 
 
 def test_psyche_wired_in_agent(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     assert "psyche" in agent._intrinsics
     assert "pad" not in agent._intrinsics
     agent.stop(timeout=1.0)
@@ -64,7 +65,7 @@ def test_covenant_constructor_arg_writes_to_system(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         covenant="You are a helpful agent", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     covenant_file = agent.working_dir / "system" / "covenant.md"
     assert covenant_file.is_file()
@@ -78,7 +79,7 @@ def test_pad_constructor_arg_writes_to_system(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         pad="initial pad", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     pad_file = agent.working_dir / "system" / "pad.md"
     assert pad_file.is_file()
@@ -92,7 +93,7 @@ def test_covenant_is_protected_section(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         covenant="researcher", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     sections = agent._prompt_manager.list_sections()
     covenant_section = [s for s in sections if s["name"] == "covenant"]
@@ -108,7 +109,7 @@ def test_existing_system_files_not_overwritten(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "t1",
         pad="existing content", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t1"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t1"),
     )
     working_dir = agent1.working_dir
     agent1.stop(timeout=1.0)
@@ -121,7 +122,7 @@ def test_existing_system_files_not_overwritten(tmp_path):
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "t2",
         pad="constructor ltm", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t2"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t2"),
     )
     # New agent has its own dir, so pad=constructor ltm is written fresh
     assert (agent2.working_dir / "system" / "pad.md").read_text() == "constructor ltm"
@@ -135,7 +136,7 @@ def test_existing_system_files_not_overwritten(tmp_path):
 
 def test_pad_edit(tmp_path):
     """Edit should write content to disk without injecting into prompt."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     result = agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "hello world"})
     assert result["status"] == "ok"
     assert result["size_bytes"] == len("hello world".encode())
@@ -146,7 +147,7 @@ def test_pad_edit(tmp_path):
 
 def test_pad_edit_then_load(tmp_path):
     """Edit + load workflow: edit writes to disk, load injects into prompt."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     try:
         # edit writes content and auto-loads into prompt manager
@@ -170,7 +171,7 @@ def test_pad_edit_then_load(tmp_path):
 
 
 def test_pad_load(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     try:
         pad_file = agent.working_dir / "system" / "pad.md"
@@ -184,7 +185,7 @@ def test_pad_load(tmp_path):
 
 
 def test_pad_load_empty_removes_section(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     try:
         agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "some content"})
@@ -199,7 +200,7 @@ def test_pad_load_empty_removes_section(tmp_path):
 
 
 def test_pad_load_no_change_no_commit(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     try:
         agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
@@ -210,14 +211,14 @@ def test_pad_load_no_change_no_commit(tmp_path):
 
 
 def test_pad_unknown_action(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     result = agent._intrinsics["psyche"]({"object": "pad", "action": "diff"})
     assert "error" in result
     agent.stop(timeout=1.0)
 
 
 def test_pad_creates_files_if_missing(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     try:
         missing_system = tmp_path / "missing-system"

@@ -13,6 +13,7 @@ from lingtai.adapters.posix.git_cli import PosixGitCliAdapter
 from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
 from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
+from lingtai.adapters.lifecycle_clock import SystemLifecycleClockAdapter
 from lingtai.adapters.workdir_lease import select_workdir_lease
 from lingtai.kernel.config_resolve import (
     resolve_env,
@@ -142,6 +143,7 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
         workdir_lease=select_workdir_lease(working_dir),
         notification_store=PosixNotificationStoreAdapter(working_dir),
         agent_presence=PosixAgentPresenceStoreAdapter(working_dir),
+        lifecycle_clock=SystemLifecycleClockAdapter(),
         snapshot_port=PosixGitCliAdapter(working_dir),
         source_revision_port=PosixGitCliAdapter(Path(__file__).resolve().parent),
         mail_service=mail_service,
