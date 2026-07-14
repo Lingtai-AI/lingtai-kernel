@@ -8,6 +8,12 @@ description: |
   demand via action='manual'; you do not need to call it before every send.
 version: 1.0.0
 last_changed_at: "2026-06-26T14:33:19-07:00"
+related_files:
+- src/lingtai/mcp_servers/wechat/manager.py
+- src/lingtai/mcp_servers/wechat/server.py
+- src/lingtai/mcp_servers/wechat/api.py
+maintenance: |
+  Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
 
 # WeChat MCP — usage manual (progressive disclosure)

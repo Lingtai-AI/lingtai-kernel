@@ -1,3 +1,12 @@
+---
+related_files:
+- src/lingtai/kernel/lifecycle_clock/CONTRACT.md
+- src/lingtai/kernel/lifecycle_clock/ANATOMY.md
+- src/lingtai/kernel/lifecycle_clock/__init__.py
+maintenance: |
+  Capability manual for the lifecycle clock Port; reciprocally linked from lifecycle_clock/CONTRACT.md and ANATOMY.md related_files (enforced by tests/test_architecture_documents.py) — keep the wall/monotonic domain guidance synced with the Port's actual contract and implementation.
+---
+
 # Lifecycle Clock — capability manual
 
 The **lifecycle clock** is the kernel's Core-owned boundary for reading time in

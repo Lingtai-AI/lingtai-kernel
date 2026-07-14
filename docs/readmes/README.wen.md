@@ -1,3 +1,11 @@
+---
+related_files:
+- README.md
+- docs/readmes/README.zh.md
+maintenance: |
+  Must stay synced with the source-locale README.md; update together when English content changes.
+---
+
 <div align="center">
 
 # lingtai-kernel 灵台内核

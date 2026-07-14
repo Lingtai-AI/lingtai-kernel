@@ -9,6 +9,12 @@ description: |
   do not need to call it before every send.
 version: 1.0.0
 last_changed_at: "2026-06-26T14:33:19-07:00"
+related_files:
+- src/lingtai/mcp_servers/cloud_mail/manager.py
+- src/lingtai/mcp_servers/cloud_mail/server.py
+- src/lingtai/mcp_servers/cloud_mail/client.py
+maintenance: |
+  Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
 
 # Cloud Mail MCP — usage manual (progressive disclosure)

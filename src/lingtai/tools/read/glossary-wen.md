@@ -3,6 +3,14 @@ kind: tool-glossary
 schema_version: 1
 tool_package: lingtai.tools.read
 language: wen
+related_files:
+- docs.yaml
+- src/lingtai/kernel/tool_glossary.py
+- src/lingtai/tools/glossary_validator.py
+- src/lingtai/tools/read/glossary-en.md
+- src/lingtai/tools/read/glossary-zh.md
+maintenance: |
+  Classical-Chinese (wen) glossary for the `read` tool package (lingtai.tools.read); body must stay non-empty and distinct from glossary-zh.md — tests/test_tool_glossary.py::test_wen_uses_classical_chinese_not_zh exercises exactly this file. Update in lockstep with glossary-en.md/glossary-zh.md whenever read's public tool schema changes.
 ---
 **名相对照**
 

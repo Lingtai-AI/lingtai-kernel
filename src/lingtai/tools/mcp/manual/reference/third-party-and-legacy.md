@@ -1,3 +1,10 @@
+---
+related_files:
+- src/lingtai/tools/mcp/manual/SKILL.md
+maintenance: |
+  Third-party/legacy MCP wiring reference routed to from mcp/manual/SKILL.md; update it whenever the npx/uvx/HTTP server wiring path or the legacy mcp/servers.json mechanism changes.
+---
+
 # Third-party and legacy MCP routes
 
 Two routes for non-curated MCPs: the **registry route** (recommended, gated by `mcp_registry.jsonl`) and the **legacy `mcp/servers.json` route** (ungated, kept for quick experiments).

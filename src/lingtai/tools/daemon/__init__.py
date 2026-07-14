@@ -185,6 +185,93 @@ def _normalize_claude_usage(usage: dict | None) -> dict | None:
             "cached": cached, "thinking": thinking}
 
 
+def _normalize_codex_usage(usage: dict | None) -> dict | None:
+    """Normalize a Codex ``turn.completed`` usage block for UI totals.
+
+    The Codex CLI event contract reports ``input_tokens`` as the total input
+    count, including ``cached_input_tokens``.  ``daemon.json.cli_tokens.input``
+    is the disjoint (non-cached) input count, so subtract the cached portion
+    and clamp at zero rather than exposing a negative number when a malformed
+    source payload overstates its cache count.  Only fields present in the
+    source ``TokenUsage`` contract are consumed; Codex does not provide a
+    separately proven thinking/reasoning count in this event.
+
+    Invalid, missing, negative, or all-zero usage is suppressed.  The caller
+    passes the returned ``input``/``cached``/``output`` values to
+    :meth:`DaemonRunDir.record_cli_tokens`, which increments ``calls`` once.
+    """
+    if not isinstance(usage, dict):
+        return None
+
+    def _nonnegative_int(value) -> int | None:
+        # bool is an int subclass, but it is not a token count.
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
+    total_input = _nonnegative_int(usage.get("input_tokens"))
+    cached_input = _nonnegative_int(usage.get("cached_input_tokens"))
+    output = _nonnegative_int(usage.get("output_tokens"))
+    if total_input is None or cached_input is None or output is None:
+        return None
+
+    input_tokens = max(total_input - cached_input, 0)
+    if not (input_tokens or cached_input or output):
+        return None
+    return {
+        "input": input_tokens,
+        "cached": cached_input,
+        "output": output,
+    }
+
+
+def _normalize_cursor_usage(event: dict | None) -> dict | None:
+    """Normalize Cursor 2026.05.28 ``result.usage`` to UI-only totals.
+
+    The installed ``agent-cli@2026.05.28-a70ca7c`` bundle emits a terminal
+    ``type=result`` / ``subtype=success`` event whose ``usage.inputTokens`` is
+    already net of cache reads and writes.  Keep that value direct: subtracting
+    either cache field again would undercount input.  Cursor emits no thinking
+    or provider field in this source-pinned event contract.
+
+    Every field is required to be a non-negative integer (booleans are not
+    token counts).  Invalid and all-zero events return ``None`` so callers do
+    not persist misleading UI usage or raw-event noise.
+    """
+    if not isinstance(event, dict):
+        return None
+    if (
+        event.get("type") != "result"
+        or event.get("subtype") != "success"
+        or event.get("is_error") is not False
+    ):
+        return None
+
+    raw_usage = event.get("usage")
+    if not isinstance(raw_usage, dict):
+        return None
+    keys = (
+        "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens",
+    )
+    values = [raw_usage.get(key) for key in keys]
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in values
+    ):
+        return None
+
+    input_tokens, output_tokens, cache_read, cache_write = values
+    cached = cache_read + cache_write
+    if not (input_tokens or output_tokens or cached):
+        return None
+    return {
+        "input": input_tokens,
+        "output": output_tokens,
+        "cached": cached,
+        "thinking": 0,
+    }
+
+
 def _toml_string(value: str) -> str:
     return json.dumps(value)
 
@@ -3616,6 +3703,11 @@ class DaemonManager:
                             agent_message_texts.append(text)
                             run_dir.record_cli_output(text, stream="stdout")
                 elif etype == "turn.completed":
+                    # A Codex turn has one terminal usage report. Treat the
+                    # first terminal event as authoritative so a duplicated
+                    # line cannot double-count UI totals or forensic events.
+                    if turn_completed:
+                        continue
                     turn_completed = True
                     # NOTE: Codex spend is intentionally NOT recorded in
                     # the daemon's or parent's token ledger. Codex runs
@@ -3624,8 +3716,20 @@ class DaemonManager:
                     # from the kernel's LLM adapters (codex `input_tokens`
                     # already includes the cached portion). Mixing it in
                     # would produce a misleading "lifetime totals" number.
-                    # Spend is visible to the agent via daemon(check),
-                    # not via sum_token_ledger.
+                    # The truthful disjoint UI view is separate from the
+                    # kernel ledgers and retains the raw source usage in the
+                    # cli_usage forensic event.
+                    usage = _normalize_codex_usage(event.get("usage"))
+                    if usage is not None:
+                        try:
+                            run_dir.record_cli_tokens(
+                                input=usage["input"],
+                                output=usage["output"],
+                                cached=usage["cached"],
+                                raw=event.get("usage"),
+                            )
+                        except Exception:
+                            pass
 
             proc.wait()
         except Exception as e:
@@ -4258,7 +4362,9 @@ class DaemonManager:
                     run_id=em_id,
                     task=spec["task"],
                     tools=spec.get("tools", []),
-                    model=backend,
+                    # Cursor's CLI is the source of model identity; do not
+                    # mislabel the daemon backend as an upstream model.
+                    model="unknown" if backend == "cursor" else backend,
                     max_turns=effective_max_turns,
                     timeout_s=effective_timeout,
                     parent_addr=parent_addr,
@@ -5482,7 +5588,22 @@ class DaemonManager:
                             agent_message_texts.append(text)
                             run_dir.record_cli_output(text, stream="stdout")
                 elif etype == "turn.completed":
-                    turn_completed = True
+                    # Resume streams should also account one terminal usage
+                    # object at most; a repeated terminal line is not a new
+                    # provider call.
+                    if not turn_completed:
+                        turn_completed = True
+                        usage = _normalize_codex_usage(event.get("usage"))
+                        if usage is not None:
+                            try:
+                                run_dir.record_cli_tokens(
+                                    input=usage["input"],
+                                    output=usage["output"],
+                                    cached=usage["cached"],
+                                    raw=event.get("usage"),
+                                )
+                            except Exception:
+                                pass
 
             if time.monotonic() >= deadline:
                 timed_out = True
@@ -6552,12 +6673,87 @@ class DaemonManager:
     # ------------------------------------------------------------------
 
     # Cursor's headless CLI is exposed as the `agent` executable. In print mode
-    # (`-p` / `--print`) it can emit the same single-result JSON shape and
-    # stream-json shape documented by Cursor's CLI reference.  We parse it with
-    # the same defensive helpers used by OpenCode because both are JSONL CLI
-    # backends whose event vocabularies may evolve between releases. Cursor's
-    # documented final result event includes `result` and `session_id` fields;
-    # the shared helpers cover both.
+    # (`-p` / `--print`) it emits the source-pinned stream-json event shapes
+    # documented by the installed 2026.05.28-a70ca7c bundle.  Keep the generic
+    # text/session helpers for existing behavior, but keep usage/model parsing
+    # strict to that version's terminal and init events.
+
+    @staticmethod
+    def _cursor_init_model(event: dict) -> tuple[str, str] | None:
+        """Return a source-reported ``(session_id, model)`` init pair."""
+        if event.get("type") != "system" or event.get("subtype") != "init":
+            return None
+        session_id = event.get("session_id")
+        model = event.get("model")
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(model, str)
+            or not model
+        ):
+            return None
+        return session_id, model
+
+    @staticmethod
+    def _cursor_result_session_id(event: dict) -> str | None:
+        """Return only the terminal event's top-level ``session_id``."""
+        session_id = event.get("session_id")
+        return session_id if isinstance(session_id, str) and session_id else None
+
+    @staticmethod
+    def _cursor_set_model(run_dir: DaemonRunDir, model: str) -> None:
+        """Persist a model learned from a preceding matching Cursor init."""
+        if run_dir._state.get("model") == model:
+            return
+        run_dir._state["model"] = model
+        run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+
+    def _cursor_process_usage_event(
+        self,
+        event: dict,
+        run_dir: DaemonRunDir,
+        init_models: dict[str, str],
+        usage_candidate: tuple[dict[str, int], dict] | None,
+    ) -> tuple[dict[str, int], dict] | None:
+        """Join source model and retain the first valid terminal usage candidate."""
+        init_model = self._cursor_init_model(event)
+        if init_model is not None:
+            init_models[init_model[0]] = init_model[1]
+            return usage_candidate
+
+        if event.get("type") != "result":
+            return usage_candidate
+
+        session_id = self._cursor_result_session_id(event)
+        if session_id is not None:
+            model = init_models.get(session_id)
+            if model is not None:
+                self._cursor_set_model(run_dir, model)
+
+        if usage_candidate is not None:
+            return usage_candidate
+        usage = _normalize_cursor_usage(event)
+        if usage is None:
+            return None
+        return usage, event["usage"]
+
+    @staticmethod
+    def _cursor_record_usage_candidate(
+        run_dir: DaemonRunDir,
+        usage_candidate: tuple[dict[str, int], dict] | None,
+    ) -> None:
+        """Persist a buffered usage candidate after stream success only."""
+        if usage_candidate is None:
+            return
+        usage, raw = usage_candidate
+        try:
+            run_dir.record_cli_tokens(
+                input=usage["input"], output=usage["output"],
+                cached=usage["cached"], thinking=usage["thinking"],
+                raw=raw,
+            )
+        except Exception:
+            pass
 
     def _build_cursor_prompt(self, task: str) -> str:
         """Compose the initial prompt sent to Cursor Agent CLI."""
@@ -6585,6 +6781,12 @@ class DaemonManager:
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         prompt = self._build_cursor_prompt(task)
+        # Backend attribution remains ``cursor``; upstream model identity is
+        # unknown until a matching source ``system/init`` + ``session_id``
+        # precedes a terminal result.
+        if run_dir._state.get("model") != "unknown":
+            run_dir._state["model"] = "unknown"
+            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
         cmd = [
             "agent",
             "-p",
@@ -6621,6 +6823,8 @@ class DaemonManager:
         stderr_lines = stderr_thread.lines
 
         session_id_captured: str | None = None
+        init_models: dict[str, str] = {}
+        usage_candidate: tuple[dict[str, int], dict] | None = None
         text_chunks: list[str] = []
         final_text: str | None = None
         final_is_error = False
@@ -6653,6 +6857,9 @@ class DaemonManager:
                     continue
 
                 any_event = True
+                usage_candidate = self._cursor_process_usage_event(
+                    event, run_dir, init_models, usage_candidate,
+                )
                 sid = self._opencode_extract_session_id(event)
                 if sid:
                     _store_session_id(sid)
@@ -6684,6 +6891,9 @@ class DaemonManager:
             stderr_thread.join(timeout=2.0)
             self._unregister_cli_proc(proc, group_id=run_dir.group_id)
 
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
         if proc.returncode != 0:
@@ -6707,6 +6917,11 @@ class DaemonManager:
             run_dir.mark_failed(exc)
             raise exc
 
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+
+        self._cursor_record_usage_candidate(run_dir, usage_candidate)
+
         if final_text is not None:
             text = final_text.strip()
         elif text_chunks:
@@ -6726,6 +6941,12 @@ class DaemonManager:
         run_dir = entry.get("run_dir")
         if run_dir is None:
             return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
+
+        # Legacy/direct run-dir callers may have initialized ``model`` to the
+        # backend label; do not expose that as upstream model identity.
+        if run_dir._state.get("model") == "cursor":
+            run_dir._state["model"] = "unknown"
+            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
 
         session_id = run_dir._state.get("cursor_session_id")
         if not session_id:
@@ -6807,6 +7028,8 @@ class DaemonManager:
         )
         stderr_lines = stderr_thread.lines
 
+        init_models: dict[str, str] = {}
+        usage_candidate: tuple[dict[str, int], dict] | None = None
         text_chunks: list[str] = []
         final_text: str | None = None
         final_is_error = False
@@ -6833,6 +7056,9 @@ class DaemonManager:
                     continue
 
                 any_event = True
+                usage_candidate = self._cursor_process_usage_event(
+                    event, run_dir, init_models, usage_candidate,
+                )
                 text = self._opencode_extract_text(event)
                 if text:
                     text_chunks.append(text)
@@ -6889,6 +7115,8 @@ class DaemonManager:
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
             return {"status": "error", "id": em_id, "message": err}
+
+        self._cursor_record_usage_candidate(run_dir, usage_candidate)
 
         if final_text is not None:
             output = final_text.strip()

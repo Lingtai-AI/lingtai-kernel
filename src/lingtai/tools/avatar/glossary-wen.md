@@ -3,6 +3,14 @@ kind: tool-glossary
 schema_version: 1
 tool_package: lingtai.tools.avatar
 language: wen
+related_files:
+- docs.yaml
+- src/lingtai/kernel/tool_glossary.py
+- src/lingtai/tools/glossary_validator.py
+- src/lingtai/tools/avatar/glossary-en.md
+- src/lingtai/tools/avatar/glossary-zh.md
+maintenance: |
+  Classical-Chinese (wen) glossary for the `avatar` tool package (lingtai.tools.avatar); body must stay non-empty and distinct from glossary-zh.md (tool_glossary.py enforces both). Update in lockstep with glossary-en.md/glossary-zh.md whenever avatar's public tool schema changes.
 ---
 **名相对照**
 

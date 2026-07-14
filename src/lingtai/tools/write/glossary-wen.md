@@ -3,6 +3,14 @@ kind: tool-glossary
 schema_version: 1
 tool_package: lingtai.tools.write
 language: wen
+related_files:
+- docs.yaml
+- src/lingtai/kernel/tool_glossary.py
+- src/lingtai/tools/glossary_validator.py
+- src/lingtai/tools/write/glossary-en.md
+- src/lingtai/tools/write/glossary-zh.md
+maintenance: |
+  Classical-Chinese (wen) glossary for the `write` tool package (lingtai.tools.write); body must stay non-empty and distinct from glossary-zh.md. Update in lockstep with glossary-en.md/glossary-zh.md whenever write's public tool schema changes.
 ---
 **名相对照**
 

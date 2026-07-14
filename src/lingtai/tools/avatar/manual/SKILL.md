@@ -4,6 +4,12 @@ description: |
   Complete operational guide for the avatar tool — spawning, managing, and communicating with 他我 (alter-ego agents). Read this when: you are about to spawn an avatar; an avatar you spawned goes quiet; you need to decide between avatar, daemon, or bash; or you are an avatar and need to know how to escalate to your parent. Covers spawn types, naming rules, discipline, escalation protocol, and the parent_prompt contract.
 version: 1.0.0
 last_changed_at: "2026-06-14T00:11:48-07:00"
+related_files:
+- src/lingtai/tools/avatar/__init__.py
+- src/lingtai/tools/avatar/ANATOMY.md
+- src/lingtai/tools/avatar/CONTRACT.md
+maintenance: |
+  Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # Avatar Manual

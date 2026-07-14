@@ -1,3 +1,10 @@
+---
+related_files:
+- CONTRACT.md
+maintenance: |
+  Tracks the external, non-model-generated liveness/mailbox-probe contract for headless controllers; update it whenever the runtime lock/heartbeat files, `.status.json` fields, or the probe/ack message shape change.
+---
+
 # Headless Runtime Contract
 
 This contract is for external controllers that need to prove a LingTai agent is

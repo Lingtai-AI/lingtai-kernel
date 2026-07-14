@@ -9,6 +9,11 @@ description: >
   not a flag catalog.
 version: 0.1.0
 last_changed_at: "2026-07-09T19:24:35-07:00"
+related_files:
+- src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
+- src/lingtai/tools/bash/manual/reference/bash-oh-my-pi/SKILL.md
+maintenance: |
+  Tracks the Oh-My-Pi daemon backend flag-discovery topic it documents; update when that integration changes.
 ---
 
 # Oh-My-Pi Daemon Backend — Flag Discovery Entrypoint

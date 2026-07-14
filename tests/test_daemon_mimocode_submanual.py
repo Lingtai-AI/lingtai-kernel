@@ -100,7 +100,7 @@ def test_mimocode_child_states_verified_backend_contract():
 
 
 def test_mimocode_child_stays_tiny_not_a_flag_catalog():
-    line_count = len(CHILD.read_text(encoding="utf-8").splitlines())
+    line_count = len(_body(CHILD).splitlines())
     assert line_count <= 90, (
         "the MiMo Code backend submanual is a tiny entrypoint to live CLI "
         f"help; {line_count} lines suggests it is growing into a flag catalog"

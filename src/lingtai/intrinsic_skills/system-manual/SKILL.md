@@ -23,6 +23,13 @@ description: >
 version: 1.6.0
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, preset]
 last_changed_at: "2026-07-13T00:00:00-07:00"
+related_files:
+- src/lingtai/prompts/substrate/substrate.md
+- src/lingtai/prompts/procedures/procedures.md
+- src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md
+maintenance: |
+  Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # System Manual — Progressive Disclosure Router

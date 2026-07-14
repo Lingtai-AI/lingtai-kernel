@@ -94,7 +94,14 @@ def normalize_tool_glossary_language(language: object) -> str:
 _FILENAME_BY_LANG: dict[str, str] = {lang: f"glossary-{lang}.md" for lang in _KNOWN}
 
 _EXPECTED_FRONTMATTER_KEYS = frozenset(
-    {"kind", "schema_version", "tool_package", "language"}
+    {
+        "kind",
+        "schema_version",
+        "tool_package",
+        "language",
+        "related_files",
+        "maintenance",
+    }
 )
 
 
@@ -169,6 +176,8 @@ def parse_glossary(
         schema_version: 1
         tool_package: <tool_package>
         language: <language>
+        related_files: [<repo-relative path>, ...]
+        maintenance: <non-empty string>
         ---
 
     The body (everything after the closing fence) is returned verbatim.
@@ -229,6 +238,21 @@ def parse_glossary(
     lang = doc["language"]
     if not isinstance(lang, str) or lang != language:
         raise GlossaryValidationError(f"language must be {language!r}, got {lang!r}")
+
+    related = doc["related_files"]
+    if not isinstance(related, list) or not related or not all(
+        isinstance(item, str) and item for item in related
+    ):
+        raise GlossaryValidationError(
+            "related_files must be a non-empty list of non-empty strings, "
+            f"got {related!r}"
+        )
+
+    maint = doc["maintenance"]
+    if not isinstance(maint, str) or not maint.strip():
+        raise GlossaryValidationError(
+            f"maintenance must be a non-empty string, got {maint!r}"
+        )
 
     return body
 

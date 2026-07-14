@@ -6,6 +6,11 @@ description: >
   LingTai daemon harness candidate.
 version: 0.1.0
 last_changed_at: "2026-07-01T00:00:00-07:00"
+related_files:
+- src/lingtai/tools/bash/manual/SKILL.md
+- src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/kimicode/SKILL.md
+maintenance: |
+  Tracks the Kimi Code CLI backend/topic behavior it documents; update when that integration changes.
 ---
 
 # Kimi Code CLI

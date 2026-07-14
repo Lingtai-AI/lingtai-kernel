@@ -1,3 +1,11 @@
+---
+related_files:
+- reports/kernel-release-v0.13.1-20260621/commits.md
+- reports/kernel-release-v0.13.1-20260621/release-body.md
+maintenance: |
+  Historical record of the v0.13.1 release; content is frozen except for factual corrections — do not rewrite retroactively to reflect later changes.
+---
+
 # Merge commits / PRs
 
 ```

@@ -595,7 +595,7 @@ class DaemonRunDir:
         """Accumulate external CLI token usage into daemon.json ``cli_tokens``.
 
         This is deliberately separate from :meth:`append_tokens`: CLI backends
-        (claude-p / claude-code, codex, ...) run as external processes billing
+        (claude-p / claude-code, codex, cursor, ...) run as external processes billing
         on their own provider account, and their cache-creation/cache-read
         semantics don't map onto the kernel's adapter accounting. So this
         method writes ONLY to ``daemon.json.cli_tokens`` — never to the daemon
@@ -604,9 +604,10 @@ class DaemonRunDir:
         lifetime totals.
 
         Normalized totals accumulate across usage events:
-            input    — sum of ``input_tokens``
+            input    — sum of each backend's normalized disjoint input count
+                       (Codex: ``max(input_tokens - cached_input_tokens, 0)``)
             output   — sum of ``output_tokens``
-            cached   — sum of cache_read + cache_creation input tokens
+            cached   — sum of the backend's reported cached input tokens
             thinking — sum of any recognizable thinking/reasoning tokens (0 if none)
             calls    — incremented once per recorded usage event
 

@@ -8,6 +8,13 @@ description: >
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
 version: 0.7.0
 last_changed_at: "2026-07-14T00:00:00-07:00"
+related_files:
+- src/lingtai/tools/daemon/DAEMON_CONTRACT.md
+- src/lingtai/tools/daemon/CONTRACT.md
+- src/lingtai/tools/daemon/ANATOMY.md
+- src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
+maintenance: |
+  Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # Daemon Manual — Router

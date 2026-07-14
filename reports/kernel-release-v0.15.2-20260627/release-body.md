@@ -1,3 +1,11 @@
+---
+related_files:
+- reports/kernel-release-v0.15.2-20260627/commits.md
+- reports/kernel-release-v0.15.2-20260627/release-report.md
+maintenance: |
+  Historical record of the v0.15.2 release; content is frozen except for factual corrections — do not rewrite retroactively to reflect later changes.
+---
+
 ## Highlights
 - Codex summarize/cache behavior now waits for the provider-side reconstruction trigger before resetting the websocket epoch, preserving incremental continuation when summarize only changed local visible history (#534).
 - Summarize/molt guidance now distinguishes local compaction from delayed provider reconstruction, treats task-boundary molt as the stronger completed-work boundary, and avoids summarize-first when a molt is already planned (#535).

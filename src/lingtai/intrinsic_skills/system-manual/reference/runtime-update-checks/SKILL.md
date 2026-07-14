@@ -10,6 +10,12 @@ description: >
 version: 0.1.0
 tags: [lingtai, runtime, kernel, nudge, updates, refresh, editable, dev-mode]
 last_changed_at: "2026-06-23T23:50:45-07:00"
+related_files:
+- src/lingtai/intrinsic_skills/system-manual/SKILL.md
+- src/lingtai/kernel/nudge/kernel_version.py
+- src/lingtai/kernel/nudge/__init__.py
+maintenance: |
+  Tracks the runtime-update-checks topic it documents; update when that integration changes.
 ---
 
 # Runtime Update Checks

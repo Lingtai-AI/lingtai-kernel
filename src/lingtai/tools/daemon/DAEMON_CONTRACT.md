@@ -20,8 +20,10 @@ related_files:
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_claude_p_background_guard.py
   - tests/test_daemon_opencode_backend.py
+  - tests/test_daemon_cursor_backend.py
   - tests/test_daemon_claude_interactive_backend.py
   - tests/test_daemon_run_dir.py
+  - tests/test_daemon_codex_usage.py
 review_triggers:
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/run_dir.py
@@ -32,8 +34,10 @@ review_triggers:
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_claude_p_background_guard.py
   - tests/test_daemon_opencode_backend.py
+  - tests/test_daemon_cursor_backend.py
   - tests/test_daemon_claude_interactive_backend.py
   - tests/test_daemon_run_dir.py
+  - tests/test_daemon_codex_usage.py
 maintenance: |
   Keep this file in the same maintenance graph as the daemon ANATOMY.md and
   manual files listed under related_files. If any review_triggers path changes
@@ -136,6 +140,17 @@ while methods in the same module persist `daemon.json`, `.prompt`, `.heartbeat`,
 selected-skill catalog/path context, and redacted MCP registrations. Secret
 MCP values belong only in native run-scoped launch plumbing where a backend
 needs them to mount tools (`src/lingtai/tools/daemon/__init__.py:3080-3264`).
+
+External CLI usage is a separate, UI-only lane. A source-reported Codex
+`turn.completed` usage object is accepted only when its contract fields are
+non-negative integer counts (`input_tokens`, `cached_input_tokens`, and
+`output_tokens`); the persisted `cli_tokens.input` is the disjoint
+`max(input_tokens - cached_input_tokens, 0)`, while `cached` and `output` are
+preserved and `calls` increments once for the terminal event. The raw usage
+object is retained in the append-only `cli_usage` event. Missing, malformed,
+and all-zero usage is silent, duplicate terminal events do not add another
+call, and neither ledger receives a row. No Codex thinking/reasoning field is
+projected because this event contract does not prove one.
 
 ### 5. Unsupported support status is an explicit capability state
 

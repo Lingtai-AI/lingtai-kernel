@@ -11,7 +11,10 @@ Three call sites reach `_perform_refresh` directly:
 (making `.refresh.taken` present and clearing `.refresh`) and signals
 `_cancel_event` + `_shutdown` after the watcher subprocess is spawned,
 so the lock-release phase completes regardless of caller. These tests
-exercise that contract without spawning a real subprocess.
+exercise that contract without spawning a real subprocess: the injected
+`FakeRefreshWatcher` (see `tests/_refresh_watcher_helpers.py`) records each
+`spawn_detached(script, env=...)` call in place of the production
+`PosixRefreshWatcherAdapter` (`src/lingtai/kernel/refresh_watcher/CONTRACT.md`).
 """
 from __future__ import annotations
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
@@ -20,12 +23,15 @@ import json
 import subprocess
 import sys
 import textwrap
+
+import pytest
 from unittest.mock import MagicMock, patch
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
+from tests._refresh_watcher_helpers import make_test_refresh_watcher
 
 
 def make_mock_service():
@@ -38,8 +44,8 @@ def make_mock_service():
 
 def _make_agent_with_launch_cmd(tmp_path, agent_name="alice", launch_cmd=None):
     """Build a bare BaseAgent and rebind `_build_launch_cmd` so the
-    refresh path proceeds past the `cmd is None` early return. The
-    actual subprocess call is patched in each test to avoid relaunches.
+    refresh path proceeds past the `cmd is None` early return. The injected
+    `FakeRefreshWatcher` records spawn calls in place of a real subprocess.
     """
     from lingtai.kernel.base_agent import BaseAgent
     wd = tmp_path / "test"
@@ -54,6 +60,7 @@ def _make_agent_with_launch_cmd(tmp_path, agent_name="alice", launch_cmd=None):
         agent_name=agent_name,
         working_dir=wd, workdir_lease=make_test_lease(),
         snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd),
+        refresh_watcher=make_test_refresh_watcher(),
     )
     # BaseAgent._build_launch_cmd returns None; rebind to a sentinel
     # list so the handshake/signal code runs.
@@ -64,11 +71,9 @@ def _make_agent_with_launch_cmd(tmp_path, agent_name="alice", launch_cmd=None):
 
 
 def _capture_watcher_script(agent):
-    with patch("subprocess.Popen") as mock_popen:
-        agent._perform_refresh()
-    assert mock_popen.called
-    args, _kwargs = mock_popen.call_args
-    return args[0][2]
+    agent._perform_refresh()
+    assert agent._refresh_watcher.spawned
+    return agent._refresh_watcher.last_script
 
 
 def _fast_watcher_script(script: str) -> str:
@@ -86,6 +91,57 @@ def _read_json(path):
 
 
 # ---------------------------------------------------------------------------
+# Production adapter
+# ---------------------------------------------------------------------------
+
+
+def test_posix_refresh_watcher_adapter_spawns_exact_detached_process():
+    """The first production adapter must preserve the Popen hand-off that was
+    extracted from `_perform_refresh`: current interpreter, exact script/env,
+    detached session, and no inherited stdio.
+    """
+    from lingtai.adapters.posix.refresh_watcher import PosixRefreshWatcherAdapter
+
+    script = "print('watcher sentinel')"
+    env = {"PATH": "/test/bin", "LINGTAI_REFRESH_ENV_OVERWRITE": "1"}
+
+    with patch("lingtai.adapters.posix.refresh_watcher.subprocess.Popen") as popen:
+        PosixRefreshWatcherAdapter().spawn_detached(script, env=env)
+
+    popen.assert_called_once_with(
+        [sys.executable, "-c", script],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        env=env,
+    )
+
+
+def test_agent_explicit_none_still_composes_production_watcher(monkeypatch, tmp_path):
+    """A production Agent always receives the real capability; explicit None
+    means "not supplied", not an opt-out that violates the composition invariant.
+    """
+    from lingtai.adapters.posix.refresh_watcher import PosixRefreshWatcherAdapter
+    from lingtai.agent import Agent
+
+    captured = {}
+
+    class CapturedComposition(Exception):
+        pass
+
+    def capture_base_agent_init(_self, **kwargs):
+        captured.update(kwargs)
+        raise CapturedComposition
+
+    monkeypatch.setattr("lingtai.agent.BaseAgent.__init__", capture_base_agent_init)
+    with pytest.raises(CapturedComposition):
+        Agent(service=object(), working_dir=tmp_path, refresh_watcher=None)
+
+    assert isinstance(captured["refresh_watcher"], PosixRefreshWatcherAdapter)
+
+
+# ---------------------------------------------------------------------------
 # Filesystem handshake
 # ---------------------------------------------------------------------------
 
@@ -99,9 +155,8 @@ def test_perform_refresh_direct_call_synthesizes_taken(tmp_path):
     assert not (wd / ".refresh").exists()
     assert not (wd / ".refresh.taken").exists()
 
-    with patch("subprocess.Popen") as mock_popen:
-        agent._perform_refresh()
-        assert mock_popen.called  # watcher subprocess spawned
+    agent._perform_refresh()
+    assert agent._refresh_watcher.spawned  # watcher subprocess spawned
 
     assert (wd / ".refresh.taken").exists(), \
         ".refresh.taken must exist after direct refresh — watcher polls for it"
@@ -117,9 +172,8 @@ def test_perform_refresh_preserves_existing_taken(tmp_path):
     taken = wd / ".refresh.taken"
     taken.write_text("preexisting body")  # heartbeat just renamed; some marker payload
 
-    with patch("subprocess.Popen") as mock_popen:
-        agent._perform_refresh()
-        assert mock_popen.called
+    agent._perform_refresh()
+    assert agent._refresh_watcher.spawned
 
     assert taken.exists()
     assert taken.read_text() == "preexisting body", \
@@ -136,9 +190,8 @@ def test_perform_refresh_renames_existing_refresh(tmp_path):
     refresh.write_text("refresh body")
     assert not (wd / ".refresh.taken").exists()
 
-    with patch("subprocess.Popen") as mock_popen:
-        agent._perform_refresh()
-        assert mock_popen.called
+    agent._perform_refresh()
+    assert agent._refresh_watcher.spawned
 
     assert not refresh.exists()
     taken = wd / ".refresh.taken"
@@ -156,9 +209,8 @@ def test_perform_refresh_removes_stale_refresh_if_both_exist(tmp_path):
     (wd / ".refresh").write_text("racey")
     (wd / ".refresh.taken").write_text("ack")
 
-    with patch("subprocess.Popen") as mock_popen:
-        agent._perform_refresh()
-        assert mock_popen.called
+    agent._perform_refresh()
+    assert agent._refresh_watcher.spawned
 
     assert not (wd / ".refresh").exists()
     assert (wd / ".refresh.taken").exists()
@@ -190,11 +242,10 @@ def test_perform_refresh_ack_write_failure_does_not_shutdown(tmp_path):
     log_events = []
     agent._log = lambda event, **kw: log_events.append((event, kw))
 
-    with patch("pathlib.Path.touch", touch_side_effect), \
-         patch("subprocess.Popen") as mock_popen:
+    with patch("pathlib.Path.touch", touch_side_effect):
         agent._perform_refresh()
 
-    assert not mock_popen.called
+    assert not agent._refresh_watcher.spawned
     assert not (wd / ".refresh.taken").exists()
     assert not agent._shutdown.is_set()
     assert not agent._cancel_event.is_set()
@@ -211,8 +262,7 @@ def test_perform_refresh_sets_shutdown_and_cancel(tmp_path):
     assert not agent._shutdown.is_set()
     assert not agent._cancel_event.is_set()
 
-    with patch("subprocess.Popen"):
-        agent._perform_refresh()
+    agent._perform_refresh()
 
     assert agent._shutdown.is_set(), \
         "_perform_refresh must set _shutdown so the run loop exits and the lock releases"
@@ -239,10 +289,9 @@ def test_perform_refresh_skips_chat_history_save_when_interface_poisoned(tmp_pat
 
     agent._log = log_capture
 
-    with patch("subprocess.Popen") as mock_popen:
-        agent._perform_refresh()
+    agent._perform_refresh()
 
-    assert mock_popen.called
+    assert agent._refresh_watcher.spawned
     assert any(
         event == "refresh_chat_history_save_skipped"
         and fields.get("reason") == "worker_still_running_interface_unsafe"
@@ -264,17 +313,71 @@ def test_perform_refresh_no_launch_cmd_skips_handshake(tmp_path):
         agent_name="alice",
         working_dir=wd, workdir_lease=make_test_lease(),
         snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd),
+        refresh_watcher=make_test_refresh_watcher(),
     )
     # Default _build_launch_cmd returns None — do not override.
 
-    with patch("subprocess.Popen") as mock_popen:
-        agent._perform_refresh()
-        assert not mock_popen.called
+    agent._perform_refresh()
+    assert not agent._refresh_watcher.spawned
 
     assert not (wd / ".refresh.taken").exists(), \
         "no-launch-cmd path must not synthesize the ack file"
     assert not agent._shutdown.is_set(), \
         "no-launch-cmd path must not orphan the agent by setting shutdown"
+
+
+def test_perform_refresh_no_launch_cmd_works_without_refresh_watcher(tmp_path):
+    """A raw BaseAgent built with no `refresh_watcher` (the ~230 unrelated
+    construction sites across the suite) must still construct and no-op
+    `_perform_refresh` cleanly when there is no launch command — the
+    no-refresh path never touches the Port."""
+    from lingtai.kernel.base_agent import BaseAgent
+    wd = tmp_path / "test"
+    wd.mkdir(exist_ok=True)
+    agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
+        service=make_mock_service(),
+        agent_name="alice",
+        working_dir=wd, workdir_lease=make_test_lease(),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd),
+        # refresh_watcher omitted entirely — must default to None and construct.
+    )
+    assert agent._refresh_watcher is None
+    # Default _build_launch_cmd returns None — do not override.
+
+    agent._perform_refresh()  # must not raise
+
+    assert not (wd / ".refresh.taken").exists()
+    assert not agent._shutdown.is_set()
+
+
+def test_perform_refresh_real_launch_cmd_without_watcher_raises_before_handshake(tmp_path):
+    """A real launch command with no injected `refresh_watcher` must fail
+    loudly — but only before any handshake or shutdown mutation, so a missing
+    Port never orphans the agent mid-handshake."""
+    from lingtai.kernel.base_agent import BaseAgent
+    wd = tmp_path / "test"
+    wd.mkdir(exist_ok=True)
+    (wd / "logs").mkdir(exist_ok=True)
+    agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
+        service=make_mock_service(),
+        agent_name="alice",
+        working_dir=wd, workdir_lease=make_test_lease(),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd),
+        # refresh_watcher omitted entirely — must default to None.
+    )
+    agent._build_launch_cmd = lambda: ["python", "-c", "print('relaunch sentinel')"]
+
+    with pytest.raises(RuntimeError, match="RefreshWatcherPort"):
+        agent._perform_refresh()
+
+    assert not (wd / ".refresh").exists()
+    assert not (wd / ".refresh.taken").exists(), \
+        "missing-Port failure must precede handshake mutation"
+    assert not agent._shutdown.is_set(), \
+        "missing-Port failure must precede shutdown signaling"
+    assert not agent._cancel_event.is_set()
 
 
 def test_perform_refresh_logs_handshake_source(tmp_path):
@@ -291,8 +394,7 @@ def test_perform_refresh_logs_handshake_source(tmp_path):
 
     agent._log = log_capture
 
-    with patch("subprocess.Popen"):
-        agent._perform_refresh()
+    agent._perform_refresh()
 
     relaunch_events = [
         (e, kw) for e, kw in log_events if e == "refresh_deferred_relaunch"
@@ -310,12 +412,10 @@ def test_perform_refresh_watcher_marks_env_file_overwrite(tmp_path):
     """
     agent = _make_agent_with_launch_cmd(tmp_path)
 
-    with patch("subprocess.Popen") as mock_popen:
-        agent._perform_refresh()
+    agent._perform_refresh()
 
-    assert mock_popen.called
-    _, kwargs = mock_popen.call_args
-    assert kwargs["env"]["LINGTAI_REFRESH_ENV_OVERWRITE"] == "1"
+    assert agent._refresh_watcher.spawned
+    assert agent._refresh_watcher.last_env["LINGTAI_REFRESH_ENV_OVERWRITE"] == "1"
 
 
 def test_refresh_watcher_script_cleans_stale_duplicate_process(tmp_path):
@@ -326,12 +426,10 @@ def test_refresh_watcher_script_cleans_stale_duplicate_process(tmp_path):
     """
     agent = _make_agent_with_launch_cmd(tmp_path)
 
-    with patch("subprocess.Popen") as mock_popen:
-        agent._perform_refresh()
+    agent._perform_refresh()
 
-    assert mock_popen.called
-    args, _kwargs = mock_popen.call_args
-    script = args[0][2]
+    assert agent._refresh_watcher.spawned
+    script = agent._refresh_watcher.last_script
     assert "another lingtai agent is already running" in script
     assert "def _cleanup_stale_duplicate" in script
     assert "def match_agent_run" in script
@@ -363,11 +461,9 @@ _FAKE_ENV_ASSIGN = "BOT_TOKEN=" + "z" * 20
 
 
 def _extract_relaunch_script(agent):
-    with patch("subprocess.Popen") as mock_popen:
-        agent._perform_refresh()
-    assert mock_popen.called
-    args, _kwargs = mock_popen.call_args
-    return args[0][2]
+    agent._perform_refresh()
+    assert agent._refresh_watcher.spawned
+    return agent._refresh_watcher.last_script
 
 
 def test_refresh_watcher_script_embeds_redactor(tmp_path):

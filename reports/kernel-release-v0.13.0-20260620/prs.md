@@ -1,3 +1,11 @@
+---
+related_files:
+- reports/kernel-release-v0.13.0-20260620/commits.md
+- reports/kernel-release-v0.13.0-20260620/release-body.md
+maintenance: |
+  Historical record of the v0.13.0 release; content is frozen except for factual corrections — do not rewrite retroactively to reflect later changes.
+---
+
 - [#402](https://github.com/Lingtai-AI/lingtai-kernel/pull/402) docs: add GitHub community entry points — @huangzesen (13 files, +185/-7)
 - [#405](https://github.com/Lingtai-AI/lingtai-kernel/pull/405) feat(system): add summarize action for tool results — @huangzesen (12 files, +1531/-16)
 - [#406](https://github.com/Lingtai-AI/lingtai-kernel/pull/406) feat(codex): rotate affinity id on refresh and stalled cache — @huangzesen (4 files, +896/-81)

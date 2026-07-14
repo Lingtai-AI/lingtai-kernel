@@ -1,3 +1,11 @@
+---
+related_files:
+- CONTRIBUTING.md
+- README.md
+maintenance: |
+  Tracks the vulnerability-reporting process; update it if the private disclosure channel, GitHub Security Advisory availability, or required report contents change.
+---
+
 # Security Policy
 
 ## Reporting a vulnerability

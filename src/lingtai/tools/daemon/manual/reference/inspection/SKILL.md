@@ -6,6 +6,11 @@ description: >
   while daemon work remains pending.
 version: 1.1.0
 last_changed_at: "2026-06-24T16:24:16-07:00"
+related_files:
+- src/lingtai/tools/daemon/manual/SKILL.md
+- src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
+maintenance: |
+  Tracks the daemon polling/inspection topic it documents; update when that integration changes.
 ---
 
 # Daemon Inspection Reference

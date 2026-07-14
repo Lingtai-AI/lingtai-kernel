@@ -9,6 +9,12 @@ description: >
   and navigation disagree.
 version: 0.3.0
 last_changed_at: "2026-07-11T18:35:00-07:00"
+related_files:
+- ANATOMY.md
+- src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py
+- src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/bench_agent_session_rebuild.py
+maintenance: |
+  Tracks the ANATOMY.md/CONTRACT.md convention it routes into; update when the root anatomy-of-anatomy or the pairing/link rules it summarizes change.
 ---
 
 # LingTai Kernel Anatomy — Navigation Router

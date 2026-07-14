@@ -25,6 +25,7 @@ from typing import Any, Callable, TYPE_CHECKING
 from uuid import uuid4
 
 from .. import _skill
+from lingtai.kernel._frontmatter import strip_frontmatter
 
 if TYPE_CHECKING:
     from .service import FeishuService
@@ -33,9 +34,10 @@ log = logging.getLogger(__name__)
 
 
 def _load_notification_header_template() -> str:
-    return resources.files(__package__).joinpath("notification_header.md").read_text(
+    text = resources.files(__package__).joinpath("notification_header.md").read_text(
         encoding="utf-8"
     )
+    return strip_frontmatter(text)
 
 
 _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()

@@ -9,6 +9,13 @@ description: >-
   during idle cleanup, how to write good summaries, how to recover the original
   tool result by tool_call_id, and how summarize differs from molt.
 last_changed_at: "2026-07-03T00:00:00Z"
+related_files:
+- src/lingtai/intrinsic_skills/system-manual/SKILL.md
+- src/lingtai/tools/system/summarize.py
+- src/lingtai/prompts/meta_guidance/catalog/summarize_best_practice.md
+- src/lingtai/prompts/meta_guidance/catalog/summarize_reconstruction_threshold.md
+maintenance: |
+  Tracks the summarize-manual topic it documents; update when that integration changes.
 ---
 
 # Summarize Manual

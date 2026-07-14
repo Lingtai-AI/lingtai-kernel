@@ -4,6 +4,13 @@ description: "Operational guide for LingTai's built-in file tools: read, write, 
 version: 0.1.0
 tags: [files, read, write, edit, grep, glob, encoding, utf-8]
 last_changed_at: "2026-05-26T03:24:43-07:00"
+related_files:
+- src/lingtai/tools/read/__init__.py
+- src/lingtai/tools/write/__init__.py
+- src/lingtai/tools/edit/__init__.py
+- src/lingtai/intrinsic_skills/read-manual/SKILL.md
+maintenance: |
+  Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---
 
 # File Manual

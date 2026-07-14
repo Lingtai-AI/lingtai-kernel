@@ -6,6 +6,11 @@ description: >
   daemon harness candidate.
 version: 0.1.0
 last_changed_at: "2026-06-13T04:32:46-07:00"
+related_files:
+- src/lingtai/tools/bash/manual/SKILL.md
+- src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/oh-my-pi/SKILL.md
+maintenance: |
+  Tracks the Oh-My-Pi CLI backend/topic behavior it documents; update when that integration changes.
 ---
 
 # Oh-My-Pi CLI

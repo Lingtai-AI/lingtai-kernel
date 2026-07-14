@@ -1,3 +1,14 @@
+---
+related_files:
+- crates/lingtai-search-sidecar/Cargo.toml
+- crates/lingtai-search-sidecar/src/main.rs
+- MANIFEST.in
+- pyproject.toml
+- src/lingtai/services/file_io.py
+maintenance: |
+  Tracks the Rust sidecar's build/runtime-selection contract (env vars, resolver priority, wire protocol); update it whenever the cargo build hook, resolver order, or JSON request/response shape in src/main.rs changes.
+---
+
 # lingtai-search-sidecar
 
 Rust sidecar that backs LingTai's `glob` and `grep` ops behind the

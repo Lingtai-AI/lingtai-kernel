@@ -8,6 +8,11 @@ description: >
   help into the generic `backend_options` mechanism. It is not a flag catalog.
 version: 0.2.0
 last_changed_at: "2026-07-11T00:00:00-07:00"
+related_files:
+- src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
+- src/lingtai/tools/bash/manual/reference/bash-mimocode/SKILL.md
+maintenance: |
+  Tracks the MiMo Code daemon backend flag-discovery topic it documents; update when that integration changes.
 ---
 
 # MiMo Code Daemon Backend — Flag Discovery Entrypoint
