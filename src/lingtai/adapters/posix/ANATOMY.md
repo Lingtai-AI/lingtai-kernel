@@ -11,6 +11,7 @@ related_files:
   - src/lingtai/adapters/posix/git_cli.py
   - src/lingtai/adapters/posix/mail.py
   - src/lingtai/adapters/posix/workdir_lease.py
+  - src/lingtai/adapters/posix/refresh_watcher.py
   - src/lingtai/adapters/posix/notification_store.py
   - src/lingtai/adapters/posix/agent_presence.py
   - src/lingtai/adapters/posix/migration_workspace.py
@@ -32,17 +33,18 @@ maintenance: |
 ---
 # POSIX Adapter Anatomy
 
-This narrow package contains production filesystem adapters for Core-owned Ports:
-the structured event journal, mail transport, notification store, workdir lease,
-agent presence, the fixed-command snapshot/source-revision Git capability, and
-the migration workspace. It is an
+This narrow package contains production filesystem and process adapters for
+Core-owned Ports: the structured event journal, mail transport, notification
+store, workdir lease, refresh watcher, agent presence, the fixed-command
+snapshot/source-revision Git capability, and the migration workspace. It is an
 implementation-only Anatomy with no independent local Contract; for the
 Anatomy/Contract pairing rule its unique owning component Contract is
 `src/lingtai/kernel/event_journal/CONTRACT.md` (this Anatomy is listed only in
 that Contract's `related_files`). Each adapter implements a Core Port rather than
 defining a separate behavioral promise; the mail adapter's promises are owned by
 `src/lingtai/kernel/mail_transport/CONTRACT.md`, the workdir-lease adapter's by
-`src/lingtai/kernel/workdir_lease/CONTRACT.md`, and the notification-store
+`src/lingtai/kernel/workdir_lease/CONTRACT.md`, the refresh-watcher adapter's by
+`src/lingtai/kernel/refresh_watcher/CONTRACT.md`, and the notification-store
 adapter's by `src/lingtai/kernel/notification_store/CONTRACT.md`, each of which
 links its adapter code file directly. Port structure is navigated via the
 co-located ANATOMY.md files for each component.
@@ -72,6 +74,12 @@ co-located ANATOMY.md files for each component.
   `release()` unlocks then guarantees the handle is closed in a `finally` (even if
   the explicit `LOCK_UN` raises) before a best-effort unlink, swallows the
   specified `OSError`s, resets its handle, and is idempotent.
+- `PosixRefreshWatcherAdapter` implements `RefreshWatcherPort` by launching
+  `[sys.executable, "-c", script]` via `subprocess.Popen` with all three
+  standard streams set to `DEVNULL`, the given `env` as the full process
+  environment, and `start_new_session=True`
+  (`src/lingtai/adapters/posix/refresh_watcher.py:35-43`); the call returns
+  once the process has been started and does not wait for or track it.
 - `PosixGitCliAdapter` implements both `SnapshotPort` and `SourceRevisionPort`
   through fixed Git command families. Separate composed instances target the
   agent workdir and running source; no arbitrary argv/process/result object is

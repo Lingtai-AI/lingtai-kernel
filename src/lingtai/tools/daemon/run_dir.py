@@ -551,7 +551,7 @@ class DaemonRunDir:
         """Accumulate external CLI token usage into daemon.json ``cli_tokens``.
 
         This is deliberately separate from :meth:`append_tokens`: CLI backends
-        (claude-p / claude-code, codex, ...) run as external processes billing
+        (claude-p / claude-code, codex, cursor, ...) run as external processes billing
         on their own provider account, and their cache-creation/cache-read
         semantics don't map onto the kernel's adapter accounting. So this
         method writes ONLY to ``daemon.json.cli_tokens`` — never to the daemon

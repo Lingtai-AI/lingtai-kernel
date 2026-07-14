@@ -18,22 +18,17 @@ maintenance: |
 # Cursor Daemon Backend — Flag Discovery Entrypoint
 
 This page is deliberately tiny: it only tells you where the knowledge lives.
-The Cursor Agent CLI revs its flags and accepted values between releases, so
-the installed CLI's own help output is the authority — not this page, and not
-any flag list LingTai could ship.
+The Cursor Agent CLI revs its flags and accepted values, so installed CLI help
+is the authority — not this page, and not any flag list LingTai could ship.
 
 ## Discover flags from the installed CLI
 
 1. Load `bash-manual` (its nested `reference/bash-cursor-agent/SKILL.md` has
    broader Cursor Agent CLI context).
-2. Run, in bash: `agent --version` and `agent --help`. The daemon backend
-   spawns the root `agent` binary directly, with no subcommand —
-   `agent -p --force --output-format stream-json <prompt>` — so root-level
-   help is the relevant flag surface; open `agent <subcommand> --help` only
-   if the root help routes a flag you need through a subcommand. These are
-   local read-only commands; no session is started. The CLI may require
-   macOS keychain access even for `--help`; if it errors before printing
-   help, unlock the login keychain and retry.
+2. Run `agent --version` and `agent --help` in bash. The daemon spawns root
+   `agent` directly — `agent -p --force --output-format stream-json <prompt>` —
+   so root help is authoritative (open a subcommand only if root routes there).
+   These are read-only checks; keychain errors happen before help on some builds.
 3. Translate the long flags you found into `backend_options` using the
    generic conversion rules in the parent `reference/cli-backends/SKILL.md`
    (key→flag mapping, value handling, key safety, persistence). Nothing
@@ -62,6 +57,11 @@ The flag and model vocabulary belong to the installed CLI — LingTai does
 not validate, enumerate, or simulate them. Confirm `--model` and its
 accepted values in your installed `agent --help` before relying on this;
 an unknown flag or value is the CLI's error, not the daemon's.
+
+## Source-pinned stream-json usage
+For installed `agent-cli@2026.05.28-a70ca7c`, accept usage only from `type=result`, `subtype=success`, `is_error=false` with all four non-negative integer fields: `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`.
+`inputTokens` is already net; UI-only `cli_tokens` adds read + write as cached, preserves raw usage, ignores invalid/all-zero blocks, and counts duplicate terminal results once.
+Join model only from a preceding matching `system/init` by `session_id`; provider stays unknown because this source emits no provider identity (do not infer it from `apiKeySource`, model, backend, credentials, or environment). This is version-pinned, not a cross-release claim.
 
 ## Harness boundary
 
