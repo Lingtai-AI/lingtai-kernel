@@ -533,9 +533,10 @@ class DaemonRunDir:
         lifetime totals.
 
         Normalized totals accumulate across usage events:
-            input    — sum of ``input_tokens``
+            input    — sum of each backend's normalized disjoint input count
+                       (Codex: ``max(input_tokens - cached_input_tokens, 0)``)
             output   — sum of ``output_tokens``
-            cached   — sum of cache_read + cache_creation input tokens
+            cached   — sum of the backend's reported cached input tokens
             thinking — sum of any recognizable thinking/reasoning tokens (0 if none)
             calls    — incremented once per recorded usage event
 

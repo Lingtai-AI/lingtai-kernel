@@ -156,6 +156,46 @@ def _normalize_claude_usage(usage: dict | None) -> dict | None:
             "cached": cached, "thinking": thinking}
 
 
+def _normalize_codex_usage(usage: dict | None) -> dict | None:
+    """Normalize a Codex ``turn.completed`` usage block for UI totals.
+
+    The Codex CLI event contract reports ``input_tokens`` as the total input
+    count, including ``cached_input_tokens``.  ``daemon.json.cli_tokens.input``
+    is the disjoint (non-cached) input count, so subtract the cached portion
+    and clamp at zero rather than exposing a negative number when a malformed
+    source payload overstates its cache count.  Only fields present in the
+    source ``TokenUsage`` contract are consumed; Codex does not provide a
+    separately proven thinking/reasoning count in this event.
+
+    Invalid, missing, negative, or all-zero usage is suppressed.  The caller
+    passes the returned ``input``/``cached``/``output`` values to
+    :meth:`DaemonRunDir.record_cli_tokens`, which increments ``calls`` once.
+    """
+    if not isinstance(usage, dict):
+        return None
+
+    def _nonnegative_int(value) -> int | None:
+        # bool is an int subclass, but it is not a token count.
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
+    total_input = _nonnegative_int(usage.get("input_tokens"))
+    cached_input = _nonnegative_int(usage.get("cached_input_tokens"))
+    output = _nonnegative_int(usage.get("output_tokens"))
+    if total_input is None or cached_input is None or output is None:
+        return None
+
+    input_tokens = max(total_input - cached_input, 0)
+    if not (input_tokens or cached_input or output):
+        return None
+    return {
+        "input": input_tokens,
+        "cached": cached_input,
+        "output": output,
+    }
+
+
 def _toml_string(value: str) -> str:
     return json.dumps(value)
 
@@ -2631,6 +2671,11 @@ class DaemonManager:
                             agent_message_texts.append(text)
                             run_dir.record_cli_output(text, stream="stdout")
                 elif etype == "turn.completed":
+                    # A Codex turn has one terminal usage report. Treat the
+                    # first terminal event as authoritative so a duplicated
+                    # line cannot double-count UI totals or forensic events.
+                    if turn_completed:
+                        continue
                     turn_completed = True
                     # NOTE: Codex spend is intentionally NOT recorded in
                     # the daemon's or parent's token ledger. Codex runs
@@ -2639,8 +2684,20 @@ class DaemonManager:
                     # from the kernel's LLM adapters (codex `input_tokens`
                     # already includes the cached portion). Mixing it in
                     # would produce a misleading "lifetime totals" number.
-                    # Spend is visible to the agent via daemon(check),
-                    # not via sum_token_ledger.
+                    # The truthful disjoint UI view is separate from the
+                    # kernel ledgers and retains the raw source usage in the
+                    # cli_usage forensic event.
+                    usage = _normalize_codex_usage(event.get("usage"))
+                    if usage is not None:
+                        try:
+                            run_dir.record_cli_tokens(
+                                input=usage["input"],
+                                output=usage["output"],
+                                cached=usage["cached"],
+                                raw=event.get("usage"),
+                            )
+                        except Exception:
+                            pass
 
             proc.wait()
         except Exception as e:
@@ -4324,7 +4381,22 @@ class DaemonManager:
                             agent_message_texts.append(text)
                             run_dir.record_cli_output(text, stream="stdout")
                 elif etype == "turn.completed":
-                    turn_completed = True
+                    # Resume streams should also account one terminal usage
+                    # object at most; a repeated terminal line is not a new
+                    # provider call.
+                    if not turn_completed:
+                        turn_completed = True
+                        usage = _normalize_codex_usage(event.get("usage"))
+                        if usage is not None:
+                            try:
+                                run_dir.record_cli_tokens(
+                                    input=usage["input"],
+                                    output=usage["output"],
+                                    cached=usage["cached"],
+                                    raw=event.get("usage"),
+                                )
+                            except Exception:
+                                pass
 
             if time.monotonic() >= deadline:
                 timed_out = True
