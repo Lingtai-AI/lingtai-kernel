@@ -560,8 +560,8 @@ the gate above.
   different loadable default; if an existing active preset is malformed,
   materialization fails rather than silently substituting another preset.
 - An unauthorized explicit `tasks[].preset` (not in `manifest.preset.allowed`)
-  is rejected before load, connectivity/capability preflight, run-dir
-  creation, scheduling, or dispatch of that task.
+  refuses the whole batch before load, connectivity/capability preflight,
+  run-dir creation, scheduling, or dispatch.
 - Once past the allowlist gate, daemon explicit-path preflight failure
   (unloadable path, failed connectivity, failed capability instantiation)
-  still prevents dispatch of that task.
+  still refuses the whole batch before any emanation is scheduled.
