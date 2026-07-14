@@ -6,6 +6,11 @@ description: >
   worked launchd diagnosis, cleanup, and bash work footprint hygiene.
 version: 1.0.0
 last_changed_at: "2026-06-01T01:47:09-07:00"
+related_files:
+- src/lingtai/tools/bash/manual/SKILL.md
+- src/lingtai/tools/bash/manual/reference/scheduled-work/SKILL.md
+maintenance: |
+  Tracks the scheduled-job debugging/cleanup topic it documents; update when that integration changes.
 ---
 
 # Debugging and Cleanup Reference

@@ -1,3 +1,10 @@
+---
+related_files:
+- reports/kernel-release-v0.14.1-20260623/commits.md
+maintenance: |
+  Historical record of the v0.14.1 release; content is frozen except for factual corrections — do not rewrite retroactively to reflect later changes.
+---
+
 # LingTai kernel v0.14.1
 
 Patch release v0.14.1 is a Codex/runtime stability release on top of v0.14.0. It keeps the kernel package version moving after the Responses/WebSocket cache work landed on main and before the release blogs/docs follow-up.

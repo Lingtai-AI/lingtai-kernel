@@ -19,8 +19,12 @@ from .. import _identity, _skill
 log = logging.getLogger(__name__)
 
 
+from lingtai.kernel._frontmatter import strip_frontmatter
+
+
 def _load_notification_header_template() -> str:
-    return resources.files(__package__).joinpath("notification_header.md").read_text(encoding="utf-8")
+    text = resources.files(__package__).joinpath("notification_header.md").read_text(encoding="utf-8")
+    return strip_frontmatter(text)
 
 
 _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()

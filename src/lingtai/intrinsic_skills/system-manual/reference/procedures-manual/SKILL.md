@@ -14,6 +14,12 @@ description: >
 version: 1.2.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
 last_changed_at: "2026-07-03T00:00:00Z"
+related_files:
+- src/lingtai/intrinsic_skills/system-manual/SKILL.md
+- src/lingtai/prompts/procedures/procedures.md
+- src/lingtai/prompts/procedures/procedures.yaml
+maintenance: |
+  Tracks the procedures-manual topic it documents; update when that integration changes.
 ---
 
 # Procedures Manual

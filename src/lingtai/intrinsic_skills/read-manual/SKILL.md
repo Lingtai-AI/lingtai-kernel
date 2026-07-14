@@ -4,6 +4,11 @@ description: "Complete guide for the read tool: continuation workflow, next_offs
 version: 0.1.0
 tags: [read, files, continuation, truncation, cap, pagination]
 last_changed_at: "2026-06-27T02:45:37-07:00"
+related_files:
+- src/lingtai/tools/read/__init__.py
+- src/lingtai/intrinsic_skills/file-manual/SKILL.md
+maintenance: |
+  Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---
 
 # Read Manual

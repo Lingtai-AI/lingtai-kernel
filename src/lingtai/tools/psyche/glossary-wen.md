@@ -3,6 +3,14 @@ kind: tool-glossary
 schema_version: 1
 tool_package: lingtai.tools.psyche
 language: wen
+related_files:
+- docs.yaml
+- src/lingtai/kernel/tool_glossary.py
+- src/lingtai/tools/glossary_validator.py
+- src/lingtai/tools/psyche/glossary-en.md
+- src/lingtai/tools/psyche/glossary-zh.md
+maintenance: |
+  Classical-Chinese (wen) glossary for the `psyche` tool package (lingtai.tools.psyche); body must stay non-empty and distinct from glossary-zh.md. Update in lockstep with glossary-en.md/glossary-zh.md whenever psyche's public tool schema changes.
 ---
 **名相对照**
 

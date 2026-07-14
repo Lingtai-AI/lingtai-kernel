@@ -7,6 +7,11 @@ description: >
   launchd process-tree reaping gotcha.
 version: 1.0.0
 last_changed_at: "2026-06-01T01:47:09-07:00"
+related_files:
+- src/lingtai/tools/bash/manual/SKILL.md
+- src/lingtai/tools/bash/_async_supervisor.py
+maintenance: |
+  Tracks the cron-driven scheduled-work topic it documents; update when that integration changes.
 ---
 
 # Scheduled Work Reference

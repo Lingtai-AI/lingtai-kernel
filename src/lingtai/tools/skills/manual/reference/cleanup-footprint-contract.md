@@ -1,3 +1,10 @@
+---
+related_files:
+- src/lingtai/tools/skills/manual/SKILL.md
+maintenance: |
+  Cleanup-footprint contract referenced from skills/manual/SKILL.md's cleanup section; update it whenever the footprint/consent rules for skill installation cleanup change.
+---
+
 # Cleanup / Footprint Contract for Tool Manuals
 
 Every tool/capability manual that owns persistent files MUST include a section named

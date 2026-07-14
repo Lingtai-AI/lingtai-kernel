@@ -10,6 +10,13 @@ description: |
   start | inspect | retry | stop lifecycle, path/timeout/validation rules,
   fail-loud error wakes, and how the /taskcard toggle interacts.
 last_changed_at: "2026-07-13T15:00:00-07:00"
+related_files:
+- src/lingtai/mcp_servers/telegram/SKILL.md
+- src/lingtai/mcp_servers/telegram/task_card/controller.py
+- src/lingtai/mcp_servers/telegram/task_card/interface.py
+- src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
+maintenance: |
+  Tracks the Telegram Task Card renderer/controller behavior it documents; update when that integration changes.
 ---
 
 # Programmable Telegram Task Card — manual (what / how / why)

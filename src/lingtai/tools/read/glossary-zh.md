@@ -3,6 +3,14 @@ kind: tool-glossary
 schema_version: 1
 tool_package: lingtai.tools.read
 language: zh
+related_files:
+- docs.yaml
+- src/lingtai/kernel/tool_glossary.py
+- src/lingtai/tools/glossary_validator.py
+- src/lingtai/tools/read/glossary-en.md
+- src/lingtai/tools/read/glossary-wen.md
+maintenance: |
+  Simplified-Chinese (zh) glossary for the `read` tool package (lingtai.tools.read); body must stay non-empty — tests/test_tool_glossary.py::test_chinese_body_is_non_empty exercises exactly this file. Update in lockstep with glossary-en.md/glossary-wen.md whenever read's public tool schema changes.
 ---
 **术语对照**
 

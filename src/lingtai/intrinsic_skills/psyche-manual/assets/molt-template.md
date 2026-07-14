@@ -1,3 +1,11 @@
+---
+related_files:
+- src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
+- tests/test_skills.py
+maintenance: |
+  Consequential-molt summary scaffold referenced by psyche-manual/SKILL.md and asserted on by tests/test_skills.py; keep its 9-section structure and heading text synced with both, since the test pins exact section headings verbatim.
+---
+
 # Consequential Molt Summary Template
 
 Use this asset when a molt is more than routine: long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, active background jobs, or any handoff the next you could not reconstruct quickly.

@@ -13,6 +13,13 @@ description: >
   9", "remind me later"), or when a scheduled job misbehaves.
 version: 1.7.1
 last_changed_at: "2026-07-13T04:44:00-07:00"
+related_files:
+- src/lingtai/tools/bash/__init__.py
+- src/lingtai/tools/bash/CONTRACT.md
+- src/lingtai/tools/bash/ANATOMY.md
+- src/lingtai/tools/bash/manual/reference/scheduled-work/SKILL.md
+maintenance: |
+  Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # Bash Manual — Router

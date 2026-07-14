@@ -36,6 +36,12 @@ description: >
   works, not what's *inside* it.
 version: 1.1.0
 last_changed_at: "2026-07-06T14:50:00-07:00"
+related_files:
+- src/lingtai/tools/skills/__init__.py
+- src/lingtai/tools/skills/ANATOMY.md
+- src/lingtai/tools/skills/CONTRACT.md
+maintenance: |
+  Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # The Skills Capability

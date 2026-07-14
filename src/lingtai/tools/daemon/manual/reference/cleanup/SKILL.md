@@ -6,6 +6,11 @@ description: >
   of old daemon artifacts.
 version: 1.0.0
 last_changed_at: "2026-06-01T01:56:31-07:00"
+related_files:
+- src/lingtai/tools/daemon/manual/SKILL.md
+- src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
+maintenance: |
+  Tracks the daemon footprint cleanup topic it documents; update when that integration changes.
 ---
 
 # Daemon Cleanup Reference

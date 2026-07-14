@@ -3,6 +3,14 @@ kind: tool-glossary
 schema_version: 1
 tool_package: lingtai.tools.web_search
 language: zh
+related_files:
+- docs.yaml
+- src/lingtai/kernel/tool_glossary.py
+- src/lingtai/tools/glossary_validator.py
+- src/lingtai/tools/web_search/glossary-en.md
+- src/lingtai/tools/web_search/glossary-wen.md
+maintenance: |
+  Simplified-Chinese (zh) glossary for the `web_search` tool package (lingtai.tools.web_search); body must stay non-empty. Update in lockstep with glossary-en.md/glossary-wen.md whenever web_search's public tool schema changes.
 ---
 **术语对照**
 

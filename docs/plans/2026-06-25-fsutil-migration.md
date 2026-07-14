@@ -1,3 +1,11 @@
+---
+related_files:
+- src/lingtai/kernel/_fsutil.py
+- tests/test_fsutil.py
+maintenance: |
+  Dated migration plan (issue #510); update the staged caller backlog checklist as each call site is migrated in its own PR — do not let it silently drift out of sync with actual `_fsutil` adoption.
+---
+
 # `_fsutil` staged migration plan (issue #510)
 
 `src/lingtai/kernel/_fsutil.py` is the shared, stdlib-only foundation for

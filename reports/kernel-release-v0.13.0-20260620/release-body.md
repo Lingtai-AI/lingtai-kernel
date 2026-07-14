@@ -1,3 +1,11 @@
+---
+related_files:
+- reports/kernel-release-v0.13.0-20260620/commits.md
+- reports/kernel-release-v0.13.0-20260620/prs.md
+maintenance: |
+  Historical record of the v0.13.0 release; content is frozen except for factual corrections — do not rewrite retroactively to reflect later changes.
+---
+
 ## LingTai kernel v0.13.0
 
 This release ships the post-v0.12.4 runtime/tooling update set from `v0.12.4..cfebe167`.

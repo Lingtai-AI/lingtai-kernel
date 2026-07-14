@@ -4,6 +4,13 @@ description: |
   Router and operational guide for the psyche tool — molt, pad management, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with a system-authored summary; or you need to understand keep_tool_calls, keep_last, and pad.append. Routes consequential molt handoffs to assets/molt-template.md while keeping routine guidance compact.
 version: 1.1.0
 last_changed_at: "2026-07-06T14:50:00-07:00"
+related_files:
+- src/lingtai/tools/psyche/__init__.py
+- src/lingtai/tools/psyche/_molt.py
+- src/lingtai/tools/psyche/_pad.py
+- src/lingtai/tools/psyche/_session_journal.py
+maintenance: |
+  Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---
 
 # Psyche Manual

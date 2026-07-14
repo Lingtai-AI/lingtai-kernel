@@ -3,6 +3,14 @@ kind: tool-glossary
 schema_version: 1
 tool_package: lingtai.tools.vision
 language: zh
+related_files:
+- docs.yaml
+- src/lingtai/kernel/tool_glossary.py
+- src/lingtai/tools/glossary_validator.py
+- src/lingtai/tools/vision/glossary-en.md
+- src/lingtai/tools/vision/glossary-wen.md
+maintenance: |
+  Simplified-Chinese (zh) glossary for the `vision` tool package (lingtai.tools.vision); body must stay non-empty. Update in lockstep with glossary-en.md/glossary-wen.md whenever vision's public tool schema changes.
 ---
 **术语对照**
 

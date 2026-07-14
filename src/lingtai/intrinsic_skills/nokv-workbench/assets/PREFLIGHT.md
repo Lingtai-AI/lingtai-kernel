@@ -1,3 +1,10 @@
+---
+related_files:
+- src/lingtai/intrinsic_skills/nokv-workbench/SKILL.md
+maintenance: |
+  Developer-facing TUI deployment preflight pointed to by nokv-workbench/SKILL.md:49; update it whenever the workbench MCP tool surface (9-tool vs 16-tool, checkpoint-lifecycle fields) or the runtime-version compatibility check changes.
+---
+
 # TUI runtime preflight (developer-facing)
 
 This is deployment guidance for developers installing a workbench-enabled

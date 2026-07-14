@@ -6,6 +6,12 @@ description: >
   rest checklist for agents leaving work pending.
 version: 1.0.0
 last_changed_at: "2026-06-20T13:05:49-07:00"
+related_files:
+- src/lingtai/tools/bash/manual/SKILL.md
+- src/lingtai/tools/notification/__init__.py
+- src/lingtai/tools/notification/schema.py
+maintenance: |
+  Tracks the one-shot notification-reminder topic it documents; update when that integration changes.
 ---
 
 # Notification Reminder Reference

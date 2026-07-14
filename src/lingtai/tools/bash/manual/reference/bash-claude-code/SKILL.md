@@ -10,6 +10,11 @@ description: >
 version: 1.0.3
 tags: [cli, code, delegation, claude, implementation]
 last_changed_at: "2026-06-30T00:00:00-07:00"
+related_files:
+- src/lingtai/tools/bash/manual/SKILL.md
+- src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/claude-p/SKILL.md
+maintenance: |
+  Tracks the Claude Code CLI backend/topic behavior it documents; update when that integration changes.
 ---
 
 # Claude Code CLI — Code Delegation

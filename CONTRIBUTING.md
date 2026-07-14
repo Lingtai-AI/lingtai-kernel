@@ -1,3 +1,17 @@
+---
+related_files:
+- ANATOMY.md
+- CONTRACT.md
+- docs/references/claude-code-guide.md
+- src/lingtai/kernel/ANATOMY.md
+- crates/lingtai-search-sidecar/README.md
+- CODE_OF_CONDUCT.md
+- SECURITY.md
+- SUPPORT.md
+maintenance: |
+  Tracks the contributor workflow and repository navigation map (Anatomy/Contract entry points, worktree usage, community links); update it whenever those referenced entry points move or the workflow steps change.
+---
+
 # Contributing to lingtai-kernel
 
 Thank you for helping improve the LingTai Python runtime. GitHub discovers this root file as the repository contributing guide.

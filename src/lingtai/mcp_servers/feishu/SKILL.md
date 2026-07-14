@@ -10,6 +10,12 @@ description: |
   send.
 version: 1.1.0
 last_changed_at: "2026-07-06T00:00:00-07:00"
+related_files:
+- src/lingtai/mcp_servers/feishu/manager.py
+- src/lingtai/mcp_servers/feishu/server.py
+- src/lingtai/mcp_servers/feishu/service.py
+maintenance: |
+  Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
 
 # Feishu (Lark) MCP — usage manual (progressive disclosure)

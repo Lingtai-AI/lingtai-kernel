@@ -16,6 +16,12 @@ description: >
 version: 1.2.0
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp, preset]
 last_changed_at: "2026-07-14T00:00:00-07:00"
+related_files:
+- src/lingtai/intrinsic_skills/system-manual/SKILL.md
+- src/lingtai/prompts/substrate/substrate.md
+- src/lingtai/prompts/substrate/substrate.yaml
+maintenance: |
+  Tracks the substrate-manual topic it documents; update when that integration changes.
 ---
 
 # Substrate Manual

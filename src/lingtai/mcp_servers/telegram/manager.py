@@ -34,10 +34,14 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+from lingtai.kernel._frontmatter import strip_frontmatter
+
+
 def _load_notification_header_template() -> str:
-    return resources.files(__package__).joinpath("notification_header.md").read_text(
+    text = resources.files(__package__).joinpath("notification_header.md").read_text(
         encoding="utf-8"
     )
+    return strip_frontmatter(text)
 
 
 # ---------------------------------------------------------------------------

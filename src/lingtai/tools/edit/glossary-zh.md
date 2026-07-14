@@ -3,6 +3,14 @@ kind: tool-glossary
 schema_version: 1
 tool_package: lingtai.tools.edit
 language: zh
+related_files:
+- docs.yaml
+- src/lingtai/kernel/tool_glossary.py
+- src/lingtai/tools/glossary_validator.py
+- src/lingtai/tools/edit/glossary-en.md
+- src/lingtai/tools/edit/glossary-wen.md
+maintenance: |
+  Simplified-Chinese (zh) glossary for the `edit` tool package (lingtai.tools.edit); body must stay non-empty. Update in lockstep with glossary-en.md/glossary-wen.md whenever edit's public tool schema changes.
 ---
 **术语对照**
 
