@@ -393,6 +393,13 @@ def test_dirty_query_is_tracked_only_and_tri_state(tmp_path):
 def _heartbeat_agent(snapshot_port, interval, working_dir):
     shutdown = Mock()
     shutdown.is_set.return_value = False
+    # The heartbeat loop reads the snapshot/GC tick through the injected
+    # LifecycleClockPort (monotonic domain), not a module-global time. Each
+    # test scripts ``_lifecycle_clock.monotonic_seconds`` directly on the stub.
+    lifecycle_clock = SimpleNamespace(
+        monotonic_seconds=Mock(return_value=0.0),
+        wall_seconds=Mock(return_value=0.0),
+    )
     return SimpleNamespace(
         agent_name="snapshot-test",
         _heartbeat_thread=object(),
@@ -401,6 +408,7 @@ def _heartbeat_agent(snapshot_port, interval, working_dir):
         _heartbeat_runtime_ready=True,
         _config=SimpleNamespace(snapshot_interval=interval, aed_timeout=999),
         _snapshot_port=snapshot_port,
+        _lifecycle_clock=lifecycle_clock,
         _last_snapshot=0.0,
         _last_gc=0.0,
         _working_dir=working_dir,
@@ -426,6 +434,9 @@ def test_start_initializes_only_when_snapshots_enabled():
             _shutdown=Mock(),
             _config=SimpleNamespace(snapshot_interval=interval),
             _snapshot_port=snapshot,
+            # ``_start`` samples the monotonic uptime anchor through the injected
+            # clock before ``_flush_system_prompt``; the stub carries a no-op one.
+            _lifecycle_clock=SimpleNamespace(monotonic_seconds=Mock(return_value=0.0)),
             _flush_system_prompt=Mock(side_effect=StopAfterInitialization),
         )
         with pytest.raises(StopAfterInitialization):
@@ -441,13 +452,13 @@ def test_heartbeat_snapshot_and_gc_are_first_eligible_and_advance_clocks(tmp_pat
         agent._heartbeat_thread = None
 
     agent._heartbeat_stop.wait.side_effect = stop_after_tick
+    monotonic = agent._lifecycle_clock.monotonic_seconds
+    monotonic.return_value = 90000
     with patch.object(lifecycle, "_write_heartbeat_tick") as heartbeat_tick, patch.object(
         lifecycle, "_check_rules_file"
     ), patch.object(lifecycle, "_maybe_sleep_after_idle_timeout"), patch(
         "lingtai.kernel.nudge.run_checks"
-    ), patch(
-        "lingtai.kernel.base_agent.lifecycle.time.monotonic", return_value=90000
-    ) as monotonic:
+    ):
         lifecycle._heartbeat_loop(agent)
 
     heartbeat_tick.assert_called_once_with(agent)
@@ -475,13 +486,13 @@ def test_heartbeat_gc_runs_only_at_exact_daily_boundaries(tmp_path):
             agent._heartbeat_thread = None
 
     agent._heartbeat_stop.wait.side_effect = stop_after_final_tick
+    monotonic = agent._lifecycle_clock.monotonic_seconds
+    monotonic.side_effect = clock_ticks
     with patch.object(lifecycle, "_write_heartbeat_tick") as heartbeat_tick, patch.object(
         lifecycle, "_check_rules_file"
     ), patch.object(lifecycle, "_maybe_sleep_after_idle_timeout"), patch(
         "lingtai.kernel.nudge.run_checks"
-    ), patch(
-        "lingtai.kernel.base_agent.lifecycle.time.monotonic", side_effect=clock_ticks
-    ) as monotonic:
+    ):
         lifecycle._heartbeat_loop(agent)
 
     assert heartbeat_tick.call_args_list == [call(agent)] * 5

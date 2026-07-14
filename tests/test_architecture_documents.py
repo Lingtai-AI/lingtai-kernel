@@ -450,6 +450,64 @@ def test_agent_presence_port_keeps_filesystem_mechanism_outside_core() -> None:
         assert removed not in handshake, removed
 
 
+def test_lifecycle_clock_contract_names_required_component_files() -> None:
+    contract_path = ROOT / "src/lingtai/kernel/lifecycle_clock/CONTRACT.md"
+    meta, _ = _read_document(contract_path)
+    assert meta["name"] == "lifecycle-clock"
+    assert {
+        "src/lingtai/kernel/lifecycle_clock/ANATOMY.md",
+        "src/lingtai/kernel/lifecycle_clock/__init__.py",
+        "src/lingtai/adapters/lifecycle_clock.py",
+        "src/lingtai/kernel/base_agent/__init__.py",
+        "src/lingtai/kernel/base_agent/identity.py",
+        "src/lingtai/kernel/base_agent/lifecycle.py",
+        "docs/references/lifecycle-clock.md",
+        "tests/_lifecycle_clock_helpers.py",
+        "tests/test_lifecycle_clock.py",
+        "tests/test_architecture_documents.py",
+    } <= set(meta["related_files"])
+    # The capability manual is discoverable from BOTH owner twins (Design
+    # principle 4): the Contract above and its paired Anatomy below.
+    anatomy_meta, _ = _read_document(ROOT / "src/lingtai/kernel/lifecycle_clock/ANATOMY.md")
+    assert "docs/references/lifecycle-clock.md" in anatomy_meta["related_files"]
+
+
+def test_lifecycle_clock_port_keeps_time_mechanism_outside_core() -> None:
+    port = (ROOT / "src/lingtai/kernel/lifecycle_clock/__init__.py").read_text(encoding="utf-8")
+    # Core Port exposes no concrete time/scheduler/filesystem mechanism and never
+    # imports or constructs the concrete adapter.
+    for banned in (
+        "import time",
+        "import threading",
+        "from datetime",
+        "import datetime",
+        "from pathlib",
+        "import pathlib",
+        "lingtai.adapters",
+        "SystemLifecycleClockAdapter",
+    ):
+        assert banned not in port, banned
+    # Exactly two zero-argument Port operations — no third op, no wait/sleep/deadline.
+    assert port.count("@abstractmethod") == 2
+    for op in ("def wall_seconds(self) -> float", "def monotonic_seconds(self) -> float"):
+        assert op in port, op
+    for absent in ("def sleep(", "def wait(", "def deadline(", "def now("):
+        assert absent not in port, absent
+
+    # The production adapter lives OUTSIDE Core, at the top of lingtai.adapters
+    # (not under adapters/posix), and Core never names it.
+    assert (ROOT / "src/lingtai/adapters/lifecycle_clock.py").is_file()
+    assert not (ROOT / "src/lingtai/adapters/posix/lifecycle_clock.py").exists()
+    adapter = (ROOT / "src/lingtai/adapters/lifecycle_clock.py").read_text(encoding="utf-8")
+    assert "class SystemLifecycleClockAdapter" in adapter
+    for core_name in ("src/lingtai/kernel/base_agent/__init__.py",
+                      "src/lingtai/kernel/base_agent/identity.py",
+                      "src/lingtai/kernel/base_agent/lifecycle.py"):
+        core_src = (ROOT / core_name).read_text(encoding="utf-8")
+        assert "SystemLifecycleClockAdapter" not in core_src, core_name
+        assert "lingtai.adapters" not in core_src, core_name
+
+
 def test_governed_child_contracts_have_reciprocal_anatomy_pairs() -> None:
     root_meta, _ = _read_document(ROOT_CONTRACT)
     child_contracts = [

@@ -12,6 +12,7 @@ from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
 from lingtai.kernel.tc_inbox import InvoluntaryToolCall, TCInbox
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -105,7 +106,7 @@ class TestDrainTCInbox:
             service=svc,
             agent_name="test",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
         )
         return agent
 
@@ -204,7 +205,7 @@ class TestReplaceInHistory:
             service=svc,
             agent_name="test",
             working_dir=tmp_path / "agent", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
+        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "agent"),
         )
         iface = ChatInterface()
         iface.add_user_message("hi")

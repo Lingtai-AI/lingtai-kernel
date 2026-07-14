@@ -20,9 +20,9 @@ description: >
   runtime/kernel update checks, molt/memory questions, MCP/addon
   ownership, preset tiers, collaboration/network topology, resident prompt
   design, and the `system` tool actions.
-version: 1.5.0
-tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks]
-last_changed_at: "2026-07-12T20:20:43-07:00"
+version: 1.6.0
+tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, preset]
+last_changed_at: "2026-07-13T00:00:00-07:00"
 ---
 
 # System Manual — Progressive Disclosure Router
@@ -52,7 +52,10 @@ selects that topic.
     avatar vs MCP, lifecycle states, system tool actions, notification/read/
     dismiss discipline, communication channels, memory layers, molt model,
     runtime log routing, collaboration topology, MCP/addon ownership, idle/soul,
-    preset tiers, and resident substrate maintenance.
+    preset tiers, the detailed preset runtime model and init.json composition
+    route (raw vs resolved manifest, preset identity, TUI/library vs main-agent
+    allowed-only catalogs, swap/revert/refresh, daemon task explicit/omitted/
+    CLI-skip paths), and resident substrate maintenance.
 - name: procedures-manual
   location: reference/procedures-manual/SKILL.md
   description: |
@@ -99,6 +102,7 @@ selects that topic.
 | Need / keywords | Read |
 |---|---|
 | Expanded substrate; body/extensions; bash vs daemon vs avatar vs MCP; lifecycle states; ACTIVE/IDLE/ASLEEP/SUSPENDED; same-channel communication; basic notifications; memory layers; molt model; idle/soul; preset tiers; `system` operations | `reference/substrate-manual/SKILL.md` |
+| `init.json` composition/owner map; preset runtime model; raw vs resolved `system/manifest.resolved.json`; preset identity/path; TUI/library discovery vs `system(action="presets")` allowed-only catalog; main-agent swap/revert/refresh; daemon `tasks[].preset` explicit/omitted path; external CLI backend preset skip | `reference/substrate-manual/SKILL.md` §11 |
 | Expanded procedures; progressive disclosure; writing skills/knowledge; action discipline; responsiveness; skill routing; HTML deliverables; artifact sharing; issue reporting; when to read which manual | `reference/procedures-manual/SKILL.md` |
 | Tool-result summarization; large-result ranking via agent_meta; progressive disclosure of raw outputs; original-result recovery; summarize vs molt | `reference/summarize-manual/SKILL.md` |
 | SQLite; `log.sqlite`; LingTai runtime logs; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes; trajectory/anomaly mining; improvement digests; cheap-model strategy | `reference/sqlite-log-query/SKILL.md` |

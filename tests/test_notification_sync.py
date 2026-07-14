@@ -1145,6 +1145,7 @@ def test_sync_active_defers_without_committing_or_mutating_tool_result(tmp_path:
     from lingtai.kernel.base_agent import BaseAgent
     from lingtai.kernel.state import AgentState
     from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
+    from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 
     chat = _make_chat_stub()
     iface = chat.interface
@@ -1165,6 +1166,11 @@ def test_sync_active_defers_without_committing_or_mutating_tool_result(tmp_path:
             self._notification_block_id = None
             self._deferred_notifications_count = 0
             self._deferred_notifications_oldest_at = None
+            # ACTIVE deferral seeds ``_deferred_notifications_oldest_at`` off the
+            # injected lifecycle clock's wall reading (see
+            # base_agent/__init__.py:_note_notification_deferred_active); this
+            # partial stub must supply a real Port or the wall read raises.
+            self._lifecycle_clock = make_test_lifecycle_clock()
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -1207,7 +1213,11 @@ def test_sync_active_defers_without_committing_or_mutating_tool_result(tmp_path:
     assert not iface.entries[1].content[0].content.startswith("notifications:\n")
     assert [evt for evt, _ in agent._logs].count("notification_deferred_active") == 1
     assert agent._deferred_notifications_count == 2
-    assert agent._deferred_notifications_oldest_at is not None
+    # The oldest-deferred timestamp is the injected clock's wall reading (the
+    # fake's default wall value), not monotonic — direct wall-mapping evidence
+    # for the deferred-oldest seam.
+    assert agent._deferred_notifications_oldest_at == agent._lifecycle_clock.wall_seconds()
+    assert agent._deferred_notifications_oldest_at == 1_000.0
 
 
 def test_sync_empty_state_commits_empty_fingerprint(tmp_path: Path) -> None:

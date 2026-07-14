@@ -246,11 +246,14 @@ summarize would discard cache benefit.
   this one latch, so they cannot double-fire. (Explicit
   `system(action="summarize", rebuild=true)` is independent and always available.)
   If pending summaries exist,
-  they are applied and their markers marked done. If none exist, the fresh replay
-  still sheds stale timely transient `_meta` copies (agent_meta/guidance
-  and notifications/notification_guidance) — model-facing serialization keeps
-  only the newest copy per family, on every provider, without rewriting
-  recorded history. Every 1.0 forced rebuild ALWAYS carries a one-shot
+  they are applied and their markers marked done. `summarize` is the only
+  historical tool-result body replacement a rebuild applies; the fresh replay
+  otherwise preserves each historical timely-transient holder and does not
+  strip its agent_meta/guidance or notifications/notification_guidance keys,
+  on every provider, without rewriting recorded history — only the LATEST
+  holder
+  per family represents current state, older holders are historical traces
+  and must not be acted on. Every 1.0 forced rebuild ALWAYS carries a one-shot
   `_meta.tool_meta.reconstruction.warning`: it reports the before→after context
   change, advises that reaching the full boundary means waiting was not ideal (prefer
   a proactive 0.75 `rebuild=true`), and says that if the rebuilt context is still
@@ -273,10 +276,13 @@ summarize would discard cache benefit.
   overflow warning (the warning is for strictly `> 1.0`).
 
 Waiting for the 1.0 forced boundary is the emergency path — prefer the proactive
-0.75 rebuild. If no summary is pending, the forced rebuild has nothing to apply,
-though the fresh replay still sheds stale timely transient `_meta` copies
-(model-facing serialization keeps only the newest copy per family, on every
-provider, without rewriting recorded history). `refresh`
+0.75 rebuild. If no summary is pending, the forced rebuild has nothing to apply;
+the fresh replay still preserves each historical timely-transient holder and
+does not strip its agent_meta/guidance or notifications/notification_guidance
+keys on any provider, without rewriting recorded history — only the LATEST
+holder per
+family represents current state, older holders are historical traces and must
+not be acted on. `refresh`
 remains the emergency path for broken/stale context or explicit human direction,
 not the normal way to apply summarize. If summarize or a rebuild still cannot
 bring context below `0.6 * context_window` (the recovery target), tend durable

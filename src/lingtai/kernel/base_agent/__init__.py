@@ -31,6 +31,7 @@ from ..workdir import WorkingDir
 from ..workdir_lease import WorkdirLeasePort
 from ..notification_store import NotificationStorePort
 from ..agent_presence import AgentPresenceStorePort
+from ..lifecycle_clock import LifecycleClockPort
 from ..snapshot import SnapshotPort, SourceRevisionPort
 from ..message import Message
 from ..prompt import SystemPromptManager
@@ -47,8 +48,10 @@ from ..meta_block import (
     build_tool_meta_token_usage,
     build_notification_payload,
     build_notification_persistent_payload,
+    consume_email_startup_reconciled_snapshot,
     formal_tool_result_preview,
     formal_tool_result_visible_len,
+    reconcile_email_startup_marker_before_empty_commit,
     record_notification_persistent_delivery,
     sanitize_email_notification_after_persistent,
     sanitize_feishu_notification_after_persistent,
@@ -326,6 +329,37 @@ def _release_acquired_workdir_lease_on_init_failure(initializer: Callable) -> Ca
     return guarded
 
 
+def _serialize_notification_sync(sync_method: Callable) -> Callable:
+    """Claim ``_notification_sync_lock`` around one entire sync call.
+
+    Real callers race here: the heartbeat tick, the run-loop's own IDLE
+    boundary, turn-boundary housekeeping, and the opt-in soul timer thread
+    can all observe the same stale fingerprint before any of them commits a
+    new one. This wraps the WHOLE decorated body — fingerprint check, marker
+    consumption, pair append, and fingerprint/state commit — as one critical
+    section via a plain blocking acquire: a genuinely racing caller waits its
+    turn rather than skipping, so it correctly re-observes the fingerprint
+    the winner just committed and becomes a no-op instead of a duplicate
+    delivery. A decorator (rather than delegating to a sibling method) so
+    the decorated callable stays fully self-contained: test doubles that copy
+    ``_sync_notifications = BaseAgent._sync_notifications`` onto a plain
+    object with no ``BaseAgent`` inheritance still get the already-wrapped
+    function, with no second attribute for that object to be missing.
+    Degrades to unlocked-but-functional when the lock attribute is absent —
+    the same fallback :func:`lingtai.tools.soul.flow._run_consultation_fire`
+    uses for ``_soul_fire_lock`` — for test doubles that construct a minimal
+    stand-in without running ``BaseAgent.__init__``.
+    """
+
+    @functools.wraps(sync_method)
+    def guarded(self, *args, **kwargs):
+        lock = getattr(self, "_notification_sync_lock", None)
+        with lock if lock is not None else contextlib.nullcontext():
+            return sync_method(self, *args, **kwargs)
+
+    return guarded
+
+
 class BaseAgent:
     """Generic research agent with intrinsic tools and MCP tool dispatch.
 
@@ -340,6 +374,11 @@ class BaseAgent:
           withdraw and foreign-address presence observation, bound to this
           agent's working directory. Required and explicit; there is no
           nullable/no-op path and Core never constructs the concrete adapter.
+        - ``lifecycle_clock`` (LifecycleClockPort): The two lifecycle time
+          sources — wall-clock seconds for persisted/cross-process timestamps
+          and ages, monotonic seconds for process-local elapsed intervals.
+          Required and explicit; there is no default/no-op/optional path and
+          Core never constructs the concrete adapter.
         - ``snapshot_port`` (SnapshotPort): Best-effort workdir initialization,
           capture, and maintenance used by lifecycle policy.
         - ``source_revision_port`` (SourceRevisionPort): Bounded running-source
@@ -379,6 +418,7 @@ class BaseAgent:
         workdir_lease: WorkdirLeasePort,
         notification_store: "NotificationStorePort",
         agent_presence: AgentPresenceStorePort,
+        lifecycle_clock: LifecycleClockPort,
         snapshot_port: SnapshotPort,
         source_revision_port: SourceRevisionPort,
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
@@ -405,9 +445,14 @@ class BaseAgent:
         self._preset_loader: Callable[..., dict] | None = None
         self._context = context
         self._admin = admin or {}
+        # Core receives the lifecycle clock as a required Port and binds it
+        # before the first monotonic/wall sample below. Core never imports or
+        # constructs the concrete adapter; the wall/monotonic domains stay
+        # distinct (see kernel/lifecycle_clock/CONTRACT.md).
+        self._lifecycle_clock = lifecycle_clock
         self._cancel_event = threading.Event()
         self._state = AgentState.IDLE
-        self._idle_since_monotonic: float | None = time.monotonic()
+        self._idle_since_monotonic: float | None = self._lifecycle_clock.monotonic_seconds()
         self._started_at: str = ""
         self._last_usage = None  # UsageMetadata from last LLM call, for ledger
         self._created_at: str = ""
@@ -632,6 +677,24 @@ class BaseAgent:
         #   no longer used for remove_pair_by_call_id (pairs are now
         #   skeletonized in-place, not deleted).
         # See notifications.py and notification-filesystem-redesign.md.
+        #
+        # `_sync_notifications` has real concurrent callers (heartbeat tick,
+        # the run-loop's own IDLE boundary, turn-boundary housekeeping, and
+        # the opt-in soul timer thread), each capable of reading the same
+        # stale `_notification_fp` before any of them commits a new one. This
+        # lock serializes the ENTIRE method body — fingerprint check, marker
+        # consumption, pair append, and fingerprint/state commit — as one
+        # critical section, so only one caller can ever act on a given
+        # on-disk change. Non-reentrant is intentional and safe: nothing
+        # `_sync_notifications` calls (directly or via `_set_state`) calls
+        # back into `_sync_notifications` on the same thread — the soul timer
+        # it may arm always fires later, on its own dedicated thread, never
+        # synchronously. `_sync_notifications` degrades to unlocked-but-
+        # functional when this attribute is absent (`getattr` at the call
+        # site), matching the existing `_soul_fire_lock` pattern below, for
+        # the many test doubles that construct a minimal stand-in without
+        # running this `__init__`.
+        self._notification_sync_lock: threading.Lock = threading.Lock()
         self._notification_fp: tuple = ()
         # System-channel RMW serialization is owned by the injected
         # NotificationStorePort through compare_update_channel.
@@ -693,6 +756,14 @@ class BaseAgent:
         # intent from canonical history + current producer state, so nothing
         # is lost and nothing accumulates. See `meta_block.reconcile_email_persistent_history`.
         self._email_pending_clear: bool = False
+        # Set (once) by `meta_block.reconcile_email_persistent_history` when
+        # startup appends a fresh live email snapshot before this loop
+        # exists; consumed (once) by `meta_block.consume_email_startup_
+        # reconciled_snapshot` on the first post-start `_inject_notification_
+        # pair` call so that injection does not also re-append the same
+        # snapshot as a second persistent-history record. See the
+        # "Startup-to-live-sync handoff" comment in meta_block.py.
+        self._email_startup_reconciled_snapshot: dict | None = None
 
         # Telegram Task Card turn-local context (kernel-driven route B).
         # Set when a Telegram notification wakes the agent; cleared at turn end.
@@ -754,7 +825,8 @@ class BaseAgent:
         # Issue #164 — ACTIVE-without-progress watchdog.
         #
         # ``_state_changed_at`` records when the agent last transitioned
-        # state (wall-clock seconds, ``time.time()``). ``_last_progress_at``
+        # state (wall-clock seconds, ``self._lifecycle_clock.wall_seconds()``).
+        # ``_last_progress_at``
         # is bumped by any of the kernel's progress events — ``wake``,
         # ``tc_wake_continue``, ``llm_call``, ``llm_response``, ``tool_call``,
         # ``tool_result``, ``notification_pair_injected``, and state
@@ -771,7 +843,7 @@ class BaseAgent:
         # visible and let admin or .clear handle recovery." Auto-restart
         # without understanding the underlying race could mask real bugs
         # behind retries.
-        now_wall = time.time()
+        now_wall = self._lifecycle_clock.wall_seconds()
         self._state_changed_at: float = now_wall
         self._last_progress_at: float = now_wall
         self._active_turn_kind: str | None = None
@@ -980,7 +1052,7 @@ class BaseAgent:
         # Soul timer + hidden idle-timeout bookkeeping: IDLE-only.  Start on
         # entering IDLE, cancel/clear on leaving. No-op when soul is absent.
         if new_state == AgentState.IDLE:
-            self._idle_since_monotonic = time.monotonic()
+            self._idle_since_monotonic = self._lifecycle_clock.monotonic_seconds()
             if _start_soul_timer is not None:
                 _start_soul_timer(self)
         elif old == AgentState.IDLE:
@@ -992,7 +1064,7 @@ class BaseAgent:
         # forward progress, so reset the no-progress clock. The
         # one-shot stuck-logged latch is cleared whenever we leave ACTIVE
         # so the next stuck episode can be reported.
-        now_wall = time.time()
+        now_wall = self._lifecycle_clock.wall_seconds()
         self._state_changed_at = now_wall
         self._last_progress_at = now_wall
         if new_state == AgentState.ACTIVE:
@@ -1029,7 +1101,7 @@ class BaseAgent:
         """
         self._deferred_notifications_count += 1
         if self._deferred_notifications_oldest_at is None:
-            self._deferred_notifications_oldest_at = time.time()
+            self._deferred_notifications_oldest_at = self._lifecycle_clock.wall_seconds()
 
         if fp == getattr(self, "_notification_deferred_log_fp", ()):
             return
@@ -1056,7 +1128,7 @@ class BaseAgent:
         # Watchdog bookkeeping — done before the actual log write so the
         # bookkeeping is in place even if the log service raises.
         if event_type in _PROGRESS_EVENTS:
-            self._last_progress_at = time.time()
+            self._last_progress_at = self._lifecycle_clock.wall_seconds()
             kind = _PROGRESS_EVENTS[event_type]
             if kind is not None:
                 self._active_turn_kind = kind
@@ -1071,7 +1143,7 @@ class BaseAgent:
             if not deferred_counter_already_updated:
                 self._deferred_notifications_count += 1
                 if self._deferred_notifications_oldest_at is None:
-                    self._deferred_notifications_oldest_at = time.time()
+                    self._deferred_notifications_oldest_at = self._lifecycle_clock.wall_seconds()
         elif event_type == "agent_state":
             # Successful injection / state transitions reset the deferral
             # storm counter — the very next state change after a deferral
@@ -1085,7 +1157,7 @@ class BaseAgent:
                 "type": event_type,
                 "address": self._working_dir.name,
                 "agent_name": self.agent_name,
-                "ts": time.time(),
+                "ts": self._lifecycle_clock.wall_seconds(),
                 **self._runtime_identity_event_fields,
                 **fields,
             })
@@ -1297,16 +1369,41 @@ class BaseAgent:
     # See notifications.py for the notification filesystem design rationale.
     # ------------------------------------------------------------------
 
+    @_serialize_notification_sync
     def _sync_notifications(self) -> None:
         """Sync `.notification/` state into the wire.
 
-        Computes the current fingerprint; if unchanged, no-op.  On change:
+        Serialized end to end (fingerprint check through fingerprint commit)
+        by the :func:`_serialize_notification_sync` decorator against real
+        concurrent callers (heartbeat, run-loop IDLE boundary, turn-boundary
+        housekeeping, soul timer thread) — see that function's docstring for
+        why and how.
+
+        Computes the current fingerprint; if unchanged, no-op — UNLESS
+        ``agent._email_startup_reconciled_snapshot`` is still armed (see
+        step 2's marker note), since a fresh process's default empty
+        fingerprint (``()``) can equal an already-empty store's fingerprint,
+        which would otherwise skip this method's body entirely on the very
+        first tick and leave startup's marker/history stuck. On change:
         1. Skeletonize the current live holder (if any) in-place — does NOT
            remove synthesized pairs from history.  Synthesized pairs are kept
            as placeholder skeletons; only normal tool-result dicts have their
            notification keys stripped.
-        2. If the new collection is empty, commit the empty fingerprint and
-           return.
+        2. If the new collection is empty: if
+           ``agent._email_startup_reconciled_snapshot`` is armed (startup
+           reconciliation recorded a live email snapshot into canonical
+           history before this loop existed — see
+           ``meta_block.reconcile_email_persistent_history``), advance that
+           canonical state to a clear tombstone via
+           ``meta_block.reconcile_email_startup_marker_before_empty_commit``
+           BEFORE committing the empty fingerprint — this call reuses the
+           SAME already-observed empty snapshot as its input fact and never
+           re-reads the producer, so a second disk read cannot race and
+           observe different state than the one being committed for. If
+           that call reports the wire could not accept the tombstone
+           (pending tool calls), the fingerprint is NOT committed and this
+           tick returns, leaving both marker and fingerprint armed for a
+           later retry. Otherwise commit the empty fingerprint and return.
         3. Otherwise, inject a new block appropriate for current state:
 
            * IDLE → splice ``(call, result)`` pair (impersonates a
@@ -1325,8 +1422,9 @@ class BaseAgent:
         notification holder at any time. Old synthesized pairs become skeleton
         placeholders but are never deleted; normal tool results keep old
         payload copies as historical timely state. The conversation structure is
-        preserved, and model-facing serialization filters old copies
-        non-mutatingly (newest per family kept).
+        preserved, and model-facing serialization does not strip timely-transient
+        keys from older holders; only the latest holder per family is current
+        state.
 
         The fingerprint is committed only when injection succeeds (or
         when in a state that cannot inject — STUCK/SUSPENDED/empty).
@@ -1365,7 +1463,16 @@ class BaseAgent:
             return is_channel_allowed(channel)
 
         fp = store.fingerprint(_allow)
-        if fp == self._notification_fp:
+        # An armed startup marker must still be resolved even when the
+        # fingerprint appears unchanged: a fresh process's default
+        # `_notification_fp == ()` can equal an already-empty store's own
+        # `()` fingerprint, which would otherwise skip this method's body on
+        # the very first tick and leave the marker (and a stale live email
+        # snapshot in canonical history) stuck forever. See
+        # `meta_block.reconcile_email_startup_marker_before_empty_commit`.
+        if fp == self._notification_fp and getattr(
+            self, "_email_startup_reconciled_snapshot", None
+        ) is None:
             return
 
         if _skip_poisoned_sync(phase="before_collect"):
@@ -1382,6 +1489,16 @@ class BaseAgent:
             # stale notification state.  Synthesized pairs remain in
             # history as placeholders; they are never deleted.
             skeletonize_notification_holder(self)
+            # Reuse THIS already-observed empty snapshot as the input fact —
+            # never re-read the producer here, so a second disk read cannot
+            # race and see different state than what is about to be
+            # committed. If a startup marker is still armed, advance
+            # canonical history from the recorded live snapshot to a clear
+            # tombstone before committing the empty fingerprint; if that
+            # cannot be done yet (pending tool calls), leave both the
+            # marker and the fingerprint uncommitted for a later retry.
+            if not reconcile_email_startup_marker_before_empty_commit(self):
+                return
             self._notification_fp = fp
             self._notification_deferred_log_fp = ()
             return
@@ -1746,6 +1863,14 @@ class BaseAgent:
         notification_persistent_payload = build_notification_persistent_payload(
             self, notifications_with_guidance
         )
+        # Drop `email` when it only restates the snapshot startup
+        # reconciliation already appended into canonical history before this
+        # loop existed — the wake below still fires once and every other
+        # channel's payload is unaffected; only the redundant persistent
+        # re-append is skipped. See the "Startup-to-live-sync handoff"
+        # module comment in meta_block.py above
+        # `reconcile_email_persistent_history`.
+        consume_email_startup_reconciled_snapshot(self, notification_persistent_payload)
         # Move (not duplicate): curated durable IM context now lives in
         # persistent lanes, so strip it from the model-visible ephemeral lane
         # before it is nested into the synthesized pair's _meta (and the

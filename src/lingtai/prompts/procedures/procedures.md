@@ -64,10 +64,14 @@ usage `1.0` (the full-context hard boundary) the runtime **forces** a rebuild on
 the next request **regardless of whether pending summaries exist**, but only
 **once per continuous full-context episode** (it does not re-force while context
 stays at/above `1.0`, and re-arms only after context later drops below `1.0`) —
-pending markers are applied and marked done, and with no pending summaries the fresh
-replay still sheds stale timely transient `_meta` copies — model-facing
-serialization keeps only the newest copy per family, on every provider, without
-rewriting recorded history. Every `1.0` forced rebuild ALWAYS attaches a
+pending markers are applied and marked done. `summarize` is the only historical
+tool-result body replacement a rebuild applies; the fresh replay otherwise
+preserves each historical timely-transient holder and does not strip its
+`agent_meta`/`guidance` or `notifications`/`notification_guidance` keys, on
+every provider, without rewriting recorded history — only the LATEST holder
+per family is
+current state, older holders are historical traces and must not be acted on.
+Every `1.0` forced rebuild ALWAYS attaches a
 one-shot `reconstruction.warning` (before→after context, proactive-`0.75`-rebuild
 advice, and "if still above the `0.6` recovery target, molt"). If that one forced
 rebuild does NOT clear the overflow (post-rebuild context stays strictly above
@@ -98,6 +102,18 @@ merely to prepare; read `psyche-manual`, tend the stores, and molt deliberately.
 If rediscovering a workflow would be painful, make or update a skill immediately.
 Use `skills-manual` before authoring/publishing. Keep private project facts in
 knowledge and reusable procedures in skills.
+
+### Preset Swap and Daemon Task Preset
+
+To switch your own model/capabilities, call `system(action="presets")` for
+your exact `allowed` paths, then `system(action="refresh", preset=<path>)` (or
+`revert_preset=true`) — a config/prompt/MCP edit needs this refresh, not
+`summarize`. For a daemon task, pass `tasks[].preset` as an explicit path
+already in your `allowed` set (an unauthorized path is refused before
+dispatch — ask the config owner to add it, then refresh), or omit `preset` to
+inherit the parent's regular surface and skip that check entirely. External
+CLI daemon backends skip LingTai preset resolution entirely. See
+`system-manual` → `reference/substrate-manual/SKILL.md` §11.
 
 ### Use the Right Body
 

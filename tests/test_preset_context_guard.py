@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -52,6 +53,9 @@ def _build_workdir(wd: Path, plib: Path, active: str = "big"):
     wd.mkdir(parents=True, exist_ok=True)
     env = wd / ".env"
     env.write_text("P1KEY=sk-test\nP2KEY=sk-test\nP3KEY=sk-test\n")
+    allowed = [str(p) for p in sorted(plib.glob("*.json"))] if plib.is_dir() else []
+    if active not in allowed:
+        allowed.append(active)
     init = {
         "manifest": {
             "agent_name": "test", "language": "en",
@@ -59,6 +63,7 @@ def _build_workdir(wd: Path, plib: Path, active: str = "big"):
                 "path": str(plib),
                 "active": active,
                 "default": active,
+                "allowed": allowed,
             },
             "llm": {"provider": "PLACEHOLDER", "model": "PLACEHOLDER",
                     "api_key": None, "api_key_env": "PLACEHOLDER"},
@@ -87,13 +92,30 @@ def _make_test_agent(tmp_path):
     _build_lib(plib)
     wd = tmp_path / "test"
     _build_workdir(wd, plib, active=str(plib / "big.json"))
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=wd, workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd))
+    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=wd, workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(wd))
     # This unit-test BaseAgent stands in for the concrete Agent composition root.
     # Compose the same wrapper-level loader that production Agent installs; a bare
     # BaseAgent intentionally fails loud under the MigrationWorkspace Contract.
     from lingtai.agent import load_preset as composed_load_preset
     agent._preset_loader = composed_load_preset
     return agent, plib
+
+
+def _allow_preset(agent, preset_path: Path) -> None:
+    """Append *preset_path* to init.json's manifest.preset.allowed.
+
+    Tests that add a preset file to the library after `_make_test_agent`
+    has already written `init.json` need this so the new file is
+    authorized under the fail-closed allowlist gate.
+    """
+    init_path = agent._working_dir / "init.json"
+    data = json.loads(init_path.read_text())
+    preset_block = data["manifest"]["preset"]
+    allowed = preset_block.setdefault("allowed", [])
+    entry = str(preset_path)
+    if entry not in allowed:
+        allowed.append(entry)
+    init_path.write_text(json.dumps(data))
 
 
 def test_swap_refused_when_current_context_exceeds_target_limit(tmp_path, monkeypatch):
@@ -199,6 +221,7 @@ def test_swap_skips_guard_when_target_limit_is_zero(tmp_path, monkeypatch):
             "context_limit": 0,
         },
     }))
+    _allow_preset(agent, plib / "zero.json")
 
     monkeypatch.setattr(agent, "get_token_usage", lambda: {
         "ctx_total_tokens": 999999,
@@ -232,6 +255,7 @@ def test_swap_skips_guard_when_target_limit_is_negative(tmp_path, monkeypatch):
             "context_limit": -1,
         },
     }))
+    _allow_preset(agent, plib / "negone.json")
 
     monkeypatch.setattr(agent, "get_token_usage", lambda: {
         "ctx_total_tokens": 999999,
@@ -272,6 +296,7 @@ def test_guard_reads_context_limit_from_llm_block(tmp_path, monkeypatch):
             "capabilities": {"file": {}},
         },
     }))
+    _allow_preset(agent, plib / "tight.json")
 
     # Current usage exceeds the 8000 cap → swap should be refused.
     monkeypatch.setattr(agent, "get_token_usage", lambda: {
@@ -313,6 +338,7 @@ def test_revert_refused_when_current_context_exceeds_default_limit(tmp_path, mon
         "active": str(plib / "big.json"),
         "default": str(plib / "small.json"),
         "path": str(plib),
+        "allowed": [str(plib / "big.json"), str(plib / "small.json")],
     }
     init_path.write_text(json.dumps(data))
 

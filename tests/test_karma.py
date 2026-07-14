@@ -13,6 +13,7 @@ from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.state import AgentState
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
@@ -22,7 +23,7 @@ def _make_agent(tmp_path, **kwargs):
     svc = MagicMock()
     svc.create_session.return_value = MagicMock()
     kwargs.setdefault("working_dir", str(tmp_path / "test000000ab"))
-    agent = BaseAgent(svc, intrinsics=_TEST_INTRINSICS, **kwargs, workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(kwargs["working_dir"]))
+    agent = BaseAgent(svc, intrinsics=_TEST_INTRINSICS, **kwargs, workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(kwargs["working_dir"]))
     return agent
 
 

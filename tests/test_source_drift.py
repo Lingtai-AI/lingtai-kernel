@@ -11,6 +11,7 @@ import pytest
 
 from tests._notification_store_helpers import FakeNotificationStore
 from tests._snapshot_helpers import FakeSourceRevisionPort
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 
 
 # ---------------------------------------------------------------------------
@@ -103,12 +104,15 @@ class TestStatusJsonRuntime:
         agent._working_dir = Path("/tmp/test")
         agent.agent_name = "test"
         agent._mail_service = None
-        agent._uptime_anchor = time.monotonic()
+        # ``_status`` reads uptime (monotonic) and the status ages (wall) through
+        # the injected LifecycleClockPort; anchor the fields off the same fake.
+        agent._lifecycle_clock = make_test_lifecycle_clock()
+        agent._uptime_anchor = agent._lifecycle_clock.monotonic_seconds()
         agent._config.stamina = 3600
         agent._state = MagicMock()
         agent._state.value = "idle"
-        agent._state_changed_at = time.time()
-        agent._last_progress_at = time.time()
+        agent._state_changed_at = agent._lifecycle_clock.wall_seconds()
+        agent._last_progress_at = agent._lifecycle_clock.wall_seconds()
         agent._active_turn_kind = None
         agent._active_turn_id = None
         agent._active_turn_started_at = None
@@ -149,12 +153,15 @@ class TestStatusJsonRuntime:
         agent._working_dir = Path("/tmp/test")
         agent.agent_name = "test"
         agent._mail_service = None
-        agent._uptime_anchor = time.monotonic()
+        # ``_status`` reads uptime (monotonic) and the status ages (wall) through
+        # the injected LifecycleClockPort; anchor the fields off the same fake.
+        agent._lifecycle_clock = make_test_lifecycle_clock()
+        agent._uptime_anchor = agent._lifecycle_clock.monotonic_seconds()
         agent._config.stamina = 3600
         agent._state = MagicMock()
         agent._state.value = "idle"
-        agent._state_changed_at = time.time()
-        agent._last_progress_at = time.time()
+        agent._state_changed_at = agent._lifecycle_clock.wall_seconds()
+        agent._last_progress_at = agent._lifecycle_clock.wall_seconds()
         agent._active_turn_kind = None
         agent._active_turn_id = None
         agent._active_turn_started_at = None

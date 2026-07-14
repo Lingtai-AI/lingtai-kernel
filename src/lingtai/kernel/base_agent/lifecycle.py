@@ -92,6 +92,22 @@ def _active_stuck_threshold_s() -> float:
         return 600.0
 
 
+class EmailReconciliationUnresolvedError(RuntimeError):
+    """Startup could not establish canonical email persistent-lane state
+    before the first full-history render becomes possible.
+
+    Raised from ``_start()`` when ``meta_block.reconcile_email_persistent_history``
+    returns ``RECONCILE_UNRESOLVED`` (source-read/parse failure, a malformed
+    restored interface, or a pending-tool-call append refusal), or when
+    anything else unexpected fails in that reconciliation block. The main
+    message-loop thread (``agent._thread``) is never created in this case, so
+    no render is possible with unknown email state; propagating this instead
+    of logging-and-continuing makes the failure visible to the caller of
+    ``agent.start()`` rather than silently risking a stale historical
+    snapshot being presented as current.
+    """
+
+
 def _start(agent) -> None:
     """Start the agent's main loop thread."""
     from ..token_ledger import sum_token_ledger
@@ -108,7 +124,7 @@ def _start(agent) -> None:
     # Capture startup time for uptime tracking
     from datetime import datetime, timezone
     agent._started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    agent._uptime_anchor = time.monotonic()
+    agent._uptime_anchor = agent._lifecycle_clock.monotonic_seconds()
 
     # Export assembled system prompt to system/system.md
     agent._flush_system_prompt()
@@ -146,31 +162,53 @@ def _start(agent) -> None:
             get_logger().warning(f"[{agent.agent_name}] Failed to restore chat history: {e}")
 
     # Bridge the email whole-snapshot persistent lane across this
-    # restart/refresh, BEFORE the first full-history render can happen (the
-    # main loop / heartbeat have not started sending anything yet — `agent
-    # ._thread` is only created later in this function). A fresh process has
-    # no live `_notification_live_holder` to compare against, so without this
-    # reconciliation a legacy nonempty `notification_persistent.email`
-    # snapshot already at zero current unread would sit as the newest email
-    # child forever with nothing in history recording that it went stale.
-    # This appends a real synthesized `(notification(action="check"),
-    # result)` pair directly into the restored `ChatInterface` when the
-    # newest historical email child does not already match current
-    # authoritative producer state -- a mere in-memory flag would not help,
-    # since the first render can happen before any tool call exists to
-    # consume one. Idempotent and no-op when there is no email history at
-    # all, or when the newest email child already matches current state
-    # (including an existing clear). See
-    # `meta_block.reconcile_email_persistent_history` and
-    # `LICC_NOTIFICATION_CONTRACT.md`.
+    # restart/refresh, BEFORE the first full-history render can happen (`agent
+    # ._thread` is only created later in this function). Without this, a
+    # legacy `notification_persistent.email` snapshot could remain the
+    # newest wire-visible email state forever, even after current unread went
+    # to zero, since a mere in-memory flag cannot help a render that can
+    # happen before any tool call exists. See
+    # `meta_block.reconcile_email_persistent_history` (RECONCILE_RECONCILED /
+    # RECONCILE_NOOP / RECONCILE_UNRESOLVED) and `LICC_NOTIFICATION_CONTRACT.md`.
+    #
+    # Fail-closed pre-render barrier for RECONCILE_UNRESOLVED (source-read
+    # failure, malformed interface, or a pending-tool-call append refusal):
+    # `_start()` raises before `agent._thread` is created, so a stale
+    # historical snapshot is never risked as the newest wire-visible state.
+    # ANY exception in this block — an unexpected import/reconciliation
+    # failure, or the intentional unresolved raise below — is treated the
+    # same way: heartbeat was already started above (`_start_heartbeat`,
+    # published early so external observers see this process as live during
+    # the heavier restore work) and is the one BACKGROUND resource already
+    # running by this point, so on failure here it is rolled back via the
+    # existing `_stop_heartbeat` teardown primitive before re-raising — no
+    # heartbeat thread or `.agent.heartbeat` liveness survives an
+    # unsuccessful start(). This is not a generic transaction framework:
+    # the main loop thread (`agent._thread`) does not exist yet regardless
+    # of outcome, and an in-memory `agent._chat` restored just above (if
+    # any) owns no thread/socket of its own — it is inert object state, not
+    # a background resource, and is simply discarded with the rest of this
+    # `BaseAgent` instance by the caller of the now-failed `start()`.
     try:
-        from ..meta_block import reconcile_email_persistent_history
-        reconcile_email_persistent_history(agent)
-    except Exception as e:
-        from ..logging import get_logger
-        get_logger().warning(
-            f"[{agent.agent_name}] email persistent history reconciliation failed: {e}"
+        from ..meta_block import (
+            RECONCILE_UNRESOLVED,
+            reconcile_email_persistent_history,
         )
+        outcome = reconcile_email_persistent_history(agent)
+        if outcome == RECONCILE_UNRESOLVED:
+            agent._log("email_persistent_history_unresolved")
+            raise EmailReconciliationUnresolvedError(
+                f"[{agent.agent_name}] email persistent history reconciliation "
+                "unresolved before first render; refusing to start"
+            )
+    except Exception as e:
+        _stop_heartbeat(agent)
+        if isinstance(e, EmailReconciliationUnresolvedError):
+            raise
+        raise EmailReconciliationUnresolvedError(
+            f"[{agent.agent_name}] email persistent history reconciliation "
+            f"failed before first render; refusing to start: {e}"
+        ) from e
 
     # Rehydrate any still-open WorkerStillRunning recovery artifacts into a
     # high-priority notification so the next process re-surfaces the unfinished
@@ -267,7 +305,7 @@ def _start(agent) -> None:
 
 def _reset_uptime(agent) -> None:
     """Reset the uptime anchor used for runtime uptime reporting."""
-    agent._uptime_anchor = time.monotonic()
+    agent._uptime_anchor = agent._lifecycle_clock.monotonic_seconds()
 
 
 def _stop(agent, timeout: float = 5.0) -> None:
@@ -595,7 +633,7 @@ def _heartbeat_loop(agent) -> None:
             )
 
         if agent._state == AgentState.STUCK:
-            now = time.monotonic()
+            now = agent._lifecycle_clock.monotonic_seconds()
             if agent._aed_start is None:
                 agent._aed_start = now
             if now - agent._aed_start > agent._config.aed_timeout:
@@ -622,7 +660,7 @@ def _heartbeat_loop(agent) -> None:
         # repeatable bug behind silent retries.
         if agent._state == AgentState.ACTIVE and not agent._active_stuck_logged:
             threshold = _active_stuck_threshold_s()
-            no_progress_for = time.time() - agent._last_progress_at
+            no_progress_for = agent._lifecycle_clock.wall_seconds() - agent._last_progress_at
             if no_progress_for > threshold:
                 agent._log(
                     "active_without_progress",
@@ -639,7 +677,7 @@ def _heartbeat_loop(agent) -> None:
 
         # Periodic snapshot (Time Machine) — off by default
         if agent._config.snapshot_interval is not None:
-            now_mono = time.monotonic()
+            now_mono = agent._lifecycle_clock.monotonic_seconds()
             if now_mono - agent._last_snapshot >= agent._config.snapshot_interval:
                 agent._snapshot_port.snapshot()
                 agent._last_snapshot = now_mono
@@ -664,7 +702,7 @@ def _maybe_sleep_after_idle_timeout(agent, *, now_mono: float | None = None) -> 
     if agent._state != AgentState.IDLE:
         return
 
-    now = time.monotonic() if now_mono is None else now_mono
+    now = agent._lifecycle_clock.monotonic_seconds() if now_mono is None else now_mono
     idle_since = getattr(agent, "_idle_since_monotonic", None)
     if idle_since is None:
         agent._idle_since_monotonic = now
@@ -686,13 +724,14 @@ def _maybe_sleep_after_idle_timeout(agent, *, now_mono: float | None = None) -> 
 
 def _write_heartbeat_tick(agent) -> None:
     """Write one real runtime heartbeat and best-effort status snapshot."""
-    # time.time() (wall clock), not time.monotonic(). Deliberate:
+    # Wall clock (``lifecycle_clock.wall_seconds()``), not monotonic. Deliberate:
     # heartbeat is written to a file and read by the presence store's liveness
-    # observation in a DIFFERENT process. S7a keeps this direct wall clock as a
-    # temporary measure; S7b extracts the wall/monotonic clocks. Publication of
-    # the value now goes through the injected AgentPresenceStorePort (best-effort
-    # inside the adapter), not a direct file write.
-    agent._heartbeat = time.time()
+    # observation in a DIFFERENT process, so it must be a cross-process wall
+    # timestamp. The clock is now the injected Core LifecycleClockPort (see
+    # kernel/lifecycle_clock/CONTRACT.md). Publication of the raw float goes
+    # through the injected AgentPresenceStorePort (best-effort inside the
+    # adapter), which writes exactly ``str(value)`` with no newline.
+    agent._heartbeat = agent._lifecycle_clock.wall_seconds()
 
     agent._agent_presence.publish_heartbeat(agent._heartbeat)
 

@@ -330,15 +330,21 @@ def test_build_meta_readme_documents_timely_latest_only_semantics():
     """agent_meta and notifications are timely transient state: older payloads
     may remain in historical context/logs as traces (canonical history is no
     longer retroactively stripped), and only the NEWEST emission is current —
-    old payloads are not current instructions/state."""
+    old payloads are not current instructions/state, and full-history replay
+    does not strip them out."""
     readme = build_meta_readme()
     for key in ("agent_meta", "notifications"):
         doc = readme[key]
         assert "timely" in doc.lower(), key
-        assert "only the NEWEST" in doc, key
+        assert "only the NEWEST" in doc or "Only the LATEST" in doc, key
         assert "historical trace" in doc, key
-    # Old notification payloads must never read as new/unhandled instructions.
+        # Replay preserves historical holders rather than stripping their keys.
+        assert "preserv" in doc.lower(), key
+        assert "does not strip" in doc.lower(), key
+    # Old notification payloads must never read as new/unhandled instructions,
+    # and the producer channel remains authoritative for actionable content.
     assert "not current instructions" in readme["notifications"]
+    assert "source of truth" in readme["notifications"]
 
 
 def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_guidance():
@@ -2937,6 +2943,152 @@ def test_reconcile_email_persistent_history_idempotent_across_redaction(tmp_path
     assert replaced_child["email_ids"] == ["different-1"]
 
 
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        pytest.param("source_read_exception", id="source_read_exception"),
+        pytest.param("malformed_producer_payload", id="malformed_producer_payload"),
+        pytest.param("successful_empty_state", id="successful_empty_state"),
+    ],
+)
+def test_reconcile_email_persistent_history_failure_vs_genuine_empty_table(
+    tmp_path, scenario
+):
+    # Luna semantic-audit blocker 1: a source-read/parse failure is NOT
+    # authoritative zero. `_collect_active_notifications_payload_or_failure`
+    # must let reconciliation tell "the read/build itself raised" apart from
+    # "the read succeeded and genuinely found nothing" -- only the latter is
+    # safe to treat as current zero unread. A REAL historical live snapshot
+    # is present in all three cases so the dangerous path is concrete: on
+    # failure, that historical snapshot must survive untouched (no false
+    # clear tombstone manufactured over it); on a genuine empty read, the
+    # existing clear-tombstone behavior is unchanged.
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
+    from lingtai.kernel.meta_block import (
+        RECONCILE_RECONCILED,
+        RECONCILE_UNRESOLVED,
+        reconcile_email_persistent_history,
+    )
+
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="legacy_call", name="email", args={})])
+    iface.add_tool_results(
+        [ToolResultBlock(id="legacy_call", name="email", content=_legacy_email_content())]
+    )
+    agent = _reconcile_test_agent(tmp_path, iface)
+    entries_before = len(iface.entries)
+
+    if scenario == "source_read_exception":
+        def _raise(*a, **kw):
+            raise RuntimeError("simulated notification store read failure")
+        agent._notification_store.snapshot = _raise
+    elif scenario == "malformed_producer_payload":
+        # A non-dict-of-dicts return value from the store makes
+        # `build_notification_payload`'s `.keys()`/`.items()` walk raise,
+        # exercising the SAME failure path from a different injection point.
+        agent._notification_store.snapshot = lambda *_a, **_kw: "not-a-mapping"
+    # else "successful_empty_state": no `.notification/` directory at all,
+    # exactly as `_reconcile_test_agent`'s default store already provides --
+    # a genuine, successful read that legitimately found no active channels.
+
+    outcome = reconcile_email_persistent_history(agent)
+
+    if scenario == "successful_empty_state":
+        assert outcome == RECONCILE_RECONCILED
+        assert len(iface.entries) == entries_before + 2  # clear pair appended
+        new_result = iface.entries[-1].content[0]
+        cleared = new_result.content["_meta"]["notification_persistent"]["email"]
+        assert cleared["cleared"] is True
+    else:
+        assert outcome == RECONCILE_UNRESOLVED
+        # History is UNCHANGED -- no false clear tombstone was manufactured
+        # over the real historical live snapshot.
+        assert len(iface.entries) == entries_before
+        legacy_result = iface.entries[2].content[0]
+        legacy_email = legacy_result.content["_meta"]["notification_persistent"]["email"]
+        assert "cleared" not in legacy_email
+        assert legacy_email["emails"][0]["message"] == "legacy unread body"
+
+
+def test_reconcile_email_persistent_history_no_history_source_read_failure_stays_unresolved(
+    tmp_path,
+):
+    # Terra final-review blocker 2, source-failure dimension: distinct from
+    # the table above (which always starts from an ALREADY-EXISTING
+    # interface). Here there is NO chat session and NO durable history file
+    # at all -- the genuinely brand-new-agent shape -- and current producer
+    # state cannot be read. Must still fail closed (RECONCILE_UNRESOLVED,
+    # never a silent NOOP that would let a first render proceed with
+    # unknown state), and must not bootstrap a session for state it could
+    # not actually establish.
+    from lingtai.kernel.meta_block import (
+        RECONCILE_UNRESOLVED,
+        reconcile_email_persistent_history,
+    )
+    from tests._notification_store_helpers import notification_store_for
+
+    store = notification_store_for(tmp_path)
+
+    def _raise(*_a, **_kw):
+        raise RuntimeError("simulated notification store read failure")
+
+    store.snapshot = _raise
+
+    class _NoHistoryAgent(SimpleNamespace):
+        agent_name = "test"
+
+    agent = _NoHistoryAgent(
+        _working_dir=tmp_path,
+        _notification_store=store,
+        _chat=None,
+        _session=SimpleNamespace(ensure_session=lambda: None),
+    )
+    # No `history/chat_history.jsonl` exists under tmp_path at all.
+    outcome = reconcile_email_persistent_history(agent)
+
+    assert outcome == RECONCILE_UNRESOLVED
+    # A source-read failure must never bootstrap a session for state it
+    # could not actually establish.
+    assert agent._chat is None
+
+
+def test_reconcile_email_persistent_history_unresolved_when_tool_calls_pending(tmp_path):
+    # Task D policy: inability to append because of pending tool calls must
+    # not quietly claim the first-render guarantee. When the wire's tail
+    # entry has an unanswered ToolCallBlock, `_append_email_reconciliation_pair`
+    # refuses (protecting the tool-call/tool-result alternation invariant),
+    # and reconcile_email_persistent_history must surface RECONCILE_UNRESOLVED
+    # rather than silently returning as if reconciled -- history stays
+    # untouched and the bounded pending-clear fallback stays armed so a later
+    # in-process carrier can still resolve it.
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
+    from lingtai.kernel.meta_block import (
+        RECONCILE_UNRESOLVED,
+        reconcile_email_persistent_history,
+    )
+
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    # Tail entry is an assistant message with an UNANSWERED tool call --
+    # interface.has_pending_tool_calls() is True, exactly the shape
+    # _append_email_reconciliation_pair refuses to append onto.
+    iface.add_assistant_message([ToolCallBlock(id="pending_call", name="email", args={})])
+    # A live current email (no matching historical child) forces the compare
+    # to find a mismatch, so the append attempt -- not a no-op -- is the
+    # thing that hits the pending-tool-calls refusal.
+    _write_email_notif(tmp_path, email_id="live-1", message="live body")
+    agent = _reconcile_test_agent(tmp_path, iface)
+    entries_before = len(iface.entries)
+
+    outcome = reconcile_email_persistent_history(agent)
+
+    assert outcome == RECONCILE_UNRESOLVED
+    assert len(iface.entries) == entries_before  # nothing appended onto a malformed wire
+    # The bounded fallback stays armed for the next in-process carrier.
+    assert agent._email_pending_clear is False
+
+
 def test_lifecycle_start_reconciles_email_before_message_loop_can_render(tmp_path):
     # Terra v4 ordering requirement: prove via the REAL BaseAgent.start() ->
     # lifecycle._start() path (not a hand-built stand-in) that the
@@ -2953,6 +3105,7 @@ def test_lifecycle_start_reconciles_email_before_message_loop_can_render(tmp_pat
     from lingtai.llm.interface_converters import to_openai
     from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
     from tests._agent_presence_helpers import make_test_presence_store
+    from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
     from tests._notification_store_helpers import notification_store_for
     from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
     from tests._workdir_lease_helpers import make_test_lease
@@ -3004,6 +3157,7 @@ def test_lifecycle_start_reconciles_email_before_message_loop_can_render(tmp_pat
         workdir_lease=make_test_lease(),
         agent_presence=make_test_presence_store(),
         snapshot_port=make_test_snapshot_port(),
+        lifecycle_clock=make_test_lifecycle_clock(),
         source_revision_port=make_test_source_revision_port(),
         notification_store=notification_store_for(working_dir),
     )
@@ -3023,6 +3177,922 @@ def test_lifecycle_start_reconciles_email_before_message_loop_can_render(tmp_pat
         ), "legacy email body still visible immediately after start() -- reconciliation did not run before render was possible"
     finally:
         agent.stop(timeout=2.0)
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    [
+        pytest.param("unresolved_outcome", id="unresolved_outcome"),
+        pytest.param("unexpected_exception", id="unexpected_exception"),
+    ],
+)
+def test_lifecycle_start_fails_closed_with_no_leaked_heartbeat_when_reconciliation_fails(
+    tmp_path, failure_mode
+):
+    # Terra final-review blocker 1: startup must be transactional -- no
+    # background resource may survive an unsuccessful start(), and no
+    # reconciliation failure path (sentinel-driven RECONCILE_UNRESOLVED, or
+    # an unexpected exception from reconciliation itself) may silently
+    # permit rendering. Proves via the REAL BaseAgent.start() ->
+    # lifecycle._start() path that BOTH failure shapes: (1) raise
+    # EmailReconciliationUnresolvedError BEFORE `agent._thread` is created,
+    # and (2) leave NO live heartbeat thread and NO stale liveness state --
+    # asserted directly on the heartbeat thread object and on the process
+    # thread registry, WITHOUT calling agent.stop() first, so a `finally:
+    # agent.stop()` cannot mask a real leak.
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent.lifecycle import EmailReconciliationUnresolvedError
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
+    from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
+    from tests._agent_presence_helpers import make_test_presence_store
+    from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
+    from tests._notification_store_helpers import notification_store_for
+    from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+    from tests._workdir_lease_helpers import make_test_lease
+    from unittest.mock import MagicMock, patch
+    import threading
+    import time as _time
+
+    def make_mock_service():
+        svc = MagicMock()
+        svc.get_adapter.return_value = MagicMock()
+        svc.provider = "gemini"
+        svc.model = "gemini-test"
+
+        def _create_session(*, interface=None, **kwargs):
+            session = MagicMock()
+            session.interface = interface if interface is not None else ChatInterface()
+            return session
+
+        svc.create_session.side_effect = _create_session
+        return svc
+
+    working_dir = tmp_path / "agent"
+    history_dir = working_dir / "history"
+    history_dir.mkdir(parents=True)
+
+    # Seed a REAL historical live email snapshot, exactly as a restored
+    # process would find it -- this is the state a false clear/stale render
+    # would misrepresent if the barrier did not hold.
+    seed_iface = ChatInterface()
+    seed_iface.add_user_message("start")
+    seed_iface.add_assistant_message([ToolCallBlock(id="legacy_call", name="email", args={})])
+    seed_iface.add_tool_results(
+        [ToolResultBlock(id="legacy_call", name="email", content=_legacy_email_content())]
+    )
+    lines = [json.dumps(entry, ensure_ascii=False) for entry in seed_iface.to_dict()]
+    (history_dir / "chat_history.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    store = notification_store_for(working_dir)
+    if failure_mode == "unresolved_outcome":
+
+        def _raise(*_a, **_kw):
+            raise RuntimeError("simulated notification store read failure")
+
+        store.snapshot = _raise
+
+    agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=working_dir,
+        workdir_lease=make_test_lease(),
+        agent_presence=make_test_presence_store(),
+        snapshot_port=make_test_snapshot_port(),
+        lifecycle_clock=make_test_lifecycle_clock(),
+        source_revision_port=make_test_source_revision_port(),
+        notification_store=store,
+    )
+
+    if failure_mode == "unexpected_exception":
+        # An unexpected exception raised BY reconcile_email_persistent_history
+        # itself (not a normal RECONCILE_UNRESOLVED sentinel return) must
+        # ALSO fail closed -- the surrounding broad except must never
+        # log-and-proceed.
+        patcher = patch(
+            "lingtai.kernel.meta_block.reconcile_email_persistent_history",
+            side_effect=ValueError("unexpected bug inside reconciliation"),
+        )
+        patcher.start()
+    else:
+        patcher = None
+
+    try:
+        with pytest.raises(EmailReconciliationUnresolvedError):
+            agent.start()
+
+        # No cleanup call yet: these assertions observe start()'s OWN
+        # rollback, not a masking finally-block stop().
+        assert agent._thread is None
+        assert agent._heartbeat_thread is None, (
+            "heartbeat thread reference must be rolled back by start() itself"
+        )
+        assert agent._heartbeat_runtime_ready is False
+
+        # Confirm the underlying OS thread actually terminated, not merely
+        # that the reference was nulled -- give the join a brief window.
+        # Match the exact thread name `_start_heartbeat` assigns this agent
+        # (`heartbeat-{agent_name}`), not a substring, so an unrelated
+        # leftover thread from another test's agent whose name merely
+        # contains "test" cannot masquerade as this start's own heartbeat.
+        expected_heartbeat_thread_name = f"heartbeat-{agent.agent_name}"
+        for _ in range(20):
+            alive_heartbeat_threads = [
+                t
+                for t in threading.enumerate()
+                if t.name == expected_heartbeat_thread_name and t.is_alive()
+            ]
+            if not alive_heartbeat_threads:
+                break
+            _time.sleep(0.05)
+        assert not alive_heartbeat_threads, (
+            f"heartbeat thread still alive after failed start(): {alive_heartbeat_threads}"
+        )
+    finally:
+        if patcher is not None:
+            patcher.stop()
+        agent.stop(timeout=2.0)  # null-safe cleanup of whatever remains, if anything
+
+
+def _email_bearing_blocks(rendered: list[dict]) -> list[str]:
+    """Wire-rendered tool-message contents carrying a live
+    `_meta.notification_persistent.email` child specifically -- distinct
+    from `_meta.notifications.email` (the separate ephemeral wake payload,
+    which legitimately also mentions "email" and must not be mistaken for a
+    persistent-history duplicate)."""
+    bearing = []
+    for m in rendered:
+        if m.get("role") != "tool" or not isinstance(m["content"], str):
+            continue
+        try:
+            parsed = json.loads(m["content"])
+        except ValueError:
+            continue
+        persistent = (parsed.get("_meta") or {}).get("notification_persistent")
+        if isinstance(persistent, dict) and "email" in persistent:
+            bearing.append(m["content"])
+    return bearing
+
+
+def test_no_history_current_unread_reaches_idle_sync_and_first_send_without_duplicate(
+    tmp_path,
+):
+    # Terra final-review blocker 2 (v3 -> v4 correction): a brand-new agent
+    # with NO prior chat history but pre-existing current unread email
+    # (`.notification/email.json` already present before start()) must not
+    # render its very first request without that unread state, AND must
+    # receive exactly one intended attention/wake for it once the real
+    # `BaseAgent.start()` -> heartbeat -> `_sync_notifications()` IDLE path
+    # runs -- not merely a forced-ACTIVE first send that never reaches IDLE
+    # sync at all. `interface is None` + no history file used to
+    # short-circuit reconciliation to RECONCILE_NOOP before ever reading
+    # producer state; separately, `_sync_notifications` never registered
+    # `_notification_fp`/`_notification_live_holder` against the
+    # reconciliation-appended pair, so the unchanged current snapshot looked
+    # brand-new to the first real IDLE tick and both duplicated the
+    # canonical email history AND queued a second `MSG_TC_WAKE` for state
+    # the agent had already been shown. This test drives the REAL sequence
+    # in order: start() -> real IDLE `_sync_notifications()` (proving one
+    # pair + one wake, no duplicate) -> a quiet unchanged tick -> the actual
+    # first provider send (proving the unread snapshot still reaches the
+    # wire without duplication) -> a genuinely changed snapshot (proving new
+    # state is never suppressed by the same handoff).
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.base_agent.turn import _handle_request
+    from lingtai.kernel.llm.interface import ChatInterface, ToolResultBlock
+    from lingtai.kernel.message import _make_message, MSG_REQUEST, MSG_TC_WAKE
+    from lingtai.kernel.state import AgentState
+    from lingtai.llm.interface_converters import to_openai
+    from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
+    from tests._agent_presence_helpers import make_test_presence_store
+    from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
+    from tests._notification_store_helpers import notification_store_for
+    from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+    from tests._workdir_lease_helpers import make_test_lease
+    from unittest.mock import MagicMock
+
+    def make_mock_service():
+        svc = MagicMock()
+        svc.get_adapter.return_value = MagicMock()
+        svc.provider = "gemini"
+        svc.model = "gemini-test"
+
+        def _create_session(*, interface=None, **kwargs):
+            session = MagicMock()
+            session.interface = interface if interface is not None else ChatInterface()
+            session.context_window.return_value = 100_000
+            return session
+
+        svc.create_session.side_effect = _create_session
+        return svc
+
+    working_dir = tmp_path / "agent"
+    # Deliberately NO history/chat_history.jsonl -- brand-new agent.
+    # Current unread email exists BEFORE start() ever runs.
+    _write_email_notif(working_dir, email_id="current-1", message="pre-existing unread body")
+
+    agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=working_dir,
+        workdir_lease=make_test_lease(),
+        agent_presence=make_test_presence_store(),
+        snapshot_port=make_test_snapshot_port(),
+        lifecycle_clock=make_test_lifecycle_clock(),
+        source_revision_port=make_test_source_revision_port(),
+        notification_store=notification_store_for(working_dir),
+    )
+    try:
+        agent.start()
+        assert agent.state == AgentState.IDLE
+        # Reconciliation must have bootstrapped the session synchronously
+        # inside start() -- before any message was ever sent -- and left
+        # the narrow one-shot startup handoff armed for the live sync loop.
+        assert agent._chat is not None
+        entries_after_start = len(agent._chat.interface.entries)
+        assert entries_after_start == 2  # bootstrapped (call, result) pair
+        assert agent._email_startup_reconciled_snapshot is not None
+        assert agent._notification_fp == ()  # reconciliation never commits this
+
+        # --- Real IDLE sync, first heartbeat tick after start() ---
+        # Called directly (the established pattern in test_notification_sync.py)
+        # rather than sleeping for the real ~1s heartbeat timer: this is the
+        # exact same bound method the heartbeat loop calls, so it exercises
+        # 100% real `_sync_notifications` / `_inject_notification_pair` /
+        # `consume_email_startup_reconciled_snapshot` logic with no timing
+        # flakiness.
+        agent._sync_notifications()
+
+        # Exactly one new (call, result) pair for the required one intended
+        # attention/wake -- not zero (unread must never be silently
+        # suppressed) and not two (no second same-snapshot pair).
+        assert len(agent._chat.interface.entries) == entries_after_start + 2
+        wake_msg = agent.inbox.get_nowait()
+        assert wake_msg.type == MSG_TC_WAKE
+        assert agent.inbox.empty(), "expected exactly one queued wake, found a second"
+
+        idle_result_block = agent._chat.interface.entries[-1].content[0]
+        assert isinstance(idle_result_block, ToolResultBlock)
+        idle_meta = idle_result_block.content["_meta"]
+        # The ephemeral wake payload IS delivered (this is the one intended
+        # attention event) ...
+        assert "email" in idle_meta.get("notifications", {})
+        # ... but the durable persistent-history child is NOT re-embedded on
+        # this pair -- that would be the second canonical copy of state
+        # already made canonical by the startup pair.
+        assert "email" not in idle_meta.get("notification_persistent", {})
+        # One-shot: consumed regardless of match, so it can never suppress a
+        # later, genuinely different snapshot.
+        assert agent._email_startup_reconciled_snapshot is None
+
+        # Exactly one block in the WHOLE canonical history carries the live
+        # `notification_persistent.email` child -- the startup pair itself.
+        persistent_email_holders = [
+            block.content["_meta"]["notification_persistent"]["email"]
+            for entry in agent._chat.interface.entries
+            for block in entry.content
+            if isinstance(block, ToolResultBlock)
+            and isinstance(block.content, dict)
+            and isinstance(block.content.get("_meta"), dict)
+            and isinstance(
+                block.content["_meta"].get("notification_persistent"), dict
+            )
+            and "email" in block.content["_meta"]["notification_persistent"]
+        ]
+        assert len(persistent_email_holders) == 1, (
+            f"expected exactly one canonical live email delivery, "
+            f"got {len(persistent_email_holders)}"
+        )
+
+        # --- A later unchanged tick stays quiet ---
+        entries_after_idle_sync = len(agent._chat.interface.entries)
+        agent._sync_notifications()
+        assert len(agent._chat.interface.entries) == entries_after_idle_sync
+        assert agent.inbox.empty()
+
+        # --- The actual first provider send still carries the unread
+        # snapshot, without duplicating it ---
+        captured = {}
+
+        class _StopAfterCapture(Exception):
+            pass
+
+        def _send_capturing_wire_state(content):
+            # This IS the moment the real "first provider send" would occur
+            # -- patched directly onto `agent._session` (the real
+            # `SessionManager` instance; only its own downstream
+            # `ChatSession` is mocked) so nothing else about the real
+            # request pipeline (build_meta, turn housekeeping, notification
+            # sync) needs to be faked. Capture the canonical wire state via
+            # the same shared full-history renderer every provider uses,
+            # exactly as it exists RIGHT NOW, then stop the turn -- no real
+            # LLM round-trip is needed for this invariant, only the outgoing
+            # wire state at send-time matters.
+            captured["rendered"] = to_openai(agent._chat.interface)
+            captured["content"] = content
+            raise _StopAfterCapture("stop after capturing pre-send wire state")
+
+        agent._session.send = _send_capturing_wire_state
+        agent._set_state(AgentState.ACTIVE, reason="test_first_request")
+        msg = _make_message(MSG_REQUEST, "user", "hello")
+        raised = None
+        try:
+            _handle_request(agent, msg)
+        except _StopAfterCapture:
+            pass
+        except Exception as e:
+            raised = e
+        assert raised is None, f"unexpected exception before send: {raised}"
+        assert "rendered" in captured, "session.send() was never reached"
+
+        tool_contents = [
+            m["content"] for m in captured["rendered"] if m.get("role") == "tool"
+        ]
+        assert any(
+            "pre-existing unread body" in c for c in tool_contents if isinstance(c, str)
+        ), "current unread email must be visible in the FIRST provider send's wire state"
+
+        # Renderer projection keeps only the NEWEST email-shaped child
+        # visible: exactly one, even though two pairs now exist in raw
+        # history (the startup pair, canonical; the IDLE-sync pair, which
+        # never carried a persistent child at all).
+        email_bearing = _email_bearing_blocks(captured["rendered"])
+        assert len(email_bearing) == 1, (
+            f"expected exactly one email-bearing block in the pre-send wire, "
+            f"got {len(email_bearing)}: {email_bearing}"
+        )
+        # ACTIVE turn-boundary sync deferred (nothing changed on disk) --
+        # leaving the fingerprint committed from the IDLE tick above, not
+        # appending a third pair.
+        assert len(agent._chat.interface.entries) == entries_after_idle_sync
+
+        # --- A genuinely changed current email after startup still
+        # delivers exactly one new canonical pair and one new wake ---
+        agent._set_state(AgentState.IDLE, reason="test_return_to_idle")
+        entries_before_change = len(agent._chat.interface.entries)
+        _write_email_notif(working_dir, email_id="current-2", message="genuinely new unread body")
+
+        agent._sync_notifications()
+
+        assert len(agent._chat.interface.entries) == entries_before_change + 2
+        change_wake_msg = agent.inbox.get_nowait()
+        assert change_wake_msg.type == MSG_TC_WAKE
+        assert agent.inbox.empty()
+        changed_result_block = agent._chat.interface.entries[-1].content[0]
+        changed_meta = changed_result_block.content["_meta"]
+        assert changed_meta["notification_persistent"]["email"]["email_ids"] == [
+            "current-2"
+        ]
+    finally:
+        agent.stop(timeout=2.0)
+
+
+def _make_sync_test_agent(tmp_path):
+    """Real `BaseAgent` against a `MagicMock` service, for tests that drive
+    `_sync_notifications()`/`reconcile_email_persistent_history()` directly
+    rather than through a full provider round trip."""
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.llm.interface import ChatInterface
+    from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
+    from tests._agent_presence_helpers import make_test_presence_store
+    from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
+    from tests._notification_store_helpers import notification_store_for
+    from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+    from tests._workdir_lease_helpers import make_test_lease
+    from unittest.mock import MagicMock
+
+    service = MagicMock()
+    service.get_adapter.return_value = MagicMock()
+    service.provider = "gemini"
+    service.model = "gemini-test"
+
+    def _create_session(*, interface=None, **kwargs):
+        session = MagicMock()
+        session.interface = interface if interface is not None else ChatInterface()
+        session.context_window.return_value = 100_000
+        return session
+
+    service.create_session.side_effect = _create_session
+
+    working_dir = tmp_path / "agent"
+    return BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
+        service=service,
+        agent_name="test",
+        working_dir=working_dir,
+        workdir_lease=make_test_lease(),
+        agent_presence=make_test_presence_store(),
+        snapshot_port=make_test_snapshot_port(),
+        lifecycle_clock=make_test_lifecycle_clock(),
+        source_revision_port=make_test_source_revision_port(),
+        notification_store=notification_store_for(working_dir),
+    )
+
+
+def _drain(inbox) -> list:
+    """Pop every currently queued message from a `queue.Queue`, in order."""
+    messages = []
+    while not inbox.empty():
+        messages.append(inbox.get_nowait())
+    return messages
+
+
+def test_no_history_secret_shaped_unread_reaches_idle_sync_without_duplicate(tmp_path):
+    # Terra final-review v4 Blocker 1: the startup marker is stored REDACTED
+    # (`reconcile_email_persistent_history` never retains a raw copy in
+    # `agent._email_startup_reconciled_snapshot`), but the first real IDLE
+    # `_sync_notifications` tick rebuilds the persistent email child RAW from
+    # the live producer payload -- the wire content must stay unredacted,
+    # since this is model-facing content, not a durable log write. Comparing
+    # those two directly (`consume_email_startup_reconciled_snapshot`) always
+    # mismatched for any unchanged body containing a redactable value (the
+    # `sk-...` fixture `test_reconcile_email_persistent_history_idempotent_
+    # across_redaction` proves the redactor changes it), so a real API-key-
+    # shaped unread email always appended a SECOND canonical
+    # `notification_persistent.email` child on the very first post-start IDLE
+    # tick even though the producer's state never changed. That reconciliation
+    # test only exercises reconcile/save/restore in isolation; this test
+    # proves the composition Terra flagged as untested: real
+    # `BaseAgent.start()` (startup reconciliation) followed by a real first
+    # IDLE `_sync_notifications()` tick, with secret-shaped content, still
+    # yields exactly one canonical persistent child while the transient
+    # attention hook and one wake remain intact.
+    from lingtai.kernel.llm.interface import ToolResultBlock
+    from lingtai.kernel.message import MSG_TC_WAKE
+
+    secret = "sk-abc1234567890123456789012345678901234567890"
+    agent = _make_sync_test_agent(tmp_path)
+    # Deliberately NO history/chat_history.jsonl -- brand-new agent. Current
+    # unread email exists BEFORE start() ever runs, and its body contains the
+    # same representative API-key shape the redaction round-trip fixture uses.
+    _write_email_notif(
+        agent._working_dir, email_id="secret-1", message=f"here is my key: {secret}"
+    )
+
+    # `agent.start()` also starts the real background run-loop thread, which
+    # blocks on `agent.inbox.get()` and would otherwise dequeue and act on
+    # any `MSG_TC_WAKE` (`base_agent/turn.py::_run_loop` calls the
+    # module-level `_handle_tc_wake(agent, msg)` directly, driving a real
+    # provider `send()` against the `MagicMock` service) concurrently with
+    # this test's own assertions on `interface.entries` -- so
+    # `inbox.get_nowait()` would race that live consumer. Observe the wake at
+    # the reliable, non-racing enqueue point (`inbox.put`) instead, and
+    # neutralize the module-level dispatch so the run loop cannot mutate the
+    # wire mid-assertion. Both patches are scoped to this test only.
+    from unittest.mock import patch as _mock_patch
+
+    wake_puts: list[str] = []
+    real_put = agent.inbox.put
+
+    def _counting_put(msg, *args, **kwargs):
+        if getattr(msg, "type", None) == MSG_TC_WAKE:
+            wake_puts.append(msg.type)
+        return real_put(msg, *args, **kwargs)
+
+    agent.inbox.put = _counting_put
+    tc_wake_patcher = _mock_patch(
+        "lingtai.kernel.base_agent.turn._handle_tc_wake", lambda agent, msg: None
+    )
+    tc_wake_patcher.start()
+
+    try:
+        agent.start()
+        # Startup reconciliation appended the RAW secret into canonical
+        # history (correct -- the live snapshot must be real) and armed the
+        # REDACTED one-shot marker for the handoff.
+        entries_after_start = len(agent._chat.interface.entries)
+        assert entries_after_start == 2
+        marker = agent._email_startup_reconciled_snapshot
+        assert marker is not None
+        assert secret not in json.dumps(marker), (
+            "the marker must never retain the raw secret"
+        )
+        wake_puts.clear()  # discard the module-import wake, if any raced in
+
+        # Real first IDLE sync -- exercises the exact composition Terra
+        # found untested: the redacted marker against the raw rebuilt child.
+        agent._sync_notifications()
+
+        # Exactly one wake, exactly one new (call, result) pair for it.
+        assert len(agent._chat.interface.entries) == entries_after_start + 2
+        assert wake_puts == [MSG_TC_WAKE], f"expected exactly one queued wake, got {wake_puts}"
+
+        idle_result_block = agent._chat.interface.entries[-1].content[0]
+        assert isinstance(idle_result_block, ToolResultBlock)
+        idle_meta = idle_result_block.content["_meta"]
+        # Transient attention hook still delivered (this IS the one intended
+        # wake) ...
+        assert "email" in idle_meta.get("notifications", {})
+        # ... but the redaction-normalized comparison now correctly
+        # recognizes the unchanged secret-shaped snapshot and does NOT
+        # re-embed a second persistent child for it.
+        assert "email" not in idle_meta.get("notification_persistent", {})
+        assert agent._email_startup_reconciled_snapshot is None
+
+        # Exactly one block across the WHOLE canonical history carries the
+        # live `notification_persistent.email` child -- the startup pair.
+        persistent_email_holders = [
+            block.content["_meta"]["notification_persistent"]["email"]
+            for entry in agent._chat.interface.entries
+            for block in entry.content
+            if isinstance(block, ToolResultBlock)
+            and isinstance(block.content, dict)
+            and isinstance(
+                block.content["_meta"].get("notification_persistent"), dict
+            )
+            and "email" in block.content["_meta"]["notification_persistent"]
+        ]
+        assert len(persistent_email_holders) == 1, (
+            f"expected exactly one canonical live email delivery for the "
+            f"unchanged secret-shaped snapshot, got {len(persistent_email_holders)}"
+        )
+        # The one surviving persistent child is the RAW startup delivery
+        # (correct -- wire content is never redacted), not the marker.
+        assert secret in json.dumps(persistent_email_holders[0])
+    finally:
+        agent.inbox.put = real_put
+        tc_wake_patcher.stop()
+        agent.stop(timeout=2.0)
+
+
+def test_consume_email_startup_reconciled_snapshot_is_genuinely_one_shot():
+    # Parent source-review correction: a mismatch must still CONSUME the
+    # marker, not merely leave the mismatching/new email untouched. The
+    # concrete failure this closes: startup reconciliation records snapshot
+    # A and stores redacted marker A. Producer state changes to B before the
+    # first live-sync handoff -- that handoff must both (1) keep B
+    # undropped and (2) clear the marker, so that if state LATER returns to
+    # A, a stale marker A left alive from the first handoff cannot wrongly
+    # suppress that genuinely new delivery of A.
+    from lingtai.kernel.meta_block import consume_email_startup_reconciled_snapshot
+    from lingtai.kernel.trace_redaction import redact_for_trajectory
+
+    snapshot_a = {
+        "context_comment": "Unread email content moved here.",
+        "email_ids": ["a-1"],
+        "count": 1,
+        "newest_received_at": "2026-07-06T07:00:00Z",
+        "emails": [{"id": "a-1", "from": "human", "subject": "s", "message": "body A"}],
+    }
+    snapshot_b = {
+        "context_comment": "Unread email content moved here.",
+        "email_ids": ["b-1"],
+        "count": 1,
+        "newest_received_at": "2026-07-06T08:00:00Z",
+        "emails": [{"id": "b-1", "from": "human", "subject": "s", "message": "body B"}],
+    }
+    agent = SimpleNamespace(_email_startup_reconciled_snapshot=redact_for_trajectory(snapshot_a))
+
+    # --- First handoff: producer state has already moved to B. ---
+    payload_b = {
+        "notification_persistent": {
+            "email": dict(snapshot_b),
+            "mcp": {"telegram": {"messages": []}},
+        }
+    }
+    consume_email_startup_reconciled_snapshot(agent, payload_b)
+
+    # B must survive undropped -- it does not match marker A.
+    assert payload_b["notification_persistent"]["email"]["email_ids"] == ["b-1"]
+    # Sibling persistent lane is untouched.
+    assert payload_b["notification_persistent"]["mcp"] == {"telegram": {"messages": []}}
+    # The marker is CONSUMED regardless of the mismatch -- this is the fix.
+    assert agent._email_startup_reconciled_snapshot is None
+
+    # --- Simulate the marker being left behind by a buggy implementation:
+    # re-arm it to A as the pre-fix code would have (mismatch = no consume),
+    # to prove the CURRENT code does not merely get lucky on call order. ---
+    agent._email_startup_reconciled_snapshot = redact_for_trajectory(snapshot_a)
+    # Consuming once (matching this time) clears it and drops A. `email` was
+    # the only key in `notification_persistent`, so the whole now-empty
+    # envelope is removed too (mirrors `_drop_stale_email_snapshot`).
+    payload_a_first = {"notification_persistent": {"email": dict(snapshot_a)}}
+    consume_email_startup_reconciled_snapshot(agent, payload_a_first)
+    assert "notification_persistent" not in payload_a_first
+    assert agent._email_startup_reconciled_snapshot is None
+
+    # --- A later, genuinely new delivery of A (state moved B -> A again)
+    # must NOT be suppressed -- the marker is already gone from the first
+    # handoff above, so this call is a true no-op that leaves A intact. ---
+    payload_a_second = {"notification_persistent": {"email": dict(snapshot_a)}}
+    consume_email_startup_reconciled_snapshot(agent, payload_a_second)
+    assert payload_a_second["notification_persistent"]["email"]["email_ids"] == ["a-1"]
+    assert agent._email_startup_reconciled_snapshot is None
+
+    # --- No-email and marker-absent shapes still consume/no-op safely. ---
+    agent._email_startup_reconciled_snapshot = redact_for_trajectory(snapshot_a)
+    payload_no_email = {"notification_persistent": {"mcp": {"telegram": {"messages": []}}}}
+    consume_email_startup_reconciled_snapshot(agent, payload_no_email)
+    assert agent._email_startup_reconciled_snapshot is None
+    assert payload_no_email["notification_persistent"]["mcp"] == {"telegram": {"messages": []}}
+
+    # Absent marker (already consumed) + any payload is a pure no-op.
+    payload_after_consumed = {"notification_persistent": {"email": dict(snapshot_b)}}
+    consume_email_startup_reconciled_snapshot(agent, payload_after_consumed)
+    assert payload_after_consumed["notification_persistent"]["email"]["email_ids"] == ["b-1"]
+
+
+def _newest_persistent_email_children(interface) -> list[dict]:
+    """Every `_meta.notification_persistent.email` child across `interface`,
+    in wire order — used to assert exactly one canonical delivery survives."""
+    return [
+        block.content["_meta"]["notification_persistent"]["email"]
+        for entry in interface.entries
+        for block in entry.content
+        if isinstance(block, ToolResultBlock)
+        and isinstance(block.content, dict)
+        and isinstance(block.content.get("_meta"), dict)
+        and isinstance(block.content["_meta"].get("notification_persistent"), dict)
+        and "email" in block.content["_meta"]["notification_persistent"]
+    ]
+
+
+def _swap_in_empty_notification_store(agent, tmp_path) -> None:
+    """Point `agent._notification_store` at a FRESH `PosixNotificationStoreAdapter`
+    rooted at an unused sibling directory, simulating "producer state is now
+    authoritatively empty" without deleting, moving, or truncating the
+    original `.notification/email.json` the startup snapshot was read from.
+    `_sync_notifications` reads `self._notification_store` fresh on every
+    call, so this swap takes effect on the very next call."""
+    from tests._notification_store_helpers import notification_store_for
+
+    agent._notification_store = notification_store_for(tmp_path / "empty_store_sibling")
+
+
+def test_empty_store_sync_advances_stuck_startup_marker_to_clear_tombstone(tmp_path):
+    # Parent correction: the all-channels-empty branch of the real,
+    # `@_serialize_notification_sync`-decorated `_sync_notifications` never
+    # drove `_inject_notification_pair` at all, so it never consumed
+    # `agent._email_startup_reconciled_snapshot` -- a startup-reconciled
+    # live snapshot A could be left as the newest canonical email state
+    # forever even after the producer genuinely went to zero, AND the
+    # default `_notification_fp == ()` can equal an already-empty store's
+    # own `()` fingerprint, which would otherwise skip this method's body
+    # entirely on the very first tick. This drives the REAL sequence:
+    # startup reconciliation records live A (mirrors `lifecycle.py::_start`
+    # calling `reconcile_email_persistent_history` before the main loop
+    # exists) -> producer state goes to genuinely empty -> the real,
+    # decorated `_sync_notifications()` must still run (bypassing the
+    # unchanged-fingerprint fast path), append exactly one clear tombstone
+    # as the newest canonical email state, consume the marker, commit the
+    # fingerprint, and queue NO notification wake for an empty collection.
+    from lingtai.kernel.meta_block import reconcile_email_persistent_history
+
+    agent = _make_sync_test_agent(tmp_path)
+    _write_email_notif(agent._working_dir, email_id="startup-1", message="startup unread body")
+
+    # Mirrors lifecycle.py::_start: reconcile before the main loop exists.
+    reconcile_email_persistent_history(agent)
+    assert agent._chat is not None
+    entries_after_reconcile = len(agent._chat.interface.entries)
+    assert entries_after_reconcile == 2  # bootstrapped (call, result) pair
+    assert agent._email_startup_reconciled_snapshot is not None
+    assert agent._notification_fp == ()  # reconciliation never commits this
+    assert _newest_persistent_email_children(agent._chat.interface) == [
+        _newest_persistent_email_children(agent._chat.interface)[0]
+    ]
+    assert _newest_persistent_email_children(agent._chat.interface)[0]["email_ids"] == [
+        "startup-1"
+    ]
+
+    # Producer state becomes genuinely empty before the first live sync --
+    # the exact scenario the parent flagged. Simulated non-destructively: no
+    # file is deleted, moved, or truncated; the original
+    # `.notification/email.json` this startup snapshot was read from stays
+    # exactly as `_write_email_notif` left it.
+    _swap_in_empty_notification_store(agent, tmp_path)
+
+    agent._sync_notifications()
+
+    # The empty-collection branch must have run despite fp == () == the
+    # fresh default, and must have advanced canonical history rather than
+    # silently leaving it on stale live A.
+    assert agent._notification_fp == ()  # the empty store's own fingerprint
+    assert agent._email_startup_reconciled_snapshot is None
+    assert agent.inbox.empty(), "an empty collection must never queue a wake"
+
+    persistent_children = _newest_persistent_email_children(agent._chat.interface)
+    assert len(persistent_children) == 2, (
+        f"expected the startup live pair plus exactly one clear tombstone, "
+        f"got {len(persistent_children)}"
+    )
+    assert persistent_children[0]["email_ids"] == ["startup-1"]  # untouched historical trace
+    assert persistent_children[-1]["cleared"] is True
+    assert "email_ids" not in persistent_children[-1]
+
+
+def test_empty_store_sync_is_idempotent_no_duplicate_tombstone(tmp_path):
+    # A second, later empty sync against the SAME still-empty producer state
+    # must not append a second tombstone -- the marker is already consumed
+    # and canonical history already ends on a clear.
+    from lingtai.kernel.meta_block import reconcile_email_persistent_history
+
+    agent = _make_sync_test_agent(tmp_path)
+    _write_email_notif(agent._working_dir, email_id="startup-1", message="startup unread body")
+    reconcile_email_persistent_history(agent)
+    _swap_in_empty_notification_store(agent, tmp_path)
+
+    agent._sync_notifications()
+    entries_after_first_empty_sync = len(agent._chat.interface.entries)
+    persistent_after_first = _newest_persistent_email_children(agent._chat.interface)
+    assert len(persistent_after_first) == 2
+
+    # Force the fingerprint check to be re-evaluated exactly as a later
+    # heartbeat tick would (fp is already committed and unchanged; the
+    # marker is already None, so this must hit the ordinary fast path).
+    agent._sync_notifications()
+
+    assert len(agent._chat.interface.entries) == entries_after_first_empty_sync
+    persistent_after_second = _newest_persistent_email_children(agent._chat.interface)
+    assert len(persistent_after_second) == 2, "a second empty sync must not append a duplicate tombstone"
+    assert agent.inbox.empty()
+
+
+def test_empty_store_sync_leaves_marker_and_fingerprint_uncommitted_when_append_blocked(tmp_path):
+    # If canonical append is blocked (wire has unanswered tool_calls), the
+    # marker/fingerprint must stay armed for a later valid retry rather than
+    # silently claiming the empty state was recorded.
+    from lingtai.kernel.llm.interface import ToolCallBlock
+    from lingtai.kernel.meta_block import reconcile_email_persistent_history
+
+    agent = _make_sync_test_agent(tmp_path)
+    _write_email_notif(agent._working_dir, email_id="startup-1", message="startup unread body")
+    reconcile_email_persistent_history(agent)
+    entries_before_pending_call = len(agent._chat.interface.entries)
+    marker_before = agent._email_startup_reconciled_snapshot
+    assert marker_before is not None
+    _swap_in_empty_notification_store(agent, tmp_path)
+
+    # A distinct, non-empty sentinel: the empty store's OWN fingerprint is
+    # also `()`, so leaving `_notification_fp` at its fresh default `()`
+    # could not mechanically distinguish "the fingerprint was never
+    # committed" from "it was committed to the same value it already held."
+    # Any prior real fingerprint tuple works here; a hand-built one-element
+    # tuple keeps the test self-contained without depending on a second
+    # real store.
+    fp_sentinel = (("previous-uncommitted-fp", 1, "deadbeef"),)
+    agent._notification_fp = fp_sentinel
+
+    # Leave the wire with an unanswered tool call so
+    # `_append_email_reconciliation_pair` refuses to append the tombstone.
+    agent._chat.interface.add_assistant_message(
+        [ToolCallBlock(id="pending_call", name="email", args={})]
+    )
+
+    agent._sync_notifications()
+
+    # Nothing was committed: no tombstone appended, marker still armed, and
+    # the fingerprint was NOT advanced to the (also-`()`) empty store's
+    # value -- it must still read back as the exact sentinel set above, so a
+    # later valid tick will retry.
+    assert agent._email_startup_reconciled_snapshot == marker_before
+    assert agent._notification_fp == fp_sentinel
+    assert len(agent._chat.interface.entries) == entries_before_pending_call + 1  # only the pending call
+    assert _newest_persistent_email_children(agent._chat.interface)[-1]["email_ids"] == [
+        "startup-1"
+    ]
+    assert agent.inbox.empty()
+
+
+def test_concurrent_sync_notifications_delivers_exactly_once(tmp_path):
+    # Terra final-review v4 Blocker 2: real concurrent `_sync_notifications()`
+    # callers exist (heartbeat tick, the run-loop's IDLE boundary,
+    # turn-boundary housekeeping, the opt-in soul timer thread), and before
+    # this fix the fingerprint check -> marker consumption -> pair append ->
+    # fingerprint commit sequence had no lock/claim spanning it: two callers
+    # could both pass the same stale fingerprint check before either
+    # committed, each independently splicing a delivery pair and queuing a
+    # wake for the SAME unchanged snapshot.
+    #
+    # This test drives two real threads through the real, decorated
+    # `agent._sync_notifications()` against the same unchanged on-disk email,
+    # released together via a `threading.Barrier`. `agent._notification_sync_
+    # lock` is temporarily a `_WaiterProbeLock` (real `threading.Lock` inside)
+    # so the test can require explicit proof the LOSER actually reached the
+    # lock and started blocking on it -- not merely that the winner still
+    # holds it -- before letting the winner release. No sleeps or busy polls;
+    # every wait is a bounded `Event.wait()` whose return value is checked.
+    #
+    # `_sync_notifications()` only needs `_state`/`_chat`/`_notification_fp`,
+    # all already correct on a freshly constructed (never-`start()`ed) agent
+    # -- `_inject_notification_pair` bootstraps `_chat` itself via
+    # `ensure_session()` when `_chat is None`, exactly like a real IDLE/ASLEEP
+    # wake would. Skipping `start()` avoids the real background run-loop
+    # thread and its `MSG_TC_WAKE` dispatch entirely, so no run-loop
+    # patch/wrap is needed to keep this test's own assertions deterministic.
+    import threading
+
+    from lingtai.kernel.llm.interface import ToolResultBlock
+    from lingtai.kernel.message import MSG_TC_WAKE
+    from lingtai.kernel.state import AgentState
+
+    class _WaiterProbeLock:
+        """Real `threading.Lock` wrapper proving a SECOND `__enter__`
+        genuinely blocked on it, not merely that a second thread happened to
+        run. `lock.locked()` alone only proves the winner still holds the
+        lock -- it says nothing about whether a second caller ever reached
+        it. This wrapper sets `second_acquire_attempted` immediately before
+        the second `__enter__` calls the real lock's blocking `acquire()`,
+        so the test can require that signal before letting the winner
+        proceed. Delegates actual acquire/release to the real lock inside."""
+
+        def __init__(self):
+            self._real = threading.Lock()
+            self._count_lock = threading.Lock()
+            self._attempts = 0
+            self.second_acquire_attempted = threading.Event()
+
+        def __enter__(self):
+            with self._count_lock:
+                self._attempts += 1
+                is_second = self._attempts == 2
+            if is_second:
+                self.second_acquire_attempted.set()
+            self._real.acquire()
+            return self
+
+        def __exit__(self, *exc_info):
+            self._real.release()
+            return False
+
+    agent = _make_sync_test_agent(tmp_path)
+    _write_email_notif(agent._working_dir, email_id="race-1", message="second racing body")
+    assert agent._state == AgentState.IDLE
+    assert agent._chat is None  # not yet bootstrapped -- proves start() was skipped
+
+    probe_lock = _WaiterProbeLock()
+    agent._notification_sync_lock = probe_lock
+    real_inject = agent._inject_notification_pair
+    winner_inside = threading.Event()
+    inject_call_count = {"n": 0}
+    count_lock = threading.Lock()
+
+    def _instrumented_inject(notifications):
+        with count_lock:
+            inject_call_count["n"] += 1
+            is_winner = inject_call_count["n"] == 1
+        if is_winner:
+            winner_inside.set()
+            # Require -- not merely observe -- that the loser has actually
+            # reached the lock and started blocking on it before proceeding.
+            assert probe_lock.second_acquire_attempted.wait(timeout=5.0), (
+                "loser never attempted to acquire _notification_sync_lock"
+            )
+        return real_inject(notifications)
+
+    agent._inject_notification_pair = _instrumented_inject
+
+    start_barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def _racing_sync():
+        start_barrier.wait(timeout=5.0)
+        try:
+            agent._sync_notifications()
+        except BaseException as exc:  # noqa: BLE001 -- surface to main thread
+            errors.append(exc)
+
+    try:
+        entries_before = len(agent._chat.interface.entries) if agent._chat else 0
+        thread_a = threading.Thread(target=_racing_sync, name="sync-race-a")
+        thread_b = threading.Thread(target=_racing_sync, name="sync-race-b")
+        thread_a.start()
+        thread_b.start()
+        thread_a.join(timeout=5.0)
+        thread_b.join(timeout=5.0)
+        assert not thread_a.is_alive() and not thread_b.is_alive(), "a racing thread never completed"
+        assert winner_inside.is_set(), "no thread ever reached _inject_notification_pair"
+        assert errors == [], f"a racing _sync_notifications call raised: {errors}"
+
+        # Exactly one delivery for the one unchanged on-disk snapshot,
+        # regardless of which thread won the race.
+        assert len(agent._chat.interface.entries) == entries_before + 2, (
+            "expected exactly one delivered pair from the race, found a duplicate"
+        )
+        wake_types = [m.type for m in _drain(agent.inbox)]
+        assert wake_types == [MSG_TC_WAKE], f"expected exactly one queued wake, got {wake_types}"
+        assert inject_call_count["n"] == 1, (
+            f"expected only the race winner to ever reach injection (the "
+            f"loser must observe the committed fingerprint and no-op), "
+            f"got {inject_call_count['n']} calls"
+        )
+
+        persistent_holders = [
+            block.content["_meta"]["notification_persistent"]["email"]
+            for entry in agent._chat.interface.entries
+            for block in entry.content
+            if isinstance(block, ToolResultBlock)
+            and isinstance(block.content, dict)
+            and isinstance(block.content["_meta"].get("notification_persistent"), dict)
+            and "email" in block.content["_meta"]["notification_persistent"]
+        ]
+        assert len(persistent_holders) == 1, (
+            f"expected exactly one canonical persistent email child for the "
+            f"raced snapshot, got {len(persistent_holders)}"
+        )
+    finally:
+        agent._inject_notification_pair = real_inject
 
 
 def test_attach_active_notifications_context_molt_batch_preserves_pending_clear_intent(

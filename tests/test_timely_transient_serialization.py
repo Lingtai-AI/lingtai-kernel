@@ -8,39 +8,43 @@ timely-transient plan in ``reports/context-rebuild-pr-plan/``):
 ``notifications``) are TIMELY transient state — only the newest occurrence per
 family represents current state. Canonical history keeps old copies as
 historical traces (no retroactive strip; see ``meta_block``); every
-model-facing full-history serialization instead presents only the newest
-occurrence per family and omits the stale copies, without mutating
-``ChatInterface`` / ``ToolResultBlock.content`` / durable history.
+model-facing full-history serialization now PRESERVES every historical
+occurrence of these keys — it does not strip, filter, or otherwise omit an
+older holder's content. Only the newest holder in history is current/
+actionable; older holders remain visible in replay as historical traces that
+must not be acted on, and the producer channel (e.g. ``telegram.read``,
+``email.read``) remains the source of truth for actionable channel content.
 
 This is SHARED semantics, not a Codex special case: the converters
 (``to_anthropic`` / ``to_openai`` / ``to_responses_input`` / ``to_gemini``)
-and the claude_code full-history render all filter through the INTERNAL
-``interface_converters._render_full_history_result`` primitive. On the Codex
-WS path the per-``call_id`` freeze keeps already-sent outputs byte-identical
-within an epoch; a fresh replay after an epoch reset re-freezes from the
-shared converter's serialization and so sheds the stale copies — no
-adapter-private filter state.
+and the claude_code full-history render all serialize ``ToolResultBlock``
+content directly for the two timely-transient families, with no filtering
+step — every historical holder's ``agent_meta`` / ``guidance`` /
+``notifications`` / ``notification_guidance`` reaches the model. On the
+Codex WS path the per-``call_id`` freeze keeps already-sent outputs
+byte-stable within an epoch for reasons unrelated to this preservation
+(in-place canonical rewrites such as summarize marker/status flips); a fresh
+replay after an epoch reset re-serializes through the shared converter,
+which still emits every historical holder's content.
 
 Summary replacement is unaffected: a summarized result's canonical content IS
-the marker dict, and replays carry it. Delta-lane ``notification_persistent``
-blocks (Telegram/WeChat/Feishu ``previous_block`` continuity) and permanent
-``tool_meta`` are never filtered.
+the marker dict, and replays carry it — ``summarize`` is the only mechanism
+that replaces a historical tool-result BODY during a rebuild. Synthetic
+notification-holder skeletonization (moving/clearing a synthesized payload) is
+a separate canonical-history mutation that happens before replay, not a
+replay-time filter; it is unchanged by this contract and not exercised here.
+The durable ``notification_persistent`` lane and permanent ``tool_meta`` were
+never filtered and remain untouched either way.
 
 ``notification_persistent.email`` is a SEPARATE, narrower whole-snapshot
 invariant (see the dedicated section below): it is an atomic current-unread
 snapshot, not timely-transient-family state and not a set of independent
-per-id records.
-
-Public/legacy compatibility: ``filter_stale_timely_transient(block, newest)``
-is the ESTABLISHED two-argument public helper. It is unchanged from before
-the email whole-snapshot feature existed — it filters only the
-timely-transient families and never touches ``notification_persistent`` at
-all. The five model-facing full-history renderers do NOT call it; they call
-the internal ``_render_full_history_result(block, newest, newest_email_snapshot)``,
-which additionally projects the email whole-snapshot state. There is no
-optional-argument bypass on the internal primitive, but the public two-arg
-contract is a source-compatible no-op for any external caller (Terra
-repair-v2 review, blocker 3).
+per-id records. It is the ONE full-history projection the five renderers
+still apply, through the internal
+``interface_converters._render_full_history_result(block, newest_email_snapshot)``
+primitive — only the newest ``notification_persistent.email`` child survives
+replay; every older one (live or an explicit clear tombstone) loses its
+``email`` child in full.
 
 These tests are content-free where possible: they assert key structure, not
 tool-result bodies.
@@ -60,9 +64,7 @@ from lingtai.kernel.llm.interface import (
 
 from lingtai.llm.interface_converters import (
     _render_full_history_result,
-    filter_stale_timely_transient,
     newest_email_snapshot_holder,
-    timely_transient_newest_holders,
     to_anthropic,
     to_gemini,
     to_openai,
@@ -143,13 +145,14 @@ _CONVERTER_OUTPUTS = [
 
 
 # ---------------------------------------------------------------------------
-# Converter parity — every model-facing full-history conversion strips stale
-# copies, keeps the newest per family, and never mutates canonical content.
+# Converter parity — every model-facing full-history conversion preserves
+# both historical and newest holders' content, and never mutates canonical
+# content.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
-def test_converters_strip_stale_copies_and_keep_newest(outputs):
+def test_converters_preserve_historical_and_newest_holders(outputs):
     call_1_content = {
         "ok": True,
         "_meta": {"tool_meta": {"id": "call_1"}, **_ALL_TRANSIENT_META},
@@ -159,24 +162,27 @@ def test_converters_strip_stale_copies_and_keep_newest(outputs):
 
     serialized = outputs(iface)
 
-    # Stale call_1 sheds the four timely transient keys; tool_meta stays.
+    # Historical call_1 keeps every timely transient key it carried, plus
+    # tool_meta — replay does not strip the older holder's content.
     parsed_1 = json.loads(serialized["call_1"])
     assert parsed_1["ok"] is True
-    assert parsed_1["_meta"] == {"tool_meta": {"id": "call_1"}}
-    # Newest call_2 keeps its live payload.
+    assert parsed_1["_meta"] == {"tool_meta": {"id": "call_1"}, **_ALL_TRANSIENT_META}
+    # Newest call_2 keeps its live payload too.
     parsed_2 = json.loads(serialized["call_2"])
     assert parsed_2["_meta"] == _NEWER_TRANSIENT_META
 
-    # Non-mutating: canonical content still carries every transient key.
+    # Non-mutating: canonical content is untouched by conversion.
     assert set(call_1_content["_meta"]) == {"tool_meta", *_ALL_TRANSIENT_META}
     assert call_1_content["_meta"]["agent_meta"] == {"elapsed_ms": 5}
 
 
 @pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
-def test_converters_keep_family_on_its_own_newest_holder(outputs):
-    # call_2 refreshes only the agent_meta family, so call_1 stays the newest
-    # notifications holder: it sheds agent_meta/guidance but KEEPS the
-    # notification payload.
+def test_converters_preserve_family_on_non_newest_holder_too(outputs):
+    # call_2 refreshes only the agent_meta family, so call_1 is the newest
+    # notifications holder but a historical agent_meta/guidance holder.
+    # Full-history replay must still carry call_1's ENTIRE _meta, including
+    # the historical agent_meta/guidance copy alongside its current
+    # notifications payload.
     call_1_content = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
     call_2_content = {
         "done": True,
@@ -187,10 +193,13 @@ def test_converters_keep_family_on_its_own_newest_holder(outputs):
     serialized = outputs(iface)
 
     parsed_1 = json.loads(serialized["call_1"])
-    assert set(parsed_1["_meta"]) == {"notifications", "notification_guidance"}
+    assert set(parsed_1["_meta"]) == set(_ALL_TRANSIENT_META)
     assert parsed_1["_meta"]["notifications"] == {
         "email": {"data": {"email_ids": ["email-1"]}}
     }
+    # The historical agent_meta/guidance copy on call_1 is preserved too, even
+    # though call_2 carries a newer agent_meta emission.
+    assert parsed_1["_meta"]["agent_meta"] == {"elapsed_ms": 5}
     parsed_2 = json.loads(serialized["call_2"])
     assert parsed_2["_meta"]["agent_meta"] == {"elapsed_ms": 9}
 
@@ -213,63 +222,13 @@ def test_converters_pass_unaffected_outputs_through_unchanged(outputs):
     assert serialized["call_2"] == json.dumps(marker, default=str)
 
 
-# ---------------------------------------------------------------------------
-# Pure helpers — non-mutating filter and newest-holder detection.
-# ---------------------------------------------------------------------------
-
-
-def test_filter_returns_original_object_when_nothing_to_filter():
-    # Byte/object stability matters (e.g. for the Codex freeze/prefix
-    # machinery): content with nothing to remove passes through as the SAME
-    # object, not a re-dump.
-    newest: dict[str, ToolResultBlock] = {}
-    for content in (
-        "plain text, not json",
-        json.dumps([1, 2, 3]),
-        json.dumps({"ok": True}),
-        {"ok": True},
-        {"ok": True, "_meta": {"tool_meta": {"id": "t1"}}},
-        {
-            "artifact": "lingtai_agent_summarized_result",
-            "agent_summary": "digest",
-            "status": "pending",
-        },
-    ):
-        block = ToolResultBlock(id="call_1", name="do_x", content=content)
-        assert _render_full_history_result(block, newest, None) is content
-        # The public two-argument helper agrees for every non-email shape.
-        assert filter_stale_timely_transient(block, newest) is content
-
-
-def test_filter_keeps_content_of_the_newest_holder_itself():
-    content = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
-    block = ToolResultBlock(id="call_1", name="do_x", content=content)
-    newest = {"agent_meta": block, "notifications": block}
-
-    assert _render_full_history_result(block, newest, None) is content
-
-
-def test_filter_removes_all_four_stale_keys_and_keeps_others():
-    content = {
-        "ok": True,
-        "_meta": {"tool_meta": {"id": "t1"}, **_ALL_TRANSIENT_META},
-    }
-    block = ToolResultBlock(id="call_1", name="do_x", content=content)
-
-    filtered = _render_full_history_result(block, {}, None)
-
-    assert filtered == {"ok": True, "_meta": {"tool_meta": {"id": "t1"}}}
-    # Canonical content is untouched.
-    assert set(content["_meta"]) == {"tool_meta", *_ALL_TRANSIENT_META}
-
-
-def test_filter_preserves_notification_persistent_lane():
+@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
+def test_converters_preserve_notification_persistent_lane(outputs):
     # notification_persistent is the DURABLE communication-context lane, not a
-    # timely transient block — the filter must never touch it, EXCEPT the
-    # narrower whole-snapshot email invariant tested separately below. This
-    # block carries only a Telegram delta-lane payload (no email), so passing
-    # `newest_email_snapshot=None` (no email snapshot anywhere in history)
-    # must leave it untouched.
+    # timely transient block — it was never filtered and stays untouched,
+    # except the narrower whole-snapshot email invariant tested separately
+    # below. This block carries only a Telegram delta-lane payload (no
+    # email), so it is untouched either way.
     content = {
         "ok": True,
         "_meta": {
@@ -277,127 +236,45 @@ def test_filter_preserves_notification_persistent_lane():
             "notification_persistent": {"mcp": {"telegram": {"messages": []}}},
         },
     }
-    block = ToolResultBlock(id="call_1", name="do_x", content=content)
+    iface = _iface_with_two_results(content, {"done": True})
 
-    filtered = _render_full_history_result(block, {}, None)
+    serialized = outputs(iface)
 
-    assert "notifications" not in filtered["_meta"]
-    assert filtered["_meta"]["notification_persistent"] == {
+    parsed_1 = json.loads(serialized["call_1"])
+    assert parsed_1["_meta"]["notifications"] == {
+        "mcp.telegram": {"data": {"message_ids": ["m1"]}}
+    }
+    assert parsed_1["_meta"]["notification_persistent"] == {
         "mcp": {"telegram": {"messages": []}}
     }
 
 
-def test_filter_omits_meta_envelope_when_only_stale_keys():
-    content = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
-    block = ToolResultBlock(id="call_1", name="do_x", content=content)
-
-    filtered = _render_full_history_result(block, {}, None)
-
-    assert filtered == {"ok": True}
-    assert "_meta" in content  # canonical keeps the envelope
-
-
-def test_filter_handles_json_string_content_without_mutating_it():
+@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
+def test_converters_leave_string_content_byte_identical(outputs):
+    # String tool-result content passes through as the exact same string —
+    # no re-dump, no mutation.
     original = json.dumps({"ok": True, "_meta": dict(_ALL_TRANSIENT_META)})
-    block = ToolResultBlock(id="call_1", name="do_x", content=original)
+    iface = _iface_with_two_results(original, {"done": True})
 
-    filtered = _render_full_history_result(block, {}, None)
+    serialized = outputs(iface)
 
-    assert isinstance(filtered, str)
-    assert json.loads(filtered) == {"ok": True}
-    assert block.content == original  # same canonical string, unmutated
+    assert serialized["call_1"] == original
 
 
-# ---------------------------------------------------------------------------
-# B3 repair: the established two-argument public helper contract is restored.
-# ---------------------------------------------------------------------------
+def test_content_is_read_directly_without_intermediate_helpers():
+    # The shared converters no longer route a ToolResultBlock's timely
+    # transient _meta keys (agent_meta/guidance, notifications/
+    # notification_guidance) through any newest-holder/filtering helper —
+    # they read block.content directly for those families. The removed
+    # helper API surface stays absent, protecting against a regression that
+    # reintroduces family-level filtering. `newest_email_snapshot_holder`
+    # and `_render_full_history_result` remain — they are the narrower email
+    # whole-snapshot projection, not timely-transient filtering.
+    import lingtai.llm.interface_converters as ic
 
-
-def test_public_two_argument_helper_never_touches_email_and_does_not_raise():
-    # Legacy/external callers using the pre-existing two-argument signature
-    # must see EXACTLY the pre-email-feature behavior: only timely-transient
-    # families are filtered, notification_persistent (including email) is
-    # untouched, and omitting the (nonexistent) third argument never raises.
-    stale_family = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
-    block_family = ToolResultBlock(id="call_1", name="do_x", content=stale_family)
-    filtered_family = filter_stale_timely_transient(block_family, {})
-    assert filtered_family == {"ok": True}
-
-    email_content = {
-        "ok": True,
-        "_meta": {
-            "tool_meta": {"id": "t1"},
-            "notification_persistent": {
-                "email": {"email_ids": ["A"], "emails": [{"id": "A"}]}
-            },
-        },
-    }
-    block_email = ToolResultBlock(id="call_2", name="email", content=email_content)
-    # A block that is ALSO the "newest" for some family still keeps its email
-    # child untouched by the two-argument helper — it never looks at email.
-    filtered_email = filter_stale_timely_transient(
-        block_email, {"agent_meta": block_email}
-    )
-    assert filtered_email["_meta"]["notification_persistent"]["email"] == {
-        "email_ids": ["A"],
-        "emails": [{"id": "A"}],
-    }
-
-
-def test_public_two_argument_helper_leaves_stale_email_snapshot_in_place():
-    # The two-argument helper is NOT the email whole-snapshot filter: two
-    # blocks with the "same id, different sender" incident shape both keep
-    # their email child when run through the legacy two-argument path alone
-    # (only the internal five-renderer primitive resolves that).
-    stale = ToolResultBlock(
-        id="call_1",
-        name="email",
-        content={
-            "ok": True,
-            "_meta": {
-                "notification_persistent": {
-                    "email": {
-                        "email_ids": ["email-1"],
-                        "emails": [{"id": "email-1", "from": "wrong@example.com"}],
-                    }
-                }
-            },
-        },
-    )
-    current = ToolResultBlock(
-        id="call_2",
-        name="email",
-        content={
-            "ok": True,
-            "_meta": {
-                "notification_persistent": {
-                    "email": {
-                        "email_ids": ["email-1"],
-                        "emails": [{"id": "email-1", "from": "right@example.com"}],
-                    }
-                }
-            },
-        },
-    )
-    filtered_stale = filter_stale_timely_transient(stale, {})
-    filtered_current = filter_stale_timely_transient(current, {})
-    assert filtered_stale["_meta"]["notification_persistent"]["email"]["emails"][0][
-        "from"
-    ] == "wrong@example.com"
-    assert filtered_current["_meta"]["notification_persistent"]["email"]["emails"][0][
-        "from"
-    ] == "right@example.com"
-
-
-def test_newest_holders_track_last_occurrence_per_family():
-    call_1_content = {"ok": True, "_meta": {"notifications": {"email": {}}}}
-    call_2_content = {"done": True, "_meta": {"agent_meta": {"elapsed_ms": 9}}}
-    iface = _iface_with_two_results(call_1_content, call_2_content)
-
-    newest = timely_transient_newest_holders(iface)
-
-    assert newest["notifications"].id == "call_1"
-    assert newest["agent_meta"].id == "call_2"
+    assert not hasattr(ic, "filter_stale_timely_transient")
+    assert not hasattr(ic, "timely_transient_newest_holders")
+    assert not hasattr(ic, "TIMELY_TRANSIENT_META_FAMILIES")
 
 
 # ---------------------------------------------------------------------------
@@ -719,6 +596,163 @@ def test_email_snapshot_coexists_with_delta_lane_previous_block(outputs):
     assert replayed_new["_meta"]["notification_persistent"]["email"]["email_ids"] == ["B"]
 
 
+def _combined_state_iface(*, current_email_content: dict) -> ChatInterface:
+    """Older unread email + historical ``agent_meta``/``guidance`` and
+    ``notifications``/``notification_guidance`` (both #918 families) on the
+    SAME older block, followed by the current authoritative email state on a
+    newer block that carries none of those four keys. Mirrors the shape a
+    real multi-turn conversation produces: one older tool result stamped
+    with the full ``_meta`` envelope, a later one narrower."""
+    older = ToolResultBlock(
+        id="call_1",
+        name="email",
+        content={
+            "ok": True,
+            "_meta": {
+                **_ALL_TRANSIENT_META,
+                "notification_persistent": {
+                    "email": {
+                        "email_ids": ["older-1"],
+                        "emails": [
+                            _email_message("older-1", sender="human", message="older unread body")
+                        ],
+                        "count": 1,
+                    },
+                },
+            },
+        },
+    )
+    current = ToolResultBlock(id="call_2", name="email", content=current_email_content)
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="call_1", name="email", args={})])
+    iface.add_tool_results([older])
+    iface.add_assistant_message([ToolCallBlock(id="call_2", name="email", args={})])
+    iface.add_tool_results([current])
+    return iface
+
+
+@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
+@pytest.mark.parametrize(
+    "current_state",
+    [
+        pytest.param("cleared", id="newest_zero_tombstone"),
+        pytest.param("changed", id="newest_changed_whole_snapshot"),
+    ],
+)
+def test_combined_state_post_918_families_preserved_alongside_email_projection(
+    outputs, current_state
+):
+    """Post-#918 combined-state regression (mandatory follow-up): an older
+    block carries a live email snapshot AND historical ``agent_meta``/
+    ``guidance``/``notifications``/``notification_guidance`` — the four
+    families #918 now preserves verbatim on EVERY historical holder, not
+    just the newest. A newer block then either clears email to zero (an
+    explicit tombstone) or replaces it with a different whole snapshot.
+
+    Full-history replay must do exactly two things and nothing else:
+      1. Remove the older block's stale ``.notification_persistent.email``
+         child in full (the one remaining projection this module performs).
+      2. Leave the older block's ``agent_meta``/``guidance``/
+         ``notifications``/``notification_guidance`` keys completely
+         untouched — #918 removed the family-filter wire-level strip
+         entirely, so even though a newer block exists, the OLDER holder's
+         own copies of these four keys must still serialize verbatim.
+
+    Exercises all four direct wire converters (parametrized) plus Claude
+    Code's ``_render_conversation`` explicitly below, so every direct
+    serializer in the codebase is covered by this one scenario.
+    """
+    if current_state == "cleared":
+        current_content = _email_cleared_content()
+    else:
+        current_content = _email_snapshot_content(
+            email_ids=["newer-1"],
+            emails=[_email_message("newer-1", sender="human", message="newer unread body")],
+            count=1,
+            newest_received_at="2026-07-06T08:00:00Z",
+        )
+    iface = _combined_state_iface(current_email_content=current_content)
+
+    serialized = outputs(iface)
+
+    replayed_older = json.loads(serialized["call_1"])
+    older_meta = replayed_older["_meta"]
+    # (1) Stale whole email child removed in full from the older holder.
+    assert "notification_persistent" not in older_meta or "email" not in older_meta.get(
+        "notification_persistent", {}
+    ), "the older block's stale email snapshot must be fully removed"
+    # (2) Every #918 family untouched on the OLDER holder — #918 preserves
+    # every historical holder's content verbatim; there is no "only newest
+    # family survives" wire-level strip to interact with the email
+    # projection at all.
+    assert older_meta["agent_meta"] == _ALL_TRANSIENT_META["agent_meta"]
+    assert older_meta["guidance"] == _ALL_TRANSIENT_META["guidance"]
+    assert older_meta["notifications"] == _ALL_TRANSIENT_META["notifications"]
+    assert older_meta["notification_guidance"] == _ALL_TRANSIENT_META["notification_guidance"]
+
+    replayed_current = json.loads(serialized["call_2"])
+    current_email = replayed_current["_meta"]["notification_persistent"]["email"]
+    if current_state == "cleared":
+        assert current_email["cleared"] is True
+        assert "emails" not in current_email and "email_ids" not in current_email
+    else:
+        assert current_email["email_ids"] == ["newer-1"]
+        assert "cleared" not in current_email
+
+
+@pytest.mark.parametrize(
+    "current_state",
+    [
+        pytest.param("cleared", id="newest_zero_tombstone"),
+        pytest.param("changed", id="newest_changed_whole_snapshot"),
+    ],
+)
+def test_combined_state_claude_code_render_preserves_families_and_projects_email(
+    current_state,
+):
+    """Claude Code coverage for the same mandatory combined-state scenario:
+    ``_render_conversation`` must project only the stale email child while
+    still rendering the older holder's historical #918 family content
+    (proven here via presence of representative substrings, matching this
+    module's existing Claude Code test style, which asserts on rendered text
+    rather than parsed JSON)."""
+    from lingtai.llm.claude_code.adapter import ClaudeCodeChatSession
+
+    if current_state == "cleared":
+        current_content = _email_cleared_content()
+    else:
+        current_content = _email_snapshot_content(
+            email_ids=["newer-1"],
+            emails=[_email_message("newer-1", sender="human", message="newer unread body")],
+            count=1,
+            newest_received_at="2026-07-06T08:00:00Z",
+        )
+    iface = _combined_state_iface(current_email_content=current_content)
+    session = ClaudeCodeChatSession(
+        adapter=None,
+        model="sonnet",
+        system_prompt="",
+        tools=[],
+        interface=iface,
+        context_window=100_000,
+    )
+
+    rendered = session._render_conversation()
+
+    # Stale older email body is gone from the rendered transcript.
+    assert "older unread body" not in rendered
+    # The older holder's #918 families still render verbatim (elapsed_ms=5
+    # only appears in the older _ALL_TRANSIENT_META agent_meta; email-1 is
+    # the older notifications family's email id).
+    assert "elapsed_ms" in rendered and "5" in rendered
+    assert "email-1" in rendered
+    if current_state == "cleared":
+        assert '"cleared": true' in rendered or '"cleared":true' in rendered.replace(" ", "")
+    else:
+        assert "newer unread body" in rendered
+
+
 @pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
 def test_malformed_notification_persistent_and_email_fields_do_not_crash(outputs):
     """Malformed non-dict ``notification_persistent``, a non-dict ``email``
@@ -865,7 +899,7 @@ def test_canonical_dict_and_json_string_content_equivalent_after_every_renderer(
 # ---------------------------------------------------------------------------
 
 
-def test_claude_code_render_filters_stale_copies():
+def test_claude_code_render_preserves_historical_and_newest_holders():
     from lingtai.llm.claude_code.adapter import ClaudeCodeChatSession
 
     call_1_content = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
@@ -882,9 +916,9 @@ def test_claude_code_render_filters_stale_copies():
 
     rendered = session._render_conversation()
 
-    assert "email-1" not in rendered  # stale notification copy omitted
-    assert "email-2" in rendered  # newest payload kept
-    # Non-mutating: canonical content still carries the stale copy.
+    assert "email-1" in rendered  # historical notification copy preserved
+    assert "email-2" in rendered  # newest payload also present
+    # Non-mutating: canonical content still carries the historical copy.
     assert call_1_content["_meta"]["notifications"] == {
         "email": {"data": {"email_ids": ["email-1"]}}
     }
@@ -941,9 +975,9 @@ def test_claude_code_render_filters_stale_whole_email_snapshot():
 
 # ---------------------------------------------------------------------------
 # Codex session-level: within an epoch the freeze keeps already-sent outputs
-# byte-identical; an epoch reset clears the freeze map so the fresh replay
-# re-freezes from the shared converter and sheds the stale copies — all
-# without mutating canonical content.
+# byte-stable; an epoch reset clears the freeze map so the fresh replay
+# re-serializes through the shared converter, which still carries every
+# historical holder's content — all without mutating canonical content.
 # ---------------------------------------------------------------------------
 
 from tests.test_codex_ws_session import (  # noqa: E402
@@ -972,7 +1006,7 @@ def _replay_outputs(frame) -> dict[str, str]:
     }
 
 
-def test_rebuild_replay_filters_stale_transients_without_mutating_canonical():
+def test_rebuild_replay_preserves_historical_and_newest_transients_without_mutating_canonical():
     transport, session = _tool_loop_session()
     call_1_content = {
         "ok": True,
@@ -983,7 +1017,7 @@ def test_rebuild_replay_filters_stale_transients_without_mutating_canonical():
     assert session.request_history_rebuild() is True
 
     # Turn 3 answers call_2 with newer values for both timely families, making
-    # call_1's copies stale.
+    # call_1 the historical holder for both.
     call_2_content = {
         "done": True,
         "_meta": {"tool_meta": {"id": "call_2"}, **_NEWER_TRANSIENT_META},
@@ -993,10 +1027,10 @@ def test_rebuild_replay_filters_stale_transients_without_mutating_canonical():
     assert result.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_rebuild_only"
     outputs = _replay_outputs(transport.sent_frames[-1])
 
-    # Stale call_1 sheds the four timely transient keys; tool_meta stays.
+    # Historical call_1 keeps every timely transient key plus tool_meta.
     replayed_1 = json.loads(outputs["call_1"])
     assert replayed_1["ok"] is True
-    assert replayed_1["_meta"] == {"tool_meta": {"id": "call_1"}}
+    assert replayed_1["_meta"] == {"tool_meta": {"id": "call_1"}, **_ALL_TRANSIENT_META}
     # Newest call_2 keeps its live timely payload.
     replayed_2 = json.loads(outputs["call_2"])
     assert replayed_2["_meta"]["agent_meta"] == {"elapsed_ms": 9}
@@ -1015,24 +1049,24 @@ def test_rebuild_replay_filters_stale_transients_without_mutating_canonical():
     }
 
 
-def test_rebuild_replay_omits_empty_meta_envelope():
+def test_rebuild_replay_keeps_meta_envelope_for_historical_holder():
     transport, session = _tool_loop_session()
     call_1_content = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
     session.send([_result_block("call_1", call_1_content)])
 
     assert session.request_history_rebuild() is True
-    # call_2 carries newer values for both timely families, so call_1 becomes a
-    # stale copy and its now-empty `_meta` envelope should disappear in replay.
+    # call_2 carries newer values for both timely families; call_1 becomes the
+    # historical holder but its _meta envelope must still survive replay.
     session.send([_result_block("call_2", {"done": True, "_meta": dict(_ALL_TRANSIENT_META)})])
 
     outputs = _replay_outputs(transport.sent_frames[-1])
-    assert "_meta" not in json.loads(outputs["call_1"])
+    assert set(json.loads(outputs["call_1"])["_meta"]) == set(_ALL_TRANSIENT_META)
     assert set(json.loads(outputs["call_2"])["_meta"]) == set(_ALL_TRANSIENT_META)
-    # Canonical keeps the envelope.
+    # Canonical keeps the envelope too (unmutated).
     assert set(call_1_content["_meta"]) == set(_ALL_TRANSIENT_META)
 
 
-def test_rebuild_replay_preserves_newest_holder_even_when_historical():
+def test_rebuild_replay_preserves_newest_holder():
     transport, session = _tool_loop_session()
     call_1_content = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
     session.send([_result_block("call_1", call_1_content)])
@@ -1058,7 +1092,10 @@ def test_rebuild_replay_still_applies_summary_marker():
     session.send([block])
 
     # Mimic the summarize intrinsic: replace the canonical content in place
-    # with the marker dict (summarize.py builds a fresh dict, no _meta).
+    # with the marker dict (summarize.py builds a fresh dict, no _meta). This
+    # is the ONE mechanism by which a rebuild replaces a historical
+    # tool-result BODY — unrelated to (and unaffected by) transient-metadata
+    # preservation.
     marker = {
         "artifact": "lingtai_agent_summarized_result",
         "tool_call_id": "call_1",
@@ -1092,3 +1129,29 @@ def test_rebuild_replay_preserves_ordinary_outputs_byte_identically():
 
     after = _replay_outputs(transport.sent_frames[-1])["call_1"]
     assert after == before
+
+
+def test_frozen_output_stays_byte_stable_across_turns_within_epoch():
+    # The per-call_id output freeze (unrelated to transient-metadata
+    # preservation) keeps an already-sent function_call_output.output
+    # string byte-identical across turns within the same epoch, even though
+    # the resident kernel may move latest-only _meta blocks between tool
+    # results in place between turns. Within an epoch the WS session sends
+    # only the incremental delta (the new turn's result), not a full replay,
+    # so the freeze is observed by the delta staying ws_incremental (the
+    # frozen call_1 output kept the strict-prefix baseline byte-stable)
+    # rather than by call_1 reappearing in a later frame's input.
+    transport, session = _tool_loop_session()
+    call_1_content = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
+    session.send([_result_block("call_1", call_1_content)])  # emits call_2
+
+    # Simulate the kernel moving the latest-only _meta blocks off call_1 by
+    # mutating its canonical content in place (no epoch reset in between).
+    call_1_content["_meta"].pop("agent_meta", None)
+    call_1_content["_meta"].pop("guidance", None)
+
+    result = session.send([_result_block("call_2", {"done": True})])
+
+    assert result.usage.extra["codex_request_mode"] == "ws_incremental"
+    delta = transport.sent_frames[-1]["input"]
+    assert [i.get("call_id") for i in delta if i.get("type") == "function_call_output"] == ["call_2"]
