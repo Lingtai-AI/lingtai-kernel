@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import threading
+from copy import deepcopy
 from unittest.mock import patch
 
 import pytest
@@ -626,6 +627,178 @@ def test_mimocode_usage_is_shared_by_initial_and_followup_streams(tmp_path):
     assert [entry["raw"]["id"] for entry in usage] == [
         "part-shared", "part-followup",
     ]
+
+
+def test_mimocode_concurrent_initial_and_resume_usage_persistence_is_atomic(tmp_path):
+    """Live progress and terminal writers cannot erase resumed MiMo usage.
+
+    The initial stream accepts one part and remains active while ``ask`` starts
+    the resume stream.  The initial stream then reaches its real ``mark_done``
+    writer while the resume stream is paused before its distinct part.  The
+    atomic-write rendezvous stages that terminal writer's pre-resume snapshot;
+    the old MiMo-only repair lets the resume stream complete and then allows the
+    stale terminal snapshot to replace the combined state.  The owner-layer
+    writer transaction makes the resume writer wait instead, so the terminal
+    snapshot is published first and the resumed transaction publishes the final
+    combined state.  The production ``mark_done`` and progress writers remain
+    live; only subprocess output is event-controlled.
+    """
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    run_dir = _make_run_dir(agent, handle="em-mimo-usage-concurrent")
+    initial_release = threading.Event()
+    first_usage_written = threading.Event()
+    resume_duplicate_seen = threading.Event()
+    resume_part_release = threading.Event()
+    terminal_snapshot_staged = threading.Event()
+    resume_terminal_done = threading.Event()
+    initial_errors: list[BaseException] = []
+
+    initial_part = _step_finish_event(
+        "part-initial", input=11, output=2, reasoning=3,
+        cache_read=4, cache_write=1,
+    )
+    resume_part = _step_finish_event(
+        "part-resume", input=13, output=5, reasoning=7,
+        cache_read=8, cache_write=2,
+    )
+
+    def initial_stdout():
+        yield json.dumps({"type": "session", "id": "mimo-concurrent-session"}) + "\n"
+        yield json.dumps(initial_part) + "\n"
+        # Finish through the real terminal writer only after resume is active.
+        assert initial_release.wait(timeout=5)
+
+    def resume_stdout():
+        yield json.dumps(initial_part) + "\n"  # concurrent duplicate
+        resume_duplicate_seen.set()
+        assert resume_part_release.wait(timeout=5)
+        yield json.dumps(resume_part) + "\n"
+        # This is a live production progress writer; the runner then invokes
+        # the real terminal writer for the resumed stream.
+        yield json.dumps({"type": "text", "part": {"text": "resume answer"}}) + "\n"
+
+    class ActiveFakeProc:
+        def __init__(self, stdout_lines):
+            self.stdout = iter(stdout_lines)
+            self.stderr = iter(())
+            self.returncode = 0
+            self.pid = 0
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    processes = iter([
+        ActiveFakeProc(initial_stdout()),
+        ActiveFakeProc(resume_stdout()),
+    ])
+
+    original_atomic = run_dir._atomic_write_json
+    first_usage = True
+
+    def coordinated_atomic(path, data):
+        nonlocal first_usage
+        cli_tokens = data.get("cli_tokens")
+        calls = cli_tokens.get("calls") if isinstance(cli_tokens, dict) else None
+        if calls == 1 and first_usage:
+            first_usage = False
+            result = original_atomic(path, deepcopy(data))
+            first_usage_written.set()
+            return result
+
+        # The initial mark_done is the non-usage writer whose snapshot is
+        # deliberately staged before the resumed distinct part.  On the fixed
+        # owner-layer path this callback owns the re-entrant writer lock, so it
+        # must complete before resume can acquire that lock.  On the old
+        # MiMo-only path it does not own a writer lock; letting resume finish
+        # first reproduces the stale terminal snapshot replacement.  This is an
+        # owner-boundary rendezvous, not a usage-lock assertion.
+        if data.get("state") == "done" and calls == 1:
+            stale_snapshot = deepcopy(data)
+            terminal_snapshot_staged.set()
+            if run_dir._state_writer_lock._is_owned():
+                return original_atomic(path, stale_snapshot)
+            assert resume_terminal_done.wait(timeout=5)
+            return original_atomic(path, stale_snapshot)
+
+        return original_atomic(path, data)
+
+    def fake_popen(*args, **kwargs):
+        return next(processes)
+
+    def run_initial():
+        try:
+            mgr._run_mimocode_emanation(
+                "em-mimo-usage-concurrent", run_dir, "task",
+                threading.Event(), threading.Event(),
+            )
+        except BaseException as exc:  # surfaced below without losing cleanup
+            initial_errors.append(exc)
+
+    entry = register_daemon_entry(
+        mgr,
+        "em-mimo-usage-concurrent",
+        run_dir,
+        task="task",
+        backend="mimocode",
+        ask_in_flight=False,
+    )
+
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen), \
+            patch.object(run_dir, "_atomic_write_json", side_effect=coordinated_atomic):
+        initial_thread = threading.Thread(target=run_initial, name="mimo-initial")
+        initial_thread.start()
+        assert first_usage_written.wait(timeout=5)
+
+        # Dispatch the real resume path while initial remains in its active
+        # stream; it reaches the duplicate and pauses before the distinct part.
+        result = mgr.handle({
+            "action": "ask",
+            "id": "em-mimo-usage-concurrent",
+            "message": "continue",
+        })
+        assert result["status"] == "sent"
+        assert resume_duplicate_seen.wait(timeout=5)
+        assert initial_thread.is_alive()
+
+        ask_future = entry["ask_future"]
+        assert ask_future is not None
+
+        def signal_resume_done():
+            ask_future.result(timeout=5)
+            resume_terminal_done.set()
+
+        resume_watcher = threading.Thread(
+            target=signal_resume_done, name="mimo-resume-watcher",
+        )
+        resume_watcher.start()
+        initial_release.set()
+        assert terminal_snapshot_staged.wait(timeout=5)
+        resume_part_release.set()
+        assert resume_terminal_done.wait(timeout=5)
+
+        initial_thread.join(timeout=5)
+        assert not initial_thread.is_alive()
+        assert not initial_errors, initial_errors
+        entry["future"].set_result("[initial done]")
+        resume_watcher.join(timeout=5)
+        assert not resume_watcher.is_alive()
+        ask_future.result(timeout=5)
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["state"] == "done"
+    assert state["last_output"] == "resume answer"
+    assert state["result_path"] is not None
+    assert state["cli_tokens"] == {
+        "input": 24, "output": 7, "cached": 15, "thinking": 10, "calls": 2,
+    }
+    usage = _cli_usage_events(run_dir)
+    assert sorted(entry["raw"]["id"] for entry in usage) == [
+        "part-initial", "part-resume",
+    ]
+    assert len([entry for entry in usage if entry["raw"]["id"] == "part-initial"]) == 1
+    assert not run_dir.token_ledger_path.exists()
+    assert not (agent._working_dir / "logs" / "token_ledger.jsonl").exists()
 
 
 def test_mimocode_ask_uses_harness_resume_command(tmp_path):

@@ -3152,11 +3152,12 @@ class DaemonManager:
                     spec["task"], schemas, system_prompt=task_context
                 )
                 run_dir.prompt_path.write_text(system_prompt, encoding="utf-8")
-                run_dir._state["call_parameters"]["mcp"] = [
+                call_parameters = dict(run_dir.state_snapshot()["call_parameters"])
+                call_parameters["mcp"] = [
                     self._redact_mcp_registration_for_prompt(r)
                     for r in task_mcp_regs
                 ]
-                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+                run_dir.update_state(call_parameters=call_parameters)
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
                 run_dir.mark_failed(e)
@@ -3284,6 +3285,7 @@ class DaemonManager:
             user_backend_argv = list(context.backend_argv)
             backend_argv = list(user_backend_argv)
             backend_harness_argv: list[str] = []
+            state_updates: dict = {}
             backend_options = spec.get("backend_options") or None
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
 
@@ -3345,11 +3347,12 @@ class DaemonManager:
                         + task_context
                     )
                 run_dir.prompt_path.write_text(system_prompt, encoding="utf-8")
-                run_dir._state["call_parameters"]["mcp"] = [
+                call_parameters = dict(run_dir.state_snapshot()["call_parameters"])
+                call_parameters["mcp"] = [
                     self._redact_mcp_registration_for_prompt(r)
                     for r in mcp_regs
                 ]
-                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+                run_dir.update_state(call_parameters=call_parameters)
                 cli_task = self._compose_cli_task(
                     spec["task"], task_context, backend=backend,
                 )
@@ -3376,7 +3379,7 @@ class DaemonManager:
                     ]
                 elif backend == "kimicode" and _cli_backend_loads_common_mcp(backend):
                     kimi_mcp_config = _write_kimicode_mcp_config(run_dir, mcp_regs)
-                    run_dir._state["backend_harness_files"] = {
+                    state_updates["backend_harness_files"] = {
                         "kimicode_mcp_config": str(kimi_mcp_config)
                     }
                 backend_argv = [*user_backend_argv, *backend_harness_argv]
@@ -3387,16 +3390,12 @@ class DaemonManager:
             # Persist user-supplied options separately from harness-owned argv
             # so run artifacts do not imply the model supplied MCP loader flags.
             if backend_options is not None:
-                run_dir._state["backend_options"] = backend_options
-                run_dir._state["backend_argv"] = list(user_backend_argv)
+                state_updates["backend_options"] = backend_options
+                state_updates["backend_argv"] = list(user_backend_argv)
             if backend_harness_argv:
-                run_dir._state["backend_harness_argv"] = list(backend_harness_argv)
-            if (
-                backend_options is not None
-                or backend_harness_argv
-                or run_dir._state.get("backend_harness_files")
-            ):
-                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+                state_updates["backend_harness_argv"] = list(backend_harness_argv)
+            if state_updates:
+                run_dir.update_state(**state_updates)
             self._log("daemon_backend_options",
                       em_id=em_id, backend=backend,
                       argv=list(user_backend_argv),
@@ -4691,7 +4690,9 @@ class DaemonManager:
             if part_id in seen_part_ids:
                 return
             seen_part_ids.add(part_id)
-        run_dir.record_cli_tokens(**usage, raw=raw_part)
+            # record_cli_tokens mutates shared run state and appends its event;
+            # keep both writes in the same per-run transaction as dedupe.
+            run_dir.record_cli_tokens(**usage, raw=raw_part)
 
     def _run_opencode_emanation(
         self,
