@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import threading
+from copy import deepcopy
 from unittest.mock import patch
 
 import pytest
@@ -189,6 +190,160 @@ def test_mimocode_error_extraction_bounds_long_detail():
 ])
 def test_mimocode_error_extraction_returns_none_for_non_error_events(event):
     assert DaemonManager._mimocode_extract_error(event) is None
+
+
+# ---------------------------------------------------------------------------
+# Initial run: source-shaped usage
+# ---------------------------------------------------------------------------
+
+
+def _step_finish_event(part_id="part-1", *, input=123, output=7,
+                       reasoning=19, cache_read=100, cache_write=5,
+                       **part_fields):
+    part = {
+        "id": part_id,
+        "type": "step-finish",
+        "reason": "stop",
+        "cost": 0,
+        "tokens": {
+            "input": input,
+            "output": output,
+            "reasoning": reasoning,
+            "cache": {"read": cache_read, "write": cache_write},
+        },
+        **part_fields,
+    }
+    return {"type": "step_finish", "part": part}
+
+
+def _cli_usage_events(run_dir):
+    return [
+        json.loads(line)
+        for line in run_dir.events_path.read_text().splitlines()
+        if json.loads(line).get("event") == "cli_usage"
+    ]
+
+
+def test_mimocode_run_records_source_usage_without_ledgers(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    part = _step_finish_event(
+        "part-exact", input=123, output=7, reasoning=19,
+        cache_read=100, cache_write=5, cost=1.25,
+    )["part"]
+    stdout_lines = [
+        json.dumps({"type": "session", "id": "mimo-usage-1"}) + "\n",
+        json.dumps({"type": "reasoning", "part": {"text": "not the answer"}}) + "\n",
+        json.dumps({"type": "step_finish", "part": part}) + "\n",
+        json.dumps({"type": "text", "part": {"text": "answer"}}) + "\n",
+    ]
+
+    run_dir = _make_run_dir(agent, handle="em-mimo-usage-exact")
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        return_value=FiniteFakeProc(stdout_lines=stdout_lines),
+    ):
+        result = mgr._run_mimocode_emanation(
+            "em-mimo-usage-exact", run_dir, "task",
+            threading.Event(), threading.Event(),
+        )
+
+    assert result == "answer"
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["cli_tokens"] == {
+        "input": 123, "output": 7, "cached": 105, "thinking": 19, "calls": 1,
+    }
+    usage = _cli_usage_events(run_dir)
+    assert len(usage) == 1
+    assert usage[0]["input"] == 123
+    assert usage[0]["output"] == 7
+    assert usage[0]["cached"] == 105
+    assert usage[0]["thinking"] == 19
+    assert usage[0]["raw"] == part
+    assert not run_dir.token_ledger_path.exists()
+    assert not (agent._working_dir / "logs" / "token_ledger.jsonl").exists()
+
+
+def test_mimocode_usage_accumulates_distinct_parts_once(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    part_one = _step_finish_event("part-one", input=10, output=2, reasoning=3,
+                                  cache_read=4, cache_write=1)
+    part_two = _step_finish_event("part-two", input=20, output=5, reasoning=6,
+                                  cache_read=7, cache_write=2)
+    stdout_lines = [
+        json.dumps({"type": "session", "id": "mimo-usage-2"}) + "\n",
+        json.dumps(part_one) + "\n",
+        json.dumps(part_one) + "\n",  # replay of the same source part
+        json.dumps(part_two) + "\n",  # distinct model step
+        json.dumps({"type": "text", "part": {"text": "done"}}) + "\n",
+    ]
+
+    run_dir = _make_run_dir(agent, handle="em-mimo-usage-dedupe")
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        return_value=FiniteFakeProc(stdout_lines=stdout_lines),
+    ):
+        mgr._run_mimocode_emanation(
+            "em-mimo-usage-dedupe", run_dir, "task",
+            threading.Event(), threading.Event(),
+        )
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["cli_tokens"] == {
+        "input": 30, "output": 7, "cached": 14, "thinking": 9, "calls": 2,
+    }
+    assert len(_cli_usage_events(run_dir)) == 2
+
+
+@pytest.mark.parametrize("bad_field,bad_value", [
+    ("input", True),
+    ("output", "7"),
+    ("reasoning", -1),
+    ("cache_read", None),
+    ("cache_write", 1.5),
+])
+def test_mimocode_usage_suppresses_malformed_and_zero_parts(
+    tmp_path, bad_field, bad_value,
+):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    malformed = _step_finish_event("part-bad", **{bad_field: bad_value})
+    zero = _step_finish_event(
+        "part-zero", input=0, output=0, reasoning=0,
+        cache_read=0, cache_write=0,
+    )
+    invalid_shape = {"type": "step_finish", "part": {
+        "id": "part-wrong-type", "type": "step", "tokens": zero["part"]["tokens"],
+    }}
+    stdout_lines = [
+        json.dumps(malformed) + "\n",
+        json.dumps(zero) + "\n",
+        json.dumps(invalid_shape) + "\n",
+        json.dumps({"type": "step_finish", "part": {
+            "id": "", "type": "step-finish", "tokens": zero["part"]["tokens"],
+        }}) + "\n",
+        json.dumps({"type": "text", "part": {"text": "still okay"}}) + "\n",
+    ]
+
+    run_dir = _make_run_dir(agent, handle=f"em-mimo-usage-invalid-{bad_field}")
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        return_value=FiniteFakeProc(stdout_lines=stdout_lines),
+    ):
+        result = mgr._run_mimocode_emanation(
+            f"em-mimo-usage-invalid-{bad_field}", run_dir, "task",
+            threading.Event(), threading.Event(),
+        )
+
+    assert result == "still okay"
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["cli_tokens"] == {
+        "input": 0, "output": 0, "cached": 0, "thinking": 0, "calls": 0,
+    }
+    assert _cli_usage_events(run_dir) == []
+    assert not run_dir.token_ledger_path.exists()
+    assert not (agent._working_dir / "logs" / "token_ledger.jsonl").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +565,238 @@ def test_mimocode_normal_backend_options_still_pass_through(tmp_path):
 # ---------------------------------------------------------------------------
 # Ask resume: command shape preserved + answer/error contract applied
 # ---------------------------------------------------------------------------
+
+
+def test_mimocode_usage_is_shared_by_initial_and_followup_streams(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    shared = _step_finish_event(
+        "part-shared", input=11, output=2, reasoning=3,
+        cache_read=4, cache_write=1,
+    )
+    distinct = _step_finish_event(
+        "part-followup", input=13, output=5, reasoning=7,
+        cache_read=8, cache_write=2,
+    )
+    processes = [
+        FiniteFakeProc(stdout_lines=[
+            json.dumps({"type": "session", "id": "mimo-followup-session"}) + "\n",
+            json.dumps(shared) + "\n",
+            json.dumps({"type": "text", "part": {"text": "initial answer"}}) + "\n",
+        ]),
+        FiniteFakeProc(stdout_lines=[
+            json.dumps(shared) + "\n",  # replayed initial part
+            json.dumps(distinct) + "\n",
+            json.dumps({"type": "reasoning", "part": {"text": "not a reply"}}) + "\n",
+            json.dumps({"type": "text", "part": {"text": "follow-up answer"}}) + "\n",
+        ]),
+    ]
+    run_dir = _make_run_dir(agent, handle="em-mimo-usage-followup")
+
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        side_effect=lambda *args, **kwargs: processes.pop(0),
+    ):
+        assert mgr._run_mimocode_emanation(
+            "em-mimo-usage-followup", run_dir, "task",
+            threading.Event(), threading.Event(),
+        ) == "initial answer"
+        register_daemon_entry(
+            mgr,
+            "em-mimo-usage-followup",
+            run_dir,
+            future=completed_future("[fake done]"),
+            task="task",
+            backend="mimocode",
+            ask_in_flight=False,
+        )
+        result = mgr.handle({
+            "action": "ask",
+            "id": "em-mimo-usage-followup",
+            "message": "continue",
+        })
+        assert result["status"] == "sent"
+        ask_future = mgr._emanations["em-mimo-usage-followup"]["ask_future"]
+        ask_future.result(timeout=5)
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["cli_tokens"] == {
+        "input": 24, "output": 7, "cached": 15, "thinking": 10, "calls": 2,
+    }
+    usage = _cli_usage_events(run_dir)
+    assert [entry["raw"]["id"] for entry in usage] == [
+        "part-shared", "part-followup",
+    ]
+
+
+def test_mimocode_concurrent_initial_and_resume_usage_persistence_is_atomic(tmp_path):
+    """Live progress and terminal writers cannot erase resumed MiMo usage.
+
+    The initial stream accepts one part and remains active while ``ask`` starts
+    the resume stream.  The initial worker then reaches the real ``mark_done``
+    writer while the resume stream is paused before its distinct part.  The
+    atomic-write rendezvous holds that terminal operation in flight; the owner
+    transaction makes the resumed live writer wait, so the terminal snapshot is
+    published first and the resumed transaction publishes the final combined
+    state.  The production ``mark_done`` and progress writers remain live; only
+    subprocess output is event-controlled.
+    """
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    run_dir = _make_run_dir(agent, handle="em-mimo-usage-concurrent")
+    initial_release = threading.Event()
+    first_usage_written = threading.Event()
+    resume_duplicate_seen = threading.Event()
+    resume_part_release = threading.Event()
+    terminal_snapshot_staged = threading.Event()
+    terminal_snapshot_release = threading.Event()
+    resume_terminal_done = threading.Event()
+    initial_errors: list[BaseException] = []
+
+    initial_part = _step_finish_event(
+        "part-initial", input=11, output=2, reasoning=3,
+        cache_read=4, cache_write=1,
+    )
+    resume_part = _step_finish_event(
+        "part-resume", input=13, output=5, reasoning=7,
+        cache_read=8, cache_write=2,
+    )
+
+    def initial_stdout():
+        yield json.dumps({"type": "session", "id": "mimo-concurrent-session"}) + "\n"
+        yield json.dumps(initial_part) + "\n"
+        # Finish through the real terminal writer only after resume is active.
+        assert initial_release.wait(timeout=5)
+
+    def resume_stdout():
+        yield json.dumps(initial_part) + "\n"  # concurrent duplicate
+        resume_duplicate_seen.set()
+        assert resume_part_release.wait(timeout=5)
+        yield json.dumps(resume_part) + "\n"
+        # This is a live production progress writer; the resumed runner then
+        # publishes a follow-up result, not another ``mark_done`` terminal
+        # state transition.
+        yield json.dumps({"type": "text", "part": {"text": "resume answer"}}) + "\n"
+
+    class ActiveFakeProc:
+        def __init__(self, stdout_lines):
+            self.stdout = iter(stdout_lines)
+            self.stderr = iter(())
+            self.returncode = 0
+            self.pid = 0
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    processes = iter([
+        ActiveFakeProc(initial_stdout()),
+        ActiveFakeProc(resume_stdout()),
+    ])
+
+    original_atomic = run_dir._atomic_write_json
+    first_usage = True
+
+    def coordinated_atomic(path, data):
+        nonlocal first_usage
+        cli_tokens = data.get("cli_tokens")
+        calls = cli_tokens.get("calls") if isinstance(cli_tokens, dict) else None
+        if calls == 1 and first_usage:
+            first_usage = False
+            result = original_atomic(path, deepcopy(data))
+            first_usage_written.set()
+            return result
+
+        # The initial mark_done is the non-usage writer whose terminal
+        # operation is deliberately held in flight before the resumed distinct
+        # part.  The owner transaction must keep the real resume writer from
+        # serializing shared state until this operation boundary is released.
+        if data.get("state") == "done" and calls == 1:
+            terminal_snapshot_staged.set()
+            assert terminal_snapshot_release.wait(timeout=5)
+
+        return original_atomic(path, data)
+
+    def fake_popen(*args, **kwargs):
+        return next(processes)
+
+    def run_initial():
+        try:
+            mgr._run_mimocode_emanation(
+                "em-mimo-usage-concurrent", run_dir, "task",
+                threading.Event(), threading.Event(),
+            )
+        except BaseException as exc:  # surfaced below without losing cleanup
+            initial_errors.append(exc)
+
+    entry = register_daemon_entry(
+        mgr,
+        "em-mimo-usage-concurrent",
+        run_dir,
+        task="task",
+        backend="mimocode",
+        ask_in_flight=False,
+    )
+
+    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen), \
+            patch.object(run_dir, "_atomic_write_json", side_effect=coordinated_atomic):
+        initial_thread = threading.Thread(target=run_initial, name="mimo-initial")
+        initial_thread.start()
+        assert first_usage_written.wait(timeout=5)
+
+        # Dispatch the real resume path while initial remains in its active
+        # stream; it reaches the duplicate and pauses before the distinct part.
+        result = mgr.handle({
+            "action": "ask",
+            "id": "em-mimo-usage-concurrent",
+            "message": "continue",
+        })
+        assert result["status"] == "sent"
+        assert resume_duplicate_seen.wait(timeout=5)
+        assert initial_thread.is_alive()
+
+        ask_future = entry["ask_future"]
+        assert ask_future is not None
+
+        def signal_resume_done():
+            ask_future.result(timeout=5)
+            resume_terminal_done.set()
+
+        resume_watcher = threading.Thread(
+            target=signal_resume_done, name="mimo-resume-watcher",
+        )
+        resume_watcher.start()
+        initial_release.set()
+        assert terminal_snapshot_staged.wait(timeout=5)
+        resume_part_release.set()
+        # The follow-up has a real live writer, but it must remain blocked while
+        # the initial worker's real mark_done transaction is in flight.
+        resume_finished_while_terminal = resume_terminal_done.wait(timeout=1)
+        terminal_snapshot_release.set()
+        assert not resume_finished_while_terminal
+        assert resume_terminal_done.wait(timeout=5)
+
+        initial_thread.join(timeout=5)
+        assert not initial_thread.is_alive()
+        assert not initial_errors, initial_errors
+        entry["future"].set_result("[initial done]")
+        resume_watcher.join(timeout=5)
+        assert not resume_watcher.is_alive()
+        ask_future.result(timeout=5)
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["state"] == "done"
+    assert state["last_output"] == "resume answer"
+    assert state["result_path"] is not None
+    assert state["cli_tokens"] == {
+        "input": 24, "output": 7, "cached": 15, "thinking": 10, "calls": 2,
+    }
+    usage = _cli_usage_events(run_dir)
+    assert sorted(entry["raw"]["id"] for entry in usage) == [
+        "part-initial", "part-resume",
+    ]
+    assert len([entry for entry in usage if entry["raw"]["id"] == "part-initial"]) == 1
+    assert not run_dir.token_ledger_path.exists()
+    assert not (agent._working_dir / "logs" / "token_ledger.jsonl").exists()
 
 
 def test_mimocode_ask_uses_harness_resume_command(tmp_path):

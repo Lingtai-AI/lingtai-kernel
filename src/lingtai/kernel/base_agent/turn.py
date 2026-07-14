@@ -1745,12 +1745,13 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
 
         # Attach the current notification payload to the latest tool-result
         # dict from this batch when the material payload changes. The previous
-        # LIVE holder is released from tracking first: synthesized pairs become
-        # skeleton placeholders (kept in history because the pair exists only as
-        # a carrier), while normal tool results retain their old notification
-        # payload as historical timely state. Model-facing serialization keeps
-        # those historical timely-state copies instead of rewriting canonical
-        # history; only the latest holder per family is current state.
+        # LIVE holder is released from tracking first: both synthesized pairs
+        # and normal tool results simply stop being tracked as live and keep
+        # their recorded content unchanged (append-only — see
+        # ``meta_block.skeletonize_notification_holder``). Model-facing
+        # serialization keeps those historical copies instead of rewriting
+        # canonical history; only the latest holder per family is current
+        # state.
         if _batch_includes_context_molt(response.tool_calls):
             # ``psyche.molt`` publishes ``.notification/post-molt.json`` before
             # its own tool result returns.  Do not let that same result batch

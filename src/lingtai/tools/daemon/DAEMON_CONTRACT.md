@@ -20,6 +20,7 @@ related_files:
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_claude_p_background_guard.py
   - tests/test_daemon_opencode_backend.py
+  - tests/test_daemon_cursor_backend.py
   - tests/test_daemon_claude_interactive_backend.py
   - tests/test_daemon_run_dir.py
   - tests/test_daemon_codex_usage.py
@@ -35,6 +36,7 @@ review_triggers:
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_claude_p_background_guard.py
   - tests/test_daemon_opencode_backend.py
+  - tests/test_daemon_cursor_backend.py
   - tests/test_daemon_claude_interactive_backend.py
   - tests/test_daemon_run_dir.py
   - tests/test_daemon_codex_usage.py

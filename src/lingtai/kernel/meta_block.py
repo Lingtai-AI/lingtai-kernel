@@ -2864,41 +2864,20 @@ def _last_dict_result(tool_results: list) -> dict | None:
     return None
 
 
-# Skeleton content placed in a synthesized pair's result dict once its live
-# notification payload has been moved away or cleared.  Keeps the pair in
-# history (preserving conversation structure) while making it clear to the
-# LLM — and to future introspective code — that the live data is elsewhere.
-_NOTIFICATION_SKELETON: dict = {
-    "_synthesized": True,
-    "_notification_placeholder": True,
-    "message": (
-        "This was a kernel-synthesized notification(action=check) tool-call pair. "
-        "The live notification payload that was here has been moved to a newer tool "
-        "result metadata block or cleared."
-    ),
-}
-
-
 def skeletonize_notification_holder(agent) -> None:
-    """Release the live notification holder; skeletonize only synthesized pairs.
+    """Release the live notification holder without mutating its history.
 
-    The live holder (``agent._notification_live_holder``) may point to:
-    * A normal tool-result content dict — its ``_meta.notifications`` /
-      ``_meta.notification_guidance`` payload is RETAINED as a historical
-      trace.  Notification payloads are timely transient state (Jason #4307):
-      canonical history is no longer retroactively stripped when the payload
-      moves or disappears; only the newest emitted payload is current.
-      Model-facing full-history serialization preserves every normal-result
-      holder's content and does not strip ``notifications`` or
-      ``notification_guidance`` keys (see
-      ``lingtai.llm.interface_converters``).
-    * A synthesized pair's content dict — replace ALL keys with the skeleton
-      so the pair stays in history but carries no live payload.  The pair
-      exists only to carry the payload; its body is not a tool result the
-      agent produced, so the skeleton remains the honest historical record.
-
-    Synthesized pairs are identified by the presence of ``_synthesized: True``
-    in the holder dict.  Normal tool-result dicts never carry that key.
+    The live holder (``agent._notification_live_holder``) is a dict that is
+    shared by reference with a historical ``ToolResultBlock.content`` already
+    appended to canonical ``ChatInterface`` entries — possibly already sent to
+    a provider. Both normal tool-result holders and synthesized pair holders
+    are simply RELEASED from live tracking here: this function never mutates
+    the dict's keys. Notification payloads are timely transient state (Jason
+    #4307): canonical history is never retroactively stripped or rewritten
+    when the payload moves or disappears; only the newest emitted holder is
+    current. Model-facing full-history serialization preserves every holder's
+    content unchanged, synthesized or not (see
+    ``lingtai.llm.interface_converters``).
 
     After this call ``agent._notification_live_holder`` is ``None``.
     Called by:
@@ -2907,11 +2886,6 @@ def skeletonize_notification_holder(agent) -> None:
       to a newer normal tool result (via ``prior_holder`` arg).
     * The notifications-cleared path so no holder reference lingers.
     """
-    holder = getattr(agent, "_notification_live_holder", None)
-    if isinstance(holder, dict) and holder.get("_synthesized"):
-        # Synthesized pair — replace entire content with skeleton.
-        holder.clear()
-        holder.update(_NOTIFICATION_SKELETON)
     agent._notification_live_holder = None
 
 

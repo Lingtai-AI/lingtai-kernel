@@ -196,6 +196,53 @@ def _normalize_codex_usage(usage: dict | None) -> dict | None:
     }
 
 
+def _normalize_cursor_usage(event: dict | None) -> dict | None:
+    """Normalize Cursor 2026.05.28 ``result.usage`` to UI-only totals.
+
+    The installed ``agent-cli@2026.05.28-a70ca7c`` bundle emits a terminal
+    ``type=result`` / ``subtype=success`` event whose ``usage.inputTokens`` is
+    already net of cache reads and writes.  Keep that value direct: subtracting
+    either cache field again would undercount input.  Cursor emits no thinking
+    or provider field in this source-pinned event contract.
+
+    Every field is required to be a non-negative integer (booleans are not
+    token counts).  Invalid and all-zero events return ``None`` so callers do
+    not persist misleading UI usage or raw-event noise.
+    """
+    if not isinstance(event, dict):
+        return None
+    if (
+        event.get("type") != "result"
+        or event.get("subtype") != "success"
+        or event.get("is_error") is not False
+    ):
+        return None
+
+    raw_usage = event.get("usage")
+    if not isinstance(raw_usage, dict):
+        return None
+    keys = (
+        "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens",
+    )
+    values = [raw_usage.get(key) for key in keys]
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in values
+    ):
+        return None
+
+    input_tokens, output_tokens, cache_read, cache_write = values
+    cached = cache_read + cache_write
+    if not (input_tokens or output_tokens or cached):
+        return None
+    return {
+        "input": input_tokens,
+        "output": output_tokens,
+        "cached": cached,
+        "thinking": 0,
+    }
+
+
 def _toml_string(value: str) -> str:
     return json.dumps(value)
 
@@ -3201,11 +3248,12 @@ class DaemonManager:
                     spec["task"], schemas, system_prompt=task_context
                 )
                 run_dir.prompt_path.write_text(system_prompt, encoding="utf-8")
-                run_dir._state["call_parameters"]["mcp"] = [
+                call_parameters = dict(run_dir.state_snapshot()["call_parameters"])
+                call_parameters["mcp"] = [
                     self._redact_mcp_registration_for_prompt(r)
                     for r in task_mcp_regs
                 ]
-                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+                run_dir.update_state(call_parameters=call_parameters)
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
                 run_dir.mark_failed(e)
@@ -3334,6 +3382,7 @@ class DaemonManager:
             user_backend_argv = list(context.backend_argv)
             backend_argv = list(user_backend_argv)
             backend_harness_argv: list[str] = []
+            state_updates: dict = {}
             backend_options = spec.get("backend_options") or None
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
 
@@ -3354,7 +3403,9 @@ class DaemonManager:
                     run_id=em_id,
                     task=spec["task"],
                     tools=spec.get("tools", []),
-                    model=backend,
+                    # Cursor's CLI is the source of model identity; do not
+                    # mislabel the daemon backend as an upstream model.
+                    model="unknown" if backend == "cursor" else backend,
                     max_turns=effective_max_turns,
                     timeout_s=effective_timeout,
                     parent_addr=parent_addr,
@@ -3395,11 +3446,12 @@ class DaemonManager:
                         + task_context
                     )
                 run_dir.prompt_path.write_text(system_prompt, encoding="utf-8")
-                run_dir._state["call_parameters"]["mcp"] = [
+                call_parameters = dict(run_dir.state_snapshot()["call_parameters"])
+                call_parameters["mcp"] = [
                     self._redact_mcp_registration_for_prompt(r)
                     for r in mcp_regs
                 ]
-                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+                run_dir.update_state(call_parameters=call_parameters)
                 cli_task = self._compose_cli_task(
                     spec["task"], task_context, backend=backend,
                 )
@@ -3426,7 +3478,7 @@ class DaemonManager:
                     ]
                 elif backend == "kimicode" and _cli_backend_loads_common_mcp(backend):
                     kimi_mcp_config = _write_kimicode_mcp_config(run_dir, mcp_regs)
-                    run_dir._state["backend_harness_files"] = {
+                    state_updates["backend_harness_files"] = {
                         "kimicode_mcp_config": str(kimi_mcp_config)
                     }
                 backend_argv = [*user_backend_argv, *backend_harness_argv]
@@ -3437,16 +3489,12 @@ class DaemonManager:
             # Persist user-supplied options separately from harness-owned argv
             # so run artifacts do not imply the model supplied MCP loader flags.
             if backend_options is not None:
-                run_dir._state["backend_options"] = backend_options
-                run_dir._state["backend_argv"] = list(user_backend_argv)
+                state_updates["backend_options"] = backend_options
+                state_updates["backend_argv"] = list(user_backend_argv)
             if backend_harness_argv:
-                run_dir._state["backend_harness_argv"] = list(backend_harness_argv)
-            if (
-                backend_options is not None
-                or backend_harness_argv
-                or run_dir._state.get("backend_harness_files")
-            ):
-                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+                state_updates["backend_harness_argv"] = list(backend_harness_argv)
+            if state_updates:
+                run_dir.update_state(**state_updates)
             self._log("daemon_backend_options",
                       em_id=em_id, backend=backend,
                       argv=list(user_backend_argv),
@@ -4677,6 +4725,75 @@ class DaemonManager:
             message = "MiMo Code reported a structured error event"
         return redact_text(message)[:500]
 
+    @staticmethod
+    def _mimocode_normalize_usage(
+        event: dict,
+    ) -> tuple[str, dict[str, int], dict] | None:
+        """Normalize one MiMo Code 0.1.5 ``step_finish`` usage event.
+
+        MiMo's terminal JSON event is deliberately narrower than the generic
+        OpenCode parser: only ``type == "step_finish"`` with a nested
+        ``part.type == "step-finish"`` is accepted. Every source counter must
+        be an actual non-negative ``int`` (booleans, strings, missing fields,
+        and negatives are rejected), and ``part.id`` is the source-stable
+        identity used for replay suppression. ``tokens.input`` already excludes
+        cache usage, so it is copied directly rather than adjusted.
+        """
+        if not isinstance(event, dict) or event.get("type") != "step_finish":
+            return None
+        part = event.get("part")
+        if not isinstance(part, dict) or part.get("type") != "step-finish":
+            return None
+        part_id = part.get("id")
+        if not isinstance(part_id, str) or not part_id.strip():
+            return None
+        tokens = part.get("tokens")
+        if not isinstance(tokens, dict):
+            return None
+        cache = tokens.get("cache")
+        if not isinstance(cache, dict):
+            return None
+        values = {
+            "input": tokens.get("input"),
+            "output": tokens.get("output"),
+            "reasoning": tokens.get("reasoning"),
+            "cache_read": cache.get("read"),
+            "cache_write": cache.get("write"),
+        }
+        if any(type(value) is not int or value < 0 for value in values.values()):
+            return None
+        normalized = {
+            "input": values["input"],
+            "output": values["output"],
+            "cached": values["cache_read"] + values["cache_write"],
+            "thinking": values["reasoning"],
+        }
+        if not any(normalized.values()):
+            return None
+        return part_id, normalized, part
+
+    @staticmethod
+    def _mimocode_usage_state(run_dir: DaemonRunDir) -> tuple[threading.Lock, set[str]]:
+        """Return the per-run MiMo usage dedupe state."""
+        return run_dir.__dict__.setdefault(
+            "_mimocode_usage_state", (threading.Lock(), set()),
+        )
+
+    def _mimocode_record_usage(self, run_dir: DaemonRunDir, event: dict) -> None:
+        """Persist one new MiMo usage part through the UI-only CLI hook."""
+        normalized = self._mimocode_normalize_usage(event)
+        if normalized is None:
+            return
+        part_id, usage, raw_part = normalized
+        lock, seen_part_ids = self._mimocode_usage_state(run_dir)
+        with lock:
+            if part_id in seen_part_ids:
+                return
+            seen_part_ids.add(part_id)
+            # record_cli_tokens mutates shared run state and appends its event;
+            # keep both writes in the same per-run transaction as dedupe.
+            run_dir.record_cli_tokens(**usage, raw=raw_part)
+
     def _run_opencode_emanation(
         self,
         em_id: str,
@@ -4692,6 +4809,7 @@ class DaemonManager:
         cmd_prefix: list[str] | None = None,
         text_extractor: Callable[[dict], str] | None = None,
         error_detector: Callable[[dict], str | None] | None = None,
+        usage_recorder: Callable[[dict], None] | None = None,
     ) -> str:
         """Run an OpenCode-family CLI session as the emanation backend.
 
@@ -4710,9 +4828,10 @@ class DaemonManager:
         an event (MiMo Code passes a strict ``type == "text"``-only extractor so
         reasoning/tool/step ``part.text`` never leaks as the answer);
         ``error_detector`` lets a backend recognize a structured error event and
-        fail loudly even on exit 0 (MiMo Code's ``type == "error"``). See
-        ``_opencode_extract_text`` / ``_opencode_extract_session_id`` for the
-        default shapes accepted.
+        fail loudly even on exit 0 (MiMo Code's ``type == "error"``). The
+        optional ``usage_recorder`` receives each parsed event for a backend-
+        specific UI-only usage path. See ``_opencode_extract_text`` /
+        ``_opencode_extract_session_id`` for the default shapes accepted.
         """
         extract_text = text_extractor or self._opencode_extract_text
         if cancel_event.is_set():
@@ -4815,6 +4934,8 @@ class DaemonManager:
                 sid = self._opencode_extract_session_id(event)
                 if sid:
                     _store_session_id(sid)
+                if usage_recorder is not None:
+                    usage_recorder(event)
 
                 # A structured backend error must fail the run loudly even when
                 # the process later exits 0 (MiMo Code's ``type == "error"``).
@@ -4910,11 +5031,14 @@ class DaemonManager:
         executable and an OpenCode-derived ``run --format json`` command, so
         the OpenCode-family runner (session capture, argv placement, non-JSON
         tolerance) is reused with a distinct session-id field. MiMo's JSONL
-        contract (0.1.5) differs from generic OpenCode in two ways the shared
+        contract (0.1.5) differs from generic OpenCode in three ways the shared
         runner is told about: the user-visible answer is ONLY the
         ``type == "text"`` event's nested ``part.text`` (reasoning/tool/step
-        events also carry ``part.text`` and must be ignored), and a structured
-        ``type == "error"`` event is a terminal failure even on exit 0.
+        events also carry ``part.text`` and must be ignored), a structured
+        ``type == "error"`` event is a terminal failure even on exit 0, and
+        source-reported ``step_finish`` usage is normalized and recorded via
+        ``record_cli_tokens`` for UI totals only (duplicate ``part.id`` values
+        are suppressed; neither token ledger is written).
         """
         return self._run_opencode_emanation(
             em_id, run_dir, task, cancel_event, timeout_event, backend_argv,
@@ -4923,6 +5047,7 @@ class DaemonManager:
             session_state_key="mimocode_session_id",
             text_extractor=self._mimocode_extract_answer_text,
             error_detector=self._mimocode_extract_error,
+            usage_recorder=lambda event: self._mimocode_record_usage(run_dir, event),
         )
 
     def _run_oh_my_pi_emanation(
@@ -5250,6 +5375,7 @@ class DaemonManager:
         build_resume_cmd: Callable[[str, str, str], list[str]] | None = None,
         text_extractor: Callable[[dict], str] | None = None,
         error_detector: Callable[[dict], str | None] | None = None,
+        usage_recorder: Callable[[dict], None] | None = None,
     ) -> dict:
         """Dispatch an OpenCode-family session-resume follow-up off the caller's turn.
 
@@ -5265,6 +5391,8 @@ class DaemonManager:
         ``text_extractor`` / ``error_detector`` apply the same answer/error
         contract to the resume stream that the initial run used (MiMo Code
         passes its strict ``type:text`` / ``type:error`` handlers).
+        ``usage_recorder`` provides the corresponding backend-specific usage
+        path without changing the shared OpenCode behavior.
         """
         run_dir = entry.get("run_dir")
         if run_dir is None:
@@ -5329,7 +5457,7 @@ class DaemonManager:
 
         ask_future = self._ask_pool.submit(
             self._run_ask_opencode_stream, em_id, entry, proc, run_dir,
-            backend_name, text_extractor, error_detector,
+            backend_name, text_extractor, error_detector, usage_recorder,
         )
         ask_future.add_done_callback(
             lambda f, eid=em_id: self._on_ask_done(eid, f)
@@ -5345,9 +5473,12 @@ class DaemonManager:
 
         Resume argv stays the harness-owned
         ``mimo run --session <id> --format json <message>``; the MiMo
-        answer/error contract is applied to the resume stream too, so a
-        ``type:error`` follow-up fails loudly and reasoning/tool ``part.text``
-        never surfaces as the reply.
+        answer/error/usage contract is applied to the resume stream too:
+        source-reported ``step_finish`` usage is normalized and recorded via
+        ``record_cli_tokens`` for UI totals only (duplicate ``part.id`` values
+        are suppressed; neither token ledger is written), a ``type:error``
+        follow-up fails loudly, and reasoning/tool ``part.text`` never surfaces
+        as the reply.
         """
         return self._handle_ask_opencode(
             em_id, entry, message,
@@ -5356,6 +5487,9 @@ class DaemonManager:
             session_state_key="mimocode_session_id",
             text_extractor=self._mimocode_extract_answer_text,
             error_detector=self._mimocode_extract_error,
+            usage_recorder=lambda event: self._mimocode_record_usage(
+                entry["run_dir"], event,
+            ),
         )
 
     @staticmethod
@@ -5389,6 +5523,7 @@ class DaemonManager:
         backend_name: str = "opencode",
         text_extractor: Callable[[dict], str] | None = None,
         error_detector: Callable[[dict], str | None] | None = None,
+        usage_recorder: Callable[[dict], None] | None = None,
     ) -> dict:
         """Background worker: stream an ``opencode run --session`` subprocess.
 
@@ -5437,6 +5572,8 @@ class DaemonManager:
                     continue
 
                 any_event = True
+                if usage_recorder is not None:
+                    usage_recorder(event)
                 if error_detector is not None:
                     detail = error_detector(event)
                     if detail is not None:
@@ -5517,12 +5654,87 @@ class DaemonManager:
     # ------------------------------------------------------------------
 
     # Cursor's headless CLI is exposed as the `agent` executable. In print mode
-    # (`-p` / `--print`) it can emit the same single-result JSON shape and
-    # stream-json shape documented by Cursor's CLI reference.  We parse it with
-    # the same defensive helpers used by OpenCode because both are JSONL CLI
-    # backends whose event vocabularies may evolve between releases. Cursor's
-    # documented final result event includes `result` and `session_id` fields;
-    # the shared helpers cover both.
+    # (`-p` / `--print`) it emits the source-pinned stream-json event shapes
+    # documented by the installed 2026.05.28-a70ca7c bundle.  Keep the generic
+    # text/session helpers for existing behavior, but keep usage/model parsing
+    # strict to that version's terminal and init events.
+
+    @staticmethod
+    def _cursor_init_model(event: dict) -> tuple[str, str] | None:
+        """Return a source-reported ``(session_id, model)`` init pair."""
+        if event.get("type") != "system" or event.get("subtype") != "init":
+            return None
+        session_id = event.get("session_id")
+        model = event.get("model")
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(model, str)
+            or not model
+        ):
+            return None
+        return session_id, model
+
+    @staticmethod
+    def _cursor_result_session_id(event: dict) -> str | None:
+        """Return only the terminal event's top-level ``session_id``."""
+        session_id = event.get("session_id")
+        return session_id if isinstance(session_id, str) and session_id else None
+
+    @staticmethod
+    def _cursor_set_model(run_dir: DaemonRunDir, model: str) -> None:
+        """Persist a model learned from a preceding matching Cursor init."""
+        if run_dir._state.get("model") == model:
+            return
+        run_dir._state["model"] = model
+        run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+
+    def _cursor_process_usage_event(
+        self,
+        event: dict,
+        run_dir: DaemonRunDir,
+        init_models: dict[str, str],
+        usage_candidate: tuple[dict[str, int], dict] | None,
+    ) -> tuple[dict[str, int], dict] | None:
+        """Join source model and retain the first valid terminal usage candidate."""
+        init_model = self._cursor_init_model(event)
+        if init_model is not None:
+            init_models[init_model[0]] = init_model[1]
+            return usage_candidate
+
+        if event.get("type") != "result":
+            return usage_candidate
+
+        session_id = self._cursor_result_session_id(event)
+        if session_id is not None:
+            model = init_models.get(session_id)
+            if model is not None:
+                self._cursor_set_model(run_dir, model)
+
+        if usage_candidate is not None:
+            return usage_candidate
+        usage = _normalize_cursor_usage(event)
+        if usage is None:
+            return None
+        return usage, event["usage"]
+
+    @staticmethod
+    def _cursor_record_usage_candidate(
+        run_dir: DaemonRunDir,
+        usage_candidate: tuple[dict[str, int], dict] | None,
+    ) -> None:
+        """Persist a buffered usage candidate after stream success only."""
+        if usage_candidate is None:
+            return
+        usage, raw = usage_candidate
+        try:
+            run_dir.record_cli_tokens(
+                input=usage["input"], output=usage["output"],
+                cached=usage["cached"], thinking=usage["thinking"],
+                raw=raw,
+            )
+        except Exception:
+            pass
 
     def _build_cursor_prompt(self, task: str) -> str:
         """Compose the initial prompt sent to Cursor Agent CLI."""
@@ -5550,6 +5762,12 @@ class DaemonManager:
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         prompt = self._build_cursor_prompt(task)
+        # Backend attribution remains ``cursor``; upstream model identity is
+        # unknown until a matching source ``system/init`` + ``session_id``
+        # precedes a terminal result.
+        if run_dir._state.get("model") != "unknown":
+            run_dir._state["model"] = "unknown"
+            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
         cmd = [
             "agent",
             "-p",
@@ -5586,6 +5804,8 @@ class DaemonManager:
         stderr_lines = stderr_thread.lines
 
         session_id_captured: str | None = None
+        init_models: dict[str, str] = {}
+        usage_candidate: tuple[dict[str, int], dict] | None = None
         text_chunks: list[str] = []
         final_text: str | None = None
         final_is_error = False
@@ -5618,6 +5838,9 @@ class DaemonManager:
                     continue
 
                 any_event = True
+                usage_candidate = self._cursor_process_usage_event(
+                    event, run_dir, init_models, usage_candidate,
+                )
                 sid = self._opencode_extract_session_id(event)
                 if sid:
                     _store_session_id(sid)
@@ -5649,6 +5872,9 @@ class DaemonManager:
             stderr_thread.join(timeout=2.0)
             self._unregister_cli_proc(proc, group_id=run_dir.group_id)
 
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
         if proc.returncode != 0:
@@ -5672,6 +5898,11 @@ class DaemonManager:
             run_dir.mark_failed(exc)
             raise exc
 
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+
+        self._cursor_record_usage_candidate(run_dir, usage_candidate)
+
         if final_text is not None:
             text = final_text.strip()
         elif text_chunks:
@@ -5691,6 +5922,12 @@ class DaemonManager:
         run_dir = entry.get("run_dir")
         if run_dir is None:
             return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
+
+        # Legacy/direct run-dir callers may have initialized ``model`` to the
+        # backend label; do not expose that as upstream model identity.
+        if run_dir._state.get("model") == "cursor":
+            run_dir._state["model"] = "unknown"
+            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
 
         session_id = run_dir._state.get("cursor_session_id")
         if not session_id:
@@ -5772,6 +6009,8 @@ class DaemonManager:
         )
         stderr_lines = stderr_thread.lines
 
+        init_models: dict[str, str] = {}
+        usage_candidate: tuple[dict[str, int], dict] | None = None
         text_chunks: list[str] = []
         final_text: str | None = None
         final_is_error = False
@@ -5798,6 +6037,9 @@ class DaemonManager:
                     continue
 
                 any_event = True
+                usage_candidate = self._cursor_process_usage_event(
+                    event, run_dir, init_models, usage_candidate,
+                )
                 text = self._opencode_extract_text(event)
                 if text:
                     text_chunks.append(text)
@@ -5854,6 +6096,8 @@ class DaemonManager:
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
             return {"status": "error", "id": em_id, "message": err}
+
+        self._cursor_record_usage_candidate(run_dir, usage_candidate)
 
         if final_text is not None:
             output = final_text.strip()

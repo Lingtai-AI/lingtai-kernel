@@ -2,8 +2,11 @@
 import json
 import os
 import re
+import threading
 import time
 from pathlib import Path
+
+import pytest
 
 from lingtai.tools.daemon.run_dir import DaemonRunDir
 
@@ -327,6 +330,160 @@ def test_record_cli_output_bounds_large_event_and_last_output(tmp_path):
     assert last["stream"] == "stderr"
     assert last["truncated"] is True
     assert len(last["text"]) <= rd._CLI_OUTPUT_EVENT_MAX + len("...[truncated]")
+
+
+@pytest.mark.parametrize(
+    "operation,setup,expected_terminal",
+    [
+        (
+            "claim",
+            lambda rd: None,
+            lambda state: (
+                state["terminal_notified"] is False
+                and isinstance(state["terminal_notification_claim"], dict)
+                and state["terminal_notification_claim"]["status"] == "pending"
+                and state["terminal_notification_claim"]["terminal_status"] == "done"
+                and state["terminal_notification_claim"]["idempotency_key"]
+                == f"daemon-terminal:{state['run_id']}"
+            ),
+        ),
+        (
+            "clear",
+            lambda rd: rd.update_state(
+                terminal_notification_claim={
+                    "status": "pending",
+                    "terminal_status": "done",
+                    "idempotency_key": "daemon-terminal:test",
+                },
+            ),
+            lambda state: (
+                state["terminal_notified"] is False
+                and state["terminal_notification_claim"] is None
+            ),
+        ),
+        (
+            "publish",
+            lambda rd: None,
+            lambda state: (
+                state["terminal_notified"] is True
+                and state["terminal_notification_claim"] is None
+                and isinstance(state["terminal_notification_receipt"], dict)
+                and state["terminal_notification_receipt"]["idempotency_key"]
+                == "daemon-terminal:test"
+            ),
+        ),
+    ],
+)
+def test_terminal_notification_operations_hold_owner_transaction(
+    tmp_path, operation, setup, expected_terminal,
+):
+    """Terminal field mutation cannot overlap a real live state writer.
+
+    Each terminal operation pauses at its first terminal-field mutation while a
+    real ``record_cli_output`` writer runs concurrently.  The fixed owner
+    transaction holds the per-run writer lock before entering that mutation, so
+    the live writer cannot serialize/read the shared state until the terminal
+    operation is released.  The old boundary (mutation before the writer lock)
+    lets the live writer serialize during the pause and fails this operation
+    boundary directly.
+    """
+    rd = _make_run_dir(tmp_path, backend="mimocode")
+    setup(rd)
+
+    terminal_name = f"terminal-{operation}"
+    writer_name = f"live-writer-{operation}"
+    terminal_field_entered = threading.Event()
+    release_terminal_field = threading.Event()
+    writer_attempted = threading.Event()
+    writer_serialized = threading.Event()
+    terminal_results: list[object] = []
+    errors: list[BaseException] = []
+
+    watched_field = (
+        "terminal_notification_claim"
+        if operation in {"claim", "clear"}
+        else "terminal_notified"
+    )
+
+    class BlockingTerminalState(dict):
+        def __setitem__(self, key, value):
+            if (
+                threading.current_thread().name == terminal_name
+                and key == watched_field
+            ):
+                terminal_field_entered.set()
+                assert release_terminal_field.wait(timeout=5)
+            super().__setitem__(key, value)
+
+    rd._state = BlockingTerminalState(rd._state)
+    original_atomic = rd._atomic_write_json
+    original_safe_state = rd._safe_state
+
+    def coordinated_atomic(path, data):
+        if threading.current_thread().name == writer_name:
+            writer_serialized.set()
+        return original_atomic(path, data)
+
+    def coordinated_safe_state(op, fn):
+        if threading.current_thread().name == writer_name:
+            writer_attempted.set()
+        return original_safe_state(op, fn)
+
+    rd._atomic_write_json = coordinated_atomic
+    rd._safe_state = coordinated_safe_state
+
+    def run_terminal():
+        try:
+            if operation == "claim":
+                result = rd.claim_terminal_notification("done")
+            elif operation == "clear":
+                result = rd.clear_terminal_notification_claim()
+            else:
+                result = rd.mark_terminal_notification_published("daemon-terminal:test")
+            terminal_results.append(result)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def run_writer():
+        try:
+            rd.record_cli_output("live progress", stream="stdout")
+        except BaseException as exc:
+            errors.append(exc)
+
+    terminal_thread = threading.Thread(target=run_terminal, name=terminal_name)
+    writer_thread = threading.Thread(target=run_writer, name=writer_name)
+    terminal_thread.start()
+    assert terminal_field_entered.wait(timeout=5)
+    writer_thread.start()
+    assert writer_attempted.wait(timeout=5)
+
+    # Under the owner transaction the writer is blocked, not merely delayed by
+    # filesystem scheduling: the terminal mutation itself is still in flight.
+    writer_overlapped = writer_serialized.wait(timeout=1)
+
+    release_terminal_field.set()
+    terminal_thread.join(timeout=5)
+    writer_thread.join(timeout=5)
+    assert not terminal_thread.is_alive()
+    assert not writer_thread.is_alive()
+    assert not errors, errors
+    assert not writer_overlapped
+    assert writer_serialized.is_set()
+    expected_result = (
+        DaemonRunDir.terminal_notification_idempotency_key(rd.run_id)
+        if operation == "claim"
+        else None
+    )
+    assert terminal_results == [expected_result]
+
+    state = json.loads(rd.daemon_json_path.read_text())
+    assert state["last_output"] == "live progress"
+    assert expected_terminal(state)
+    if operation == "publish":
+        assert state["terminal_notification_receipt"]["idempotency_key"] == (
+            "daemon-terminal:test"
+        )
+
 
 def test_append_tokens_writes_daemon_ledger(tmp_path):
     rd = _make_run_dir(tmp_path)

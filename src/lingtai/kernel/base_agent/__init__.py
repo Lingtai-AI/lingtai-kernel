@@ -1650,14 +1650,14 @@ class BaseAgent:
 
         The ``ToolResultBlock`` is created with ``synthesized=True``
         (the existing flag the kernel already uses for heal-path
-        placeholders) and its ``content`` is a mutable dict (not a JSON
-        string).  All adapters serialize dict content correctly via
-        ``json.dumps``.  Storing a dict enables in-place skeletonization
-        later: when the live payload moves to a newer result, the dict
-        is mutated to the skeleton placeholder shape — the pair stays in
-        history but carries no live data.  The ``_synthesized: true``
-        field in the body lets the agent distinguish kernel-injected
-        reads from voluntary calls when reading conversation history.
+        placeholders) and its ``content`` is a dict (not a JSON string) so
+        every adapter can serialize it directly via ``json.dumps``.  When the
+        live payload later moves to a newer holder, this dict is simply
+        released from live tracking (``skeletonize_notification_holder``) —
+        never mutated — so the pair stays in history exactly as recorded.
+        The ``_synthesized: true`` field in the body lets the agent
+        distinguish kernel-injected reads from voluntary calls when reading
+        conversation history.
 
         Both call.args and result.content carry safe notification freshness
         fields from build_meta plus a monotonic injection_seq. Internal tool-meta
@@ -1869,17 +1869,19 @@ class BaseAgent:
         result_block = ToolResultBlock(
             id=call_id,
             name="notification",
-            content=content_dict,  # dict, not JSON string — mutable for skeletonization
+            content=content_dict,  # dict, serialized directly by every adapter
             synthesized=True,
         )
 
         iface.add_assistant_message(content=[call_block])
         iface.add_tool_results([result_block])
 
-        # The append succeeded.  Now skeletonize the previous live holder
-        # (if any) before registering this synthesized pair as the new live
-        # holder.  Doing it after append preserves the old live payload if
-        # injection had to abort because of pending tool calls.
+        # The append succeeded.  Now release the previous live holder (if
+        # any) from tracking before registering this synthesized pair as the
+        # new live holder.  Doing it after append preserves the old live
+        # payload if injection had to abort because of pending tool calls.
+        # Release only stops future code from treating the prior holder as
+        # authoritative — its recorded content is never mutated.
         prior_holder = getattr(self, "_notification_live_holder", None)
         if prior_holder is not None and prior_holder is not content_dict:
             try:
@@ -1891,7 +1893,7 @@ class BaseAgent:
 
         # Register content_dict as the live holder so future
         # skeletonize_notification_holder / attach_active_notifications calls
-        # can mutate it in-place without touching conversation history.
+        # can release tracking of it without touching conversation history.
         # _notification_block_id is retained for informational / molt-reset
         # purposes; it is no longer used for remove_pair_by_call_id.
         self._notification_live_holder = content_dict
