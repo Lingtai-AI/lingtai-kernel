@@ -4100,6 +4100,833 @@ def test_host_loss_truth_across_real_processes(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# v10 remaining-acceptance gap 2: real killed-drain-host truth through the
+# GENUINE refresh/drain lifecycle path (`_perform_refresh` + `lifecycle._stop`
+# — the same real handshake `test_v9_b1_b2_real_successor_observes_and_
+# controls_persisted_run` drives), not the manually-invoked
+# `_prepare_refresh_host()`/`_run_drain_loop()` primitives
+# `test_host_loss_truth_across_real_processes` above uses. This closes the
+# exact gap the v9 test's own docstring left open: v9 proves a killed
+# process is detected via `_prepare_refresh_host` called directly; this test
+# proves the same host-loss truth after the host reached drain status via
+# the real product entry point a real `system(action="refresh")` call would
+# use, then was actually SIGKILLed while genuinely owning an in-flight run.
+# ---------------------------------------------------------------------------
+
+_REAL_LIFECYCLE_KILLABLE_HOST_SCRIPT = """
+import json, os, sys, threading, time
+sys.path.insert(0, {src_path!r})
+from unittest.mock import MagicMock
+from pathlib import Path
+
+from lingtai.agent import Agent
+from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.base_agent import lifecycle as lifecycle_module
+import lingtai.llm.service as service_mod
+from lingtai.kernel.llm.base import ToolCall
+
+working_dir = Path({working_dir!r})
+host_ready_file = Path({host_ready_file!r})
+host_pid_file = Path({host_pid_file!r})
+host_generation_file = Path({host_generation_file!r})
+side_effect_marker = Path({side_effect_marker!r})
+release_file = Path({release_file!r})
+
+svc = MagicMock()
+svc.provider = "mock"
+svc.model = "mock-model"
+agent = Agent(svc, working_dir=working_dir, capabilities=["daemon"], config=AgentConfig())
+agent._start_heartbeat()
+hb_deadline = time.time() + 5.0
+while not (working_dir / ".agent.heartbeat").exists():
+    assert time.time() < hb_deadline, "real heartbeat never published"
+    time.sleep(0.02)
+
+_em_id_holder = {{}}
+
+def _blocking_side_effect_handler(args):
+    # This handler must NEVER actually complete in this test: the host is
+    # killed while the run is still genuinely blocked here, so any observed
+    # side_effect_marker after the kill would prove a replay. release_file
+    # is provided only for parity with the other real-subprocess scripts
+    # and is deliberately never written by this test.
+    deadline = time.time() + 60.0
+    while not release_file.exists():
+        if time.time() > deadline:
+            raise TimeoutError("release_file never appeared (expected -- host is killed first)")
+        time.sleep(0.02)
+    side_effect_marker.write_text(str(os.getpid()), encoding="utf-8")
+    return {{"content": "should never be reached in this test"}}
+
+agent.add_tool(
+    "blocking_side_effect",
+    schema={{"type": "object", "properties": {{}}}},
+    handler=_blocking_side_effect_handler,
+    description="Blocks on release_file -- deliberately never released in this test.",
+)
+
+mgr = agent.get_capability("daemon")
+
+# Same real-cmdline-observation seam as the other real-subprocess tests in
+# this file: this process's actual argv is `python -c <script>`, which
+# correctly does not match any real agent-run launch form.
+import lingtai.tools.daemon.refresh_host as _refresh_host_module
+_real_read_cmdline = _refresh_host_module._read_cmdline
+def _patched_read_cmdline(pid):
+    if pid == os.getpid():
+        return "python -m lingtai run " + str(working_dir)
+    return _real_read_cmdline(pid)
+_refresh_host_module._read_cmdline = _patched_read_cmdline
+
+service_mod.LLMService = lambda **kwargs: agent.service
+resp1 = MagicMock()
+resp1.text = "calling blocking tool"
+resp1.tool_calls = [ToolCall(name="blocking_side_effect", args={{}}, id="tc-1")]
+resp1.usage = MagicMock(input_tokens=0, output_tokens=0, thinking_tokens=0, cached_tokens=0)
+mock_session = MagicMock()
+mock_session.send = MagicMock(return_value=resp1)
+agent.service.create_session = MagicMock(return_value=mock_session)
+agent.service.make_tool_result = MagicMock(return_value="mock_result")
+
+result = mgr._handle_emanate([{{"task": "do the blocking thing", "tools": ["blocking_side_effect"]}}])
+assert result["status"] == "dispatched", result
+em_id = result["ids"][0]
+_em_id_holder["em_id"] = em_id
+
+# The ONE seam standing in for the real console launch command -- every
+# OTHER piece of _perform_refresh (handshake normalization, watcher
+# subprocess spawn) is the real, unmodified product code.
+agent._build_launch_cmd = lambda: [sys.executable, "-c", "import time; time.sleep(60)"]
+
+# --- Drive the REAL .refresh -> _perform_refresh handshake + watcher
+# spawn, and the REAL lifecycle._stop() PREPARE/drain branch -- exactly
+# the product path `system(action="refresh")` uses, not a manually-driven
+# _prepare_refresh_host()/_run_drain_loop() call. ---
+(working_dir / ".refresh").touch()
+agent._perform_refresh()
+assert (working_dir / ".refresh.taken").exists(), (
+    "the real _perform_refresh handshake must have normalized "
+    ".refresh -> .refresh.taken before spawning the watcher"
+)
+
+lifecycle_module._stop(agent, timeout=1.0)
+
+daemon_json_path = working_dir / "daemons" / em_id / "daemon.json"
+daemon_json = json.loads(daemon_json_path.read_text())
+assert daemon_json["state"] == "running", daemon_json
+assert daemon_json.get("execution_owner") is not None, (
+    "the real lifecycle._stop() path must have committed a real "
+    "execution_owner tag via PREPARE before this host can be killed "
+    "while genuinely, durably owning the run"
+)
+generation = daemon_json["execution_owner"]["generation"]
+
+host_pid_file.write_text(str(os.getpid()), encoding="utf-8")
+host_generation_file.write_text(generation, encoding="utf-8")
+host_ready_file.write_text("ready", encoding="utf-8")
+
+# Deliberately do nothing further and do NOT exit -- this process is
+# killed (SIGKILL) by the outer test from here on, while its own real
+# drain thread (started by lifecycle._stop above) is still genuinely
+# polling for control requests that will never arrive.
+time.sleep(60)
+os._exit(97)  # never reached if the outer test kills this process as intended
+"""
+
+
+def test_real_killed_drain_host_reaches_daemon_host_lost_via_genuine_lifecycle_path(tmp_path):
+    """v10 category 2: start a real owned in-flight run through the GENUINE
+    `_perform_refresh` + `lifecycle._stop()` drain path (not a manually
+    invoked `_prepare_refresh_host()`), SIGKILL the real owning host process
+    before it ever acks/finishes, then start a real, separate successor
+    subprocess and prove it mechanically reconciles the run to
+    `DaemonHostLost` with exactly one durable terminal-notification receipt
+    and event, and that the original blocked side effect never replays.
+    """
+    working_dir = tmp_path / "agent-workdir"
+    working_dir.mkdir()
+    host_ready_file = tmp_path / "host_ready"
+    host_pid_file = tmp_path / "host_pid"
+    host_generation_file = tmp_path / "host_generation"
+    side_effect_marker = tmp_path / "side_effect_marker"
+    release_file = tmp_path / "release_file_never_written"
+    src_path = str(Path(__file__).resolve().parents[1] / "src")
+
+    host_script = _REAL_LIFECYCLE_KILLABLE_HOST_SCRIPT.format(
+        src_path=src_path, working_dir=str(working_dir),
+        host_ready_file=str(host_ready_file), host_pid_file=str(host_pid_file),
+        host_generation_file=str(host_generation_file),
+        side_effect_marker=str(side_effect_marker), release_file=str(release_file),
+    )
+    env = {**os.environ, "PYTHONPATH": src_path}
+    host_proc = subprocess.Popen(
+        [sys.executable, "-c", host_script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+    )
+    try:
+        deadline = time.monotonic() + 20.0
+        while not host_ready_file.exists():
+            assert time.monotonic() < deadline, (
+                f"host process never became ready. poll={host_proc.poll()}"
+            )
+            assert host_proc.poll() is None, f"host process exited early: {host_proc.poll()}"
+            time.sleep(0.02)
+
+        host_pid = int(host_pid_file.read_text(encoding="utf-8"))
+        assert host_pid == host_proc.pid
+        # The real Python process is STILL ALIVE after its own real
+        # lifecycle._stop() returned -- proving the drain thread (not
+        # process exit) is what's keeping the in-flight run reachable
+        # right up until the real SIGKILL below.
+        assert host_proc.poll() is None
+
+        daemon_dirs = [d for d in (working_dir / "daemons").iterdir() if d.is_dir() and d.name.startswith("em-")]
+        assert len(daemon_dirs) == 1, daemon_dirs
+        em_id = daemon_dirs[0].name
+        run_dir = daemon_dirs[0]
+
+        daemon_json_before = json.loads((run_dir / "daemon.json").read_text())
+        assert daemon_json_before["state"] == "running"
+        assert daemon_json_before.get("execution_owner") is not None
+        assert not side_effect_marker.exists(), (
+            "the run must still be genuinely blocked -- never released -- "
+            "before the host is killed, so a later absence check actually "
+            "proves something"
+        )
+
+        # Real kill -- SIGKILL, not a clean stop signal, so there is no
+        # opportunity for the host to publish anything about its own death
+        # (no CLOSED marker, no terminal daemon.json write, nothing).
+        host_proc.kill()
+        host_proc.wait(timeout=10)
+        assert host_proc.poll() is not None
+
+        # A moment for the OS to fully reap/release the PID before the
+        # successor probes it.
+        time.sleep(0.1)
+
+        successor_script = _SUCCESSOR_PROCESS_SCRIPT.format(
+            src_path=src_path, working_dir=str(working_dir), em_id=em_id,
+            host_pid=host_pid, result_file=str(tmp_path / "killed_host_successor_result"),
+        )
+        successor_result_file = tmp_path / "killed_host_successor_result"
+        successor_proc = subprocess.run(
+            [sys.executable, "-c", successor_script], capture_output=True, text=True, env=env, timeout=30,
+        )
+        assert successor_proc.returncode == 0, (
+            f"successor stdout={successor_proc.stdout!r} stderr={successor_proc.stderr!r}"
+        )
+
+        # The successor's OWN fresh-manager construction (inside Agent(...))
+        # already ran _reap_host_lost_daemon_records before this script's
+        # explicit _handle_list() call -- the real, on-disk daemon.json is
+        # the durable proof of what that startup reaping actually did.
+        daemon_json_after = json.loads((run_dir / "daemon.json").read_text())
+        assert daemon_json_after["state"] == "failed"
+        assert daemon_json_after["error"]["type"] == "DaemonHostLost"
+        assert daemon_json_after["error"]["type"] != "DaemonOrphaned"
+        assert daemon_json_after["current_tool"] is None
+        assert daemon_json_after["finished_at"] is not None
+
+        # Exactly one stable terminal event, honestly written by the
+        # successor only now (because the former sole writer -- the real
+        # killed host -- is proven gone), never a second, duplicate publish.
+        assert daemon_json_after["terminal_notified"] is True
+        receipt = daemon_json_after["terminal_notification_receipt"]
+        assert receipt is not None
+        assert receipt["idempotency_key"] == f"daemon-terminal:{em_id}"
+
+        from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
+        store = PosixNotificationStoreAdapter(working_dir)
+        snapshot = store.snapshot(lambda name: True)
+        events = snapshot.get("system", {}).get("data", {}).get("events", [])
+        matching = [e for e in events if e.get("ref_id") == em_id]
+        assert len(matching) == 1, matching
+
+        # No replay: the side effect never occurred -- the blocking tool
+        # handler was never re-entered by anything (the successor never
+        # dispatches the owned run itself), and release_file (the only
+        # thing that could ever unblock the ORIGINAL handler) was never
+        # written by this test.
+        assert not side_effect_marker.exists()
+        assert not release_file.exists()
+
+        # The successor's own `list` call must report the SAME honest
+        # terminal state, not a stale in-memory guess.
+        successor_out = json.loads(successor_result_file.read_text(encoding="utf-8"))
+        assert successor_out["list_status"] == "failed", successor_out
+
+        # Distinct, explicit-cause terminal states: DaemonHostLost never
+        # collapses into ExplicitReclaim/ExplicitTimeout semantics -- there
+        # was no reclaim/timeout ControlRequest involved anywhere in this
+        # test, only a real process death.
+        assert daemon_json_after["error"]["message"], daemon_json_after["error"]
+        assert "DaemonHostLost" in daemon_json_after["error"]["message"] or \
+            "could not be verified live" in daemon_json_after["error"]["message"], (
+            daemon_json_after["error"]
+        )
+    finally:
+        if host_proc.poll() is None:
+            host_proc.kill()
+            host_proc.wait(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# v10 remaining-acceptance gap 3: second-successor truth / no replay. After a
+# FIRST real successor process has already observed/reconciled a persisted
+# run against durable on-disk state, a SECOND, fully independent successor
+# process is constructed against that SAME durable workdir. It must neither
+# replay work/effects nor duplicate the terminal notification -- it must
+# reach the identical, idempotent conclusion the first successor already
+# recorded, purely by re-reading durable state, never by re-deriving or
+# re-publishing anything.
+#
+# Reuses the exact killed-host scenario above (the smallest real risk this
+# category needs to close is: does a manager constructed AFTER another
+# manager has already reaped a host-lost run accidentally re-reap/re-publish
+# it) rather than inventing a second, broader synthetic matrix.
+# ---------------------------------------------------------------------------
+
+
+def test_second_independent_successor_after_first_reconciled_host_loss_does_not_replay(tmp_path):
+    """v10 category 3: after a FIRST real successor subprocess has already
+    reconciled a real killed-host run to `DaemonHostLost` (durable receipt +
+    exactly one published terminal notification event), a SECOND,
+    completely independent successor subprocess is constructed fresh
+    against the SAME durable workdir. Proves the second successor's own
+    `DaemonManager.__init__` reconciliation methods (which unconditionally
+    run again on every construction) do not re-reap, do not mutate the
+    already-terminal `daemon.json` a second time, do not publish a second
+    terminal-notification event, and report the exact same idempotent
+    terminal state the first successor already recorded -- i.e. genuinely
+    idempotent reconciliation of a run this second successor never itself
+    dispatched or controlled.
+    """
+    working_dir = tmp_path / "agent-workdir"
+    working_dir.mkdir()
+    host_ready_file = tmp_path / "host_ready"
+    host_pid_file = tmp_path / "host_pid"
+    host_generation_file = tmp_path / "host_generation"
+    side_effect_marker = tmp_path / "side_effect_marker"
+    release_file = tmp_path / "release_file_never_written"
+    src_path = str(Path(__file__).resolve().parents[1] / "src")
+
+    host_script = _REAL_LIFECYCLE_KILLABLE_HOST_SCRIPT.format(
+        src_path=src_path, working_dir=str(working_dir),
+        host_ready_file=str(host_ready_file), host_pid_file=str(host_pid_file),
+        host_generation_file=str(host_generation_file),
+        side_effect_marker=str(side_effect_marker), release_file=str(release_file),
+    )
+    env = {**os.environ, "PYTHONPATH": src_path}
+    host_proc = subprocess.Popen(
+        [sys.executable, "-c", host_script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+    )
+    try:
+        deadline = time.monotonic() + 20.0
+        while not host_ready_file.exists():
+            assert time.monotonic() < deadline, "host process never became ready"
+            assert host_proc.poll() is None, f"host process exited early: {host_proc.poll()}"
+            time.sleep(0.02)
+
+        host_pid = int(host_pid_file.read_text(encoding="utf-8"))
+        daemon_dirs = [d for d in (working_dir / "daemons").iterdir() if d.is_dir() and d.name.startswith("em-")]
+        assert len(daemon_dirs) == 1, daemon_dirs
+        em_id = daemon_dirs[0].name
+        run_dir = daemon_dirs[0]
+
+        # Real kill, exactly as category 2 -- no chance for the host to
+        # publish anything about its own death.
+        host_proc.kill()
+        host_proc.wait(timeout=10)
+        time.sleep(0.1)
+
+        # --- FIRST successor: reconciles the killed host for real. ---
+        first_result_file = tmp_path / "first_successor_result"
+        first_script = _SUCCESSOR_PROCESS_SCRIPT.format(
+            src_path=src_path, working_dir=str(working_dir), em_id=em_id,
+            host_pid=host_pid, result_file=str(first_result_file),
+        )
+        first_proc = subprocess.run(
+            [sys.executable, "-c", first_script], capture_output=True, text=True, env=env, timeout=30,
+        )
+        assert first_proc.returncode == 0, (
+            f"first successor stdout={first_proc.stdout!r} stderr={first_proc.stderr!r}"
+        )
+        first_out = json.loads(first_result_file.read_text(encoding="utf-8"))
+        assert first_out["list_status"] == "failed", first_out
+
+        daemon_json_after_first = json.loads((run_dir / "daemon.json").read_text())
+        assert daemon_json_after_first["state"] == "failed"
+        assert daemon_json_after_first["error"]["type"] == "DaemonHostLost"
+        assert daemon_json_after_first["terminal_notified"] is True
+        first_receipt = daemon_json_after_first["terminal_notification_receipt"]
+        assert first_receipt is not None
+        first_finished_at = daemon_json_after_first["finished_at"]
+
+        from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
+        store = PosixNotificationStoreAdapter(working_dir)
+        snapshot_after_first = store.snapshot(lambda name: True)
+        events_after_first = snapshot_after_first.get("system", {}).get("data", {}).get("events", [])
+        matching_after_first = [e for e in events_after_first if e.get("ref_id") == em_id]
+        assert len(matching_after_first) == 1, matching_after_first
+        first_event_id = matching_after_first[0].get("event_id")
+
+        # --- SECOND, fully independent successor: constructed fresh, in a
+        # distinct OS process, against the SAME durable workdir, with no
+        # in-memory continuity whatsoever from either the killed host or
+        # the first successor. ---
+        second_result_file = tmp_path / "second_successor_result"
+        second_script = _SUCCESSOR_PROCESS_SCRIPT.format(
+            src_path=src_path, working_dir=str(working_dir), em_id=em_id,
+            host_pid=host_pid, result_file=str(second_result_file),
+        )
+        second_proc = subprocess.run(
+            [sys.executable, "-c", second_script], capture_output=True, text=True, env=env, timeout=30,
+        )
+        assert second_proc.returncode == 0, (
+            f"second successor stdout={second_proc.stdout!r} stderr={second_proc.stderr!r}"
+        )
+        second_out = json.loads(second_result_file.read_text(encoding="utf-8"))
+
+        # Idempotent reconciliation: the SAME honest terminal state, not a
+        # different/regressed one, and not vacuously absent.
+        assert second_out["list_status"] == "failed", second_out
+
+        daemon_json_after_second = json.loads((run_dir / "daemon.json").read_text())
+        assert daemon_json_after_second["state"] == "failed"
+        assert daemon_json_after_second["error"]["type"] == "DaemonHostLost"
+        # finished_at must be byte-identical -- the second successor's own
+        # _reap_host_lost_daemon_records must have found this record already
+        # terminal (state != "running"/"active") and skipped it entirely,
+        # never re-writing a fresh finished_at timestamp for a run it never
+        # itself observed as nonterminal.
+        assert daemon_json_after_second["finished_at"] == first_finished_at, (
+            "a second successor re-wrote finished_at for an already-terminal "
+            "run -- this is a replay of the reaping write, not idempotent "
+            "reconciliation"
+        )
+        # The terminal-notification receipt must be the EXACT SAME receipt
+        # object the first successor produced -- proving
+        # _reconcile_terminal_notifications correctly saw
+        # terminal_notified=True already and never re-entered the publish
+        # path for a second time.
+        second_receipt = daemon_json_after_second["terminal_notification_receipt"]
+        assert second_receipt == first_receipt, (
+            "the second successor produced a DIFFERENT terminal-notification "
+            "receipt than the first -- proving it re-published rather than "
+            "recognizing the existing durable receipt"
+        )
+
+        # Exactly one matching system-notification event still exists --
+        # never two. This is the decisive replay-sensitive assertion: an
+        # overwrite-only receipt field could look identical even after a
+        # second publish if the second publish reused the same idempotency
+        # key and the store deduplicated by key, so the notification STORE
+        # itself (not just the daemon.json receipt) is inspected directly.
+        snapshot_after_second = store.snapshot(lambda name: True)
+        events_after_second = snapshot_after_second.get("system", {}).get("data", {}).get("events", [])
+        matching_after_second = [e for e in events_after_second if e.get("ref_id") == em_id]
+        assert len(matching_after_second) == 1, matching_after_second
+        assert matching_after_second[0].get("event_id") == first_event_id, (
+            "a second, distinct system-notification event was published for "
+            "the same run -- exactly the duplicate-terminal-notification "
+            "defect this category exists to rule out"
+        )
+
+        # No replay of the underlying work/effect either: the original
+        # blocked tool handler is provably never re-entered by anything --
+        # neither successor ever dispatches or executes this run's own
+        # task, and the only file that could ever unblock the original
+        # handler was never written by this test.
+        assert not side_effect_marker.exists()
+        assert not release_file.exists()
+    finally:
+        if host_proc.poll() is None:
+            host_proc.kill()
+            host_proc.wait(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# v10 remaining-acceptance gap 1: hermetic fake external-CLI delayed-output
+# survival across refresh. Exercises the REAL `_run_codex_emanation` dispatch
+# (the actual `_handle_emanate_cli` -> `subprocess.Popen(["codex", "exec",
+# "--json", ...])` product path in `src/lingtai/tools/daemon/__init__.py`),
+# not a unit-only mock or a parent-touched completion file: the executable
+# named "codex" that `subprocess.Popen` resolves via PATH is a real,
+# independent OS process (a small hermetic Python script this test writes to
+# a `tmp_path` bin directory prepended to PATH) -- so the CLI supervisor,
+# process registry (`_register_cli_proc`/`_unregister_cli_proc`), and
+# run-dir product path all run for real, exactly as they would against a
+# genuine `codex` binary. That real child process blocks (produces no
+# stdout at all) until a `post_refresh_signal` file appears, which this
+# test only creates AFTER the real `_perform_refresh` handshake has spawned
+# the real detached watcher and the real `lifecycle._stop()` has entered the
+# genuine PREPARE/drain branch -- mechanically proving the CLI child process
+# is still genuinely alive and unread across the real refresh boundary, not
+# replayed or restarted, before it is ever allowed to produce its terminal
+# output.
+# ---------------------------------------------------------------------------
+
+_HERMETIC_FAKE_CODEX_SCRIPT = """#!/usr/bin/env python3
+import json, os, sys, time, tomllib
+
+# Mirrors the real `codex exec --json ... <task>` argv shape: the last argv
+# is the composed CLI task string. The real product wraps the raw task text
+# this test supplied (the signal-file path) with additional oneshot daemon
+# context via `_compose_cli_task`, always ending in the literal marker
+# "Task:\\n<raw task text>" (see that function's own construction) -- so the
+# signal path is recovered by splitting on that exact marker and taking the
+# LAST line, not by treating the whole composed argv as the path.
+composed_task = sys.argv[-1]
+post_refresh_signal_path = composed_task.rsplit("Task:\\n", 1)[-1].strip().splitlines()[-1]
+
+# Parse the ACTUAL harness-owned Codex MCP config argv generated by
+# `_codex_mcp_argv`, rather than accepting a completion path invented by the
+# parent test. A real model would call daemon_common.finish through this MCP
+# registration; this hermetic CLI stand-in uses the same registered env and
+# the same daemon_common validation/atomic transport after its delayed work.
+daemon_common_env = None
+prefix = "mcp_servers.daemon_common.env="
+for index, arg in enumerate(sys.argv[:-1]):
+    if arg != "-c" or index + 1 >= len(sys.argv):
+        continue
+    config = sys.argv[index + 1]
+    if config.startswith(prefix):
+        daemon_common_env = tomllib.loads("value = " + config[len(prefix):])["value"]
+        break
+assert daemon_common_env is not None, sys.argv
+
+def emit(event):
+    sys.stdout.write(json.dumps(event) + "\\n")
+    sys.stdout.flush()
+
+emit({"type": "thread.started", "thread_id": "hermetic-fake-codex-session-1"})
+
+# Block producing any further output until the real product refresh
+# boundary has genuinely passed -- this is the "delayed output" the whole
+# category is about. A deadline guards against ever hanging pytest itself
+# if the outer test's timing assumption is wrong.
+deadline = time.time() + 30.0
+while not os.path.exists(post_refresh_signal_path):
+    if time.time() > deadline:
+        sys.stderr.write("post_refresh_signal never appeared\\n")
+        sys.exit(1)
+    time.sleep(0.02)
+
+emit({"type": "item.completed", "item": {"type": "agent_message", "text": "hermetic fake codex delayed reply"}})
+emit({"type": "turn.completed", "usage": {"input_tokens": 11, "cached_input_tokens": 0, "output_tokens": 7}})
+
+# Child-owned completion: use the real daemon_common schema validation and
+# atomic completion transport from the exact MCP registration the product
+# passed to this CLI process. The parent never touches daemon_completion.json.
+os.environ.update({str(key): str(value) for key, value in daemon_common_env.items()})
+from lingtai.kernel._fsutil import atomic_write_json
+from lingtai.mcp_servers.daemon_common.server import _completion_path, _validate_finish
+payload = _validate_finish({
+    "status": "done",
+    "summary": "hermetic fake codex completed after the refresh boundary",
+})
+atomic_write_json(_completion_path(), payload, ensure_ascii=False, indent=2)
+sys.exit(0)
+"""
+
+_REAL_LIFECYCLE_CLI_HOST_SCRIPT = """
+import json, os, stat, sys, time
+sys.path.insert(0, {src_path!r})
+from unittest.mock import MagicMock
+from pathlib import Path
+
+from lingtai.agent import Agent
+from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.base_agent import lifecycle as lifecycle_module
+
+working_dir = Path({working_dir!r})
+host_ready_file = Path({host_ready_file!r})
+host_pid_file = Path({host_pid_file!r})
+fake_codex_bin_dir = Path({fake_codex_bin_dir!r})
+post_refresh_signal_path = str(Path({post_refresh_signal_path!r}))
+
+svc = MagicMock()
+svc.provider = "mock"
+svc.model = "mock-model"
+agent = Agent(svc, working_dir=working_dir, capabilities=["daemon"], config=AgentConfig())
+agent._start_heartbeat()
+hb_deadline = time.time() + 5.0
+while not (working_dir / ".agent.heartbeat").exists():
+    assert time.time() < hb_deadline, "real heartbeat never published"
+    time.sleep(0.02)
+
+mgr = agent.get_capability("daemon")
+
+# The hermetic fake "codex" executable is resolved via PATH -- exactly the
+# real `subprocess.Popen(["codex", ...])` resolution `_run_codex_emanation`
+# performs, no product code touched. This proves the real CLI-backend
+# dispatch/process/run-dir path, not a unit-only mock of subprocess.Popen
+# itself (see tests/test_daemon.py's `_install_fake_popen`, which patches
+# `daemon_mod.subprocess.Popen` directly rather than launching a real OS
+# process -- deliberately NOT reused here).
+os.environ["PATH"] = str(fake_codex_bin_dir) + os.pathsep + os.environ.get("PATH", "")
+
+# Same real-cmdline-observation seam as the other real-subprocess tests in
+# this file -- this process's actual argv is `python -c <script>`, which
+# correctly does not match any real agent-run launch form.
+import lingtai.tools.daemon.refresh_host as _refresh_host_module
+_real_read_cmdline = _refresh_host_module._read_cmdline
+def _patched_read_cmdline(pid):
+    if pid == os.getpid():
+        return "python -m lingtai run " + str(working_dir)
+    return _real_read_cmdline(pid)
+_refresh_host_module._read_cmdline = _patched_read_cmdline
+
+# Real `_handle_emanate_cli` dispatch -- the task text IS the signal-file
+# path the hermetic fake codex script waits on (see its own argv-parsing
+# comment); this is the real product `_handle_emanate` (routing on
+# backend="codex") -> `_handle_emanate_cli` -> `_run_codex_emanation` ->
+# `subprocess.Popen(["codex", "exec", "--json", ..., post_refresh_signal_path])`
+# path, unmodified.
+result = mgr._handle_emanate(
+    [{{"task": post_refresh_signal_path, "tools": []}}],
+    backend="codex",
+)
+assert result["status"] == "dispatched", result
+em_id = result["ids"][0]
+
+# The real codex subprocess must already be running and already blocked
+# (no signal file yet) before refresh ever begins -- confirms this is a
+# genuinely in-flight external CLI child, not one that raced to completion
+# before the refresh boundary even mattered.
+daemon_json_path = working_dir / "daemons" / em_id / "daemon.json"
+running_deadline = time.time() + 10.0
+while True:
+    state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+    if state.get("state") in ("running", "active"):
+        break
+    assert time.time() < running_deadline, f"codex run never reached running state: {{state}}"
+    time.sleep(0.02)
+assert not os.path.exists(post_refresh_signal_path), (
+    "the fake codex child must still be genuinely blocked before refresh -- "
+    "if the signal file already existed the delayed-output proof would be "
+    "vacuous"
+)
+
+# The ONE seam standing in for the real console launch command.
+agent._build_launch_cmd = lambda: [sys.executable, "-c", "import time; time.sleep(60)"]
+
+# --- Drive the REAL .refresh -> _perform_refresh handshake + watcher
+# spawn, and the REAL lifecycle._stop() PREPARE/drain branch. ---
+(working_dir / ".refresh").touch()
+agent._perform_refresh()
+assert (working_dir / ".refresh.taken").exists()
+
+lifecycle_module._stop(agent, timeout=1.0)
+
+daemon_json = json.loads(daemon_json_path.read_text())
+assert daemon_json["state"] == "running", daemon_json
+assert daemon_json.get("execution_owner") is not None, (
+    "the real lifecycle._stop() path must have committed a real "
+    "execution_owner tag for the still-running real CLI child via PREPARE"
+)
+
+host_pid_file.write_text(str(os.getpid()), encoding="utf-8")
+host_ready_file.write_text("ready", encoding="utf-8")
+
+# Deliberately do nothing further and do NOT exit -- the real drain thread
+# (self_exit_process=True), started by lifecycle._stop above, is the only
+# thing that may ever terminate this process. It cannot reach quiescence
+# until the real codex subprocess -- still genuinely blocked on the pool
+# worker thread's `for raw_line in proc.stdout` read loop -- itself exits,
+# which only happens once the outer test writes the post-refresh signal.
+time.sleep(60)
+os._exit(97)  # never reached if the real drain path completes as intended
+"""
+
+
+def test_hermetic_fake_cli_delayed_output_survives_real_refresh_exactly_once(tmp_path):
+    """v10 category 1: dispatch a real external-CLI backend run (`codex`)
+    through the actual `_handle_emanate_cli` -> `_run_codex_emanation` ->
+    `subprocess.Popen` product path against a hermetic fake `codex`
+    executable (a real OS process, not a monkeypatched `subprocess.Popen`).
+    That real child process is still genuinely running -- blocked, no
+    output yet -- when the real `_perform_refresh` handshake and the real
+    `lifecycle._stop()` PREPARE/drain branch both fire. Only AFTER both have
+    genuinely completed does this test release the child's delayed output;
+    proves the resulting stdout/terminal result is durably recorded exactly
+    once, the run is never replayed, and the terminal notification receipt/
+    event are each published exactly once.
+    """
+    working_dir = tmp_path / "agent-workdir"
+    working_dir.mkdir()
+    host_ready_file = tmp_path / "host_ready"
+    host_pid_file = tmp_path / "host_pid"
+    fake_codex_bin_dir = tmp_path / "fake_bin"
+    fake_codex_bin_dir.mkdir()
+    post_refresh_signal_path = tmp_path / "post_refresh_signal"
+    src_path = str(Path(__file__).resolve().parents[1] / "src")
+
+    fake_codex_path = fake_codex_bin_dir / "codex"
+    fake_codex_path.write_text(_HERMETIC_FAKE_CODEX_SCRIPT, encoding="utf-8")
+    fake_codex_path.chmod(fake_codex_path.stat().st_mode | 0o111)
+
+    host_script = _REAL_LIFECYCLE_CLI_HOST_SCRIPT.format(
+        src_path=src_path, working_dir=str(working_dir),
+        host_ready_file=str(host_ready_file), host_pid_file=str(host_pid_file),
+        fake_codex_bin_dir=str(fake_codex_bin_dir),
+        post_refresh_signal_path=str(post_refresh_signal_path),
+    )
+    env = {**os.environ, "PYTHONPATH": src_path}
+    host_proc = subprocess.Popen(
+        [sys.executable, "-c", host_script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+    )
+    try:
+        deadline = time.monotonic() + 20.0
+        while not host_ready_file.exists():
+            assert time.monotonic() < deadline, (
+                f"host process never became ready. poll={host_proc.poll()} "
+                f"stderr_so_far={host_proc.stderr.read1(4096) if host_proc.stderr else None}"
+            )
+            assert host_proc.poll() is None, f"host process exited early: {host_proc.poll()}"
+            time.sleep(0.02)
+
+        host_pid = int(host_pid_file.read_text(encoding="utf-8"))
+        assert host_pid == host_proc.pid
+        # The real Python host process is STILL ALIVE after its own real
+        # lifecycle._stop() returned -- the drain thread is what's keeping
+        # the in-flight real CLI child reachable.
+        assert host_proc.poll() is None
+
+        daemon_dirs = [d for d in (working_dir / "daemons").iterdir() if d.is_dir() and d.name.startswith("em-")]
+        assert len(daemon_dirs) == 1, daemon_dirs
+        em_id = daemon_dirs[0].name
+        run_dir = daemon_dirs[0]
+
+        # The run is STILL genuinely running post-refresh (the real codex
+        # child is still blocked) -- confirmed before release, so the later
+        # "durably recorded" check actually proves something about delayed
+        # output, not output that arrived before refresh ever happened.
+        daemon_json_before = json.loads((run_dir / "daemon.json").read_text())
+        assert daemon_json_before["state"] == "running"
+        assert daemon_json_before.get("execution_owner") is not None
+        events_before = (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8") \
+            if (run_dir / "logs" / "events.jsonl").exists() else ""
+        assert "hermetic fake codex delayed reply" not in events_before, (
+            "the delayed output must not already be recorded before release "
+            "-- otherwise the later durability check is vacuous"
+        )
+
+        # Completion must also still be absent before release. The parent test
+        # never writes it: only the real fake-CLI child may consume the actual
+        # daemon_common MCP registration and produce the validated transport
+        # after its delayed work crosses the refresh boundary.
+        completion_path = run_dir / "daemon_completion.json"
+        assert not completion_path.exists(), (
+            "daemon completion arrived before the delayed CLI child was released"
+        )
+
+        # --- Release the real codex child's delayed output and child-owned
+        # daemon_common completion. ---
+        assert not post_refresh_signal_path.exists()
+        post_refresh_signal_path.write_text("go", encoding="utf-8")
+
+        term_deadline = time.monotonic() + 20.0
+        while True:
+            daemon_json_after = json.loads((run_dir / "daemon.json").read_text())
+            if daemon_json_after["state"] in ("done", "failed"):
+                break
+            assert time.monotonic() < term_deadline, (
+                f"real codex child's delayed output never reached a terminal "
+                f"state: {daemon_json_after}"
+            )
+            assert host_proc.poll() is None, "host process died before completing the CLI run"
+            time.sleep(0.02)
+        assert daemon_json_after["state"] == "done", (
+            f"expected the real delayed codex output to complete successfully; "
+            f"got failed: {daemon_json_after.get('error')!r}"
+        )
+        assert daemon_json_after["parent_pid"] == host_pid
+
+        # The completion transport was produced by the CLI child itself from
+        # the real harness-owned daemon_common registration, with the exact
+        # schema/run binding the product later validated before mark_done.
+        completion = json.loads(completion_path.read_text(encoding="utf-8"))
+        assert completion == {
+            "schema": "lingtai.daemon_completion.v1",
+            "status": "done",
+            "run_id": em_id,
+            "summary": "hermetic fake codex completed after the refresh boundary",
+        }
+
+        # The delayed stdout is durably recorded in the real run directory
+        # (result_preview / result file), not merely inferred from state.
+        assert daemon_json_after.get("result_preview"), daemon_json_after
+        assert "hermetic fake codex delayed reply" in daemon_json_after["result_preview"]
+        result_path = daemon_json_after.get("result_path")
+        assert result_path, daemon_json_after
+        assert "hermetic fake codex delayed reply" in Path(result_path).read_text(encoding="utf-8")
+
+        # Not replayed: the recorded output line appears in the events log
+        # exactly once -- an append-only log makes a second real invocation
+        # of the same child mechanically detectable.
+        events_after = (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8")
+        matches = [
+            ln for ln in events_after.splitlines()
+            if "hermetic fake codex delayed reply" in ln
+        ]
+        assert len(matches) == 1, matches
+
+        # Terminal notification: durable receipt plus exactly one matching
+        # real system notification event.
+        terminal_deadline = time.monotonic() + 10.0
+        while True:
+            daemon_json_after = json.loads((run_dir / "daemon.json").read_text())
+            if daemon_json_after.get("terminal_notified") is True:
+                break
+            assert time.monotonic() < terminal_deadline, (
+                f"terminal_notified never became True: {daemon_json_after}"
+            )
+            assert host_proc.poll() is None
+            time.sleep(0.02)
+        receipt = daemon_json_after["terminal_notification_receipt"]
+        assert receipt is not None
+        assert receipt["idempotency_key"] == f"daemon-terminal:{em_id}"
+
+        from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
+        store = PosixNotificationStoreAdapter(working_dir)
+        snapshot = store.snapshot(lambda name: True)
+        events = snapshot.get("system", {}).get("data", {}).get("events", [])
+        matching = [e for e in events if e.get("ref_id") == em_id]
+        assert len(matching) == 1, matching
+        assert matching[0].get("idempotency_key") == receipt["idempotency_key"]
+
+        # Real CLI child process registry hygiene: the completed run's
+        # subprocess must no longer be tracked as an active CLI process
+        # after terminal completion (via `_unregister_cli_proc` in the real
+        # `_run_codex_emanation`'s own `finally` block) -- proven indirectly
+        # by the drain host reaching genuine quiescence and self-exiting
+        # below, which `_owned_runs_quiescent` can only do once this run's
+        # future is `done()`.
+        exit_deadline = time.monotonic() + 20.0
+        while host_proc.poll() is None:
+            assert time.monotonic() < exit_deadline, (
+                "the real drain-host process did not self-exit within the "
+                "bounded window after its owned real CLI run genuinely "
+                "finished"
+            )
+            time.sleep(0.05)
+        assert host_proc.returncode == 0, (
+            f"expected a clean os._exit(0) self-exit from the real drain "
+            f"host; got {host_proc.returncode} (97 would mean self-exit "
+            f"never fired). stdout={host_proc.stdout.read()!r} "
+            f"stderr={host_proc.stderr.read()!r}"
+        )
+    finally:
+        if host_proc.poll() is None:
+            host_proc.kill()
+            host_proc.wait(timeout=5)
+
+
+# ---------------------------------------------------------------------------
 # Brief category 6: multiple refresh generations / PID reuse. Same-process
 # (not a full 2-generation real-subprocess handoff, which would require the
 # not-yet-implemented lifecycle.py wiring to produce a genuine second
