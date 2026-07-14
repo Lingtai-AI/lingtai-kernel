@@ -3,8 +3,9 @@
 MCPClient: stdio subprocess servers (e.g., uvx minimax-coding-plan-mcp).
 HTTPMCPClient: remote HTTP/SSE servers (e.g., api.z.ai/api/mcp/...).
 
-Both provide the same synchronous call_tool() interface. A background daemon
-thread runs the async event loop; the public API is thread-safe.
+Both provide the same basic synchronous call_tool() interface. A background
+daemon thread runs the async event loop; the public API is thread-safe. The
+stdio client additionally accepts an explicit stale-resource replay policy.
 """
 from __future__ import annotations
 
@@ -16,6 +17,10 @@ from typing import Any
 from lingtai.kernel.logging import get_logger
 
 logger = get_logger()
+
+# A stale stdio response has an unknowable remote commit point. Replay is
+# therefore opt-in and limited to callers that can justify that it is safe.
+_STALE_RETRY_POLICIES = frozenset({"never", "safe"})
 
 
 class MCPClient:
@@ -70,6 +75,24 @@ class MCPClient:
         cls = type(exc).__name__
         msg = str(exc).strip()
         return f"{cls}: {msg}" if msg else cls
+
+    @staticmethod
+    def _validate_retry_policy(retry_policy: str) -> None:
+        if retry_policy not in _STALE_RETRY_POLICIES:
+            allowed = ", ".join(sorted(_STALE_RETRY_POLICIES))
+            raise ValueError(
+                f"retry_policy must be one of: {allowed}; got {retry_policy!r}"
+            )
+
+    @staticmethod
+    def _ambiguous_stale_error(message: str) -> dict:
+        """Return a non-retryable error for an unknowable remote outcome."""
+        return {
+            "status": "error",
+            "message": message,
+            "outcome": "ambiguous",
+            "retryable": False,
+        }
 
     @staticmethod
     def _is_stale_resource_error(exc: BaseException) -> bool:
@@ -150,7 +173,14 @@ class MCPClient:
     # Tool calls
     # ------------------------------------------------------------------
 
-    def call_tool(self, name: str, args: dict, timeout: float = 120) -> dict:
+    def call_tool(
+        self,
+        name: str,
+        args: dict,
+        timeout: float = 120,
+        *,
+        retry_policy: str = "never",
+    ) -> dict:
         """Call an MCP tool synchronously.
 
         Starts the connection lazily if not yet connected.
@@ -159,14 +189,25 @@ class MCPClient:
             name: Tool name (e.g., "web_search").
             args: Tool arguments dict.
             timeout: Timeout in seconds.
+            retry_policy: Stale-resource replay policy. ``"never"`` (the
+                default) fails closed because the remote commit point is
+                ambiguous. ``"safe"`` is an explicit caller assertion that a
+                replay cannot create a duplicate externally visible effect.
+                This client does not infer safety from tool names or arguments.
 
         Returns:
-            Parsed dict from the tool's JSON response.
+            Parsed dict from the tool's JSON response. A default-policy stale
+            failure returns an error with ``outcome="ambiguous"`` and
+            ``retryable=False`` after attempting transport recovery without
+            replaying the call.
 
         Raises:
             RuntimeError: If the client is closed or connection fails.
+            ValueError: If ``retry_policy`` is not supported.
         """
         import asyncio
+
+        self._validate_retry_policy(retry_policy)
 
         if self._closed:
             raise RuntimeError("MCP client has been closed")
@@ -215,32 +256,58 @@ class MCPClient:
                 # never blank (issue #104), but don't churn the subprocess.
                 result = {"status": "error", "message": formatted}
             else:
-                # Stale/closed resource: tear down and reconnect, retry once.
-                logger.warning(
-                    "MCP tool %s hit stale resource (%s); restarting and "
-                    "retrying once", name, formatted,
-                )
-                try:
-                    self.restart()
-                except Exception as restart_exc:
-                    result = {
-                        "status": "error",
-                        "message": (
-                            f"{formatted}: MCP session closed; restart failed: "
-                            f"{self._format_exception(restart_exc)}"
-                        ),
-                    }
-                else:
+                if retry_policy == "never":
+                    # Recover the transport for a future independent call, but
+                    # do not replay this call: the server may have committed it
+                    # before the stale response path failed.
+                    logger.warning(
+                        "MCP tool %s hit stale resource (%s); restarting "
+                        "transport without replay",
+                        name,
+                        formatted,
+                    )
                     try:
-                        result = _attempt()
-                    except Exception as retry_exc:
-                        result = {
-                            "status": "error",
-                            "message": (
+                        self.restart()
+                    except Exception as restart_exc:
+                        result = self._ambiguous_stale_error(
+                            f"{formatted}: MCP session closed; remote outcome is "
+                            "ambiguous; call was not retried to avoid duplicate "
+                            "side effects; transport restart failed: "
+                            f"{self._format_exception(restart_exc)}"
+                        )
+                    else:
+                        result = self._ambiguous_stale_error(
+                            f"{formatted}: MCP session closed; remote outcome is "
+                            "ambiguous; call was not retried to avoid duplicate "
+                            "side effects; transport restarted for a future call"
+                        )
+                else:
+                    # ``safe`` is a trusted caller attestation. This generic
+                    # client cannot verify the operation's replay semantics.
+                    logger.warning(
+                        "MCP tool %s hit stale resource (%s); explicit safe "
+                        "policy; restarting and retrying once",
+                        name,
+                        formatted,
+                    )
+                    try:
+                        self.restart()
+                    except Exception as restart_exc:
+                        result = self._ambiguous_stale_error(
+                            f"{formatted}: MCP session closed; explicit safe "
+                            "replay requested but transport restart failed: "
+                            f"{self._format_exception(restart_exc)}; first "
+                            "attempt outcome remains ambiguous"
+                        )
+                    else:
+                        try:
+                            result = _attempt()
+                        except Exception as retry_exc:
+                            result = self._ambiguous_stale_error(
                                 f"{self._format_exception(retry_exc)}: MCP "
-                                "session closed; restarted once but retry failed"
-                            ),
-                        }
+                                "session closed; restarted once but explicit "
+                                "safe retry failed; outcome remains ambiguous"
+                            )
 
         # Log activity
         with self._activity_lock:
