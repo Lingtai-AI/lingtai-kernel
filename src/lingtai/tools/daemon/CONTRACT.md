@@ -73,9 +73,10 @@ cumulative spend — effective only for `backend="lingtai"` tasks whose
 resolved provider is Codex (`codex`/`codex-pool`); every other provider and
 every external CLI backend ignores it. Omitted, it inherits the parent
 service's resolved context window as the threshold; an explicit value wins.
-See `src/lingtai/tools/daemon/DAEMON_CONTRACT.md` for the standalone Codex
-compaction behavior this threshold triggers and
-`src/lingtai/llm/openai/ANATOMY.md` for the Codex Responses session mechanics.
+See `src/lingtai/tools/daemon/DAEMON_CONTRACT.md` (capability invariant 7) for
+the Codex-only/lingtai-backend-only capability boundary and
+`src/lingtai/llm/openai/ANATOMY.md` ("Standalone Codex compaction") for the
+Codex Responses session mechanics this threshold triggers.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
