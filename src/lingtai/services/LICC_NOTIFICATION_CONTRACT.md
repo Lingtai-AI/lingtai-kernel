@@ -23,6 +23,7 @@ related_files:
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/notification/__init__.py
+  - src/lingtai/prompts/meta_guidance/catalog/notification_handling.md
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/notifications.py
   - src/lingtai/llm/interface_converters.py
@@ -116,7 +117,7 @@ where they share the `.notification/` filesystem protocol.
 4. **Model-visible transient hook.** `_meta.notifications` is sparse and
    update-driven. `attach_active_notifications` attaches or moves the canonical
    payload only on first appearance, material change, or deliberate
-   `notification(action="check")` (`src/lingtai/kernel/meta_block.py:2939`).
+   `notification(action="check")` (`src/lingtai/kernel/meta_block.py:3702`).
    For IM channels with a persistent lane (Telegram, WeChat, Feishu, WhatsApp),
    the shared
    `_sanitize_im_notification_after_persistent` (via the per-channel
@@ -126,9 +127,11 @@ where they share the `.notification/` filesystem protocol.
    `sanitize_whatsapp_notification_after_persistent` wrappers) reduces
    `_meta.notifications.mcp.<channel>.data` to stable `message_ids` only; content,
    sender/subject, routing details, counts, and summaries must not remain in the
-   transient lane (`src/lingtai/kernel/meta_block.py:2589-2655`).
+   transient lane (`src/lingtai/kernel/meta_block.py:3356-3394`).
 5. **Model-visible persistent communication context.** When structured IM metadata is available, `build_notification_persistent_payload` emits `_meta.notification_persistent.mcp.<channel>` with `messages`, `events`, and comments through the shared `_ImPersistentLane` machinery. Delta lanes (Telegram, WeChat, Feishu) also carry `previous_block`; WhatsApp is snapshot/no-previous-block because the producer sends the current bounded conversation window per event. Telegram additionally carries full out-of-window reply targets under `referenced_messages`. For built-in email it emits `_meta.notification_persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate)
-   (`src/lingtai/kernel/meta_block.py:1857-2489`). The Telegram MCP supplies the
+   (`src/lingtai/kernel/meta_block.py:3234-3256`, email-specific construction in
+   `_build_email_notification_persistent_payload` at
+   `src/lingtai/kernel/meta_block.py:2362-2386`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`
    metadata. Every Telegram message object in those fields carries the explicit
    current-agent boolean `taskcard`; it is derived at producer projection time
@@ -277,64 +280,71 @@ correlated fields (`count`, `newest_received_at`, `context_comment`,
 be read or reconstructed as a mix of two different snapshots.
 
 Because canonical history keeps every historical block (no retroactive
-strip), a stale nonempty email snapshot would otherwise sit in model-facing
-full-history replay looking exactly as current as a later one — or, once
-unread count reaches zero and the producer stops emitting any email payload
-at all, would remain the ONLY email evidence in history forever with no
-signal that it had been superseded, including across a process restart where
-no in-memory holder survives to notice the transition. Three mechanisms
-together close this, none of them by having a converter query live
-mailbox/disk state:
+strip — this is a LITERAL invariant: model-facing full-history replay must
+never strip, filter, deduplicate, normalize, substitute, or otherwise
+semantically mutate any historical context content; the only allowed
+exception is an explicit `summarize` replacement of a tool-result BODY, see
+`lingtai.tools.system.summarize`), a superseded email snapshot always
+remains present, in full, in every full-history render forever — including
+the moment unread count reaches zero and every earlier nonempty snapshot.
+WHICH child is CURRENT is therefore a READING CONVENTION the model applies,
+never a wire-level strip: the newest whole `notification_persistent.email`
+child in wire order (a live snapshot or an explicit clear tombstone) is
+authoritative; every earlier child (live or cleared) is a historical trace
+the model must not act on. Two mechanisms make that reading-convention fact
+determinable at every point in time, including immediately after a restart,
+without ever removing content from a converter or renderer:
 
-- **Whole-snapshot replay filtering.** `lingtai/llm/interface_converters.py`
-  scans the full history once per full-history render
-  (`newest_email_snapshot_holder`) and keeps exactly one authoritative
-  `notification_persistent.email` child — the block holding the newest
-  occurrence in wire order (a live snapshot or an explicit clear tombstone)
-  — while removing the ENTIRE child (never a partial id/field subset) from
-  every other block. All five model-facing full-history renderers
-  (`to_anthropic`, `to_openai`, `to_responses_input`, `to_gemini`, and
+- **Reading-convention helper, not a filter.**
+  `lingtai.kernel.meta_block.newest_email_snapshot_holder` scans the full
+  history once and returns the SINGLE block holding the newest
+  `notification_persistent.email` occurrence in wire order. It is a pure,
+  non-mutating lookup used by the append-only mechanisms below (and by
+  in-process reconciliation) to decide what to append next — it is never
+  used to remove or hide any other block's content. All five model-facing
+  full-history renderers (`to_anthropic`, `to_openai`, `to_responses_input`,
+  `to_gemini`, and
   `llm/claude_code/adapter.py::ClaudeCodeChatSession._render_conversation`)
-  call the same internal `_render_full_history_result(block,
-  newest_email_snapshot)` primitive, so none of them can silently skip this
-  projection. This is the ONE full-history projection `interface_converters`
-  still performs: the two timely-transient `_meta` families
-  (`agent_meta`/`guidance`, `notifications`/`notification_guidance`) are no
-  longer filtered by wire serialization at all — every historical holder's
-  content reaches the model as-is, and only the newest holder per family is
-  the reading convention the model must follow (see
-  `lingtai.kernel.meta_block`). Email remains projected because it is a
-  stamped whole-body snapshot/tombstone lane, not a sparse timely hint: an
-  old nonempty snapshot left in full-history replay would read as
-  still-current unread mail with nothing else in the wire signaling it went
-  stale.
-- **In-process explicit clear marker.** The producer (`tools/email/
-  primitives.py::_rerender_unread_digest`) deletes `.notification/email.json`
-  when unread count reaches zero, which on its own leaves no wire evidence
-  that the snapshot ended. `attach_active_notifications`
-  (`src/lingtai/kernel/meta_block.py`) is the owner of this clear-transition
-  WHILE THE PROCESS KEEPS RUNNING: whenever it observes that a live email
-  snapshot has become absent, it stamps a durable, append-only tombstone in
-  its place — `{"cleared": true, "cleared_at": <iso>}`, built by
-  `meta_block.build_email_persistent_cleared_marker` — onto whatever
-  dict-shaped tool result is available that turn. The tombstone carries no
-  message content. Once stamped, it is itself the newest authoritative email
-  state and the whole-snapshot filter above removes every earlier nonempty
-  snapshot the same way it would for a newer nonempty snapshot. If no
-  dict-shaped result exists that turn, the witnessed transition is retained
+  serialize every historical `ToolResultBlock.content` — including every
+  `notification_persistent.email` child, live or cleared, old or new — AS
+  RECORDED. This is the same treatment the two timely-transient `_meta`
+  families (`agent_meta`/`guidance`, `notifications`/`notification_guidance`)
+  already receive: every historical holder's content reaches the model
+  as-is, and only the newest holder per family/lane is the reading
+  convention the model must follow (see `lingtai.kernel.meta_block`). An old
+  nonempty snapshot left in full-history replay reads as historical
+  unread-mail evidence, not current state, precisely because the model is
+  taught to apply the newest-wins reading convention — the same way it
+  already must for `agent_meta`/`notifications`.
+- **In-process explicit clear marker (append-only).** The producer
+  (`tools/email/ primitives.py::_rerender_unread_digest`) deletes
+  `.notification/email.json` when unread count reaches zero, which on its
+  own leaves no wire evidence that the snapshot ended. `attach_active_
+  notifications` (`src/lingtai/kernel/meta_block.py`) is the owner of this
+  clear-transition WHILE THE PROCESS KEEPS RUNNING: whenever it observes
+  that a live email snapshot has become absent, it stamps a durable,
+  append-only tombstone — `{"cleared": true, "cleared_at": <iso>}`, built by
+  `meta_block.build_email_persistent_cleared_marker` — onto whatever FRESH
+  dict-shaped tool result THIS batch is building (never an existing/prior
+  holder). The tombstone carries no message content. Once stamped, it is
+  the newest block in wire order and therefore the reading-convention
+  winner; every earlier nonempty snapshot remains present, unmodified, as a
+  historical trace. If no dict-shaped result exists that turn, the witnessed
+  transition is retained
   as a bounded pending-clear intent (`agent._email_pending_clear`, a single
   boolean, not a log) and consumed exactly once on the next turn that offers
   a carrier. The context-molt batch is a DISTINCT seam: it bypasses
   `attach_active_notifications` entirely and instead calls
   `skeletonize_notification_holder` directly on the live holder
   (`base_agent/turn.py`). That holder can be a SYNTHESIZED IDLE/ASLEEP-wake
-  pair (built by `_inject_notification_pair`), whose content
-  `skeletonize_notification_holder` destructively wipes in place — unlike an
-  ordinary tool-result holder, whose content it leaves untouched. Before that
-  destructive wipe, `meta_block.note_email_clear_intent_before_holder_destroyed`
-  inspects the outgoing holder and notes the same pending-clear flag if it
-  was carrying a live email snapshot, so the obligation survives the
-  destruction of its only evidence. This mechanism has an implicit deadline
+  pair (built by `_inject_notification_pair`); `skeletonize_notification_holder`
+  releases it from live tracking WITHOUT mutating it — identically to how it
+  releases an ordinary tool-result holder, whose content it also leaves
+  untouched. Losing the LIVE reference is still the moment a pending clear
+  obligation must be captured, so before that release,
+  `meta_block.note_email_clear_intent_before_holder_destroyed` inspects the
+  outgoing holder and notes the same pending-clear flag if it was carrying a
+  live email snapshot. This mechanism has an implicit deadline
   (the next real tool result), which is always reachable while the process
   is alive; if the process exits first, the next start's reconciliation
   (below) independently re-derives the same conclusion.
@@ -436,14 +446,15 @@ mailbox/disk state:
   unresolved email lane and no background resource survives a failed
   `start()`.
 
-The producer (`email.read`) remains the source of truth regardless of any of
-these three mechanisms; together they only prevent a superseded snapshot (or
-a snapshot that has since gone to zero, including across a restart) from
-misrepresenting itself as current sender/body/count during replay — and,
-critically, they do so before the FIRST render a restarted process can
-produce, not merely before some later render. Delta lanes are unaffected by
-any of them — their `previous_block` continuity is exactly why they are NOT
-filtered this way.
+The producer (`email.read`) remains the source of truth regardless of these
+mechanisms; together they only make it determinable, by reading order, that
+a superseded snapshot (or a snapshot that has since gone to zero, including
+across a restart) is no longer current sender/body/count as of the newest
+wire-order block — never by removing the superseded snapshot from replay.
+They do so before the FIRST render a restarted process can produce, not
+merely before some later render. Delta lanes are unaffected by either
+mechanism — their `previous_block` continuity already makes the newest-wins
+reading convention explicit without a whole-snapshot/tombstone shape.
 
 **Startup-to-live-sync handoff.** `reconcile_email_persistent_history` can
 append the current email snapshot into restored history before the main
@@ -531,11 +542,12 @@ In-memory state involved in this contract:
   carrier); and (2) by
   `meta_block.note_email_clear_intent_before_holder_destroyed`, called from
   `base_agent/turn.py`'s context-molt branch immediately before it calls
-  `skeletonize_notification_holder` directly on the live holder — a
-  SYNTHESIZED IDLE/ASLEEP-wake holder's live email content is destructively
-  wiped in place by that call (unlike an ordinary tool-result holder, whose
-  content skeletonize leaves untouched), so the flag must be noted from the
-  still-intact holder before that happens. Consumed exactly once, by
+  `skeletonize_notification_holder` directly on the live holder — that call
+  releases a SYNTHESIZED IDLE/ASLEEP-wake holder from live tracking WITHOUT
+  mutating its live email content (identically to an ordinary tool-result
+  holder, whose content skeletonize also leaves untouched); losing the LIVE
+  reference is still the moment the flag must be noted, so it is captured
+  before that release happens. Consumed exactly once, by
   `attach_active_notifications`, on the next turn that offers a dict-shaped
   carrier; consuming it never manufactures a false clear, because the
   consumer is itself gated on the current round's email actually being
@@ -620,7 +632,7 @@ Re-check this contract whenever a change touches any of these areas:
 - **Generic LICC/MCP:** still publishes bounded previews into the raw
   `.notification/mcp.<name>.json` mirror. That is allowed until the producer has
   a persistent context lane.
-- **Email:** migrated to the same attention/context split. Transient `_meta.notifications.email` is an identity-only high-attention hook carrying `email_ids`; unread context lives in `_meta.notification_persistent.email` as an atomic whole-snapshot lane (no `previous_block`); a transition to zero unread is an explicit `{"cleared": true, "cleared_at": ...}` tombstone, not silence; model-facing full-history replay keeps only the newest whole snapshot-or-clear state and removes every earlier child in full (never a per-id splice); the email tool/store remains source of truth.
+- **Email:** migrated to the same attention/context split. Transient `_meta.notifications.email` is an identity-only high-attention hook carrying `email_ids`; unread context lives in `_meta.notification_persistent.email` as an atomic whole-snapshot lane (no `previous_block`); a transition to zero unread is an explicit `{"cleared": true, "cleared_at": ...}` tombstone, not silence; model-facing full-history replay serializes every whole snapshot-or-clear child AS RECORDED (never a strip, never a per-id splice) — the newest child in wire order is the reading-convention-authoritative one, an append-only fact, not a wire-level deletion of the others; the email tool/store remains source of truth.
 
 ## Notes
 

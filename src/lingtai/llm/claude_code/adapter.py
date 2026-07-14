@@ -33,10 +33,6 @@ from lingtai.kernel.llm.interface import (
 from lingtai.kernel.logging import get_logger
 
 from lingtai.llm.base import LLMAdapter
-from lingtai.llm.interface_converters import (
-    _render_full_history_result,
-    newest_email_snapshot_holder,
-)
 
 logger = get_logger()
 
@@ -230,13 +226,7 @@ class ClaudeCodeChatSession(ChatSession):
                 prompt = self._render_prompt()
                 return self._adapter._invoke(prompt, self._model)
 
-            (action, usage, raw), total_dropped, rounds = self._run_with_overflow_recovery(_do_call)
-            # On successful context-overflow recovery the kernel silently trimmed
-            # oldest entries; inject a [kernel] notice (same idiom as the other
-            # adapters) so the agent learns context was lost — before recording
-            # the assistant turn so the notice precedes it in history.
-            if rounds > 0:
-                self._inject_overflow_notice(total_dropped=total_dropped, rounds=rounds)
+            (action, usage, raw), _total_dropped, _rounds = self._run_with_overflow_recovery(_do_call)
             return self._record_response(action, usage, raw)
         except Exception:
             if restore is not None:
@@ -368,15 +358,16 @@ class ClaudeCodeChatSession(ChatSession):
 
     def _render_conversation(self) -> str:
         # Model-facing full-history serialization: every historical tool
-        # result's content is rendered as-is, including any
-        # ``_meta.agent_meta`` / ``guidance`` / ``notifications`` /
-        # ``notification_guidance`` it carries — this render does not strip
-        # those keys from any holder, same as the shared wire converters.
-        # The email whole-snapshot lane is the one exception: the whole
-        # stale ``notification_persistent.email`` snapshot child is dropped
-        # except on its newest holder — same as the shared wire converters
-        # (see ``lingtai.llm.interface_converters``).
-        newest_email_snapshot = newest_email_snapshot_holder(self._interface)
+        # result's content is rendered as-is, including any ``_meta`` it
+        # carries (``agent_meta`` / ``guidance`` / ``notifications`` /
+        # ``notification_guidance`` / ``notification_persistent``, including
+        # the ``email`` whole-snapshot lane) — this render does not strip,
+        # filter, or select across any holder, same as the shared wire
+        # converters (see ``lingtai.llm.interface_converters``). Which
+        # ``notification_persistent.email`` child is CURRENT is a reading
+        # convention the model applies (newest wins — see
+        # ``lingtai.kernel.meta_block.newest_email_snapshot_holder``), not a
+        # wire strip performed here.
         lines: list[str] = []
         for entry in self._interface._entries:
             role = entry.role
@@ -399,9 +390,7 @@ class ClaudeCodeChatSession(ChatSession):
                         f"ASSISTANT_ACTION: called tool `{block.name}` with input {args}"
                     )
                 elif isinstance(block, ToolResultBlock):
-                    content = _render_full_history_result(
-                        block, newest_email_snapshot
-                    )
+                    content = block.content
                     if not isinstance(content, str):
                         try:
                             content = json.dumps(content, ensure_ascii=False)

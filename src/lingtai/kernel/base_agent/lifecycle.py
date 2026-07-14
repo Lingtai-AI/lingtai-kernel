@@ -135,20 +135,17 @@ def _start(agent) -> None:
     agent._heartbeat_runtime_ready = False
     _start_heartbeat(agent)
 
-    # Restore chat session and token state from filesystem if available
+    # Restore chat session and token state from filesystem if available.
+    # Restored spill manifests are recorded exactly as they were persisted —
+    # no startup rewrite of historical artifact_state/artifact_expired_at
+    # based on current sidecar file-existence (that was a restore-conditioned
+    # canonical mutation with no explicit ``summarize`` replacement; see
+    # ``tool_result_artifacts.py`` module docstring). Current sidecar
+    # availability is a read-time/UI concern, not something backfilled into
+    # provider-visible history.
     chat_history_file = agent._working_dir / "history" / "chat_history.jsonl"
     if chat_history_file.is_file():
         try:
-            # Mark stale spill manifests before the LLM sees them so
-            # expired sidecar files are flagged honestly.
-            from ..tool_result_artifacts import mark_expired_spill_manifests
-            try:
-                expired = mark_expired_spill_manifests(agent._working_dir)
-                if expired:
-                    agent._log("spill_manifests_expired_on_restore", count=expired)
-            except Exception:
-                pass  # best-effort; don't block startup
-
             messages = [
                 json.loads(line)
                 for line in chat_history_file.read_text(encoding="utf-8").splitlines()

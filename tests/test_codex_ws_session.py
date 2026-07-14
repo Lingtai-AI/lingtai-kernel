@@ -1166,37 +1166,20 @@ class _PerTurnToolCallWsTransport(FakeWsTransport):
         yield _completed(rid)
 
 
-def _strip_resident_meta_from_oldest_tool_result(session) -> bool:
-    """Mimic ``attach_active_runtime``: strip the latest-only ``_meta`` blocks
-    from the OLDEST tool result's content in place (the kernel moves them onto
-    the freshest result each turn). Returns True if a result was mutated."""
-    from lingtai.kernel.llm.interface import ToolResultBlock
+def test_repeated_send_with_unchanged_history_stays_incremental():
+    """Core regression for the per-``call_id`` output freeze: across ordinary
+    turns where NO canonical tool-result content changes, the freeze keeps
+    already-sent ``function_call_output.output`` strings byte-stable so the
+    delta stays ``ws_incremental`` (no spurious ``prefix_mismatch``).
 
-    for entry in session._interface.entries:
-        for block in getattr(entry, "content", []) or []:
-            if isinstance(block, ToolResultBlock) and isinstance(block.content, dict):
-                meta = block.content.get("_meta")
-                if isinstance(meta, dict) and (
-                    "agent_meta" in meta or "guidance" in meta or "notifications" in meta
-                ):
-                    meta.pop("agent_meta", None)
-                    meta.pop("guidance", None)
-                    meta.pop("notifications", None)
-                    if not meta:
-                        block.content.pop("_meta", None)
-                    return True
-    return False
-
-
-def test_resident_meta_movement_does_not_break_incremental_delta():
-    """Core regression for resident-meta canonicalization.
-
-    The kernel moves latest-only ``_meta`` blocks off an older tool result onto
-    the freshest one each turn, mutating the older ``ToolResultBlock.content`` in
-    place. Without per-session output freezing that older
-    ``function_call_output.output`` changes between turns, breaking the strict
-    prefix and forcing ``ws_full`` (``prefix_mismatch``). With freezing the older
-    output replays byte-identically and the delta stays ``ws_incremental``.
+    ``attach_active_runtime`` (``meta_block.py``) is append-only — it never
+    strips or mutates an older tool result's recorded ``_meta`` in place, it
+    only stamps the freshest holder — so there is no real code path that
+    mutates historical ``ToolResultBlock.content``. The freeze's only job is
+    to keep genuinely-unchanged history byte-identical across turns; it must
+    NOT paper over content that actually changed (see
+    ``test_frozen_output_refreezes_when_canonical_content_changes`` for that
+    boundary).
     """
     from lingtai.kernel.llm.interface import ToolResultBlock
 
@@ -1213,12 +1196,7 @@ def test_resident_meta_movement_does_not_break_incremental_delta():
         )
     ])  # assistant emits call_2
 
-    # Kernel boundary: the meta hops off call_1's result onto the newer one.
-    # Simulate that in-place mutation BEFORE the next send re-converts history.
-    assert _strip_resident_meta_from_oldest_tool_result(session)
-
-    # Turn 3: answer call_2. The re-converted history now contains call_1 with
-    # its resident meta stripped — the exact prefix-mismatch trigger.
+    # Turn 3: answer call_2. call_1's canonical content is untouched.
     third = session.send([
         ToolResultBlock(
             id="call_2",
@@ -1236,6 +1214,56 @@ def test_resident_meta_movement_does_not_break_incremental_delta():
     assert t.sent_frames[2]["previous_response_id"] == "resp_ws_2"
     delta = t.sent_frames[2]["input"]
     assert [i.get("call_id") for i in delta if i.get("type") == "function_call_output"] == ["call_2"]
+
+
+def test_frozen_output_refreezes_when_canonical_content_changes():
+    """B2 regression: if a historical ``ToolResultBlock.content`` DOES change
+    (e.g. a defensive/future code path, not a sanctioned one today), the
+    per-``call_id`` freeze must NEVER replay the stale pre-change string. It
+    refreezes to the new value, and the honest, expected consequence is a
+    prefix mismatch (``ws_full``) rather than a silent semantic substitution —
+    the freeze is a stable-representation cache for unchanged content, not a
+    vehicle for replaying superseded history.
+    """
+    from lingtai.kernel.llm.interface import ToolResultBlock
+
+    t = _PerTurnToolCallWsTransport()
+    session = _make_session(t)
+
+    session.send("start the tool loop")  # turn 1 -> assistant emits call_1
+    session.send([
+        ToolResultBlock(
+            id="call_1",
+            name="do_x",
+            content={"ok": True, "_meta": {"agent_meta": {"runtime_probe": 9}, "tool_meta": {"id": "call_1"}}},
+        )
+    ])  # assistant emits call_2, freezes call_1's raw output
+
+    # Directly mutate call_1's canonical content in place (out-of-band change,
+    # not going through the freeze at all yet).
+    for entry in session._interface.entries:
+        for block in getattr(entry, "content", []) or []:
+            if isinstance(block, ToolResultBlock) and block.id == "call_1":
+                block.content = {"ok": True, "_meta": {"tool_meta": {"id": "call_1"}}}
+
+    third = session.send([
+        ToolResultBlock(
+            id="call_2",
+            name="do_x",
+            content={"ok": True, "_meta": {"agent_meta": {"runtime_probe": 8}, "tool_meta": {"id": "call_2"}}},
+        )
+    ])
+
+    # The changed call_1 content forces a full replay rather than silently
+    # replaying the stale frozen string.
+    assert third.usage.extra["codex_request_mode"] == "ws_full"
+    replayed = {
+        item["call_id"]: item["output"]
+        for item in t.sent_frames[-1]["input"]
+        if item.get("type") == "function_call_output"
+    }
+    call_1_replayed = json.loads(replayed["call_1"])
+    assert "agent_meta" not in call_1_replayed.get("_meta", {})
 
 
 def test_mismatch_falls_back_to_ws_full_with_safe_reason():

@@ -44,6 +44,34 @@ class WorkerStillRunningError(TimeoutError):
         )
 
 
+class TerminalProviderHistoryError(RuntimeError):
+    """A provider rejected recorded history as unverifiable/unusable, and no
+    retry against the SAME unmodified history can ever succeed.
+
+    Distinct from an ordinary (even non-transient) provider error: AED's
+    normal recovery — close pending tool calls, rebuild the session, inject a
+    recovery prompt, retry, preset-fallback — all resend the identical
+    historical content that the provider just declared unverifiable, so every
+    one of those actions would either repeat the same failure or require
+    silently mutating/substituting historical content, which only an explicit
+    ``summarize`` replacement may do. ``_run_loop`` must treat this as an
+    immediate terminal failure: report it, then go ASLEEP without spending an
+    AED attempt, closing pending tool calls, rebuilding the session, or
+    attempting preset fallback.
+
+    The triggering provider exception is preserved as ``__cause__`` (never
+    swallowed) so the original diagnostic is still visible.
+    """
+
+    def __init__(self, *, provider: str, detail: str, cause: BaseException):
+        self.provider = provider
+        self.detail = detail
+        super().__init__(
+            f"{provider} reported a terminal provider-history failure: {detail}"
+        )
+        self.__cause__ = cause
+
+
 def _send(
     submit_fn,
     timeout_pool: ThreadPoolExecutor,

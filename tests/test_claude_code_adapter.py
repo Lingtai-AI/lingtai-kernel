@@ -385,57 +385,55 @@ def test_successful_send_does_not_roll_back():
 
 
 # ---------------------------------------------------------------------------
-# Overflow recovery: a successful recovery must inject a [kernel] notice and
-# still return the final assistant response.
+# Overflow fail-loud: a context-overflow CLI error propagates unconditionally
+# — no trim, no shortened-wire retry, no fake-success [kernel] notice. See
+# the provider-context rebuild/replay invariant in
+# lingtai.llm.interface_converters and lingtai.kernel.llm.base.ChatSession.
 # ---------------------------------------------------------------------------
 
 
 def _seed_conversation(sess, turns=3):
-    """Run a few successful final turns so the interface has trimmable history."""
+    """Run a few successful final turns so the interface has real history."""
     out = _envelope('{"action":"final","text":"ok"}')
     with patch("lingtai.llm.claude_code.adapter.subprocess.run", return_value=_FakeProc(stdout=out)):
         for i in range(turns):
             sess.send(f"message {i}")
 
 
-def test_successful_overflow_recovery_injects_notice():
+def test_overflow_error_propagates_preserves_history_no_notice():
     ad = ClaudeCodeAdapter(model="sonnet")
     sess = ad.create_chat("sonnet", "sys", None)
     _seed_conversation(sess, turns=3)
-    before = len(sess.interface._entries)
-    assert before > 2  # enough non-system entries that a trim can drop one
+    pre_entries = list(sess.interface._entries)
 
     overflow = _FakeProc(stdout="", stderr="Error: prompt is too long", returncode=1)
-    success = _FakeProc(stdout=_envelope('{"action":"final","text":"recovered"}'))
-    # First CLI call overflows; after the kernel trims, the retry succeeds.
     with patch(
         "lingtai.llm.claude_code.adapter.subprocess.run",
-        side_effect=[overflow, success],
+        side_effect=[overflow],
     ):
-        resp = sess.send("the message that overflows")
+        try:
+            sess.send("the message that overflows")
+            raise AssertionError("expected the overflow error to propagate")
+        except Exception:
+            pass
 
-    # The final response is still returned.
-    assert resp.text == "recovered"
-    assert resp.tool_calls == []
+    # Canonical history is byte-identical: nothing was trimmed, and the
+    # failed user message was reverted rather than left stranded.
+    assert sess.interface._entries == pre_entries
 
-    # A [kernel] overflow notice was injected as a user entry, and it sits
-    # before the recorded assistant response (notice, then assistant).
+    # No [kernel] overflow notice — there was no recovery, only a truthful
+    # terminal failure that must reach the caller's AED recovery path.
     texts = [
         b.text
         for e in sess.interface._entries
         for b in e.content
         if isinstance(b, TextBlock)
     ]
-    notice = [t for t in texts if t.startswith("[kernel] Context exceeded")]
-    assert len(notice) == 1
-    # Tail is the assistant response; the entry just before it is the notice.
-    assert sess.interface._entries[-1].role == "assistant"
-    assert sess.interface._entries[-2].role == "user"
-    assert sess.interface._entries[-2].content[0].text.startswith("[kernel] Context exceeded")
+    assert not any(t.startswith("[kernel] Context exceeded") for t in texts)
 
 
 def test_no_overflow_means_no_notice():
-    """Guard: a clean turn (0 rounds) injects no overflow notice."""
+    """Guard: a clean turn injects no overflow notice."""
     ad = ClaudeCodeAdapter(model="sonnet")
     sess = ad.create_chat("sonnet", "sys", None)
     out = _envelope('{"action":"final","text":"fine"}')

@@ -1,31 +1,39 @@
-"""Tool-result artifact store — preventive spill + retroactive history compaction.
+"""Tool-result artifact store — preventive spill of oversized fresh results.
 
-Two related concerns live here:
+``spill_oversized_result`` is called by ``ToolExecutor`` on every
+newly-built tool result, before it ever reaches canonical history or a
+provider wire.  If serialized content exceeds ``PREVENTIVE_MAX_CHARS``
+(200_000 hard ceiling), the full original is written to
+``<workdir>/tmp/tool-results/<…>.{json,txt}`` and a compact manifest dict
+(``status="spilled"``, ``artifact="lingtai_tool_result_spill"``) replaces
+the wire-bound content of that fresh result. This is a first-construction
+decision, not a rebuild/replay mutation: the manifest IS the canonical
+content from the moment the result is built, so no historical holder is
+ever rewritten by this module.
 
-1. **Preventive spill** (``spill_oversized_result``) — called by ``ToolExecutor``
-   on every newly-built tool result.  If serialized content exceeds
-   ``PREVENTIVE_MAX_CHARS`` (200_000 hard ceiling), the full original is written to
-   ``<workdir>/tmp/tool-results/<…>.{json,txt}`` and a compact manifest dict
-   (``status="spilled"``, ``artifact="lingtai_tool_result_spill"``) replaces
-   the wire-bound content.
+This module previously also retroactively rewrote ``ToolResultBlock.content``
+already committed to canonical history (via a since-removed
+``compact_oversized_history``, invoked by the AED retry path in
+``base_agent/turn.py``). That mutated historical tool-result bodies without
+an explicit ``summarize`` replacement, which the provider-context replay
+invariant forbids — only ``lingtai.tools.system.summarize`` may replace a
+historical tool-result body. An unresolved over-window AED error now fails
+loud (deterministically exhausts AED and falls through to the existing
+preset-fallback / ASLEEP path) instead of being silently shrunk; see
+``base_agent/turn.py::_is_over_window_error``.
 
-2. **Retroactive compaction** (``compact_oversized_history``) — called by the
-   AED retry path in ``base_agent/turn.py`` *before* the LLM retry/replay
-   happens.  Walks the live ``ChatInterface._entries`` and rewrites any
-   ``ToolResultBlock.content`` that already grew past ``RETROACTIVE_MAX_CHARS``
-   (5_000) into the same manifest shape.  Entry order, role, ids,
-   ``tool_call``/``tool_result`` pairing, and ``synthesized`` flags are
-   untouched — only ``ToolResultBlock.content`` is mutated.
-
-Both paths produce the same manifest dict, recognised by
-``is_spill_manifest``.  The retroactive helper uses that recogniser to skip
-content that is already a manifest, making compaction idempotent across
-repeated AED retries.
-
-The 200K hard cap on the live wire vs. the 5K cap on history is deliberate: a
-freshly-built result has room for stamp_meta and small reserved warnings,
-while a result already sitting in history is a sunk cost we want to shrink
-hard before retry to free up provider tokens.
+This module also previously exposed a since-removed ``mark_expired_spill_
+manifests``, called from ``base_agent/lifecycle.py::_start`` on every
+restore to rewrite historical spill-manifest fields (``artifact_state``,
+``artifact_expired_at``, ``warning``, and a legacy ``artifact_lifetime``
+backfill) in ``history/chat_history.jsonl`` based on CURRENT sidecar
+file-existence. That was the same category of violation as
+``compact_oversized_history`` above: a startup/restore-conditioned rewrite
+of already-committed ``ToolResultBlock.content`` with no explicit
+``summarize`` replacement. Restored/persisted spill manifests are recorded
+exactly as they were written; current sidecar availability is a read-time
+concern for a non-provider-facing surface (UI/log/access-time diagnostic),
+not something the kernel silently back-writes into provider-visible history.
 """
 from __future__ import annotations
 
@@ -33,9 +41,8 @@ import datetime as _dt
 import json as _json
 import re as _re
 import uuid as _uuid
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .workdir import workdir_layout
 from ._fsutil import atomic_write_text
@@ -64,11 +71,6 @@ _HOISTED_RESERVED_FIELDS = ("_advisory",)
 # result, before it reaches the LLM wire. This is the non-configurable hard
 # ceiling for provider-visible tool results.
 PREVENTIVE_MAX_CHARS = 200_000
-
-# Retroactive cap — applied by the AED recovery path to results already
-# committed to the chat interface.  Tighter than the preventive cap so the
-# pre-retry compaction actually frees space.
-RETROACTIVE_MAX_CHARS = 5_000
 
 # Filename slugging — keep tool/call-id readable but filesystem-safe.
 _FILENAME_SAFE_RE = _re.compile(r"[^A-Za-z0-9_.-]+")
@@ -271,226 +273,3 @@ def spill_oversized_result(
             break
         manifest["preview"] = preview[: max(0, len(preview) // 2)]
     return manifest
-
-
-@dataclass
-class CompactionStats:
-    """Summary of a single ``compact_oversized_history`` pass.
-
-    Bounded shape — safe to log verbatim without blowing up the event log
-    even on large transcripts.  ``artifact_paths`` is capped at
-    ``_MAX_LOGGED_ARTIFACT_PATHS`` (16) entries to keep individual log
-    lines small while still letting an operator see what was spilled.
-    """
-
-    scanned_blocks: int = 0
-    compacted_blocks: int = 0
-    original_chars_total: int = 0
-    replacement_chars_total: int = 0
-    artifact_paths: list[str] = field(default_factory=list)
-
-    def to_log_fields(self) -> dict[str, Any]:
-        return {
-            "scanned_blocks": self.scanned_blocks,
-            "compacted_blocks": self.compacted_blocks,
-            "original_chars_total": self.original_chars_total,
-            "replacement_chars_total": self.replacement_chars_total,
-            "artifact_paths": list(self.artifact_paths),
-        }
-
-
-_MAX_LOGGED_ARTIFACT_PATHS = 16
-
-
-def compact_oversized_history(
-    interface: Any,
-    *,
-    working_dir: Path | str | None,
-    max_chars: int = RETROACTIVE_MAX_CHARS,
-    logger_fn: Callable[..., None] | None = None,
-) -> CompactionStats:
-    """Rewrite oversized tool-result content in the live chat interface in place.
-
-    Walks ``interface._entries`` and replaces ``ToolResultBlock.content``
-    whose serialized length exceeds ``max_chars`` with the same compact
-    manifest produced by ``spill_oversized_result``.  Entries are never
-    reordered, never deleted, and no field other than ``ToolResultBlock.content``
-    is touched — id / name / synthesized / pairing with ``ToolCallBlock``
-    remain intact.
-
-    Idempotent: content that is already a spill manifest (detected by
-    ``is_spill_manifest``) is skipped, so repeated invocations across
-    successive AED retries do not duplicate artifacts.
-
-    Returns a ``CompactionStats`` summary.  Designed to be a safe no-op
-    when ``interface`` is None, lacks ``_entries`` / ``entries``, or when
-    ``working_dir`` is None — callers can invoke it without pre-checks
-    and rely on ``stats.compacted_blocks`` to decide whether downstream
-    persistence (save chat history) is needed.
-    """
-    stats = CompactionStats()
-    if interface is None:
-        return stats
-    # Late import to avoid a circular import at module load time —
-    # ``llm.interface`` imports nothing from this module today, but the
-    # base_agent package pulls both transitively.
-    try:
-        from .llm.interface import ToolResultBlock
-    except ImportError:
-        return stats
-
-    entries = getattr(interface, "_entries", None)
-    if entries is None:
-        entries = getattr(interface, "entries", None)
-    if not entries:
-        return stats
-
-    for entry in entries:
-        content = getattr(entry, "content", None)
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, ToolResultBlock):
-                continue
-            stats.scanned_blocks += 1
-            if is_spill_manifest(block.content):
-                continue
-            current_chars = _serialized_len(block.content)
-            if current_chars <= max_chars:
-                continue
-            manifest = spill_oversized_result(
-                block.content,
-                max_chars=max_chars,
-                tool_name=block.name,
-                tool_call_id=block.id,
-                working_dir=working_dir,
-                source="retroactive",
-            )
-            # Only mutate the content field — pairing / id / name /
-            # synthesized must survive untouched so the wire alternation
-            # and tool_use/tool_result correlation stay valid.
-            block.content = manifest
-            stats.compacted_blocks += 1
-            stats.original_chars_total += current_chars
-            stats.replacement_chars_total += _serialized_len(manifest)
-            spill_path = manifest.get("spill_path") if isinstance(manifest, dict) else None
-            if spill_path and len(stats.artifact_paths) < _MAX_LOGGED_ARTIFACT_PATHS:
-                stats.artifact_paths.append(spill_path)
-            if logger_fn is not None:
-                try:
-                    logger_fn(
-                        "tool_result_compacted_retroactively",
-                        tool_name=block.name,
-                        tool_call_id=block.id,
-                        original_char_count=manifest.get("original_char_count"),
-                        spill_path=spill_path,
-                    )
-                except Exception:
-                    pass
-    return stats
-
-
-def mark_expired_spill_manifests(working_dir: Path | str) -> int:
-    """Scan persisted chat history for spill manifests whose sidecar files are gone.
-
-    Walks ``<working_dir>/history/chat_history.jsonl`` and, for every JSON
-    line that contains a spill manifest (recognised by ``is_spill_manifest``),
-    checks whether the ``spill_path`` file still exists on disk.
-
-    * If **missing**: sets ``artifact_state="expired"`` and stamps
-      ``artifact_expired_at`` with the current UTC ISO timestamp.
-    * If **present**: ensures ``artifact_state="available"`` (no timestamp).
-
-    The file is rewritten **only if** at least one manifest was mutated, so
-    the function is idempotent and cheap when nothing changed.
-
-    Returns the count of manifests whose sidecar was missing (i.e. now
-    marked ``"expired"``).
-    """
-    wd = Path(working_dir)
-    history_path = workdir_layout(wd).chat_history
-    if not history_path.is_file():
-        return 0
-
-    lines = history_path.read_text(encoding="utf-8").splitlines()
-    changed = False
-    expired_count = 0
-    now_iso: str | None = None  # lazy — only generated if needed
-
-    def _mark_manifest(manifest: dict) -> None:
-        nonlocal changed, expired_count, now_iso
-        spill_path = manifest.get("spill_path")
-        if not spill_path:
-            return
-        # Backfill artifact_lifetime for legacy manifests that predate #192.
-        if "artifact_lifetime" not in manifest:
-            manifest["artifact_lifetime"] = "ephemeral_tmp"
-            changed = True
-        abs_path = wd / spill_path
-        if abs_path.is_file():
-            # Sidecar still on disk — ensure available state.
-            if manifest.get("artifact_state") != "available":
-                manifest["artifact_state"] = "available"
-                manifest.pop("artifact_expired_at", None)
-                changed = True
-        else:
-            # Sidecar gone — mark expired.
-            expired_warning = (
-                "EXPIRED: This tool result was stored in a temporary "
-                "sidecar file that no longer exists. The full content is "
-                "unavailable. Use the preview below if sufficient, or "
-                "rerun the source tool to regenerate the result."
-            )
-            if manifest.get("artifact_state") != "expired":
-                if now_iso is None:
-                    now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat(
-                        timespec="seconds"
-                    )
-                manifest["artifact_state"] = "expired"
-                manifest["artifact_expired_at"] = now_iso
-                manifest["warning"] = expired_warning
-                changed = True
-                expired_count += 1
-            elif "artifact_expired_at" not in manifest:
-                # Already expired but missing timestamp — backfill.
-                if now_iso is None:
-                    now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat(
-                        timespec="seconds"
-                    )
-                manifest["artifact_expired_at"] = now_iso
-                changed = True
-            # Always overwrite stale warning text on expired manifests.
-            if manifest.get("warning") != expired_warning:
-                manifest["warning"] = expired_warning
-                changed = True
-
-    def _walk(value: Any) -> None:
-        if isinstance(value, dict):
-            if is_spill_manifest(value):
-                _mark_manifest(value)
-            else:
-                for v in value.values():
-                    _walk(v)
-        elif isinstance(value, list):
-            for item in value:
-                _walk(item)
-
-    new_lines: list[str] = []
-    for line in lines:
-        if not line.strip():
-            new_lines.append(line)
-            continue
-        try:
-            entry = _json.loads(line)
-        except (_json.JSONDecodeError, ValueError):
-            new_lines.append(line)
-            continue
-        _walk(entry)
-        new_lines.append(_json.dumps(entry, ensure_ascii=False, default=str))
-
-    if changed:
-        atomic_write_text(
-            history_path,
-            "\n".join(new_lines) + ("\n" if new_lines else ""),
-        )
-    return expired_count

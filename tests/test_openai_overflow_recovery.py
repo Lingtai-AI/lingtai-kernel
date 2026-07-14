@@ -1,9 +1,13 @@
-"""Tests for OpenAIChatSession context-overflow auto-recovery.
+"""Tests for OpenAIChatSession context-overflow fail-loud propagation.
 
-When a provider returns 400 with context_length_exceeded, the adapter
-trims the oldest ~10% of non-system entries and retries — up to
-_OVERFLOW_MAX_ROUNDS times — then injects a [kernel] notice telling the
-agent to molt soon.
+When a provider returns 400 with context_length_exceeded, the kernel has no
+license to silently discard historical canonical entries to fix that — only
+an explicit ``summarize`` replacement may replace a historical tool-result
+body (see ``lingtai.tools.system.summarize`` and the provider-context
+rebuild/replay invariant in ``lingtai.llm.interface_converters``). The
+overflow error is classified/logged for diagnostics and re-raised
+unconditionally: no trim, no retry with a shortened wire, no fake success
+notice. It propagates into the existing AED over-window recovery path.
 """
 from __future__ import annotations
 
@@ -103,81 +107,20 @@ def test_does_not_detect_non_bad_request():
 
 
 # ---------------------------------------------------------------------------
-# Trimming
+# No trimming machinery exists anymore
 # ---------------------------------------------------------------------------
 
 
-def test_trim_drops_at_least_one_oldest_entry():
-    iface = ChatInterface()
-    iface.add_system("sys")
-    _seed_history(iface, n_pairs=10)
-    session = _make_session(client=MagicMock(), interface=iface)
-    pre = len(iface._entries)
-    dropped = session._trim_context_one_round()
-    assert dropped >= 1
-    assert len(iface._entries) == pre - dropped
-    assert iface._entries[0].role == "system"  # system preserved
-
-
-def test_trim_preserves_tool_call_result_pair():
-    iface = ChatInterface()
-    iface.add_system("sys")
-    # Build a layout where the front-half cut would land mid-pair.
-    # Many small entries followed by an assistant[tool_call] -> user[tool_result]
-    # pair near the cut point.
-    for i in range(8):
-        iface.add_user_message(f"q{i}")
-        iface.add_assistant_message(
-            [TextBlock(text=f"a{i}")],
-            model="gpt-test",
-            provider="openai",
-        )
-    # Insert a tool_call/result pair early so the 10% cut hits inside it.
-    iface.add_assistant_message(
-        [ToolCallBlock(id="tc1", name="search", args={})],
-        model="gpt-test",
-        provider="openai",
-    )
-    iface.add_tool_results([ToolResultBlock(id="tc1", name="search", content="result")])
-    # Tail
-    iface.add_user_message("recent")
-    iface.add_assistant_message([TextBlock(text="ok")], model="gpt-test", provider="openai")
-
-    session = _make_session(client=MagicMock(), interface=iface)
-    session._trim_context_one_round()
-
-    # Verify: every remaining ToolCallBlock id has a matching ToolResultBlock,
-    # and every remaining ToolResultBlock id has a matching ToolCallBlock.
-    call_ids = set()
-    result_ids = set()
-    for e in iface._entries:
-        for b in e.content:
-            if isinstance(b, ToolCallBlock):
-                call_ids.add(b.id)
-            elif isinstance(b, ToolResultBlock):
-                result_ids.add(b.id)
-    assert call_ids == result_ids, (
-        f"mismatch — calls={call_ids}, results={result_ids}"
-    )
-
-
-def test_trim_returns_zero_when_only_system_present():
-    iface = ChatInterface()
-    iface.add_system("sys")
-    session = _make_session(client=MagicMock(), interface=iface)
-    assert session._trim_context_one_round() == 0
-
-
-def test_trim_returns_zero_when_single_conversation_entry():
-    iface = ChatInterface()
-    iface.add_system("sys")
-    iface.add_user_message("only")
-    session = _make_session(client=MagicMock(), interface=iface)
-    assert session._trim_context_one_round() == 0
+def test_trim_context_one_round_no_longer_exists():
+    session = _make_session(client=MagicMock())
+    assert not hasattr(session, "_trim_context_one_round")
+    assert not hasattr(session, "_OVERFLOW_MAX_ROUNDS")
+    assert not hasattr(session, "_OVERFLOW_DROP_FRACTION")
+    assert not hasattr(session, "_inject_overflow_notice")
 
 
 # ---------------------------------------------------------------------------
-# Recovery wrapper
+# Recovery wrapper: classify, never trim, always propagate
 # ---------------------------------------------------------------------------
 
 
@@ -199,40 +142,29 @@ def test_recovery_no_overflow_passes_through():
     assert calls["n"] == 1
 
 
-def test_recovery_succeeds_after_one_trim():
+def test_overflow_error_propagates_without_retry_or_trim():
     iface = ChatInterface()
     iface.add_system("sys")
     _seed_history(iface, n_pairs=20)
     session = _make_session(client=MagicMock(), interface=iface)
+    pre_entries = list(iface._entries)
 
     attempts = {"n": 0}
     def do_call():
         attempts["n"] += 1
-        if attempts["n"] == 1:
-            raise _make_overflow_error()
-        return "result"
-
-    result, dropped, rounds = session._run_with_overflow_recovery(do_call)
-    assert result == "result"
-    assert rounds == 1
-    assert dropped >= 1
-
-
-def test_recovery_gives_up_after_max_rounds():
-    iface = ChatInterface()
-    iface.add_system("sys")
-    _seed_history(iface, n_pairs=200)  # plenty to trim
-    session = _make_session(client=MagicMock(), interface=iface)
-
-    def do_call():
         raise _make_overflow_error()
 
     try:
         session._run_with_overflow_recovery(do_call)
+        raise AssertionError("expected the overflow error to propagate")
     except openai.BadRequestError:
         pass
-    else:
-        raise AssertionError("expected BadRequestError after max rounds")
+
+    # Exactly one attempt — no retry with a shortened wire.
+    assert attempts["n"] == 1
+    # Canonical history is byte-identical: nothing was trimmed.
+    assert iface._entries == pre_entries
+    assert len(iface._entries) == len(pre_entries)
 
 
 def test_recovery_reraises_non_overflow_400():
@@ -258,39 +190,37 @@ def test_recovery_reraises_non_overflow_400():
 
 
 # ---------------------------------------------------------------------------
-# End-to-end via send()
+# End-to-end via send(): full preservation, no fake success
 # ---------------------------------------------------------------------------
 
 
-def test_send_recovers_and_injects_kernel_notice():
+def test_send_propagates_overflow_preserves_full_history_no_fake_success():
     iface = ChatInterface()
     iface.add_system("sys")
     _seed_history(iface, n_pairs=20)
+    pre_entries = list(iface._entries)
 
     client = MagicMock()
-    raw = _make_raw_response()
-    # First call raises overflow, second succeeds.
-    client.chat.completions.create.side_effect = [
-        _make_overflow_error(),
-        raw,
-    ]
+    client.chat.completions.create.side_effect = _make_overflow_error()
     session = _make_session(client=client, interface=iface)
 
-    response = session.send("a brand new question")
-    assert response.text == "ok"
-    assert client.chat.completions.create.call_count == 2
+    try:
+        session.send("a brand new question")
+        raise AssertionError("expected the overflow error to propagate")
+    except openai.BadRequestError:
+        pass
 
-    # Find the kernel notice — should be a user-role TextBlock with the
-    # [kernel] prefix and a "molt" recommendation.
-    found = False
+    # Only one call was ever made — no shortened-wire retry.
+    assert client.chat.completions.create.call_count == 1
+    # No [kernel] molt/recovery notice is injected — there was no recovery,
+    # only a truthful terminal failure.
     for entry in iface._entries:
         for b in entry.content:
-            if (isinstance(b, TextBlock)
-                and b.text.startswith("[kernel]")
-                and "molt" in b.text.lower()):
-                found = True
-                break
-    assert found, "expected a [kernel] molt-recommendation notice in interface"
+            if isinstance(b, TextBlock) and b.text.startswith("[kernel]"):
+                raise AssertionError("unexpected [kernel] notice — no fake success")
+    # The failed user message is reverted; canonical history is unchanged
+    # (full preservation — no partial/trimmed state left behind).
+    assert iface._entries == pre_entries
 
 
 def test_send_passes_through_when_no_overflow():

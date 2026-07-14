@@ -3,6 +3,93 @@
 Naming convention:
 - to_<provider>(iface) -> provider message list
 - from_<provider>(messages, ...) -> ChatInterface
+
+-------------------------------------------------------------------------
+Provider-context rebuild/replay invariant and the representation boundary
+-------------------------------------------------------------------------
+Every historical holder's content (``ToolResultBlock.content``, ``_meta``
+in full — ``agent_meta`` / ``guidance`` / ``notifications`` /
+``notification_guidance`` / ``notification_persistent`` including the
+``email`` whole-snapshot lane, and ``ThinkingBlock`` text/``provider_data``)
+must survive full-history conversion UNCHANGED. Config/prompt refresh may
+rebuild the provider session (a fresh call into these functions), but replay
+semantics stay the same as an ordinary send: no path here strips, filters,
+deduplicates, normalizes, substitutes, or otherwise semantically mutates
+historical context content because it is being rebuilt/replayed rather than
+sent for the first time. The ONE exception is an explicit ``summarize``
+replacement (``lingtai.tools.system.summarize``): an agent- or
+operator-triggered marker that replaces a historical tool-result BODY and is
+identical whether the next send is a fresh turn or a rebuild.
+
+What IS permitted here, and why it is representation rather than mutation —
+each item below is the SAME transformation in ordinary send and in
+rebuild/replay; none of them behaves differently, adds content, or removes
+content specifically BECAUSE the call is a rebuild:
+
+- **Role/schema/JSON translation.** Every ``to_<provider>`` function maps
+  canonical block types onto each provider's wire shape and JSON-serializes
+  dict content. This is a lossless format change (semantically equal, not
+  necessarily byte-identical), applied uniformly to every holder — it is not
+  a decision about which content survives.
+- **Provider-required pairing** (:func:`_pair_responses_orphan_function_calls`).
+  The Responses API rejects a ``function_call`` with no matching
+  ``function_call_output``. The guard APPENDS a synthesized placeholder
+  output for an orphaned call — it never removes or rewrites a real
+  historical item, and behaves identically on a first send or a rebuild
+  replay (the condition it reacts to, an unpaired call, can occur either
+  way).
+- **Holder first-construction** (``_pair_responses_orphan_function_calls``'s
+  placeholder, :mod:`lingtai.kernel.tool_result_artifacts`'s preventive
+  spill). A block's canonical content is decided once, when it is first
+  built — before it is ever a "historical holder" a rebuild could act on.
+  Serializing that already-decided content later, including during a
+  rebuild, is not a rebuild-time mutation.
+- **Session-local byte-stable cache, not a content substitution**
+  (``_ws_frozen_outputs`` in ``lingtai.llm.openai.adapter``). This map pins
+  the byte-for-byte wire string this converter already produced for a given
+  ``call_id`` ONLY while the freshly converted canonical output stays
+  identical to what was cached, so the Codex WS strict-prefix delta baseline
+  stays byte-stable across calls that change nothing. It never pins a STALE
+  string once canonical content has genuinely changed: when the one
+  sanctioned in-place canonical rewrite (a ``summarize`` marker/status flip)
+  changes the converted output, the cache refreshes to the new value and
+  that new value serializes from then on — the freeze never replays
+  pre-summarize content after canonical history has moved on, and may force
+  an honest ``ws_full`` / prefix-mismatch replay instead. It is never
+  persisted, never read by any other session/renderer, and a DIFFERENT
+  converter call (a different session, a fresh process) sees the unmodified
+  canonical block.
+
+What is NOT permitted, and was removed from this module for that reason:
+
+- A converter selecting "only the newest occurrence of X" and stripping
+  every earlier occurrence during full-history replay (the former email
+  whole-snapshot projection, ``_render_full_history_result`` /
+  ``_drop_stale_email_snapshot``). Which ``notification_persistent.email``
+  child is CURRENT is now a reading convention the MODEL applies (newest
+  wins — see ``lingtai.kernel.meta_block.newest_email_snapshot_holder``),
+  never a wire strip. Old snapshots remain historical, full-body, and
+  present in every replay; only an explicit clear tombstone or a newer
+  producer-owned snapshot make an old one non-authoritative, and that is a
+  reading-order fact, not a deletion.
+- A rebuild-only handler removing/replacing canonical content unconditionally
+  (the former Codex encrypted-reasoning self-heal, which used to pop
+  ``openai_responses_reasoning_item`` from canonical ``ThinkingBlock.
+  provider_data``; the former AED retroactive compaction, which used to
+  rewrite ``ToolResultBlock.content`` in place with a spill manifest). AED
+  over-window now fails loud into an existing, fully-logged recovery path
+  instead of silently rewriting history — see
+  ``lingtai.kernel.base_agent.turn._is_over_window_error``.
+- A retry that resends history with a DIFFERENT representation of the same
+  recorded item after a provider rejection (the former Codex
+  encrypted-reasoning "self-heal", which retried with
+  ``summary_text``-only reasoning in place of the recorded raw
+  ``openai_responses_reasoning_item`` once the provider reported it
+  unverifiable). ``to_responses_input`` always emits the raw recorded item
+  as-is; an unverifiable-encrypted-content provider error is a terminal
+  condition for that request and propagates observably instead of
+  triggering a second request with altered historical content — see
+  ``lingtai.llm.openai.adapter._is_codex_unverifiable_encrypted_content_error``.
 """
 
 from __future__ import annotations
@@ -19,147 +106,6 @@ from lingtai.kernel.llm.interface import (
     ToolCallBlock,
     ToolResultBlock,
 )
-# Kernel-owned: `lingtai.kernel` may not import the outer `lingtai.llm`
-# package (see tests/test_kernel_isolation.py), so the shared full-history
-# email whole-snapshot traversal lives in `meta_block` and is re-exported
-# here for the five direct converters below (and any external caller that
-# already imports it from this module) — not duplicated.
-from lingtai.kernel.meta_block import newest_email_snapshot_holder
-
-
-# ---------------------------------------------------------------------------
-# ``notification_persistent.email`` whole-snapshot filtering (shared
-# model-facing serialization)
-# ---------------------------------------------------------------------------
-#
-# Email is a producer-owned ATOMIC snapshot lane (see
-# ``lingtai.kernel.meta_block`` / ``LICC_NOTIFICATION_CONTRACT.md``): every
-# stamped ``notification_persistent.email`` child is the producer's entire
-# current unread state (or an explicit ``{"cleared": True, ...}`` tombstone
-# once unread count reaches zero), never an incremental/independent set of
-# per-id records. Correlated fields (``count``, ``newest_received_at``,
-# ``context_comment``, ``email_ids``, ``emails``) describe ONE snapshot as a
-# whole and must never be spliced against a different snapshot. Full-history
-# replay must therefore keep the newest whole child intact and remove every
-# older child in full — never merge/select individual ids/fields across
-# snapshots.
-#
-# This is the ONE remaining full-history projection in this module. The four
-# timely transient ``_meta`` families (``agent_meta``/``guidance``,
-# ``notifications``/``notification_guidance``) are NOT filtered here — every
-# historical holder's content is now serialized as-is (see
-# ``lingtai.kernel.meta_block``'s latest-holder-is-current-state reading
-# rule: only the newest holder is authoritative, but that is a reading
-# convention the model applies, not a wire-level strip). Email remains
-# projected because it is a snapshot/tombstone lane, not a sparse timely
-# hint: an old nonempty snapshot left in full-history replay would read as
-# still-current unread mail with no signal that it went stale, which the
-# other four families' "latest wins" convention alone does not prevent for a
-# stamped whole-body payload like this one.
-
-
-def _load_meta(content: Any) -> tuple[dict | None, dict | None, bool]:
-    """Parse ``content`` into ``(parsed, meta, was_str)``, or ``(None, None, was_str)``.
-
-    Used by :func:`_drop_stale_email_snapshot` to stay lenient about the
-    same canonical content shapes (dict or JSON string; anything
-    unparseable or non-dict yields no ``_meta``) that the kernel-owned
-    :func:`lingtai.kernel.meta_block.newest_email_snapshot_holder` (imported
-    above) already applies via its own parsing helper.
-    """
-    was_str = isinstance(content, str)
-    if was_str:
-        if "_meta" not in content:
-            return None, None, was_str
-        try:
-            parsed = json.loads(content)
-        except ValueError:
-            return None, None, was_str
-    else:
-        parsed = content
-    if not isinstance(parsed, dict):
-        return None, None, was_str
-    meta = parsed.get("_meta")
-    if not isinstance(meta, dict):
-        return None, None, was_str
-    return parsed, meta, was_str
-
-
-def _drop_stale_email_snapshot(
-    meta: dict,
-    block: ToolResultBlock,
-    newest_email_snapshot: ToolResultBlock | None,
-) -> tuple[dict, bool]:
-    """Return ``(meta, changed)`` with a stale whole email child removed.
-
-    Removes the ENTIRE ``notification_persistent.email`` child (never a
-    partial id/field subset) unless ``block`` IS
-    ``newest_email_snapshot`` (compared by identity) — that block alone may
-    keep its email state, whether a live snapshot or a clear tombstone. Only
-    rewrites the ``notification_persistent``/``email`` sub-levels; sibling
-    keys (``mcp`` delta lanes, other ``_meta`` blocks) stay the same objects.
-    ``meta`` may be the original (unmutated) dict when nothing changes —
-    callers must not assume a fresh copy came back.
-    """
-    persistent = meta.get("notification_persistent")
-    if not isinstance(persistent, dict):
-        return meta, False
-    email = persistent.get("email")
-    if not isinstance(email, dict):
-        return meta, False
-    if newest_email_snapshot is block:
-        return meta, False
-
-    new_persistent = {k: v for k, v in persistent.items() if k != "email"}
-    new_meta = dict(meta)
-    if new_persistent:
-        new_meta["notification_persistent"] = new_persistent
-    else:
-        new_meta.pop("notification_persistent", None)
-    return new_meta, True
-
-
-def _render_full_history_result(
-    block: ToolResultBlock,
-    newest_email_snapshot: ToolResultBlock | None,
-) -> Any:
-    """Internal full-history rendering primitive — the ONLY entry point the
-    five model-facing full-history renderers use.
-
-    Applies the one full-history projection this module still performs: the
-    email whole-snapshot filter (:func:`_drop_stale_email_snapshot`, keyed
-    off ``newest_email_snapshot`` — see :func:`newest_email_snapshot_holder`).
-    Every other ``_meta`` key (``agent_meta``/``guidance``,
-    ``notifications``/``notification_guidance``, delta-lane
-    ``notification_persistent`` IM blocks) is left exactly as recorded — full
-    history conversion does not strip those from any holder (see
-    ``lingtai.kernel.meta_block`` for the latest-holder-is-current-state
-    reading rule those families rely on instead).
-
-    A DISTINCT internal function rather than inlined per-renderer so all five
-    renderers below share one email-projection call site with no silent
-    per-renderer bypass.
-
-    Non-mutating by construction: canonical ``ToolResultBlock.content`` /
-    ``ChatInterface`` entries / durable history are never touched — string
-    content is parsed into a fresh object, dict content is copied at the
-    rewritten levels. When there is nothing to remove the ORIGINAL content
-    object is returned unchanged, so unaffected results stay byte-identical
-    across re-serializations.
-    """
-    content = block.content
-    parsed, meta, was_str = _load_meta(content)
-    if parsed is None:
-        return content
-    new_meta, email_changed = _drop_stale_email_snapshot(meta, block, newest_email_snapshot)
-    if not email_changed:
-        return content
-    filtered = dict(parsed)
-    if new_meta:
-        filtered["_meta"] = new_meta
-    else:
-        filtered.pop("_meta")
-    return json.dumps(filtered, default=str) if was_str else filtered
 
 
 # ---------------------------------------------------------------------------
@@ -171,45 +117,42 @@ def to_anthropic(iface: ChatInterface) -> list[dict]:
     """Convert canonical interface to Anthropic message list.
     System entries excluded (Anthropic passes system separately).
     Every historical ``ToolResultBlock``'s content is serialized as-is,
-    including any ``_meta.agent_meta`` / ``guidance`` / ``notifications`` /
-    ``notification_guidance`` it carries — full-history conversion does not
-    strip these keys from any holder. String content passes through
-    unchanged; dict content is re-serialized to JSON (equal, not
-    byte-identical). A ``summarize``-replaced body is the only historical
-    tool-result body a rebuild replaces (see ``lingtai.kernel.meta_block``
-    for the latest-holder-is-current-state reading rule). The email
-    whole-snapshot lane is the one exception: only the newest
-    ``notification_persistent.email`` child is kept (see
-    :func:`newest_email_snapshot_holder`).
+    including any ``_meta`` it carries (``agent_meta`` / ``guidance`` /
+    ``notifications`` / ``notification_guidance`` /
+    ``notification_persistent`` — including the ``email`` whole-snapshot
+    lane) — full-history conversion does not strip, filter, or select
+    across any holder. String content passes through unchanged; dict
+    content is re-serialized to JSON (equal, not byte-identical). A
+    ``summarize``-replaced body is the only historical tool-result body a
+    rebuild ever replaces. Which ``notification_persistent.email`` child is
+    CURRENT is a reading convention the model applies (newest wins — see
+    ``lingtai.kernel.meta_block.newest_email_snapshot_holder``), not a wire
+    strip performed here.
     """
-    newest_email_snapshot = newest_email_snapshot_holder(iface)
     messages: list[dict] = []
     for entry in iface.entries:
         if entry.role == "system":
             continue
         if entry.role == "user":
             if entry.content and isinstance(entry.content[0], ToolResultBlock):
-                blocks = [_to_anthropic_block(b, newest_email_snapshot) for b in entry.content]
+                blocks = [_to_anthropic_block(b) for b in entry.content]
                 messages.append({"role": "user", "content": blocks})
             elif len(entry.content) == 1 and isinstance(entry.content[0], TextBlock):
                 messages.append({"role": "user", "content": entry.content[0].text})
             else:
-                messages.append({"role": "user", "content": [_to_anthropic_block(b, newest_email_snapshot) for b in entry.content]})
+                messages.append({"role": "user", "content": [_to_anthropic_block(b) for b in entry.content]})
         elif entry.role == "assistant":
-            messages.append({"role": "assistant", "content": [_to_anthropic_block(b, newest_email_snapshot) for b in entry.content]})
+            messages.append({"role": "assistant", "content": [_to_anthropic_block(b) for b in entry.content]})
     return messages
 
 
-def _to_anthropic_block(
-    block: ContentBlock,
-    newest_email_snapshot: ToolResultBlock | None,
-) -> dict:
+def _to_anthropic_block(block: ContentBlock) -> dict:
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
     elif isinstance(block, ToolCallBlock):
         return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.args}
     elif isinstance(block, ToolResultBlock):
-        content = _render_full_history_result(block, newest_email_snapshot)
+        content = block.content
         return {
             "type": "tool_result",
             "tool_use_id": block.id,
@@ -279,16 +222,17 @@ def to_openai(iface: ChatInterface) -> list[dict]:
     """Convert canonical interface to OpenAI Chat Completions message list.
     System entries become role=system.  Tool results become separate role=tool
     messages.  Every historical tool result's content is serialized as-is,
-    including any ``_meta.agent_meta``/``guidance``/``notifications``/
-    ``notification_guidance`` it carries — full-history conversion does not
-    strip these keys from any holder. String content passes through
-    unchanged; dict content is re-serialized to JSON (equal, not
-    byte-identical). A ``summarize``-replaced body is the only historical
-    tool-result body a rebuild replaces. The email whole-snapshot lane is the
-    one exception: only the newest ``notification_persistent.email`` child
-    is kept (see :func:`newest_email_snapshot_holder`).
+    including any ``_meta`` it carries (``agent_meta`` / ``guidance`` /
+    ``notifications`` / ``notification_guidance`` / ``notification_persistent``,
+    including the ``email`` whole-snapshot lane) — full-history conversion
+    does not strip, filter, or select across any holder. String content
+    passes through unchanged; dict content is re-serialized to JSON (equal,
+    not byte-identical). A ``summarize``-replaced body is the only historical
+    tool-result body a rebuild ever replaces. Which ``notification_persistent.
+    email`` child is CURRENT is a reading convention the model applies
+    (newest wins — see ``lingtai.kernel.meta_block.newest_email_snapshot_holder``),
+    not a wire strip performed here.
     """
-    newest_email_snapshot = newest_email_snapshot_holder(iface)
     messages: list[dict] = []
     for entry in iface.entries:
         if entry.role == "system":
@@ -297,7 +241,7 @@ def to_openai(iface: ChatInterface) -> list[dict]:
             if entry.content and isinstance(entry.content[0], ToolResultBlock):
                 for block in entry.content:
                     if isinstance(block, ToolResultBlock):
-                        content = _render_full_history_result(block, newest_email_snapshot)
+                        content = block.content
                         messages.append({
                             "role": "tool",
                             "tool_call_id": block.id,
@@ -418,7 +362,9 @@ def _pair_responses_orphan_function_calls(items: list[dict]) -> list[dict]:
     return patched
 
 
-def to_responses_input(iface: ChatInterface) -> list[dict]:
+def to_responses_input(
+    iface: ChatInterface,
+) -> list[dict]:
     """Convert canonical interface to OpenAI Responses API ``input`` items.
 
     System entries are excluded (the Responses API takes the system prompt
@@ -444,22 +390,34 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
     execution and was rolled back by the adapter (issue #170).
 
     Every historical tool result's content is serialized as-is, including any
-    ``_meta.agent_meta`` / ``guidance`` / ``notifications`` /
-    ``notification_guidance`` it carries — full-history conversion does not
-    strip these keys from any holder. String content passes through
+    ``_meta`` it carries (``agent_meta`` / ``guidance`` / ``notifications`` /
+    ``notification_guidance`` / ``notification_persistent``, including the
+    ``email`` whole-snapshot lane) — full-history conversion does not strip,
+    filter, or select across any holder. String content passes through
     unchanged; dict content is re-serialized to JSON (equal, not
     byte-identical). A ``summarize``-replaced body is the only historical
-    tool-result body a rebuild replaces. On the Codex WS path the
+    tool-result body a rebuild ever replaces. On the Codex WS path the
     per-``call_id`` freeze (``lingtai.llm.openai.adapter._freeze_responses_outputs``)
     keeps already-sent outputs byte-identical STRINGS within an epoch for
     reasons unrelated to this preservation (in-place canonical rewrites such
     as summarize marker/status flips); a fresh replay after an epoch reset
     re-serializes through this converter, which still emits every historical
-    holder's content. The email whole-snapshot lane is the one exception:
-    only the newest ``notification_persistent.email`` child is kept (see
-    :func:`newest_email_snapshot_holder`).
+    holder's content. Which ``notification_persistent.email`` child is
+    CURRENT is a reading convention the model applies (newest wins — see
+    ``lingtai.kernel.meta_block.newest_email_snapshot_holder``), not a wire
+    strip performed here.
+
+    Every recorded ``ThinkingBlock``'s raw
+    ``provider_data["openai_responses_reasoning_item"]`` (when present) is
+    always emitted as-is, on every call, ordinary send or rebuild alike —
+    there is no session-local or replay-only substitution of a different
+    representation for the same recorded item. If the provider reports the
+    encrypted blob unverifiable, that is a terminal provider-side condition
+    for that item (see
+    ``lingtai.llm.openai.adapter._is_codex_unverifiable_encrypted_content_error``);
+    it propagates as an observable failure instead of triggering a second
+    request that resends history in a different form.
     """
-    newest_email_snapshot = newest_email_snapshot_holder(iface)
     items: list[dict] = []
     for entry in iface.entries:
         if entry.role == "system":
@@ -468,7 +426,7 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
             if entry.content and isinstance(entry.content[0], ToolResultBlock):
                 for block in entry.content:
                     if isinstance(block, ToolResultBlock):
-                        content = _render_full_history_result(block, newest_email_snapshot)
+                        content = block.content
                         output = (
                             content
                             if isinstance(content, str)
@@ -495,7 +453,9 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
                 if isinstance(block, TextBlock):
                     text_parts.append(block.text)
                 elif isinstance(block, ThinkingBlock):
-                    raw_item = block.provider_data.get("openai_responses_reasoning_item")
+                    raw_item = block.provider_data.get(
+                        "openai_responses_reasoning_item"
+                    )
                     encrypted_content = (
                         raw_item.get("encrypted_content")
                         if isinstance(raw_item, dict) else None
@@ -549,35 +509,34 @@ def to_gemini(iface: ChatInterface) -> list[dict]:
     """Convert canonical interface to Gemini Interactions TurnParam list.
     System entries excluded (Gemini uses system_instruction parameter).
     Every historical tool result's content is serialized as-is, including any
-    ``_meta.agent_meta`` / ``guidance`` / ``notifications`` /
-    ``notification_guidance`` it carries — full-history conversion does not
-    strip these keys from any holder. String content passes through
+    ``_meta`` it carries (``agent_meta`` / ``guidance`` / ``notifications`` /
+    ``notification_guidance`` / ``notification_persistent``, including the
+    ``email`` whole-snapshot lane) — full-history conversion does not strip,
+    filter, or select across any holder. String content passes through
     unchanged; dict content is re-serialized to JSON (equal, not
     byte-identical). A ``summarize``-replaced body is the only historical
-    tool-result body a rebuild replaces. The email whole-snapshot lane is the
-    one exception: only the newest ``notification_persistent.email`` child
-    is kept (see :func:`newest_email_snapshot_holder`).
+    tool-result body a rebuild ever replaces. Which
+    ``notification_persistent.email`` child is CURRENT is a reading
+    convention the model applies (newest wins — see
+    ``lingtai.kernel.meta_block.newest_email_snapshot_holder``), not a wire
+    strip performed here.
     """
-    newest_email_snapshot = newest_email_snapshot_holder(iface)
     turns: list[dict] = []
     for entry in iface.entries:
         if entry.role == "system":
             continue
         role = "model" if entry.role == "assistant" else "user"
-        turns.append({"role": role, "content": [_to_gemini_block(b, newest_email_snapshot) for b in entry.content]})
+        turns.append({"role": role, "content": [_to_gemini_block(b) for b in entry.content]})
     return turns
 
 
-def _to_gemini_block(
-    block: ContentBlock,
-    newest_email_snapshot: ToolResultBlock | None,
-) -> dict:
+def _to_gemini_block(block: ContentBlock) -> dict:
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
     elif isinstance(block, ToolCallBlock):
         return {"type": "function_call", "id": block.id, "name": block.name, "arguments": block.args}
     elif isinstance(block, ToolResultBlock):
-        content = _render_full_history_result(block, newest_email_snapshot)
+        content = block.content
         return {
             "type": "function_result",
             "call_id": block.id,

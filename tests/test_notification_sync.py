@@ -962,8 +962,9 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     assert agent._notification_block_id == call_block.id
 
 
-def test_sync_idle_skeletonizes_then_reinjects(tmp_path: Path) -> None:
-    """Two consecutive sync calls — old payload is skeletonized, new pair appended."""
+def test_sync_idle_releases_then_reinjects(tmp_path: Path) -> None:
+    """Two consecutive sync calls — old payload is released (append-only,
+    never mutated), new pair appended."""
     from lingtai.kernel.base_agent import BaseAgent
     from lingtai.kernel.state import AgentState
 
@@ -1018,16 +1019,17 @@ def test_sync_idle_skeletonizes_then_reinjects(tmp_path: Path) -> None:
 
     assert second_id is not None
     assert second_id != first_id
-    # Old pair kept as a placeholder skeleton, new pair appended.
+    # Old pair is kept in history verbatim (append-only — released from live
+    # tracking, never mutated); new pair appended as the current holder.
     assert len(agent._chat_stub.interface.entries) == 4
     first_body = agent._chat_stub.interface.entries[1].content[0].content
-    assert first_body["_notification_placeholder"] is True
-    assert "notifications" not in first_body
-    assert "_meta" not in first_body
+    assert first_body["_synthesized"] is True
+    assert first_body["_meta"]["notifications"]["email"]["count"] == 1
 
 
-def test_sync_idle_empty_strips(tmp_path: Path) -> None:
-    """When all producer files are cleared, the wire pair is stripped."""
+def test_sync_idle_empty_releases_holder(tmp_path: Path) -> None:
+    """When all producer files are cleared, the live holder is released
+    from tracking without mutating its recorded wire content."""
     from lingtai.kernel.base_agent import BaseAgent
     from lingtai.kernel.state import AgentState
 
@@ -1073,14 +1075,15 @@ def test_sync_idle_empty_strips(tmp_path: Path) -> None:
     clear_test_payload(tmp_path, "email")
     agent._sync_notifications()
 
-    # The synthesized pair remains in history, but its live payload is
-    # skeletonized so it cannot be mistaken for current notification data.
+    # The synthesized pair remains in history, and its recorded wire content
+    # is untouched (append-only) — only `agent._notification_live_holder` is
+    # released so it is no longer treated as the current notification data.
     assert agent._notification_block_id is not None
     assert len(agent._chat_stub.interface.entries) == 2
     body = agent._chat_stub.interface.entries[1].content[0].content
-    assert body["_notification_placeholder"] is True
-    assert "notifications" not in body
-    assert "_meta" not in body
+    assert body["_synthesized"] is True
+    assert body["_meta"]["notifications"]["email"]["count"] == 1
+    assert agent._notification_live_holder is None
 
 
 def test_sync_no_change_is_noop(tmp_path: Path) -> None:

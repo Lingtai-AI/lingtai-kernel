@@ -439,6 +439,26 @@ def test_build_meta_guidance_renders_guidance_meta_readme_and_adapter():
     assert "1:10" in section
 
 
+def test_build_meta_guidance_teaches_persistent_email_reading_convention():
+    """The resident `meta_guidance` section actually rendered to the model
+    must teach the newest-wins reading convention for
+    `_meta.notification_persistent.email`, not just for the transient
+    `_meta.notifications`/`notification_guidance` families. Before this,
+    LICC_NOTIFICATION_CONTRACT.md claimed the model is taught this rule but
+    `notification_handling.md` only covered the transient lane."""
+    agent = _meta_guidance_agent(None)
+
+    section = build_meta_guidance(agent)
+
+    assert "notification_persistent.email" in section
+    assert "newest-wins reading convention" in section
+    assert "newest whole `notification_persistent.email` child" in section
+    assert "clear tombstone" in section
+    assert "supersedes any earlier unread body" in section
+    assert "`email.read`" in section
+    assert "as source of truth" in section
+
+
 def test_build_meta_guidance_without_adapter_comment_still_renders():
     agent = _meta_guidance_agent(None)
     section = build_meta_guidance(agent)
@@ -2461,13 +2481,14 @@ def test_attach_active_notifications_synthesized_prior_holder_clear_intent(tmp_p
     cleared = batch[0].content["_meta"]["notification_persistent"]["email"]
     assert cleared["cleared"] is True
     assert "emails" not in cleared
-    # The synthesized pair itself is skeletonized (existing, unrelated
-    # behavior: a synthesized pair carries no live payload of its own once
-    # released — the tombstone is a NEW stamp on the new carrier, not a
-    # mutation of the synthesized pair's content).
+    # The synthesized pair itself is only released from live tracking —
+    # append-only: its recorded content, including the live email snapshot,
+    # is never mutated. The tombstone above is a NEW stamp on the new
+    # carrier, not a rewrite of the synthesized pair's own content.
     assert synthesized_holder["_synthesized"] is True
-    assert synthesized_holder["_notification_placeholder"] is True
-    assert "_meta" not in synthesized_holder
+    assert synthesized_holder["_meta"]["notification_persistent"]["email"]["emails"] == [
+        {"id": "email-1"}
+    ]
 
 
 def test_attach_active_notifications_repeated_empty_batches_stamp_exactly_one_clear(
@@ -2661,11 +2682,15 @@ def _legacy_email_content(*, message: str = "legacy unread body", email_id: str 
 
 
 def test_reconcile_email_persistent_history_immediate_clear_all_five_renderers(tmp_path):
-    # Terra v4 correction: v3's bridge only set a pending flag, which no
-    # renderer ever consults -- rendering IMMEDIATELY after reconciliation
-    # (with NO intervening attach_active_notifications / tool-result call)
-    # still leaked the legacy body in all five renderers. This is the
-    # corrected regression: reconcile, then render at once.
+    # Under the literal provider-context rebuild/replay invariant, the
+    # legacy body is NEVER expected to disappear from any renderer -- full
+    # history keeps every holder, including the pre-reconciliation legacy
+    # snapshot, unchanged forever. What this test proves is narrower: the
+    # tombstone this reconciliation appends is ALREADY the newest
+    # wire-visible email state immediately after reconciliation (with NO
+    # intervening attach_active_notifications / tool-result call) -- i.e.
+    # the reading-convention winner is correct from the very first render,
+    # not merely eventually.
     from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
     from lingtai.kernel.meta_block import reconcile_email_persistent_history
 
@@ -2704,8 +2729,13 @@ def test_reconcile_email_persistent_history_immediate_clear_all_five_renderers(t
         for entry in iface.entries[1:]
     )
 
-    # IMMEDIATE render, no intervening attach_active_notifications call.
-    _assert_absent_in_all_five_renderers(iface, "legacy unread body")
+    # IMMEDIATE render, no intervening attach_active_notifications call: the
+    # legacy body survives replay (full-history is a straight pass-through),
+    # but the newest-wire-order holder is already the tombstone.
+    from lingtai.kernel.meta_block import newest_email_snapshot_holder
+
+    _assert_present_in_all_five_renderers(iface, "legacy unread body")
+    assert newest_email_snapshot_holder(iface) is new_result_block
 
 
 def test_reconcile_email_persistent_history_immediate_current_snapshot_replaces_legacy(
@@ -2713,10 +2743,16 @@ def test_reconcile_email_persistent_history_immediate_current_snapshot_replaces_
 ):
     # Legacy live snapshot + current producer state is a DIFFERENT live
     # snapshot (nonzero unread): the current, intact snapshot must be
-    # appended and visible immediately, replacing the legacy one, with no
-    # intervening attach_active_notifications call.
+    # appended and become the newest-wire-order (reading-convention)
+    # authoritative state immediately, with no intervening
+    # attach_active_notifications call. Under the literal invariant the
+    # legacy snapshot is never expected to disappear from replay -- it
+    # survives, non-authoritative by reading order.
     from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock
-    from lingtai.kernel.meta_block import reconcile_email_persistent_history
+    from lingtai.kernel.meta_block import (
+        newest_email_snapshot_holder,
+        reconcile_email_persistent_history,
+    )
 
     iface = ChatInterface()
     iface.add_user_message("start")
@@ -2738,8 +2774,9 @@ def test_reconcile_email_persistent_history_immediate_current_snapshot_replaces_
     assert current_email["email_ids"] == ["current-1"]
     assert "cleared" not in current_email
 
-    _assert_absent_in_all_five_renderers(iface, "legacy unread body")
+    _assert_present_in_all_five_renderers(iface, "legacy unread body")
     _assert_present_in_all_five_renderers(iface, "CURRENT authoritative body")
+    assert newest_email_snapshot_holder(iface) is new_result_block
 
 
 def test_reconcile_email_persistent_history_no_op_when_no_email_history(tmp_path):
@@ -2857,9 +2894,15 @@ def test_reconcile_email_persistent_history_idempotent_across_save_and_restore(t
     reconcile_email_persistent_history(restored_agent)
 
     # Idempotent: the restored history already ends on the clear tombstone,
-    # so no new pair is appended.
+    # so no new pair is appended. The legacy body still survives full
+    # replay (it is never expected to disappear); the tombstone remains the
+    # newest-wire-order, reading-convention-authoritative state.
+    from lingtai.kernel.meta_block import newest_email_snapshot_holder
+
     assert len(restored_iface.entries) == len(restored_messages)
-    _assert_absent_in_all_five_renderers(restored_iface, "legacy unread body")
+    _assert_present_in_all_five_renderers(restored_iface, "legacy unread body")
+    newest = newest_email_snapshot_holder(restored_iface)
+    assert newest.content["_meta"]["notification_persistent"]["email"].get("cleared") is True
 
 
 def test_reconcile_email_persistent_history_idempotent_across_redaction(tmp_path):
@@ -3167,14 +3210,27 @@ def test_lifecycle_start_reconciles_email_before_message_loop_can_render(tmp_pat
         # already run synchronously; the main loop thread (agent._thread)
         # exists but is blocked on inbox.get() with nothing queued, so it
         # cannot have rendered anything yet. Assert on the interface RIGHT
-        # NOW, with no intervening turn.
+        # NOW, with no intervening turn. Under the literal invariant the
+        # legacy body is never expected to disappear from replay -- what
+        # this test proves is narrower and still meaningful: the clear
+        # tombstone reconciliation appends is ALREADY the newest
+        # wire-order (reading-convention-authoritative) email state before
+        # any render is possible, not merely eventually.
+        from lingtai.kernel.meta_block import newest_email_snapshot_holder
+
         assert agent.state == AgentState.IDLE
         iface = agent._chat.interface
         rendered = to_openai(iface)
         tool_contents = [m["content"] for m in rendered if m.get("role") == "tool"]
-        assert not any(
+        assert any(
             "legacy unread body" in c for c in tool_contents if isinstance(c, str)
-        ), "legacy email body still visible immediately after start() -- reconciliation did not run before render was possible"
+        ), "legacy email body missing from replay -- full-history replay must never strip a historical holder"
+        newest = newest_email_snapshot_holder(iface)
+        newest_email = newest.content["_meta"]["notification_persistent"]["email"]
+        assert newest_email.get("cleared") is True, (
+            "reconciliation's clear tombstone must already be the newest "
+            "wire-order email state before any render is possible"
+        )
     finally:
         agent.stop(timeout=2.0)
 
@@ -4104,9 +4160,8 @@ def test_attach_active_notifications_context_molt_batch_preserves_pending_clear_
     # leaves its content untouched, so a later non-molt batch can still
     # recompute `was_email_live` fresh from `prior_holder` -- no pending
     # flag is even needed for this shape. This test locks that baseline.
-    # The SYNTHESIZED-holder case (where skeletonize destructively wipes the
-    # content in place) is a materially different seam, covered separately
-    # by `test_note_email_clear_intent_before_holder_destroyed_*` below.
+    # The SYNTHESIZED-holder case is covered separately by
+    # `test_note_email_clear_intent_before_holder_destroyed_*` below.
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
 
@@ -4134,8 +4189,8 @@ def _real_synthesized_email_holder(*, email_id: str = "email-1", message: str = 
     `_synthesized: True` plus a `_meta` envelope carrying
     `notification_persistent.email`, alongside sibling `_meta.notifications`
     / `notification_guidance` keys a real delivery also carries. Distinct
-    from an ordinary tool-result holder -- this is what
-    `skeletonize_notification_holder` destructively wipes in place."""
+    from an ordinary tool-result holder, but `skeletonize_notification_holder`
+    releases both the same way -- without mutating either."""
     return {
         "_synthesized": True,
         "_meta": {
@@ -4155,13 +4210,12 @@ def _real_synthesized_email_holder(*, email_id: str = "email-1", message: str = 
 def test_note_email_clear_intent_before_holder_destroyed_synthesized_holder_then_zero(
     tmp_path,
 ):
-    # Terra repair-v4 review r2, Blocker 1: the real synthesized-IDLE-holder
-    # -> context-molt -> current-zero -> next-carrier path. Drives the ACTUAL
-    # molt code sequence (note-then-skeletonize, matching base_agent/turn.py's
+    # Terra repair-v4 review r2, Blocker 1 (repaired per the literal
+    # append-only invariant): the real synthesized-IDLE-holder ->
+    # context-molt -> current-zero -> next-carrier path. Drives the ACTUAL
+    # molt code sequence (note-then-release, matching base_agent/turn.py's
     # molt branch exactly) against the REAL synthesized holder shape -- not
-    # an ordinary ToolResultBlock dict, which the earlier (invalid) version
-    # of this regression used and which does not exercise the destructive
-    # skeletonize path at all.
+    # an ordinary ToolResultBlock dict.
     from lingtai.kernel.meta_block import note_email_clear_intent_before_holder_destroyed
 
     agent = _notif_agent(tmp_path)
@@ -4169,17 +4223,19 @@ def test_note_email_clear_intent_before_holder_destroyed_synthesized_holder_then
     agent._notification_live_holder = synth_holder
 
     # Exact molt-branch sequence from base_agent/turn.py: note the clear
-    # obligation BEFORE the destructive skeletonize, then skeletonize.
+    # obligation BEFORE releasing the holder, then release it.
     note_email_clear_intent_before_holder_destroyed(agent)
     assert agent._email_pending_clear is True
     skeletonize_notification_holder(agent)
 
-    # The synthesized holder's content is destructively wiped in place (this
-    # IS the existing, correct, unrelated skeletonize behavior for
-    # synthesized pairs) -- its email content is genuinely gone from that
-    # dict now; the pending flag is the ONLY surviving evidence.
+    # The synthesized holder's content is append-only -- release from live
+    # tracking never mutates it. Its recorded email snapshot survives
+    # verbatim; the pending flag is a SEPARATE, additional signal for the
+    # next carrier, not the only surviving evidence.
     assert synth_holder["_synthesized"] is True
-    assert "_meta" not in synth_holder
+    assert synth_holder["_meta"]["notification_persistent"]["email"]["emails"] == [
+        {"id": "email-1", "message": "live body"}
+    ]
     assert agent._notification_live_holder is None
 
     # Current producer state is now zero unread (no .notification/email.json
@@ -5587,11 +5643,11 @@ def test_attach_active_notifications_picks_latest_dict_in_batch(tmp_path):
 
 # ---------------------------------------------------------------------------
 # skeletonize_notification_holder / clear_active_notification_holder — release
-# the live-holder reference.  Old synthesized notification pairs are replaced
-# by placeholder skeletons (they exist only to carry the payload); a normal
-# tool result RETAINS its payload as a historical trace — notification
-# payloads are timely transient state and canonical history is no longer
-# retroactively stripped (Jason #4307).
+# the live-holder reference.  Both a synthesized notification pair and a
+# normal tool result RETAIN their recorded content unchanged — release is
+# append-only, never a mutation.  Notification payloads are timely transient
+# state and canonical history is never retroactively stripped or rewritten
+# (Jason #4307).
 # ---------------------------------------------------------------------------
 
 
@@ -5621,7 +5677,7 @@ def test_clear_active_notification_holder_retains_normal_live_holder_payload():
     assert agent._notification_live_holder is None
 
 
-def test_clear_active_notification_holder_skeletonizes_synthesized_holder():
+def test_clear_active_notification_holder_retains_synthesized_holder_payload():
     synthesized = {
         "_synthesized": True,
         "_meta": {
@@ -5634,11 +5690,16 @@ def test_clear_active_notification_holder_skeletonizes_synthesized_holder():
 
     clear_active_notification_holder(agent)
 
-    assert synthesized["_synthesized"] is True
-    assert synthesized["_notification_placeholder"] is True
-    assert "kernel-synthesized notification(action=check)" in synthesized["message"]
-    # Synthesized holder is replaced wholesale with the skeleton — _meta gone.
-    assert "_meta" not in synthesized
+    # Release only drops live tracking — the synthesized holder's recorded
+    # content is untouched, append-only, exactly like a normal holder.
+    assert synthesized == {
+        "_synthesized": True,
+        "_meta": {
+            "notification_guidance": "live guidance",
+            "notifications": {"email": {"data": {"count": 1}}},
+        },
+        "current_time": "2026-05-13T00:00:00Z",
+    }
     assert agent._notification_live_holder is None
 
 
@@ -5850,6 +5911,15 @@ def test_attach_active_runtime_moves_to_latest_and_retains_prior():
     holder = attach_active_runtime(agent, [first], prior_holder=None)
     assert "agent_meta" in first.content["_meta"]
 
+    # Documentation/ownership regression (ANATOMY.md's `attach_active_runtime`
+    # paragraph, meta_block.py:4085): a material-change promotion writes
+    # agent_meta/guidance ONLY onto the new target. It must not strip or
+    # otherwise mutate the prior holder's dict in place — snapshot it (deep
+    # copy) before the second call and require exact equality after, not just
+    # key presence.
+    import copy
+    first_content_before_second_batch = copy.deepcopy(first.content)
+
     # Second batch: a new dict result takes over as the newest update point.
     # The prior holder RETAINS its agent_meta/guidance as a historical trace —
     # agent_meta is timely transient state and canonical history is no longer
@@ -5865,6 +5935,9 @@ def test_attach_active_runtime_moves_to_latest_and_retains_prior():
     assert "guidance" in first.content["_meta"]
     assert "current_time" not in second.content["_meta"]["agent_meta"]
     assert second.content["_meta"]["agent_meta"]["active_turn_tool_calls"] == 2
+    # Byte/value equal to the pre-second-batch snapshot: the promotion never
+    # touched the prior holder's dict, not even to re-write an identical value.
+    assert first.content == first_content_before_second_batch
 
 
 def test_attach_active_runtime_picks_latest_dict_in_batch():

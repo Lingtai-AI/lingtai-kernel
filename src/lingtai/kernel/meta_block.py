@@ -2440,22 +2440,31 @@ def newest_email_snapshot_holder(iface):
     Walks ``iface.entries`` in wire order and remembers the LAST block whose
     ``_meta.notification_persistent.email`` is a dict — whether that dict is a
     live nonempty snapshot or an explicit clear tombstone
-    (``{"cleared": True, ...}``). Only that last occurrence is authoritative;
-    every earlier block (nonempty or clear) is superseded and must lose its
-    entire ``.email`` child in full-history replay, whole-block, never
-    per-id. Returns ``None`` when no block in the history carries an email
-    snapshot at all — callers must then leave every block's (nonexistent)
-    email child untouched.
+    (``{"cleared": True, ...}``). Only that last occurrence is authoritative.
+    Earlier blocks (nonempty or clear) are superseded **by reading order**,
+    not by deletion: full-history replay serializes every holder's
+    ``.email`` child exactly as recorded — no wire strip, no per-id or
+    whole-block removal (see the provider-context rebuild/replay invariant
+    in ``lingtai.llm.interface_converters``). Callers use this helper only
+    to decide which child is CURRENT (e.g. whether to append a new
+    snapshot/tombstone), never to remove or alter another block's child.
+    Returns ``None`` when no block in the history carries an email snapshot
+    at all.
 
     Kernel-owned (moved here from ``lingtai.llm.interface_converters`` —
     ``lingtai.kernel`` may not import the outer ``lingtai.llm`` package; see
     ``tests/test_kernel_isolation.py``): both
     :func:`reconcile_email_persistent_history` and
     :func:`reconcile_email_startup_marker_before_empty_commit` need this
-    same traversal at the kernel layer, and ``interface_converters`` — a
-    caller, not the owner — imports/re-exports this symbol so its five
-    direct full-history renderers keep using the identical function with no
-    duplicated traversal logic. Reuses :func:`_email_persistent_child` for
+    same traversal at the kernel layer. ``interface_converters`` does NOT
+    import or re-export this symbol — its five direct full-history
+    renderers serialize ``ToolResultBlock.content`` directly with no
+    filtering/newest-holder step of their own (see
+    ``tests/test_timely_transient_serialization.py::test_content_is_read_directly_without_intermediate_helpers``,
+    which asserts ``newest_email_snapshot_holder`` is absent from
+    ``interface_converters``). "Newest wins" here is a reading convention
+    the MODEL applies over the full, unfiltered replay, not a converter-side
+    selection. Reuses :func:`_email_persistent_child` for
     the per-block parse so the accepted content shapes (dict or JSON
     string; anything unparseable/non-dict yields no email child) stay
     identical to every other email-persistent-child reader in this module —
@@ -2546,13 +2555,17 @@ def _consume_email_pending_clear(agent) -> bool:
 
 
 def note_email_clear_intent_before_holder_destroyed(agent) -> None:
-    """Preserve the clear obligation before a seam that destroys the live holder.
+    """Preserve the clear obligation before a seam that releases the live holder.
 
-    ``skeletonize_notification_holder`` wipes a SYNTHESIZED holder's content
-    in place (``holder.clear(); holder.update(_NOTIFICATION_SKELETON)``) —
-    the live IDLE/ASLEEP wake path's own pair shape (``_inject_notification_pair``),
-    which can carry a live email persistent snapshot exactly like an ordinary
-    tool-result holder can. ``attach_active_notifications`` already captures
+    ``skeletonize_notification_holder`` releases tracking of a SYNTHESIZED
+    holder — the live IDLE/ASLEEP wake path's own pair shape
+    (``_inject_notification_pair``), which can carry a live email persistent
+    snapshot exactly like an ordinary tool-result holder can — WITHOUT
+    mutating its historical content; the holder's dict stays exactly as
+    recorded in canonical history. Losing the LIVE reference still means no
+    future code will read this holder as authoritative going forward, so the
+    email clear obligation (if any) must be captured here, before that
+    release, or it is lost. ``attach_active_notifications`` already captures
     ``was_email_live`` from ``prior_holder`` BEFORE it calls
     ``skeletonize_notification_holder``, so that caller is safe on its own.
     The context-molt path in ``base_agent/turn.py`` is the one caller that
@@ -3566,41 +3579,21 @@ def _stamp_email_cleared_marker_if_possible(tool_results: list) -> bool:
     return True
 
 
-# Skeleton content placed in a synthesized pair's result dict once its live
-# notification payload has been moved away or cleared.  Keeps the pair in
-# history (preserving conversation structure) while making it clear to the
-# LLM — and to future introspective code — that the live data is elsewhere.
-_NOTIFICATION_SKELETON: dict = {
-    "_synthesized": True,
-    "_notification_placeholder": True,
-    "message": (
-        "This was a kernel-synthesized notification(action=check) tool-call pair. "
-        "The live notification payload that was here has been moved to a newer tool "
-        "result metadata block or cleared."
-    ),
-}
-
-
 def skeletonize_notification_holder(agent) -> None:
-    """Release the live notification holder; skeletonize only synthesized pairs.
+    """Release the live notification holder without mutating its history.
 
-    The live holder (``agent._notification_live_holder``) may point to:
-    * A normal tool-result content dict — its ``_meta.notifications`` /
-      ``_meta.notification_guidance`` payload is RETAINED as a historical
-      trace.  Notification payloads are timely transient state (Jason #4307):
-      canonical history is no longer retroactively stripped when the payload
-      moves or disappears; only the newest emitted payload is current.
-      Model-facing full-history serialization preserves every normal-result
-      holder's content and does not strip ``notifications`` or
-      ``notification_guidance`` keys (see
-      ``lingtai.llm.interface_converters``).
-    * A synthesized pair's content dict — replace ALL keys with the skeleton
-      so the pair stays in history but carries no live payload.  The pair
-      exists only to carry the payload; its body is not a tool result the
-      agent produced, so the skeleton remains the honest historical record.
-
-    Synthesized pairs are identified by the presence of ``_synthesized: True``
-    in the holder dict.  Normal tool-result dicts never carry that key.
+    The live holder (``agent._notification_live_holder``) is a dict that is
+    shared by reference with a historical ``ToolResultBlock.content`` already
+    appended to canonical ``ChatInterface`` entries — possibly already sent to
+    a provider. Both normal tool-result holders and synthesized pair holders
+    are simply RELEASED from live tracking here: this function never mutates
+    the dict's keys. Notification payloads are timely transient state (Jason
+    #4307): canonical history is never retroactively stripped or rewritten
+    when the payload moves or disappears; only the newest emitted holder
+    (by wire/reading order — see ``newest_email_snapshot_holder`` for the
+    email lane's own instance of this convention) is current. Model-facing
+    full-history serialization preserves every holder's content unchanged,
+    synthesized or not (see ``lingtai.llm.interface_converters``).
 
     After this call ``agent._notification_live_holder`` is ``None``.
     Called by:
@@ -3609,11 +3602,6 @@ def skeletonize_notification_holder(agent) -> None:
       to a newer normal tool result (via ``prior_holder`` arg).
     * The notifications-cleared path so no holder reference lingers.
     """
-    holder = getattr(agent, "_notification_live_holder", None)
-    if isinstance(holder, dict) and holder.get("_synthesized"):
-        # Synthesized pair — replace entire content with skeleton.
-        holder.clear()
-        holder.update(_NOTIFICATION_SKELETON)
     agent._notification_live_holder = None
 
 
