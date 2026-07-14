@@ -359,6 +359,15 @@ def register_all_adapters() -> None:
             val = d.get(cfg_key)
             if val is not None:
                 codex_id_kw[cfg_key] = val
+        # Standalone Codex compaction threshold (daemon task
+        # ``context_token_limit``). Codex-only and orthogonal to the generic
+        # ``compact_threshold``/``context_management`` this factory never sets
+        # for Codex (see ``CodexOpenAIAdapter._create_responses_session``).
+        # Omitted -> the session falls back to its own resolved
+        # ``context_window()`` at check time.
+        compact_token_limit = d.get("codex_compact_token_limit")
+        if compact_token_limit is not None:
+            codex_id_kw["codex_compact_token_limit"] = compact_token_limit
         # Per-agent Codex OAuth token file (true multiple Codex accounts). When a
         # manifest/preset sets ``codex_auth_path`` to a non-empty path, read that
         # token file instead of the shared default ``~/.lingtai-tui/codex-auth.json``.

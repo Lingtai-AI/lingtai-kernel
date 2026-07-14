@@ -63,12 +63,24 @@ its process, materializes lingtai/tools/skills, or signals completion — that i
 
 Schema `required: ["action"]`. Relevant properties: `tasks[]` (each requires
 `task` + `tools`; optional `skills`, `mcp`, `preset`, `backend_options`,
-`system_prompt`), `id`, `message`, `last`, `truncate`, `contains`, `status`,
-`include_done`, `max_turns`, `timeout`, `backend`, `summary`.
+`system_prompt`, `context_token_limit`), `id`, `message`, `last`, `truncate`,
+`contains`, `status`, `include_done`, `max_turns`, `timeout`, `backend`,
+`summary`.
+
+Per-task `context_token_limit` (positive integer; bool rejected) is a
+context-token compaction threshold — rendered/provider-context tokens, never
+cumulative spend — effective only for `backend="lingtai"` tasks whose
+resolved provider is Codex (`codex`/`codex-pool`); every other provider and
+every external CLI backend ignores it. Omitted, it inherits the parent
+service's resolved context window as the threshold; an explicit value wins.
+See `src/lingtai/tools/daemon/DAEMON_CONTRACT.md` (capability invariant 7) for
+the Codex-only/lingtai-backend-only capability boundary and
+`src/lingtai/llm/openai/ANATOMY.md` ("Standalone Codex compaction") for the
+Codex Responses session mechanics this threshold triggers.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `skills`/`mcp`/`preset`/`backend_options`/`system_prompt` | `{status: "dispatched", count, ids: [...], group_id}` | `{status: "error", message}` — `No tasks provided`, bad `max_turns`/`timeout`, tool-surface/preset build failure |
+| `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `skills`/`mcp`/`preset`/`backend_options`/`system_prompt`/`context_token_limit` | `{status: "dispatched", count, ids: [...], group_id}` | `{status: "error", message}` — `No tasks provided`, bad `max_turns`/`timeout`/`context_token_limit`, tool-surface/preset build failure |
 | `list` | — | `contains`, `status`, `include_done` (default true), `last` | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
 | `ask` | `id`, `message` | — | `{status: "sent", id, output}` (CLI ask returns immediately; `{status: "sent", id, async: true, ...}`) | `{status: "error", id, message}` — unknown/absent id, backend `ask` unsupported, or busy |
 | `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, events: [...]}` | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
@@ -134,6 +146,7 @@ correct cancellation and attribution. Deeper backend-launch details are in
 | `check` surfaces a terminal event for a done emanation and failure error | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_check.py::test_check_includes_terminal_event_for_done_emanation`, `::test_check_includes_failure_error` |
 | CLI-backend `ask` returns immediately and enforces its own timeout | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs`, `::test_ask_codex_silent_subprocess_enforces_timeout` |
 | Token rows are written to both the daemon and parent ledgers, tagged | `src/lingtai/tools/daemon/run_dir.py` | `tests/test_daemon_run_dir.py::test_append_tokens_writes_daemon_ledger`, `::test_append_tokens_writes_parent_ledger_tagged` |
+| `context_token_limit` is validated (positive int, bool rejected), reaches Codex-only via `_daemon_provider_defaults`, and is inert for every other provider and every external CLI backend | `src/lingtai/tools/daemon/__init__.py` | `tests/test_codex_standalone_compaction.py::test_daemon_schema_rejects_bool_context_token_limit`, `::test_daemon_schema_rejects_zero_context_token_limit`, `::test_daemon_provider_defaults_injects_codex_compact_token_limit`, `::test_external_cli_backend_ignores_context_token_limit` |
 | `reclaim` cancels running emanations; agent stop shuts the daemon down first | `src/lingtai/tools/daemon/__init__.py` | `tests/test_lifecycle_daemon_shutdown.py::test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock` |
 
 ## Verification matrix
@@ -146,11 +159,12 @@ correct cancellation and attribution. Deeper backend-launch details are in
 | CLI `ask` never blocks the caller's tool thread | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs` | `ask` a hung CLI daemon, confirm immediate return | Parent loop stalls on a hung subprocess |
 | Reclaim kills the right process group / batch | `tests/test_daemon_cli_watchdog_scope.py`, `tests/test_lifecycle_daemon_shutdown.py` | Emanate two batches, reclaim, confirm scoped kill | A batch kills an unrelated newer batch's procs |
 | Dual-ledger token accounting stays correct | `tests/test_daemon_run_dir.py::test_append_tokens_writes_parent_ledger_tagged` | Inspect both token_ledger.jsonl files after a run | Daemon spend double-counted or lost in totals |
+| `context_token_limit` stays Codex-only and inert everywhere else | `tests/test_codex_standalone_compaction.py` | Emanate a `backend='lingtai'` Codex task with an explicit `context_token_limit`, confirm compaction fires only past that threshold | A bad value silently breaks unrelated providers/backends, or Codex requests start sending `context_management` |
 
 Run before merging daemon tool-surface changes:
 
 ```bash
-python -m pytest tests/test_daemon.py tests/test_daemon_check.py tests/test_daemon_backend_options.py tests/test_daemon_run_dir.py tests/test_lifecycle_daemon_shutdown.py -q
+python -m pytest tests/test_daemon.py tests/test_daemon_check.py tests/test_daemon_backend_options.py tests/test_daemon_run_dir.py tests/test_lifecycle_daemon_shutdown.py tests/test_codex_standalone_compaction.py -q
 ```
 
 ## Schema and glossary ownership

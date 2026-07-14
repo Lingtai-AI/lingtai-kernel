@@ -152,6 +152,7 @@ files, not standalone top-level skills.
     new preset for this path), read `system-manual` →
     `reference/substrate-manual/SKILL.md` §11.
   - `backend_options`: raw CLI flags for CLI backends only.
+  - `context_token_limit`: optional context-token compaction threshold (rendered/provider-context tokens, not cumulative spend). Effective only for `backend="lingtai"` tasks whose resolved provider is Codex (`codex`/`codex-pool`) — every other provider and every external CLI backend ignores it. When the session's provider-visible input-token count reaches the limit, the runtime compacts provider context via Codex's standalone compaction (`POST /responses/compact`) and continues the same tool loop — the daemon keeps running; nothing restarts or drops history. Omit to inherit the parent service's resolved context window as the threshold. Must be a positive integer; a boolean is rejected.
 - Treat `system_prompt` as the parent's behavioral contract for **all** tools
   and selected skills/MCP context, not only for communication. If a daemon receives `bash`,
   say whether it may run mutating commands; if it receives file access, say what

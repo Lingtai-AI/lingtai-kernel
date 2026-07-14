@@ -833,6 +833,11 @@ def get_schema(lang: str = "en") -> dict:
                             "type": "string",
                             "description": 'Optional oneshot behavior contract appended to this daemon task: role, constraints, tool-use policy, collaboration boundaries, and safety posture. Leave blank or omit it for the default daemon persona. It can guide how the daemon works, but cannot override tool availability, cancellation/timeout limits, or tool execution/approval guards.',
                         },
+                        "context_token_limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Optional context-token compaction threshold for this daemon task (rendered/provider-context tokens, not cumulative spend). Currently effective only for backend='lingtai' tasks whose resolved provider is Codex ('codex'/'codex-pool'); every other provider and every external CLI backend ignores this field. When the provider-visible input-token count for this session reaches the limit, the runtime compacts provider context via Codex's standalone compaction and continues the same tool loop. Omit to inherit the parent service's resolved context window as the threshold. Must be a positive integer.",
+                        },
                     },
                     "required": ["task", "tools"],
                 },
@@ -1692,6 +1697,8 @@ class DaemonManager:
         provider: str,
         base_defaults: dict | None,
         run_dir,
+        *,
+        context_token_limit: int | None = None,
     ) -> dict | None:
         """Return provider defaults for a daemon-scoped LLM service.
 
@@ -1702,6 +1709,12 @@ class DaemonManager:
         a LingTai daemon is a disposable run, so Codex daemon calls need a per-run
         anchor rather than the parent agent's anchor; otherwise parent and child
         traffic collide in one REST cache slot.
+
+        context_token_limit: the task's optional ``context_token_limit``. Only
+        meaningful for a Codex-family provider, where it becomes
+        ``codex_compact_token_limit`` — the standalone-compaction threshold
+        consulted by ``CodexOpenAIAdapter``/``CodexResponsesSession``. Omitted
+        for every other provider so their adapter construction is unaffected.
         """
         provider_key = str(provider).lower()
         bucket = dict(base_defaults or {})
@@ -1711,6 +1724,8 @@ class DaemonManager:
             # Codex adapter and also seeds its sticky auth-pool choice off this
             # anchor, so a daemon run selects independently of its parent.
             bucket["codex_session_anchor"] = self._daemon_codex_session_anchor(run_dir)
+            if context_token_limit is not None:
+                bucket["codex_compact_token_limit"] = context_token_limit
         if not bucket:
             return None
         return {provider_key: bucket}
@@ -2062,7 +2077,8 @@ class DaemonManager:
                        timeout_event: threading.Event | None = None,
                        preset_llm: dict | None = None,
                        max_turns: int | None = None,
-                       mcp_clients: list[object] | None = None) -> str:
+                       mcp_clients: list[object] | None = None,
+                       context_token_limit: int | None = None) -> str:
         """Run a single emanation's tool loop. Called in a worker thread.
 
         run_dir is the DaemonRunDir constructed in _handle_emanate. All
@@ -2081,6 +2097,12 @@ class DaemonManager:
         LLMService is built from the effective preset — the daemon never reuses
         ``self._agent.service`` directly and never runs provider-name env-var
         fallback resolution for its primary key.
+
+        context_token_limit: the task's optional ``context_token_limit``
+        (already validated as a positive int by ``_handle_emanate``'s
+        pre-flight gate). Only consulted for a Codex-family provider — see
+        ``_daemon_provider_defaults``; every other provider ignores it, and
+        every external CLI backend never reaches this method at all.
         """
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
@@ -2118,6 +2140,7 @@ class DaemonManager:
             "base_url": effective_preset_llm.get("base_url"),
             "provider_defaults": self._daemon_provider_defaults(
                 provider, base_defaults, run_dir,
+                context_token_limit=context_token_limit,
             ),
         }
         # Implicit-preset-only pass-throughs that mirror the parent service:
@@ -3010,6 +3033,31 @@ class DaemonManager:
                 effective_timeout=effective_timeout,
             )
 
+        # Pre-flight: validate per-task ``context_token_limit`` (LingTai backend
+        # only — external CLI backends never reach this point, see the
+        # ``backend_spec.is_cli`` return above). A single bad value refuses the
+        # whole batch, consistent with the other pre-flight gates below. Bound
+        # to a Codex-specific compaction feature at construction time, but
+        # validated generically here so the schema/error shape does not leak
+        # provider identity into the daemon tool surface.
+        for spec in tasks:
+            raw_limit = spec.get("context_token_limit")
+            if raw_limit is None:
+                continue
+            if isinstance(raw_limit, bool) or not isinstance(raw_limit, int):
+                return {
+                    "status": "error",
+                    "message": (
+                        f"context_token_limit must be a positive integer "
+                        f"(got {raw_limit!r})"
+                    ),
+                }
+            if raw_limit <= 0:
+                return {
+                    "status": "error",
+                    "message": f"context_token_limit must be ≥ 1 (got {raw_limit})",
+                }
+
         # --- Authorization gate (LingTai backend only): explicit per-task
         # presets must be in the parent's manifest.preset.allowed. This runs
         # before ANY LingTai side effect (preset load/connectivity/capability
@@ -3169,6 +3217,7 @@ class DaemonManager:
                         "skills": spec.get("skills", []),
                         "mcp": [],
                         "system_prompt": task_system_prompt,
+                        "context_token_limit": spec.get("context_token_limit"),
                     },
                     log_callback=self._log,
                     preset_name=resolved["name"] if resolved else None,
@@ -3217,6 +3266,7 @@ class DaemonManager:
                 resolved["llm"] if resolved else None,
                 effective_max_turns,
                 task_mcp_clients,
+                spec.get("context_token_limit"),
             )
             future.add_done_callback(
                 lambda f, eid=em_id, task=spec["task"]:
@@ -3555,6 +3605,7 @@ class DaemonManager:
             "skills": call_params.get("skills", []),
             "mcp": call_params.get("mcp", []),
             "system_prompt_preview": self._truncate_list_string(call_params.get("system_prompt")),
+            "context_token_limit": call_params.get("context_token_limit"),
         }
         visible_call_params = {k: v for k, v in visible_call_params.items() if v not in (None, [], "")}
         info = {

@@ -24,6 +24,8 @@ related_files:
   - tests/test_daemon_claude_interactive_backend.py
   - tests/test_daemon_run_dir.py
   - tests/test_daemon_codex_usage.py
+  - src/lingtai/llm/openai/ANATOMY.md
+  - tests/test_codex_standalone_compaction.py
 review_triggers:
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/run_dir.py
@@ -38,6 +40,7 @@ review_triggers:
   - tests/test_daemon_claude_interactive_backend.py
   - tests/test_daemon_run_dir.py
   - tests/test_daemon_codex_usage.py
+  - tests/test_codex_standalone_compaction.py
 maintenance: |
   Keep this file in the same maintenance graph as the daemon ANATOMY.md and
   manual files listed under related_files. If any review_triggers path changes
@@ -188,6 +191,39 @@ window. If that event is dismissed or evicted before recovery records the
 receipt, startup may safely republish: the contract is at-least-once delivery
 without false durable success.
 
+### 7. Per-task `context_token_limit` is a Codex-only, lingtai-backend-only capability
+
+The daemon task object also carries an optional per-task `context_token_limit`
+(positive integer; bool rejected) — a context-token compaction threshold,
+never cumulative spend (`src/lingtai/tools/daemon/__init__.py`, schema
+property and `_handle_emanate` pre-flight gate). This capability is narrowly
+scoped and does not join the general skills/MCP/completion/backend-support
+invariants above:
+
+- Effective ONLY for `backend="lingtai"` tasks whose resolved provider is
+  Codex (`codex`/`codex-pool`), threaded through `_daemon_provider_defaults`
+  as `codex_compact_token_limit`. Every other provider and every external CLI
+  backend (including the `codex` CLI backend) never receives it and is
+  behaviorally unchanged — a CLI-backend task carrying the field never even
+  reaches the LingTai-backend pre-flight gate (the CLI early-return in
+  `_handle_emanate` precedes it).
+- Omitted, the value inherits the parent service's resolved context window as
+  the threshold; an explicit task value always wins.
+- When the threshold is reached (a PROJECTED provider-visible token count,
+  not a raw reactive-only check — see below), the Codex Responses session
+  compacts prior context via the standalone `POST /responses/compact`
+  endpoint and continues the SAME tool loop; it never uses the generic OpenAI
+  Responses `context_management` axis, which the Codex backend rejects.
+- The full trigger/boundary/invalidation mechanics (compaction boundary
+  selection via `ChatInterface.find_compaction_boundary` so the live turn
+  that triggers compaction always rides as a verbatim trailing item rather
+  than being folded into the opaque summary, projected-token calibration,
+  and invalidation on history rewrite) are Codex Responses adapter/session
+  internals, not daemon-owned — see `src/lingtai/llm/openai/ANATOMY.md`
+  ("Standalone Codex compaction") for that mechanism. This contract states
+  only the daemon-task-object capability boundary above; it does not
+  restate adapter internals.
+
 ## Backend Support Matrix
 
 Current source-backed status:
@@ -255,4 +291,7 @@ Re-check this contract when touching:
 - `tests/test_daemon*.py` coverage that proves backend options, CLI native MCP,
   daemon_common completion, OpenCode-family routing, Qwen settings, Claude print
   MCP config, run-dir artifacts, prompt redaction, or selected-skill catalog
-  preservation.
+  preservation. **Exception:** `tests/test_codex_standalone_compaction.py`
+  does not match this glob but is the coverage for capability invariant 7
+  (per-task `context_token_limit`) and its daemon-side wiring/pre-flight
+  validation — re-check it alongside this contract for the same reason.
