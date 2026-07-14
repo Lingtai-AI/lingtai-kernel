@@ -28,34 +28,10 @@ def _update_default_preset(agent, preset_name: str) -> None:
 # refresh
 # ---------------------------------------------------------------------------
 
-def _preset_ref_in(name: str, refs: list) -> bool:
-    """Membership test on a list of preset path strings, normalized so
-    `~/...` and the equivalent absolute path compare equal.
-
-    Used by the `_refresh` allowed-gate so an agent passing the form it
-    received from `_presets` (home-shortened) is not refused when the
-    on-disk `allowed` entry was written in absolute form, or vice versa.
-    """
-    if not isinstance(name, str) or not name:
-        return False
-    from pathlib import Path
-    try:
-        target = Path(name).expanduser().resolve(strict=False)
-    except (OSError, RuntimeError):
-        target = None
-    for ref in refs:
-        if not isinstance(ref, str):
-            continue
-        if ref == name:
-            return True
-        if target is None:
-            continue
-        try:
-            if Path(ref).expanduser().resolve(strict=False) == target:
-                return True
-        except (OSError, RuntimeError):
-            continue
-    return False
+# Compatibility re-export — callers/tests import `_preset_ref_in` from here.
+# The implementation lives in the kernel so system and daemon share one
+# normalization primitive; see `lingtai.kernel.presets._preset_ref_in`.
+from lingtai.kernel.presets import _preset_ref_in  # noqa: F401
 
 
 def _check_context_fits(agent, preset_name: str) -> tuple:
@@ -159,7 +135,10 @@ def _refresh(agent, args: dict) -> dict:
             allowed = preset_block.get("allowed") if isinstance(preset_block, dict) else None
         except Exception:
             allowed = None
-        if isinstance(allowed, list) and not _preset_ref_in(preset_name, allowed):
+        # A missing or malformed `allowed` fails closed: `_preset_ref_in`
+        # returns False for a non-list `refs`, so the swap is refused
+        # rather than silently permitted.
+        if not _preset_ref_in(preset_name, allowed, working_dir=agent._working_dir):
             agent._log("preset_swap_refused_unauthorized",
                        requested=preset_name)
             return {

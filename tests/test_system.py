@@ -388,9 +388,55 @@ def test_preset_ref_in_normalizes_tilde_and_absolute(tmp_path, monkeypatch):
     assert not _preset_ref_in("", [tilde])
 
 
+def test_system_preset_ref_in_is_the_kernel_implementation():
+    """`lingtai.tools.system._preset_ref_in` must be the shared kernel
+    primitive (a re-export), not a local duplicate — otherwise the two
+    gates can silently drift apart."""
+    from lingtai.tools.system import _preset_ref_in as system_impl
+    from lingtai.kernel.presets import _preset_ref_in as kernel_impl
+    assert system_impl is kernel_impl
+
+
+def test_refresh_with_missing_allowed_denies(tmp_path, monkeypatch):
+    """A preset block with no `allowed` key at all must fail closed —
+    the old `isinstance(allowed, list)` guard let this fall through as an
+    unauthorized bypass."""
+    agent = _make_test_agent_for_presets(tmp_path)  # no active_preset → no preset block
+
+    activate_calls = []
+    monkeypatch.setattr(agent, "_activate_preset",
+                        lambda n: activate_calls.append(n))
+
+    result = agent._intrinsics["system"]({"action": "refresh", "preset": "minimax"})
+
+    assert result["status"] == "error"
+    assert "minimax" in result["message"]
+    assert activate_calls == []
+
+
+def test_refresh_with_malformed_allowed_denies(tmp_path, monkeypatch):
+    """A non-list `allowed` (e.g. a stray string from hand-edited init.json)
+    must fail closed rather than bypassing the gate."""
+    import json
+    agent = _make_test_agent_for_presets(tmp_path, active_preset="minimax")
+    init_path = agent._working_dir / "init.json"
+    data = json.loads(init_path.read_text())
+    data["manifest"]["preset"]["allowed"] = "not-a-list"
+    init_path.write_text(json.dumps(data))
+
+    activate_calls = []
+    monkeypatch.setattr(agent, "_activate_preset",
+                        lambda n: activate_calls.append(n))
+
+    result = agent._intrinsics["system"]({"action": "refresh", "preset": "minimax"})
+
+    assert result["status"] == "error"
+    assert activate_calls == []
+
+
 def test_refresh_with_known_preset_calls_activate_then_perform(tmp_path, monkeypatch):
     """system(action='refresh', preset='minimax') calls _activate_preset then _perform_refresh."""
-    agent = _make_test_agent_for_presets(tmp_path)
+    agent = _make_test_agent_for_presets(tmp_path, active_preset="minimax")
 
     activate_calls = []
     perform_calls = []

@@ -2390,7 +2390,177 @@ def _make_agent_with_presets(tmp_path, presets_dir):
             "llm": {"provider": "mock", "model": "mock-model"},
         }
     }
+    # The daemon authorization gate reads the raw allowlist via the
+    # side-effect-free `_read_preset_from_init` (never `_read_init`); wire
+    # every preset file in the library as allowed so these fixtures'
+    # per-task preset paths stay authorized.
+    allowed_paths = [
+        str(p) for p in sorted(presets_dir.glob("*.json"))
+        if p.name != "_kernel_meta.json"
+    ]
+    agent._read_preset_from_init = lambda: {
+        "active": "mock",
+        "default": "mock",
+        "allowed": allowed_paths,
+    }
     return agent
+
+
+# ---------------------------------------------------------------------------
+# Preset authorization gate (LingTai backend only) — must run before
+# load/probe/capability/run-dir/executor/dispatch. CLI backends are
+# explicitly out of scope: see
+# test_emanate_cli_backend_unauthorized_preset_string_unaffected below.
+# ---------------------------------------------------------------------------
+
+def test_emanate_lingtai_valid_but_unallowed_preset_rejected_before_preflight(
+        tmp_path, monkeypatch):
+    """A syntactically valid preset that is absent from `allowed` must be
+    rejected before `load_preset`, connectivity probe, capability
+    instantiation, run-dir construction, or executor submission — not just
+    before dispatch."""
+    from unittest.mock import patch
+    from concurrent.futures import ThreadPoolExecutor
+    import lingtai.kernel.preset_connectivity as preset_connectivity
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
+
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    _write_preset_file(presets_dir, "unlisted")
+    _write_preset_file(presets_dir, "listed")
+
+    agent = _make_agent_with_presets(tmp_path, presets_dir)
+    # Restrict the allowlist to only "listed" — "unlisted" is syntactically
+    # valid and loadable but not authorized.
+    listed_path = str(presets_dir / "listed.json")
+    agent._read_preset_from_init = lambda: {
+        "active": "mock", "default": "mock", "allowed": [listed_path],
+    }
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    unlisted_path = str(presets_dir / "unlisted.json")
+
+    with patch.object(agent, "load_preset") as mock_load, \
+         patch.object(preset_connectivity, "check_connectivity") as mock_conn, \
+         patch.object(mgr, "_instantiate_preset_capabilities") as mock_caps, \
+         patch.object(DaemonRunDir, "__init__", side_effect=AssertionError(
+             "DaemonRunDir must not be constructed for an unauthorized preset")), \
+         patch.object(ThreadPoolExecutor, "submit") as mock_submit, \
+         patch.object(mgr, "_run_emanation") as mock_run:
+        result = mgr.handle({"action": "emanate", "tasks": [
+            {"task": "task A", "tools": ["file"], "preset": unlisted_path},
+        ]})
+
+    assert result["status"] == "error"
+    assert "unlisted" in result["message"] or unlisted_path in result["message"]
+    mock_load.assert_not_called()
+    mock_conn.assert_not_called()
+    mock_caps.assert_not_called()
+    mock_submit.assert_not_called()
+    mock_run.assert_not_called()
+    daemons_dir = agent._working_dir / "daemons"
+    assert not daemons_dir.exists() or not list(daemons_dir.iterdir())
+
+
+def test_emanate_lingtai_authorized_equivalent_path_reaches_preflight(
+        tmp_path, monkeypatch):
+    """An authorized preset requested via the non-canonical form (tilde vs.
+    absolute) must still pass the gate and reach the existing preflight —
+    proving the gate normalizes rather than merely string-compares."""
+    from unittest.mock import patch
+    import lingtai.kernel.preset_connectivity as preset_connectivity
+
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    _write_preset_file(presets_dir, "deepseek", api_key_env="DEEPSEEK_API_KEY_EQ")
+    monkeypatch.setenv("DEEPSEEK_API_KEY_EQ", "sk-test")
+
+    agent = _make_agent_with_presets(tmp_path, presets_dir)
+    abs_path = presets_dir / "deepseek.json"
+    agent._read_preset_from_init = lambda: {
+        "active": "mock", "default": "mock", "allowed": [str(abs_path)],
+    }
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    # Connectivity is mocked so the LingTai preflight completes.
+    with patch.object(preset_connectivity, "_probe_host", return_value=10):
+        result = mgr.handle({"action": "emanate", "tasks": [
+            {"task": "task A", "tools": ["file"], "preset": str(abs_path)},
+        ]})
+
+    # The gate passed — batch either dispatched or failed later in the
+    # pipeline (e.g. session mocking), never with the allowlist message.
+    assert "is not in this agent's allowed list" not in result.get("message", "")
+
+
+def test_emanate_lingtai_omitted_preset_never_reads_allowlist(tmp_path, monkeypatch):
+    """Omitted `tasks[].preset` is the documented parent-derived/no-preset
+    path and must stay unchanged: the new gate must not even call
+    `_read_preset_from_init` when no task requests an explicit preset."""
+    from unittest.mock import patch
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    _reuse_parent_service(monkeypatch, agent)
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    mock_resp = MagicMock()
+    mock_resp.text = "done"
+    mock_resp.tool_calls = []
+    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                thinking_tokens=0, cached_tokens=0)
+    agent.service.create_session.return_value.send = MagicMock(return_value=mock_resp)
+
+    with patch.object(agent, "_read_preset_from_init") as mock_read:
+        result = mgr.handle({"action": "emanate", "tasks": [
+            {"task": "task A", "tools": ["file"]},
+        ]})
+
+    mock_read.assert_not_called()
+    assert result["status"] == "dispatched"
+
+
+def test_emanate_cli_backend_unauthorized_preset_string_unaffected(
+        tmp_path, monkeypatch):
+    """CLI backends are explicitly out of scope for the LingTai allowlist
+    gate: an explicit preset that would be unauthorized on the LingTai path
+    must NOT be rejected by the new gate on a CLI backend — the gate must
+    never run before `_handle_emanate_cli`, so CLI behavior here is
+    byte-for-byte unchanged from before this patch (any per-backend CLI
+    preset handling downstream of `_handle_emanate_cli`, if any, is
+    unaffected)."""
+    from unittest.mock import patch
+
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    _write_preset_file(presets_dir, "unlisted")
+    _write_preset_file(presets_dir, "listed")
+
+    agent = _make_agent_with_presets(tmp_path, presets_dir)
+    listed_path = str(presets_dir / "listed.json")
+    agent._read_preset_from_init = lambda: {
+        "active": "mock", "default": "mock", "allowed": [listed_path],
+    }
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+
+    unlisted_path = str(presets_dir / "unlisted.json")
+
+    # The gate itself must never fire on the CLI path — assert the raw
+    # allowlist reader is never even called.
+    with patch.object(agent, "_read_preset_from_init",
+                       wraps=agent._read_preset_from_init) as spy_read, \
+         patch.object(mgr, "_handle_emanate_cli",
+                       return_value={"status": "dispatched", "count": 1}) as mock_cli:
+        result = mgr.handle({
+            "action": "emanate", "backend": "codex",
+            "tasks": [{"task": "task A", "tools": ["file"], "preset": unlisted_path}],
+        })
+
+    spy_read.assert_not_called()
+    mock_cli.assert_called_once()
+    assert result["status"] == "dispatched"
 
 
 def test_emanate_with_preset_validates_preset_exists(tmp_path, monkeypatch):

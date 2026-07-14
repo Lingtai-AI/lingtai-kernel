@@ -2906,6 +2906,43 @@ class DaemonManager:
                 effective_timeout=effective_timeout,
             )
 
+        # --- Authorization gate (LingTai backend only): explicit per-task
+        # presets must be in the parent's manifest.preset.allowed. This runs
+        # before ANY LingTai side effect (preset load/connectivity/capability
+        # setup, run-dir/thread-pool/schedule/dispatch). Omitted tasks[].preset
+        # is unaffected — it is the documented parent-derived/no-preset path —
+        # and the raw allowlist is only read when at least one task actually
+        # requests an explicit preset, so the no-preset path never consults it.
+        if any(spec.get("preset") for spec in tasks):
+            from lingtai.kernel.presets import _preset_ref_in
+
+            read_raw_preset = getattr(self._agent, "_read_preset_from_init", None)
+            if callable(read_raw_preset):
+                try:
+                    raw_preset_block = read_raw_preset()
+                except Exception:
+                    raw_preset_block = {}
+            else:
+                raw_preset_block = {}
+            allowed = (
+                raw_preset_block.get("allowed")
+                if isinstance(raw_preset_block, dict) else None
+            )
+
+            for spec in tasks:
+                requested = spec.get("preset")
+                if not requested:
+                    continue
+                if not _preset_ref_in(requested, allowed, working_dir=self._agent._working_dir):
+                    self._log("daemon_preset_refused_unauthorized", requested=requested)
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"preset {requested!r} is not in this agent's allowed "
+                            f"list — call system(action='presets') to see what's available"
+                        ),
+                    }
+
         # Pre-flight: resolve any per-task presets BEFORE scheduling.
         # If any preset is invalid, refuse the whole batch. Presets are
         # identified by path (~/foo.json, ./foo.json, or absolute).
