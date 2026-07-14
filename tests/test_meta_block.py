@@ -3485,11 +3485,11 @@ def test_attach_active_notifications_picks_latest_dict_in_batch(tmp_path):
 
 # ---------------------------------------------------------------------------
 # skeletonize_notification_holder / clear_active_notification_holder — release
-# the live-holder reference.  Old synthesized notification pairs are replaced
-# by placeholder skeletons (they exist only to carry the payload); a normal
-# tool result RETAINS its payload as a historical trace — notification
-# payloads are timely transient state and canonical history is no longer
-# retroactively stripped (Jason #4307).
+# the live-holder reference WITHOUT mutating the released holder's content.
+# Both a synthesized notification pair and a normal tool result RETAIN their
+# payload as a historical trace — notification payloads are timely transient
+# state and canonical history is never retroactively stripped or rewritten
+# (Jason #4307).
 # ---------------------------------------------------------------------------
 
 
@@ -3519,7 +3519,11 @@ def test_clear_active_notification_holder_retains_normal_live_holder_payload():
     assert agent._notification_live_holder is None
 
 
-def test_clear_active_notification_holder_skeletonizes_synthesized_holder():
+def test_clear_active_notification_holder_retains_synthesized_holder_payload():
+    # A synthesized holder is released from live tracking WITHOUT mutation —
+    # skeletonization no longer replaces its content with a placeholder.
+    # Historical notifications/notification_guidance on a synthesized pair
+    # must survive full-history replay exactly like a normal tool result's.
     synthesized = {
         "_synthesized": True,
         "_meta": {
@@ -3532,11 +3536,14 @@ def test_clear_active_notification_holder_skeletonizes_synthesized_holder():
 
     clear_active_notification_holder(agent)
 
-    assert synthesized["_synthesized"] is True
-    assert synthesized["_notification_placeholder"] is True
-    assert "kernel-synthesized notification(action=check)" in synthesized["message"]
-    # Synthesized holder is replaced wholesale with the skeleton — _meta gone.
-    assert "_meta" not in synthesized
+    assert synthesized == {
+        "_synthesized": True,
+        "_meta": {
+            "notification_guidance": "live guidance",
+            "notifications": {"email": {"data": {"count": 1}}},
+        },
+        "current_time": "2026-05-13T00:00:00Z",
+    }
     assert agent._notification_live_holder is None
 
 
