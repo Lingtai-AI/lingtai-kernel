@@ -2289,10 +2289,15 @@ class DaemonManager:
         )
         if isinstance(resolved_key, str):
             runtime_llm["api_key"] = resolved_key
-        for key in ("provider_defaults", "_provider_defaults"):
-            value = effective_llm.get(key)
-            if isinstance(value, dict):
-                runtime_llm[key] = value
+        # The durable manifest always exposes the normalized public key
+        # ``provider_defaults``.  Effective in-process presets may instead carry
+        # their raw provider bucket under the private alias
+        # ``_provider_defaults``; copying that alias into the capsule would leave
+        # the public redacted map untouched in the execution child.  Overlay the
+        # exact normalized/per-run map that was used to build the manifest.
+        normalized_defaults = resolved_llm.get("provider_defaults")
+        if isinstance(normalized_defaults, dict):
+            runtime_llm["provider_defaults"] = normalized_defaults
         if runtime_llm:
             capsule.setdefault("llm", {}).update(runtime_llm)
         PosixDaemonSupervisorAdapter().spawn_detached(request, capsule=capsule)
