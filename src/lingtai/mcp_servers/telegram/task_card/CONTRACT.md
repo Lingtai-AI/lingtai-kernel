@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/task_card/interface.py
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
+  - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/mcp_servers/telegram/task_card/assets/render_bash_async.py
@@ -17,6 +18,7 @@ related_files:
   - pyproject.toml
   - tests/test_task_card_controller.py
   - tests/test_telegram_task_card_programmable.py
+  - tests/test_telegram_task_card_resident_groups.py
   - tests/test_telegram_task_card_toggle.py
   - tests/test_telegram_task_card_templates.py
   - tests/test_mcp_skill_manuals.py
@@ -41,8 +43,8 @@ maintenance: |
 
 ## Purpose
 
-This component owns the *programmable* slot of Telegram's **one tracked resident
-Task Card target** (per account+chat): the model-facing `task_card` capability
+This component owns Telegram's **one tracked resident Task Card target** (per
+account+chat) and its programmable slot: the model-facing `task_card` capability
 that binds agent state to that card by running an agent-supplied Python renderer
 and projecting only validated data. It is Telegram MCP-owned — registration is
 gated by the Telegram reverse route, projection targets
@@ -157,9 +159,27 @@ the procedure lives in [`SKILL.md`](SKILL.md), not here:
    ordinary Telegram messages are never enumerated, guessed at, or deleted.
 9. Agents must read the manual before authoring a renderer and MUST NOT weaken
    these promises to match implementation drift.
+10. The Telegram-owned `TaskCardResident` is the single owner of in-memory
+    channel frames, per-account+chat locks, compose, enablement transitions, and
+    the `ensure`/`project` boundary. `TelegramManager` is its transport adapter;
+    automatic and programmable frames feed the same owner. The resident boundary
+    is not coupled to BaseAgent turn, molt, heartbeat, or latest-route state.
+11. A first real inbound message for an established enabled account+chat calls
+    `ensure` once; the existing account `task_cards` id is rehydrated on restart
+    and updated in place. Explicit `taskcard: false` suppresses presentation;
+    only explicit on re-enables the resident.
+12. Automatic events are normalized to public canonical text and safe tool rows.
+    Hidden thinking, system prompts, raw tool args/results, auth/secrets, and
+    private runtime logs never reach the card. Rows/text are redacted and bounded.
+    Events sharing one provider `api_call_id` form one render group and produce
+    exactly one TUI-equivalent divider. `/taskcard N` counts these groups, not
+    tool rows; truncation can occur inside a chosen group only.
 
 ## Port
 
+The resident boundary exposes the minimal Telegram-addon-owned operations
+`rehydrate`, `ensure`, `project`, and `set_enabled` (implemented by
+`TaskCardResident`); the manager supplies only the transport adapter callbacks.
 The inbound driving port is the `task_card` tool (`start | inspect | retry |
 stop`; schema in `controller.py` `get_schema`). Core's outbound host dependency
 is the `TelegramTaskCardAgent` Protocol in `interface.py`: `_working_dir`,
@@ -361,6 +381,18 @@ one source of truth for each projection axis:
    `test_row_started_at_is_...` cases. Update this contract and its paired
    anatomy/tests together if the event schema, final-carrier path, supported
    fields, formatter budget, or timestamp provenance changes.
+
+## Resident and API-call-group conformance
+
+The resident-owner boundary and call-group projection are covered by the focused
+Telegram Task Card tests. In addition to the existing singleton, persistence,
+toggle, fail-open, and programmable-slot cases, the behavioral contract requires
+coverage for first-inbound `ensure`, restart rehydration preserving the same
+compound id, explicit off then one deterministic on transition, two API calls
+with multiple text/tool events producing two dividers, bounded public text with
+hidden/internal exclusions, and numeric windows counting calls rather than tool
+rows. These tests must use the existing account `task_cards` state and must not
+introduce a latest-route file or schema.
 
 ## Maintenance
 

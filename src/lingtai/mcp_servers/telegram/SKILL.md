@@ -175,43 +175,46 @@ Important behavior notes:
 ## AUTOMATIC TASK CARD: `events.jsonl` → resident broadcast
 
 The automatic slot is a bounded projection of the agent's durable behavior
-journal, not a second model-authored progress lifecycle:
+journal, and it feeds the same Telegram-owned `TaskCardResident` as the
+programmable slot:
 
 1. `TelegramManager` owns one tail worker for its lifetime. It reads
-   `<workdir>/logs/events.jsonl`, checks the exact event `type` first, and skips
-   every event except `"tool_call"` without inspecting that event's payload.
-2. From a matching row it extracts only `tool_name`, `tool_args.action`, and a
-   redacted, length-capped `tool_args._reasoning`; raw arguments, results, and
-   provider errors are never forwarded. The manager keeps a bounded recent
-   window, and the current `/taskcard N` setting chooses how many normal rows the
-   card renders.
-3. When that window changes, the manager renders the automatic frame once and
-   broadcasts the same agent-behavior view to every tracked resident Task Card
-   across configured Telegram accounts and chats. Rows carry no account/chat
-   route and are not correlated to the chat that created a resident card; a
-   failure for one target does not block the others.
-4. The tailer never inspects `tool_result` or dispatch events and does not
-   reconstruct completion, `DONE`, elapsed time, heartbeat, or API-error rows.
-   The automatic path also does not call the private reverse MCP route; that route
-   is programmable-slot-only.
-5. There is no durable cursor or second behavior store. The byte offset and row
-   window are in-memory optimizations. Startup, refresh, molt, and detected log
-   truncation/replacement reverse-tail the journal again to rehydrate recent
-   matching rows. An unterminated final JSONL line is left unconsumed until it is
-   complete, and read/stat failures fail closed rather than advancing past unseen
-   bytes.
+   `<workdir>/logs/events.jsonl` and recognizes only canonical public response
+   text (`diary`/text aliases) and validated `tool_call` events. Hidden thinking,
+   system prompts, notifications, raw tool arguments/results, auth material, and
+   private runtime diagnostics are never projected.
+2. A provider/API call is identified by its `api_call_id`. All public text and
+   safe tool events with the same id remain in one atomic group. The card emits
+   exactly one TUI-style divider (`──────────`) before each selected group;
+   multiple text/tool events do not create extra dividers.
+3. `/taskcard N` selects the latest N API-call groups (1–10), not N tool uses.
+   The existing persisted `normal_rows` value is reused as this numeric group
+   window, so no schema migration or latest-chat route is needed. If a selected
+   group is larger than the card budget, content is truncated inside that group
+   after the group count has been chosen.
+4. The manager renders the bounded groups once and broadcasts the same
+   agent-behavior view to every tracked resident Task Card across configured
+   Telegram accounts and chats. Groups carry no account/chat route and are not
+   correlated to the chat that created a resident card; one target's failure
+   does not block the others.
+5. There is no durable cursor or second behavior store. The byte offset, groups,
+   and channel frames are in-memory optimizations. Startup, refresh, molt, and
+   detected log truncation/replacement rehydrate from the existing
+   `events.jsonl` and `TelegramAccount.task_cards` state. An unterminated final
+   JSONL line is left unconsumed until complete, and read/stat failures fail
+   closed rather than advancing past unseen bytes.
 
 Architecture and lifecycle details live in the owning
-[`mcp_servers` Anatomy](../ANATOMY.md). The separate programmable renderer/tool
-structure lives in the
-[`telegram/task_card` Anatomy](task_card/ANATOMY.md); its user procedure is the
-co-located [`task_card/SKILL.md`](task_card/SKILL.md).
+[`mcp_servers` Anatomy](../ANATOMY.md). The resident boundary is
+[`task_card/resident.py`](task_card/resident.py); the programmable renderer/tool
+structure lives in the separate
+[`telegram/task_card` Anatomy](task_card/ANATOMY.md).
 
 ## TASKCARD STATE
 
 - `/taskcard` reports both current preferences. `/taskcard on` and `/taskcard off`
   change delivery locally without an LLM call. `/taskcard N` sets the rolling
-  normal-tool-row window to decimal `N=1..10` without changing delivery; invalid,
+  API-call-group window to decimal `N=1..10` without changing delivery; invalid,
   non-ASCII, extra-argument, and out-of-range forms return usage rather than being
   clamped. Telegram's normal `/taskcard@BotName ...` mention form works in groups.
 - The preferences are agent-wide and shared by all configured Telegram accounts
@@ -223,15 +226,16 @@ co-located [`task_card/SKILL.md`](task_card/SKILL.md).
   delivery boolean: structured message objects use `taskcard: true|false`, and
   textual preview lines use `taskcard: True|False`. Check/read/search items derive
   it at projection time, so old stored messages reflect the current value without
-  history rewrites. `normal_rows` chooses how many of the newest bounded,
-  manager-projected `tool_call` rows the automatic card renders; non-`tool_call`
-  events never enter that window.
+  history rewrites. `normal_rows` is the compatibility persistence key for how
+  many of the newest bounded API-call groups the automatic card renders; it is
+  not a tool-row count.
 - `taskcard: True` means automatic and programmable Task Cards may be sent to
   Telegram. `taskcard: False` hides delivery of **both** slots at the presentation
   boundary. The event tail still follows the journal and programmable renderers,
   watchers, retries, and bookkeeping continue, but no automatic broadcast is
   delivered while disabled. Turning delivery back on needs no restart.
-- Automatic event-tail cards render the safe tool rows, the fixed no-reply footer
+- Automatic event-tail cards render safe public text and tool rows, one divider
+  per selected API-call group, the fixed no-reply footer
   that names both command forms, and the render-time timestamp. They do not render
   `tool_result`, completion, elapsed, heartbeat, API-error, or provider-error rows,
   and they do not forward raw arguments, external response bodies, URLs, tokens,

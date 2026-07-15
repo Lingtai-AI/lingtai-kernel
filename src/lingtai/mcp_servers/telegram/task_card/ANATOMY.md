@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
   - src/lingtai/mcp_servers/telegram/task_card/interface.py
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
+  - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/mcp_servers/telegram/task_card/assets/render_bash_async.py
   - src/lingtai/mcp_servers/telegram/task_card/assets/render_daemon.py
@@ -22,12 +23,13 @@ maintenance: |
 ---
 # Telegram Programmable Task Card Anatomy
 
-The Telegram-owned unit that drives the *programmable* slot of Telegram's one
-tracked resident Task Card target. The model-facing `task_card` tool runs an
-agent-supplied Python renderer and projects its validated output onto the
-Telegram-owned reverse channel; `TelegramManager` remains the single
-render/compose/persistence/transport owner (including the hard-at-most-one /
-last-message resident transport) and this unit only normalizes those outcomes.
+The Telegram-owned Task Card unit drives the programmable slot and names the
+resident boundary shared with the automatic event projection. `TaskCardResident`
+owns channel frames, per-account+chat locks, compose/enablement transitions, and
+the deterministic project/ensure boundary; `TelegramManager` remains the
+Telegram transport adapter for the hard-at-most-one / last-message transaction.
+The model-facing `task_card` tool runs an agent-supplied Python renderer and
+projects only validated data onto that same resident target.
 Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 
 ## Components
@@ -35,6 +37,7 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 - `get_schema` / `get_description` — the `task_card` tool schema (`start` /
   `inspect` / `retry` / `stop`) and the description that routes to the manual
   (`controller.py:59`, `controller.py:100`).
+- `TaskCardResident` — deterministic resident owner for shared channel frames, route locks, compose, enablement, and `ensure`/`project` (`resident.py:14`).
 - `TaskCardController` — thin Core: dispatch, synchronous first frame, watch
   registry, fail-loud/recovery wakes (`controller.py:179`). Key methods:
   `handle` (`controller.py:188`), `_start` (`controller.py:213`), `_inspect`
@@ -153,6 +156,9 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 
 ## State
 
+The resident module holds only in-memory channel frames, route locks, and the
+observed enablement transition. Resident message ids remain in the existing
+TelegramAccount `task_cards` state map; event history remains `events.jsonl`.
 The controller holds only in-memory per-watch state (`_watches`, threads,
 last-valid frames, error epochs). It writes no files and deletes none — the
 renderer files it runs are the agent's own working-dir copies (the shipped
