@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -359,32 +360,52 @@ def test_disabled_manager_does_not_mask_invalid_channel_or_sub_action(
     assert result["status"] == "error"
 
 
-def test_reenable_projects_next_frame_without_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_command_reenables_same_resident_once_and_transition_is_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service = _service(tmp_path, "main")
     manager = _manager(tmp_path, service)
     account = service.get_account("main")
-    calls: list[tuple[int, str]] = []
+    calls: list[tuple] = []
+    next_id = iter((88, 89, 90))
     monkeypatch.setattr(
-        account,
-        "send_message",
-        lambda chat_id, text, **_kwargs: calls.append((chat_id, text)) or {"message_id": 88},
+        account, "send_message",
+        lambda chat_id, text, **_kwargs: calls.append(("send", chat_id, text))
+        or {"message_id": next(next_id)},
     )
+    monkeypatch.setattr(
+        account, "edit_message",
+        lambda chat_id, message_id, text, **_kwargs:
+        calls.append(("edit", chat_id, message_id, text)) or {"ok": True},
+    )
+    manager._ensure_task_card_resident("main", 123)
+    resident_id = account.get_task_card(123)
+
+    calls.clear()
+    account._cmd_taskcard(123, "/taskcard off")
+    assert [call[0] for call in calls] == ["send"]
+    calls.clear()
+    account._cmd_taskcard(123, "/taskcard on")
+    assert [call[0] for call in calls] == ["edit", "send"]
+    assert account.get_task_card(123) == resident_id
+    calls.clear()
+    manager._broadcast_task_card_event_window()
+    assert [call[0] for call in calls] == ["edit"]
 
     service.set_taskcard_enabled(False)
-    hidden = manager._handle_task_card_update({
-        "sub_action": "create", "account": "main", "chat_id": 123,
-        "tool": "bash", "tool_action": "run", "reasoning": "hidden frame",
-    })
-    assert hidden["suppressed"] is True
-    assert calls == []
-
-    service.set_taskcard_enabled(True)
-    shown = manager._handle_task_card_update({
-        "sub_action": "create", "account": "main", "chat_id": 123,
-        "tool": "bash", "tool_action": "run", "reasoning": "visible frame",
-    })
-    assert shown == {"status": "ok", "message_id": "main:123:88"}
-    assert len(calls) == 1 and "visible frame" in calls[0][1]
+    broadcasts: list[bool] = []
+    monkeypatch.setattr(manager, "_broadcast_task_card_event_window", lambda: broadcasts.append(True))
+    barrier = threading.Barrier(3)
+    def enable() -> None:
+        barrier.wait()
+        service.set_taskcard_enabled(True)
+    threads = [threading.Thread(target=enable) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join()
+    assert broadcasts == [True]
 
 
 def test_manager_treats_suppression_as_success_without_transport(

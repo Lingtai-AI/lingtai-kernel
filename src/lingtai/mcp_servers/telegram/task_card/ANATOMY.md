@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
   - src/lingtai/mcp_servers/telegram/task_card/interface.py
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
+  - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/mcp_servers/telegram/task_card/assets/render_bash_async.py
   - src/lingtai/mcp_servers/telegram/task_card/assets/render_daemon.py
@@ -22,12 +23,13 @@ maintenance: |
 ---
 # Telegram Programmable Task Card Anatomy
 
-The Telegram-owned unit that drives the *programmable* slot of Telegram's one
-tracked resident Task Card target. The model-facing `task_card` tool runs an
-agent-supplied Python renderer and projects its validated output onto the
-Telegram-owned reverse channel; `TelegramManager` remains the single
-render/compose/persistence/transport owner (including the hard-at-most-one /
-last-message resident transport) and this unit only normalizes those outcomes.
+The Telegram-owned Task Card unit drives the programmable slot and names the
+resident boundary shared with the automatic event projection. `TaskCardResident`
+owns channel frames, per-account+chat locks, compose, atomic enablement, and
+the deterministic project/ensure boundary; `TelegramManager` remains the
+Telegram transport adapter for the hard-at-most-one / last-message transaction.
+The model-facing `task_card` tool runs an agent-supplied Python renderer and
+projects only validated data onto that same resident target.
 Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 
 ## Components
@@ -35,6 +37,9 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 - `get_schema` / `get_description` — the `task_card` tool schema (`start` /
   `inspect` / `retry` / `stop`) and the description that routes to the manual
   (`controller.py:59`, `controller.py:100`).
+- `TaskCardResident` — resident owner for channel frames, per-route tail-driven
+  automatic provenance, route locks, atomic enablement, and `ensure`/`project`
+  (`resident.py:9`).
 - `TaskCardController` — thin Core: dispatch, synchronous first frame, watch
   registry, fail-loud/recovery wakes (`controller.py:179`). Key methods:
   `handle` (`controller.py:188`), `_start` (`controller.py:213`), `_inspect`
@@ -99,14 +104,14 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 ## Automatic event-tail projection paths
 
 - **Rows/timestamps:** after validating `type == "tool_call"`,
-  `_project_tool_call_row` reads only `tool_name`, `tool_args.action`,
-  `tool_args._reasoning`, and that same event's top-level Unix-epoch `ts`.
+  `_project_tool_call_row` reads only `tool_name`, redacted/bounded
+  `tool_args._reasoning`, and top-level Unix-epoch `ts`; raw action is excluded.
   `_format_task_card_row_timestamp` projects a valid value as optional
   `started_at` in `HH:MM:SS UTC±HH`; missing, boolean, non-numeric, non-finite,
   or out-of-range values omit it. `_meta`, row arguments, notifications, and
   render time are never timestamp sources. Navigation:
   `manager.py:_project_tool_call_row`, `_format_task_card_row_timestamp`, and
-  `_format_rows_task_card_text` (currently around lines 1917, 1991, and 2843).
+  `_format_rows_task_card_text` (currently around lines 1990, 2061, and 2941).
 - **Current telemetry:** `_project_final_carrier_metadata` accepts only a
   final-carrier `type == "notification_block_injected"` event's latest whole
   `_meta.agent_meta`, then projects
@@ -119,36 +124,45 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   It never reads retired `tool_meta.token_usage`, row args, notifications, or
   render time. Navigation: `manager.py:_project_final_carrier_metadata`,
   `_reverse_tail_latest_rows`, `_append_new_lines`, `_current_automatic_frame`,
-  and `_broadcast_task_card_event_window` (currently around lines 1952, 2054,
-  2205, 2278, and 2288).
+  and `_broadcast_task_card_event_window` (currently around lines 2022, 2129,
+  2285, 2364, and 2391).
 - **Freshness at every edit, committed atomically with transport success
-  (Telegram 8482/8485/8487):** `_poll_event_tail` (`manager.py:2200`) splits
+  (Telegram 8482/8485/8487):** `_poll_event_tail` (`manager.py:2280`) splits
   into `_sync_event_tail_state` (the bounded incremental read alone,
-  `manager.py:2152`) and the broadcast side effect. `_deliver_channel_frame_locked`
-  (`manager.py:1693`) calls `_sync_event_tail_state` and renders a fresh
-  automatic frame via `_current_automatic_frame` immediately before composing a
-  `programmable` edit, whenever the route's currently *committed* automatic
-  frame is *tail-driven* — marked by `_set_channel_frame`'s `tail_driven` flag,
-  set only by `_broadcast_task_card_event_window` (the sole production
-  renderer of a rows/metadata automatic frame from the tail). That refreshed
-  frame is a **transaction-local proposal only**: it is passed to
-  `_compose_channels`'s `automatic_override` parameter (`manager.py:1627`,
-  alongside the existing `channel`/`frame` programmable proposal) to build the
-  outgoing text, and is committed to `_task_card_channels` — together with the
-  programmable frame, atomically, via one local `_commit()` closure — only at
-  the same post-transport-success points the programmable frame itself already
-  committed at (in-place edit OK, rotation OK, replacement-recovery OK, or a
-  confirmed send). Any transport failure (unknown/transient edit failure,
-  rejected rotation/recovery, failed/indeterminate send) commits neither
-  proposal, leaving the previously committed automatic frame and its
-  `tail_driven` provenance byte-for-byte unchanged — a failed programmable
-  edit can never poison or resurrect an automatic frame Telegram never
-  received. A route with no automatic frame yet, or one that was never
-  tail-driven (e.g. the legacy scalar single-tool automatic form, which
-  carries no footer), proposes no automatic override at all, so this never
-  fabricates a footer that was never there. Navigation:
+  `manager.py:2232`) and the broadcast side effect. `_deliver_channel_frame_locked`
+  (`manager.py:1694`) calls `_sync_event_tail_state` and renders a fresh
+  automatic frame via `_current_automatic_frame` (`manager.py:2364`, the same
+  renderer `_broadcast_task_card_event_window` calls, so a refresh can never
+  diverge in row order, grouping, dividers, or truncation from a broadcast)
+  immediately before composing a `programmable` edit, whenever the
+  Telegram-owned `TaskCardResident` (`resident.py:9`) already has a
+  *tail-driven* automatic frame committed for that route
+  (`TaskCardResident.is_automatic_tail_driven`, `resident.py:104`) — marked by
+  `TaskCardResident.set_frame`'s `tail_driven` flag (`resident.py:75`), which
+  the manager sets only via `_set_channel_frame`'s pass-through
+  (`manager.py:1638`) from `_broadcast_task_card_event_window` (the sole
+  production renderer of a rows/metadata automatic frame from the tail). That
+  refreshed frame is a **transaction-local proposal only**: it is passed to
+  `_compose_channels`'s `automatic_override` parameter (`manager.py:1652`,
+  which forwards to `TaskCardResident.compose`, `resident.py:108`, alongside
+  the existing `channel`/`frame` programmable proposal) to build the outgoing
+  text, and is committed through `TaskCardResident.set_frame` — together with
+  the programmable frame, atomically, via one local `_commit()` closure inside
+  `_deliver_channel_frame_locked` — only at the same post-transport-success
+  points the programmable frame itself already committed at (in-place edit OK,
+  rotation OK, replacement-recovery OK, or a confirmed send). Any transport
+  failure (unknown/transient edit failure, rejected rotation/recovery,
+  failed/indeterminate send) commits neither proposal, leaving the previously
+  committed automatic frame and its tail-driven provenance byte-for-byte
+  unchanged — a failed programmable edit can never poison or resurrect an
+  automatic frame Telegram never received. A route with no automatic frame
+  yet, or one that was never tail-driven (e.g. the legacy scalar single-tool
+  automatic form, which carries no footer), proposes no automatic override at
+  all, so this never fabricates a footer that was never there. Navigation:
   `manager.py:_sync_event_tail_state`, `_deliver_channel_frame_locked`,
-  `_compose_channels`, `_set_channel_frame`.
+  `_compose_channels`, `_set_channel_frame`;
+  `resident.py:TaskCardResident.set_frame`, `.compose`,
+  `.is_automatic_tail_driven`.
 - **Regression/drift triggers:** the event-to-final-render coverage is
   `tests/test_telegram_task_card_event_tail.py:test_event_log_final_carrier_projects_session_telemetry_into_final_render`
   plus `test_malformed_current_telemetry_carrier_clears_previous_snapshot` and the adjacent timestamp/malformed-input cases. Cross-channel freshness
@@ -188,6 +202,12 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 
 ## State
 
+The resident module holds only in-memory channel frames, route locks, the
+observed enablement transition, and — alongside the frames — which routes'
+committed automatic frame is tail-driven (`_automatic_tail_driven`, cleared or
+set in lockstep with the automatic frame it describes so the two can never
+drift). Resident message ids remain in the existing TelegramAccount
+`task_cards` state map; event history remains `events.jsonl`.
 The controller holds only in-memory per-watch state (`_watches`, threads,
 last-valid frames, error epochs). It writes no files and deletes none — the
 renderer files it runs are the agent's own working-dir copies (the shipped
