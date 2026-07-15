@@ -72,7 +72,8 @@ which:
 
 The manifest and `SHA256SUMS` are uploaded as their own `release-manifest`
 Actions artifact so any run (including a manual `workflow_dispatch` shape
-check) produces inspectable output without publishing anything.
+check) produces inspectable output without publishing anything. The publisher
+also attaches both files alongside the wheels/sdist.
 
 ## Publish
 
@@ -124,12 +125,11 @@ push) that the Gitee tag ref already points at the exact release commit
 **Neither script ever force-pushes or otherwise mutates history** on the
 Gitee git repository.
 
-Idempotency: an asset already attached under the same filename is skipped
-(GitHub: by name; Gitee: by name, since Gitee's attachment listing exposes no
-checksum). A same-name Gitee attachment already present with different bytes
-always triggers `AssetConflict` for a human to investigate — see
-`plan_gitee_uploads`. **There is no delete-and-replace path.** If a bad asset
-was ever uploaded, remove it by hand through the Gitee UI/API and re-run.
+Idempotency: an asset already attached under the same filename is skipped only
+after the actual GitHub or Gitee download bytes match the local SHA256. A
+same-name asset with different bytes, missing/ambiguous metadata, or a failed
+download always triggers a fail-loud error before upload planning completes.
+**There is no delete-and-replace path.**
 
 ### Manual dry run (safe, no token required)
 

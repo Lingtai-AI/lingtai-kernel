@@ -16,20 +16,21 @@ verified v5 REST contract directly:
 using the GITEE_ACCESS_TOKEN environment variable. The token is never echoed,
 logged, or included in any printed command.
 
-Idempotency: for each asset, if the target release already has an attachment
-of the same filename AND the same sha256 (GitHub: compare against the local
-SHA256SUMS/manifest before upload by checking `gh release view --json assets`;
-Gitee: compare against the attachment list), the upload is skipped. If an
-existing same-name attachment has a DIFFERENT sha256, this is a fail-loud
-condition — the script refuses to overwrite it. There is no delete-and-replace
-cleanup path by design (see the task's non-negotiable safety constraints).
+Idempotency: for each asset, an existing same-name attachment is downloaded
+and hashed before it is accepted as an idempotent skip. A different digest,
+missing/ambiguous metadata, or download failure is fail-loud. Comparison files
+are retained under unique runner temp paths. There is no delete-and-replace
+cleanup path by design.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+import tempfile
+import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -80,6 +81,23 @@ def verify_local_assets(manifest, assets_dir: Path) -> None:
             )
 
 
+def release_files(manifest, assets_dir: Path, manifest_path: Path) -> list[Path]:
+    checksum_path = assets_dir / "SHA256SUMS"
+    if not checksum_path.is_file():
+        raise PublishError(f"release checksum file is missing on disk: {checksum_path}")
+    return [assets_dir / a.filename for a in manifest.artifacts] + [manifest_path, checksum_path]
+
+
+def _comparison_path(provider: str, filename: str) -> Path:
+    root = Path(os.environ.get("RELEASE_ASSET_COMPARISON_DIR", tempfile.gettempdir()))
+    directory = root / "lingtai-release-comparisons" / provider
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{uuid.uuid4().hex}-{filename}"
+    if path.exists():
+        raise PublishError(f"refusing comparison-path collision: {path}")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # GitHub (gh CLI)
 # ---------------------------------------------------------------------------
@@ -93,43 +111,84 @@ def gh_release_exists(tag: str, repo_slug: str) -> bool:
     return result.returncode == 0
 
 
-def gh_release_asset_shas(tag: str, repo_slug: str) -> dict[str, None]:
-    """Return the set of asset filenames already attached to the release.
-
-    `gh release view --json assets` does not expose a checksum, so filename
-    presence is the signal; the caller re-verifies bytes by re-downloading
-    only when a name collision is found (kept out of v1 scope — see
-    plan_github_uploads' fail-loud-on-name-collision behavior instead of a
-    silent re-download-and-compare, which would add real network cost to
-    every dry run).
-    """
+def gh_release_asset_shas(tag: str, repo_slug: str) -> dict[str, dict]:
+    """Return GitHub release asset metadata, including download URLs."""
     result = subprocess.run(
         ["gh", "release", "view", tag, "--repo", repo_slug, "--json", "assets"],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        return {}
+        raise PublishError("GitHub release asset metadata lookup failed; refusing to plan uploads")
     try:
         data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {}
-    return {a["name"]: None for a in data.get("assets", [])}
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise PublishError("GitHub release asset metadata was not valid JSON; refusing to plan uploads") from exc
+    if not isinstance(data, dict):
+        raise PublishError("GitHub release asset metadata has an invalid top-level shape")
+    if "assets" not in data:
+        raise PublishError("GitHub release asset metadata is missing assets")
+    assets = data["assets"]
+    if not isinstance(assets, list):
+        raise PublishError("GitHub release asset metadata is ambiguous: assets is not a list")
+    result = {}
+    for asset in assets:
+        if not isinstance(asset, dict):
+            raise PublishError("GitHub release asset metadata is ambiguous: asset is not an object")
+        name = asset.get("name")
+        if not isinstance(name, str) or not name:
+            raise PublishError("GitHub release asset metadata is ambiguous: asset has no name")
+        if name in result:
+            raise PublishError(f"GitHub release has ambiguous duplicate asset name {name!r}")
+        url = _github_asset_url(asset)
+        if not isinstance(url, str) or not url:
+            raise PublishError(f"GitHub asset {name!r} has no usable download URL")
+        result[name] = asset
+    return result
+
+
+def _github_asset_url(asset: dict) -> str | None:
+    return (
+        asset.get("apiUrl")
+        or asset.get("api_url")
+        or asset.get("url")
+        or asset.get("browserDownloadUrl")
+        or asset.get("browser_download_url")
+    )
+
+
+def _download_github_asset(asset: dict, filename: str) -> Path:
+    url = _github_asset_url(asset)
+    if not isinstance(url, str) or not url:
+        raise PublishError(f"GitHub asset {filename!r} has no usable download URL")
+    destination = _comparison_path("github", filename)
+    result = subprocess.run(
+        ["gh", "api", url, "--header", "Accept: application/octet-stream", "--output", str(destination)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not destination.is_file():
+        raise PublishError(f"GitHub asset {filename!r} download failed; refusing to trust a name collision")
+    return destination
 
 
 def plan_github_uploads(manifest, assets_dir: Path, manifest_path: Path, repo_slug: str, tag: str) -> list[Path]:
     """Return the list of local file paths that still need uploading to GitHub.
 
-    Fails loud (PublishError) rather than silently skipping when an existing
-    asset can't be trusted byte-identical (name present but no way to verify
-    without a download this script deliberately does not perform in v1 —
-    the operator is told to inspect manually instead of the script guessing).
+    Existing names are accepted only after downloading and hashing the actual
+    GitHub asset bytes. Reported size or digest metadata is not sufficient.
     """
     existing = gh_release_asset_shas(tag, repo_slug)
     to_upload = []
-    all_files = [assets_dir / a.filename for a in manifest.artifacts] + [manifest_path]
+    all_files = release_files(manifest, assets_dir, manifest_path)
     for path in all_files:
-        if path.name in existing:
-            print(f"  [github] {path.name}: already attached to {tag}; skipping (idempotent)")
+        asset = existing.get(path.name)
+        if asset is not None:
+            remote_sha = sha256_file(_download_github_asset(asset, path.name))
+            local_sha = sha256_file(path)
+            if remote_sha != local_sha:
+                raise AssetConflict(
+                    f"GitHub asset {path.name!r} differs: local sha256={local_sha}, remote sha256={remote_sha}"
+                )
+            print(f"  [github] {path.name}: existing bytes sha256={local_sha}; skipping (idempotent)")
             continue
         to_upload.append(path)
     return to_upload
@@ -208,33 +267,62 @@ def gitee_verify_tag_synchronized(owner: str, repo: str, tag: str, expected_comm
 
 def gitee_existing_attachments(owner: str, repo: str, release_id: int, token: str) -> dict[str, dict]:
     release = _gitee_request("GET", f"/repos/{owner}/{repo}/releases/{release_id}", token)
-    return {a["name"]: a for a in release.get("attach_files", [])}
+    attachments = release.get("attach_files", [])
+    if not isinstance(attachments, list):
+        raise PublishError("Gitee attachment metadata is ambiguous: attach_files is not a list")
+    result = {}
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            raise PublishError("Gitee attachment metadata is ambiguous: attachment is not an object")
+        name = attachment.get("name")
+        if not isinstance(name, str) or not name:
+            raise PublishError("Gitee attachment metadata is ambiguous: attachment has no name")
+        if name in result:
+            raise PublishError(f"Gitee release has ambiguous duplicate attachment name {name!r}")
+        result[name] = attachment
+    return result
+
+
+def _gitee_download_sha256(attachment: dict, filename: str, token: str) -> str:
+    url = (
+        attachment.get("browserDownloadUrl")
+        or attachment.get("browser_download_url")
+        or attachment.get("download_url")
+        or attachment.get("url")
+    )
+    if not isinstance(url, str) or not url:
+        raise PublishError(f"Gitee attachment {filename!r} has no usable download URL")
+    destination = _comparison_path("gitee", filename)
+    separator = "&" if "?" in url else "?"
+    request = urllib.request.Request(url + f"{separator}access_token={token}")
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            with destination.open("xb") as output:
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+        raise PublishError(
+            f"Gitee attachment {filename!r} download/hash failed; refusing to trust a name collision"
+        ) from exc
+    return sha256_file(destination)
 
 
 def plan_gitee_uploads(manifest, assets_dir: Path, manifest_path: Path, owner: str, repo: str, release_id: int, token: str) -> list[Path]:
     existing = gitee_existing_attachments(owner, repo, release_id, token)
     to_upload = []
-    all_files = [assets_dir / a.filename for a in manifest.artifacts] + [manifest_path]
+    all_files = release_files(manifest, assets_dir, manifest_path)
     for path in all_files:
         att = existing.get(path.name)
         if att is None:
             to_upload.append(path)
             continue
-        # Gitee's attachment listing does not expose a checksum; the browser
-        # download URL is the only public evidence available without fetching
-        # the bytes. v1 treats "attachment with this name already exists" as
-        # an idempotent skip ONLY when re-verified against browserDownloadUrl
-        # is out of scope for this script (no network fetch-and-hash here);
-        # instead it fails loud so a human confirms before any manual retry,
-        # matching the "no delete-and-replace" and "fail loud on mismatch"
-        # requirements rather than silently trusting a name match.
-        raise AssetConflict(
-            f"Gitee release already has an attachment named {path.name!r} "
-            f"(id={att.get('id')}, url={att.get('browser_download_url', '?')}). "
-            "This script does not delete-and-replace attachments. If the bytes "
-            "are known identical, skip re-publishing this asset manually; "
-            "otherwise investigate before retrying."
-        )
+        remote_sha = _gitee_download_sha256(att, path.name, token)
+        local_sha = sha256_file(path)
+        if remote_sha != local_sha:
+            raise AssetConflict(
+                f"Gitee attachment {path.name!r} differs: local sha256={local_sha}, remote sha256={remote_sha}"
+            )
+        print(f"  [gitee] {path.name}: existing bytes sha256={local_sha}; skipping (idempotent)")
     return to_upload
 
 
