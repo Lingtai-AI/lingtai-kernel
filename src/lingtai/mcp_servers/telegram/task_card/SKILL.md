@@ -9,7 +9,7 @@ description: |
   templates (bash async, daemon) shipped as skill assets, the
   start | inspect | retry | stop lifecycle, path/timeout/validation rules,
   fail-loud error wakes, and how the /taskcard toggle interacts.
-last_changed_at: "2026-07-13T15:00:00-07:00"
+last_changed_at: "2026-07-14T19:22:00-07:00"
 related_files:
 - src/lingtai/mcp_servers/telegram/SKILL.md
 - src/lingtai/mcp_servers/telegram/task_card/controller.py
@@ -49,11 +49,19 @@ quick or invisible jobs.
 
 The resident Telegram Task Card has two independent slots:
 
-- **automatic** — the kernel's own tool-activity rows, heartbeat, and any API
-  errors, managed for you during Telegram-originated turns. You do not drive it.
+- **automatic** — a manager-owned mechanical projection of recent exact
+  `tool_call` events from `logs/events.jsonl`, broadcast identically to every
+  tracked resident Task Card. It does not reconstruct heartbeat, completion,
+  elapsed time, API errors, or per-chat routing. You do not drive it.
 - **programmable** — the slot this tool owns. Updating one slot never disturbs
   the other; with both present the programmable block appears under a `— WATCH —`
   header.
+
+The automatic source/filter/broadcast and refresh/molt rehydration workflow is
+explained in the parent [Telegram MCP manual](../SKILL.md#automatic-task-card-eventsjsonl-resident-broadcast)
+and mapped structurally in the owning
+[`mcp_servers` Anatomy](../../ANATOMY.md). This manual and the paired
+[`ANATOMY.md`](ANATOMY.md) cover the programmable controller only.
 
 ## HOW to use it
 

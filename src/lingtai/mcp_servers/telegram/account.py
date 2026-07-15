@@ -1292,3 +1292,21 @@ class TelegramAccount:
         with self._state_lock:
             if self._task_cards.pop(str(chat_id), None) is not None:
                 self._save_state()
+
+    def list_task_card_chats(self) -> list[int]:
+        """Return every chat id with a persisted resident Task Card.
+
+        Read-only enumeration over the same durable ``task_cards`` map
+        ``get_task_card``/``set_task_card`` use; a malformed (non-numeric) key
+        is skipped rather than raising, since ``_normalize_task_cards`` already
+        guarantees string keys but not that they parse as chat ids.
+        """
+        with self._state_lock:
+            keys = list(self._task_cards.keys())
+        chats: list[int] = []
+        for key in keys:
+            try:
+                chats.append(int(key))
+            except (TypeError, ValueError):
+                continue
+        return chats

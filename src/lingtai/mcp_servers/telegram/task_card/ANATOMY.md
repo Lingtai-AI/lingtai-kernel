@@ -83,9 +83,10 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   tool with `channel="programmable"` on the `telegram` MCP client from
   `agent._mcp_clients_by_tool`, consumed by
   `TelegramManager._handle_task_card_update` (`src/lingtai/mcp_servers/telegram/manager.py`).
-- Route: `_resolve_route` reads the automatic driver's turn-local
-  `agent._telegram_task_card_context` so both slots resolve to the one tracked
-  resident target for that account+chat.
+- Route: `_resolve_route` reads the programmable controller's turn-local
+  `agent._telegram_task_card_context` so its frames resolve to the one tracked
+  resident target for that account+chat; the automatic event-tail broadcast is
+  manager-owned and does not use this route.
 - Transport ownership: the manager (`_deliver_channel_frame_locked`,
   `_rotate_task_card_to_latest`, `_replace_task_card_after_probe`) owns the
   hard-at-most-one / last-message resident transport; `_project` only reads its
@@ -99,9 +100,15 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 
 - **Parent:** [`src/lingtai/mcp_servers/ANATOMY.md`](../../ANATOMY.md).
 - **Paired contract:** [`CONTRACT.md`](CONTRACT.md).
-- **Automatic slot + route host:** the kernel Task Card hooks in
-  [`src/lingtai/kernel/base_agent/ANATOMY.md`](../../../kernel/base_agent/ANATOMY.md);
-  render/compose/persistence in `src/lingtai/mcp_servers/telegram/manager.py`.
+- **Automatic slot owner:** `TelegramManager`'s `logs/events.jsonl` tail
+  worker and broadcast in `src/lingtai/mcp_servers/telegram/manager.py` (see
+  `src/lingtai/mcp_servers/ANATOMY.md`); BaseAgent no longer builds or renders
+  automatic rows.
+- **Programmable route host:** the kernel Task Card hooks in
+  [`src/lingtai/kernel/base_agent/ANATOMY.md`](../../../kernel/base_agent/ANATOMY.md)
+  capture only the turn-local `{account, chat_id}` route this controller
+  reads; render/compose/persistence for both channels stays in
+  `src/lingtai/mcp_servers/telegram/manager.py`.
 - **Manual:** [`SKILL.md`](SKILL.md).
 - **Manual assets:** [`assets/render_bash_async.py`](assets/render_bash_async.py)
   and [`assets/render_daemon.py`](assets/render_daemon.py) — the two co-located,

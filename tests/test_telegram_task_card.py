@@ -7,17 +7,12 @@ only (no cumulative history), no continuation/overflow, loud 📋 TASK CARD.
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pytest
-from lingtai.kernel.base_agent import BaseAgent, _TASK_CARD_TOOL
+from lingtai.kernel.base_agent import BaseAgent
 from lingtai.mcp_servers.telegram.manager import TelegramManager, SCHEMA
 from tests._notification_store_helpers import notification_store_for
-
-# Fixed local instant so the immutable per-row start stamp is deterministic.
-_FIXED_LOCAL_DT = datetime(2026, 7, 12, 4, 8, 8, tzinfo=timezone(timedelta(hours=-7)))
-_FIXED_STAMP = "04:08:08 UTC-07"
 
 
 # ---------------------------------------------------------------------------
@@ -62,51 +57,6 @@ def _manager(tmp_path):
     service = FakeService()
     manager = TelegramManager(service, working_dir=Path(tmp_path), on_inbound=lambda _: None, notification_store=notification_store_for(Path(tmp_path)))
     return manager, service.default_account
-
-
-# ---------------------------------------------------------------------------
-# Fake MCP Client
-# ---------------------------------------------------------------------------
-
-class _FakeMCPClient:
-    def __init__(self, tool_results=None, raise_on=None):
-        self.calls = []
-        self._tool_results = tool_results or {}
-        self._raise_on = raise_on or set()
-
-    def call_tool(self, tool_name, args, timeout=None):
-        self.calls.append((tool_name, dict(args), timeout))
-        if tool_name in self._raise_on:
-            raise RuntimeError(f"Simulated MCP failure: {tool_name}")
-        # P0 guard: task-card reverse calls target the private tool name and
-        # send NO public ``action`` (the server forces it).
-        sub = args.get("sub_action", "")
-        if sub in ("create", "update", "finalize"):
-            assert tool_name == _TASK_CARD_TOOL, \
-                f"Expected {_TASK_CARD_TOOL}, got {tool_name}"
-            assert "action" not in args, \
-                f"Reverse call must send no action, got {args.get('action')!r}"
-        return self._tool_results.get(tool_name, {"status": "ok", "message_id": "test:123:456"})
-
-
-def _agent_with_card_context(client, *, card_message_id=None):
-    """A bare BaseAgent wired with a turn-local Task Card context for hook tests."""
-    agent = BaseAgent.__new__(BaseAgent)
-    agent._telegram_task_card_context = {
-        "mcp_client": client,
-        "account": "mybot",
-        "chat_id": 123,
-        "card_message_id": card_message_id,
-        "_lock": threading.Lock(),
-    }
-    return agent
-
-
-def _warning_blob(caplog):
-    """Join all captured WARNING messages (empty string if none)."""
-    return " ".join(
-        r.getMessage() for r in caplog.records if r.levelname == "WARNING"
-    )
 
 
 # ===========================================================================
@@ -343,369 +293,35 @@ def test_no_raw_args_in_card(tmp_path):
 
 
 # ===========================================================================
-# Lifecycle: lazy create, no-card on direct answer, teardown, dedup
+# Lifecycle: no-card on direct answer, teardown, dedup
+#
+# The lazy-create / same-card-edit / reverse-call-error/exception tests that
+# used to live here exercised BaseAgent's ``_on_tool_pre_dispatch_hook`` and
+# ``_teardown_telegram_task_card`` finalize reverse-call — both retired. The
+# automatic Task Card is now a mechanical broadcast of ``logs/events.jsonl``
+# owned entirely by ``TelegramManager`` (see
+# ``tests/test_telegram_task_card_event_tail.py``), not a turn-local
+# BaseAgent callback model. ``_teardown_telegram_task_card`` now only clears
+# the route context BaseAgent still captures for the programmable controller
+# (``test_no_tool_no_card``/``test_teardown_idempotent`` below cover that).
 # ===========================================================================
 
-def test_hook_lazy_creates_card():
-    agent = BaseAgent.__new__(BaseAgent)
-    client = _FakeMCPClient({_TASK_CARD_TOOL: {"status": "ok", "message_id": "mybot:123:789"}})
-    agent._telegram_task_card_context = {
-        "mcp_client": client,
-        "account": "mybot",
-        "chat_id": 123,
-        "card_message_id": None,
-        "_lock": threading.Lock(),
-        "wall_clock": lambda: _FIXED_LOCAL_DT,
-    }
-    agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "check", "action": "run"}, tool_call_id="c1")
-    assert len(client.calls) == 1
-    assert client.calls[0][0] == _TASK_CARD_TOOL  # private tool name
-    assert client.calls[0][1]["sub_action"] == "create"
-    assert "action" not in client.calls[0][1]  # server forces the action
-    # The tool renders as one row carrying its display label (not routing) and
-    # its immutable captured local start stamp.
-    rows = client.calls[0][1]["rows"]
-    assert rows == [{
-        "tool": "bash", "tool_action": "run", "reasoning": "check",
-        "elapsed_s": 0, "done": False, "started_at": _FIXED_STAMP,
-    }]
-    assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:789"
-
-
-def test_hook_second_tool_edits_same_card():
-    agent = BaseAgent.__new__(BaseAgent)
-    client = _FakeMCPClient({_TASK_CARD_TOOL: {"status": "ok", "message_id": "mybot:123:789"}})
-    agent._telegram_task_card_context = {
-        "mcp_client": client,
-        "account": "mybot",
-        "chat_id": 123,
-        "card_message_id": "mybot:123:789",
-        "_lock": threading.Lock(),
-        "wall_clock": lambda: _FIXED_LOCAL_DT,
-    }
-    agent._on_tool_pre_dispatch_hook("read", {"_reasoning": "step 2"}, tool_call_id="c2")
-    assert len(client.calls) == 1
-    assert client.calls[0][0] == _TASK_CARD_TOOL  # private tool name
-    assert client.calls[0][1]["sub_action"] == "update"
-    assert "action" not in client.calls[0][1]  # server forces the action
-    assert client.calls[0][1]["account"] == "mybot"
-    assert client.calls[0][1]["chat_id"] == 123
-    assert client.calls[0][1]["card_message_id"] == "mybot:123:789"
-    rows = client.calls[0][1]["rows"]
-    assert rows == [{
-        "tool": "read", "tool_action": "", "reasoning": "step 2",
-        "elapsed_s": 0, "done": False, "started_at": _FIXED_STAMP,
-    }]
-
-
 def test_no_tool_no_card():
+    """Teardown with no captured route context is a silent no-op."""
     agent = BaseAgent.__new__(BaseAgent)
-    client = _FakeMCPClient()
-    agent._telegram_task_card_context = {
-        "mcp_client": client,
-        "account": "mybot",
-        "chat_id": 123,
-        "card_message_id": None,
-        "_lock": threading.Lock(),
-    }
+    agent._telegram_task_card_context = None
     agent._teardown_telegram_task_card()
-    assert len(client.calls) == 0
-    assert agent._telegram_task_card_context is None
-
-
-def test_teardown_finalizes_and_clears():
-    agent = BaseAgent.__new__(BaseAgent)
-    client = _FakeMCPClient()
-    agent._telegram_task_card_context = {
-        "mcp_client": client,
-        "account": "mybot",
-        "chat_id": 123,
-        "card_message_id": "mybot:123:789",
-        "_lock": threading.Lock(),
-    }
-    agent._teardown_telegram_task_card()
-    assert len(client.calls) == 1
-    assert client.calls[0][1]["sub_action"] == "finalize"
     assert agent._telegram_task_card_context is None
 
 
 def test_teardown_idempotent():
+    """Teardown clears the route context and is safe to call repeatedly."""
     agent = BaseAgent.__new__(BaseAgent)
-    client = _FakeMCPClient()
-    agent._telegram_task_card_context = {
-        "mcp_client": client,
-        "account": "mybot",
-        "chat_id": 123,
-        "card_message_id": "mybot:123:789",
-        "_lock": threading.Lock(),
-    }
+    agent._telegram_task_card_context = {"account": "mybot", "chat_id": 123}
     agent._teardown_telegram_task_card()
     assert agent._telegram_task_card_context is None
     agent._teardown_telegram_task_card()  # no-op, no raise
     assert agent._telegram_task_card_context is None
-
-
-def test_non_telegram_noop():
-    agent = BaseAgent.__new__(BaseAgent)
-    agent._telegram_task_card_context = None
-    agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "x"}, tool_call_id="c1")
-    # Nothing happens — no context
-
-
-def test_mcp_timeout_does_not_block():
-    agent = BaseAgent.__new__(BaseAgent)
-    # The hook reverse-calls the private task-card tool, not "telegram", so it
-    # must raise on _TASK_CARD_TOOL to truly exercise the fail-open path.
-    client = _FakeMCPClient(raise_on={_TASK_CARD_TOOL})
-    agent._telegram_task_card_context = {
-        "mcp_client": client,
-        "account": "mybot",
-        "chat_id": 123,
-        "card_message_id": None,
-        "_lock": threading.Lock(),
-    }
-    agent._on_tool_pre_dispatch_hook("bash", {"_reasoning": "x"}, tool_call_id="c1")
-    # Must not raise — fail-open
-
-
-def test_recursion_guard():
-    agent = BaseAgent.__new__(BaseAgent)
-    client = _FakeMCPClient()
-    agent._telegram_task_card_context = {
-        "mcp_client": client,
-        "account": "mybot",
-        "chat_id": 123,
-        "card_message_id": "mybot:123:789",
-        "_lock": threading.Lock(),
-    }
-    agent._on_tool_pre_dispatch_hook(_TASK_CARD_TOOL, {"_reasoning": "x"}, tool_call_id="c1")
-    assert len(client.calls) == 0  # skipped — private tool never re-triggers the hook
-
-
-def test_no_reasoning_skip():
-    agent = BaseAgent.__new__(BaseAgent)
-    client = _FakeMCPClient()
-    agent._telegram_task_card_context = {
-        "mcp_client": client,
-        "account": "mybot",
-        "chat_id": 123,
-        "card_message_id": None,
-        "_lock": threading.Lock(),
-    }
-    agent._on_tool_pre_dispatch_hook("bash", {"action": "run"}, tool_call_id="c1")
-    assert len(client.calls) == 0  # no reasoning → skip, no lazy create
-
-
-# ===========================================================================
-# Reverse-call error results: observable, fail-open, no fake success
-# ===========================================================================
-#
-# The real MCPClient.call_tool never raises for a tool-level failure — it
-# returns an error *dict* (e.g. {"status": "error", "message": ...} or
-# {"status": "error", "error": ...}).  Before the fix the hook did
-# ``ctx["card_message_id"] = result.get("message_id")`` which silently accepted
-# that error dict as success (card_message_id stayed None with no signal), so a
-# real reverse-call failure was invisible.  These tests pin down the required
-# behavior: the failure is logged (observably) without ever leaking reasoning,
-# chat IDs, or credentials, and the turn is never blocked (fail-open).
-
-
-def test_create_error_result_is_observable_and_no_fake_success(caplog):
-    """An error dict from the create call must be logged, and must NOT be
-    mistaken for a created card."""
-    client = _FakeMCPClient(
-        {_TASK_CARD_TOOL: {"status": "error", "message": "boom sending card"}}
-    )
-    agent = _agent_with_card_context(client)
-    with caplog.at_level("WARNING", logger="lingtai"):
-        agent._on_tool_pre_dispatch_hook(
-            "bash", {"_reasoning": "secret-reasoning-42", "action": "run"},
-            tool_call_id="c1",
-        )
-    # No fake success: an error result must not be recorded as a card id.
-    assert agent._telegram_task_card_context["card_message_id"] is None
-    # Observable, and redacted by construction (no reasoning, chat id, provider text).
-    blob = _warning_blob(caplog)
-    assert blob, "reverse-call failure must be logged (observable)"
-    assert "secret-reasoning-42" not in blob
-    assert "123" not in blob
-    assert "boom sending card" not in blob
-
-
-def test_create_error_result_does_not_raise():
-    """Fail-open: an error result must never propagate out of the hook."""
-    client = _FakeMCPClient(
-        {_TASK_CARD_TOOL: {"status": "error", "error": "manager not initialized"}}
-    )
-    agent = _agent_with_card_context(client)
-    agent._on_tool_pre_dispatch_hook(  # must not raise
-        "bash", {"_reasoning": "x", "action": "run"}, tool_call_id="c1",
-    )
-    assert agent._telegram_task_card_context["card_message_id"] is None
-
-
-def test_update_error_result_is_observable_and_keeps_card(caplog):
-    """An error dict from the update call must be logged and must leave the
-    existing card id intact (fail-open), not overwrite it with None."""
-    client = _FakeMCPClient(
-        {_TASK_CARD_TOOL: {"status": "error", "message": "edit failed"}}
-    )
-    agent = _agent_with_card_context(client, card_message_id="mybot:123:789")
-    with caplog.at_level("WARNING", logger="lingtai"):
-        agent._on_tool_pre_dispatch_hook(
-            "read", {"_reasoning": "step-2-secret", "action": ""},
-            tool_call_id="c2",
-        )
-    assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:789"
-    blob = _warning_blob(caplog)
-    assert blob, "reverse-call update failure must be logged (observable)"
-    assert "step-2-secret" not in blob
-    assert "edit failed" not in blob
-
-
-def test_update_malformed_success_result_is_observable_and_keeps_card(caplog):
-    """A success-shaped update dict that carries NO usable message_id (e.g.
-    ``{"status": "ok"}``) must be observable, not silently ignored: it did not
-    confirm a card. Fail-open — the existing card id is kept — and redacted by
-    construction — no reasoning/chat id/payload leaks."""
-    client = _FakeMCPClient({_TASK_CARD_TOOL: {"status": "ok"}})  # no message_id
-    agent = _agent_with_card_context(client, card_message_id="mybot:123:789")
-    with caplog.at_level("WARNING", logger="lingtai"):
-        agent._on_tool_pre_dispatch_hook(
-            "read", {"_reasoning": "malformed-step-secret", "action": ""},
-            tool_call_id="c2",
-        )
-    # Fail-open: existing card id is unchanged, never overwritten with None.
-    assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:789"
-    # Observable: a warning is emitted even though the payload looked ok.
-    blob = _warning_blob(caplog)
-    assert blob, "malformed success-shaped update must be logged (observable)"
-    # Redacted by construction: no reasoning or payload content leaks.
-    assert "malformed-step-secret" not in blob
-    assert "123" not in blob
-
-
-def test_create_raised_exception_is_observable_and_fail_open(caplog):
-    """A raised reverse call (not just an error dict) must be fail-open AND
-    observable — the pre-fix code swallowed it silently."""
-    client = _FakeMCPClient(raise_on={_TASK_CARD_TOOL})
-    agent = _agent_with_card_context(client)
-    with caplog.at_level("WARNING", logger="lingtai"):
-        agent._on_tool_pre_dispatch_hook(  # must not raise
-            "bash", {"_reasoning": "secret-42", "action": "run"}, tool_call_id="c1",
-        )
-    assert agent._telegram_task_card_context["card_message_id"] is None
-    blob = _warning_blob(caplog)
-    assert blob, "a raised reverse call must be logged (observable)"
-    # Only the exception class name is allowed, never its message/args.
-    assert "RuntimeError" in blob
-    assert "Simulated MCP failure" not in blob
-    assert "secret-42" not in blob
-
-
-
-
-def test_update_stale_delete_error_keeps_old_id_and_warns(caplog):
-    """A stale-delete failure is pre-send: no replacement id can be adopted."""
-    client = _FakeMCPClient({_TASK_CARD_TOOL: {
-        "status": "error",
-        "stale_delete_failed": True,
-    }})
-    agent = _agent_with_card_context(client, card_message_id="mybot:123:789")
-    with caplog.at_level("WARNING", logger="lingtai"):
-        agent._on_tool_pre_dispatch_hook(
-            "read", {"_reasoning": "stale-secret", "action": ""},
-            tool_call_id="c2",
-        )
-    assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:789"
-    blob = _warning_blob(caplog)
-    assert blob
-    assert "partial" not in blob
-    assert "stale-secret" not in blob
-    assert "123" not in blob
-
-
-def test_update_rejects_impossible_stale_delete_success_payload(caplog):
-    """A contradictory stale-delete payload cannot authorize id adoption."""
-    client = _FakeMCPClient({_TASK_CARD_TOOL: {
-        "status": "ok",
-        "message_id": "mybot:123:999",
-        "stale_delete_failed": True,
-    }})
-    agent = _agent_with_card_context(client, card_message_id="mybot:123:789")
-    with caplog.at_level("WARNING", logger="lingtai"):
-        agent._on_tool_pre_dispatch_hook(
-            "read", {"_reasoning": "impossible-secret", "action": ""},
-            tool_call_id="c2",
-        )
-    assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:789"
-    blob = _warning_blob(caplog)
-    assert blob
-    assert "partial" not in blob
-    assert "impossible-secret" not in blob
-    assert "123" not in blob
-
-
-def test_update_resident_persist_partial_adopts_new_id_and_warns(caplog):
-    """Only post-send persistence failure is a successful partial delivery."""
-    client = _FakeMCPClient({_TASK_CARD_TOOL: {
-        "status": "ok",
-        "message_id": "mybot:123:999",
-        "resident_persist_failed": True,
-    }})
-    agent = _agent_with_card_context(client, card_message_id="mybot:123:789")
-    with caplog.at_level("WARNING", logger="lingtai"):
-        agent._on_tool_pre_dispatch_hook(
-            "read", {"_reasoning": "partial-secret", "action": ""},
-            tool_call_id="c2",
-        )
-    assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:999"
-    blob = _warning_blob(caplog)
-    assert "partial" in blob
-    assert "resident_persist_failed" in blob
-    assert "partial-secret" not in blob
-    assert "123" not in blob
-
-
-def test_create_success_result_still_sets_card_id(caplog):
-    """A well-formed success result must still be accepted (no regression)."""
-    client = _FakeMCPClient(
-        {_TASK_CARD_TOOL: {"status": "ok", "message_id": "mybot:123:789"}}
-    )
-    agent = _agent_with_card_context(client)
-    with caplog.at_level("WARNING", logger="lingtai"):
-        agent._on_tool_pre_dispatch_hook(
-            "bash", {"_reasoning": "x", "action": "run"}, tool_call_id="c1",
-        )
-    assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:789"
-    # A success must not log a spurious warning.
-    assert not _warning_blob(caplog)
-
-
-def test_finalize_error_result_is_observable_and_clears_context(caplog):
-    """A finalize error dict must be observable, yet context is still cleared."""
-    client = _FakeMCPClient(
-        {_TASK_CARD_TOOL: {"status": "error", "message": "finalize failed"}}
-    )
-    agent = _agent_with_card_context(client, card_message_id="mybot:123:789")
-    with caplog.at_level("WARNING", logger="lingtai"):
-        agent._teardown_telegram_task_card()
-    assert agent._telegram_task_card_context is None  # cleared in finally
-    blob = _warning_blob(caplog)
-    assert blob, "finalize failure must be logged (observable)"
-    assert "finalize failed" not in blob
-
-
-def test_finalize_raised_exception_is_observable_and_clears_context(caplog):
-    """A raised finalize call must be observable, fail-open, and still clear."""
-    client = _FakeMCPClient(raise_on={_TASK_CARD_TOOL})
-    agent = _agent_with_card_context(client, card_message_id="mybot:123:789")
-    with caplog.at_level("WARNING", logger="lingtai"):
-        agent._teardown_telegram_task_card()  # must not raise
-    assert agent._telegram_task_card_context is None
-    blob = _warning_blob(caplog)
-    assert blob and "RuntimeError" in blob
-    assert "Simulated MCP failure" not in blob
 
 
 # ===========================================================================
@@ -1037,57 +653,6 @@ def test_parallel_hook_exactly_n_calls_in_order():
         "All hooks MUST complete before any dispatch begins — "
         "per-future hooks would interleave and violate this assertion"
     )
-
-
-# ===========================================================================
-# Recovery message_id (r6 Fix 4)
-# ===========================================================================
-
-
-def test_update_recovery_adopts_new_message_id():
-    """When update recovery re-creates the card, BaseAgent adopts new message_id."""
-    agent = BaseAgent.__new__(BaseAgent)
-    # simulate recovery: update returns a DIFFERENT message_id
-    client = _FakeMCPClient(
-        {_TASK_CARD_TOOL: {"status": "ok", "message_id": "recovered:123:999"}}
-    )
-    agent._telegram_task_card_context = {
-        "mcp_client": client,
-        "account": "mybot",
-        "chat_id": 123,
-        "card_message_id": "original:123:789",
-        "_lock": threading.Lock(),
-    }
-    agent._on_tool_pre_dispatch_hook(
-        "read", {"_reasoning": "step 2", "action": ""},
-        tool_call_id="c2",
-    )
-    assert len(client.calls) == 1
-    assert client.calls[0][1]["sub_action"] == "update"
-    # Old id was sent in the request
-    assert client.calls[0][1]["card_message_id"] == "original:123:789"
-    # But context now has the recovered id
-    assert agent._telegram_task_card_context["card_message_id"] == "recovered:123:999"
-
-
-def test_update_same_message_id_not_changed():
-    """When update succeeds without recovery, card_message_id stays the same."""
-    agent = BaseAgent.__new__(BaseAgent)
-    client = _FakeMCPClient(
-        {_TASK_CARD_TOOL: {"status": "ok", "message_id": "mybot:123:789"}}
-    )
-    agent._telegram_task_card_context = {
-        "mcp_client": client,
-        "account": "mybot",
-        "chat_id": 123,
-        "card_message_id": "mybot:123:789",
-        "_lock": threading.Lock(),
-    }
-    agent._on_tool_pre_dispatch_hook(
-        "read", {"_reasoning": "step 2"},
-        tool_call_id="c2",
-    )
-    assert agent._telegram_task_card_context["card_message_id"] == "mybot:123:789"
 
 
 # ===========================================================================

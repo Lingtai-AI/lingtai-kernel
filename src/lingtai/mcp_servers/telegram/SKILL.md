@@ -9,11 +9,13 @@ description: |
   human-visible watcher for long-running bash-async/daemon work — and error
   surfacing. Pulled on demand via action='manual'; you do not need to call it
   before every send.
-version: 1.5.1
-last_changed_at: "2026-07-13T12:15:00-07:00"
+version: 1.5.2
+last_changed_at: "2026-07-14T19:22:00-07:00"
 related_files:
+- src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/manager.py
 - src/lingtai/mcp_servers/telegram/server.py
+- src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
 maintenance: |
   Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
@@ -48,12 +50,14 @@ descriptions; you do not need to call it before every send.
 - The final answer must be a **separate durable message** using `action='send'`
   or `action='reply'`. Do **not** edit the placeholder into the final answer;
   the placeholder shows progress only (it may optionally be deleted).
-- When the current agent has `taskcard: True`, an automatic Task Card may update
-  separately during Telegram-originated turns (you do not manage it; use
-  send/reply for your own messages). While the resident Task Card is still the
-  chat's last message, automatic, programmable, heartbeat, and final frames edit
-  that one stable resident message ID in place; an identical Telegram edit is a
-  successful no-op. See **TASKCARD STATE** below.
+- When the current agent has `taskcard: True`, the manager-owned automatic Task
+  Card updates separately from your own send/reply messages. It is a mechanical
+  view of recent `tool_call` events in `logs/events.jsonl`, not a turn-local
+  heartbeat or completion lifecycle. While the resident Task Card is still the
+  chat's last message, automatic event-tail and programmable frames edit that one
+  stable resident message ID in place; an identical Telegram edit is a successful
+  no-op. See **AUTOMATIC TASK CARD: `events.jsonl` → resident broadcast** and
+  **TASKCARD STATE** below.
 - The Task Card's tracked resident target is kept as the last message. When a
   newer message has arrived below it — your own durable send/reply, or an incoming
   user message — the addon same-content-probes the exact old resident with its last committed
@@ -168,6 +172,41 @@ Important behavior notes:
 - Do not edit or print `bot_token` values while documenting or debugging slash
   commands.
 
+## AUTOMATIC TASK CARD: `events.jsonl` → resident broadcast
+
+The automatic slot is a bounded projection of the agent's durable behavior
+journal, not a second model-authored progress lifecycle:
+
+1. `TelegramManager` owns one tail worker for its lifetime. It reads
+   `<workdir>/logs/events.jsonl`, checks the exact event `type` first, and skips
+   every event except `"tool_call"` without inspecting that event's payload.
+2. From a matching row it extracts only `tool_name`, `tool_args.action`, and a
+   redacted, length-capped `tool_args._reasoning`; raw arguments, results, and
+   provider errors are never forwarded. The manager keeps a bounded recent
+   window, and the current `/taskcard N` setting chooses how many normal rows the
+   card renders.
+3. When that window changes, the manager renders the automatic frame once and
+   broadcasts the same agent-behavior view to every tracked resident Task Card
+   across configured Telegram accounts and chats. Rows carry no account/chat
+   route and are not correlated to the chat that created a resident card; a
+   failure for one target does not block the others.
+4. The tailer never inspects `tool_result` or dispatch events and does not
+   reconstruct completion, `DONE`, elapsed time, heartbeat, or API-error rows.
+   The automatic path also does not call the private reverse MCP route; that route
+   is programmable-slot-only.
+5. There is no durable cursor or second behavior store. The byte offset and row
+   window are in-memory optimizations. Startup, refresh, molt, and detected log
+   truncation/replacement reverse-tail the journal again to rehydrate recent
+   matching rows. An unterminated final JSONL line is left unconsumed until it is
+   complete, and read/stat failures fail closed rather than advancing past unseen
+   bytes.
+
+Architecture and lifecycle details live in the owning
+[`mcp_servers` Anatomy](../ANATOMY.md). The separate programmable renderer/tool
+structure lives in the
+[`telegram/task_card` Anatomy](task_card/ANATOMY.md); its user procedure is the
+co-located [`task_card/SKILL.md`](task_card/SKILL.md).
+
 ## TASKCARD STATE
 
 - `/taskcard` reports both current preferences. `/taskcard on` and `/taskcard off`
@@ -184,20 +223,19 @@ Important behavior notes:
   delivery boolean: structured message objects use `taskcard: true|false`, and
   textual preview lines use `taskcard: True|False`. Check/read/search items derive
   it at projection time, so old stored messages reflect the current value without
-  history rewrites. `normal_rows` controls only automatic ordinary tool rows;
-  the single API-error row is never evicted by this window.
+  history rewrites. `normal_rows` chooses how many of the newest bounded,
+  manager-projected `tool_call` rows the automatic card renders; non-`tool_call`
+  events never enter that window.
 - `taskcard: True` means automatic and programmable Task Cards may be sent to
   Telegram. `taskcard: False` hides delivery of **both** slots at the presentation
-  boundary but does not stop rows, heartbeats, reverse calls, renderers, watchers,
-  retries, or bookkeeping. Turning delivery back on needs no restart.
-- Automatic cards render a fixed no-reply footer that mentions both command forms,
-  then at most two metadata lines (150 characters total), then the bare timestamp.
-  The metadata is a numeric projection of canonical session telemetry: cache rate,
-  cumulative cache miss/budget, API calls, and context usage. API failures render
-  only bounded machine fields (type, public provider/model, valid HTTP status,
-  allow-listed code, and retry/recovered/failed state), never opaque external
-  identifiers or raw exception text, response bodies, URLs, tokens, prompts,
-  paths, or tracebacks.
+  boundary. The event tail still follows the journal and programmable renderers,
+  watchers, retries, and bookkeeping continue, but no automatic broadcast is
+  delivered while disabled. Turning delivery back on needs no restart.
+- Automatic event-tail cards render the safe tool rows, the fixed no-reply footer
+  that names both command forms, and the render-time timestamp. They do not render
+  `tool_result`, completion, elapsed, heartbeat, API-error, or provider-error rows,
+  and they do not forward raw arguments, external response bodies, URLs, tokens,
+  prompts, paths, or tracebacks.
 - When answering whether Task Cards are on or how many normal rows they keep, use
   the explicit current `/taskcard` status rather than inferring from a visible card.
 
@@ -212,9 +250,10 @@ Important behavior notes:
   these two cases (`render_bash_async.py` and `render_daemon.py`); the full manual
   below routes to them and explains how to copy an asset into your working
   directory. Skip the watcher only for quick or invisible jobs.
-- The resident Task Card has two independent slots: the **automatic** tool-activity
-  slot (managed for you, described under **TASKCARD STATE**) and a **programmable**
-  slot you drive with the separate public `task_card` tool. With both present, the
+- The resident Task Card has two independent slots: the **automatic** event-journal
+  slot (manager-owned, described under **AUTOMATIC TASK CARD: `events.jsonl` →
+  resident broadcast**) and a **programmable** slot you drive with the separate
+  public `task_card` tool. With both present, the
   programmable block appears under a `— WATCH —` header; updating one slot never
   disturbs the other.
 - You surface your latest reported snapshot on the programmable slot by supplying
