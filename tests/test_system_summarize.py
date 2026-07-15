@@ -477,7 +477,7 @@ def test_summarize_single_item_success():
     # recorded in runtime history, active provider context may still hold the old
     # raw result until rebuild. The comment names both apply-paths (the 1.0 forced
     # boundary OR one tactical rebuild=true), warns against looping, and references
-    # the durable stores/molt fallback below the 0.6 recovery target.
+    # the durable stores/molt fallback below the 0.75 recovery target.
     assert result["mode"] == "summarize"
     assert "reconstruction" in result
     assert "runtime history" in result["reconstruction"]
@@ -485,7 +485,7 @@ def test_summarize_single_item_success():
     assert "old raw result" in result["reconstruction"]
     assert "1.0 hard context boundary" in result["reconstruction"]
     assert "rebuild=true" in result["reconstruction"]
-    assert "0.6 recovery target" in result["reconstruction"]
+    assert "0.75 recovery target" in result["reconstruction"]
     assert "do not loop rebuild/summarize" in result["reconstruction"]
     assert "meta_guidance" in result["reconstruction"]
     # Dynamic pending totals + context snapshot accompany the comment.
