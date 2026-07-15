@@ -341,7 +341,7 @@ def _build_rebuild_reconstruction(snapshot: dict, applied_totals, *, requested: 
         f"yet; it first becomes observable on the next provider round. "
         f"{_pending_totals_line(applied_totals, applied=True)}After that round, inspect "
         f"_meta.agent_meta.agent_state.token_usage.session.context_usage and the reconstruction "
-        f"metadata to decide whether context recovered. If it remains above the 0.6 "
+        f"metadata to decide whether context recovered. If it remains above the 0.75 "
         f"recovery target, tend durable stores and molt rather than repeating rebuild. "
         f"Be tactical with token efficiency — do not loop rebuild/summarize. See "
         f"meta_guidance, substrate, and summarize-manual."
@@ -368,7 +368,7 @@ def _build_summarize_only_reconstruction(snapshot: dict, totals: dict) -> str:
             "Two ways to apply the pending summaries: let the runtime force a rebuild "
             "at the 1.0 hard context boundary (it applies pending summaries then), OR "
             "make one tactical system(action='summarize', rebuild=true) call proactively "
-            "— preferably when context is high (>=0.75 / the runtime rebuild hint) or a "
+            "— preferably when context is high (>=0.85 / the runtime rebuild hint) or a "
             "fresh context is worth the cache-miss cost. Proactive is better: the 1.0 "
             "forced path is the emergency boundary. "
         )
@@ -380,7 +380,7 @@ def _build_summarize_only_reconstruction(snapshot: dict, totals: dict) -> str:
         )
     return (
         f"{prefix}{body}Be tactical with token efficiency: do not loop "
-        f"rebuild/summarize. If rebuild cannot recover below the 0.6 recovery target, "
+        f"rebuild/summarize. If rebuild cannot recover below the 0.75 recovery target, "
         f"tend durable stores and molt. See meta_guidance, substrate, and "
         f"summarize-manual."
     )

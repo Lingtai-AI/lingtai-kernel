@@ -1,8 +1,8 @@
 """Tests for the sustained context-pressure streak (channel B).
 
-The molt reminder in ``_meta.agent_meta.agent_state.context.molt`` is no longer an immediate
-``usage >= 0.60`` nudge.  Instead it tracks *fresh provider rounds* whose context
-usage is at/above the reconstruction threshold (0.75).  The reminder only begins
+The molt reminder in ``_meta.agent_meta.agent_state.context.molt`` is not an immediate
+recovery-target nudge. Instead it tracks *fresh provider rounds* whose context
+usage is at/above the reconstruction threshold (0.85).  The reminder only begins
 on the THIRD consecutive high round, so a single spike (or even two) does not
 nag the agent before the delayed-summarize reconstruction has had a chance to
 relieve pressure.  Duplicate observations of the same provider round must not
@@ -47,7 +47,7 @@ def make_session_manager(**kw):
 
 
 def test_constants_match_contract():
-    assert CONTEXT_PRESSURE_HIGH_RATIO == 0.75
+    assert CONTEXT_PRESSURE_HIGH_RATIO == 0.85
     # The reconstruction ratio is now the 1.0 hard forced-rebuild boundary
     # (CONTEXT_PRESSURE_RECONSTRUCTION_RATIO is a back-compat alias).
     assert CONTEXT_PRESSURE_RECONSTRUCTION_RATIO == 1.0
@@ -56,20 +56,20 @@ def test_constants_match_contract():
 
 def test_first_two_high_rounds_do_not_warn():
     sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.80, round_id=1)
+    sm.note_context_pressure_round(0.90, round_id=1)
     assert sm.context_pressure_streak == 1
     assert sm.context_pressure_warning_active is False
 
-    sm.note_context_pressure_round(0.82, round_id=2)
+    sm.note_context_pressure_round(0.90, round_id=2)
     assert sm.context_pressure_streak == 2
     assert sm.context_pressure_warning_active is False
 
 
 def test_third_consecutive_high_round_warns():
     sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.80, round_id=1)
-    sm.note_context_pressure_round(0.81, round_id=2)
-    sm.note_context_pressure_round(0.83, round_id=3)
+    sm.note_context_pressure_round(0.90, round_id=1)
+    sm.note_context_pressure_round(0.90, round_id=2)
+    sm.note_context_pressure_round(0.90, round_id=3)
     assert sm.context_pressure_streak == 3
     assert sm.context_pressure_warning_active is True
 
@@ -86,36 +86,36 @@ def test_duplicate_same_round_id_does_not_advance():
     """Multiple build_meta / tool results in one batch share the same provider
     round; observing the same round_id repeatedly must not advance the streak."""
     sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.80, round_id=7)
-    sm.note_context_pressure_round(0.80, round_id=7)
-    sm.note_context_pressure_round(0.80, round_id=7)
+    sm.note_context_pressure_round(0.90, round_id=7)
+    sm.note_context_pressure_round(0.90, round_id=7)
+    sm.note_context_pressure_round(0.90, round_id=7)
     assert sm.context_pressure_streak == 1
     assert sm.context_pressure_warning_active is False
 
 
 def test_drop_below_threshold_resets_streak():
     sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.80, round_id=1)
-    sm.note_context_pressure_round(0.81, round_id=2)
+    sm.note_context_pressure_round(0.90, round_id=1)
+    sm.note_context_pressure_round(0.90, round_id=2)
     sm.note_context_pressure_round(0.50, round_id=3)  # relieved
     assert sm.context_pressure_streak == 0
     assert sm.context_pressure_warning_active is False
 
     # Must climb back from scratch — two more highs still no warning.
-    sm.note_context_pressure_round(0.80, round_id=4)
-    sm.note_context_pressure_round(0.81, round_id=5)
+    sm.note_context_pressure_round(0.90, round_id=4)
+    sm.note_context_pressure_round(0.90, round_id=5)
     assert sm.context_pressure_warning_active is False
-    sm.note_context_pressure_round(0.82, round_id=6)
+    sm.note_context_pressure_round(0.90, round_id=6)
     assert sm.context_pressure_warning_active is True
 
 
-def test_threshold_is_inclusive_at_0_75():
-    """Threshold interpretation: ``usage >= 0.75`` counts as a high round,
+def test_threshold_is_inclusive_at_0_85():
+    """Threshold interpretation: ``usage >= 0.85`` counts as a high round,
     matching the delayed-reconstruction release test (``usage >= ratio``)."""
     sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.75, round_id=1)
+    sm.note_context_pressure_round(0.85, round_id=1)
     assert sm.context_pressure_streak == 1
-    sm.note_context_pressure_round(0.7499, round_id=2)
+    sm.note_context_pressure_round(0.8499, round_id=2)
     assert sm.context_pressure_streak == 0
 
 
@@ -156,7 +156,7 @@ def test_track_usage_advances_streak_on_fresh_high_rounds():
     mock_session.interface.estimate_context_tokens.return_value = 30000  # ignored
 
     for i in range(3):
-        sm._track_usage(_response(80000, f"call-{i}"))
+        sm._track_usage(_response(90000, f"call-{i}"))
 
     assert sm.context_pressure_streak == 3
     assert sm.context_pressure_warning_active is True
@@ -182,8 +182,8 @@ def test_track_usage_resets_streak_when_pressure_relieved():
     sm.ensure_session()
     mock_session.context_window.return_value = 100000
 
-    sm._track_usage(_response(80000, "c1"))  # provider 0.80
-    sm._track_usage(_response(80000, "c2"))
+    sm._track_usage(_response(90000, "c1"))  # provider 0.90
+    sm._track_usage(_response(90000, "c2"))
     assert sm.context_pressure_streak == 2
 
     sm._track_usage(_response(30000, "c3"))  # provider 0.30 -> relieved
@@ -195,9 +195,9 @@ def test_unknown_usage_sentinel_does_not_advance_or_reset():
     """A -1.0 sentinel (decomposition not ready) is neither high nor a real
     relief; it must leave the streak untouched rather than spuriously reset it."""
     sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.80, round_id=1)
-    sm.note_context_pressure_round(0.82, round_id=2)
+    sm.note_context_pressure_round(0.90, round_id=1)
+    sm.note_context_pressure_round(0.90, round_id=2)
     sm.note_context_pressure_round(-1.0, round_id=3)
     assert sm.context_pressure_streak == 2  # untouched
-    sm.note_context_pressure_round(0.83, round_id=4)
+    sm.note_context_pressure_round(0.90, round_id=4)
     assert sm.context_pressure_warning_active is True

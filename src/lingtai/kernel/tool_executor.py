@@ -440,7 +440,7 @@ class ToolExecutor:
                 token_usage = dict(candidate)
             # Current context guidance — captured for the final agent_state.
             # build_meta stashes it under a transit key; the same transit
-            # sub-object carries the 75% manual rebuild hint, the sustained-pressure
+            # sub-object carries the 85% manual rebuild hint, the sustained-pressure
             # molt warning, and the cache-miss budget guard fields.
             candidate_context = pending.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
             if isinstance(candidate_context, dict):

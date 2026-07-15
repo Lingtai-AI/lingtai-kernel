@@ -814,7 +814,7 @@ def test_reconstruction_event_recorded_on_immediate_release(monkeypatch):
     assert event is not None
     assert event["type"] == "delayed_summarize_reconstruction"
     assert event["trigger_threshold"] == 1.0
-    assert event["recovery_target"] == 0.60
+    assert event["recovery_target"] == 0.75
     assert event["context_window"] == 1000
     # Before-context (A): the provider input that crossed the boundary.
     assert event["before"]["context_tokens"] == 1000
@@ -914,7 +914,7 @@ def test_request_history_rebuild_records_manual_reconstruction_event(monkeypatch
     assert event["type"] == "summarize_rebuild_only_reconstruction"
     assert event["reason"] == "summarize_rebuild_only_reconstruction"
     assert event["trigger_threshold"] == 1.0
-    assert event["recovery_target"] == 0.60
+    assert event["recovery_target"] == 0.75
     assert event["context_window"] == 1000
     assert event["before"]["context_tokens"] == 800
     assert event["before"]["usage"] == pytest.approx(0.80)

@@ -26,18 +26,18 @@ THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 # but are ignored — they no longer override these values. See
 # ``lingtai/agent.py`` (config reload) and ``lingtai/init_schema.py``
 # (MANIFEST_LEGACY_IGNORED).
-MOLT_NOTICE_THRESHOLD = 0.60  # legacy name; now the molt RECOVERY TARGET (see below)
+MOLT_NOTICE_THRESHOLD = 0.75  # legacy name; now the molt RECOVERY TARGET (see below)
 
 # Sustained context-pressure / manual-rebuild / molt-warning constants
 # (kernel-fixed).
 #
 # The warning surfaced in ``_meta.agent_meta.agent_state.context.molt`` is no
-# longer an immediate ``usage >= 0.60`` trip-wire.  It is a *sustained-pressure*
+# longer an immediate trip-wire.  It is a *sustained-pressure*
 # signal, while provider-context reconstruction is a separate, rarer event:
 #
-#   * CONTEXT_PRESSURE_HIGH_RATIO (0.75) — a fresh provider round whose context
+#   * CONTEXT_PRESSURE_HIGH_RATIO (0.85) — a fresh provider round whose context
 #     usage is at/above this fraction counts as a "high" round.  The same
-#     inclusive threshold (``usage >= 0.75``) also continuously stamps
+#     inclusive threshold (``usage >= 0.85``) also continuously stamps
 #     ``_meta.agent_meta.agent_state.context.rebuild`` with permission to manually rebuild via
 #     ``system(action='summarize', rebuild=true)``.  It does NOT force an
 #     automatic provider-context rebuild — it is the proactive hint boundary.
@@ -56,17 +56,17 @@ MOLT_NOTICE_THRESHOLD = 0.60  # legacy name; now the molt RECOVERY TARGET (see b
 #   * CONTEXT_PRESSURE_WARN_AFTER_ROUNDS (3) — the resident ``context.molt``
 #     warning begins on the THIRD consecutive high round; earlier high rounds get
 #     the manual-rebuild hint but not the stronger molt reminder.
-#   * CONTEXT_PRESSURE_RECOVERY_TARGET (0.60) — if summarize/rebuild cannot bring
+#   * CONTEXT_PRESSURE_RECOVERY_TARGET (0.75) — if summarize/rebuild cannot bring
 #     context below this fraction of the window, molt becomes the recommended
-#     action.  This is the new meaning of the legacy 0.60 constant: a recovery
+#     action.  This is the new meaning of the legacy 0.75 constant: a recovery
 #     target, not an immediate trip-wire.
-CONTEXT_PRESSURE_HIGH_RATIO = 0.75
+CONTEXT_PRESSURE_HIGH_RATIO = 0.85
 CONTEXT_PRESSURE_FORCED_REBUILD_RATIO = 1.0
 # Back-compat alias for the pre-1.0 name (was 0.95, "delayed reconstruction");
 # the boundary is now the hard 1.0 forced rebuild.
 CONTEXT_PRESSURE_RECONSTRUCTION_RATIO = CONTEXT_PRESSURE_FORCED_REBUILD_RATIO
 CONTEXT_PRESSURE_WARN_AFTER_ROUNDS = 3
-CONTEXT_PRESSURE_RECOVERY_TARGET = MOLT_NOTICE_THRESHOLD  # 0.60
+CONTEXT_PRESSURE_RECOVERY_TARGET = MOLT_NOTICE_THRESHOLD  # 0.75
 
 MOLT_PRESSURE_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 MOLT_URGENCY_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
@@ -124,9 +124,9 @@ class AgentConfig:
     # driven by the SessionManager streak and the kernel constants
     # CONTEXT_PRESSURE_* (see top of this module), not by these fields. Legacy
     # init.json molt_notice/molt_pressure/molt_urgency values remain ignored.
-    # The 0.60 default here now corresponds to the molt RECOVERY TARGET
+    # The 0.75 default here now corresponds to the molt RECOVERY TARGET
     # (CONTEXT_PRESSURE_RECOVERY_TARGET), not an immediate trip-wire.
-    molt_notice: float = MOLT_NOTICE_THRESHOLD  # legacy/compat only; == recovery target (0.60), not a trip-wire
+    molt_notice: float = MOLT_NOTICE_THRESHOLD  # legacy/compat only; == recovery target (0.75), not a trip-wire
     molt_pressure: float = MOLT_PRESSURE_THRESHOLD  # legacy alias; unused by the warning path
     molt_urgency: float = MOLT_URGENCY_THRESHOLD  # legacy alias; unused by the warning path
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes

@@ -3850,7 +3850,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         # summarize intrinsic before this hook, so no compression happens here — the
         # agent asked to discard the remote continuation prefix and replay the
         # current local history on the next model request. This is the manual path
-        # advertised at 75%; the hard forced rebuild remains at the 1.0 boundary. The
+        # advertised at 85%; the hard forced rebuild remains at the 1.0 boundary. The
         # ``reason`` default keeps the internal ``summarize_rebuild_only`` epoch label.
         if not self._continuation_enabled:
             return False

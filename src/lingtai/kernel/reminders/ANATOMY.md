@@ -35,7 +35,7 @@ pulls the state machine + decisions + prose into one debuggable object:
 - **Provider-round input** — `note_round(usage, *, round_id)` records one *fresh
   provider round*'s context usage. `round_id` (the `SessionManager._api_calls`
   counter) dedups multiple observations of the same round; usage semantics:
-  `>= reconstruction_ratio` (0.75) advances the streak, `0 <= usage < ratio`
+  `>= reconstruction_ratio` (0.85) advances the streak, `0 <= usage < ratio`
   resets it to 0 (relieved), `< 0` sentinel leaves it untouched.
 - **Transient streak state** — `streak`, `last_round_id`, `last_usage`,
   `active` (derived: `streak >= warn_after_rounds`), and
@@ -134,14 +134,15 @@ which values applied and tests can inject variants.
   event is one-shot at source. Dedup lives here (at the real emission site), not
   in the render-path `build_meta`, which must stay pure.
 - `config.py` — owns the kernel-fixed thresholds
-  (`CONTEXT_PRESSURE_RECONSTRUCTION_RATIO` 0.75,
-  `CONTEXT_PRESSURE_WARN_AFTER_ROUNDS` 3, `CONTEXT_PRESSURE_RECOVERY_TARGET`
-  0.60) that this abstraction defaults from.
+  (`CONTEXT_PRESSURE_HIGH_RATIO` 0.85,
+  `CONTEXT_PRESSURE_FORCED_REBUILD_RATIO` 1.0 with back-compat alias
+  `CONTEXT_PRESSURE_RECONSTRUCTION_RATIO`, `CONTEXT_PRESSURE_WARN_AFTER_ROUNDS`
+  3, and `CONTEXT_PRESSURE_RECOVERY_TARGET` 0.75) that this abstraction defaults from.
 
 ## Behavior invariants
 
-- Warn only after sustained high provider rounds (3 consecutive `>= 0.75`); the
-  old immediate `>= 0.60` trip-wire stays retired.
+- Warn only after sustained high provider rounds (3 consecutive `>= 0.85`); the
+  old immediate recovery-target trip-wire stays retired.
 - The reconstruction event is one-shot current-agent evidence (channel A) at
   `agent_meta.agent_state.events.reconstruction`, distinct from the
   current-state reminder (channel B).
