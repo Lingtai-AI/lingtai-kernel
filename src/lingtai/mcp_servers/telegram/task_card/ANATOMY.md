@@ -96,6 +96,10 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   else returns `indeterminate_send` so cold-send/old-first replacement fail closed.
 - Fail-loud: after-handle failures call `agent._enqueue_system_notification`.
 
+## Automatic row timestamp path
+
+The automatic slot keeps time provenance in the same bounded event projection: only after an event is validated as `type == "tool_call"`, `TelegramManager` reads that event's own top-level Unix-epoch `ts`, formats a valid value as the latest `HH:MM:SS UTC±HH`, and projects it as optional row `started_at`. Missing, boolean, non-numeric, non-finite, or out-of-range values omit the suffix; `_meta` and the current render instant are never substitutes. The path is `tool_call.ts` → `_format_task_card_row_timestamp` → `_project_tool_call_row` → `_format_rows_task_card_text` (`src/lingtai/mcp_servers/telegram/manager.py:1854`, `src/lingtai/mcp_servers/telegram/manager.py:1819`, `src/lingtai/mcp_servers/telegram/manager.py:2656`). Owning event-to-render and malformed-input regressions live at `tests/test_telegram_task_card_event_tail.py:403` and `tests/test_telegram_task_card_event_tail.py:443`.
+
 ## Composition
 
 - **Parent:** [`src/lingtai/mcp_servers/ANATOMY.md`](../../ANATOMY.md).

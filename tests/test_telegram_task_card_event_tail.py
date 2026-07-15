@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from lingtai.mcp_servers.telegram.manager import TelegramManager
@@ -380,7 +381,7 @@ def test_only_safe_bounded_fields_are_projected(tmp_path):
     window = manager._task_card_event_window()
     assert len(window) == 1
     row = window[0]
-    assert set(row.keys()) <= {"tool", "tool_action", "reasoning", "ts"}
+    assert set(row.keys()) <= {"tool", "tool_action", "reasoning", "started_at"}
     assert row["tool"] == "bash"
     assert row["tool_action"] == "run"
     assert row["reasoning"] == "safe text"
@@ -391,6 +392,79 @@ def test_only_safe_bounded_fields_are_projected(tmp_path):
     assert "sk-should-never-appear" not in rendered
     assert "/very/secret/path" not in rendered
     assert "--token=abc123" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# Row timestamp: derived from the event's own canonical ``ts``, never raw
+# tool args, never the current render instant, safely omitted when malformed
+# ---------------------------------------------------------------------------
+
+
+def test_row_started_at_is_derived_from_event_ts_and_rendered(tmp_path):
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    event_ts = 1752600000.0
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [_tool_call_line(ts=event_ts)])
+
+    manager._poll_event_tail()
+
+    local = datetime.fromtimestamp(event_ts).astimezone()
+    expected = f"{local:%H:%M:%S} UTC{local:%z}"[:-2]
+    window = manager._task_card_event_window()
+    assert len(window) == 1
+    assert window[0]["started_at"] == expected
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    assert edits
+    assert f" · {expected}" in edits[-1][3]
+
+
+def test_row_started_at_omitted_when_ts_missing(tmp_path):
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    line = json.dumps({
+        "type": "tool_call", "tool_name": "bash",
+        "tool_args": {"action": "run", "_reasoning": "no ts here"},
+    })
+    _write_lines(events_path, [line])
+
+    manager._poll_event_tail()
+
+    window = manager._task_card_event_window()
+    assert len(window) == 1
+    assert "started_at" not in window[0]
+
+
+def test_row_started_at_omitted_when_ts_malformed(tmp_path):
+    """Bool, non-numeric, non-finite, and out-of-range ``ts`` all safely omit
+    the row's stamp rather than crashing or fabricating one."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    bad_values = [True, "not-a-number", float("nan"), float("inf"), 1e20, 10**400]
+    lines = [
+        json.dumps({
+            "type": "tool_call", "tool_name": f"tool{i}",
+            "tool_args": {"action": "run", "_reasoning": "x"},
+            "ts": v,
+        })
+        for i, v in enumerate(bad_values)
+    ]
+    _write_lines(events_path, lines)
+
+    manager._poll_event_tail()
+
+    window = manager._task_card_event_window()
+    assert len(window) == len(bad_values)
+    for row in window:
+        assert "started_at" not in row
 
 
 def test_events_missing_expected_fields_are_skipped_fail_closed(tmp_path):

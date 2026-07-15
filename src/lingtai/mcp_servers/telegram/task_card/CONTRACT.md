@@ -316,6 +316,12 @@ Verification commands (repo venv):
   tests/test_mcp_skill_manuals.py
 ```
 
+## Automatic row timestamp interface
+
+1. An automatic row MAY expose `started_at` only from the same already-validated `tool_call` event's top-level Unix-epoch `ts`; `_meta`, tool arguments, notification payloads, and the current render instant are not time sources.
+2. A valid event time MUST use the current row presentation `HH:MM:SS UTC±HH`. Missing, boolean, non-numeric, non-finite, or out-of-range `ts` MUST omit `started_at` without failing the event tail.
+3. The event-to-final-render suffix and fail-closed malformed cases are contract-tested at `tests/test_telegram_task_card_event_tail.py:403` and `tests/test_telegram_task_card_event_tail.py:443`. The implementation anchors are `src/lingtai/mcp_servers/telegram/manager.py:1854` and `src/lingtai/mcp_servers/telegram/manager.py:1819`.
+
 ## Maintenance
 
 Follow the canonical maintenance block in frontmatter. Behavioral changes require

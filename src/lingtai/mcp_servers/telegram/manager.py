@@ -13,6 +13,7 @@ Mirrors IMAPMailManager patterns with Telegram-specific adaptations.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -1782,11 +1783,14 @@ class TelegramManager:
     # not a per-chat/per-route view. It whitelists exactly one event type,
     # ``tool_call``; every other event type is skipped immediately. Only a
     # fixed, bounded, safe field allowlist is ever read from a matching row
-    # (``tool_name``, ``tool_args.action``, ``tool_args._reasoning``) — raw
-    # ``tool_args`` is never forwarded. The projection keeps only the most
-    # recent ``_TASK_CARD_EVENT_WINDOW`` matching rows and never inspects
-    # ``tool_result``/dispatch events or reconstructs completion, elapsed time,
-    # or a second lifecycle model; row order alone conveys recency.
+    # (``tool_name``, ``tool_args.action``, ``tool_args._reasoning``, and the
+    # event's own canonical ``ts`` converted to a row stamp) — raw
+    # ``tool_args`` is never forwarded. A missing/malformed ``ts`` safely omits
+    # the row's stamp rather than crashing or fabricating one. The projection
+    # keeps only the most recent ``_TASK_CARD_EVENT_WINDOW`` matching rows and
+    # never inspects ``tool_result``/dispatch events or reconstructs
+    # completion, elapsed time, or a second lifecycle model; row order alone
+    # conveys recency.
     #
     # There is no durable cursor/checkpoint file: ``events.jsonl`` is the only
     # durable behavior source. On start (and after any truncation/replacement)
@@ -1840,7 +1844,31 @@ class TelegramManager:
         if len(reasoning) > cap:
             # The ellipsis itself must stay inside the cap, not extend past it.
             reasoning = reasoning[:cap - 1] + "…"
-        return {"tool": tool_name, "tool_action": action, "reasoning": reasoning}
+        row = {"tool": tool_name, "tool_action": action, "reasoning": reasoning}
+        started_at = TelegramManager._format_task_card_row_timestamp(event.get("ts"))
+        if started_at:
+            row["started_at"] = started_at
+        return row
+
+    @staticmethod
+    def _format_task_card_row_timestamp(ts: object) -> str:
+        """Convert an event's canonical epoch ``ts`` to the row stamp shape.
+
+        Mirrors ``_format_task_card_current_time``'s ``HH:MM:SS UTC±HH``
+        format so a row's own stamp and the render-time line read
+        consistently. Missing, non-numeric (incl. ``bool``), non-finite, or
+        out-of-range ``ts`` values safely resolve to ``""`` (row renders with
+        no inline stamp) rather than crashing or fabricating a timestamp.
+        """
+        if type(ts) not in (int, float):
+            return ""
+        if isinstance(ts, float) and not math.isfinite(ts):
+            return ""
+        try:
+            local = datetime.fromtimestamp(ts).astimezone()
+        except (OverflowError, OSError, ValueError):
+            return ""
+        return _format_task_card_current_time(local)
 
     def _init_event_tail(self) -> None:
         """Rehydrate the latest-N window and forward offset from the file tail.
