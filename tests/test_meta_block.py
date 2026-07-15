@@ -1376,9 +1376,10 @@ def test_token_usage_block_carries_short_guidance_ref():
 # ---------------------------------------------------------------------------
 # Always-on since-last-molt cache-miss/budget telemetry in the session half of
 # token_usage (Jason's follow-up to PR #641).  Distinct from the
-# tool_meta.context guard (build_cache_miss_budget_context), which surfaces only
-# at/above budget: these three fields ride on EVERY result whenever the session
-# aggregate is available so agents can always read current cache miss + budget.
+# agent_meta.agent_state.context guard (build_cache_miss_budget_context), which
+# surfaces only at/above budget: these three fields ride on EVERY result whenever
+# the session aggregate is available so agents can always read current cache
+# miss + budget.
 # ---------------------------------------------------------------------------
 
 
@@ -4304,8 +4305,8 @@ def test_build_meta_current_molt_carries_reminder_and_event_payload():
 # agent._config.cache_miss_budget, build_meta restamps a "cache miss budget
 # {budget} reached, molt now" reminder into the _tool_meta_context transit
 # sub-object (promoted to agent_meta.agent_state.context.molt) and surfaces
-# cache_miss_budget / cache_miss_tokens under tool_meta.context. It is a soft
-# signal, not a new event route.
+# cache_miss_budget / cache_miss_tokens under agent_meta.agent_state.context. It
+# is a soft signal, not a new event route.
 # ---------------------------------------------------------------------------
 
 

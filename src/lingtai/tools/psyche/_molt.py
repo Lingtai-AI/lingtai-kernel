@@ -15,7 +15,7 @@ from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
 
 
 # Channel name for the post-molt reminder notification. Context-pressure
-# reminders live at ``_meta.tool_meta.context.molt`` (meta_block.
+# reminders live at ``_meta.agent_meta.agent_state.context.molt`` (meta_block.
 # build_molt_context); ``_check_molt_pressure`` now only clears any stale
 # legacy ``molt`` notification, so it cannot sweep this reminder.
 _POST_MOLT_CHANNEL = "post-molt"

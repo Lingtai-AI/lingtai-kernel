@@ -228,7 +228,7 @@ summarize would discard cache benefit.
 - **Below 1.0 of the context window:** summarize stays pending at the provider
   layer and the session keeps appending. This delay is normal, not a failure; do
   not call `refresh` merely to "apply" the summary.
-- **At or above 0.75 of the context window:** `_meta.tool_meta.context.rebuild`
+- **At or above 0.75 of the context window:** `_meta.agent_meta.agent_state.context.rebuild`
   is stamped continuously. It is a decision prompt / permission, not an automatic
   rebuild — recording summaries never triggers a provider-context rebuild on its
   own. If making already-recorded summaries active in the provider context earlier
@@ -257,7 +257,7 @@ summarize would discard cache benefit.
   holder
   per family represents current state, older holders are historical traces
   and must not be acted on. Every 1.0 forced rebuild ALWAYS carries a one-shot
-  `_meta.tool_meta.reconstruction.warning`: it reports the before→after context
+  `_meta.agent_meta.agent_state.events.reconstruction.warning`: it reports the before→after context
   change, advises that reaching the full boundary means waiting was not ideal (prefer
   a proactive 0.75 `rebuild=true`), and says that if the rebuilt context is still
   above the 0.6 recovery target you should tend durable stores and molt. This is
@@ -268,7 +268,7 @@ summarize would discard cache benefit.
   first provider response is observed and that post-rebuild provider input is still
   **strictly above** `1.0` (a failed forced request keeps verification pending
   until a successful provider-usage result exists), EVERY following result carries
-  a permanent `_meta.tool_meta.context.molt` line, verbatim:
+  a permanent `_meta.agent_meta.agent_state.context.molt` line, verbatim:
   `100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! (xxx %) Molt IMMEDIATELY!!`
   (`xxx` = the current measured percentage, one decimal). It rides the same
   permanent current-state channel as the sustained-pressure and cache-miss-budget

@@ -89,7 +89,7 @@ class AgentSession:
 
     Identity is ``molt_count`` (NOT a new id). The token aggregate is the
     since-molt sum rebuilt from the durable trajectory; its shape matches the
-    injected ``_meta.tool_meta.token_usage.session`` half so that consumer can
+    injected ``_meta.agent_meta.agent_state.token_usage.session`` half so that consumer can
     read this object instead of recomputing.
     """
 

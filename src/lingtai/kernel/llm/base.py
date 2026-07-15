@@ -245,7 +245,7 @@ class ChatSession(ABC):
         provider-reported usage is still STRICTLY above ``1.0`` — i.e. the forced
         rebuild failed to clear the overflow. The kernel renders the fixed
         human-authored ``Forced Rebuilt Failed`` warning from ``usage`` and keeps
-        it on every ``_meta.tool_meta.context.molt`` result while active (a pure,
+        it on every ``_meta.agent_meta.agent_state.context.molt`` result while active (a pure,
         idempotent read — unlike the one-shot
         :meth:`take_pending_reconstruction_event`). Default: no such machinery, so
         ``None``.

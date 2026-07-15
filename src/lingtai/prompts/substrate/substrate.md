@@ -86,9 +86,9 @@ session (since-last-molt) API calls exceed 100, or when context pressure, explic
 request, or conversation confusion makes the fresh briefing worth the cost. Below
 that threshold, go idle instead of molting merely because the task ended. A
 separate soft cache-miss budget (default 1,000,000 uncached-input tokens for the
-current session) also nudges a molt: when `_meta.tool_meta.context.molt` says the
-cache-miss budget is reached, molt to shed the carried context and restore cache
-efficiency.
+current session) also nudges a molt: when `_meta.agent_meta.agent_state.context.molt`
+says the cache-miss budget is reached, molt to shed the carried context and
+restore cache efficiency.
 
 ## V · Idle and soul
 
@@ -151,7 +151,7 @@ boundary, pending summarized history may remain at the provider layer while the
 session keeps appending; from the agent's perspective, the old raw block may
 still be in the current continuation. Do not call `refresh` just to apply
 summarize. Once context is at/above `0.75`, the runtime stamps
-`_meta.tool_meta.context.rebuild`, which permits a proactive manual rebuild with
+`_meta.agent_meta.agent_state.context.rebuild`, which permits a proactive manual rebuild with
 `system(action="summarize", rebuild=true)` — either with new items (record then
 apply) or with no items (apply already-pending summaries) — when the fresh
 context is worth the cost; applied summaries flip to `status: done`. The manual
@@ -177,7 +177,7 @@ forced rebuild ALWAYS attaches a one-shot `reconstruction.warning`
 (before→after context, proactive-`0.75`-rebuild advice, and "if still above the
 `0.6` recovery target, molt"). If that one forced rebuild does NOT clear the
 overflow (post-rebuild context stays strictly above `1.0`), every result then
-also carries a permanent `_meta.tool_meta.context.molt` line `100% context Forced
+also carries a permanent `_meta.agent_meta.agent_state.context.molt` line `100% context Forced
 Rebuilt Failed. Context overflowed!! (xxx %) Molt IMMEDIATELY!!` — the runtime
 will not keep force-rebuilding, so molt immediately. Waiting until full context is not ideal — prefer
 the proactive `0.75` rebuild. If pending total is `0`, the forced rebuild has no
