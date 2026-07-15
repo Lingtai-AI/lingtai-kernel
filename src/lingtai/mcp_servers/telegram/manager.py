@@ -468,15 +468,27 @@ class TelegramManager:
         self._dup_free_passes = 2
         # Resident Task Card composition (Jason #7258/#7259): one tracked resident
         # target per account+chat, composed from two independent channels — "automatic"
-        # (turn-local tool rows) and "programmable" (the public task_card renderer
-        # output). Each channel owns only its own frame; updating one never
+        # (the agent-event-tail broadcast) and "programmable" (the public task_card
+        # renderer output). Each channel owns only its own frame; updating one never
         # overwrites the other. Keyed by ``"{account}:{chat_id}"``.
         self._task_card_channels: dict[str, dict[str, str]] = {}
         # Serialize the full compose/read/deliver/persist/delete/commit transaction
-        # per route. Automatic heartbeats/finalize and programmable watches run on
+        # per route. The automatic tail worker and programmable watches run on
         # different threads but must still share one resident-card transaction.
         self._task_card_delivery_locks: dict[str, threading.RLock] = {}
         self._task_card_delivery_locks_guard = threading.Lock()
+        # Automatic Task Card event-tail state (agent-behavior broadcast). See
+        # ``## Automatic Task Card event tail`` below for the full contract; kept
+        # as plain instance attributes (not a helper object) so no second durable
+        # source of truth can accidentally form around it.
+        self._task_card_event_path: Path | None = None
+        self._task_card_event_offset = 0
+        self._task_card_event_size = 0
+        self._task_card_event_inode: int | None = None
+        self._task_card_event_rows: list[dict] = []
+        self._task_card_event_lock = threading.Lock()
+        self._task_card_tail_thread: threading.Thread | None = None
+        self._task_card_tail_stop = threading.Event()
 
     def _account_dir(self, account: str) -> Path:
         return self._working_dir / "telegram" / account
@@ -522,8 +534,10 @@ class TelegramManager:
 
     def start(self) -> None:
         self._service.start()
+        self._start_task_card_tail()
 
     def stop(self) -> None:
+        self._stop_task_card_tail()
         self._service.stop()
 
     # ------------------------------------------------------------------
@@ -1758,6 +1772,366 @@ class TelegramManager:
         if len(text) > cls._TASK_CARD_TEXT_LIMIT:
             text = text[:cls._TASK_CARD_TEXT_LIMIT]
         return text
+
+    # ------------------------------------------------------------------
+    # Automatic Task Card event tail (agent-behavior broadcast)
+    # ------------------------------------------------------------------
+    #
+    # The automatic slot is a mechanical, bounded projection of the agent's own
+    # authoritative ``logs/events.jsonl`` — a broadcast of the agent's behavior,
+    # not a per-chat/per-route view. It whitelists exactly one event type,
+    # ``tool_call``; every other event type is skipped immediately. Only a
+    # fixed, bounded, safe field allowlist is ever read from a matching row
+    # (``tool_name``, ``tool_args.action``, ``tool_args._reasoning``) — raw
+    # ``tool_args`` is never forwarded. The projection keeps only the most
+    # recent ``_TASK_CARD_EVENT_WINDOW`` matching rows and never inspects
+    # ``tool_result``/dispatch events or reconstructs completion, elapsed time,
+    # or a second lifecycle model; row order alone conveys recency.
+    #
+    # There is no durable cursor/checkpoint file: ``events.jsonl`` is the only
+    # durable behavior source. On start (and after any truncation/replacement)
+    # the tailer reverse-scans the file tail in bounded chunks to rehydrate the
+    # latest-N window, then sets the forward offset to EOF. Every later poll
+    # seeks from the in-memory offset and reads only newly appended complete
+    # lines — never a full-file scan. The in-memory window/offset are ephemeral
+    # transport optimizations rebuilt from the file after every restart.
+    _TASK_CARD_EVENT_WINDOW = 10
+    _TASK_CARD_EVENT_POLL_INTERVAL = 1.0
+    _TASK_CARD_EVENT_TAIL_CHUNK = 65536
+    _TASK_CARD_EVENT_REASONING_CAP = 300
+
+    def _task_card_events_path(self) -> Path:
+        return self._working_dir / "logs" / "events.jsonl"
+
+    def _event_tail_offset(self) -> int:
+        with self._task_card_event_lock:
+            return self._task_card_event_offset
+
+    def _task_card_event_window(self) -> list[dict]:
+        with self._task_card_event_lock:
+            return list(self._task_card_event_rows)
+
+    @staticmethod
+    def _project_tool_call_row(event: dict) -> dict | None:
+        """Extract the fixed safe-field allowlist from one ``tool_call`` event.
+
+        Returns ``None`` (fail-closed) when the event does not carry the
+        expected shape — a malformed row is skipped exactly like a
+        non-whitelisted one, never partially trusted.
+        """
+        if event.get("type") != "tool_call":
+            return None
+        tool_name = event.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name:
+            return None
+        tool_args = event.get("tool_args")
+        if not isinstance(tool_args, dict):
+            return None
+        action = tool_args.get("action", "")
+        if not isinstance(action, str):
+            action = ""
+        reasoning = tool_args.get("_reasoning", "")
+        if not isinstance(reasoning, str):
+            reasoning = ""
+        from lingtai.kernel.trace_redaction import redact_text
+
+        reasoning = redact_text(reasoning)
+        cap = TelegramManager._TASK_CARD_EVENT_REASONING_CAP
+        if len(reasoning) > cap:
+            # The ellipsis itself must stay inside the cap, not extend past it.
+            reasoning = reasoning[:cap - 1] + "…"
+        return {"tool": tool_name, "tool_action": action, "reasoning": reasoning}
+
+    def _init_event_tail(self) -> None:
+        """Rehydrate the latest-N window and forward offset from the file tail.
+
+        No durable checkpoint is read or written — every restart (including
+        refresh/molt) re-derives state purely from ``logs/events.jsonl`` itself,
+        by reverse-tailing in bounded chunks until enough complete matching
+        rows are found or the file start is reached.
+        """
+        path = self._task_card_events_path()
+        try:
+            stat = path.stat()
+        except OSError:
+            with self._task_card_event_lock:
+                self._task_card_event_path = path
+                self._task_card_event_offset = 0
+                self._task_card_event_size = 0
+                self._task_card_event_inode = None
+                self._task_card_event_rows = []
+            return
+
+        result = self._reverse_tail_latest_rows(path, stat.st_size)
+        if result is None:
+            # A read/stat failure mid-scan proves nothing was actually
+            # consumed. Fail closed at offset 0 rather than advancing to EOF
+            # as if history had been rehydrated — the next poll's stat-based
+            # truncation check would otherwise never retry this file.
+            with self._task_card_event_lock:
+                self._task_card_event_path = path
+                self._task_card_event_offset = 0
+                self._task_card_event_size = 0
+                self._task_card_event_inode = None
+                self._task_card_event_rows = []
+            return
+        rows, offset = result
+        with self._task_card_event_lock:
+            self._task_card_event_path = path
+            self._task_card_event_offset = offset
+            self._task_card_event_size = stat.st_size
+            self._task_card_event_inode = getattr(stat, "st_ino", None)
+            self._task_card_event_rows = rows
+
+    def _reverse_tail_latest_rows(
+        self, path: Path, size: int,
+    ) -> tuple[list[dict], int] | None:
+        """Reverse-scan bounded chunks from EOF to collect the latest-N matches.
+
+        Reads growing chunks backward from the end of the file until either
+        ``_TASK_CARD_EVENT_WINDOW`` matching rows are found or the file start is
+        reached — never a full read of a large (e.g. multi-hundred-MB) log.
+        The tail chunk may start mid-line; the leading partial fragment is
+        discarded (its predecessor chunk will complete it on the next round).
+
+        Returns ``(rows, offset)`` where ``offset`` is the forward byte offset
+        the poller should resume from — ``size`` unless the file's final line
+        has no trailing newline yet (writer mid-append), in which case it is
+        the start of that incomplete tail so the poller re-reads it whole once
+        it is completed, instead of treating it as an already-consumed row.
+        Returns ``None`` (fail closed) on any read/stat error, so the caller
+        never advances the offset past bytes that were never actually read.
+        """
+        window = self._TASK_CARD_EVENT_WINDOW
+        matches: list[dict] = []
+        tail_offset = size
+        try:
+            with open(path, "rb") as f:
+                end = size
+                chunk_size = self._TASK_CARD_EVENT_TAIL_CHUNK
+                carry = b""
+                first_chunk = True
+                while end > 0 and len(matches) < window:
+                    start = max(0, end - chunk_size)
+                    f.seek(start)
+                    data = f.read(end - start)
+                    end = start
+                    buf = data + carry
+                    if first_chunk:
+                        # The file's very last line may have no trailing
+                        # newline yet (writer mid-append). Exclude that
+                        # unterminated tail from both matches and the
+                        # resulting offset so it is re-read whole later.
+                        last_newline = buf.rfind(b"\n")
+                        if last_newline == -1:
+                            tail_offset = start
+                            buf = b""
+                        else:
+                            tail_offset = start + last_newline + 1
+                            buf = buf[: last_newline + 1]
+                        first_chunk = False
+                    lines = buf.split(b"\n")
+                    # The first fragment may be a partial continuation of an
+                    # earlier (still unread) chunk; keep it as carry unless we
+                    # are already at the start of the file.
+                    carry = lines[0] if start > 0 else b""
+                    complete = lines[1:] if start > 0 else lines
+                    round_matches: list[dict] = []
+                    for raw in complete:
+                        row = self._decode_and_project_line(raw)
+                        if row is not None:
+                            round_matches.append(row)
+                    matches = round_matches + matches
+                    chunk_size *= 2
+        except OSError:
+            return None
+        return matches[-window:], tail_offset
+
+    @staticmethod
+    def _decode_and_project_line(raw: bytes) -> dict | None:
+        line = raw.strip()
+        if not line:
+            return None
+        try:
+            event = json.loads(line.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if not isinstance(event, dict):
+            return None
+        return TelegramManager._project_tool_call_row(event)
+
+    def _poll_event_tail(self) -> None:
+        """Read any newly appended complete lines and broadcast on change.
+
+        Detects truncation/replacement (current size smaller than the tracked
+        offset, or a changed inode) and reinitializes from the new tail rather
+        than seeking into now-invalid byte positions.
+        """
+        with self._task_card_event_lock:
+            path = self._task_card_event_path
+        if path is None:
+            self._init_event_tail()
+            with self._task_card_event_lock:
+                path = self._task_card_event_path
+                rehydrated_rows = bool(self._task_card_event_rows)
+            if rehydrated_rows:
+                self._broadcast_task_card_event_window()
+            return
+
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+
+        with self._task_card_event_lock:
+            offset = self._task_card_event_offset
+            tracked_inode = self._task_card_event_inode
+
+        current_inode = getattr(stat, "st_ino", None)
+        truncated = stat.st_size < offset or (
+            tracked_inode is not None
+            and current_inode is not None
+            and current_inode != tracked_inode
+        )
+        if truncated:
+            # Truncation/replacement is itself the signal of change: the file
+            # content the resident cards were showing no longer exists, so the
+            # rehydrated window — even an empty one — must still be broadcast
+            # rather than leaving a stale non-empty render displayed.
+            self._init_event_tail()
+            changed = True
+        elif stat.st_size > offset:
+            changed = self._append_new_lines(path, offset, stat.st_size)
+            with self._task_card_event_lock:
+                self._task_card_event_inode = current_inode
+        else:
+            changed = False
+
+        if changed:
+            self._broadcast_task_card_event_window()
+
+    def _append_new_lines(self, path: Path, offset: int, size: int) -> bool:
+        """Seek to ``offset`` and consume only complete new lines.
+
+        A trailing partial line (the writer mid-append) is left unconsumed —
+        the offset only advances past bytes that formed a complete line, so
+        the same partial bytes are safely re-read (and, once completed,
+        consumed) on the next poll.
+        """
+        try:
+            with open(path, "rb") as f:
+                f.seek(offset)
+                data = f.read(size - offset)
+        except OSError:
+            return False
+        if not data:
+            return False
+
+        last_newline = data.rfind(b"\n")
+        if last_newline == -1:
+            return False  # no complete line yet
+        complete, _partial = data[:last_newline + 1], data[last_newline + 1:]
+        new_offset = offset + len(complete)
+
+        new_rows: list[dict] = []
+        for raw in complete.split(b"\n"):
+            row = self._decode_and_project_line(raw)
+            if row is not None:
+                new_rows.append(row)
+
+        if not new_rows:
+            with self._task_card_event_lock:
+                self._task_card_event_offset = new_offset
+                self._task_card_event_size = size
+            return False
+
+        with self._task_card_event_lock:
+            rows = self._task_card_event_rows + new_rows
+            self._task_card_event_rows = rows[-self._TASK_CARD_EVENT_WINDOW:]
+            self._task_card_event_offset = new_offset
+            self._task_card_event_size = size
+        return True
+
+    def _resident_task_card_targets(self) -> list[tuple[str, int]]:
+        """Enumerate every ``(account, chat_id)`` with a resident Task Card.
+
+        Reads only the existing persisted account/manager state (each
+        account's durable ``task_cards`` map); no new durable index is
+        introduced. Cross-chat visibility is deliberately not filtered by
+        route — this is a broadcast of agent behavior, not per-chat routing.
+        """
+        targets: list[tuple[str, int]] = []
+        for alias in self._service.list_accounts():
+            try:
+                acct = self._service.get_account(alias)
+                lister = getattr(acct, "list_task_card_chats", None)
+                if not callable(lister):
+                    continue
+                for chat_id in lister():
+                    targets.append((alias, chat_id))
+            except Exception as e:
+                log.debug("Failed to enumerate task card chats for %s: %s", alias, e)
+        return targets
+
+    def _broadcast_task_card_event_window(self) -> None:
+        """Project the current bounded window to every resident Task Card.
+
+        Update-first per target (same discipline as ``_task_card_create``):
+        edits the tracked resident in place, sending/deleting only as
+        fail-open recovery. A delivery failure for one target never blocks
+        another target's broadcast.
+        """
+        if not self._taskcard_enabled():
+            return
+        normal_rows = self._taskcard_normal_rows()
+        rows = self._task_card_event_window()[-normal_rows:]
+        automatic = self._format_task_card_text(
+            "", "", "", rows=rows, normal_rows=normal_rows)
+        for account, chat_id in self._resident_task_card_targets():
+            try:
+                self._deliver_channel_frame(
+                    account, chat_id, "automatic", automatic,
+                    error="Failed to broadcast task card",
+                )
+            except Exception as e:
+                log.debug(
+                    "Automatic task card broadcast failed for %s:%s: %s",
+                    account, chat_id, e,
+                )
+
+    def _start_task_card_tail(self) -> None:
+        """Start the one manager-owned tail worker, idempotently.
+
+        Joined with the Telegram MCP manager lifecycle: ``start()``/``stop()``
+        are the only callers, so exactly one worker runs per manager instance
+        regardless of how many times ``start()`` is called.
+        """
+        if self._task_card_tail_thread is not None and self._task_card_tail_thread.is_alive():
+            return
+        self._init_event_tail()
+        self._task_card_tail_stop.clear()
+
+        def _loop() -> None:
+            while not self._task_card_tail_stop.is_set():
+                try:
+                    self._poll_event_tail()
+                except Exception as e:
+                    log.debug("Automatic task card event tail poll failed: %s", e)
+                if self._task_card_tail_stop.wait(self._TASK_CARD_EVENT_POLL_INTERVAL):
+                    return
+
+        thread = threading.Thread(
+            target=_loop, name="telegram-task-card-event-tail", daemon=True,
+        )
+        self._task_card_tail_thread = thread
+        thread.start()
+
+    def _stop_task_card_tail(self) -> None:
+        self._task_card_tail_stop.set()
+        thread = self._task_card_tail_thread
+        if thread is not None:
+            thread.join(timeout=5.0)
+        self._task_card_tail_thread = None
 
     def _handle_task_card_update(self, args: dict) -> dict:
         """Private internal action — internally-driven Task Card projection

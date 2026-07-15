@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from lingtai.kernel.base_agent import BaseAgent, _TASK_CARD_TOOL
+from lingtai.kernel.base_agent import _TASK_CARD_TOOL
 from lingtai.mcp_servers.telegram.account import DEFAULT_COMMANDS
 from lingtai.mcp_servers.telegram.manager import TelegramManager
 from lingtai.mcp_servers.telegram.service import TelegramService
@@ -388,35 +387,29 @@ def test_reenable_projects_next_frame_without_restart(tmp_path: Path, monkeypatc
     assert len(calls) == 1 and "visible frame" in calls[0][1]
 
 
-def test_base_agent_treats_suppression_as_success_and_keeps_mechanics(
-    caplog: pytest.LogCaptureFixture,
+def test_manager_treats_suppression_as_success_without_transport(
+    tmp_path: Path,
 ) -> None:
-    class Client:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, dict, float]] = []
+    """Suppressed automatic broadcast reports success but sends nothing.
 
-        def call_tool(self, tool_name, args, timeout=None):
-            self.calls.append((tool_name, dict(args), timeout))
-            return {"status": "ok", "suppressed": True, "taskcard": False}
+    The automatic slot no longer reaches ``TelegramManager`` through a
+    BaseAgent-owned reverse call — ``TelegramManager`` itself checks
+    ``taskcard_enabled()`` before broadcasting its own event-tail window (see
+    ``_broadcast_task_card_event_window``). This exercises the same
+    suppression contract at the layer that now owns it: transport calls stay
+    zero while suppressed, matching the private-action result shape asserted
+    elsewhere in this file.
+    """
+    service = _service(tmp_path, "main")
+    service.set_taskcard_enabled(False)
+    manager = _manager(tmp_path, service)
 
-    client = Client()
-    agent = BaseAgent.__new__(BaseAgent)
-    ctx = {
-        "mcp_client": client,
-        "account": "main",
-        "chat_id": 123,
-        "card_message_id": None,
-        "rows": [{"tool": "bash", "tool_action": "run", "reasoning": "work", "elapsed_s": 0, "done": False}],
-        "_lock": threading.RLock(),
-    }
-    with caplog.at_level(logging.WARNING):
-        agent._render_task_card(ctx)
-        agent._render_task_card(ctx)
+    result = manager._handle_task_card_update({
+        "sub_action": "create", "account": "main", "chat_id": 123,
+        "tool": "bash", "tool_action": "run", "reasoning": "work",
+    })
 
-    assert len(client.calls) == 2
-    assert all(call[0] == _TASK_CARD_TOOL for call in client.calls)
-    assert ctx["rows"] and ctx["card_message_id"] is None
-    assert "task-card reverse call failed" not in caplog.text
+    assert result == {"status": "ok", "suppressed": True, "taskcard": False}
 
 
 def test_programmable_watch_keeps_rendering_while_hidden_and_projects_after_reenable(

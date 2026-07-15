@@ -771,8 +771,9 @@ async def serve() -> None:
     service_started = False
     try:
         manager, _wd = build_manager()
-        # The service starts the per-account poll threads.
-        manager._service.start()
+        # Starts the per-account poll threads and the automatic Task Card
+        # event-tail worker together as one lifecycle.
+        manager.start()
         service_started = True
         log.info("Telegram listener running")
     except Exception as e:
@@ -792,6 +793,6 @@ async def serve() -> None:
     finally:
         if manager is not None and service_started:
             try:
-                manager._service.stop()
+                manager.stop()
             except Exception:
                 pass
