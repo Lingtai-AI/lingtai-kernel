@@ -8,7 +8,7 @@ description: >
   shows how to translate that help into the generic `backend_options`
   mechanism. It is not a flag catalog.
 version: 0.1.0
-last_changed_at: "2026-07-09T19:22:27-07:00"
+last_changed_at: "2026-07-14T19:04:52-07:00"
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-claude-code/SKILL.md
@@ -18,12 +18,10 @@ maintenance: |
 
 # claude-p Daemon Backend — Flag Discovery Entrypoint
 
-This page is deliberately tiny: it only tells you where the knowledge lives.
-The Claude Code CLI revs its flags and accepted values between releases, so
-the installed CLI's own help output is the authority — not this page, and not
-any flag list LingTai could ship. `claude-p` is the canonical print-mode
-backend id; `claude-code` is a compatibility alias that resolves to the same
-runner and the same reserved-flag set.
+This page is deliberately tiny: the Claude Code CLI revs its flags between
+releases, so the installed CLI's own help output is the authority — not this
+page. `claude-p` is the canonical print-mode backend id; `claude-code` is a
+compatibility alias with the same runner and reserved-flag set.
 
 ## Discover flags from the installed CLI
 
@@ -76,6 +74,10 @@ Related run-scoped behavior you should not fight through flags:
 - MCP: the harness writes stdio registrations (including `daemon_common`) to
   the run's `claude-mcp-config.json` and appends `--mcp-config <path>
   --strict-mcp-config` itself as `backend_harness_argv`.
+- Safe mode: `--safe-mode` disables customizations including MCP servers; do
+  not use it because claude-p terminal success requires the injected
+  `daemon_common.finish(status="done")`. For read-only runs, keep MCP enabled
+  and combine a read-only brief with the live-help `--allowedTools` surface.
 - Resume: `daemon(action="ask")` runs `claude --resume <claude_session_id>
   --print ...` against the session id persisted to
   `daemon.json.claude_session_id`; `backend_options` are not re-passed on
@@ -85,5 +87,4 @@ Related run-scoped behavior you should not fight through flags:
   OAuth credentials win; do not re-inject auth overrides via flags.
 
 To debug what was actually sent, `daemon.json` records the raw
-`backend_options` object alongside the resolved `backend_argv` /
-`backend_harness_argv` token lists.
+`backend_options` alongside the resolved `backend_argv` / `backend_harness_argv`.
