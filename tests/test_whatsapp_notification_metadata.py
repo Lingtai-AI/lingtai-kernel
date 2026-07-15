@@ -3,7 +3,7 @@
 `WhatsAppManager.ingest_webhook` must attach bounded routing keys plus
 structured `recent_messages` / `latest_incoming` context to the LICC event
 metadata, mirroring the Telegram producer, so the kernel can project durable
-content into `_meta.notification_persistent.mcp.whatsapp` and keep the
+content into `_meta.agent_meta.notifications.persistent.mcp.whatsapp` and keep the
 transient `_meta.agent_meta.notifications.attention.mcp.whatsapp` hook identity-only.
 """
 from __future__ import annotations
