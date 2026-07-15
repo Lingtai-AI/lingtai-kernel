@@ -8,7 +8,7 @@ maintenance: |
 
 # Curated addons — imap / telegram / feishu / wechat / whatsapp / cloud_mail
 
-LingTai's first-party email and chat integrations. They now ship inside the `lingtai` distribution under `lingtai.mcp_servers.{imap,telegram,feishu,wechat,whatsapp,cloud_mail}` so a single kernel release carries the curated MCP surface atomically. Historical `lingtai_*` import packages remain as thin compatibility wrappers. Historical standalone package names remain useful as provenance/homepage names, but the normal runtime path no longer depends on separate addon wheels.
+LingTai's first-party email and chat integrations. They now ship inside the `lingtai` distribution under `lingtai.mcp_servers.{imap,telegram,feishu,wechat,whatsapp,cloud_mail}` so a single kernel release carries the curated MCP surface atomically. Historical `lingtai_*` names may still appear in old configs or compatibility source, but new configurations must use the bundled `lingtai.mcp_servers.*` modules; do not assume a historical wrapper is importable in the active runtime. Historical standalone package names remain useful as provenance/homepage names, but the normal runtime path no longer depends on separate addon wheels.
 
 ## The four-step setup
 
@@ -49,6 +49,29 @@ LingTai's first-party email and chat integrations. They now ship inside the `lin
 
 Use the module name in `mcp.<name>.args`, e.g. `["-m", "lingtai.mcp_servers.feishu"]`. Historical distribution names are retained only for provenance and compatibility notes.
 
+## Telegram setup/readiness checklist
+
+Use this checklist as the Telegram setup acceptance test. It is intentionally separate from the generic catalog/registry steps above: a healthy registry record is not proof that the live listener is usable.
+
+1. **Use the current launch module.** The Telegram child must be launched with `-m lingtai.mcp_servers.telegram` and `LINGTAI_TELEGRAM_CONFIG=.secrets/telegram.json` (or the agent-relative equivalent). Replace a stale `-m lingtai_telegram` in `init.json` or `mcp_registry.jsonl`; it can fail with `ModuleNotFoundError`, leave the stdio child down, and surface to the parent as a closed MCP/closed-resource symptom. Do not diagnose that symptom as a Telegram token failure until the launch module is corrected.
+
+2. **Check both registry and runtime layers.** `mcp(action="info")` proves only that the registry is readable and reports its records/problems. It does **not** prove that a child is mounted. After one controlled refresh or relaunch, confirm there is one live Telegram MCP child/server, the `telegram` tool is mounted, and the intended configured account is mounted; an `info` entry by itself is insufficient.
+
+3. **Separate outbound from inbound proof.** Startup `getMe` and one deliberate direct send prove only outbound Bot API reachability. They do not prove that the listener is receiving updates or that inbound events reach the host agent. Do not call the Bot API `getUpdates` yourself while the Telegram listener may own long polling; a second poller can contend for updates and invalidate the test.
+
+4. **Make one controlled lifecycle change.** After editing a sidecar or Telegram config, perform exactly one controlled `system(action="refresh")` or one controlled relaunch, then inspect the resulting child and mount. Do not start a duplicate parent. A passing readiness check requires the live Telegram MCP child/server **and** its account mounted after that single transition.
+
+5. **Prove the complete inbound/reply path.** Have an allowed-user producer send a fresh test message. Verify the producer's inbound read reaches the host (LICC inbox delivery or `telegram(action="read", chat_id=<chat-id>)`), then reply on that same channel with `telegram(action="reply", message_id=<inbound-message-id>, text=<sanitized-test-reply>)` or the equivalent channel send. An account listing, `getMe`, or an outbound send alone is not end-to-end proof.
+
+6. **Lock down the config.** The secrets directory must be mode `0700` and the Telegram config must be mode `0600`:
+
+   ```bash
+   chmod 700 .secrets
+   chmod 600 .secrets/telegram.json
+   ```
+
+   Use placeholders such as `<bot-token>`, `<allowed-user-id>`, `<chat-id>`, and `<inbound-message-id>` in examples and reports; never include real tokens, IDs, private paths, or raw logs.
+
 ## Cloud Mail setup
 
 `cloud_mail` is a REST client for a self-hosted [Cloud Mail](https://github.com/maillab/cloud-mail) deployment (Cloudflare Workers). It is **not** IMAP/SMTP — it talks to Cloud Mail's HTTP API. Inbound mail is discovered by polling Cloud Mail's `POST /public/emailList` and delivered to your inbox via LICC.
@@ -83,7 +106,7 @@ Config schema (plaintext; copy verbatim, never commit real passwords):
 
 ## After it's running
 
-Inbound events (new emails, chat messages) flow into your `.mcp_inbox/<name>/` via the LICC v1 inbox callback contract — the kernel auto-injects them into your next turn as `[system]` messages. You don't poll; the kernel does. Outbound calls go through the omnibus tool: `imap(action="send", ...)`, `telegram(action="send_message", ...)`, etc. — see each addon's README for the action list.
+Inbound events (new emails, chat messages) flow into your `.mcp_inbox/<name>/` via the LICC v1 inbox callback contract — the kernel auto-injects them into your next turn as `[system]` messages. You don't poll; the kernel does. Outbound calls go through the omnibus tool: `imap(action="send", ...)`, `telegram(action="send", ...)`, etc. — see each addon's README for the action list.
 
 ## WeChat setup checklist
 
