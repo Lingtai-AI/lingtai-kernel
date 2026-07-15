@@ -316,11 +316,51 @@ Verification commands (repo venv):
   tests/test_mcp_skill_manuals.py
 ```
 
-## Automatic row timestamp interface
+## Automatic Task Card telemetry and timestamp interface
 
-1. An automatic row MAY expose `started_at` only from the same already-validated `tool_call` event's top-level Unix-epoch `ts`; `_meta`, tool arguments, notification payloads, and the current render instant are not time sources.
-2. A valid event time MUST use the current row presentation `HH:MM:SS UTC±HH`. Missing, boolean, non-numeric, non-finite, or out-of-range `ts` MUST omit `started_at` without failing the event tail.
-3. The event-to-final-render suffix and fail-closed malformed cases are contract-tested at `tests/test_telegram_task_card_event_tail.py:403` and `tests/test_telegram_task_card_event_tail.py:443`. The implementation anchors are `src/lingtai/mcp_servers/telegram/manager.py:1854` and `src/lingtai/mcp_servers/telegram/manager.py:1819`.
+The automatic slot is a bounded projection of the agent's authoritative
+`logs/events.jsonl` event order, broadcast to each resident Task Card. It has
+one source of truth for each projection axis:
+
+1. **Tool rows and timestamps.** A row is projected only from a validated
+   `type == "tool_call"` event. Its allowlisted fields are `tool_name`,
+   `tool_args.action`, and redacted/capped `tool_args._reasoning`. Its optional
+   `started_at` is derived only from that same event's top-level Unix-epoch `ts`
+   and uses `HH:MM:SS UTC±HH`. Missing, boolean, non-numeric, non-finite, or
+   out-of-range `ts` omits `started_at` without failing the tail. `_meta`, row
+   arguments, notification payloads, and the current render instant are never
+   timestamp sources.
+2. **Current telemetry.** Only the latest final-carrier `type == "notification_block_injected"`
+   event's whole `_meta.agent_meta` is current. The manager projects only
+   `_meta.agent_meta.agent_state.token_usage.session` and only these supported
+   fields: `session_cache_rate`, `cache_miss_tokens`, `cache_miss_budget`,
+   `api_calls`, `context_tokens`, `context_window`, and `context_usage`.
+   Historical `agent_meta` holders are not merged; retired
+   `tool_meta.token_usage`, row args, notifications, and render time are not
+   telemetry sources. A missing/malformed carrier or field omits safely and
+   must not leave an older snapshot visible after a malformed current carrier.
+3. **Formatting and composition.** The supported fields are passed to the
+   existing `_format_task_card_metadata` projection, which preserves the
+   bounded two-line metadata footer and its 150-character joined budget. The
+   rows continue through `_format_rows_task_card_text`; telemetry never changes
+   row ordering, row timestamps, or the programmable slot. A broadcast occurs
+   when either the bounded tool-row window or the current telemetry projection
+   changes.
+4. **Implementation and tests.** The event path is
+   `manager.py:_decode_event_line` → `_project_tool_call_row` /
+   `_project_final_carrier_metadata` → `_reverse_tail_latest_rows` or
+   `_append_new_lines` → `_broadcast_task_card_event_window` →
+   `_format_task_card_text`. The formatter anchors are
+   `manager.py:_format_task_card_metadata` and
+   `manager.py:_format_rows_task_card_text`. The event-log-to-final-render
+   regression is
+   `tests/test_telegram_task_card_event_tail.py:test_event_log_final_carrier_projects_session_telemetry_into_final_render`;
+   malformed-carrier coverage is
+   `test_malformed_current_telemetry_carrier_clears_previous_snapshot`, while
+   timestamp and malformed-input coverage is in the adjacent
+   `test_row_started_at_is_...` cases. Update this contract and its paired
+   anatomy/tests together if the event schema, final-carrier path, supported
+   fields, formatter budget, or timestamp provenance changes.
 
 ## Maintenance
 

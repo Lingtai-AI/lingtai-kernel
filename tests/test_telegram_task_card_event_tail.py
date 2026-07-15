@@ -1,11 +1,12 @@
 """Automatic Task Card as a broadcast projection of the agent's ``events.jsonl``.
 
 Jason's final contract (Telegram 8266-8295): the automatic slot mechanically
-consumes the agent's authoritative ``logs/events.jsonl`` in file order, skips
-every non-whitelisted event type, keeps the most recent N matching
-``tool_call`` events using only safe bounded fields, and broadcasts the same
-projection to every resident Task Card for the agent (no per-route
-correlation — this is an agent-behavior broadcast, not per-chat visibility).
+consumes the agent's authoritative ``logs/events.jsonl`` in file order, keeps
+the most recent N ``tool_call`` events using only safe bounded fields, projects
+current session telemetry only from the latest final-carrier ``notification_block_injected``,
+and broadcasts the same projection to every resident Task Card for the agent
+(no per-route correlation — this is an agent-behavior broadcast, not per-chat
+visibility).
 
 These tests exercise ``TelegramManager``'s tailer directly: no durable
 cursor/checkpoint file, no BaseAgent pre-dispatch/result callback dependency,
@@ -419,6 +420,112 @@ def test_row_started_at_is_derived_from_event_ts_and_rendered(tmp_path):
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert edits
     assert f" · {expected}" in edits[-1][3]
+
+
+def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tmp_path):
+    """Rows and the footer telemetry come from their authoritative events.
+
+    The final-carrier ``notification_block_injected`` owns the current whole ``agent_meta``
+    snapshot; a retired ``tool_meta`` snapshot and row arguments are present as
+    decoys and must not affect the automatic card.
+    """
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    event_ts = 1752600000.0
+    session = {
+        "session_cache_rate": 0.87803,
+        "cache_miss_tokens": 170631,
+        "cache_miss_budget": 1_000_000,
+        "api_calls": 13,
+        "context_tokens": 171246,
+        "context_window": 272000,
+        "context_usage": 0.62958,
+    }
+    events_path = _events_path(tmp_path)
+    row_event = json.loads(_tool_call_line(ts=event_ts, reasoning="event-log row"))
+    row_event["tool_args"]["metadata"] = {"api_calls": 999}
+    _write_lines(events_path, [
+        json.dumps(row_event),
+        # A plain tool_result is the live decoy immediately before the real
+        # notification carrier; even if it fabricates agent_meta, it must not
+        # own the current snapshot.
+        json.dumps({
+            "type": "tool_result",
+            "tool_name": "bash",
+            "tool_call_id": "c1",
+            "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+                "session": {"api_calls": 888},
+            }}}},
+        }),
+        json.dumps({
+            "type": "notification_block_injected",
+            "tool_name": "bash",
+            "tool_call_id": "c1",
+            "ts": event_ts + 1,
+            "_meta": {
+                "tool_meta": {"token_usage": {"session": {
+                    "session_cache_rate": 0.01,
+                    "api_calls": 1,
+                }}},
+                "agent_meta": {
+                    "agent_state": {"token_usage": {
+                        "current_call": {"api_calls": 999},
+                        "session": session,
+                    }},
+                    "notifications": {"persistent": {"api_calls": 777}},
+                },
+            },
+        }),
+    ])
+
+    manager._poll_event_tail()
+
+    local = datetime.fromtimestamp(event_ts).astimezone()
+    expected_stamp = f"{local:%H:%M:%S} UTC{local:%z}"[:-2]
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    assert edits
+    rendered = edits[-1][3]
+    assert "bash.run" in rendered
+    assert f" · {expected_stamp}" in rendered
+    assert "session · cache 87.8% · miss 170.6k/1.0M · calls 13" in rendered
+    assert "ctx · 171.2k/272.0k · 63%" in rendered
+    assert "calls 888" not in rendered
+    assert "calls 999" not in rendered
+    assert "calls 777" not in rendered
+
+
+def test_malformed_current_telemetry_carrier_clears_previous_snapshot(tmp_path):
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [
+        _tool_call_line(),
+        json.dumps({
+            "type": "notification_block_injected",
+            "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+                "session": {"api_calls": 7},
+            }}}},
+        }),
+    ])
+    manager._poll_event_tail()
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    assert "calls 7" in edits[-1][3]
+
+    _write_lines(events_path, [json.dumps({
+        "type": "notification_block_injected",
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+            "session": {"api_calls": "malformed"},
+        }}}},
+    })])
+    manager._poll_event_tail()
+
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    assert "calls 7" not in edits[-1][3]
+    assert "session ·" not in edits[-1][3]
 
 
 def test_row_started_at_omitted_when_ts_missing(tmp_path):

@@ -96,9 +96,38 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   else returns `indeterminate_send` so cold-send/old-first replacement fail closed.
 - Fail-loud: after-handle failures call `agent._enqueue_system_notification`.
 
-## Automatic row timestamp path
+## Automatic event-tail projection paths
 
-The automatic slot keeps time provenance in the same bounded event projection: only after an event is validated as `type == "tool_call"`, `TelegramManager` reads that event's own top-level Unix-epoch `ts`, formats a valid value as the latest `HH:MM:SS UTC±HH`, and projects it as optional row `started_at`. Missing, boolean, non-numeric, non-finite, or out-of-range values omit the suffix; `_meta` and the current render instant are never substitutes. The path is `tool_call.ts` → `_format_task_card_row_timestamp` → `_project_tool_call_row` → `_format_rows_task_card_text` (`src/lingtai/mcp_servers/telegram/manager.py:1854`, `src/lingtai/mcp_servers/telegram/manager.py:1819`, `src/lingtai/mcp_servers/telegram/manager.py:2656`). Owning event-to-render and malformed-input regressions live at `tests/test_telegram_task_card_event_tail.py:403` and `tests/test_telegram_task_card_event_tail.py:443`.
+- **Rows/timestamps:** after validating `type == "tool_call"`,
+  `_project_tool_call_row` reads only `tool_name`, `tool_args.action`,
+  `tool_args._reasoning`, and that same event's top-level Unix-epoch `ts`.
+  `_format_task_card_row_timestamp` projects a valid value as optional
+  `started_at` in `HH:MM:SS UTC±HH`; missing, boolean, non-numeric, non-finite,
+  or out-of-range values omit it. `_meta`, row arguments, notifications, and
+  render time are never timestamp sources. Navigation:
+  `manager.py:_project_tool_call_row`, `_format_task_card_row_timestamp`, and
+  `_format_rows_task_card_text` (currently around lines 1819, 1854, and 2720).
+- **Current telemetry:** `_project_final_carrier_metadata` accepts only a
+  final-carrier `type == "notification_block_injected"` event's latest whole
+  `_meta.agent_meta`, then projects
+  `_meta.agent_meta.agent_state.token_usage.session` fields
+  `session_cache_rate`, `cache_miss_tokens`, `cache_miss_budget`, `api_calls`,
+  `context_tokens`, `context_window`, and `context_usage`. The tail stores no
+  historical holders and passes this bounded projection to the existing
+  `_format_task_card_metadata` two-line/150-character formatter through
+  `_broadcast_task_card_event_window`; malformed or missing values omit safely.
+  It never reads retired `tool_meta.token_usage`, row args, notifications, or
+  render time. Navigation: `manager.py:_project_final_carrier_metadata`,
+  `_reverse_tail_latest_rows`, `_append_new_lines`, and
+  `_broadcast_task_card_event_window` (currently around lines 1849, 1980, 2140,
+  and 2190).
+- **Regression/drift triggers:** the event-to-final-render coverage is
+  `tests/test_telegram_task_card_event_tail.py:test_event_log_final_carrier_projects_session_telemetry_into_final_render`
+  plus `test_malformed_current_telemetry_carrier_clears_previous_snapshot` and the adjacent timestamp/malformed-input cases. Update this anatomy and
+  the paired contract/tests together if event types, the final-carrier metadata
+  path, supported session fields, the two-line formatter budget, or timestamp
+  provenance changes; do not broaden the automatic source without revisiting
+  the authoritative-event rule.
 
 ## Composition
 
