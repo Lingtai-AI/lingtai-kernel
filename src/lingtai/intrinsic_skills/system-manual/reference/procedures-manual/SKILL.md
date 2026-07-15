@@ -82,7 +82,7 @@ summary does not by itself rebuild the active provider context. Runtimes usually
 append onto a stable cache/continuation prefix instead of rebuilding that prefix
 every turn. Below the full-context boundary, keep working: do not treat pending
 summarized history as failure, and do not call `refresh` just to force a rebuild.
-Once context is at/above 0.75, the runtime stamps `_meta.agent_meta.agent_state.context.rebuild`;
+Once context is at/above 0.85, the runtime stamps `_meta.agent_meta.agent_state.context.rebuild`;
 if a fresh provider context is worth the cost, make one proactive tactical
 `system(action="summarize", rebuild=true)` call — with new items (record then
 apply the pending set) or with no items (pure rebuild of the already-pending
@@ -100,12 +100,12 @@ rewriting recorded history — only the LATEST holder
 per family represents current state, older holders are historical traces and
 must not be acted on. Every 1.0 forced rebuild
 ALWAYS carries a one-shot `reconstruction.warning` (before→after context,
-proactive-0.75-rebuild advice, and "if still above the 0.6 recovery target, molt").
+proactive-0.85-rebuild advice, and "if still above the 0.75 recovery target, molt").
 If that one forced rebuild does NOT clear the overflow (post-rebuild context stays
 strictly above 1.0), every result then also carries a permanent
 `_meta.agent_meta.agent_state.context.molt` line `100% context Forced Rebuild Failed to Bring Usage Below 100%. Context
 overflowed!! (xxx %) Molt IMMEDIATELY!!` — molt immediately.
-Waiting for the 1.0 boundary is not ideal — prefer the proactive 0.75 rebuild; if
+Waiting for the 1.0 boundary is not ideal — prefer the proactive 0.85 rebuild; if
 the pending total is 0, the forced rebuild has nothing to apply, so summarize more
 or molt instead. At task completion, default to proactive task-boundary molt only when
 session (since-last-molt) API calls exceed 100. Below that threshold, go idle
@@ -115,7 +115,7 @@ tool result. If you have already decided to molt, do not summarize first merely
 to prepare: molt is the stronger whole-conversation summarize boundary.
 
 Reserve `refresh` for emergencies (broken/stale context). If summarize or a
-rebuild still cannot bring context below `0.6 * context_window`, tend durable
+rebuild still cannot bring context below `0.75 * context_window`, tend durable
 stores and molt deliberately.
 
 ## 2. Action and responsiveness

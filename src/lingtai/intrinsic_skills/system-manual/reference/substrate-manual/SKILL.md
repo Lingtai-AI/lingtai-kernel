@@ -109,7 +109,7 @@ contract.
 Refresh is also the **emergency** context-reconstruction path: reach for it when
 context is broken or stale, or when an immediate provider-side rebuild is urgently
 needed. It is not part of the normal summarize flow — summarize records compact
-history now, offers an explicit proactive rebuild path at 0.75 via
+history now, offers an explicit proactive rebuild path at 0.85 via
 `system(action="summarize", rebuild=true)`, and otherwise the runtime forces a
 rebuild at the 1.0 full-context hard boundary (see `summarize` below), so
 do not refresh just to "apply" a summarize.
@@ -190,7 +190,7 @@ text visible, record a compact summary replacement for its raw payload regardles
 of length. The
 summary preserves the conclusion, evidence, anchors, validation, risks, and next
 steps while lowering active context. Runtime high-attention guidance for this
-behavior is carried in `_meta.agent_meta.guidance`, including the resident 0.75 manual
+behavior is carried in `_meta.agent_meta.guidance`, including the resident 0.85 manual
 rebuild hint and the 1.0 hard forced-rebuild boundary rule.
 Treat guidance as a system-prompt-like appendix placed at the end of context: it
 is an ordered `sections[]` structure, not a loose metadata bag.  The kernel's
@@ -206,7 +206,7 @@ At the provider layer, runtimes serve requests by *appending* onto a stable
 cache/continuation prefix rather than *reconstructing* it each turn; rebuilding
 that prefix on every summarize would discard the cache benefit. So below the
 full-context boundary the summarize stays pending and the session keeps appending —
-this delay is normal. Once context is at/above 0.75, the runtime stamps
+this delay is normal. Once context is at/above 0.85, the runtime stamps
 `_meta.agent_meta.agent_state.context.rebuild`; if an earlier fresh provider context is worth
 the cost, make one proactive tactical `system(action="summarize", rebuild=true)`
 call — with new items (record then apply the pending set) or with no items (pure
@@ -218,18 +218,18 @@ full-context episode (it does not re-force while context stays at/above 1.0, and
 re-arms only after context later drops below 1.0): pending markers are applied and
 marked done, and with no pending summaries it still runs to release transient
 context. Every 1.0 forced rebuild ALWAYS carries a one-shot
-`reconstruction.warning` (before→after context, proactive-0.75-rebuild advice, and
-"if still above the 0.6 recovery target, molt"). If that one forced rebuild does
+`reconstruction.warning` (before→after context, proactive-0.85-rebuild advice, and
+"if still above the 0.75 recovery target, molt"). If that one forced rebuild does
 NOT clear the overflow (post-rebuild context stays strictly above 1.0), every
 result then also carries a permanent `_meta.agent_meta.agent_state.context.molt` line `100%
 context Forced Rebuilt Failed. Context overflowed!! (xxx %) Molt IMMEDIATELY!!` —
 molt immediately. Waiting until full context is not
-ideal — prefer the proactive 0.75 rebuild; if the pending total is 0, the forced
+ideal — prefer the proactive 0.85 rebuild; if the pending total is 0, the forced
 rebuild has nothing to apply, so summarize more or molt instead.
 `refresh` is reserved for emergency reconstruction (see above). Summarize
 is a mini molt for a consumed tool result; molt is the stronger
 whole-conversation summarize boundary when summarize/reconstruction cannot get
-context below `0.6 * context_window`. A completed task can also be an
+context below `0.75 * context_window`. A completed task can also be an
 efficiency boundary, but molt is not free cleanup: after necessary reporting and
 durable-store updates, if no concrete next action remains, default to proactive
 task-boundary molt only once session (since-last-molt) API calls exceed 100. Below that

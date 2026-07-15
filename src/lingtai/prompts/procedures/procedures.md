@@ -55,7 +55,7 @@ later. A successful summarize records the compacted replacement in runtime
 history, but it does not by itself rebuild the active provider-side context.
 Below the full-context boundary, pending summarized history is normal; keep
 working, do not assume the old raw block has left the current continuation, and
-do not use `refresh` to force it. Once context is at/above `0.75`, the runtime
+do not use `refresh` to force it. Once context is at/above `0.85`, the runtime
 stamps `_meta.agent_meta.agent_state.context.rebuild`; if a fresh provider context is worth
 the cost, make one proactive tactical `system(action="summarize", rebuild=true)`
 call (with new items to record and apply, or with no items to apply
@@ -72,15 +72,15 @@ every provider, without rewriting recorded history — only the LATEST holder
 per family is
 current state, older holders are historical traces and must not be acted on.
 Every `1.0` forced rebuild ALWAYS attaches a
-one-shot `reconstruction.warning` (before→after context, proactive-`0.75`-rebuild
-advice, and "if still above the `0.6` recovery target, molt"). If that one forced
+one-shot `reconstruction.warning` (before→after context, proactive-`0.85`-rebuild
+advice, and "if still above the `0.75` recovery target, molt"). If that one forced
 rebuild does NOT clear the overflow (post-rebuild context stays strictly above
 `1.0`), every result then also carries a permanent `_meta.agent_meta.agent_state.context.molt`
 line `100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! (xxx %) Molt
 IMMEDIATELY!!` — molt immediately. Waiting until full
-context is not ideal — prefer the proactive `0.75` rebuild. If pending total is 0,
+context is not ideal — prefer the proactive `0.85` rebuild. If pending total is 0,
 the forced rebuild has nothing to apply, so summarize more or molt. Do not loop
-rebuild/summarize; if rebuild cannot recover below the `0.6` target, tend durable
+rebuild/summarize; if rebuild cannot recover below the `0.75` target, tend durable
 stores and molt.
 
 **Molt boundary.** At task completion, after necessary reporting and durable
@@ -88,7 +88,7 @@ stores are tended, if no human reply or concrete next action remains, do not
 molt automatically. Default to proactive task-boundary molt only when
 `_meta.agent_meta.agent_state.token_usage.session.api_calls > 100`; below that threshold, go
 idle unless context pressure is present, summarize plus automatic reconstruction
-still cannot bring context below `0.6 * context_window`, the human explicitly
+still cannot bring context below `0.75 * context_window`, the human explicitly
 asks for a reset, or conversation confusion makes the fresh briefing worth the
 molt cost. Independently, when `_meta.agent_meta.agent_state.context.molt` reports the
 cache-miss budget reached (`cache_miss_budget` / `cache_miss_tokens`, default

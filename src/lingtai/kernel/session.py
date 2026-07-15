@@ -621,7 +621,7 @@ class SessionManager:
             #
             # Use the PROVIDER-reported input tokens (input_tokens / window), not
             # get_context_pressure()'s local-estimate-primary value: the delayed
-            # reconstruction threshold (0.75) is itself provider-input based, so
+            # reconstruction threshold (0.85) is itself provider-input based, so
             # the streak must observe the same ruler. This keeps channel A
             # (reconstruction event) and channel B (sustained warning) consistent
             # and avoids a low/stale local estimate masking real provider

@@ -153,7 +153,7 @@ by itself rebuild the active provider-side context. Below the full-context
 boundary, pending summarized history may remain at the provider layer while the
 session keeps appending; from the agent's perspective, the old raw block may
 still be in the current continuation. Do not call `refresh` just to apply
-summarize. Once context is at/above `0.75`, the runtime stamps
+summarize. Once context is at/above `0.85`, the runtime stamps
 `_meta.agent_meta.agent_state.context.rebuild`, which permits a proactive manual rebuild with
 `system(action="summarize", rebuild=true)` — either with new items (record then
 apply) or with no items (apply already-pending summaries) — when the fresh
@@ -177,13 +177,13 @@ holder per family
 is current state, older holders are historical traces and must not be acted on.
 Every `1.0`
 forced rebuild ALWAYS attaches a one-shot `reconstruction.warning`
-(before→after context, proactive-`0.75`-rebuild advice, and "if still above the
-`0.6` recovery target, molt"). If that one forced rebuild does NOT clear the
+(before→after context, proactive-`0.85`-rebuild advice, and "if still above the
+`0.75` recovery target, molt"). If that one forced rebuild does NOT clear the
 overflow (post-rebuild context stays strictly above `1.0`), every result then
 also carries a permanent `_meta.agent_meta.agent_state.context.molt` line `100% context Forced
 Rebuilt Failed. Context overflowed!! (xxx %) Molt IMMEDIATELY!!` — the runtime
 will not keep force-rebuilding, so molt immediately. Waiting until full context is not ideal — prefer
-the proactive `0.75` rebuild. If pending total is `0`, the forced rebuild has no
+the proactive `0.85` rebuild. If pending total is `0`, the forced rebuild has no
 summaries to apply, so summarize more or molt rather than relying on it for
 compaction. Do not loop rebuild/summarize. Reference manuals explain why this
 boundary exists; this resident section states what to do.
@@ -192,7 +192,7 @@ Both a-priori (`summary=true`) and a-posteriori (`system(action="summarize")`)
 summary are mini molts for tool results; molt is the stronger
 whole-conversation boundary: if you have already decided to molt, do not pay a
 separate summarize call merely to prepare, and if summarize/reconstruction
-cannot bring context below `0.6 * context_window`, tend durable stores and molt
+cannot bring context below `0.75 * context_window`, tend durable stores and molt
 deliberately.
 
 Reading and clearing

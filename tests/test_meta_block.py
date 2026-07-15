@@ -421,7 +421,7 @@ def test_build_meta_guidance_renders_guidance_meta_readme_and_adapter():
     # Packaged guidance section body is present.
     assert "progressive disclosure" in section
     assert "Delayed summarization reconstruction threshold" in section
-    assert "0.75" in section
+    assert "0.85" in section
     assert "1.0" in section
     assert "Do not call `refresh` just to apply a summarize" in section
     assert "does not mean the active provider-side context" in section
@@ -1659,7 +1659,7 @@ def test_build_meta_usage_matches_get_context_pressure_after_restore():
 # The adapter records the before-context (A) when an actual reconstruction
 # fires; the kernel pops it once, fills the after-context (B) from the live
 # context decomposition, and attaches the A->B event to the next visible tool
-# result. If B is still >= the 0.6 recovery target, a molt reminder is
+# result. If B is still >= the 0.75 recovery target, a molt reminder is
 # included; otherwise the A->B event is attached without a warning.
 # ---------------------------------------------------------------------------
 
@@ -1732,7 +1732,7 @@ _RAW_EVENT = {
     "type": "delayed_summarize_reconstruction",
     "reason": "delayed_summarize_reconstruction",
     "trigger_threshold": 1.0,
-    "recovery_target": 0.60,
+    "recovery_target": 0.75,
     "context_window": 100000,
     "before": {"context_tokens": 100000, "usage": 1.0},
 }
@@ -1743,7 +1743,7 @@ _RAW_MANUAL_EVENT = {
     "type": "summarize_rebuild_only_reconstruction",
     "reason": "summarize_rebuild_only_reconstruction",
     "trigger_threshold": 1.0,
-    "recovery_target": 0.60,
+    "recovery_target": 0.75,
     "context_window": 100000,
     "before": {"context_tokens": 85000, "usage": 0.85},
 }
@@ -1763,7 +1763,7 @@ def test_forced_rebuild_always_carries_unified_warning_even_when_low():
     assert event is not None
     assert event["type"] == "delayed_summarize_reconstruction"
     assert event["trigger_threshold"] == 1.0
-    assert event["recovery_target"] == 0.60
+    assert event["recovery_target"] == 0.75
     assert event["before"]["usage"] == 1.0
     assert event["after"]["usage"] == pytest.approx(0.40)
     assert event["after"]["context_tokens"] == 40000
@@ -1777,8 +1777,8 @@ def test_forced_rebuild_always_carries_unified_warning_even_when_low():
     assert "40000 tokens (40%) after" in warning
     assert "prefer a proactive" in warning
     assert "rebuild=true" in warning
-    assert "0.75" in warning or "75%" in warning
-    assert "60%" in warning or "0.6" in warning
+    assert "0.85" in warning or "85%" in warning
+    assert "75%" in warning or "0.75" in warning
     assert "molt" in warning
     assert "meta_guidance" in warning
 
@@ -1829,7 +1829,7 @@ def test_manual_rebuild_event_uses_recovery_molt_not_forced_warning():
     # The manual rebuild=true event carries NO forced-rebuild warning; when the
     # rebuilt context is still above the recovery target it carries the recovery
     # molt reminder instead.
-    agent = _recon_agent(raw_event=dict(_RAW_MANUAL_EVENT), after_usage=0.70)
+    agent = _recon_agent(raw_event=dict(_RAW_MANUAL_EVENT), after_usage=0.80)
     event = meta_block.build_reconstruction_tool_meta(agent)
     assert event["type"] == "summarize_rebuild_only_reconstruction"
     assert "warning" not in event
@@ -1837,8 +1837,8 @@ def test_manual_rebuild_event_uses_recovery_molt_not_forced_warning():
     molt = event["molt"]
     assert isinstance(molt, str)
     assert "runtime already rebuilt the provider context" in molt
-    assert "70%" in molt
-    assert "60%" in molt
+    assert "80%" in molt
+    assert "75%" in molt
     assert "molt deliberately" in molt
 
 
@@ -4017,11 +4017,11 @@ def test_packaged_guidance_resource_is_valid():
     assert "mini molt for consumed tool results" in body
     assert "stronger whole-conversation boundary" in body
     assert "skip pre-molt summarize" in body
-    assert "0.75" in body
+    assert "0.85" in body
     assert "1.0" in body
     assert "Do not call `refresh` just to apply a summarize" in body
     assert "does not mean the active provider-side context" in body
-    assert "0.6 * context_window" in body
+    assert "0.75 * context_window" in body
     # Unified contract: token diagnostics live in agent_meta.agent_state.token_usage; the
     # guidance points there and describes the since-last-molt session aggregate
     # half (cumulative/restored, surviving refresh — Jason FINAL correction).
@@ -4112,12 +4112,12 @@ def test_attach_active_runtime_is_wired_into_turn_boundary():
 # dismissible notification.
 #
 # Corrected contract (channel B): the warning is NOT the old immediate
-# ``usage >= 0.60`` trip-wire.  It is driven by the SessionManager
-# sustained-pressure streak — context must be high (>= 0.75) for
+# immediate trip-wire. It is driven by the SessionManager sustained-pressure
+# streak — context must be high (>= 0.85) for
 # CONTEXT_PRESSURE_WARN_AFTER_ROUNDS (3) consecutive *fresh provider rounds*
 # before the warning appears, giving summarize/reconstruction time to relieve
-# pressure first.  A drop below 0.75 resets the streak and clears the warning.
-# Wording directs: summarize first; if context cannot be brought below the 0.6
+# pressure first.  A drop below 0.85 resets the streak and clears the warning.
+# Wording directs: summarize first; if context cannot be brought below the 0.75
 # recovery target, consider/perform molt.
 # ---------------------------------------------------------------------------
 
@@ -4154,10 +4154,10 @@ def test_build_molt_context_absent_for_first_two_high_rounds():
     assert build_molt_context(_molt_agent(warning_active=False, streak=2), 0.92) is None
 
 
-def test_build_molt_context_old_immediate_0_60_no_longer_trips():
-    """Regression: 0.61 (above the retired 0.60 trip-wire) with no sustained
+def test_build_molt_context_recovery_target_no_longer_trips():
+    """Regression: 0.81 (above the recovery target) with no sustained
     streak must NOT produce a warning anymore."""
-    assert build_molt_context(_molt_agent(warning_active=False, streak=1), 0.61) is None
+    assert build_molt_context(_molt_agent(warning_active=False, streak=1), 0.81) is None
 
 
 def test_build_molt_context_warns_from_third_high_round():
@@ -4167,9 +4167,9 @@ def test_build_molt_context_warns_from_third_high_round():
     assert "Context has stayed high" in molt
     assert "3 consecutive fresh model calls" in molt
     assert "90%" in molt
-    assert "recovery target is 60%" in molt
+    assert "recovery target is 75%" in molt
     assert "batch tool results" in molt
-    assert "Repeated summarize calls while context stays above 75%" in molt
+    assert "Repeated summarize calls while context stays above 85%" in molt
     assert "substantially hurt token efficiency" in molt
     assert "batched summarize/reconstruction pass" in molt
     assert "stop repeating summarize" in molt
@@ -4500,11 +4500,11 @@ def test_attach_tool_block_promotes_budget_context_and_pops_transit_key():
 def test_build_context_rebuild_hint_stamps_after_high_ratio():
     agent = SimpleNamespace(_intrinsics={"system"})
 
-    assert build_context_rebuild_hint(agent, 0.7499) is None
-    hint = build_context_rebuild_hint(agent, 0.75)
+    assert build_context_rebuild_hint(agent, 0.8499) is None
+    hint = build_context_rebuild_hint(agent, 0.85)
 
     assert hint is not None
-    assert "context now above 75%" in hint
+    assert "context now above 85%" in hint
     assert "rebuild=true" in hint
     # The hint clarifies that recording summaries does not itself rebuild the
     # provider context, that rebuild=true is a permitted option (not required),

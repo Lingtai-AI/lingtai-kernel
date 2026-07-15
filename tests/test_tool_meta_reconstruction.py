@@ -67,7 +67,7 @@ def _agent_state(wire):
 _EVENT = {
     "type": "delayed_summarize_reconstruction",
     "trigger_threshold": 1.0,
-    "recovery_target": 0.60,
+    "recovery_target": 0.75,
     "context_window": 100000,
     "before": {"context_tokens": 100000, "usage": 1.0},
     "after": {"context_tokens": 70000, "usage": 0.70},
@@ -76,9 +76,9 @@ _EVENT = {
         "Context changed from 100000 tokens (100%) before to 70000 tokens (70%) "
         "after. Reaching the full-context boundary means waiting until context was "
         "full was not ideal — when context is high, prefer a proactive "
-        "system(action='summarize', rebuild=true) at the 75% rebuild hint instead of "
+        "system(action='summarize', rebuild=true) at the 85% rebuild hint instead of "
         "letting the emergency boundary force it. If the rebuilt context is still "
-        "above the 60% recovery target, tend durable stores and molt. See "
+        "above the 75% recovery target, tend durable stores and molt. See "
         "meta_guidance, substrate, and procedures."
     ),
 }
@@ -90,14 +90,14 @@ _MANUAL_MOLT_EVENT = {
     "type": "summarize_rebuild_only_reconstruction",
     "reason": "summarize_rebuild_only_reconstruction",
     "trigger_threshold": 1.0,
-    "recovery_target": 0.60,
+    "recovery_target": 0.75,
     "context_window": 100000,
     "before": {"context_tokens": 85000, "usage": 0.85},
-    "after": {"context_tokens": 70000, "usage": 0.70},
+    "after": {"context_tokens": 80000, "usage": 0.80},
     "molt": (
         "The runtime already rebuilt the provider context after summarization, "
-        "but the rebuilt context is still at 70% of the context window, at or "
-        "above the 60% recovery target. If more digested tool results can be "
+        "but the rebuilt context is still at 80% of the context window, at or "
+        "above the 75% recovery target. If more digested tool results can be "
         "summarized, do that first; otherwise tend durable stores and molt "
         "deliberately. See psyche-manual."
     ),
@@ -259,10 +259,10 @@ def test_reconstruction_event_emits_reminder_event_when_molt_attached(tmp_path):
     payload = emitted[0][1]
     assert payload["target_path"] == "_meta.agent_meta.agent_state.events.reconstruction.molt"
     assert payload["before_usage"] == 0.85
-    assert payload["after_usage"] == 0.70
+    assert payload["after_usage"] == 0.80
     assert payload["branch"] == "above_recovery"
     assert payload["trigger_threshold"] == 1.0
-    assert payload["recovery_target"] == 0.60
+    assert payload["recovery_target"] == 0.75
     # Redaction-safe: no full reminder prose in the event payload.
     import json
 
@@ -306,8 +306,8 @@ _CURRENT_MOLT_TEXT = "Context has stayed high across 3 consecutive fresh model c
 _CURRENT_MOLT_EVENT_PAYLOAD = {
     "target_path": "_meta.agent_meta.agent_state.context.molt",
     "message_hash": "abcdef012345",
-    "threshold_high": 0.75,
-    "recovery_target": 0.60,
+    "threshold_high": 0.85,
+    "recovery_target": 0.75,
     "usage": 0.90,
     "streak": 3,
     "last_round_id": 7,

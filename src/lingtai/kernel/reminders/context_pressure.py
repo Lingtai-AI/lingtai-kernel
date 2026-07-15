@@ -24,7 +24,7 @@ The abstraction owns:
   * a :meth:`snapshot` / :meth:`to_debug_dict` view for tests / logs /
     debugging (thresholds, streak, active, last usage/round, and why).
 
-Reminder prose now separates the 0.75 high-context/manual-rebuild threshold from
+Reminder prose now separates the 0.85 high-context/manual-rebuild threshold from
 the 1.0 hard forced-rebuild boundary: high rounds still drive the sustained
 3-round warning, while the forced rebuild at full context is rarer.  Under the
 two-axis ``_meta`` contract both reminders are current agent state, not
@@ -167,7 +167,7 @@ def reconstruction_molt_emission_descriptor(event: dict, *, message: str) -> dic
 
 
 def _format_ratio_percent(value: float | int | str | None) -> str:
-    """Render a 0..1 ratio as a compact percent string ('75%', '60.5%').
+    """Render a 0..1 ratio as a compact percent string ('85%', '75.5%').
 
     Same behavior as the former ``meta_block._format_ratio_percent`` (which this
     replaces), so the reminder prose reads identically to the pre-abstraction
@@ -208,7 +208,7 @@ class ContextPressureReminder:
     are stored on the instance so :meth:`to_debug_dict` can report exactly which
     values drove a decision (and so tests can inject variants).  The historical
     field name ``reconstruction_ratio`` is retained for compatibility, but on the
-    current-state reminder it means the 75% high-context/manual-rebuild ratio,
+    current-state reminder it means the 85% high-context/manual-rebuild ratio,
     not the 1.0 hard forced-rebuild boundary.
     """
 
@@ -378,11 +378,11 @@ def render_current_molt_context(
         f"(currently {usage_text} of the context window). This is a context-pressure "
         "reminder, not an immediate command: when continuing, batch tool results "
         "you have already digested before summarizing. Repeated summarize "
-        "calls while context stays above 75% substantially hurt token efficiency; "
+        "calls while context stays above 85% substantially hurt token efficiency; "
         "if you only need a fresh provider context, use one rebuild-only summarize "
         "call instead. "
         f"The recovery target is {recovery_text}, but if a batched summarize/"
-        "reconstruction pass still leaves context above 75%, stop repeating summarize, "
+        "reconstruction pass still leaves context above 85%, stop repeating summarize, "
         "tend durable stores, and molt deliberately. See psyche-manual."
     )
 
@@ -413,8 +413,8 @@ def render_reconstruction_molt(
         return (
             "The runtime already rebuilt the provider context after summarization, "
             f"but the rebuilt context is still at {after_text} of the context "
-            "window, above the 75% high-context threshold. Repeated small "
-            "summarize calls while context stays above 75% substantially hurt "
+            "window, above the 85% high-context threshold. Repeated small "
+            "summarize calls while context stays above 85% substantially hurt "
             "token efficiency; use at most one rebuild-only summarize call, then "
             "stop repeating summarize, tend durable stores, and molt "
             "deliberately. See psyche-manual."
@@ -452,9 +452,9 @@ def render_forced_rebuild_warning(
     This is a single template — it does NOT branch into different text based on
     whether the rebuilt context landed high or low. Every 1.0 forced rebuild
     carries the same warning: what happened (forced rebuild at the hard boundary),
-    the before→after context change, the proactive-rebuild advice (prefer the 0.75
-    hint next time), and the conditional molt instruction (if still above the 0.6
-    recovery target). The agent reads the after-context and the 0.6 clause and
+    the before→after context change, the proactive-rebuild advice (prefer the 0.85
+    hint next time), and the conditional molt instruction (if still above the 0.75
+    recovery target). The agent reads the after-context and the 0.75 clause and
     decides whether to molt.
     """
     trigger_text = _format_ratio_percent(trigger_threshold)

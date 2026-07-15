@@ -905,7 +905,7 @@ def build_runtime_guidance() -> dict:
 
 
 def build_molt_context(agent, usage: float) -> str | None:
-    # NOTE: the lighter 75% manual-rebuild hint is built by
+    # NOTE: the lighter 85% manual-rebuild hint is built by
     # ``build_context_rebuild_hint`` below.  This function remains the stronger
     # sustained-pressure molt reminder.
     """Return the sustained-pressure molt reminder string, or ``None``.
@@ -915,9 +915,9 @@ def build_molt_context(agent, usage: float) -> str | None:
     result while the warning is active — it is part of the complete current
     ``agent_meta.agent_state`` snapshot).
     The contract (channel B)
-    replaces the old immediate ``usage >= 0.60`` trip-wire with a
+    replaces the old immediate trip-wire with a
     *sustained-pressure* signal: the reminder appears only once context has been
-    high (>= the 0.75 reconstruction ratio) for
+    high (>= the 0.85 reconstruction ratio) for
     ``CONTEXT_PRESSURE_WARN_AFTER_ROUNDS`` consecutive *fresh provider rounds*,
     tracked by ``SessionManager.note_context_pressure_round``. The first two
     high rounds are the window in which the automatic delayed-summarize
@@ -951,7 +951,7 @@ def build_molt_context(agent, usage: float) -> str | None:
 
 
 def build_context_rebuild_hint(agent, usage: float) -> str | None:
-    """Return the lightweight 75% manual provider-context rebuild hint.
+    """Return the lightweight 85% manual provider-context rebuild hint.
 
     This is not a molt warning and not an event route.  It is a current-state line
     stamped under ``_meta.agent_meta.agent_state.context.rebuild`` whenever context is at/above
@@ -969,7 +969,7 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
     if pressure < CONTEXT_PRESSURE_HIGH_RATIO:
         return None
     return (
-        "context now above 75%: recording summaries does NOT itself rebuild the "
+        "context now above 85%: recording summaries does NOT itself rebuild the "
         "active provider context. If recorded summaries are worth making active "
         "sooner, you MAY pay for a provider-context rebuild via "
         "system(action='summarize', rebuild=true) (with or without new items). This "
@@ -1137,8 +1137,8 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
     Distinct from :func:`build_molt_context` (channel B, current-state reminder
     routed to ``agent_meta.agent_state.events.reconstruction``): this records a
     *historical event* — the runtime actually rebuilt the
-    provider context around the compacted history when context crossed the 0.75
-    reconstruction threshold.
+    provider context around the compacted history after a manual rebuild request or
+    at the 1.0 hard forced-rebuild boundary.
 
     The adapter supplies the before-context (A) and fixed trigger/recovery
     metadata via ``session.chat.take_pending_reconstruction_event()`` (one-shot:
@@ -1155,9 +1155,9 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
     (0, e.g. a provider that returned no usage). The delayed-reconstruction
     threshold is itself provider-input based, so this keeps B on the same ruler.
 
-    If B is still at/above the 0.6 recovery target, a natural-language molt
+    If B is still at/above the 0.75 recovery target, a natural-language molt
     reminder is attached saying summarize/reconstruction was attempted and
-    pressure remains above the recovery target, so consider molt. If B < 0.6,
+    pressure remains above the recovery target, so consider molt. If B < 0.75,
     the A->B event is returned without a reminder.
 
     Returns ``None`` when no reconstruction is pending (the common case).
@@ -1241,7 +1241,7 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
         # 1.0 HARD forced rebuild: ALWAYS attach the one unified warning,
         # regardless of whether the rebuilt context dropped low or stayed high. It
         # folds the before→after change, the proactive-rebuild advice, and the
-        # conditional "if still above 0.6, molt" instruction into a single string —
+        # conditional "if still above 0.75, molt" instruction into a single string —
         # no after-high/low branching.
         before = event.get("before") if isinstance(event.get("before"), dict) else {}
         event["warning"] = render_forced_rebuild_warning(
@@ -1574,7 +1574,7 @@ def build_meta(agent) -> dict:
         {
             "current_time": "<iso>",          # transient; promoted into agent_state
             "_tool_meta_context": {           # transient; promoted into agent_state.context
-                "rebuild": str,               # 75%+ manual rebuild permission hint
+                "rebuild": str,               # 85%+ manual rebuild permission hint
                 "molt": str,                  # sustained-pressure and/or cache-miss-budget reminder
                 "cache_miss_budget": int,     # present only when the budget guard is tripped
                 "cache_miss_tokens": int,     # present only when the budget guard is tripped
@@ -1594,7 +1594,7 @@ def build_meta(agent) -> dict:
     ``agent_meta.agent_state``; ``tool_meta`` remains limited to immutable
     result-local execution facts.
 
-    The ``_tool_meta_context`` sub-object is emitted when the lightweight 75%+
+    The ``_tool_meta_context`` sub-object is emitted when the lightweight 85%+
     manual-rebuild hint is active, OR the sustained-pressure warning is active,
     OR the cache-miss budget guard is tripped
     (:func:`build_cache_miss_budget_context`).  When warning paths fire together,

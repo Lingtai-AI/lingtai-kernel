@@ -228,7 +228,7 @@ summarize would discard cache benefit.
 - **Below 1.0 of the context window:** summarize stays pending at the provider
   layer and the session keeps appending. This delay is normal, not a failure; do
   not call `refresh` merely to "apply" the summary.
-- **At or above 0.75 of the context window:** `_meta.agent_meta.agent_state.context.rebuild`
+- **At or above 0.85 of the context window:** `_meta.agent_meta.agent_state.context.rebuild`
   is stamped continuously. It is a decision prompt / permission, not an automatic
   rebuild — recording summaries never triggers a provider-context rebuild on its
   own. If making already-recorded summaries active in the provider context earlier
@@ -259,8 +259,8 @@ summarize would discard cache benefit.
   and must not be acted on. Every 1.0 forced rebuild ALWAYS carries a one-shot
   `_meta.agent_meta.agent_state.events.reconstruction.warning`: it reports the before→after context
   change, advises that reaching the full boundary means waiting was not ideal (prefer
-  a proactive 0.75 `rebuild=true`), and says that if the rebuilt context is still
-  above the 0.6 recovery target you should tend durable stores and molt. This is
+  a proactive 0.85 `rebuild=true`), and says that if the rebuilt context is still
+  above the 0.75 recovery target you should tend durable stores and molt. This is
   one unified warning — it does not branch on whether context dropped low or stayed
   high.
 - **If the forced rebuild does NOT clear the overflow:** the persistent
@@ -279,7 +279,7 @@ summarize would discard cache benefit.
   overflow warning (the warning is for strictly `> 1.0`).
 
 Waiting for the 1.0 forced boundary is the emergency path — prefer the proactive
-0.75 rebuild. If no summary is pending, the forced rebuild has nothing to apply;
+0.85 rebuild. If no summary is pending, the forced rebuild has nothing to apply;
 the fresh replay still preserves each historical timely-transient holder and
 does not strip its agent_meta/guidance or notifications/notification_guidance
 keys on any provider, without rewriting recorded history — only the LATEST
@@ -288,7 +288,7 @@ family represents current state, older holders are historical traces and must
 not be acted on. `refresh`
 remains the emergency path for broken/stale context or explicit human direction,
 not the normal way to apply summarize. If summarize or a rebuild still cannot
-bring context below `0.6 * context_window` (the recovery target), tend durable
+bring context below `0.75 * context_window` (the recovery target), tend durable
 stores and molt deliberately.
 
 ## 4 · Recovering the original result
