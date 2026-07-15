@@ -125,13 +125,13 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   render time. Navigation: `manager.py:_project_final_carrier_metadata`,
   `_reverse_tail_latest_rows`, `_append_new_lines`, `_current_automatic_frame`,
   and `_broadcast_task_card_event_window` (currently around lines 2022, 2129,
-  2285, 2364, and 2391).
+  2285, 2416, and 2443).
 - **Freshness at every edit, committed atomically with transport success
-  (Telegram 8482/8485/8487):** `_poll_event_tail` (`manager.py:2280`) splits
+  (Telegram 8482/8485/8487):** `_poll_event_tail` (`manager.py:2317`) splits
   into `_sync_event_tail_state` (the bounded incremental read alone,
-  `manager.py:2232`) and the broadcast side effect. `_deliver_channel_frame_locked`
-  (`manager.py:1694`) calls `_sync_event_tail_state` and renders a fresh
-  automatic frame via `_current_automatic_frame` (`manager.py:2364`, the same
+  `manager.py:2250`) and the broadcast side effect. `_deliver_channel_frame_locked`
+  (`manager.py:1703`) calls `_sync_event_tail_state` and renders a fresh
+  automatic frame via `_current_automatic_frame` (`manager.py:2416`, the same
   renderer `_broadcast_task_card_event_window` calls, so a refresh can never
   diverge in row order, grouping, dividers, or truncation from a broadcast)
   immediately before composing a `programmable` edit, whenever the
@@ -163,6 +163,28 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   `_compose_channels`, `_set_channel_frame`;
   `resident.py:TaskCardResident.set_frame`, `.compose`,
   `.is_automatic_tail_driven`.
+- **Pending-broadcast latch — a not-committed edit's tail sync must not
+  starve the automatic poll:** the pre-edit `_sync_event_tail_state` call
+  above is shared, manager-owned tail state (`_task_card_event_offset`,
+  `_task_card_event_metadata`, `_task_card_event_groups`) — it advances even
+  when the transaction that triggered it (a programmable edit) then fails
+  transport and never commits its own frame proposal. Without a durable
+  record of that, the next plain `_poll_event_tail` would see no new bytes
+  past the already-advanced offset and skip broadcasting telemetry the
+  automatic card never actually received. `_sync_event_tail_state`
+  (`manager.py:2250`) therefore latches the instance flag
+  `_task_card_event_pending_broadcast` (`manager.py:509`) whenever it observes
+  a change, regardless of which caller triggered it. `_poll_event_tail`
+  (`manager.py:2317`) clears the latch on its own next run and broadcasts
+  whenever either its own sync observed a change or the latch was already
+  set — so the automatic broadcaster always gets exactly one delivery attempt
+  per observed change, whether it or a programmable edit's refresh was the
+  one to observe it. The latch is cleared unconditionally right before the
+  broadcast attempt (matching `_broadcast_task_card_event_window`'s existing
+  per-target fail-open discipline: a delivery failure for one target does not
+  re-arm the latch to retry on unchanged state). Navigation:
+  `manager.py:_task_card_event_pending_broadcast`, `_sync_event_tail_state`,
+  `_poll_event_tail`.
 - **Regression/drift triggers:** the event-to-final-render coverage is
   `tests/test_telegram_task_card_event_tail.py:test_event_log_final_carrier_projects_session_telemetry_into_final_render`
   plus `test_malformed_current_telemetry_carrier_clears_previous_snapshot` and the adjacent timestamp/malformed-input cases. Cross-channel freshness
@@ -170,13 +192,15 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   `test_second_programmable_edit_picks_up_telemetry_changed_between_edits`,
   the atomic-commit-on-failure coverage
   `test_failed_programmable_edit_does_not_commit_refreshed_automatic_frame`
-  and `test_retry_after_failed_programmable_edit_commits_fresh_telemetry`, and
-  `test_programmable_edit_does_not_fabricate_automatic_footer`. Update this
-  anatomy and the paired contract/tests together if event types, the
-  final-carrier metadata path, supported session fields, the two-line
-  formatter budget, timestamp provenance, or the pre-edit refresh gating
-  changes; do not broaden the automatic source without revisiting the
-  authoritative-event rule.
+  and `test_retry_after_failed_programmable_edit_commits_fresh_telemetry`,
+  `test_programmable_edit_does_not_fabricate_automatic_footer`, and the
+  pending-broadcast-latch coverage
+  `test_failed_programmable_edit_does_not_starve_the_automatic_broadcast`.
+  Update this anatomy and the paired contract/tests together if event types,
+  the final-carrier metadata path, supported session fields, the two-line
+  formatter budget, timestamp provenance, the pre-edit refresh gating, or the
+  pending-broadcast latch semantics change; do not broaden the automatic
+  source without revisiting the authoritative-event rule.
 
 ## Composition
 

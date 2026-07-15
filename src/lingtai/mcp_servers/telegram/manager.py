@@ -498,6 +498,15 @@ class TelegramManager:
         # an empty dict is a seen-but-malformed carrier and deliberately clears
         # any older snapshot.
         self._task_card_event_metadata: dict | None = None
+        # Set whenever ANY caller's ``_sync_event_tail_state()`` observes new
+        # rows/metadata (including the pre-edit programmable refresh, which
+        # advances the shared offset even though its own frame proposal may
+        # never commit on a failed transport). The periodic automatic poll
+        # broadcasts and clears this on its own next run, so a change consumed
+        # by a not-yet-committed programmable edit is never silently lost —
+        # the automatic broadcaster still gets exactly one delivery attempt
+        # per change, whether it observed the change itself or not.
+        self._task_card_event_pending_broadcast = False
         self._task_card_event_lock = threading.Lock()
         self._task_card_tail_thread: threading.Thread | None = None
         self._task_card_tail_stop = threading.Event()
@@ -1742,6 +1751,15 @@ class TelegramManager:
         fabricates or clobbers content that the tail did not produce, and a
         failed programmable edit can never poison or resurrect an automatic
         frame Telegram never received.
+
+        The ``_sync_event_tail_state`` call above is shared, manager-owned
+        state: it can advance the tail offset/metadata/groups past bytes this
+        transaction's own frame proposal then never commits (a failed
+        transport). ``_sync_event_tail_state`` latches
+        ``_task_card_event_pending_broadcast`` whenever it observes a change,
+        so the next automatic poll still broadcasts that telemetry on the
+        normal automatic path even though this transaction never did — see
+        ``_poll_event_tail``.
         """
         refreshed_automatic: object = TaskCardResident.NO_AUTOMATIC_OVERRIDE
         if channel == "programmable":
@@ -2238,6 +2256,18 @@ class TelegramManager:
         appended since the last sync — never a full-file rescan. Returns
         whether the in-memory rows/metadata snapshot changed; callers decide
         whether that warrants a broadcast or just an up-to-date read.
+
+        Any observed change also latches ``_task_card_event_pending_broadcast``
+        (cleared only by ``_poll_event_tail``'s own next broadcast attempt).
+        A caller other than the automatic poll — namely the pre-edit
+        programmable refresh — can observe a change here whose own frame
+        proposal is then never committed (a failed transport). Without the
+        latch, that change's bytes are already consumed (the offset has moved
+        past them), so the next plain poll would see no new bytes and skip
+        the broadcast — silently starving the automatic card of telemetry it
+        never actually delivered. The latch guarantees the automatic
+        broadcaster still gets exactly one delivery attempt per change,
+        whether it was the one to observe the change or not.
         """
         with self._task_card_event_lock:
             path = self._task_card_event_path
@@ -2246,7 +2276,10 @@ class TelegramManager:
             with self._task_card_event_lock:
                 rehydrated_rows = bool(self._task_card_event_groups)
                 rehydrated_metadata = self._task_card_event_metadata is not None
-            return rehydrated_rows or rehydrated_metadata
+                changed = rehydrated_rows or rehydrated_metadata
+                if changed:
+                    self._task_card_event_pending_broadcast = True
+            return changed
 
         try:
             stat = path.stat()
@@ -2269,17 +2302,36 @@ class TelegramManager:
             # rehydrated window — even an empty one — must still be broadcast
             # rather than leaving a stale non-empty render displayed.
             self._init_event_tail()
+            with self._task_card_event_lock:
+                self._task_card_event_pending_broadcast = True
             return True
         if stat.st_size > offset:
             changed = self._append_new_lines(path, offset, stat.st_size)
             with self._task_card_event_lock:
                 self._task_card_event_inode = current_inode
+                if changed:
+                    self._task_card_event_pending_broadcast = True
             return changed
         return False
 
     def _poll_event_tail(self) -> None:
-        """Sync the tail state and broadcast to every resident on change."""
-        if self._sync_event_tail_state():
+        """Sync the tail state and broadcast to every resident on change.
+
+        Broadcasts either when this call's own sync observes a change, or
+        when an earlier caller's sync (the pre-edit programmable refresh)
+        already latched a pending change it never got to broadcast itself —
+        see ``_sync_event_tail_state``. Either way the latch is cleared right
+        before the broadcast attempt: a delivery failure for one target
+        inside ``_broadcast_task_card_event_window`` must not re-arm this
+        poll to retry forever on state that has not changed again, matching
+        the existing per-target fail-open discipline (a stuck target is a
+        that-target problem, not a reason to loop the whole broadcast).
+        """
+        observed_change = self._sync_event_tail_state()
+        with self._task_card_event_lock:
+            had_pending = self._task_card_event_pending_broadcast
+            self._task_card_event_pending_broadcast = False
+        if observed_change or had_pending:
             self._broadcast_task_card_event_window()
 
     def _append_new_lines(self, path: Path, offset: int, size: int) -> bool:

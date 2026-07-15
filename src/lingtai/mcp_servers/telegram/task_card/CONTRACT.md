@@ -410,13 +410,25 @@ one source of truth for each projection axis:
    which carries no footer to refresh) or that has no automatic frame at all
    proposes no automatic override and is left untouched — this refresh never
    fabricates an automatic footer that was never there, never changes row
-   content, and never touches the programmable slot's own content. Regression
+   content, and never touches the programmable slot's own content.
+
+   The pre-edit `_sync_event_tail_state` call is shared, manager-owned tail
+   state: it can advance the tail offset/metadata/groups past bytes this
+   transaction's own automatic-frame proposal then never commits (a failed
+   transport). To ensure that consumed telemetry is not silently lost,
+   `_sync_event_tail_state` latches `_task_card_event_pending_broadcast`
+   whenever it observes a change, regardless of caller. `_poll_event_tail`
+   clears the latch on its own next run and broadcasts whenever either its
+   own sync observed a change OR the latch was already set — so the automatic
+   broadcaster still gets exactly one delivery attempt per change even when a
+   failed programmable edit was the one to consume it from the tail. Regression
    coverage:
    `tests/test_telegram_task_card_event_tail.py:test_programmable_edit_re_reads_telemetry_appended_since_last_broadcast`,
    `test_second_programmable_edit_picks_up_telemetry_changed_between_edits`,
    `test_programmable_edit_does_not_fabricate_automatic_footer`,
    `test_failed_programmable_edit_does_not_commit_refreshed_automatic_frame`,
-   and `test_retry_after_failed_programmable_edit_commits_fresh_telemetry`.
+   `test_retry_after_failed_programmable_edit_commits_fresh_telemetry`, and
+   `test_failed_programmable_edit_does_not_starve_the_automatic_broadcast`.
 
 ## Resident and API-call-group conformance
 
