@@ -13,11 +13,13 @@ stamping ``started_at`` once per row, immutability across heartbeats/finalize).
 That capture mechanism no longer exists — rows the automatic Task Card renders
 now come from ``TelegramManager``'s own bounded projection of
 ``logs/events.jsonl`` (see ``tests/test_telegram_task_card_event_tail.py``),
-which does not track a per-row start instant at all (only ``tool``,
-``tool_action``, ``reasoning``). The manager's ``_format_task_card_text``
-rendering behavior tested below is unaffected — it still accepts an optional
-``started_at`` per row (rendered inline when present, omitted safely when not)
-and always renders the render-instant ``Current Time`` line.
+which derives each row's ``started_at`` from that same ``tool_call`` event's
+own canonical ``ts`` field (converted to the ``HH:MM:SS UTC±HH`` shape),
+omitting it only when ``ts`` is missing or malformed. The manager's
+``_format_task_card_text`` rendering behavior tested below is unaffected — it
+still accepts an optional ``started_at`` per row (rendered inline when
+present, omitted safely when not) and always renders the render-instant
+``Current Time`` line.
 """
 
 from __future__ import annotations
@@ -126,10 +128,10 @@ def test_api_error_row_never_carries_a_stamp_alongside_a_stamped_tool_row():
 
 
 def test_render_tool_row_without_started_at_is_safe():
-    """Backward-compatible: a row missing started_at renders without any inline
-    stamp (no crash) — the event-tail projection never sets this field, so this
-    is now the common case, not an edge case; the render-time line still
-    renders unconditionally."""
+    """A row missing started_at (the event-tail projection omits it when the
+    source event's ``ts`` was missing or malformed) renders without any
+    inline stamp — no crash, no fabricated timestamp; the render-time line
+    still renders unconditionally."""
     text = TelegramManager._format_task_card_text("", "", "", rows=[
         {"tool": "bash", "tool_action": "", "reasoning": "x",
          "elapsed_s": 1, "done": False},
