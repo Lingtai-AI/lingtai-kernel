@@ -47,6 +47,7 @@ from __future__ import annotations
 import hashlib as _hashlib
 import json as _json
 import time as _time
+import copy as _copy
 from collections.abc import Mapping
 from typing import NamedTuple
 
@@ -3106,6 +3107,34 @@ def attach_active_runtime(
     if target_block is not None:
         pending = getattr(target_block, "_agent_pending", None)
         target_block._agent_pending = None
+
+    # Reconstruction is a one-shot capture, so it can be consumed while an
+    # earlier result is being stamped in a multi-tool batch.  It is current
+    # batch state, not an earlier result's snapshot: promote only this event to
+    # the designated final carrier and do not copy any other earlier state.
+    reconstruction_event = None
+    for block in tool_results:
+        if block is target_block or not _is_tool_result_block(block):
+            continue
+        candidate = getattr(block, "_agent_pending", None)
+        if not isinstance(candidate, dict):
+            continue
+        state = candidate.get("agent_state")
+        events = state.get("events") if isinstance(state, dict) else None
+        event = events.get("reconstruction") if isinstance(events, dict) else None
+        if isinstance(event, dict):
+            reconstruction_event = _copy.deepcopy(event)
+            break
+    if reconstruction_event is None and isinstance(pending, dict):
+        state = pending.get("agent_state")
+        events = state.get("events") if isinstance(state, dict) else None
+        event = events.get("reconstruction") if isinstance(events, dict) else None
+        if isinstance(event, dict):
+            reconstruction_event = _copy.deepcopy(event)
+    if reconstruction_event is not None and isinstance(pending, dict):
+        state = pending.setdefault("agent_state", {})
+        if isinstance(state, dict):
+            state.setdefault("events", {})["reconstruction"] = reconstruction_event
 
     # Clear scaffolding from every other result regardless of outcome.
     _strip_agent_pending(tool_results)

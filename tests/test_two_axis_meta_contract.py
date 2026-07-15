@@ -8,6 +8,7 @@ from lingtai.kernel.llm.interface import ChatInterface, ToolResultBlock, content
 from lingtai.kernel.meta_block import finalize_two_axis_sidecars
 from lingtai.llm.interface_converters import (
     _normalize_runtime_envelope,
+    _restore_projected_result,
     to_anthropic,
     to_gemini,
     to_openai,
@@ -141,6 +142,36 @@ def test_business_meta_is_not_restored_as_runtime_axes():
     wire = json.loads(to_responses_input(iface)[-1]["output"])
     assert wire["_meta"] == business["_meta"]
     assert _normalize_runtime_envelope(business["_meta"]) is None
+
+
+def test_handler_meta_survives_runtime_sidecar_projection_and_restore():
+    runtime = _metadata()
+    for handler_meta in (
+        {"order_id": "x", "status": "paid"},
+        None,
+        "handler-owned",
+        ["handler", 1, True],
+    ):
+        handler = {"value": 1, "_meta": handler_meta}
+        block = ToolResultBlock("collision-1", "business", handler, metadata=runtime)
+        interface = ChatInterface()
+        interface.add_tool_results([block])
+
+        wires = [
+            to_anthropic(interface)[-1]["content"][0]["content"],
+            to_openai(interface)[-1]["content"],
+            to_responses_input(interface)[-1]["output"],
+            to_gemini(interface)[-1]["content"][0]["result"],
+        ]
+        for wire in wires:
+            projected = json.loads(wire)
+            assert projected["result"] == handler
+            assert projected["result"]["_meta"] == handler_meta
+            assert projected["_meta"] == runtime
+            restored, metadata = _restore_projected_result(projected)
+            assert restored == handler
+            assert restored["_meta"] == handler_meta
+            assert metadata == runtime
 
 
 def test_latest_whole_snapshot_repeats_active_payload_and_explicitly_clears():

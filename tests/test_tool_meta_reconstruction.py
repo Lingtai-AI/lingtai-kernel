@@ -9,6 +9,7 @@ current ``agent_meta.agent_state`` block.
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 from lingtai.kernel.llm.base import ToolCall
@@ -154,6 +155,41 @@ def test_reconstruction_event_is_one_shot_across_batch(tmp_path):
     wires = [c.args[1] for c in captured.call_args_list]
     with_event = [w for w in wires if "reconstruction" in _agent_state(w).get("events", {})]
     assert len(with_event) == 1
+
+
+def test_reconstruction_event_promotes_to_final_batch_wire(tmp_path):
+    """An event consumed by result one is carried only by the final carrier."""
+    from lingtai.kernel.meta_block import attach_active_runtime, finalize_two_axis_sidecars
+    from lingtai.llm.interface_converters import to_responses_input
+
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        return _EVENT if calls["n"] == 1 else None
+
+    executor, _ = _make_executor(
+        dispatch_fn=lambda tc: {"ok": True},
+        working_dir=tmp_path,
+        reconstruction_event_fn=fn,
+    )
+    results, _, _ = executor.execute([
+        ToolCall(name="read", args={}, id="tc-a"),
+        ToolCall(name="read", args={}, id="tc-b"),
+    ])
+    agent = type("AgentStub", (), {"_agent_meta_signature": None, "_executor": executor})()
+    attach_active_runtime(agent, results)
+    finalize_two_axis_sidecars(results)
+
+    assert "agent_meta" not in results[0].metadata
+    assert results[0]._agent_pending is None
+    assert results[1].metadata["agent_meta"]["agent_state"]["events"]["reconstruction"] == _EVENT
+    from lingtai.kernel.llm.interface import ChatInterface
+    interface = ChatInterface()
+    interface.add_tool_results(results)
+    wire = to_responses_input(interface)[-1]["output"]
+    assert json.loads(wire)["_meta"]["agent_meta"]["agent_state"]["events"]["reconstruction"] == _EVENT
+    assert calls["n"] == 2
 
 
 def test_no_event_when_none_pending(tmp_path):

@@ -76,13 +76,19 @@ def _normalize_runtime_envelope(raw: Any) -> dict | None:
 
 
 def _project_tool_result(block: ToolResultBlock) -> Any:
-    """Project exactly the runtime axes; handler ``_meta`` is never merged."""
+    """Project runtime metadata without merging handler-owned ``_meta``."""
     if isinstance(block.content, dict):
         projected = dict(block.content)
+        has_business_meta = "_meta" in projected
         business_meta = projected.get("_meta")
         envelope = _normalize_runtime_envelope(business_meta)
         if isinstance(block.metadata, dict) and block.metadata:
             envelope = _normalize_runtime_envelope(block.metadata) or {}
+            if has_business_meta:
+                # Keep the handler dictionary intact inside the established
+                # result sidecar shape; otherwise its own ``_meta`` would be
+                # mistaken for the runtime envelope and overwritten.
+                return {"result": block.content, "_meta": envelope}
             projected.pop("_meta", None)
         elif envelope is not None:
             projected.pop("_meta", None)
