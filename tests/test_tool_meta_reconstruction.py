@@ -13,6 +13,7 @@ import json
 from unittest.mock import MagicMock
 
 from lingtai.kernel.llm.base import ToolCall
+from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.meta_block import (
     TOOL_META_CONTEXT_EVENT_PENDING_KEY,
@@ -35,8 +36,9 @@ def _make_executor(
     reconstruction_event_fn=None,
     logger_fn=None,
     meta_fn=None,
+    result_factory_fn=None,
 ):
-    captured = MagicMock(side_effect=lambda name, result, **kw: result)
+    captured = MagicMock(side_effect=result_factory_fn or (lambda name, result, **kw: result))
     executor = ToolExecutor(
         dispatch_fn=dispatch_fn,
         make_tool_result_fn=captured,
@@ -168,10 +170,15 @@ def test_reconstruction_event_promotes_to_final_batch_wire(tmp_path):
         calls["n"] += 1
         return _EVENT if calls["n"] == 1 else None
 
+    def make_result(name, result, tool_call_id=None):
+        return ToolResultBlock(tool_call_id or "", name, result)
+
     executor, _ = _make_executor(
         dispatch_fn=lambda tc: {"ok": True},
         working_dir=tmp_path,
         reconstruction_event_fn=fn,
+        meta_fn=lambda: {"agent_state": {}},
+        result_factory_fn=make_result,
     )
     results, _, _ = executor.execute([
         ToolCall(name="read", args={}, id="tc-a"),
