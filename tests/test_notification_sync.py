@@ -2032,6 +2032,42 @@ def _make_stub_agent_for_block_log(tmp_path: Path):
     return _Agent(tmp_path)
 
 
+def test_notification_injection_has_no_unbound_local_meta_builder(
+    tmp_path: Path,
+) -> None:
+    """Regression: synthetic notification injection must resolve its meta builder."""
+    publish_test_payload(tmp_path, "email", {"count": 1})
+    agent = _make_stub_agent_for_block_log(tmp_path)
+
+    try:
+        injected = agent._inject_notification_pair(
+            snapshot_notifications(tmp_path)
+        )
+    except UnboundLocalError as exc:
+        pytest.fail(f"notification injection raised UnboundLocalError: {exc}")
+
+    assert injected is True
+    assert len(agent._chat_stub.interface.entries) == 2
+    result_block = agent._chat_stub.interface.entries[1].content[0]
+    assert result_block.metadata["tool_meta"]["synthetic"] is True
+
+
+def test_delta_persistent_lane_paths_match_current_synthetic_metadata() -> None:
+    """Continuity hooks must point at the real #939 metadata location."""
+    from lingtai.kernel.meta_block import _IM_PERSISTENT_LANES
+
+    paths = {
+        lane.channel: lane.path
+        for lane in _IM_PERSISTENT_LANES
+        if lane.mode == "delta"
+    }
+    assert paths == {
+        "telegram": "_meta.agent_meta.notifications.persistent.mcp.telegram",
+        "wechat": "_meta.agent_meta.notifications.persistent.mcp.wechat",
+        "feishu": "_meta.agent_meta.notifications.persistent.mcp.feishu",
+    }
+
+
 def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> None:
     """IDLE injection via _inject_notification_pair must log notification_block_injected
     with the full ``_meta`` envelope (tool_meta/agent_meta/guidance/notifications/
@@ -2057,7 +2093,9 @@ def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> 
     assert "email" in bl["sources"]
     assert "system" in bl["sources"]
 
-    # New schema: a single top-level ``_meta`` envelope carrying formal blocks.
+    # New schema: the logged ``_meta`` is the ToolResultBlock.metadata
+    # envelope; formal guidance and notification lanes are nested under
+    # ``agent_meta``.
     meta = bl["_meta"]
     assert "tool_meta" in meta
     assert meta["tool_meta"].get("synthetic") is True
@@ -2065,17 +2103,18 @@ def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> 
     # Tail/synthetic guidance is now a lightweight ref/hook pointing at the
     # resident ``meta_guidance`` system-prompt section, not the full ordered
     # sections (which no longer ride on every result).
-    assert "guidance" in meta
-    guidance = meta["guidance"]
+    agent_meta = meta["agent_meta"]
+    assert "guidance" in agent_meta
+    guidance = agent_meta["guidance"]["persistent"]
     assert "sections" not in guidance
     assert guidance.get("ref") == "meta_guidance"
 
-    assert meta["notification_guidance"] == {
+    assert agent_meta["guidance"]["transient"] == {
         "ref": "meta_guidance.notification_handling",
         "sources": ["email", "system"],
     }
-    assert "notifications" in meta
-    notifs = meta["notifications"]
+    assert "notifications" in agent_meta
+    notifs = agent_meta["notifications"]["attention"]
     assert "email" in notifs
     assert "system" in notifs
     # Per-channel duplicate static guidance is omitted.
@@ -2128,16 +2167,19 @@ def test_inject_notification_pair_adds_telegram_persistent_and_strips_ephemeral(
     agent._sync_notifications()
 
     entries = agent._chat_stub.interface.entries
-    body = entries[1].content[0].content
+    result_block = entries[1].content[0]
+    body = result_block.content
     assert isinstance(body, dict)
-    meta = body["_meta"]
-    telegram = meta["notification_persistent"]["mcp"]["telegram"]
+    assert body == {"_synthesized": True, "injection_seq": 1}
+    meta = result_block.metadata
+    notifications = meta["agent_meta"]["notifications"]
+    telegram = notifications["persistent"]["mcp"]["telegram"]
     assert len(telegram["messages"]) == 20
     assert telegram["messages"][0]["id"] == "main:123:2"
     assert telegram["messages"][-1]["id"] == "main:123:21"
     assert all(message["taskcard"] is False for message in telegram["messages"])
     assert telegram["previous_block"] == {
-        "path": "_meta.notification_persistent.mcp.telegram",
+        "path": "_meta.agent_meta.notifications.persistent.mcp.telegram",
         "tool_result_id": None,
         "is_first_block": True,
     }
@@ -2151,7 +2193,7 @@ def test_inject_notification_pair_adds_telegram_persistent_and_strips_ephemeral(
             "platform": "telegram",
         }
     ]
-    transient = meta["notifications"]["mcp.telegram"]
+    transient = notifications["attention"]["mcp.telegram"]
     assert transient["data"] == {"message_ids": ["main:123:21"]}
     assert "previews" not in transient["data"]
     assert "source" not in transient["data"]
@@ -2199,17 +2241,25 @@ def test_inject_notification_pair_strips_legacy_tool_meta_context_transit_keys(
 
     entries = agent._chat_stub.interface.entries
     call_args = entries[0].content[0].args
-    body = entries[1].content[0].content
+    result_block = entries[1].content[0]
+    body = result_block.content
     assert isinstance(body, dict)
 
     for key in (TOOL_META_CONTEXT_PENDING_KEY, TOOL_META_CONTEXT_EVENT_PENDING_KEY):
         assert key not in call_args
         assert key not in body
 
-    # Safe freshness fields may remain, but internal tool-meta context/event
-    # payloads must not be model-visible on the synthesized notification wire.
+    # Safe freshness fields remain in their current locations, while the
+    # handler-shaped body contains only its freshness marker.
     assert body["injection_seq"] == 1
-    assert body["current_tool_result_chars"] == {"total_chars": 1}
+    assert body == {"_synthesized": True, "injection_seq": 1}
+    result_meta = result_block.metadata
+    assert result_meta["agent_meta"]["agent_state"]["current_tool_result_chars"] == {
+        "total_chars": 1
+    }
+    assert result_meta["agent_meta"]["agent_state"]["context"] == {
+        "molt": "transit molt prose"
+    }
     body_json = json.dumps(body, ensure_ascii=False)
     assert "transit molt prose" not in body_json
     assert "abc123transit" not in body_json
@@ -2222,9 +2272,11 @@ def test_inject_notification_pair_strips_legacy_tool_meta_context_transit_keys(
 
     block_logs = [fields for evt, fields in agent._logs if evt == "notification_block_injected"]
     assert block_logs
-    logged_meta_json = json.dumps(block_logs[-1]["_meta"], ensure_ascii=False)
-    assert "transit molt prose" not in logged_meta_json
-    assert "abc123transit" not in logged_meta_json
+    logged_meta = block_logs[-1]["_meta"]
+    assert logged_meta["agent_meta"]["agent_state"]["context"] == {
+        "molt": "transit molt prose"
+    }
+    assert "abc123transit" not in json.dumps(logged_meta, ensure_ascii=False)
     agent_meta = block_logs[-1]["_meta"].get("agent_meta", {})
     for key in (TOOL_META_CONTEXT_PENDING_KEY, TOOL_META_CONTEXT_EVENT_PENDING_KEY):
         assert key not in agent_meta

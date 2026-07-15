@@ -46,6 +46,7 @@ from ..meta_block import (
     TOOL_META_CONTEXT_EVENT_PENDING_KEY,
     TOOL_META_CONTEXT_PENDING_KEY,
     build_meta,
+    build_synthetic_meta_envelope,
     build_tool_meta_token_usage,
     build_notification_payload,
     build_notification_persistent_payload,
@@ -1863,7 +1864,6 @@ class BaseAgent:
             meta=meta,
         )
         # Log the exact canonical sidecar that was attached to the live block.
-        from ..meta_block import build_synthetic_meta_envelope
         synthetic_envelope = result_block.metadata
         self._log_notification_block_injected(
             synthetic_envelope,
