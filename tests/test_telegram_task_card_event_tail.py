@@ -528,6 +528,262 @@ def test_malformed_current_telemetry_carrier_clears_previous_snapshot(tmp_path):
     assert "session ·" not in edits[-1][3]
 
 
+def _programmable_update(manager, account, chat_id, lines):
+    return manager._handle_task_card_update({
+        "sub_action": "update",
+        "channel": "programmable",
+        "account": account,
+        "chat_id": chat_id,
+        "card": {"lines": lines},
+    })
+
+
+def test_programmable_edit_re_reads_telemetry_appended_since_last_broadcast(tmp_path):
+    """A programmable edit must not compose against a stale automatic footer.
+
+    The automatic slot's footer metadata is baked into whatever text the tail
+    last broadcast. If new session telemetry lands in ``events.jsonl`` after
+    that broadcast but before a programmable ``task_card`` edit — and no
+    automatic poll has re-broadcast in between — the programmable edit must
+    still show the newer telemetry, not the frozen snapshot from the last
+    automatic broadcast (Telegram 8482/8485/8487).
+    """
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [
+        _tool_call_line(),
+        json.dumps({
+            "type": "notification_block_injected",
+            "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+                "session": {"api_calls": 1},
+            }}}},
+        }),
+    ])
+    manager._poll_event_tail()
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    assert "calls 1" in edits[-1][3]
+
+    # New telemetry lands on the authoritative event log, but the automatic
+    # tail worker has not polled again yet — the stored automatic frame is
+    # still the "calls 1" snapshot at this point.
+    _write_lines(events_path, [json.dumps({
+        "type": "notification_block_injected",
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+            "session": {"api_calls": 42},
+        }}}},
+    })])
+
+    result = _programmable_update(manager, acct.alias, 555, ["watch line"])
+    assert result["status"] == "ok"
+
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    rendered = edits[-1][3]
+    assert "watch line" in rendered  # programmable content still present
+    assert "calls 42" in rendered  # fresh telemetry re-read at this edit
+    assert "calls 1" not in rendered  # stale snapshot must not survive
+
+
+def test_second_programmable_edit_picks_up_telemetry_changed_between_edits(tmp_path):
+    """Freshness holds across *consecutive* programmable edits, not just the first."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [
+        _tool_call_line(),
+        json.dumps({
+            "type": "notification_block_injected",
+            "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+                "session": {"api_calls": 5},
+            }}}},
+        }),
+    ])
+    manager._poll_event_tail()
+
+    first = _programmable_update(manager, acct.alias, 555, ["v1"])
+    assert first["status"] == "ok"
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    assert "calls 5" in edits[-1][3]
+
+    # Telemetry mutates again between the two programmable edits, with no
+    # automatic poll in between.
+    _write_lines(events_path, [json.dumps({
+        "type": "notification_block_injected",
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+            "session": {"api_calls": 99},
+        }}}},
+    })])
+
+    second = _programmable_update(manager, acct.alias, 555, ["v2"])
+    assert second["status"] == "ok"
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    rendered = edits[-1][3]
+    assert "v2" in rendered
+    assert "calls 99" in rendered
+    assert "calls 5" not in rendered
+
+
+def test_programmable_edit_does_not_fabricate_automatic_footer(tmp_path):
+    """A programmable-only card must not gain an automatic footer from a refresh."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [json.dumps({
+        "type": "notification_block_injected",
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+            "session": {"api_calls": 3},
+        }}}},
+    })])
+    # No automatic frame has ever been broadcast for this route (no poll, and
+    # no _task_card_create/_update ever ran) — only the programmable slot is
+    # ever written.
+    result = _programmable_update(manager, acct.alias, 555, ["only watch content"])
+    assert result["status"] == "ok"
+
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    rendered = edits[-1][3] if edits else manager._compose_channels(acct.alias, 555)
+    assert "only watch content" in rendered
+    assert "session ·" not in rendered
+    assert "calls 3" not in rendered
+
+
+def test_failed_programmable_edit_does_not_commit_refreshed_automatic_frame(tmp_path):
+    """A failed programmable transport must not poison the committed automatic slot.
+
+    The pre-transport telemetry refresh renders a fresher automatic frame as a
+    transaction-local proposal only. If the programmable edit's own transport
+    then fails (an unknown/transient ``edit_message`` failure), neither that
+    fresher automatic frame nor the failed programmable frame may be
+    committed — the manager's central invariant is that composed slot state,
+    and its ``tail_driven`` provenance, represent only successfully delivered
+    content. A concurrently queued automatic broadcast (or the next successful
+    programmable edit) must still see the last genuinely delivered automatic
+    frame, not one Telegram never received.
+    """
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [
+        _tool_call_line(),
+        json.dumps({
+            "type": "notification_block_injected",
+            "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+                "session": {"api_calls": 1},
+            }}}},
+        }),
+    ])
+    manager._poll_event_tail()
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    committed_before = edits[-1][3]
+    assert "calls 1" in committed_before
+    key = manager._channel_key(acct.alias, 555)
+    assert key in manager._task_card_automatic_is_tail_driven
+    committed_automatic_before = manager._task_card_channels[key]["automatic"]
+
+    # Fresher telemetry lands, but the upcoming programmable edit's own
+    # transport is about to fail with an unknown/transient error (NOT a
+    # provider-confirmed "message to edit not found", which would instead
+    # take the old-first delete+resend recovery path and could still
+    # succeed). An unknown/transient failure must fail closed with neither
+    # resident nor slot state touched.
+    _write_lines(events_path, [json.dumps({
+        "type": "notification_block_injected",
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+            "session": {"api_calls": 42},
+        }}}},
+    })])
+
+    real_edit_message = acct.edit_message
+
+    def _transient_failure(chat_id, message_id, text, **kwargs):
+        acct.calls.append(("edit_message", chat_id, message_id, text))
+        raise RuntimeError("simulated transient failure")
+
+    acct.edit_message = _transient_failure
+
+    result = _programmable_update(manager, acct.alias, 555, ["watch line"])
+    assert result["status"] == "error"
+    acct.edit_message = real_edit_message
+
+    # The failed edit attempt did reach transport (proving the fresh compose
+    # was attempted), but nothing from it may be committed.
+    failed_attempt = [c for c in acct.calls if c[0] == "edit_message"][-1]
+    assert "calls 42" in failed_attempt[3]  # the attempted text was fresh
+
+    # Committed state must be byte-for-byte unchanged: same automatic frame,
+    # same tail-driven provenance, and no programmable slot ever appeared.
+    assert manager._task_card_channels[key]["automatic"] == committed_automatic_before
+    assert key in manager._task_card_automatic_is_tail_driven
+    assert "programmable" not in manager._task_card_channels[key]
+    assert "calls 42" not in manager._task_card_channels[key]["automatic"]
+    assert "watch line" not in manager._compose_channels(acct.alias, 555)
+
+
+def test_retry_after_failed_programmable_edit_commits_fresh_telemetry(tmp_path):
+    """Once the transport recovers, the retried edit commits fresh telemetry.
+
+    Continues the prior failure scenario: after one failed programmable
+    attempt commits nothing, a retried edit (transport now healthy) must both
+    succeed and deliver/commit the currently fresh telemetry — proving the
+    failure did not leave the tail-driven refresh path permanently disabled
+    or stuck on a poisoned snapshot.
+    """
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [
+        _tool_call_line(),
+        json.dumps({
+            "type": "notification_block_injected",
+            "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+                "session": {"api_calls": 1},
+            }}}},
+        }),
+    ])
+    manager._poll_event_tail()
+
+    _write_lines(events_path, [json.dumps({
+        "type": "notification_block_injected",
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+            "session": {"api_calls": 42},
+        }}}},
+    })])
+
+    real_edit_message = acct.edit_message
+
+    def _transient_failure(chat_id, message_id, text, **kwargs):
+        acct.calls.append(("edit_message", chat_id, message_id, text))
+        raise RuntimeError("simulated transient failure")
+
+    acct.edit_message = _transient_failure
+    failed = _programmable_update(manager, acct.alias, 555, ["watch line"])
+    assert failed["status"] == "error"
+    acct.edit_message = real_edit_message
+
+    key = manager._channel_key(acct.alias, 555)
+    assert "calls 42" not in manager._task_card_channels[key]["automatic"]
+
+    retried = _programmable_update(manager, acct.alias, 555, ["watch line"])
+    assert retried["status"] == "ok"
+
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    rendered = edits[-1][3]
+    assert "watch line" in rendered
+    assert "calls 42" in rendered
+    assert "calls 42" in manager._task_card_channels[key]["automatic"]
+    assert manager._task_card_channels[key]["programmable"] != ""
+
+
 def test_row_started_at_omitted_when_ts_missing(tmp_path):
     acct = FakeAccount()
     manager, service = _manager(tmp_path, acct)

@@ -473,6 +473,13 @@ class TelegramManager:
         # renderer output). Each channel owns only its own frame; updating one never
         # overwrites the other. Keyed by ``"{account}:{chat_id}"``.
         self._task_card_channels: dict[str, dict[str, str]] = {}
+        # Routes whose stored "automatic" frame was produced by the tail-driven
+        # rows/metadata render (``_current_automatic_frame``), as opposed to the
+        # legacy scalar single-tool form (which carries no footer/metadata to
+        # refresh). Only a tail-driven frame is safe to re-render before a
+        # programmable edit composes with it; refreshing a scalar-form frame
+        # from tail state would silently discard its actual content.
+        self._task_card_automatic_is_tail_driven: set[str] = set()
         # Serialize the full compose/read/deliver/persist/delete/commit transaction
         # per route. The automatic tail worker and programmable watches run on
         # different threads but must still share one resident-card transaction.
@@ -1590,18 +1597,37 @@ class TelegramManager:
 
     def _set_channel_frame(
         self, account: str, chat_id: int, channel: str, frame: str | None,
+        *, tail_driven: bool = False,
     ) -> None:
-        """Store one channel's last frame; ``None`` clears that channel only."""
+        """Store one channel's last frame; ``None`` clears that channel only.
+
+        ``tail_driven`` marks (or, when clearing, unmarks) whether the stored
+        "automatic" frame was produced by the tail-driven rows/metadata render
+        — the only shape a pre-edit refresh may safely regenerate. It is
+        ignored for the "programmable" channel.
+        """
         key = self._channel_key(account, chat_id)
         slots = self._task_card_channels.setdefault(key, {})
         if frame is None:
             slots.pop(channel, None)
+            if channel == "automatic":
+                self._task_card_automatic_is_tail_driven.discard(key)
         else:
             slots[channel] = frame
+            if channel == "automatic":
+                if tail_driven:
+                    self._task_card_automatic_is_tail_driven.add(key)
+                else:
+                    self._task_card_automatic_is_tail_driven.discard(key)
+
+    # Sentinel distinguishing "no automatic override proposed" from "propose
+    # clearing the automatic slot" (``None`` is a legitimate override value).
+    _NO_AUTOMATIC_OVERRIDE = object()
 
     def _compose_channels(
         self, account: str, chat_id: int,
         *, channel: str | None = None, frame: str | None = None,
+        automatic_override: object = _NO_AUTOMATIC_OVERRIDE,
     ) -> str:
         """Compose the resident message from the two channel frames.
 
@@ -1616,6 +1642,14 @@ class TelegramManager:
         frame, WITHOUT mutating ``_task_card_channels``. Callers commit the frame
         via ``_set_channel_frame`` only after the transport succeeds, so a failed
         edit never poisons the stored state.
+
+        ``automatic_override`` independently proposes replacement text for the
+        "automatic" slot (``None`` proposes clearing it), for the one case where
+        a programmable edit's pre-transport telemetry refresh needs to compose
+        with a *not-yet-committed* fresher automatic frame while ``channel``/
+        ``frame`` simultaneously propose the programmable edit. It never
+        mutates ``_task_card_channels`` either — the caller commits it (or not)
+        exactly like the primary ``channel``/``frame`` override.
         """
         slots = dict(self._task_card_channels.get(self._channel_key(account, chat_id), {}))
         if channel is not None:
@@ -1623,6 +1657,11 @@ class TelegramManager:
                 slots.pop(channel, None)
             else:
                 slots[channel] = frame
+        if automatic_override is not self._NO_AUTOMATIC_OVERRIDE:
+            if automatic_override is None:
+                slots.pop("automatic", None)
+            else:
+                slots["automatic"] = automatic_override
         automatic = slots.get("automatic", "")
         programmable = slots.get("programmable", "")
         if not programmable:
@@ -1641,19 +1680,20 @@ class TelegramManager:
     def _deliver_channel_frame(
         self, account: str, chat_id: int, channel: str, frame: str | None,
         *, error: str, resident_id: str | None = None,
-        empty_fallback: str | None = None,
+        empty_fallback: str | None = None, tail_driven: bool = False,
     ) -> dict:
         """Serialize and deliver one channel-frame transaction for this route."""
         with self._task_card_delivery_lock(account, chat_id):
             return self._deliver_channel_frame_locked(
                 account, chat_id, channel, frame, error=error,
                 resident_id=resident_id, empty_fallback=empty_fallback,
+                tail_driven=tail_driven,
             )
 
     def _deliver_channel_frame_locked(
         self, account: str, chat_id: int, channel: str, frame: str | None,
         *, error: str, resident_id: str | None = None,
-        empty_fallback: str | None = None,
+        empty_fallback: str | None = None, tail_driven: bool = False,
     ) -> dict:
         """Deliver a proposed ``channel`` frame to the tracked resident target and
         commit it to ``_task_card_channels`` **only after** the edit/send/
@@ -1674,8 +1714,55 @@ class TelegramManager:
         transported instead — the proposed ``frame`` (``None`` for finalize) is
         still what gets committed on success, so the slot is really cleared and the
         marker never becomes stored channel state.
+
+        ``tail_driven`` marks a proposed "automatic" ``frame`` as produced by
+        the tail-driven rows/metadata render (``_current_automatic_frame``),
+        as opposed to the legacy scalar single-tool form. Only a tail-driven
+        automatic frame is safe for a later programmable edit to refresh, since
+        only that shape carries a footer/metadata line to refresh in the first
+        place.
+
+        A ``programmable`` edit does not itself carry rows/telemetry, so
+        without a refresh it would compose against whatever automatic frame
+        the automatic slot last broadcast — freezing that frame's footer
+        metadata (session/cache/miss/calls/ctx/Current Time) even though this
+        edit is reaching Telegram right now. When a *tail-driven* automatic
+        frame already exists for this route, sync the event tail's bounded
+        incremental read (never a full rescan) and compose against a freshly
+        rendered automatic frame from the current snapshot — but this refresh
+        is a transaction-local **proposal only**: it is composed via
+        ``_compose_channels``'s ``automatic_override`` exactly like the
+        programmable ``channel``/``frame`` proposal, and both proposals commit
+        to ``_task_card_channels`` together, atomically, at the same success
+        points below the primary proposal already used — never before
+        transport, and never on a failed/partial-without-id/rejected outcome.
+        A route with no automatic frame yet, or one that was never
+        tail-driven, proposes no automatic override at all; this never
+        fabricates or clobbers content that the tail did not produce, and a
+        failed programmable edit can never poison or resurrect an automatic
+        frame Telegram never received.
         """
-        text = self._compose_channels(account, chat_id, channel=channel, frame=frame)
+        refreshed_automatic: object = self._NO_AUTOMATIC_OVERRIDE
+        if channel == "programmable":
+            key = self._channel_key(account, chat_id)
+            if key in self._task_card_automatic_is_tail_driven:
+                self._sync_event_tail_state()
+                refreshed_automatic = self._current_automatic_frame()
+
+        def _commit() -> None:
+            """Commit the proposed ``channel``/``frame`` and, when a fresher
+            automatic frame was proposed, the refreshed automatic frame too —
+            atomically, and only ever called after transport succeeds."""
+            if refreshed_automatic is not self._NO_AUTOMATIC_OVERRIDE:
+                self._set_channel_frame(
+                    account, chat_id, "automatic", refreshed_automatic,
+                    tail_driven=True)
+            self._set_channel_frame(account, chat_id, channel, frame, tail_driven=tail_driven)
+
+        text = self._compose_channels(
+            account, chat_id, channel=channel, frame=frame,
+            automatic_override=refreshed_automatic,
+        )
         # Programmable-only finalize clears the slot: the composed text is empty
         # and Telegram cannot edit/send empty text, so substitute the nonempty
         # terminal marker for transport while ``frame`` (``None``) is still what
@@ -1712,11 +1799,11 @@ class TelegramManager:
                 rotated = self._rotate_task_card_to_latest(
                     account, chat_id, resident_id, text, error=error)
                 if rotated.get("status") == "ok":
-                    self._set_channel_frame(account, chat_id, channel, frame)
+                    _commit()
                 return rotated
             edit_outcome = self._try_update_progress_message(resident_id, text)
             if edit_outcome == _TASK_CARD_EDIT_OK:
-                self._set_channel_frame(account, chat_id, channel, frame)
+                _commit()
                 return {"status": "ok", "message_id": resident_id}
             if edit_outcome == _TASK_CARD_EDIT_FAILED:
                 # Unknown, transient, network, and provider failures do not prove
@@ -1727,7 +1814,7 @@ class TelegramManager:
             recovered = self._recover_task_card_by_replacement(
                 account, chat_id, resident_id, text, error=error)
             if recovered.get("status") == "ok":
-                self._set_channel_frame(account, chat_id, channel, frame)
+                _commit()
             return recovered
 
         result = self.send_progress_message(account, chat_id, text)
@@ -1741,7 +1828,7 @@ class TelegramManager:
                 outcome["indeterminate_send"] = True
             return outcome
         new_id = result["message_id"]
-        self._set_channel_frame(account, chat_id, channel, frame)
+        _commit()
         persisted = self._set_resident_task_card(account, chat_id, new_id)
         outcome = {"status": "ok", "message_id": new_id}
         if not persisted:
@@ -2062,29 +2149,29 @@ class TelegramManager:
         event = TelegramManager._decode_event_line(raw)
         return TelegramManager._project_tool_call_row(event) if event is not None else None
 
-    def _poll_event_tail(self) -> None:
-        """Read any newly appended complete lines and broadcast on change.
+    def _sync_event_tail_state(self) -> bool:
+        """Incrementally read any newly appended complete lines.
 
         Detects truncation/replacement (current size smaller than the tracked
         offset, or a changed inode) and reinitializes from the new tail rather
-        than seeking into now-invalid byte positions.
+        than seeking into now-invalid byte positions. Bounded to only the bytes
+        appended since the last sync — never a full-file rescan. Returns
+        whether the in-memory rows/metadata snapshot changed; callers decide
+        whether that warrants a broadcast or just an up-to-date read.
         """
         with self._task_card_event_lock:
             path = self._task_card_event_path
         if path is None:
             self._init_event_tail()
             with self._task_card_event_lock:
-                path = self._task_card_event_path
                 rehydrated_rows = bool(self._task_card_event_rows)
                 rehydrated_metadata = self._task_card_event_metadata is not None
-            if rehydrated_rows or rehydrated_metadata:
-                self._broadcast_task_card_event_window()
-            return
+            return rehydrated_rows or rehydrated_metadata
 
         try:
             stat = path.stat()
         except OSError:
-            return
+            return False
 
         with self._task_card_event_lock:
             offset = self._task_card_event_offset
@@ -2102,15 +2189,17 @@ class TelegramManager:
             # rehydrated window — even an empty one — must still be broadcast
             # rather than leaving a stale non-empty render displayed.
             self._init_event_tail()
-            changed = True
-        elif stat.st_size > offset:
+            return True
+        if stat.st_size > offset:
             changed = self._append_new_lines(path, offset, stat.st_size)
             with self._task_card_event_lock:
                 self._task_card_event_inode = current_inode
-        else:
-            changed = False
+            return changed
+        return False
 
-        if changed:
+    def _poll_event_tail(self) -> None:
+        """Sync the tail state and broadcast to every resident on change."""
+        if self._sync_event_tail_state():
             self._broadcast_task_card_event_window()
 
     def _append_new_lines(self, path: Path, offset: int, size: int) -> bool:
@@ -2186,6 +2275,16 @@ class TelegramManager:
                 log.debug("Failed to enumerate task card chats for %s: %s", alias, e)
         return targets
 
+    def _current_automatic_frame(self) -> str:
+        """Render the automatic channel frame from the tail's current snapshot."""
+        normal_rows = self._taskcard_normal_rows()
+        rows = self._task_card_event_window()[-normal_rows:]
+        return self._format_task_card_text(
+            "", "", "", rows=rows,
+            metadata=self._task_card_event_metadata_snapshot(),
+            normal_rows=normal_rows,
+        )
+
     def _broadcast_task_card_event_window(self) -> None:
         """Project the current bounded window to every resident Task Card.
 
@@ -2196,18 +2295,12 @@ class TelegramManager:
         """
         if not self._taskcard_enabled():
             return
-        normal_rows = self._taskcard_normal_rows()
-        rows = self._task_card_event_window()[-normal_rows:]
-        automatic = self._format_task_card_text(
-            "", "", "", rows=rows,
-            metadata=self._task_card_event_metadata_snapshot(),
-            normal_rows=normal_rows,
-        )
+        automatic = self._current_automatic_frame()
         for account, chat_id in self._resident_task_card_targets():
             try:
                 self._deliver_channel_frame(
                     account, chat_id, "automatic", automatic,
-                    error="Failed to broadcast task card",
+                    error="Failed to broadcast task card", tail_driven=True,
                 )
             except Exception as e:
                 log.debug(
@@ -2334,6 +2427,10 @@ class TelegramManager:
         # Compose with the proposed automatic frame + the live programmable slot,
         # deliver, and commit the automatic frame only once the edit/send/replace
         # succeeds (a failed edit must not poison the stored channel state).
+        # ``tail_driven`` stays False here: this caller's ``rows``/``metadata``
+        # are whatever the caller supplied, not necessarily the event tail's own
+        # snapshot (``_broadcast_task_card_event_window`` is the only caller
+        # that renders from the tail directly and marks its frame tail-driven).
         return self._deliver_channel_frame(
             account, chat_id, "automatic", automatic, error="Failed to send task card")
 
@@ -2519,6 +2616,7 @@ class TelegramManager:
         # All automatic mutations share the same edit-first delivery discipline:
         # identical content is success, unknown transport failure fails loud, and
         # only a provider-confirmed edit-impossible condition may replace.
+        # ``tail_driven`` stays False: see the note in ``_task_card_create``.
         return self._deliver_channel_frame(
             account,
             chat_id,
@@ -2561,6 +2659,7 @@ class TelegramManager:
             chat_id = args.get("chat_id", card_chat_id)
             if card_account != account or card_chat_id != chat_id:
                 return {"status": "error", "error": "Failed to finalize task card"}
+            # ``tail_driven`` stays False: see the note in ``_task_card_create``.
             return self._deliver_channel_frame(
                 account,
                 chat_id,

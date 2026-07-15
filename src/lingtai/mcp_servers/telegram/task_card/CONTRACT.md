@@ -361,6 +361,38 @@ one source of truth for each projection axis:
    `test_row_started_at_is_...` cases. Update this contract and its paired
    anatomy/tests together if the event schema, final-carrier path, supported
    fields, formatter budget, or timestamp provenance changes.
+5. **Freshness at every edit, including a programmable-only edit, committed
+   only atomically with transport success (Telegram 8482/8485/8487).** Every
+   real Task Card edit — automatic or programmable — re-reads and renders
+   fresh footer metadata immediately before composing and delivering; an edit
+   MUST NOT reuse a stale stored automatic-channel snapshot. A programmable
+   edit does not itself carry rows/telemetry, so `_deliver_channel_frame_locked`
+   syncs the event tail's bounded incremental read (`_sync_event_tail_state`,
+   never a full rescan) and renders a fresh automatic frame from the current
+   snapshot (`_current_automatic_frame`), whenever a *tail-driven* automatic
+   frame is already committed for that route. That refreshed frame is a
+   **transaction-local proposal only**, composed via `_compose_channels`'s
+   `automatic_override` alongside the programmable edit's own proposed frame
+   — it MUST NOT be written to `_task_card_channels` before transport. Both
+   proposals commit together, atomically, **only after** the transport outcome
+   is accepted as success (including the established accepted-partial
+   semantics in rule 7/8 below, where the card content itself reached
+   Telegram). On any transport failure — an unknown/transient edit failure, a
+   rejected rotation/recovery, or a failed/indeterminate send — neither
+   proposal commits: the previously committed automatic frame and its
+   `tail_driven` provenance MUST remain byte-for-byte unchanged, so a failed
+   programmable edit can never poison or resurrect an automatic frame Telegram
+   never received. A route whose automatic frame was never tail-driven (the
+   legacy scalar single-tool form, which carries no footer to refresh) or that
+   has no automatic frame at all proposes no automatic override and is left
+   untouched — this refresh never fabricates an automatic footer that was
+   never there, never changes row content, and never touches the programmable
+   slot's own content. Regression coverage:
+   `tests/test_telegram_task_card_event_tail.py:test_programmable_edit_re_reads_telemetry_appended_since_last_broadcast`,
+   `test_second_programmable_edit_picks_up_telemetry_changed_between_edits`,
+   `test_programmable_edit_does_not_fabricate_automatic_footer`,
+   `test_failed_programmable_edit_does_not_commit_refreshed_automatic_frame`,
+   and `test_retry_after_failed_programmable_edit_commits_fresh_telemetry`.
 
 ## Maintenance
 
