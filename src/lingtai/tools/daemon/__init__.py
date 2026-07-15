@@ -136,11 +136,13 @@ def _normalize_claude_usage(usage: dict | None) -> dict | None:
         cached = cache_read_input_tokens + cache_creation_input_tokens
 
     ``thinking`` is 0 — Claude Code does not surface a separate thinking-token
-    count in this block. Every consumed field must be a non-negative integer
+    count in this block. The primary ``input_tokens`` and ``output_tokens``
+    fields are required; cache-read and cache-creation counts are optional and
+    default to zero. Every consumed field must be a non-negative integer
     (booleans are not token counts, matching the Codex/Cursor normalizers);
-    a malformed field invalidates the whole event. Returns ``None`` if
-    ``usage`` is missing/not a dict, carries an invalid field, or carries no
-    countable tokens, so callers can skip persistence cleanly.
+    a missing primary or malformed field invalidates the whole event. Returns
+    ``None`` if ``usage`` is missing/not a dict, carries an invalid field, or
+    carries no countable tokens, so callers can skip persistence cleanly.
     """
     if not isinstance(usage, dict):
         return None
@@ -150,8 +152,8 @@ def _normalize_claude_usage(usage: dict | None) -> dict | None:
             return None
         return value
 
-    input_tokens = _nonnegative_int(usage.get("input_tokens", 0))
-    output_tokens = _nonnegative_int(usage.get("output_tokens", 0))
+    input_tokens = _nonnegative_int(usage.get("input_tokens"))
+    output_tokens = _nonnegative_int(usage.get("output_tokens"))
     cache_read = _nonnegative_int(usage.get("cache_read_input_tokens", 0))
     cache_creation = _nonnegative_int(usage.get("cache_creation_input_tokens", 0))
     if None in (input_tokens, output_tokens, cache_read, cache_creation):

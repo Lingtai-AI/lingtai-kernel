@@ -164,6 +164,36 @@ def test_claude_initial_duplicate_terminal_events_account_once(tmp_path):
     assert len(_usage_events(run_dir)) == 1
 
 
+def test_claude_initial_missing_primary_usage_is_not_recorded(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    missing_input = _claude_result(result="missing input", usage={
+        "output_tokens": 10,
+        "cache_read_input_tokens": 5, "cache_creation_input_tokens": 2,
+    })
+    missing_output = _claude_result(result="missing output", usage={
+        "input_tokens": 100,
+        "cache_read_input_tokens": 5, "cache_creation_input_tokens": 2,
+    })
+    run_dir = _make_run_dir(agent, handle="em-claude-missing-primary-usage")
+
+    with patch(
+        "lingtai.tools.daemon.subprocess.Popen",
+        return_value=FiniteFakeProc(
+            stdout_lines=_source_claude_stream(missing_input, missing_output),
+        ),
+    ):
+        result = mgr._run_claude_code_emanation(
+            "em-claude-missing-primary-usage", run_dir,
+            "Ignore incomplete usage.", threading.Event(), threading.Event(),
+        )
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert result == "missing output"
+    assert state["cli_tokens"]["calls"] == 0
+    assert _usage_events(run_dir) == []
+
+
 def test_claude_initial_invalid_and_zero_usage_events_are_not_recorded(tmp_path):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
