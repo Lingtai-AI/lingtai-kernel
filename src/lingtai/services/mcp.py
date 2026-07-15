@@ -85,7 +85,7 @@ class MCPClient:
             )
 
     @staticmethod
-    def _ambiguous_stale_error(message: str) -> dict:
+    def _ambiguous_call_error(message: str) -> dict:
         """Return a non-retryable error for an unknowable remote outcome."""
         return {
             "status": "error",
@@ -199,7 +199,9 @@ class MCPClient:
             Parsed dict from the tool's JSON response. A default-policy stale
             failure returns an error with ``outcome="ambiguous"`` and
             ``retryable=False`` after attempting transport recovery without
-            replaying the call.
+            replaying the call. A timeout after the call has been submitted is
+            also returned as ambiguous and non-retryable; the remote may have
+            committed even though no response reached this caller.
 
         Raises:
             RuntimeError: If the client is closed or connection fails.
@@ -245,7 +247,26 @@ class MCPClient:
                 return {"status": "success", "text": ""}
 
             future = asyncio.run_coroutine_threadsafe(_call(), self._loop)
-            return future.result(timeout=timeout)
+            try:
+                return future.result(timeout=timeout)
+            except TimeoutError as exc:
+                # The coroutine crossed the submission boundary before this
+                # timeout. The server may therefore have committed the call
+                # even though this caller never received its response. Cancel
+                # local work if possible, but never advertise a blind retry.
+                future.cancel()
+                formatted = self._format_exception(exc)
+                logger.warning(
+                    "MCP tool %s timed out after submission (%s); remote "
+                    "outcome is ambiguous; not retrying",
+                    name,
+                    formatted,
+                )
+                return self._ambiguous_call_error(
+                    f"{formatted}: MCP call was submitted but completion timed "
+                    "out; remote outcome is ambiguous; call was not retried to "
+                    "avoid duplicate side effects"
+                )
 
         try:
             result = _attempt()
@@ -269,14 +290,14 @@ class MCPClient:
                     try:
                         self.restart()
                     except Exception as restart_exc:
-                        result = self._ambiguous_stale_error(
+                        result = self._ambiguous_call_error(
                             f"{formatted}: MCP session closed; remote outcome is "
                             "ambiguous; call was not retried to avoid duplicate "
                             "side effects; transport restart failed: "
                             f"{self._format_exception(restart_exc)}"
                         )
                     else:
-                        result = self._ambiguous_stale_error(
+                        result = self._ambiguous_call_error(
                             f"{formatted}: MCP session closed; remote outcome is "
                             "ambiguous; call was not retried to avoid duplicate "
                             "side effects; transport restarted for a future call"
@@ -293,7 +314,7 @@ class MCPClient:
                     try:
                         self.restart()
                     except Exception as restart_exc:
-                        result = self._ambiguous_stale_error(
+                        result = self._ambiguous_call_error(
                             f"{formatted}: MCP session closed; explicit safe "
                             "replay requested but transport restart failed: "
                             f"{self._format_exception(restart_exc)}; first "
@@ -303,7 +324,7 @@ class MCPClient:
                         try:
                             result = _attempt()
                         except Exception as retry_exc:
-                            result = self._ambiguous_stale_error(
+                            result = self._ambiguous_call_error(
                                 f"{self._format_exception(retry_exc)}: MCP "
                                 "session closed; restarted once but explicit "
                                 "safe retry failed; outcome remains ambiguous"

@@ -32,11 +32,16 @@ class _FakeFuture:
     def __init__(self, value=None, exc=None):
         self._value = value
         self._exc = exc
+        self.cancelled = False
 
     def result(self, timeout=None):
         if self._exc is not None:
             raise self._exc
         return self._value
+
+    def cancel(self):
+        self.cancelled = True
+        return True
 
 
 def _install_fake_loop(client):
@@ -300,6 +305,66 @@ def test_call_tool_rejects_unsupported_retry_policy_before_call(
 
     assert starts["n"] == 0
     assert client.get_activity_log() == []
+
+
+def test_call_tool_timeout_before_submission_is_not_marked_ambiguous(monkeypatch):
+    """An exception raised before a Future exists cannot be a remote outcome."""
+    client = MCPClient(command="/bin/true")
+    _install_fake_loop(client)
+    restarts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        raise TimeoutError("submission rejected")
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(
+        client,
+        "restart",
+        lambda: restarts.__setitem__("n", restarts["n"] + 1),
+    )
+
+    result = client.call_tool("send_message", {"text": "hi"})
+
+    assert result == {"status": "error", "message": "TimeoutError: submission rejected"}
+    assert "outcome" not in result
+    assert "retryable" not in result
+    assert restarts["n"] == 0
+
+
+def test_call_tool_timeout_after_submission_is_ambiguous_and_non_retryable(
+    monkeypatch,
+):
+    """A Future timeout can hide a committed remote side effect."""
+    client = MCPClient(command="/bin/true")
+    _install_fake_loop(client)
+    future = _FakeFuture(exc=TimeoutError("response deadline"))
+    attempts = {"n": 0}
+    restarts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        attempts["n"] += 1
+        return future
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(
+        client,
+        "restart",
+        lambda: restarts.__setitem__("n", restarts["n"] + 1),
+    )
+
+    result = client.call_tool("send_message", {"text": "hi"})
+
+    assert attempts["n"] == 1
+    assert future.cancelled is True
+    assert restarts["n"] == 0
+    assert result["status"] == "error"
+    assert result["outcome"] == "ambiguous"
+    assert result["retryable"] is False
+    assert "submitted" in result["message"]
+    assert "timed out" in result["message"]
+    assert "not retried" in result["message"]
 
 
 def test_call_tool_non_stale_empty_error_surfaces_class_without_restart(monkeypatch):
