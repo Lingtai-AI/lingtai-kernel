@@ -3,7 +3,7 @@
 Jason's final contract (Telegram 8266-8295): the automatic slot mechanically
 consumes the agent's authoritative ``logs/events.jsonl`` in file order, keeps
 the most recent N ``tool_call`` events using only safe bounded fields, projects
-current session telemetry only from the latest final-carrier ``tool_result``,
+current session telemetry only from the latest final-carrier ``notification_block_injected``,
 and broadcasts the same projection to every resident Task Card for the agent
 (no per-route correlation — this is an agent-behavior broadcast, not per-chat
 visibility).
@@ -425,7 +425,7 @@ def test_row_started_at_is_derived_from_event_ts_and_rendered(tmp_path):
 def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tmp_path):
     """Rows and the footer telemetry come from their authoritative events.
 
-    The final-carrier ``tool_result`` owns the current whole ``agent_meta``
+    The final-carrier ``notification_block_injected`` owns the current whole ``agent_meta``
     snapshot; a retired ``tool_meta`` snapshot and row arguments are present as
     decoys and must not affect the automatic card.
     """
@@ -448,8 +448,19 @@ def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tm
     row_event["tool_args"]["metadata"] = {"api_calls": 999}
     _write_lines(events_path, [
         json.dumps(row_event),
+        # A plain tool_result is the live decoy immediately before the real
+        # notification carrier; even if it fabricates agent_meta, it must not
+        # own the current snapshot.
         json.dumps({
             "type": "tool_result",
+            "tool_name": "bash",
+            "tool_call_id": "c1",
+            "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+                "session": {"api_calls": 888},
+            }}}},
+        }),
+        json.dumps({
+            "type": "notification_block_injected",
             "tool_name": "bash",
             "tool_call_id": "c1",
             "ts": event_ts + 1,
@@ -480,6 +491,7 @@ def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tm
     assert f" · {expected_stamp}" in rendered
     assert "session · cache 87.8% · miss 170.6k/1.0M · calls 13" in rendered
     assert "ctx · 171.2k/272.0k · 63%" in rendered
+    assert "calls 888" not in rendered
     assert "calls 999" not in rendered
     assert "calls 777" not in rendered
 
@@ -493,7 +505,7 @@ def test_malformed_current_telemetry_carrier_clears_previous_snapshot(tmp_path):
     _write_lines(events_path, [
         _tool_call_line(),
         json.dumps({
-            "type": "tool_result",
+            "type": "notification_block_injected",
             "_meta": {"agent_meta": {"agent_state": {"token_usage": {
                 "session": {"api_calls": 7},
             }}}},
@@ -504,7 +516,7 @@ def test_malformed_current_telemetry_carrier_clears_previous_snapshot(tmp_path):
     assert "calls 7" in edits[-1][3]
 
     _write_lines(events_path, [json.dumps({
-        "type": "tool_result",
+        "type": "notification_block_injected",
         "_meta": {"agent_meta": {"agent_state": {"token_usage": {
             "session": {"api_calls": "malformed"},
         }}}},

@@ -488,7 +488,7 @@ class TelegramManager:
         self._task_card_event_inode: int | None = None
         self._task_card_event_rows: list[dict] = []
         # The current telemetry snapshot is carried only by the latest final
-        # ``tool_result`` event. ``None`` means no such carrier has been seen;
+        # ``notification_block_injected`` event. ``None`` means no such carrier has been seen;
         # an empty dict is a seen-but-malformed carrier and deliberately clears
         # any older snapshot.
         self._task_card_event_metadata: dict | None = None
@@ -1787,7 +1787,7 @@ class TelegramManager:
     # authoritative ``logs/events.jsonl`` — a broadcast of the agent's behavior,
     # not a per-chat/per-route view. Tool rows whitelist exactly one event type,
     # ``tool_call``; every other event type is skipped for row projection. A
-    # final-carrier ``tool_result`` is read separately for the latest whole
+    # final-carrier ``notification_block_injected`` event is read separately for the latest whole
     # ``_meta.agent_meta`` snapshot, from which only the supported session
     # telemetry fields are projected. Row fields remain the bounded allowlist
     # (``tool_name``, ``tool_args.action``, ``tool_args._reasoning``, and the
@@ -1862,21 +1862,19 @@ class TelegramManager:
         return row
 
     @staticmethod
-    def _project_tool_result_metadata(event: dict) -> dict | None:
-        """Project current session telemetry from one final-carrier result.
+    def _project_final_carrier_metadata(event: dict) -> dict | None:
+        """Project current session telemetry from one final-carrier event.
 
         ``agent_meta`` is a whole current snapshot: only the newest
-        ``tool_result`` carrier is consulted, and only its
+        ``notification_block_injected`` carrier is consulted, and only its
         ``agent_state.token_usage.session`` fields cross into the Task Card.
         An empty dict is a recognized-but-malformed carrier, so it clears an
         older snapshot instead of leaving stale telemetry visible. ``None``
         means this event is not a final carrier and must not change state.
         """
-        if event.get("type") != "tool_result":
+        if event.get("type") != "notification_block_injected":
             return None
         envelope = event.get("_meta")
-        if envelope is None:
-            return None
         if not isinstance(envelope, dict):
             return {}
         agent_meta = envelope.get("agent_meta")
@@ -2035,7 +2033,7 @@ class TelegramManager:
                         row = self._project_tool_call_row(event)
                         if row is not None:
                             round_matches.append(row)
-                        candidate = self._project_tool_result_metadata(event)
+                        candidate = self._project_final_carrier_metadata(event)
                         if candidate is not None:
                             # ``complete`` is oldest-to-newest within this
                             # chunk; the last candidate is the newest here.
@@ -2147,7 +2145,7 @@ class TelegramManager:
             row = self._project_tool_call_row(event)
             if row is not None:
                 new_rows.append(row)
-            candidate = self._project_tool_result_metadata(event)
+            candidate = self._project_final_carrier_metadata(event)
             if candidate is not None:
                 # Forward append order is oldest-to-newest, so the last
                 # candidate is the only current snapshot.

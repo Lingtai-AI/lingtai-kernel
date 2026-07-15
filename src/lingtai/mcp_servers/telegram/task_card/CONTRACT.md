@@ -330,7 +330,7 @@ one source of truth for each projection axis:
    out-of-range `ts` omits `started_at` without failing the tail. `_meta`, row
    arguments, notification payloads, and the current render instant are never
    timestamp sources.
-2. **Current telemetry.** Only the latest final-carrier `type == "tool_result"`
+2. **Current telemetry.** Only the latest final-carrier `type == "notification_block_injected"`
    event's whole `_meta.agent_meta` is current. The manager projects only
    `_meta.agent_meta.agent_state.token_usage.session` and only these supported
    fields: `session_cache_rate`, `cache_miss_tokens`, `cache_miss_budget`,
@@ -348,7 +348,7 @@ one source of truth for each projection axis:
    changes.
 4. **Implementation and tests.** The event path is
    `manager.py:_decode_event_line` → `_project_tool_call_row` /
-   `_project_tool_result_metadata` → `_reverse_tail_latest_rows` or
+   `_project_final_carrier_metadata` → `_reverse_tail_latest_rows` or
    `_append_new_lines` → `_broadcast_task_card_event_window` →
    `_format_task_card_text`. The formatter anchors are
    `manager.py:_format_task_card_metadata` and

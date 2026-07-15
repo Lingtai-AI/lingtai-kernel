@@ -107,8 +107,8 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   render time are never timestamp sources. Navigation:
   `manager.py:_project_tool_call_row`, `_format_task_card_row_timestamp`, and
   `_format_rows_task_card_text` (currently around lines 1819, 1854, and 2720).
-- **Current telemetry:** `_project_tool_result_metadata` accepts only a
-  final-carrier `type == "tool_result"` event's latest whole
+- **Current telemetry:** `_project_final_carrier_metadata` accepts only a
+  final-carrier `type == "notification_block_injected"` event's latest whole
   `_meta.agent_meta`, then projects
   `_meta.agent_meta.agent_state.token_usage.session` fields
   `session_cache_rate`, `cache_miss_tokens`, `cache_miss_budget`, `api_calls`,
@@ -117,7 +117,7 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   `_format_task_card_metadata` two-line/150-character formatter through
   `_broadcast_task_card_event_window`; malformed or missing values omit safely.
   It never reads retired `tool_meta.token_usage`, row args, notifications, or
-  render time. Navigation: `manager.py:_project_tool_result_metadata`,
+  render time. Navigation: `manager.py:_project_final_carrier_metadata`,
   `_reverse_tail_latest_rows`, `_append_new_lines`, and
   `_broadcast_task_card_event_window` (currently around lines 1849, 1980, 2140,
   and 2190).
