@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/kernel/refresh_watcher/__init__.py
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
   - src/lingtai/kernel/refresh_watcher/MANUAL.md
+  - src/lingtai/kernel/process_match.py
   - src/lingtai/adapters/posix/refresh_watcher.py
   - src/lingtai/adapters/posix/refresh_watcher_entrypoint.py
   - src/lingtai/kernel/base_agent/__init__.py
@@ -15,6 +16,7 @@ related_files:
   - src/lingtai/cli.py
   - tests/_refresh_watcher_helpers.py
   - tests/test_perform_refresh_handshake.py
+  - tests/test_process_match.py
   - tests/test_deep_refresh.py
   - tests/test_base_agent.py
 maintenance: |
@@ -228,14 +230,28 @@ Windows production adapter is explicitly out of scope for this slice.
    compact deterministic JSON wire shape and validate it on the way back, but
    know nothing about how a transport delivers the encoded string (argv, a
    file, stdin, ...) — that remains the adapter/entrypoint's concern.
-6. The generated watcher program's terminal-failure metadata bounds and
+6. The generated watcher program's stale same-agent duplicate-process guard
+   (`_is_same_agent_run`) MUST import and call the canonical Core process
+   policy `lingtai.kernel.process_match.match_agent_run`
+   (`src/lingtai/kernel/process_match.py`) — the same function
+   `lingtai.cli._check_duplicate_process` uses — at runtime via
+   `from lingtai.kernel.process_match import match_agent_run` in the
+   rendered program text. The generated program MUST NOT embed or maintain
+   a second local `match_agent_run` definition; the CLI duplicate-process check
+   and the watcher's stale-duplicate cleanup MUST share the one importable Core
+   implementation of the launch-form policy (module/console/legacy command
+   forms, program-anchoring, working-directory match). The standalone
+   `lingtai-doctor` bundle intentionally retains a stdlib-only copy because it
+   cannot import kernel modules; `tests/test_process_match.py` MUST continue to
+   keep that bundle copy in parity with the canonical Core implementation.
+7. The generated watcher program's terminal-failure metadata bounds and
    redacts `last_stderr_tail`, `last_cleanup_error`, and `last_relaunch_error`
    identically (via the shared `_redact_bounded` helper in the rendered
    program) before writing `refresh_failed_permanent.json`, the
    `.notification/system.json` alert, or the final `refresh_failed_permanent`
    event. No raw or unbounded exception text may reach any of those three
    sinks.
-7. `build_watcher_env(request)` MUST make `request.env_overwrite` fully
+8. `build_watcher_env(request)` MUST make `request.env_overwrite` fully
    authoritative in both directions: when `True` it sets `ENV_OVERWRITE_VAR`
    in the copied environment; when `False` it explicitly removes
    `ENV_OVERWRITE_VAR` from the copy, even if the parent process's own
@@ -243,7 +259,7 @@ Windows production adapter is explicitly out of scope for this slice.
    inherit a stale `True` value from the parent environment. The parent
    process's `os.environ` itself is never mutated — `build_watcher_env`
    returns a fresh `dict` copy.
-8. `RefreshWatcherRequest.cmd` is a tuple (`tuple[str, ...]`), not a `list`.
+9. `RefreshWatcherRequest.cmd` is a tuple (`tuple[str, ...]`), not a `list`.
    `frozen=True` alone only blocks attribute reassignment; a mutable
    container field would let a caller mutate the request's owned data after
    construction despite the dataclass being "frozen". `RefreshWatcherRequest.
@@ -256,7 +272,7 @@ Windows production adapter is explicitly out of scope for this slice.
    failing loudly (`ValueError`) on invalid JSON or a non-object top-level
    value, before any generated source is produced — an invalid snapshot MUST
    NOT silently render broken or empty watcher-program text.
-9. `decode_request(encode_request(request))` MUST equal `request` for every
+10. `decode_request(encode_request(request))` MUST equal `request` for every
    valid `RefreshWatcherRequest`, including restoring `cmd` to a `tuple`
    (JSON has no tuple type, so the decoded value would otherwise be a `list`).
    `encode_request` MUST be deterministic — the same request always encodes
@@ -268,6 +284,19 @@ Windows production adapter is explicitly out of scope for this slice.
    malformed request from untrusted transport input.
 
 ## Contract tests
+
+`test_refresh_watcher_script_cleans_stale_duplicate_process`
+(`tests/test_perform_refresh_handshake.py`) and
+`test_refresh_watcher_imports_canonical_match_agent_run`
+(`tests/test_process_match.py`) pin contract rule 6: the rendered watcher
+program text must contain
+`from lingtai.kernel.process_match import match_agent_run` and must NOT
+contain a `def match_agent_run` definition of its own.
+`tests/test_process_match.py` owns the shared `MATCH_CASES` policy matrix and
+exercises it directly against the canonical
+`lingtai.kernel.process_match.match_agent_run` and the `lingtai-doctor`
+script's own copy; it does not re-derive the watcher's copy from generated
+program text, since the watcher no longer has one.
 
 `tests/test_perform_refresh_handshake.py` and `tests/test_deep_refresh.py`
 inject `FakeRefreshWatcher` (`tests/_refresh_watcher_helpers.py`) in place of
@@ -294,7 +323,7 @@ hand-off or how the request crosses the process boundary.
 `test_encode_decode_request_roundtrip`, `test_encode_request_is_deterministic`,
 `test_decode_request_invalid_payload_fails_loudly`, and
 `test_decode_request_rejects_extra_and_wrong_type_fields`
-(`tests/test_perform_refresh_handshake.py`) pin contract rule 9's
+(`tests/test_perform_refresh_handshake.py`) pin contract rule 10's
 serialization/validation guarantees directly against
 `refresh_watcher.encode_request`/`decode_request`, independent of any
 transport or subprocess.

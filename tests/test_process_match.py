@@ -1,21 +1,15 @@
 """Tests for LingTai agent process-command matching."""
 from __future__ import annotations
-from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from lingtai.kernel.process_match import match_agent_run
-from tests._workdir_lease_helpers import make_test_lease
-from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
-from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
-from tests._notification_store_helpers import notification_store_for
-from tests._agent_presence_helpers import make_test_presence_store
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,33 +46,6 @@ def _load_doctor_module():
     return module
 
 
-def _watcher_match_agent_run(tmp_path):
-    from lingtai.kernel.base_agent import BaseAgent
-
-    service = MagicMock()
-    service.get_adapter.return_value = MagicMock()
-    service.provider = "p"
-    service.model = "m"
-
-    working_dir = tmp_path / "agent"
-    working_dir.mkdir()
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=service, agent_name="alice", working_dir=working_dir, workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(working_dir))
-    agent._build_launch_cmd = lambda: ["python", "-c", "print('relaunch sentinel')"]
-
-    with patch("subprocess.Popen") as mock_popen:
-        agent._perform_refresh()
-    assert mock_popen.called
-    args, _kwargs = mock_popen.call_args
-    script = args[0][2]
-    function_source = script.split("def match_agent_run", 1)[1]
-    function_source = "def match_agent_run" + function_source.split(
-        "def _is_same_agent_run", 1
-    )[0]
-    ns: dict[str, object] = {}
-    exec(compile("import os\n" + function_source, "<relaunch_matcher>", "exec"), ns)
-    return ns["match_agent_run"]
-
-
 @pytest.mark.parametrize(("cmdline", "working_dir", "expected"), MATCH_CASES)
 def test_canonical_match_agent_run_matrix(cmdline, working_dir, expected):
     assert match_agent_run(cmdline, working_dir) == expected
@@ -90,10 +57,30 @@ def test_doctor_copy_matches_canonical_matrix():
         assert doctor.match_agent_run(cmdline, working_dir) == expected
 
 
-def test_refresh_watcher_copy_matches_canonical_matrix(tmp_path):
-    watcher_match = _watcher_match_agent_run(tmp_path)
-    for cmdline, working_dir, expected in MATCH_CASES:
-        assert watcher_match(cmdline, working_dir) == expected
+def test_refresh_watcher_imports_canonical_match_agent_run(tmp_path):
+    """The generated watcher program must import and use the canonical
+    Core matcher (`lingtai.kernel.process_match.match_agent_run`) at
+    runtime rather than embedding/maintaining a second local definition —
+    the policy source of truth is `MATCH_CASES` above, exercised directly
+    against the canonical function in `test_canonical_match_agent_run_matrix`.
+    """
+    from lingtai.kernel.refresh_watcher import RefreshWatcherRequest
+    from lingtai.kernel.refresh_watcher.watcher_program import render_watcher_script
+
+    request = RefreshWatcherRequest(
+        taken_path="/wd/.refresh.taken",
+        lock_path="/wd/.agent.lock",
+        events_path="/wd/logs/events.jsonl",
+        stderr_log="/wd/logs/refresh_relaunch.log",
+        working_dir="/wd",
+        cmd=("lingtai-agent", "run", "/wd"),
+        agent_name="alice",
+        address="wd",
+    )
+    script = render_watcher_script(request)
+
+    assert "from lingtai.kernel.process_match import match_agent_run" in script
+    assert "def match_agent_run" not in script
 
 
 def test_cli_duplicate_process_detects_console_script(tmp_path):

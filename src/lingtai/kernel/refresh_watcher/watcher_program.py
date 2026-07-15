@@ -8,12 +8,20 @@ redaction, and terminal-failure artifact/notification publication. Moving the
 text-assembly logic here makes *rendering* it importable, directly callable
 production code instead of a string literal buried in lifecycle control
 flow — it does not turn the watcher's own policy into independently
-executable/importable code: the returned value is still generated ``python
--c`` program *source text*, run later as a detached subprocess, not a
-function this process calls. For Core-produced requests, the generated program
-preserves the previously shipped runtime behavior; this slice does not claim
+executable/importable code: the returned value is still generated Python
+program *source text*, executed later by the detached
+``refresh_watcher_entrypoint`` process, not a function this process calls. For
+Core-produced requests, the generated program preserves the previously shipped
+runtime behavior; this slice does not claim
 textual byte identity, redesign retry/heartbeat/duplicate policy, or
 introduce a process-supervision Port; that remains a later slice.
+
+The rendered program's stale same-agent duplicate-process guard
+(``_is_same_agent_run``) imports the canonical Core process-command matcher,
+``lingtai.kernel.process_match.match_agent_run``, at runtime via
+``from lingtai.kernel.process_match import match_agent_run`` in the generated
+source, rather than embedding a second local ``match_agent_run`` definition —
+the same matcher ``lingtai.cli._check_duplicate_process`` already uses.
 
 Identity fields cross the request boundary as
 ``RefreshWatcherRequest.identity_fields_json`` — a JSON object snapshot, not
@@ -43,9 +51,9 @@ concrete environment-variable name the transport uses — is entirely adapter
 mechanism: see ``lingtai.adapters.posix.refresh_watcher.build_watcher_env``
 and its ``ENV_OVERWRITE_VAR``. This module does not define or reference that
 variable name; Core knows only the boolean ``request.env_overwrite`` policy
-bit, never the concrete env-var transport. The POSIX adapter
-(`lingtai.adapters.posix.refresh_watcher`) is the only caller that launches
-the rendered text as a real detached process.
+bit, never the concrete env-var transport. The POSIX entrypoint executes the
+rendered text inside the detached process launched by
+``lingtai.adapters.posix.refresh_watcher``.
 """
 from __future__ import annotations
 
@@ -85,13 +93,13 @@ def _decode_identity_fields(identity_fields_json: str) -> dict:
 
 
 def render_watcher_script(request: RefreshWatcherRequest) -> str:
-    """Render the complete, self-contained watcher program source.
+    """Render the complete watcher program source.
 
-    The returned text is a standalone Python program: it re-derives every
-    value it needs (handshake paths, relaunch command, identity fields) from
-    literals embedded by this function, and it imports only stdlib plus the
-    kernel's redaction helper at runtime. It carries no reference to this
-    process's live objects.
+    The returned text embeds every request-derived value it needs (handshake
+    paths, relaunch command, identity fields), and carries no reference to this
+    process's live objects. Execution requires an importable LingTai package for
+    the kernel's redaction helper and canonical process-command matcher in
+    addition to the Python standard library.
     """
     taken_path = request.taken_path
     lock_path = request.lock_path
@@ -337,21 +345,7 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "        if len(parts) >= 2 and parts[1].rstrip(':').isdigit():\n"
         "            return int(parts[1].rstrip(':'))\n"
         "    return None\n"
-        "def match_agent_run(cmdline, working_dir):\n"
-        "    target = os.path.normpath(working_dir)\n"
-        "    for token, label, program_anchored in (\n"
-        "        (' -m lingtai run ', 'module', False),\n"
-        "        ('lingtai-agent run ', 'console', True),\n"
-        "        ('lingtai run ', 'legacy', True),\n"
-        "    ):\n"
-        "        idx = cmdline.find(token)\n"
-        "        while idx != -1:\n"
-        "            if (not program_anchored) or idx == 0 or cmdline[idx - 1] == '/':\n"
-        "                tail = cmdline[idx + len(token):].strip()\n"
-        "                if tail and os.path.normpath(tail) == target:\n"
-        "                    return label\n"
-        "            idx = cmdline.find(token, idx + 1)\n"
-        "    return None\n"
+        "from lingtai.kernel.process_match import match_agent_run\n"
         "def _is_same_agent_run(pid):\n"
         "    if not pid or pid == os.getpid():\n"
         "        return False\n"

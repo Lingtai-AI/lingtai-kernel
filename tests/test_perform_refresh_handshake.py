@@ -756,7 +756,10 @@ def test_refresh_watcher_script_cleans_stale_duplicate_process(tmp_path):
     """Production incident 2026-06-04: refresh watcher relaunches can be
     blocked by a stale LingTai run process. The watcher script
     must detect the duplicate-process guard stderr and terminate only a stale
-    same-agent process (no fresh heartbeat) before retrying.
+    same-agent process (no fresh heartbeat) before retrying. The matcher
+    itself is the canonical Core policy
+    (`lingtai.kernel.process_match.match_agent_run`), imported at runtime
+    rather than duplicated/embedded in the generated script.
     """
     agent = _make_agent_with_launch_cmd(tmp_path)
 
@@ -766,7 +769,8 @@ def test_refresh_watcher_script_cleans_stale_duplicate_process(tmp_path):
     script = agent._refresh_watcher.last_script
     assert "another lingtai agent is already running" in script
     assert "def _cleanup_stale_duplicate" in script
-    assert "def match_agent_run" in script
+    assert "from lingtai.kernel.process_match import match_agent_run" in script
+    assert "def match_agent_run" not in script
     assert "match_agent_run(cmdline, wd) is not None" in script
     assert "heartbeat_age" in script
     assert "signal.SIGTERM" in script
@@ -1028,6 +1032,10 @@ def test_refresh_watcher_permanent_failure_writes_operator_alert(tmp_path):
         capture_output=True,
         text=True,
         timeout=10,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+        },
     )
 
     assert result.returncode == 0, result.stderr
@@ -1115,6 +1123,10 @@ def test_refresh_watcher_cleanup_then_success_does_not_write_failure_alert(tmp_p
             capture_output=True,
             text=True,
             timeout=10,
+            env={
+                **os.environ,
+                "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+            },
         )
     finally:
         try:
