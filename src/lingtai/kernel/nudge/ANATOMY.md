@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/kernel/nudge/kernel_version.py
   - src/lingtai/kernel/nudge/source_drift.py
   - src/lingtai/kernel/snapshot/ANATOMY.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -114,6 +115,14 @@ Three similar lines is better than a premature abstraction
 than maintaining a `Check` protocol and a registry. If the duplication starts
 to hurt, lift a `_throttled_probe` helper into `__init__.py` — but the right
 abstraction shape will be obvious by then.
+
+## Manual route
+
+The detailed agent-facing update lifecycle, nudge interpretation, TUI ownership,
+and troubleshooting route is
+`src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md`.
+This anatomy remains the structural map; the nested manual is the one source of
+truth for operational guidance.
 
 ## Wire surface
 

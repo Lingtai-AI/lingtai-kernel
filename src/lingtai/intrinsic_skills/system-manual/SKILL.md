@@ -13,21 +13,24 @@ description: >
   summarize-vs-molt distinctions; and `reference/sqlite-log-query/SKILL.md` for
   SQLite/log.sqlite runtime trace inspection and trajectory/anomaly mining from
   event traces; and `reference/runtime-update-checks/SKILL.md` for
-  runtime/kernel self-checks, nudge-driven update reminders, editable/dev-mode
-  identification, and safe refresh/update handoffs. Also
+  runtime/kernel self-checks, the complete nudge lifecycle, editable/dev/source
+  identification, safe refresh/update handoffs, and read-only diagnostics. Also
   route here for lifecycle operations, notification/nudge
   handling (including direct `notification(action='manual')` retrieval),
   runtime/kernel update checks, molt/memory questions, MCP/addon
   ownership, preset tiers, collaboration/network topology, resident prompt
   design, and the `system` tool actions.
-version: 1.6.0
+version: 1.7.0
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, preset]
-last_changed_at: "2026-07-13T00:00:00-07:00"
+last_changed_at: "2026-07-15T12:00:00-07:00"
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
 - src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
+- src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
+- src/lingtai/kernel/nudge/ANATOMY.md
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -91,11 +94,11 @@ selects that topic.
 - name: runtime-update-checks
   location: reference/runtime-update-checks/SKILL.md
   description: |
-    Runtime/kernel self-check and update-nudge manual: handling `.notification/nudge.json`
-    entries with `kind: kernel_version`, distinguishing running/installed/latest
-    LingTai kernel versions, recognizing editable/dev/source installs, honoring
-    the once-per-day packaged-runtime update check, asking the human before
-    downloading/updating, and refreshing only when safe.
+    Complete kernel update/nudge lifecycle: runtime and source discovery,
+    `kernel_version` and `source_drift` checks, heartbeat dispatch, durable
+    throttle state, `.notification/nudge.json` envelopes, sync/wake/dismiss
+    behavior, packaged versus editable/source paths, human confirmation, TUI
+    update ownership, refresh boundaries, verification, and read-only diagnosis.
 - name: goal-manual
   location: reference/goal-manual/SKILL.md
   description: |
@@ -114,7 +117,7 @@ selects that topic.
 | Tool-result summarization; large-result ranking via agent_meta; progressive disclosure of raw outputs; original-result recovery; summarize vs molt | `reference/summarize-manual/SKILL.md` |
 | SQLite; `log.sqlite`; LingTai runtime logs; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes; trajectory/anomaly mining; improvement digests; cheap-model strategy | `reference/sqlite-log-query/SKILL.md` |
 | Notifications; direct `notification(action='manual')`; check/dismiss_channel/dismiss_event/dismiss_ref/manual; `.notification/<channel>.json`; channel allowlist; top-level `instructions`; protected channels; generic vs producer dismiss; stale-version/force; legacy `large_tool_result` dismiss | `notification-manual` |
-| Runtime/kernel state; `nudge` notification channel; `.notification/nudge.json`; `kind: kernel_version`; running vs installed vs latest LingTai kernel; editable/dev/source installs; daily update checks; safe `system(action='refresh')`; ask the human before downloading/updating | `reference/runtime-update-checks/SKILL.md` |
+| Kernel update lifecycle; runtime/source discovery; `kernel_version` and `source_drift`; heartbeat nudge dispatch; `.notification/nudge.json`; durable state; sync/wake/dismiss mechanics; packaged vs editable/source installs; refresh vs TUI-managed update; verification/troubleshooting | `reference/runtime-update-checks/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `psyche-manual` |
 | Soul tool; soul flow opt-in (`LINGTAI_SOUL_FLOW_ENABLED`); disabled-flow behavior; `delay_seconds` as cadence-not-off-switch; inquiry/config/voice/dismiss; privacy/cost rationale | `soul-manual` |
