@@ -27,6 +27,20 @@ def test_normalize_claude_usage_handles_missing_cache_fields():
     assert norm == {"input": 100, "output": 50, "cached": 0, "thinking": 0}
 
 
+def test_normalize_claude_usage_requires_input_tokens():
+    assert _normalize_claude_usage({"output_tokens": 7}) is None
+
+
+def test_normalize_claude_usage_requires_output_tokens():
+    assert _normalize_claude_usage({"input_tokens": 7}) is None
+
+
+def test_normalize_claude_usage_rejects_cache_only_usage():
+    assert _normalize_claude_usage({
+        "cache_read_input_tokens": 5, "cache_creation_input_tokens": 2,
+    }) is None
+
+
 def test_normalize_claude_usage_returns_none_for_non_dict():
     assert _normalize_claude_usage(None) is None
     assert _normalize_claude_usage("nope") is None
@@ -41,10 +55,23 @@ def test_normalize_claude_usage_returns_none_when_all_zero():
     }) is None
 
 
-def test_normalize_claude_usage_ignores_non_int_fields():
-    """Defensive: malformed (string) token counts coerce to 0, not crash."""
-    norm = _normalize_claude_usage({
+def test_normalize_claude_usage_rejects_non_int_fields():
+    """A malformed (string/None) token count invalidates the whole event,
+    matching the strict Codex/Cursor normalizer contract."""
+    assert _normalize_claude_usage({
         "input_tokens": "lots", "output_tokens": 7,
         "cache_read_input_tokens": None,
-    })
-    assert norm == {"input": 0, "output": 7, "cached": 0, "thinking": 0}
+    }) is None
+
+
+def test_normalize_claude_usage_rejects_bool_fields():
+    """bool is an int subclass but is not a token count."""
+    assert _normalize_claude_usage({
+        "input_tokens": True, "output_tokens": 7,
+    }) is None
+
+
+def test_normalize_claude_usage_rejects_negative_fields():
+    assert _normalize_claude_usage({
+        "input_tokens": -1, "output_tokens": 7,
+    }) is None

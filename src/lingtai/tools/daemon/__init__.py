@@ -136,19 +136,30 @@ def _normalize_claude_usage(usage: dict | None) -> dict | None:
         cached = cache_read_input_tokens + cache_creation_input_tokens
 
     ``thinking`` is 0 — Claude Code does not surface a separate thinking-token
-    count in this block. Returns ``None`` if ``usage`` is missing/not a dict or
+    count in this block. The primary ``input_tokens`` and ``output_tokens``
+    fields are required; cache-read and cache-creation counts are optional and
+    default to zero. Every consumed field must be a non-negative integer
+    (booleans are not token counts, matching the Codex/Cursor normalizers);
+    a missing primary or malformed field invalidates the whole event. Returns
+    ``None`` if ``usage`` is missing/not a dict, carries an invalid field, or
     carries no countable tokens, so callers can skip persistence cleanly.
     """
     if not isinstance(usage, dict):
         return None
 
-    def _int(value) -> int:
-        return value if isinstance(value, int) else 0
+    def _nonnegative_int(value) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
 
-    input_tokens = _int(usage.get("input_tokens"))
-    output_tokens = _int(usage.get("output_tokens"))
-    cached = (_int(usage.get("cache_read_input_tokens"))
-              + _int(usage.get("cache_creation_input_tokens")))
+    input_tokens = _nonnegative_int(usage.get("input_tokens"))
+    output_tokens = _nonnegative_int(usage.get("output_tokens"))
+    cache_read = _nonnegative_int(usage.get("cache_read_input_tokens", 0))
+    cache_creation = _nonnegative_int(usage.get("cache_creation_input_tokens", 0))
+    if None in (input_tokens, output_tokens, cache_read, cache_creation):
+        return None
+
+    cached = cache_read + cache_creation
     thinking = 0
     if not (input_tokens or output_tokens or cached or thinking):
         return None
@@ -2406,6 +2417,9 @@ class DaemonManager:
         final_result_text: str | None = None
         final_is_error: bool = False
         session_id_captured: str | None = None
+        # Buffered, not yet persisted — see the result-event handler and
+        # the post-classification persistence below for why.
+        usage_candidate: tuple[dict[str, int], dict] | None = None
         # Active tool_use blocks awaiting their tool_result. Keyed by
         # the tool_use id from the assistant message; value is the tool
         # name so we can call clear_current_tool with a status string.
@@ -2502,24 +2516,22 @@ class DaemonManager:
                 elif etype == "result":
                     final_result_text = event.get("result") or ""
                     final_is_error = bool(event.get("is_error"))
-                    # Persist Claude Code's reported token usage for UI
-                    # display only. This goes to daemon.json.cli_tokens via
-                    # record_cli_tokens — NOT to append_tokens — so the
-                    # parent/daemon token ledgers stay free of external CLI
-                    # billing (whose cache semantics don't match the kernel
-                    # adapter accounting). See the note in this method's
-                    # docstring and run_dir.record_cli_tokens.
-                    usage = _normalize_claude_usage(event.get("usage"))
-                    if usage is not None:
-                        try:
-                            run_dir.record_cli_tokens(
-                                input=usage["input"], output=usage["output"],
-                                cached=usage["cached"],
-                                thinking=usage["thinking"],
-                                raw=event.get("usage"),
-                            )
-                        except Exception:
-                            pass
+                    # Buffer Claude Code's reported token usage — do not
+                    # persist it yet. A watchdog/manual cancel can still
+                    # fire after this final line arrives but before
+                    # proc.wait() returns; persisting here would let a
+                    # cancelled/timed-out run leave usage and, via
+                    # mark_done below, a false "done" state. Retain only
+                    # the first valid terminal usage candidate (a
+                    # duplicated terminal line is not a new provider
+                    # call), and persist it once terminal classification
+                    # (cancel/timeout, exit code, is_error) has passed —
+                    # see the persistence call after the classification
+                    # gates below.
+                    if usage_candidate is None:
+                        usage = _normalize_claude_usage(event.get("usage"))
+                        if usage is not None:
+                            usage_candidate = (usage, event.get("usage"))
                     # If there are still tool_use blocks pending without
                     # a matching tool_result (shouldn't happen on success,
                     # but be defensive), clear them so daemon.json's
@@ -2542,6 +2554,15 @@ class DaemonManager:
             stderr_thread.join(timeout=2.0)
             # Remove from tracked procs to prevent PID recycling issues
             self._unregister_cli_proc(proc, group_id=run_dir.group_id)
+
+        # Re-check cancellation after proc.wait() returns. A watchdog or
+        # manual reclaim can set cancel_event while we were blocked in
+        # wait() for the process to exit after stdout EOF — a zero exit
+        # observed after that point must not overwrite the cancelled/
+        # timeout state or persist the buffered usage candidate (mirrors
+        # the Cursor backend's post-EOF cancellation fix).
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
@@ -2578,7 +2599,31 @@ class DaemonManager:
                 _store_session_id(session_id)
 
         text = (final_result_text or "").strip() or "[no output]"
+        # _require_done_completion is itself a terminal acceptance gate:
+        # when the run loaded daemon_common MCP, a missing/bad finish()
+        # call marks the run failed and raises here, before any usage is
+        # persisted or the run is marked done.
         self._require_done_completion(run_dir, text)
+
+        # Final re-check: the classification above (including
+        # _require_done_completion, which reads a completion file and can
+        # take non-trivial time) could still race a watchdog/manual
+        # cancel. Persist the buffered usage candidate — and mark done —
+        # only for a run accepted as successful by every prior gate.
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+
+        if usage_candidate is not None:
+            usage, raw = usage_candidate
+            try:
+                run_dir.record_cli_tokens(
+                    input=usage["input"], output=usage["output"],
+                    cached=usage["cached"], thinking=usage["thinking"],
+                    raw=raw,
+                )
+            except Exception:
+                pass
+
         run_dir.mark_done(text)
         return text
 
@@ -4251,6 +4296,9 @@ class DaemonManager:
         final_result_text: str | None = None
         final_is_error = False
         timed_out = False
+        # Buffered, not yet persisted — see the result-event handler and
+        # the post-classification persistence below for why.
+        usage_candidate: tuple[dict[str, int], dict] | None = None
 
         try:
             assert proc.stdout is not None
@@ -4284,20 +4332,19 @@ class DaemonManager:
                 elif etype == "result":
                     final_result_text = event.get("result") or ""
                     final_is_error = bool(event.get("is_error"))
-                    # Accumulate the follow-up's token usage into
-                    # daemon.json.cli_tokens for UI display — same UI-only,
-                    # never-ledger policy as the initial emanation run.
-                    usage = _normalize_claude_usage(event.get("usage"))
-                    if usage is not None:
-                        try:
-                            run_dir.record_cli_tokens(
-                                input=usage["input"], output=usage["output"],
-                                cached=usage["cached"],
-                                thinking=usage["thinking"],
-                                raw=event.get("usage"),
-                            )
-                        except Exception:
-                            pass
+                    # Buffer the follow-up's token usage — do not persist
+                    # yet. A result read right at the deadline can still
+                    # be followed by a timeout classification below;
+                    # persisting here would leave usage for a follow-up
+                    # that is reported as failed. Retain only the first
+                    # valid terminal usage candidate and persist once
+                    # terminal classification (timeout, exit code,
+                    # is_error) has passed — same UI-only, never-ledger
+                    # policy as the initial emanation run.
+                    if usage_candidate is None:
+                        usage = _normalize_claude_usage(event.get("usage"))
+                        if usage is not None:
+                            usage_candidate = (usage, event.get("usage"))
 
             if time.monotonic() >= deadline:
                 timed_out = True
@@ -4341,6 +4388,17 @@ class DaemonManager:
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
             return {"status": "error", "id": em_id, "message": err}
+
+        if usage_candidate is not None:
+            usage, raw = usage_candidate
+            try:
+                run_dir.record_cli_tokens(
+                    input=usage["input"], output=usage["output"],
+                    cached=usage["cached"], thinking=usage["thinking"],
+                    raw=raw,
+                )
+            except Exception:
+                pass
 
         output = (final_result_text or "").strip()
         if output:
