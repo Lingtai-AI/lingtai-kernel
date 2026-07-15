@@ -8,10 +8,11 @@ redaction, and terminal-failure artifact/notification publication. Moving the
 text-assembly logic here makes *rendering* it importable, directly callable
 production code instead of a string literal buried in lifecycle control
 flow — it does not turn the watcher's own policy into independently
-executable/importable code: the returned value is still generated ``python
--c`` program *source text*, run later as a detached subprocess, not a
-function this process calls. For Core-produced requests, the generated program
-preserves the previously shipped runtime behavior; this slice does not claim
+executable/importable code: the returned value is still generated Python
+program *source text*, executed later by the detached
+``refresh_watcher_entrypoint`` process, not a function this process calls. For
+Core-produced requests, the generated program preserves the previously shipped
+runtime behavior; this slice does not claim
 textual byte identity, redesign retry/heartbeat/duplicate policy, or
 introduce a process-supervision Port; that remains a later slice.
 
@@ -50,9 +51,9 @@ concrete environment-variable name the transport uses — is entirely adapter
 mechanism: see ``lingtai.adapters.posix.refresh_watcher.build_watcher_env``
 and its ``ENV_OVERWRITE_VAR``. This module does not define or reference that
 variable name; Core knows only the boolean ``request.env_overwrite`` policy
-bit, never the concrete env-var transport. The POSIX adapter
-(`lingtai.adapters.posix.refresh_watcher`) is the only caller that launches
-the rendered text as a real detached process.
+bit, never the concrete env-var transport. The POSIX entrypoint executes the
+rendered text inside the detached process launched by
+``lingtai.adapters.posix.refresh_watcher``.
 """
 from __future__ import annotations
 
@@ -92,13 +93,13 @@ def _decode_identity_fields(identity_fields_json: str) -> dict:
 
 
 def render_watcher_script(request: RefreshWatcherRequest) -> str:
-    """Render the complete, self-contained watcher program source.
+    """Render the complete watcher program source.
 
-    The returned text is a standalone Python program: it re-derives every
-    value it needs (handshake paths, relaunch command, identity fields) from
-    literals embedded by this function, and it imports only stdlib plus the
-    kernel's redaction helper at runtime. It carries no reference to this
-    process's live objects.
+    The returned text embeds every request-derived value it needs (handshake
+    paths, relaunch command, identity fields), and carries no reference to this
+    process's live objects. Execution requires an importable LingTai package for
+    the kernel's redaction helper and canonical process-command matcher in
+    addition to the Python standard library.
     """
     taken_path = request.taken_path
     lock_path = request.lock_path

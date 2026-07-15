@@ -237,11 +237,13 @@ Windows production adapter is explicitly out of scope for this slice.
    `lingtai.cli._check_duplicate_process` uses — at runtime via
    `from lingtai.kernel.process_match import match_agent_run` in the
    rendered program text. The generated program MUST NOT embed or maintain
-   a second local `match_agent_run` definition; `match_agent_run`'s launch-form
-   matching policy (module/console/legacy command forms, program-anchoring,
-   working-directory match) has exactly one implementation, shared by the CLI
-   duplicate-process check and the watcher's stale-duplicate cleanup, not two
-   copies kept in parity by a test.
+   a second local `match_agent_run` definition; the CLI duplicate-process check
+   and the watcher's stale-duplicate cleanup MUST share the one importable Core
+   implementation of the launch-form policy (module/console/legacy command
+   forms, program-anchoring, working-directory match). The standalone
+   `lingtai-doctor` bundle intentionally retains a stdlib-only copy because it
+   cannot import kernel modules; `tests/test_process_match.py` MUST continue to
+   keep that bundle copy in parity with the canonical Core implementation.
 7. The generated watcher program's terminal-failure metadata bounds and
    redacts `last_stderr_tail`, `last_cleanup_error`, and `last_relaunch_error`
    identically (via the shared `_redact_bounded` helper in the rendered
@@ -321,7 +323,7 @@ hand-off or how the request crosses the process boundary.
 `test_encode_decode_request_roundtrip`, `test_encode_request_is_deterministic`,
 `test_decode_request_invalid_payload_fails_loudly`, and
 `test_decode_request_rejects_extra_and_wrong_type_fields`
-(`tests/test_perform_refresh_handshake.py`) pin contract rule 9's
+(`tests/test_perform_refresh_handshake.py`) pin contract rule 10's
 serialization/validation guarantees directly against
 `refresh_watcher.encode_request`/`decode_request`, independent of any
 transport or subprocess.

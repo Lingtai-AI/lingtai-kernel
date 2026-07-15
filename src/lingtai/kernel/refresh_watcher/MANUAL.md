@@ -49,17 +49,17 @@ data afterward.
    (`src/lingtai/kernel/refresh_watcher/watcher_program.py`) first decodes
    `request.identity_fields_json` back to a `dict` via `_decode_identity_fields`
    — raising `ValueError` before generating any source if the snapshot is
-   invalid JSON or not a JSON object — then renders a complete,
-   self-contained Python program source: the ACK/lock handshake poll, the
+   invalid JSON or not a JSON object — then renders complete Python program
+   source independent of the parent process's live objects: the ACK/lock handshake poll, the
    12-attempt relaunch loop with a 10s health-check wait, stale same-agent
    duplicate-process cleanup (SIGTERM → 5s grace → SIGKILL), redacted event
    logging, and the terminal failure artifact/notification. This module
-   performs no OS calls itself. The rendered program's duplicate-process
-   guard imports the canonical Core process-command matcher
-   (`from lingtai.kernel.process_match import match_agent_run`,
-   `src/lingtai/kernel/process_match.py`) at runtime instead of embedding a
-   second copy of that policy — the same function the CLI's own
-   `_check_duplicate_process` uses.
+   performs no OS calls itself. Executing the rendered source requires an
+   importable LingTai package for the kernel's redaction helper and canonical
+   Core process-command matcher. The duplicate-process guard imports
+   `from lingtai.kernel.process_match import match_agent_run` at runtime
+   instead of embedding a second watcher copy of that policy — the same function
+   the CLI's own `_check_duplicate_process` uses.
 3. **The POSIX adapter encodes the request and launches the entrypoint.**
    `PosixRefreshWatcherAdapter.spawn_detached(request)`
    (`src/lingtai/adapters/posix/refresh_watcher.py`) calls
@@ -84,9 +84,11 @@ data afterward.
    watcher policy of its own — it is a thin decode→render→exec pipeline, so
    the watcher's actual runtime behavior remains entirely owned by
    `render_watcher_script`.
-5. **The watcher program runs standalone.** Once running it re-derives
-   everything it needs from literals embedded by `render_watcher_script`; it
-   holds no reference to the parent process's live objects and outlives it.
+5. **The watcher program runs independently of the parent's live objects.**
+   Once running it gets every request-derived value from literals embedded by
+   `render_watcher_script` and outlives the parent process. Its runtime imports
+   still require the LingTai package that supplied the entrypoint, redaction
+   helper, and canonical process-command matcher.
 
 ## Why
 
@@ -141,11 +143,14 @@ for a later slice.
 A later slice replaced the rendered program's embedded, duplicated
 `match_agent_run` definition with an import of the canonical Core policy
 (`lingtai.kernel.process_match.match_agent_run`) that the CLI's own
-duplicate-process check already used. Before this, the launch-form matching
-rule set existed as two hand-synchronized copies — the CLI's and one baked
+duplicate-process check already used. Before this, the CLI and watcher runtime
+consumers carried two hand-synchronized copies of the launch-form matching
+rule set — the CLI's and one baked
 into every rendered watcher program — kept in parity only by a test that
 string-sliced the generated source back into an executable function. Import
-replaces duplication: the matching policy now has exactly one implementation,
-still shared by both consumers, with no change to the policy itself, the
-watcher's own retry/heartbeat/duplicate-cleanup behavior, or anything else
-this Port renders.
+removes only the watcher duplicate: the CLI and watcher now share one
+importable Core implementation. The standalone `lingtai-doctor` bundle
+intentionally retains its stdlib-only copy, kept in parity by
+`tests/test_process_match.py`. This changes neither the matching policy nor the
+watcher's own retry/heartbeat/duplicate-cleanup behavior or anything else this
+Port renders.

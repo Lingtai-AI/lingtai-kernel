@@ -47,12 +47,12 @@ what/how/why walkthrough.
 - `_decode_identity_fields(identity_fields_json)` — decodes+validates the
   JSON snapshot back to a `dict`, raising `ValueError` on invalid JSON or a
   non-object top-level value
-  (`src/lingtai/kernel/refresh_watcher/watcher_program.py:61-84`).
+  (`src/lingtai/kernel/refresh_watcher/watcher_program.py:69-92`).
 - `render_watcher_script(request)` — pure Core-owned function rendering the
   complete watcher program source from a `RefreshWatcherRequest` (decoding
   `identity_fields_json` via `_decode_identity_fields` for the rendered
   literal shape); performs no OS calls
-  (`src/lingtai/kernel/refresh_watcher/watcher_program.py:87-476`). The
+  (`src/lingtai/kernel/refresh_watcher/watcher_program.py:95-471`). The
   rendered program's stale same-agent duplicate-process guard
   (`_is_same_agent_run`) imports the canonical Core process-command matcher
   `lingtai.kernel.process_match.match_agent_run`
@@ -127,8 +127,10 @@ detached process, not a redesign of that policy. The one deliberate structural
 change since that extraction: the rendered program's stale-duplicate guard now
 imports `lingtai.kernel.process_match.match_agent_run`
 (`src/lingtai/kernel/process_match.py`) instead of embedding its own copy of
-that matching policy, so the launch-form matching rules have exactly one
-implementation shared with the CLI's duplicate-process check — this is not a
+that matching policy, so the watcher and CLI runtime consumers share one
+importable Core implementation, while the standalone `lingtai-doctor` bundle
+intentionally retains its stdlib-only copy under
+`tests/test_process_match.py` parity coverage — this is not a
 claim that the watcher's own retry/heartbeat/duplicate-cleanup policy became
 independently unit-testable, only that one helper it calls is now imported
 rather than duplicated. `base_agent/ANATOMY.md`
