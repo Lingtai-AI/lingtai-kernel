@@ -142,6 +142,27 @@ def _make_adapter(**kwargs) -> MimoAdapter:
     return MimoAdapter(api_key="fake", base_url="https://api.xiaomimimo.com", **kwargs)
 
 
+def _override_projected_provider_tokens(session, values: list[int]) -> None:
+    """Make compaction state-machine tests independent of the active tokenizer.
+
+    These tests exercise boundary/replay/failure behavior, not the estimator's
+    arithmetic.  The real local tokenizer (tiktoken, sentencepiece, or a
+    fallback) is therefore intentionally *not* the trigger oracle here:
+    state-machine tests inject deterministic projected provider-token values
+    with comfortable headroom.  Dedicated projection/calibration tests should
+    not use this seam, so they continue to exercise the real logic.
+    """
+    projected = iter(values)
+
+    def deterministic_projection(_prebuilt_items=None):
+        try:
+            return next(projected)
+        except StopIteration as exc:  # Catch an accidentally unplanned request.
+            raise AssertionError("test consumed more projected-token values than scripted") from exc
+
+    session._projected_provider_tokens = deterministic_projection
+
+
 def _make_session(
     *,
     context_window: int = 1_000_000,
@@ -149,6 +170,7 @@ def _make_session(
     turns: list | None = None,
     compact_output=None,
     compact_error=None,
+    projected_provider_tokens: list[int] | None = None,
 ) -> tuple[MimoResponsesSession, ScriptedResponses]:
     adapter = _make_adapter(compact_token_limit=compact_token_limit)
     client = FakeClient(turns or [], compact_output, compact_error)
@@ -156,6 +178,8 @@ def _make_session(
     session = adapter.create_chat(
         "mimo-v2.5-pro", "system prompt", tools=None, context_window=context_window,
     )
+    if projected_provider_tokens is not None:
+        _override_projected_provider_tokens(session, projected_provider_tokens)
     return session, client.responses
 
 
@@ -236,7 +260,14 @@ def test_factory_omitted_wire_api_defaults_to_responses():
 
 
 def test_never_sends_context_management():
-    session, fake = _make_session(compact_token_limit=100, turns=[_message_response("ok", 10)])
+    session, fake = _make_session(
+        compact_token_limit=100,
+        # Cross the standalone threshold deterministically; the single turn
+        # still has no safe boundary, and generic context_management remains
+        # absent regardless of tokenizer behavior.
+        projected_provider_tokens=[250],
+        turns=[_message_response("ok", 10)],
+    )
     assert session._compact_threshold is None
     session.send("hello")
     assert "context_management" not in fake.create_calls[0]
@@ -347,6 +378,9 @@ def test_compaction_fires_and_replays_opaque_prefix_with_live_trailing_turn():
     session, fake = _make_session(
         context_window=1_000_000,
         compact_token_limit=150,
+        # Keep this state-machine trigger independent of tiktoken/sentencepiece:
+        # three comfortably-below estimates, then a comfortably-above one.
+        projected_provider_tokens=[100, 100, 100, 250],
         turns=[
             _message_response("r0", 50), _message_response("r1", 80),
             _message_response("r2", 110), _message_response("r3", 200),
@@ -376,6 +410,9 @@ def test_compaction_fires_and_replays_opaque_prefix_with_live_trailing_turn():
 def test_compact_request_shape_no_store_no_context_management():
     session, fake = _make_session(
         context_window=1_000_000, compact_token_limit=150,
+        # Tokenizer-independent state-machine trigger; 250 is deliberate
+        # headroom above the unchanged 150-token contract threshold.
+        projected_provider_tokens=[100, 100, 100, 250],
         turns=[
             _message_response("r0", 50), _message_response("r1", 80),
             _message_response("r2", 110), _message_response("r3", 200),
@@ -403,6 +440,9 @@ def test_compact_request_kwargs_bind_against_real_sdk_signature():
 
     session, fake = _make_session(
         context_window=1_000_000, compact_token_limit=150,
+        # The SDK-signature assertion needs a deterministic state-machine
+        # trigger; it is not a tokenizer calibration test.
+        projected_provider_tokens=[100, 100, 100, 250],
         turns=[
             _message_response("r0", 50), _message_response("r1", 80),
             _message_response("r2", 110), _message_response("r3", 200),
@@ -421,6 +461,9 @@ def test_compact_request_kwargs_bind_against_real_sdk_signature():
 def test_additive_delta_after_compaction_only_appends_new_entries():
     session, fake = _make_session(
         context_window=1_000_000, compact_token_limit=150,
+        # The fifth value keeps the post-compaction delta below the threshold;
+        # all trigger decisions are deterministic rather than tokenizer-driven.
+        projected_provider_tokens=[100, 100, 100, 250, 100],
         turns=[
             _message_response("r0", 50), _message_response("r1", 80),
             _message_response("r2", 110), _message_response("r3", 200),
@@ -450,6 +493,9 @@ def test_no_encrypted_content_logged(caplog):
 
     session, fake = _make_session(
         context_window=1_000_000, compact_token_limit=150,
+        # Logging assertions still need a real compaction, but must not depend
+        # on whichever tokenizer happens to be installed in the test runner.
+        projected_provider_tokens=[100, 100, 100, 250],
         turns=[
             _message_response("r0", 50), _message_response("r1", 80),
             _message_response("r2", 110), _message_response("r3", 200),
@@ -468,6 +514,9 @@ def test_no_encrypted_content_logged(caplog):
 def test_no_compaction_strictly_below_threshold():
     session, fake = _make_session(
         context_window=1_000_000, compact_token_limit=100_000,
+        # Explicitly exercise the strict-below branch without making its
+        # no-trigger result depend on the installed tokenizer.
+        projected_provider_tokens=[100, 100, 100, 100, 100, 100],
         turns=[_message_response(f"r{i}", 20) for i in range(6)],
     )
     for i in range(6):
@@ -484,6 +533,10 @@ def test_no_compaction_strictly_below_threshold():
 def test_compact_provider_error_is_a_hard_failure():
     session, fake = _make_session(
         context_window=1_000_000, compact_token_limit=150,
+        # Force only the fourth request over the threshold with ample margin;
+        # this failure-path test intentionally does not ask a tokenizer to
+        # decide whether the state machine reaches ``compact()``.
+        projected_provider_tokens=[100, 100, 100, 250],
         turns=[
             _message_response("r0", 50), _message_response("r1", 80),
             _message_response("r2", 110), _message_response("r3", 200),
@@ -507,6 +560,9 @@ def test_compact_provider_error_is_a_hard_failure():
 def test_compact_empty_output_is_a_hard_failure():
     session, fake = _make_session(
         context_window=1_000_000, compact_token_limit=150,
+        # Deterministic trigger with safe headroom; empty-output handling is
+        # deliberately tested after the boundary logic has been reached.
+        projected_provider_tokens=[100, 100, 100, 250],
         turns=[
             _message_response("r0", 50), _message_response("r1", 80),
             _message_response("r2", 110), _message_response("r3", 200),
@@ -525,6 +581,9 @@ def test_hard_failure_does_not_fall_back_to_chat_completions_wire():
     turn on the Chat Completions session/wire instead."""
     session, fake = _make_session(
         context_window=1_000_000, compact_token_limit=150,
+        # Deterministic trigger with safe headroom keeps this wire/fallback
+        # assertion independent of the installed tokenizer.
+        projected_provider_tokens=[100, 100, 100, 250],
         turns=[
             _message_response("r0", 50), _message_response("r1", 80),
             _message_response("r2", 110), _message_response("r3", 200),
@@ -545,6 +604,9 @@ def test_no_safe_boundary_yet_is_not_a_hard_failure():
     enough history for a safe boundary, this is a no-op, not an error."""
     session, fake = _make_session(
         context_window=1_000_000, compact_token_limit=1,
+        # Cross the threshold deterministically, then prove that the missing
+        # boundary (not tokenizer arithmetic) makes compaction a no-op.
+        projected_provider_tokens=[2],
         turns=[_message_response("only turn", 999_999)],
         compact_error=RuntimeError("must not be called"),
     )
@@ -599,6 +661,10 @@ def test_codex_standalone_compaction_failure_remains_non_fatal():
     )
     adapter._client = client
     session = adapter.create_chat("gpt-5.6-sol", "system prompt", tools=None, context_window=1000)
+    # This is a Codex failure-policy regression guard, not a tokenizer test:
+    # drive its state machine with the same deterministic trigger seam so the
+    # assertion remains portable across tokenizer backends.
+    _override_projected_provider_tokens(session, [100, 100, 100, 100, 250])
     for i in range(4):
         session.send(f"warmup {i}")
 
