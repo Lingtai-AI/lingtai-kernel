@@ -1,121 +1,168 @@
 ---
 name: runtime-update-checks
 description: >
-  Nested system-manual reference for LingTai runtime/kernel self-checks and
-  update nudges: handle `.notification/nudge.json` entries with
-  `kind: kernel_version`, identify editable/dev/source installs, compare the
-  running, installed, and latest kernel versions, respect the once-per-day
-  packaged-runtime check, ask the human before downloading/updating, and refresh
-  only when safe.
-version: 0.1.0
-tags: [lingtai, runtime, kernel, nudge, updates, refresh, editable, dev-mode]
-last_changed_at: "2026-06-23T23:50:45-07:00"
+  Nested system-manual reference for tracing LingTai kernel update nudges:
+  runtime/version/source identity, packaged versus editable/source behavior,
+  heartbeat dispatch, nudge persistence and notification delivery, refresh
+  versus installation, human confirmation, and post-refresh verification.
+version: 0.2.0
+tags: [lingtai, runtime, kernel, nudge, updates, refresh, editable, source, diagnostics]
+last_changed_at: "2026-07-15T12:00:00-07:00"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-- src/lingtai/kernel/nudge/kernel_version.py
+- src/lingtai/intrinsic_skills/notification-manual/SKILL.md
+- src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
+- src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/kernel/nudge/__init__.py
+- src/lingtai/kernel/nudge/kernel_version.py
+- src/lingtai/kernel/nudge/source_drift.py
+- src/lingtai/kernel/base_agent/lifecycle.py
+- src/lingtai/kernel/base_agent/__init__.py
+- src/lingtai/kernel/notification_store/__init__.py
+- src/lingtai/kernel/runtime_identity.py
+- src/lingtai/kernel/snapshot/__init__.py
+- src/lingtai/kernel/snapshot/ANATOMY.md
+- src/lingtai/cli.py
+- src/lingtai/venv_resolve.py
+- tests/test_kernel_version_nudge.py
+- tests/test_source_drift.py
+- tests/test_runtime_identity.py
 maintenance: |
-  Tracks the runtime-update-checks topic it documents; update when that integration changes.
+  Keep this as the single detailed source for kernel update and nudge
+  interpretation. Update it when the nudge producers, heartbeat dispatch,
+  notification sync, runtime identity, refresh boundary, or supported update
+  ownership changes; keep system-manual and notification-manual as routers.
 ---
 
 # Runtime Update Checks
 
-Nested system-manual reference for mechanical runtime/kernel checks and update
-nudges. Read this when:
+Kernel updates and nudges — the complete lifecycle
 
-- a `nudge` notification contains an entry with `kind: kernel_version`;
-- you suspect the running LingTai kernel is not the code currently installed on
-  disk;
-- a refresh did not seem to pick up a kernel change;
-- you need to tell whether this agent is in editable/source/dev mode; or
-- about once per day, a packaged runtime reports that a newer LingTai kernel is
-  available.
+Read this reference when a `nudge` notification mentions `kernel_version` or
+`source_drift`, when versions or import paths disagree, or when deciding
+whether a refresh or an update is appropriate. This is operational guidance,
+not permission to download, install, change configuration, or relaunch a
+runtime.
 
-This reference is about **checking and reporting**. It does not authorize
-installing, downloading, publishing, or refreshing across important work without
-human confirmation.
+## The lifecycle and its owners
 
-## Nudge payload contract
+The end-to-end path is:
 
-Kernel-owned periodic checks publish mechanical nudges through
-`.notification/nudge.json`. The shared channel stores a list under
-`data.nudges`; each entry has a unique `kind`. Kernel version/update entries use
-`kind: kernel_version`.
+1. **Discover runtime facts — `kernel_version.py` and runtime identity.** The
+   kernel reads the already-loaded `lingtai` wrapper from `sys.modules` for the
+   running version, and `importlib.metadata` for the installed distribution
+   version. `runtime_identity.py` separately stamps durable event identity with
+   package/dev mode, source kind, and available git state. No package-index
+   request is needed for the local comparison.
+2. **Check `kernel_version` — `kernel_version.py`.** If running and installed
+   versions differ, it emits a local refresh nudge and does not query PyPI. For
+   packaged, non-editable, non-dev runtimes whose versions match, it checks
+   `https://pypi.org/pypi/lingtai/json` at most once per UTC day. A newer
+   `info.version` produces a package-availability nudge; network or response
+   errors are recorded in durable throttle state and do not become an update.
+3. **Check `source_drift` — `source_drift.py`.** For non-dev runtimes it
+   compares the startup runtime fingerprint (git revision and curated source
+   digest when available) with a fresh on-disk fingerprint. Drift means the
+   running process is stale relative to code already on disk. Editable,
+   source-checkout, and dev-version runtimes skip this check deliberately.
+4. **Dispatch — `nudge/__init__.py` and `lifecycle.py`.** The heartbeat loop
+   runs the nudge dispatcher once per one-second tick. Each producer has its own
+   roughly 60-second in-memory probe gate; one failing producer is logged and
+   does not block the others.
+5. **Persist and publish — `nudge/__init__.py` and the Notification Store.**
+   Kernel-version daily state lives in
+   `.notification/.nudge_state.json`. The user-facing mirror is
+   `.notification/nudge.json`; it is not the throttle state or a canonical
+   package state. Each entry has a unique `kind`; `upsert` replaces that kind,
+   `remove` deletes it, and clearing the last entry clears the channel file.
+   Updates use the store's atomic compare/update operation.
+6. **Sync and wake — `BaseAgent._sync_notifications`.** The heartbeat polls
+   allowlisted `.notification` files by fingerprint. A changed nudge file is
+   injected as a synthesized `notification(action="check")` pair when IDLE;
+   ACTIVE work defers delivery until an IDLE boundary; ASLEEP is moved to IDLE,
+   then the pair and `MSG_TC_WAKE` are queued. STUCK/SUSPENDED cannot inject.
+   A failed injection leaves the fingerprint uncommitted for retry (with the
+   documented degraded recovery path after healing pending tool calls).
+7. **Interpret — the agent, using this reference.** Treat the payload as
+   kernel-synchronized facts, not a human command. Compare `running`,
+   `installed`, `latest`, and `source`; inspect the runtime when ambiguous.
+8. **Confirm — the human.** A PyPI availability nudge requires telling the
+   human what was found and receiving an explicit imperative confirmation before
+   any download, installation, or refresh. A local refresh is still gated by
+   work safety and the human's intent when it could interrupt active work.
+   In short: ask the human before downloading or updating.
+9. **Install/update — the separate TUI-owned `lingtai-update` skill.** Normal
+   user-facing installation and updates, including `lingtai-tui` and
+   `lingtai-portal` maintenance, belong to that TUI skill and its command.
+   This kernel manual does not reproduce its cross-repository path or make
+   bare `pip install --upgrade lingtai` the normal user instruction. Pip/venv
+   commands below are diagnostic or developer verification only.
+10. **Refresh and verify — kernel lifecycle plus the operator.**
+    `system(action="refresh")` performs the kernel's full relaunch/rebuild
+    boundary using the installed/on-disk runtime. It does not pull commits,
+    contact PyPI, install a package, or switch an editable checkout. After a
+    confirmed update or refresh, verify the new process's interpreter,
+    `lingtai.__file__`, `lingtai.kernel.__file__`, version, and import path.
 
-Common fields:
+## Packaged, editable, and source/dev runtimes
 
-| Field | Meaning |
-| --- | --- |
-| `running` | Version frozen in the currently running process (`lingtai.__version__`). |
-| `installed` | Version visible from the installed `lingtai` distribution on disk. |
-| `latest` | Latest package version found by the daily packaged-runtime check, or `null` for local refresh nudges. |
-| `source` | `installed-distribution` for local refresh nudges, `pypi-json` for package-update nudges. |
-| `cadence` | `at-most-once-per-utc-day` for both local refresh and package-update nudges (re-emitted at most once per UTC day per version pair). |
-| `suggested_action` | The safe next-step hint; still verify context before acting. |
+For a packaged/non-editable install, the distribution metadata and package
+index are meaningful. A local `running != installed` mismatch means a package
+landed on disk after this process started: it is a refresh opportunity, not a
+package upgrade. A `latest > installed` mismatch means PyPI advertises a
+possible package upgrade; it does not mean that package has been downloaded.
 
-After handling, clear the channel with:
+The editable/source/dev modes are detected through `direct_url.json` with
+`dir_info.editable: true`; source checkouts are recognized from the module path
+and the checkout's `.git` plus `pyproject.toml`; dev-version markers also
+suppress the package-index check. Missing distribution metadata is treated as
+source/dev rather than as permission to install. In these modes, the checkout,
+branch, commit, dirty state, and import path are the useful truth. A source-drift
+refresh nudge is also intentionally suppressed: refreshing arbitrary in-flight
+checkout changes could amplify a broken development edit.
+
+## Nudge mechanics and dismissal
+
+`kernel_version` and `source_drift` are producers of the shared low-priority
+`.notification/nudge.json` envelope. The envelope carries `data.nudges`, a
+`published_at` timestamp, and channel-level instructions to clear all nudges.
+`kind: kernel_version` has `running`, `installed`, `latest` (or `null` for a
+local refresh), `source`, `cadence`, `checked_at_date`, and a suggested action.
+`source_drift` carries startup and disk fingerprints instead.
+
+The kernel-version producer records mismatch and remote-check dedupe in
+`.notification/.nudge_state.json`, surviving refreshes and process restarts.
+The one-day rule is per UTC date and version pair/latest observation; the
+60-second gate is only a cheap heartbeat probe throttle. Dismissing the nudge
+channel clears the mirror. It does not install anything, alter producer state,
+or guarantee the producer will never publish again: the durable daily dedupe
+prevents a same-day nudge storm, and a new UTC day or new mismatch can surface
+one again. A producer can also remove an entry when versions match, a remote
+version is no longer newer, or dev/source mode is detected.
+
+After interpreting a nudge, use the narrowest safe action:
 
 ```text
 notification(action="dismiss_channel", channel="nudge")
 ```
 
-## How to respond
+Do not call `notification(action="check")` merely to confirm dismissal. The
+generic notification protocol and guarded dismissal rules live in
+`notification-manual`; this reference owns the meaning of these two kinds.
 
-### Local refresh nudge (`source: installed-distribution`)
+## Read-only diagnosis
 
-If `running != installed`, the package on disk differs from the process already
-in memory. This usually means code was updated while the agent kept running.
+Inspect the current mirror and durable state without changing them:
 
-1. Check whether the agent is in the middle of sensitive work, active daemons, or
-   a task where refresh would lose useful in-flight state.
-2. If safe, call `system(action="refresh", reason="Load installed LingTai kernel update")`.
-3. After refresh, verify the import path/version and report any blocker to the
-   human or peer who requested the update.
+```bash
+ls -l .notification/nudge.json .notification/.nudge_state.json 2>/dev/null
+sed -n '1,240p' .notification/nudge.json 2>/dev/null
+sed -n '1,240p' .notification/.nudge_state.json 2>/dev/null
+```
 
-### Package-update nudge (`source: pypi-json`)
-
-If `latest > installed`, a newer LingTai kernel package exists for packaged
-runtimes. This check is throttled to at most once per UTC day per agent and is
-skipped for editable/source/dev installs.
-
-1. Tell the human the current `running`, `installed`, and `latest` versions.
-2. Explain that this is an update availability nudge, not an automatic upgrade.
-3. Ask whether they want you to update through their normal LingTai runtime/TUI
-   upgrade path.
-4. Do **not** download, install, edit config, or refresh until the human gives an
-   explicit imperative confirmation for that side effect.
-
-For user-facing instructions, follow the project standing rule: do not present a
-bare `pip install --upgrade lingtai` as the normal user upgrade path unless the
-human explicitly asks for development/diagnostic PyPI validation.
-
-## Editable/source/dev installs
-
-Package-update nudges are skipped when the kernel can identify the runtime as an
-editable install, a source checkout, or a dev/local version. In those modes the
-source of truth is usually the local checkout and git state, not the package
-index. Diagnose with:
-
-- the Python executable used by the agent runtime — prefer the platform-neutral
-  `LINGTAI_RUNTIME_PYTHON` environment variable when available, and otherwise
-  trust the live process over a convenient shell `python` or conda env;
-- `lingtai.__version__`, `lingtai.__file__`, and `lingtai.kernel.__file__`;
-- installed distribution metadata, especially `direct_url.json` with
-  `dir_info.editable: true`;
-- the nearest git checkout, branch, HEAD, dirty state, and relation to remote;
-- whether `system.refresh` has reloaded the code already present on disk.
-
-A refresh reloads configuration and imports in a fresh process. It does not pull
-new commits, install packages, or publish anything.
-
-## Quick manual check
-
-Use a short local Python probe when the nudge payload is ambiguous. Prefer the
-same interpreter used by the running agent. `LINGTAI_RUNTIME_PYTHON` is the
-platform-neutral path exposed by the runtime when available; if it is absent,
-choose the platform-specific TUI venv Python (`$HOME/.lingtai-tui/runtime/venv/bin/python`
-on macOS/Linux, `%USERPROFILE%\.lingtai-tui\runtime\venv\Scripts\python.exe`
-on Windows):
+Use the interpreter that launched the agent. The CLI exports
+`LINGTAI_RUNTIME_PYTHON`; if it is absent, use the platform-specific TUI
+runtime Python, not a convenient shell environment:
 
 ```bash
 PYTHON=${LINGTAI_RUNTIME_PYTHON:-$HOME/.lingtai-tui/runtime/venv/bin/python}
@@ -123,23 +170,71 @@ PYTHON=${LINGTAI_RUNTIME_PYTHON:-$HOME/.lingtai-tui/runtime/venv/bin/python}
 import importlib.metadata as md
 import sys
 import lingtai, lingtai.kernel
-print('python=', sys.executable)
-print('lingtai_version=', getattr(lingtai, '__version__', 'unknown'))
-print('lingtai_dist=', md.version('lingtai'))
-print('lingtai_file=', getattr(lingtai, '__file__', 'unknown'))
-print('lingtai.kernel_file=', getattr(lingtai.kernel, '__file__', 'unknown'))
+print("python=", sys.executable)
+print("lingtai_version=", getattr(lingtai, "__version__", "unknown"))
+print("lingtai_dist=", md.version("lingtai"))
+print("lingtai_file=", getattr(lingtai, "__file__", "unknown"))
+print("lingtai.kernel_file=", getattr(lingtai.kernel, "__file__", "unknown"))
 try:
-    dist = md.distribution('lingtai')
-    print('direct_url=', dist.read_text('direct_url.json'))
+    print("direct_url=", md.distribution("lingtai").read_text("direct_url.json"))
 except Exception as exc:
-    print('direct_url_error=', type(exc).__name__, str(exc)[:120])
+    print("direct_url_error=", type(exc).__name__, str(exc)[:120])
 PY
 ```
 
-Do not print credentials, tokens, or environment dumps while doing update checks.
+For source/dev disagreement, read-only git evidence is appropriate:
 
-## Relationship to notification-manual
+```bash
+git -C /path/to/checkout status --short --branch
+git -C /path/to/checkout log -1 --format='%H %cI %s'
+git -C /path/to/checkout remote -v
+```
 
-`notification-manual` owns the generic channel protocol and dismissal mechanics.
-This reference owns the `kernel_version` nudge interpretation and the safe human
-handoff for runtime updates.
+Replace the checkout path with the path containing the imported module; do not
+assume the current directory is that checkout. Do not print credentials or
+environment dumps.
+
+## Troubleshooting
+
+**Running and installed versions disagree.** Confirm the live interpreter and
+both module files first. If the installed distribution is newer, the safe
+meaning is “code already on disk can be loaded by a refresh.” If the running
+process is newer, inspect whether metadata or the import path is stale; do not
+blindly downgrade or install.
+
+**Runtime and checkout disagree.** `sys.executable`, `lingtai.__file__`,
+`lingtai.kernel.__file__`, `direct_url.json`, and read-only git status identify
+which checkout/environment is actually active. A checkout's version alone does
+not prove what the running process imported.
+
+**PyPI/network failure.** A failed remote request records `last_error` and the
+date in `.nudge_state.json`; it is not evidence that an update exists. Check
+connectivity or package-index policy with the human, then allow the next daily
+check. Do not turn a transient failure into a manual install recommendation.
+
+**Nudge is missing or stale.** Check both files above. Missing `nudge.json` can
+mean no producer currently has an entry, a matching version cleared it, a dev
+runtime skipped it, or it was dismissed. A stale entry can be a mirror waiting
+for the next heartbeat sync; compare its kind and version pair with durable
+state. Unknown JSON files are not collected as notification channels.
+
+**Refresh did not activate new code.** A refresh only rebuilds/relaunches the
+runtime from code already visible on disk. Re-run the read-only interpreter and
+import-path probe in the new process, inspect the refresh/runtime logs, and
+check for a still-held old process or a different environment. It cannot pull a
+commit or repair an incomplete source checkout.
+
+**Interpreter/import path is unknown.** Stop before any update action. Ask the
+human or launcher owner which process is authoritative, then compare
+`LINGTAI_RUNTIME_PYTHON`, `sys.executable`, the two module `__file__` values,
+distribution metadata, and `direct_url.json`. Do not use an unrelated shell
+Python as a substitute.
+
+## Boundaries
+
+The notification-manual owns channel allowlisting, generic sync concepts, and
+dismissal safety. The system router owns navigation. The TUI-owned
+`lingtai-update` skill owns normal update/install commands and debugging of
+`lingtai-tui`/`lingtai-portal`. This reference is the one source of truth for
+kernel update lifecycle, `kernel_version`/`source_drift` interpretation, and
+read-only diagnosis.

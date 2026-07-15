@@ -8,7 +8,7 @@ description: >
   producing, or debugging notification payloads; skip for dismissal policy.
 version: 0.1.0
 tags: [lingtai, notifications, channels, protocol, sync, nudge]
-last_changed_at: "2026-07-12T20:20:43-07:00"
+last_changed_at: "2026-07-15T12:00:00-07:00"
 related_files:
 - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
 - src/lingtai/tools/notification/schema.py
@@ -36,11 +36,12 @@ ignored by collection, and kernel publish/dismiss helpers reject names outside
 the allowlist. This prevents arbitrary workdir files from entering the
 model-visible notification lane.
 
-`nudge` is the formal channel for mechanical, throttled checks. For example,
-runtime update checks publish `data.nudges[]` entries with
-`kind: kernel_version`; route those through
-`../../../system-manual/reference/runtime-update-checks/SKILL.md` before asking a human to update or
-refresh.
+`nudge` is the formal channel for mechanical, throttled checks. Runtime update
+checks publish `data.nudges[]` entries with `kind: kernel_version`, and source
+freshness checks may publish `kind: source_drift`; route both through the
+system-manual's nested `runtime-update-checks` reference before asking a human
+to update or refresh. That reference is the detailed source of truth; this
+manual owns only the generic channel protocol.
 
 ## Envelope and producer instructions
 

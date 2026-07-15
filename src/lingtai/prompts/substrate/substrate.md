@@ -56,7 +56,10 @@ example `~/.lingtai-tui/runtime/venv` on macOS/Linux) and should confirm the
 module files it imports (`lingtai.__file__`, `lingtai.kernel.__file__`). Do not
 infer freshness from a convenient shell `python`, conda env, or checkout;
 `refresh` reloads the current on-disk/runtime surface but does not fetch or
-switch code by itself.
+switch code by itself. For a `kernel_version` or `source_drift` nudge, route to
+the system-manual nested `runtime-update-checks` reference for the lifecycle,
+human-confirmation gate, and read-only diagnosis; normal installation/update
+commands remain TUI-managed.
 
 ## II · Life states
 
