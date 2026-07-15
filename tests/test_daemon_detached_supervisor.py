@@ -624,7 +624,15 @@ def test_real_manager_handle_emanate_capsule_and_fresh_active_control(tmp_path, 
     agent.service.model = "fake-model"
     agent.service.api_key = "INLINE_API_KEY_SENTINEL"
     agent.service._base_url = None
-    agent.service._provider_defaults = {}
+    # The private in-process alias must be normalized to the public manifest
+    # key in the one-shot capsule.  ``api_compat`` is intentionally
+    # redaction-shaped: the durable manifest hides it, while the execution
+    # child must still receive the real value and pass its redaction gate.
+    agent.service._provider_defaults = {
+        "lingtai-supervisor-test-fake": {
+            "api_compat": "PROVIDER_DEFAULT_RUNTIME_SENTINEL",
+        },
+    }
     monkeypatch.setenv(FAKE_LLM_ENV, "1")
     monkeypatch.setenv(
         "PYTHONPATH",
@@ -668,6 +676,11 @@ def test_real_manager_handle_emanate_capsule_and_fresh_active_control(tmp_path, 
     raw = "INLINE_API_KEY_SENTINEL"
     manifest = (run_dir.path / "supervisor_manifest.json").read_text(encoding="utf-8")
     assert raw not in manifest
+    assert "PROVIDER_DEFAULT_RUNTIME_SENTINEL" not in manifest
+    manifest_data = json.loads(manifest)
+    assert manifest_data["llm"]["provider_defaults"] == {
+        "lingtai-supervisor-test-fake": {"api_compat": "<redacted>"}
+    }
     for path in run_dir.path.rglob("*"):
         if path.is_file():
             assert raw not in path.read_text(encoding="utf-8", errors="replace")
