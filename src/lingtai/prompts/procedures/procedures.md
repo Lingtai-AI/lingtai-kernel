@@ -129,6 +129,11 @@ so they are often the token-efficient body for temporary work. Choose the daemon
 or model by exercising judgment about the task; when the human gives an explicit
 instruction, follow that instruction.
 
+When the same coding harness is available as a daemon backend option, prefer the
+daemon backend over launching that harness through Bash async, using the
+first-class daemon context-isolation and supervision path. Read `daemon-manual`
+for backend details.
+
 Treat daemon use as a practice to learn from, not a rigid policy: daemon need not
 always come first. Observe how humans route work to daemons and subagents — what
 they correct, what they approve, what they reject — and after a meaningful daemon
