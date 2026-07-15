@@ -2224,7 +2224,7 @@ def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path)
     holder = attach_active_notifications(agent, [block], prior_holder=None)
 
     assert holder is block
-    # Required path is _meta.notification_persistent.mcp.telegram (Jason #6148).
+    # Required path is _meta.agent_meta.notifications.persistent.mcp.telegram (Jason #6148).
     telegram = block.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["telegram"]
     # Seed block carries the English range comment; historical last-20 context
     # must not be mistaken for a burst of multiple new incoming messages.
@@ -2244,7 +2244,7 @@ def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path)
     assert "burst_comment" not in telegram
     # First block: explicit hook with no predecessor.
     assert telegram["previous_block"] == {
-        "path": "_meta.notification_persistent.mcp.telegram",
+        "path": "_meta.agent_meta.notifications.persistent.mcp.telegram",
         "tool_result_id": None,
         "is_first_block": True,
     }
@@ -2288,7 +2288,7 @@ def test_attach_active_notifications_first_block_reseeds_with_retained_ids(tmp_p
         "conversation. The current/new message is 121."
     )
     assert telegram["previous_block"] == {
-        "path": "_meta.notification_persistent.mcp.telegram",
+        "path": "_meta.agent_meta.notifications.persistent.mcp.telegram",
         "tool_result_id": None,
         "is_first_block": True,
     }
@@ -2342,12 +2342,12 @@ def test_attach_active_notifications_adds_telegram_persistent_delta_with_comment
     assert [message["id"] for message in telegram["messages"]] == ["main:123:21"]
     # Every non-first block hooks to the previous block via the prior tool id.
     previous_block = telegram["previous_block"]
-    assert previous_block["path"] == "_meta.notification_persistent.mcp.telegram"
+    assert previous_block["path"] == "_meta.agent_meta.notifications.persistent.mcp.telegram"
     assert previous_block["tool_result_id"] == "call-first"
     assert "is_first_block" not in previous_block
     assert previous_block["comment"] == (
         "For earlier Telegram context, see tool result call-first "
-        "at _meta.notification_persistent.mcp.telegram."
+        "at _meta.agent_meta.notifications.persistent.mcp.telegram."
     )
     assert agent._notification_persistent_telegram_last_tool_id == "call-second"
 
@@ -2420,7 +2420,7 @@ def test_build_notification_persistent_payload_lands_at_mcp_telegram_path():
     assert [m["id"] for m in telegram["messages"]] == ["main:123:1", "main:123:2", "main:123:3"]
     # First block always carries an explicit hook, even with no predecessor.
     assert telegram["previous_block"] == {
-        "path": "_meta.notification_persistent.mcp.telegram",
+        "path": "_meta.agent_meta.notifications.persistent.mcp.telegram",
         "tool_result_id": None,
         "is_first_block": True,
     }
@@ -2751,7 +2751,7 @@ def test_sanitize_telegram_notification_after_persistent_is_noop_without_telegra
 # ---------------------------------------------------------------------------
 # WeChat persistent lane — mirrors the Telegram lane through the shared
 # parametrized IM machinery: seed/delta boundary at the producer's 10-message
-# preview window, `_meta.notification_persistent.mcp.wechat` path, WeChat
+# preview window, `_meta.agent_meta.notifications.persistent.mcp.wechat` path, WeChat
 # comment wording (wechat.read), and the transient
 # `agent_meta.notifications.attention.mcp.wechat` lane reduced to a
 # message_ids identity hook.
@@ -2863,7 +2863,7 @@ def test_attach_active_notifications_adds_wechat_persistent_snapshot(tmp_path):
     holder = attach_active_notifications(agent, [block], prior_holder=None)
 
     assert holder is block
-    # Required path mirrors Telegram: _meta.notification_persistent.mcp.wechat.
+    # Required path mirrors Telegram: _meta.agent_meta.notifications.persistent.mcp.wechat.
     assert "wechat" not in block.metadata["agent_meta"]["notifications"]["persistent"]
     wechat = block.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["wechat"]
     assert set(wechat.keys()) == {
@@ -2885,7 +2885,7 @@ def test_attach_active_notifications_adds_wechat_persistent_snapshot(tmp_path):
     )
     assert "burst_comment" not in wechat
     assert wechat["previous_block"] == {
-        "path": "_meta.notification_persistent.mcp.wechat",
+        "path": "_meta.agent_meta.notifications.persistent.mcp.wechat",
         "tool_result_id": None,
         "is_first_block": True,
     }
@@ -2944,12 +2944,12 @@ def test_attach_active_notifications_adds_wechat_persistent_delta_with_comment(t
     wechat = second.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["wechat"]
     assert [message["id"] for message in wechat["messages"]] == ["wc-11"]
     previous_block = wechat["previous_block"]
-    assert previous_block["path"] == "_meta.notification_persistent.mcp.wechat"
+    assert previous_block["path"] == "_meta.agent_meta.notifications.persistent.mcp.wechat"
     assert previous_block["tool_result_id"] == "call-first"
     assert "is_first_block" not in previous_block
     assert previous_block["comment"] == (
         "For earlier WeChat context, see tool result call-first "
-        "at _meta.notification_persistent.mcp.wechat."
+        "at _meta.agent_meta.notifications.persistent.mcp.wechat."
     )
     assert agent._notification_persistent_wechat_last_tool_id == "call-second"
 
@@ -2998,10 +2998,10 @@ def test_build_notification_persistent_payload_wechat_and_telegram_coexist():
     assert [m["id"] for m in mcp["wechat"]["messages"]] == ["wc-1", "wc-2"]
     # Each lane hooks to its own previous block path.
     assert mcp["telegram"]["previous_block"]["path"] == (
-        "_meta.notification_persistent.mcp.telegram"
+        "_meta.agent_meta.notifications.persistent.mcp.telegram"
     )
     assert mcp["wechat"]["previous_block"]["path"] == (
-        "_meta.notification_persistent.mcp.wechat"
+        "_meta.agent_meta.notifications.persistent.mcp.wechat"
     )
 
 
@@ -3133,7 +3133,7 @@ def test_build_notification_persistent_payload_feishu_delta_lane():
         "main:oc_chat:om_3",
     ]
     assert feishu["previous_block"] == {
-        "path": "_meta.notification_persistent.mcp.feishu",
+        "path": "_meta.agent_meta.notifications.persistent.mcp.feishu",
         "tool_result_id": None,
         "is_first_block": True,
     }
