@@ -1,6 +1,6 @@
 ---
 name: component-contract-convention
-contract_version: 3
+contract_version: 4
 related_files:
   - ANATOMY.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
@@ -18,6 +18,8 @@ related_files:
   - README.md
   - dev-guide-skill/SKILL.md
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
+  - src/lingtai/kernel/meta_block.py
+  - tests/test_runtime_guidance_globals.py
   - tests/test_architecture_documents.py
 maintenance: |
   This file is the normative root of the distributed code interface definition
@@ -69,6 +71,13 @@ in the manuals and references they point to (progressive disclosure), not inline
    strongly emphasize reading and applying this section before every development
    task and route each change to the manual that teaches the capability it
    touches.
+6. **Runtime prompt and metadata changes require executable startup proof.** Any
+   change to runtime-guidance loading, `_meta` ownership/projection, or system-
+   prompt assembly MUST be accepted only after focused regression tests plus a
+   hermetic real `Agent` construction and complete system-prompt build on the
+   exact candidate tree. Compilation alone is insufficient: missing globals and
+   incomplete wiring can compile successfully while making every refreshed or
+   relaunched agent fail before heartbeat.
 
 ## Purpose
 

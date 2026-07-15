@@ -667,6 +667,10 @@ def now_iso_plain() -> str:
         return ""
 
 
+_GUIDANCE_CACHE: dict | None = None
+_GUIDANCE_REQUIRED_TOP_KEYS = ("schema_version", "guidance_version", "priority", "render_mode", "sections")
+
+
 class GuidanceSchemaError(ValueError):
     """Raised when the runtime guidance payload does not match the expected shape.
 
