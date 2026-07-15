@@ -1935,12 +1935,24 @@ class OpenAIResponsesSession(ChatSession):
             },
         )
 
+    def _replay_input_items(self) -> list[dict]:
+        """Return the stateless-replay wire items for the CURRENT interface.
+
+        Extracted seam (not just an inline ``to_responses_input`` call) so a
+        subclass with standalone compaction active (e.g.
+        ``MimoResponsesSession``) can substitute the opaque compacted-prefix-
+        plus-delta representation here instead of a full re-conversion —
+        without duplicating ``send``/``send_stream``. Plain (non-compacting)
+        Responses sessions keep the original full-conversion behavior.
+        """
+        return to_responses_input(self._interface)
+
     def _request_input(self, message) -> list[dict]:
         if not self._stateless_replay:
             return self._convert_input(message)
         self._stage_input(message)
         self._interface.enforce_tool_pairing()
-        return to_responses_input(self._interface)
+        return self._replay_input_items()
 
     def send(self, message) -> LLMResponse:
         """Send a user message (str) or tool results (list of dicts)."""
@@ -1958,7 +1970,7 @@ class OpenAIResponsesSession(ChatSession):
                 self.pre_request_hook(self._interface)
                 if self._stateless_replay:
                     self._interface.enforce_tool_pairing()
-                    input_items = to_responses_input(self._interface)
+                    input_items = self._replay_input_items()
 
             kwargs: dict[str, Any] = {
                 "model": self._model,
@@ -2010,7 +2022,7 @@ class OpenAIResponsesSession(ChatSession):
                 self.pre_request_hook(self._interface)
                 if self._stateless_replay:
                     self._interface.enforce_tool_pairing()
-                    input_items = to_responses_input(self._interface)
+                    input_items = self._replay_input_items()
 
             kwargs: dict[str, Any] = {
                 "model": self._model,
@@ -2546,7 +2558,247 @@ class OpenAIAdapter(LLMAdapter):
 _CODEX_FORCED_REBUILD_THRESHOLD_RATIO = CONTEXT_PRESSURE_FORCED_REBUILD_RATIO
 
 
-class CodexResponsesSession(OpenAIResponsesSession):
+class _StandaloneCompactionMixin:
+    """Shared standalone ``/responses/compact`` machinery.
+
+    Owns the provider-agnostic half of standalone Responses compaction: the
+    projected-token trigger (``_maybe_compact_before_send``), the opaque
+    compacted-prefix-plus-strict-additive-delta replay basis
+    (``_compacted_replay_input``), and the turn-aware boundary selection that
+    builds the next compact request's ``input`` (``_prepare_compact_request``).
+    First extracted from ``CodexResponsesSession`` (PR #926) so a second
+    provider (MiMo) can reuse it without duplicating the calibration/boundary
+    logic — see PR #926 for the original design rationale and
+    ``tests/test_codex_standalone_compaction.py`` for the behavior contract.
+
+    Subclasses differ in exactly two ways, both left as seams:
+      * ``_compaction_prefix_input(entries)`` — how a list of canonical
+        ``ChatInterface`` entries converts to Responses-wire items for the
+        compact request / delta replay. Codex routes this through its
+        per-session tool-result output freezing; a plain stateless session
+        uses the ordinary converter.
+      * ``_compact_now()`` — the actual ``client.responses.compact()`` call
+        and its failure policy. Codex treats any failure as non-fatal (skip
+        compaction for this turn); MiMo treats it as a hard failure (see
+        ``MimoResponsesSession._compact_now``). This mixin does not call
+        ``client.responses.compact`` itself; it only prepares the request.
+
+    Requires the host class to also provide (already true of
+    ``OpenAIResponsesSession``): ``self._interface``, ``self._model``,
+    ``self._instructions``, ``self._tools``, ``self._client``,
+    ``self._prompt_cache_key``, ``self.context_window()``.
+    """
+
+    def _init_standalone_compaction(self, compact_token_limit: int | None) -> None:
+        self._compact_token_limit = _validate_codex_compact_token_limit(compact_token_limit)
+        self._compacted_items: list[dict[str, Any]] | None = None
+        self._compacted_at_entry_count: int = 0
+        # Calibration pair for ``_projected_provider_tokens``: the provider's
+        # actual reported input-token count and a LOCAL estimate of the exact
+        # rendered representation that produced it, captured together right
+        # after a successful response (see each host session's own
+        # post-response hook — ``CodexResponsesSession.send_stream`` /
+        # ``MimoResponsesSession._record_calibration_sample``). Both ``None``
+        # until the first successful provider response.
+        self._last_provider_input_tokens: int | None = None
+        self._last_local_estimate_tokens: int | None = None
+
+    def _compaction_prefix_input(self, entries: list[Any]) -> list[dict[str, Any]]:
+        """Convert canonical entries to Responses-wire items for compaction.
+
+        Default: the plain converter over a temporary interface (no
+        provider-specific freezing). Subclasses override for provider-specific
+        wire shaping.
+        """
+        if not entries:
+            return []
+        temp_interface = ChatInterface()
+        temp_interface.entries.extend(entries)
+        return to_responses_input(temp_interface)
+
+    def _effective_compact_token_limit(self) -> int | None:
+        """Return the resolved compaction threshold, or ``None`` if disabled.
+
+        An explicit per-task ``context_token_limit`` (``self._compact_token_limit``)
+        wins. When the task omitted it, the effective threshold falls back to
+        this session's resolved ``context_window()`` — the parent service's
+        context window, per daemon task contract. A session with no window
+        configured (``context_window() <= 0``) has compaction disabled.
+
+        This value is always the public, unmodified ``context_token_limit``
+        (or its context-window fallback) — an UPPER BOUND the provider-visible
+        input must stay under. ``_maybe_compact_before_send`` supplies the
+        margin by comparing a PROJECTED provider-token count against this
+        bound, rather than shrinking the bound itself by a fixed fraction.
+        """
+        if self._compact_token_limit is not None:
+            return self._compact_token_limit
+        try:
+            window = int(self.context_window())
+        except Exception:
+            return None
+        return window if window > 0 else None
+
+    def _current_request_representation(
+        self, prebuilt_items: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build the EXACT wire representation the next request would send.
+
+        While standalone compaction is active, this is the opaque
+        ``_compacted_items`` verbatim plus the strict-additive delta (the SAME
+        shape ``_compacted_replay_input`` returns); otherwise it is the full
+        converted canonical interface. ``prebuilt_items`` — pre-built
+        Responses-wire dicts or legacy ``role=tool`` items a caller passed
+        directly to ``send`` — are appended in both cases. This exists so the
+        compaction trigger can estimate tokens over what will ACTUALLY be
+        sent, not a representation that silently drops dict/list legacy input
+        items.
+        """
+        compacted_replay = self._compacted_replay_input()
+        if compacted_replay is not None:
+            items = compacted_replay
+        else:
+            items = self._compaction_prefix_input(self._interface.entries)
+        if prebuilt_items:
+            items = [*items, *prebuilt_items]
+        return items
+
+    def _projected_provider_tokens(
+        self, prebuilt_items: list[dict[str, Any]] | None = None,
+    ) -> int | None:
+        """Project the provider-visible input-token count for the NEXT request.
+
+        Calibrates a local estimate of the EXACT rendered request
+        representation (``_current_request_representation``) against the last
+        real provider round-trip: ``_last_local_estimate_tokens`` is the local
+        estimate computed for the SAME rendered representation that was
+        actually sent for the request whose reported actual is
+        ``_last_provider_input_tokens`` (both captured together right after a
+        successful response, using the SAME representation that request's
+        ``kwargs["input"]`` held). ``calibration = provider_actual /
+        local_estimate`` for that one paired sample; the current live local
+        estimate is scaled by that ratio to project what the provider would
+        currently report.
+
+        This is deliberately NOT calibrated against
+        ``ChatInterface.estimate_context_tokens()`` (the full raw canonical
+        history) — before compaction the two are roughly the same
+        representation, but after compaction they diverge. See PR #926 Sol
+        source-audit finding.
+
+        Falls back to the raw current representation estimate (an implicit
+        1:1 calibration) when no paired sample exists yet.
+
+        Returns ``None`` when even the raw representation estimate cannot be
+        computed (fail-safe: no projection, no trigger).
+        """
+        try:
+            current_items = self._current_request_representation(prebuilt_items)
+            current_estimate = _estimate_responses_input_tokens(
+                self._instructions, self._tools, current_items,
+            )
+        except Exception:
+            return None
+        if current_estimate <= 0:
+            return current_estimate
+        provider_actual = self._last_provider_input_tokens
+        local_sample = self._last_local_estimate_tokens
+        if provider_actual and local_sample and local_sample > 0:
+            calibration = provider_actual / local_sample
+            return int(current_estimate * calibration)
+        return current_estimate
+
+    def _maybe_compact_before_send(
+        self, prebuilt_items: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Compact provider context via standalone ``/responses/compact`` if due.
+
+        Triggers from a PROJECTED provider-visible token count, not from
+        cumulative session spend and not by waiting for a past request to have
+        already crossed the limit. A no-op when: no threshold is configured or
+        the projection stays below the threshold.
+
+        When compaction is ALREADY active, this re-arms rather than blocking
+        outright: if the post-compaction delta has itself grown enough for
+        ``find_compaction_boundary`` to find a NEW boundary strictly past the
+        current one, compaction re-fires using the existing opaque
+        ``_compacted_items`` plus the delta up to that new boundary as input.
+        If no new boundary exists yet, this is a no-op.
+        """
+        limit = self._effective_compact_token_limit()
+        if limit is None:
+            return
+        projected = self._projected_provider_tokens(prebuilt_items)
+        if projected is None or projected < limit:
+            return
+        self._compact_now()
+
+    def _prepare_compact_request(self) -> tuple[int, list[dict[str, Any]]] | None:
+        """Resolve the compaction boundary and build the compact request's input.
+
+        Compacts only the OLDER portion of canonical history, determined by
+        ``ChatInterface.find_compaction_boundary(keep_turns=1)`` — deliberately
+        called with ``keep_turns=1`` (not the library's generic default of 3):
+        fold everything safely old, keep only the ONE newest complete live
+        turn (and any tool_call/tool_result pair it carries) uncompacted.
+        When there isn't yet enough history for a safe boundary
+        (``find_compaction_boundary`` returns ``None``), returns ``None`` —
+        compaction is skipped entirely for this turn rather than guessing a
+        boundary.
+
+        Re-arm: if ``_compacted_items`` is already active, this finds a NEW
+        boundary against the full current entry list. If that boundary has
+        not moved past the existing ``_compacted_at_entry_count``, returns
+        ``None`` — nothing safe to fold yet. Otherwise the returned input is
+        the existing opaque ``_compacted_items`` verbatim, followed by the
+        delta entries between the OLD and NEW boundary.
+
+        Returns ``(boundary_index, full_input)``, or ``None`` when there is
+        nothing safe/new to compact.
+        """
+        boundary_id = self._interface.find_compaction_boundary(keep_turns=1)
+        if boundary_id is None:
+            return None
+        entries = self._interface.entries
+        boundary_index = next(
+            (i for i, entry in enumerate(entries) if entry.id == boundary_id),
+            None,
+        )
+        if boundary_index is None or boundary_index <= 0:
+            return None
+
+        already_compacted = self._compacted_items is not None
+        if already_compacted:
+            if boundary_index <= self._compacted_at_entry_count:
+                return None
+            delta_entries = entries[self._compacted_at_entry_count:boundary_index]
+            delta_items = self._compaction_prefix_input(delta_entries)
+            full_input = [*self._compacted_items, *delta_items]
+        else:
+            full_input = self._compaction_prefix_input(entries[:boundary_index])
+        if not full_input:
+            return None
+        return boundary_index, full_input
+
+    def _compacted_replay_input(self) -> list[dict[str, Any]] | None:
+        """Return the compacted replay basis for THIS turn, or ``None`` if inactive.
+
+        The replay is the opaque compacted items verbatim, followed by the
+        strict-additive delta: canonical interface entries at/after the
+        compaction boundary (``_compacted_at_entry_count``, the newest kept
+        turn plus everything appended since). Because the boundary always
+        keeps at least one complete turn, this delta is never empty once
+        compaction has fired — the live turn that triggered compaction rides
+        here, verbatim.
+        """
+        if self._compacted_items is None:
+            return None
+        delta_entries = self._interface.entries[self._compacted_at_entry_count:]
+        delta_items = self._compaction_prefix_input(delta_entries)
+        return [*self._compacted_items, *delta_items]
+
+
+class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
     """Responses session for Codex's `/backend-api/codex/responses`.
 
     Differences from the parent:
@@ -2592,34 +2844,12 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # which Codex never receives (see ``_create_responses_session``).
         # ``None`` -> no explicit task limit; the effective threshold falls
         # back to ``context_window()`` at check time (see
-        # ``_effective_compact_token_limit``). Validated once here so an
-        # invalid daemon task value fails at session construction.
-        self._compact_token_limit = _validate_codex_compact_token_limit(compact_token_limit)
-        # Opaque post-compaction replay basis: the exact ``output`` items
-        # (``message`` + ``compaction_summary``) the standalone
-        # ``/responses/compact`` call returned, replayed verbatim as the new
-        # provider-context prefix. ``None`` -> compaction not active (never
-        # triggered, or invalidated by a history rewrite).
-        self._compacted_items: list[dict[str, Any]] | None = None
-        # Canonical ``ChatInterface`` entry count at the moment compaction was
-        # taken. Entries at/after this index are the strict-additive delta
-        # replayed on top of ``_compacted_items``; entries before it are the
-        # ones the compaction call already folded into the opaque summary.
-        self._compacted_at_entry_count: int = 0
-        # Local/provider token calibration for the compaction trigger margin
-        # (see ``_maybe_compact_before_send``). ``_last_local_estimate_tokens``
-        # is ``_estimate_responses_input_tokens()`` computed over the EXACT
-        # rendered request representation that was actually sent (the opaque
-        # compacted prefix + strict-additive delta when compaction is active,
-        # or the full converted interface otherwise) — NOT
-        # ``ChatInterface.estimate_context_tokens()`` over the raw canonical
-        # history, which would diverge from the real request size once
-        # compaction is active (compaction never deletes canonical entries,
-        # so the raw estimate keeps growing forever while the actual request
-        # shrinks). Captured at the SAME moment ``_last_provider_input_tokens``
-        # is recorded. Both are ``None`` until the first successful provider
-        # response.
-        self._last_local_estimate_tokens: int | None = None
+        # ``_effective_compact_token_limit``). Validated once here (in the
+        # shared mixin init) so an invalid daemon task value fails at session
+        # construction. See ``_StandaloneCompactionMixin`` for
+        # ``_compacted_items`` / ``_compacted_at_entry_count`` /
+        # ``_last_local_estimate_tokens`` field docs.
+        self._init_standalone_compaction(compact_token_limit)
         # Transport axis (REST vs WebSocket). Both transports run the SAME
         # full->incremental planner (``_codex_plan_continuation``); this only
         # selects HOW the planned request is sent. Resolution priority:
@@ -2698,11 +2928,12 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # visible tool result's _meta.tool_meta (permanent evidence), filling the
         # after-context (B) and any molt warning at attach time.
         self._pending_reconstruction_event: dict[str, Any] | None = None
-        # Last real provider request size.  Codex delayed summarize release must
-        # be keyed to the previous request's input tokens, not ChatInterface's
-        # local estimate, because the latter can omit provider-visible prompt and
-        # tool-result mass.  See PR #535 live probe.
-        self._last_provider_input_tokens: int | None = None
+        # Last real provider request size (``_last_provider_input_tokens``,
+        # initialized by ``_init_standalone_compaction`` above). Codex delayed
+        # summarize release must be keyed to the previous request's input
+        # tokens, not ChatInterface's local estimate, because the latter can
+        # omit provider-visible prompt and tool-result mass. See PR #535 live
+        # probe.
         # One automatic forced provider-context rebuild per continuous
         # hard-boundary episode (Jason, 2026-07-12; separate PR after #896).
         # ``_hb_rebuild_fired`` latches True when the automatic forced rebuild
@@ -3395,227 +3626,43 @@ class CodexResponsesSession(OpenAIResponsesSession):
     # ``compaction_summary`` + trailing ``message`` pair, which is then
     # replayed as the new provider-context prefix, with only strict-additive
     # entries appended on top — never ``context_management`` (Codex rejects
-    # it; see ``_create_responses_session``).
+    # it; see ``_create_responses_session``). The projected-token trigger,
+    # boundary selection, and opaque replay basis are shared with any other
+    # standalone-compaction session via ``_StandaloneCompactionMixin``; only
+    # the wire-shaping (``_compaction_prefix_input``, Codex's per-session
+    # tool-result output freezing) and the failure policy (``_compact_now``,
+    # non-fatal for Codex) are provider-specific.
 
-    def _effective_compact_token_limit(self) -> int | None:
-        """Return the resolved compaction threshold, or ``None`` if disabled.
-
-        An explicit per-task ``context_token_limit`` (``self._compact_token_limit``)
-        wins. When the task omitted it, the effective threshold falls back to
-        this session's resolved ``context_window()`` — the parent service's
-        context window, per daemon task contract. A session with no window
-        configured (``context_window() <= 0``) has compaction disabled.
-
-        This value is always the public, unmodified ``context_token_limit``
-        (or its context-window fallback) — an UPPER BOUND the provider-visible
-        input must stay under. ``_maybe_compact_before_send`` supplies the
-        margin by comparing a PROJECTED provider-token count against this
-        bound, rather than shrinking the bound itself by a fixed fraction.
-        """
-        if self._compact_token_limit is not None:
-            return self._compact_token_limit
-        try:
-            window = int(self.context_window())
-        except Exception:
-            return None
-        return window if window > 0 else None
-
-    def _current_request_representation(
-        self, prebuilt_items: list[dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Build the EXACT wire representation the next request would send.
-
-        Mirrors ``send_stream``'s own branch: while standalone compaction is
-        active, this is the opaque ``_compacted_items`` verbatim plus the
-        strict-additive delta (the SAME shape ``_compacted_replay_input``
-        returns); otherwise it is the full converted canonical interface
-        (``_frozen_responses_input``). ``prebuilt_items`` — pre-built
-        Responses-wire dicts or legacy ``role=tool`` items a caller passed
-        directly to ``send`` — are appended in both cases, exactly as
-        ``send_stream`` appends them to whichever base it built. This exists
-        so the compaction trigger can estimate tokens over what will ACTUALLY
-        be sent, not a representation that silently drops dict/list legacy
-        input items.
-        """
-        compacted_replay = self._compacted_replay_input()
-        if compacted_replay is not None:
-            items = compacted_replay
-        else:
-            items = self._frozen_responses_input(self._interface)
-        if prebuilt_items:
-            items = [*items, *prebuilt_items]
-        return items
-
-    def _projected_provider_tokens(
-        self, prebuilt_items: list[dict[str, Any]] | None = None,
-    ) -> int | None:
-        """Project the provider-visible input-token count for the NEXT request.
-
-        Calibrates a local estimate of the EXACT rendered request
-        representation (``_current_request_representation`` — the opaque
-        compacted prefix + strict-additive delta when compaction is active,
-        or the full converted interface otherwise; see
-        ``_estimate_responses_input_tokens``) against the last real provider
-        round-trip: ``_last_local_estimate_tokens`` is the local estimate
-        computed for the SAME rendered representation that was actually sent
-        for the request whose reported actual is ``_last_provider_input_tokens``
-        (both captured together in ``send_stream``, right after a successful
-        response, using the SAME representation that request's ``kwargs["input"]``
-        held). ``calibration = provider_actual / local_estimate`` for that one
-        paired sample; the current live local estimate is scaled by that ratio
-        to project what the provider would currently report.
-
-        This is deliberately NOT calibrated against
-        ``ChatInterface.estimate_context_tokens()`` (the full raw canonical
-        history) — before compaction the two are roughly the same
-        representation, but after compaction they diverge: the actual request
-        becomes ``[opaque compacted items + live suffix]`` while the raw
-        canonical estimate keeps counting all pre-compaction history forever
-        (compaction never deletes canonical entries). Calibrating against the
-        raw estimate would divide by an artificially large denominator,
-        producing a calibration ratio that under-projects the next
-        (potentially large) live delta and can silently let a request cross
-        ``context_token_limit`` before re-arm fires. See PR #926 Sol
-        source-audit finding.
-
-        Falls back to the raw current representation estimate (an implicit
-        1:1 calibration) when no paired sample exists yet (first turn(s) of
-        the session) — a safe, no-magic-margin default: nothing has been
-        observed yet to calibrate against, so the estimate is trusted as-is
-        rather than either fired eagerly (no signal to justify it) or held
-        back (the resolved limit is documented as the number to respect, and
-        we have no data suggesting a different ratio).
-
-        Returns ``None`` when even the raw representation estimate cannot be
-        computed (fail-safe: no projection, no trigger — see
-        ``_maybe_compact_before_send``).
-        """
-        try:
-            current_items = self._current_request_representation(prebuilt_items)
-            current_estimate = _estimate_responses_input_tokens(
-                self._instructions, self._tools, current_items,
-            )
-        except Exception:
-            return None
-        if current_estimate <= 0:
-            return current_estimate
-        provider_actual = self._last_provider_input_tokens
-        local_sample = self._last_local_estimate_tokens
-        if provider_actual and local_sample and local_sample > 0:
-            calibration = provider_actual / local_sample
-            return int(current_estimate * calibration)
-        return current_estimate
-
-    def _maybe_compact_before_send(
-        self, prebuilt_items: list[dict[str, Any]] | None = None,
-    ) -> None:
-        """Compact provider context via standalone ``/responses/compact`` if due.
-
-        Triggers from a PROJECTED provider-visible token count
-        (``_projected_provider_tokens`` — a local estimate of the EXACT
-        rendered request representation that would be sent next, calibrated
-        against the last real provider round-trip when one exists), not from
-        cumulative session spend and not by waiting for a past request to have
-        already crossed the limit. This gives the resolved ``context_token_limit``
-        (explicit or inherited-from-``context_window``) real headroom to act as
-        an upper bound the provider request should stay under, rather than a
-        threshold that is only checked after the fact. A no-op when: no
-        threshold is configured or the projection stays below the threshold.
-
-        ``prebuilt_items`` — pre-built Responses-wire dicts or legacy
-        ``role=tool`` items ``send_stream`` computed BEFORE calling this — are
-        forwarded to ``_projected_provider_tokens`` so the projected
-        representation matches what will actually be sent; omitting them would
-        silently under-count a turn that carries dict/list legacy input.
-
-        When compaction is ALREADY active, this re-arms rather than blocking
-        outright: if the post-compaction delta has itself grown enough for
-        ``find_compaction_boundary`` to find a NEW boundary strictly past the
-        current one, ``_compact_now`` re-compacts using the existing opaque
-        ``_compacted_items`` plus the delta up to that new boundary as input
-        (OpenAI's compaction endpoint accepts prior compaction items as valid
-        input — this is the documented chained-compaction pattern, not a
-        special case). If no new boundary exists yet (the delta is still too
-        short to safely re-split without splitting a turn), this is a no-op —
-        the task's small limit is not re-enforced on every turn while active,
-        but it IS re-enforced whenever the delta grows enough to safely act on
-        (see LOW-2 in the PR #926 review this responds to). Re-arming never
-        discards ``_compacted_items``; on any failure it leaves the existing
-        compacted state exactly as it was, so a failed re-arm never regresses
-        to the original full history.
-        """
-        limit = self._effective_compact_token_limit()
-        if limit is None:
-            return
-        projected = self._projected_provider_tokens(prebuilt_items)
-        if projected is None or projected < limit:
-            return
-        self._compact_now()
+    def _compaction_prefix_input(self, entries: list[Any]) -> list[dict[str, Any]]:
+        """Codex routes compaction wire-shaping through the WS output-freeze map
+        (``_frozen_responses_input`` / ``_interface_entries_to_responses_input``)
+        so a compact request's items stay byte-identical to what the ordinary
+        strict-additive delta would have sent for the same entries."""
+        if not entries:
+            return []
+        prefix_interface = ChatInterface()
+        prefix_interface.entries.extend(entries)
+        return self._frozen_responses_input(prefix_interface)
 
     def _compact_now(self) -> None:
         """Call standalone Codex compaction and store the opaque replay basis.
 
-        Compacts only the OLDER portion of canonical history, determined by
-        ``ChatInterface.find_compaction_boundary(keep_turns=1)`` — the same
-        turn-aware boundary primitive covered by ``tests/test_compaction.py``
-        (used here as this file's first production caller), deliberately
-        called with ``keep_turns=1`` (not the library's generic default of 3):
-        fold everything safely old, keep only the ONE newest complete live
-        turn (and any tool_call/tool_result pair it carries) uncompacted, so
-        it always survives as a verbatim, strict-additive suffix — never
-        folded into the opaque summary — while nothing older is needlessly
-        retained (PR #926 Sol source-audit follow-up: ``keep_turns=3`` kept
-        two extra small turns live for no reason, which could push an
-        otherwise-fixed re-arm scenario a few tokens past the limit). When
-        there isn't yet enough history for a safe boundary
-        (``find_compaction_boundary`` returns ``None``), compaction is skipped
-        entirely for this turn rather than guessing a boundary.
-
-        Re-arm (LOW-2): if ``_compacted_items`` is already active, this finds
-        a NEW boundary against the full current entry list. If that boundary
-        has not moved past the existing ``_compacted_at_entry_count`` (the
-        delta since the last compaction is still within the "keep" window),
-        this is a no-op — nothing safe to fold yet. Otherwise the compact
-        request's ``input`` is the existing opaque ``_compacted_items``
-        verbatim, followed by the delta entries between the OLD and NEW
-        boundary, converted the same way any strict-additive delta is. Only
-        entries strictly newer than the new boundary remain live afterward.
-
-        On any other failure (network, malformed output), compaction is also
-        skipped for this turn (falls back to the existing full-replay/current
-        compacted-replay behavior) rather than raising — compaction is an
-        optimization, not a correctness requirement, and a transient failure
-        must not block the turn. Never logs or persists
+        Builds the request via ``_prepare_compact_request`` (the shared
+        turn-aware boundary/re-arm logic — see
+        ``_StandaloneCompactionMixin._prepare_compact_request``). On any
+        failure (network, malformed output, no safe boundary yet), compaction
+        is skipped for this turn (falls back to the existing full-replay/
+        current compacted-replay behavior) rather than raising — compaction is
+        an optimization for Codex, not a correctness requirement, and a
+        transient failure must not block the turn. Never logs or persists
         ``encrypted_content``/opaque summary text; only structural item
         types/counts are safe to record.
         """
-        boundary_id = self._interface.find_compaction_boundary(keep_turns=1)
-        if boundary_id is None:
+        prepared = self._prepare_compact_request()
+        if prepared is None:
             return
-        entries = self._interface.entries
-        boundary_index = next(
-            (i for i, entry in enumerate(entries) if entry.id == boundary_id),
-            None,
-        )
-        if boundary_index is None or boundary_index <= 0:
-            return
-
+        boundary_index, full_input = prepared
         already_compacted = self._compacted_items is not None
-        if already_compacted:
-            # Re-arm: only proceed if the new boundary is strictly past the
-            # existing one — otherwise the "new" split would just re-derive
-            # the same (or a less-compacted) prefix, which is not progress.
-            if boundary_index <= self._compacted_at_entry_count:
-                return
-            delta_entries = entries[self._compacted_at_entry_count:boundary_index]
-            delta_items = self._interface_entries_to_responses_input(delta_entries)
-            full_input = [*self._compacted_items, *delta_items]
-        else:
-            prefix_interface = ChatInterface()
-            prefix_interface.entries.extend(entries[:boundary_index])
-            full_input = self._frozen_responses_input(prefix_interface)
-        if not full_input:
-            return
         try:
             compacted = self._client.responses.compact(
                 model=self._model,
@@ -3660,29 +3707,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
             extra={
                 "output_item_types": [item.get("type") for item in normalized],
                 "boundary_index": boundary_index,
-                "total_entries": len(entries),
+                "total_entries": len(self._interface.entries),
                 "rearm": already_compacted,
             },
         )
-
-    def _compacted_replay_input(self) -> list[dict[str, Any]] | None:
-        """Return the compacted replay basis for THIS turn, or ``None`` if inactive.
-
-        The replay is the opaque compacted items verbatim, followed by the
-        strict-additive delta: canonical interface entries at/after the
-        compaction boundary (``_compacted_at_entry_count``, the newest kept
-        turn plus everything appended since), converted the SAME way the
-        WebSocket incremental delta is (``_interface_entries_to_responses_input``
-        — reuses the existing strict-additive machinery rather than a new
-        conversion path). Because the boundary always keeps at least one
-        complete turn, this delta is never empty once compaction has fired —
-        the live turn that triggered compaction rides here, verbatim.
-        """
-        if self._compacted_items is None:
-            return None
-        delta_entries = self._interface.entries[self._compacted_at_entry_count:]
-        delta_items = self._interface_entries_to_responses_input(delta_entries)
-        return [*self._compacted_items, *delta_items]
 
     def _fire_boundary_forced_rebuild(self) -> bool:
         """Fire the once-per-episode automatic forced rebuild, honoring the latch.

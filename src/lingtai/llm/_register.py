@@ -531,7 +531,25 @@ def register_all_adapters() -> None:
     def _mimo(*, model=None, defaults=None, **kw):
         from .mimo.adapter import MimoAdapter
         kw.pop("model", None)
-        return MimoAdapter(**{k: v for k, v in kw.items() if v is not None})
+        adapter_kw = {k: v for k, v in kw.items() if v is not None}
+        d = defaults or {}
+        # Explicit escape hatch to the Chat Completions wire (the
+        # reasoning_content round-trip session) — MimoAdapter defaults to the
+        # native Responses wire when this is absent. Independent of the
+        # generic ``use_responses_api`` legacy flag (mirrors ``_openai``/
+        # ``_custom``): pass whichever the manifest set.
+        if "wire_api" in d:
+            adapter_kw["wire_api"] = d["wire_api"]
+        # Standalone MiMo compaction threshold (daemon task
+        # ``context_token_limit``). Orthogonal to the generic
+        # ``compact_threshold``/``context_management`` this adapter always
+        # forces to ``None`` for MiMo (see
+        # ``MimoAdapter._create_responses_session``). Omitted -> the session
+        # falls back to its own resolved ``context_window()`` at check time.
+        compact_token_limit = d.get("mimo_compact_token_limit")
+        if compact_token_limit is not None:
+            adapter_kw["compact_token_limit"] = compact_token_limit
+        return MimoAdapter(**adapter_kw)
 
     LLMService.register_adapter("mimo", _mimo)
 

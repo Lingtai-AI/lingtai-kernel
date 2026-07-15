@@ -847,7 +847,7 @@ def get_schema(lang: str = "en") -> dict:
                         "context_token_limit": {
                             "type": "integer",
                             "minimum": 1,
-                            "description": "Optional context-token compaction threshold for this daemon task (rendered/provider-context tokens, not cumulative spend). Currently effective only for backend='lingtai' tasks whose resolved provider is Codex ('codex'/'codex-pool'); every other provider and every external CLI backend ignores this field. When the provider-visible input-token count for this session reaches the limit, the runtime compacts provider context via Codex's standalone compaction and continues the same tool loop. Omit to inherit the parent service's resolved context window as the threshold. Must be a positive integer.",
+                            "description": "Optional context-token compaction threshold for this daemon task (rendered/provider-context tokens, not cumulative spend). Currently effective only for backend='lingtai' tasks whose resolved provider is Codex ('codex'/'codex-pool') or the native 'mimo' provider; every other provider and every external CLI backend ignores this field. When the provider-visible input-token count for this session reaches the limit, the runtime compacts provider context via the provider's standalone compaction and continues the same tool loop. For Codex a standalone-compaction failure is non-fatal (that turn's compaction is skipped and the loop continues on full history); for 'mimo' it is a HARD failure that propagates to the caller instead of silently continuing on full history or falling back to a different wire. Omit to inherit the parent service's resolved context window as the threshold. Must be a positive integer.",
                         },
                     },
                     "required": ["task", "tools"],
@@ -1721,11 +1721,15 @@ class DaemonManager:
         anchor rather than the parent agent's anchor; otherwise parent and child
         traffic collide in one REST cache slot.
 
-        context_token_limit: the task's optional ``context_token_limit``. Only
-        meaningful for a Codex-family provider, where it becomes
+        context_token_limit: the task's optional ``context_token_limit``.
+        Meaningful for a Codex-family provider, where it becomes
         ``codex_compact_token_limit`` — the standalone-compaction threshold
-        consulted by ``CodexOpenAIAdapter``/``CodexResponsesSession``. Omitted
-        for every other provider so their adapter construction is unaffected.
+        consulted by ``CodexOpenAIAdapter``/``CodexResponsesSession`` — and
+        for the native ``mimo`` provider, where it becomes
+        ``mimo_compact_token_limit`` — the same standalone-compaction axis
+        consulted by ``MimoAdapter``/``MimoResponsesSession`` (see
+        ``src/lingtai/llm/mimo/ANATOMY.md``). Omitted for every other
+        provider so their adapter construction is unaffected.
         """
         provider_key = str(provider).lower()
         bucket = dict(base_defaults or {})
@@ -1737,6 +1741,8 @@ class DaemonManager:
             bucket["codex_session_anchor"] = self._daemon_codex_session_anchor(run_dir)
             if context_token_limit is not None:
                 bucket["codex_compact_token_limit"] = context_token_limit
+        elif provider_key == "mimo" and context_token_limit is not None:
+            bucket["mimo_compact_token_limit"] = context_token_limit
         if not bucket:
             return None
         return {provider_key: bucket}
@@ -2111,9 +2117,10 @@ class DaemonManager:
 
         context_token_limit: the task's optional ``context_token_limit``
         (already validated as a positive int by ``_handle_emanate``'s
-        pre-flight gate). Only consulted for a Codex-family provider — see
-        ``_daemon_provider_defaults``; every other provider ignores it, and
-        every external CLI backend never reaches this method at all.
+        pre-flight gate). Consulted for a Codex-family provider or the native
+        ``mimo`` provider — see ``_daemon_provider_defaults``; every other
+        provider ignores it, and every external CLI backend never reaches
+        this method at all.
         """
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
@@ -3082,9 +3089,12 @@ class DaemonManager:
         # only — external CLI backends never reach this point, see the
         # ``backend_spec.is_cli`` return above). A single bad value refuses the
         # whole batch, consistent with the other pre-flight gates below. Bound
-        # to a Codex-specific compaction feature at construction time, but
-        # validated generically here so the schema/error shape does not leak
-        # provider identity into the daemon tool surface.
+        # to a provider-specific standalone-compaction feature at construction
+        # time (Codex's ``codex_compact_token_limit`` or the native ``mimo``
+        # provider's ``mimo_compact_token_limit`` — see
+        # ``_daemon_provider_defaults``), but validated generically here so the
+        # schema/error shape does not leak provider identity into the daemon
+        # tool surface.
         for spec in tasks:
             raw_limit = spec.get("context_token_limit")
             if raw_limit is None:

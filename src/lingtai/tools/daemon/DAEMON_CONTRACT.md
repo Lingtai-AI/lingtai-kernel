@@ -191,7 +191,7 @@ window. If that event is dismissed or evicted before recovery records the
 receipt, startup may safely republish: the contract is at-least-once delivery
 without false durable success.
 
-### 7. Per-task `context_token_limit` is a Codex-only, lingtai-backend-only capability
+### 7. Per-task `context_token_limit` is a Codex/native-mimo-only, lingtai-backend-only capability
 
 The daemon task object also carries an optional per-task `context_token_limit`
 (positive integer; bool rejected) — a context-token compaction threshold,
@@ -201,28 +201,46 @@ scoped and does not join the general skills/MCP/completion/backend-support
 invariants above:
 
 - Effective ONLY for `backend="lingtai"` tasks whose resolved provider is
-  Codex (`codex`/`codex-pool`), threaded through `_daemon_provider_defaults`
-  as `codex_compact_token_limit`. Every other provider and every external CLI
-  backend (including the `codex` CLI backend) never receives it and is
+  Codex (`codex`/`codex-pool`) or the native `mimo` LLM provider, threaded
+  through `_daemon_provider_defaults` as `codex_compact_token_limit` /
+  `mimo_compact_token_limit` respectively. Every other provider and every
+  external CLI backend (including the `codex` CLI backend and the `mimocode`
+  CLI backend — an entirely separate thing from the native `mimo` LLM
+  provider, see the Backend Support Matrix below) never receives it and is
   behaviorally unchanged — a CLI-backend task carrying the field never even
   reaches the LingTai-backend pre-flight gate (the CLI early-return in
   `_handle_emanate` precedes it).
 - Omitted, the value inherits the parent service's resolved context window as
   the threshold; an explicit task value always wins.
 - When the threshold is reached (a PROJECTED provider-visible token count,
-  not a raw reactive-only check — see below), the Codex Responses session
-  compacts prior context via the standalone `POST /responses/compact`
-  endpoint and continues the SAME tool loop; it never uses the generic OpenAI
-  Responses `context_management` axis, which the Codex backend rejects.
+  not a raw reactive-only check — see below), the Codex or native-MiMo
+  Responses session compacts prior context via that provider's standalone
+  `POST /responses/compact` endpoint and continues the SAME tool loop; neither
+  ever uses the generic OpenAI Responses `context_management` axis (Codex's
+  backend rejects it; MiMo's documented Responses API marks it explicitly
+  incompatible).
+- **Failure policy differs by provider.** A standalone compact call/parse
+  failure is NON-FATAL for Codex — that turn's compaction is skipped and the
+  loop continues on full (uncompacted) history, since compaction there is an
+  optimization, not a correctness requirement. For the native `mimo` provider
+  the SAME class of failure is a HARD failure: it propagates to the caller
+  instead of being swallowed, instead of silently continuing on the original
+  full history, and instead of silently falling back to the Chat Completions
+  wire. This is because MiMo's Responses API gives LingTai no generic
+  `context_management` fallback and no server-side state to lean on (`store`,
+  `previous_response_id`, and `conversation` are all documented-unsupported),
+  so a MiMo session that silently kept replaying ever-growing full history
+  past its configured threshold would have no safety net.
 - The full trigger/boundary/invalidation mechanics (compaction boundary
   selection via `ChatInterface.find_compaction_boundary` so the live turn
   that triggers compaction always rides as a verbatim trailing item rather
   than being folded into the opaque summary, projected-token calibration,
-  and invalidation on history rewrite) are Codex Responses adapter/session
-  internals, not daemon-owned — see `src/lingtai/llm/openai/ANATOMY.md`
-  ("Standalone Codex compaction") for that mechanism. This contract states
-  only the daemon-task-object capability boundary above; it does not
-  restate adapter internals.
+  and invalidation on history rewrite) are shared Responses adapter/session
+  internals (`_StandaloneCompactionMixin`), not daemon-owned — see
+  `src/lingtai/llm/openai/ANATOMY.md` ("Standalone Codex compaction") and
+  `src/lingtai/llm/mimo/ANATOMY.md` for that mechanism and the MiMo failure-
+  policy divergence. This contract states only the daemon-task-object
+  capability boundary above; it does not restate adapter internals.
 
 ## Backend Support Matrix
 

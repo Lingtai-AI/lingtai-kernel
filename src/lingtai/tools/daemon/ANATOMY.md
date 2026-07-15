@@ -53,12 +53,15 @@ OAuth token file) is among the preserved provider defaults — and is on the
 authenticates against the same Codex account as the parent. A per-task
 `context_token_limit` (positive int; validated pre-flight in
 `_handle_emanate`) is threaded through `_run_emanation` into
-`_daemon_provider_defaults` as `codex_compact_token_limit`, effective only
-when the task's resolved provider is Codex — every other provider and every
-external CLI backend ignores it. Omitted, the Codex session falls back to its
-own resolved `context_window()` as the threshold. See
-`src/lingtai/llm/openai/ANATOMY.md` for the standalone
-`CodexResponsesSession` compaction mechanics this threshold drives. Results are persisted in per-run daemon folders; **every** terminal outcome
+`_daemon_provider_defaults` as `codex_compact_token_limit` (Codex) or
+`mimo_compact_token_limit` (the native `mimo` provider) — effective only
+when the task's resolved provider is one of those two; every other provider
+and every external CLI backend ignores it. Omitted, the session falls back
+to its own resolved `context_window()` as the threshold. See
+`src/lingtai/llm/openai/ANATOMY.md` for the shared `_StandaloneCompactionMixin`
+mechanics this threshold drives, and `src/lingtai/llm/mimo/ANATOMY.md` for
+MiMo's hard-failure-on-compact-error divergence from Codex's non-fatal
+policy. Results are persisted in per-run daemon folders; **every** terminal outcome
 (done / failed / cancelled / timeout) is surfaced as a compact
 `.notification/system.json` event — never as ordinary parent request text — and
 `daemon.json.terminal_notified` is written only after publication succeeds (or

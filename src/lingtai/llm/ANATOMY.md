@@ -13,6 +13,7 @@ related_files:
   - src/lingtai/llm/gemini/ANATOMY.md
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/llm/minimax/ANATOMY.md
+  - src/lingtai/llm/mimo/ANATOMY.md
   - src/lingtai/llm/openai/ANATOMY.md
   - src/lingtai/llm/openai/adapter.py
   - src/lingtai/llm/openrouter/ANATOMY.md
@@ -21,6 +22,7 @@ related_files:
   - tests/test_codex_endpoint_pool.py
   - tests/test_llm_identity_headers.py
   - tests/test_wire_tool_description.py
+  - tests/test_mimo_responses_compaction.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -51,7 +53,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 
 - **Kernel types** — `__init__.py:3` imports `ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema` from `lingtai.kernel.llm.base`; `ChatInterface` from `lingtai.kernel.llm.interface`.
 - **ABC chain** — `LLMAdapter` (`base.py:94`) → abstract `create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`. `LLMService` (`service.py:97`) extends `lingtai.kernel.llm.service.LLMService` ABC.
-- **Adapter registration** — `_register.py` registers dedicated factories (including the two subscription/OAuth providers `codex` and `claude-code`, which drop `api_key`/`base_url` since their CLI owns auth) + generic-routed providers (`grok`, `qwen`, `glm`, `zhipu`, `kimi`, `mimo`) via dedicated or `_custom` factories.
+- **Adapter registration** — `_register.py` registers dedicated factories (including the two subscription/OAuth providers `codex` and `claude-code`, which drop `api_key`/`base_url` since their CLI owns auth, and the native `mimo` factory — see below) + generic-routed providers (`grok`, `qwen`, `kimi`) via `_custom`.
 - **Interface converters** — imported by adapter session modules (e.g. `openai.adapter` imports `to_openai`, `to_responses_input` from `interface_converters.py:120`).
 - **Rate gating** — `LLMAdapter._setup_gate(max_rpm)` creates `APICallGate`; `_wrap_with_gate()` returns `_GatedSession` proxy for sessions.
 
@@ -76,6 +78,8 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
   - **Attribution split:** the pre-send `llm_call` event truthfully names the INITIAL primary attempt (emitted before a switch is knowable); the served `LLMResponse.usage.extra` / `token_ledger.jsonl` identify the account that actually served the response, carrying the switched `codex_pool_source_ref` (redacted if absolute) / index / size / weight / `auth_path_sha8` / `codex_pool_model_scope` plus `codex_pool_failover = usage_limit_reached` (the `_usage_extra` `failover` mapping). A later request starts from the normal deterministic initial selection. Never persists or marks any account unavailable — no cooldown/reset/health/disabled state; pool/auth/config files are byte-for-byte unchanged. Tests: `tests/test_codex_pool.py`.
 
 - **Claude Code factory** — `_register.py:_claude_code` builds `ClaudeCodeAdapter` (drops `api_key`/`base_url`: the `claude` CLI owns auth), registered under both the `claude-code` and `claude_code` spellings (no dash/underscore normalization in `LLMService`, so both must be registered to match the connectivity aliases). The adapter drives `claude -p --output-format json` as a *stateless reasoning core* — each turn serialises the canonical `ChatInterface` (system prompt + tools + conversation) into one prompt, the CLI emits a single JSON action (`tool_call`/`tool_calls`/`final`) which is parsed back into an `LLMResponse`; LingTai's own loop executes the tools. The child env strips `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` so usage stays on the subscription/OAuth path; built-in CLI tools are disabled so it acts as a pure brain. `ClaudeCodeChatSession.send` snapshots the canonical history before mutating it and restores that snapshot if the hook / tool pairing / CLI call / parsing raises, so a failed turn never strands the just-added user / tool-result message; on *successful* context-overflow recovery (`rounds > 0`) it injects a `[kernel]` overflow notice via `_inject_overflow_notice` before recording the assistant turn (same idiom as `openai`/`anthropic`). For health checks it is a *local CLI-login provider* (`lingtai.kernel.preset_connectivity._LOCAL_CLI_LOGIN_PROVIDERS`, both spellings): gauged by module importability, never a TCP probe. See `claude_code/adapter.py`.
+
+- **MiMo factory** — `_register.py:_mimo` builds `MimoAdapter`, forwarding `wire_api` and the daemon-only `mimo_compact_token_limit` (→ `compact_token_limit`) from provider defaults when present. `MimoAdapter` defaults to the native OpenAI Responses wire (`MimoResponsesSession` — stateless full-history/opaque-compacted replay; never `store`/`previous_response_id`/`conversation`/generic `context_management`); an explicit `wire_api="chat_completions"` still selects the pre-existing Chat Completions escape hatch (`MimoChatSession`, the `reasoning_content` round-trip session). Standalone compaction reuses `_StandaloneCompactionMixin` from `openai/adapter.py` but — unlike Codex — treats a compact failure as a HARD failure (`MimoCompactionHardFailure`), never silently continuing on full history or falling back to Chat Completions. See `src/lingtai/llm/mimo/ANATOMY.md`.
 
 ## State
 
