@@ -26,7 +26,10 @@ if TYPE_CHECKING:
     from lingtai.services.vision import VisionService
 
 PROVIDERS = {
-    "providers": ["minimax", "zhipu", "mimo", "gemini", "anthropic", "openai", "codex"],
+    "providers": [
+        "minimax", "zhipu", "mimo", "gemini", "anthropic", "openai",
+        "codex", "codex-pool", "codex_pool",
+    ],
     "default": None,
     "fallback_on_inherit": None,  # no agnostic fallback for vision
 }
@@ -167,27 +170,57 @@ def setup(
                 )
                 return CAPABILITY_UNAVAILABLE
         else:
-            # Provider-specific kwarg injection. Each branch is opt-in because
-            # vision services have heterogeneous constructor signatures —
-            # passing api_host to a service that doesn't accept it raises
-            # TypeError at construction (silently swallowed by the agent's
-            # capability-setup try/except, leaving the agent without vision).
-            if provider == "minimax" and "api_host" not in kwargs:
-                from .._media_host import resolve_media_host
-                kwargs["api_host"] = resolve_media_host(agent)
-            if provider == "zhipu" and "z_ai_mode" not in kwargs:
-                from .._zhipu_mode import resolve_z_ai_mode
-                kwargs["z_ai_mode"] = resolve_z_ai_mode(agent)
-            # Dedicated vision services do not consume the LLM adapter's
-            # transport selector. ``expand_inherit`` copies it for capability
-            # routing, but forwarding it into service constructors breaks
-            # providers such as MiniMax that only accept provider-native args.
-            kwargs.pop("api_compat", None)
-            kwargs.pop("base_url", None)
-            # Lazy import: the provider service lives in ``lingtai.services`` and
-            # the ``lingtai.tools → lingtai`` edge is allowed only inside setup/handlers.
-            from lingtai.services.vision import create_vision_service
-            vision_service = create_vision_service(provider, api_key=api_key, **kwargs)
+            provider_key = provider.lower()
+            if provider_key in {"codex", "codex-pool", "codex_pool"}:
+                # Codex vision is a standalone Responses request. It may share
+                # the active Codex family's model and endpoint, but never
+                # inherits those from an unrelated main provider.
+                main_provider = getattr(getattr(agent, "service", None), "provider", "")
+                if main_provider.lower() in {"codex", "codex-pool", "codex_pool"}:
+                    kwargs.setdefault("model", getattr(agent.service, "_model", None))
+                    kwargs.setdefault("base_url", getattr(agent.service, "_base_url", None))
+                codex_base_url = kwargs.get("base_url")
+
+                defaults = getattr(getattr(agent, "service", None), "_provider_defaults", None)
+                bucket = defaults.get(provider_key) if isinstance(defaults, dict) else None
+                if not isinstance(bucket, dict):
+                    bucket = {}
+                if provider_key == "codex":
+                    token_path = kwargs.pop("token_path", None) or bucket.get("codex_auth_path")
+                    if token_path:
+                        kwargs["token_path"] = token_path
+                else:
+                    # The pool selector is the single owner of deterministic
+                    # account choice. It reads only the non-secret pool file.
+                    from lingtai.auth.codex_pool import select_codex_pool_auth
+                    selection = select_codex_pool_auth(
+                        bucket,
+                        model=kwargs.get("model"),
+                    )
+                    if selection:
+                        kwargs["token_path"] = selection["auth_path"]
+                kwargs.pop("api_compat", None)
+                kwargs.pop("base_url", None)
+                if codex_base_url:
+                    kwargs["base_url"] = codex_base_url
+                from lingtai.services.vision import create_vision_service
+                vision_service = create_vision_service("codex", api_key=None, **kwargs)
+            else:
+                # Provider-specific kwarg injection. Each branch is opt-in because
+                # vision services have heterogeneous constructor signatures.
+                if provider == "minimax" and "api_host" not in kwargs:
+                    from .._media_host import resolve_media_host
+                    kwargs["api_host"] = resolve_media_host(agent)
+                if provider == "zhipu" and "z_ai_mode" not in kwargs:
+                    from .._zhipu_mode import resolve_z_ai_mode
+                    kwargs["z_ai_mode"] = resolve_z_ai_mode(agent)
+                # Dedicated vision services do not consume the LLM adapter's
+                # transport selector.
+                kwargs.pop("api_compat", None)
+                kwargs.pop("base_url", None)
+                # Lazy import: the provider service lives in ``lingtai.services``.
+                from lingtai.services.vision import create_vision_service
+                vision_service = create_vision_service(provider, api_key=api_key, **kwargs)
     elif vision_service is None:
         raise ValueError(
             "vision capability requires 'vision_service' or 'provider' + 'api_key'. "

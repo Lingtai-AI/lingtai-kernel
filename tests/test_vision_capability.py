@@ -147,6 +147,82 @@ def test_vision_setup_with_codex_provider_without_api_key(tmp_path):
         assert isinstance(mgr, VisionManager)
 
 
+@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
+def test_codex_family_vision_aliases_use_codex_service(tmp_path, provider):
+    """All Codex vision aliases construct the native Codex service path."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_pool.select_codex_pool_auth", return_value=None
+    ) as mock_select:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        setup(agent, provider=provider)
+        assert mock_factory.call_args.args == ("codex",)
+        assert mock_factory.call_args.kwargs["api_key"] is None
+        if provider == "codex":
+            mock_select.assert_not_called()
+        else:
+            mock_select.assert_called_once_with({}, model=None)
+
+
+def test_codex_vision_inherits_active_model_and_endpoint(tmp_path):
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex"
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = "https://codex.example/backend-api/codex"
+        agent.service._provider_defaults = {"codex": {}}
+        setup(agent, provider="codex")
+        kwargs = mock_factory.call_args.kwargs
+        assert kwargs["model"] == "gpt-5.6-sol"
+        assert kwargs["base_url"] == "https://codex.example/backend-api/codex"
+
+
+def test_codex_vision_does_not_inherit_non_codex_model(tmp_path):
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "gemini"
+        agent.service._model = "gemini-2.5-pro"
+        agent.service._base_url = "https://generativelanguage.example"
+        setup(agent, provider="codex")
+        kwargs = mock_factory.call_args.kwargs
+        assert "model" not in kwargs
+        assert "base_url" not in kwargs
+
+
+def test_direct_codex_vision_uses_configured_auth_path(tmp_path):
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex"
+        agent.service._model = None
+        agent.service._base_url = None
+        agent.service._provider_defaults = {"codex": {"codex_auth_path": "/tmp/codex-a.json"}}
+        setup(agent, provider="codex")
+        assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-a.json"
+
+
+def test_codex_pool_vision_selects_exact_model_and_passes_result(tmp_path):
+    selected = {"auth_path": "/tmp/codex-b.json", "selection": {"source_index": 1}}
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_pool.select_codex_pool_auth", return_value=selected
+    ) as mock_select:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex-pool"
+        agent.service._model = "gpt-5.6-terra"
+        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
+        agent.service._provider_defaults = {"codex-pool": {"codex_auth_pool_path": "pool.json"}}
+        setup(agent, provider="codex-pool")
+        mock_select.assert_called_once_with(
+            {"codex_auth_pool_path": "pool.json"}, model="gpt-5.6-terra"
+        )
+        assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-terra"
+        assert mock_factory.call_args.kwargs["base_url"] == "https://codex-pool.example/backend-api/codex"
+        assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-b.json"
+
+
 def test_vision_setup_unsupported_provider_skips(tmp_path):
     """Unsupported providers gracefully skip and log capability_skipped.
 
@@ -224,6 +300,7 @@ def test_codex_vision_service_streams_responses_api(monkeypatch, tmp_path):
 
     with patch("lingtai.services.vision.codex.CodexTokenManager") as mock_mgr_cls:
         mock_mgr_cls.return_value.get_access_token.return_value = "oauth-token"
+        mock_mgr_cls.return_value.get_account_id.return_value = None
         from lingtai.services.vision.codex import CodexVisionService
 
         svc = CodexVisionService(timeout=9.5)
@@ -246,6 +323,33 @@ def test_codex_vision_service_streams_responses_api(monkeypatch, tmp_path):
     assert content[0] == {"type": "input_text", "text": "What is shown?"}
     assert content[1]["type"] == "input_image"
     assert content[1]["image_url"].startswith("data:image/png;base64,")
+
+
+def test_codex_vision_sends_account_header_and_refreshes_auth_each_call(monkeypatch, tmp_path):
+    img_path = tmp_path / "chart.png"
+    img_path.write_bytes(b"fake png bytes")
+    responses = MagicMock()
+    responses.create.return_value = [SimpleNamespace(type="response.output_text.delta", delta="ok")]
+    client = SimpleNamespace(responses=responses)
+    openai_cls = MagicMock(return_value=client)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=openai_cls))
+
+    with patch("lingtai.services.vision.codex.CodexTokenManager") as mock_mgr_cls:
+        manager = mock_mgr_cls.return_value
+        manager.get_access_token.side_effect = ["token-1", "token-2"]
+        manager.get_account_id.side_effect = ["acct-1", None]
+        from lingtai.services.vision.codex import CodexVisionService
+
+        svc = CodexVisionService()
+        assert svc.analyze_image(str(img_path)) == "ok"
+        assert svc.analyze_image(str(img_path)) == "ok"
+
+    assert manager.get_access_token.call_count == 2
+    assert manager.get_account_id.call_count == 2
+    assert openai_cls.call_args_list[0].kwargs["default_headers"] == {
+        "ChatGPT-Account-ID": "acct-1"
+    }
+    assert "default_headers" not in openai_cls.call_args_list[1].kwargs
 
 def test_create_vision_service_unknown_provider():
     """create_vision_service should raise ValueError for unknown providers."""

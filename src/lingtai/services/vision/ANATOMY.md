@@ -30,7 +30,7 @@ Provider-specific image understanding — standalone services that own their own
 |------|-----|------|
 | `__init__.py` | 112 | `VisionService` ABC, `_MIME_BY_EXT` map, `_read_image()` helper, `create_vision_service()` factory |
 | `anthropic.py` | 61 | `AnthropicVisionService` — base64 inline image via Anthropic Messages API |
-| `codex.py` | 78 | `CodexVisionService` — ChatGPT Codex Responses API vision via OAuth token |
+| `codex.py` | 87 | `CodexVisionService` — ChatGPT Codex Responses API vision via OAuth token |
 | `gemini.py` | 53 | `GeminiVisionService` — `genai.Client` + `types.Part.from_bytes` |
 | `local.py` | 72 | `LocalVisionService` — mlx-vlm on Apple Silicon, lazy model load |
 | `mimo.py` | 75 | `MiMoVisionService` — OpenAI SDK to `api.xiaomimimo.com/v1` |
@@ -61,11 +61,11 @@ Provider-specific image understanding — standalone services that own their own
 
 ## Notes
 
-- **Image encoding** — Anthropic (`anthropic.py:34`) and OpenAI/MiMo/Codex (`openai.py:38`, `mimo.py:57`, `codex.py:45`) use base64 data URLs. Gemini (`gemini.py:37`) uses `types.Part.from_bytes`. Local passes file path directly to mlx-vlm. MCP providers send base64 in tool args (minimax) or file path (zhipu).
+- **Image encoding** — Anthropic (`anthropic.py:34`) and OpenAI/MiMo/Codex (`openai.py:38`, `mimo.py:57`, `codex.py:45-49`) use base64 data URLs. Gemini (`gemini.py:37`) uses `types.Part.from_bytes`. Local passes file path directly to mlx-vlm. MCP providers send base64 in tool args (minimax) or file path (zhipu).
 - **Default models** — Anthropic: `claude-sonnet-4-20250514`; Gemini: `gemini-2.5-flash`; OpenAI: `gpt-4o`; MiMo: `mimo-v2.5`; Codex: `gpt-5.5`; Local: `mlx-community/paligemma2-3b-ft-docci-448-8bit`.
 - **MCP tool names** — MiniMax: `understand_image` (`minimax.py:77`); Zhipu: `analyze_image` (`zhipu.py:70`).
 - **MCP launchers** — MiniMax uses `uvx minimax-coding-plan-mcp -y` (`minimax.py:64`); Zhipu uses `npx -y @z_ai/mcp-server` (`zhipu.py:58`).
 - **Zhipu path vs base64** — Zhipu MCP reads the file directly by path (`zhipu.py:70`), unlike other providers that base64-encode.
-- **Codex Responses API** — `codex.py` constructs `OpenAI(base_url="https://chatgpt.com/backend-api/codex")`, passes `instructions`, `stream=True`, `store=False`, `input_text` + `input_image` content blocks, and concatenates `response.output_text.delta` events. It omits `max_output_tokens` by default because the live ChatGPT Codex backend rejected that parameter (`codex.py:25-28`, `codex.py:70-71`).
+- **Codex Responses API** — `codex.py` refreshes access token and account id on every call, sends `ChatGPT-Account-ID` when available, constructs `OpenAI` with the selected base URL, passes `instructions`, `stream=True`, `store=False`, `input_text` + `input_image` content blocks, and concatenates `response.output_text.delta` events. It omits `max_output_tokens` by default because the live ChatGPT Codex backend rejected that parameter (`codex.py:25-28`, `codex.py:51-82`).
 - **Gemini thought filtering** — `gemini.py:51` skips `part.text` when `part.thought` is True to exclude reasoning output.
 - **Git history** — 7 commits. Key: MiMo provider addition (`a728864`), zhipu path-based input fix (`2e6d53c`), region-aware ZAI/ZHIPU mode (`bed1c1e`).

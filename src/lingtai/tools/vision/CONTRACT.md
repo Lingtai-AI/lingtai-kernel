@@ -40,10 +40,19 @@ lazy-import DAG rule -> §Cross-platform invariants.
 - Canonical tool name: `vision`.
 - One tool, one call — no actions, no persistent state.
 - Advertised providers (`PROVIDERS["providers"]`): `minimax`, `zhipu`, `mimo`,
-  `gemini`, `anthropic`, `openai`, `codex`. Default provider is `None` and there
+  `gemini`, `anthropic`, `openai`, `codex`, `codex-pool`, `codex_pool`. Default provider is `None` and there
   is no agnostic inherit fallback (`fallback_on_inherit: None`).
 - A local `mlx-vlm` provider (`provider="local"`) exists but is intentionally
   **not** advertised in `PROVIDERS`; users opt in explicitly.
+
+- `codex`, `codex-pool`, and `codex_pool` all construct the native standalone
+  Codex Responses vision service. Pool aliases select their initial auth path
+  with `select_codex_pool_auth(defaults, model=<exact configured model>)` and
+  never route through another provider's vision service.
+- When the active main provider is Codex-family, its configured model and
+  endpoint are forwarded to standalone vision. A non-Codex main provider does
+  not supply those values to an explicitly configured Codex vision provider.
+  Direct Codex uses the selected provider bucket's `codex_auth_path`.
 
 **Non-goals:** the capability does not pre-validate that the resolved
 model/relay can actually do vision — an incapable relay fails at runtime, not at
@@ -77,8 +86,13 @@ DOCUMENT ONLY — do not change these assumptions and do not propose Windows wor
   module import.
 - Provider-specific kwargs are injected per branch (e.g. MiniMax `api_host`,
   Zhipu `z_ai_mode`) because vision services have heterogeneous constructor
-  signatures; `api_compat` / `base_url` are popped before forwarding to
-  dedicated services.
+  signatures. Non-Codex dedicated services receive neither `api_compat` nor the
+  inherited LLM `base_url`. Codex-family vision strips `api_compat` but may
+  forward `base_url` intentionally when it came from an explicit capability
+  override or the active main provider is Codex-family.
+- `CodexVisionService` refreshes the selected OAuth token and account id for
+  each image call. It sends `ChatGPT-Account-ID` only when a non-secret account
+  id is available, and uses Responses `input_text` plus `input_image` blocks.
 - Unknown providers route through the OpenAI- or Anthropic-compatible service
   based on `api_compat`; if neither matches, the capability logs
   `capability_skipped` and returns `CAPABILITY_UNAVAILABLE`.
