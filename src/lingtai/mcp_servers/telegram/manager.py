@@ -487,6 +487,11 @@ class TelegramManager:
         self._task_card_event_size = 0
         self._task_card_event_inode: int | None = None
         self._task_card_event_rows: list[dict] = []
+        # The current telemetry snapshot is carried only by the latest final
+        # ``tool_result`` event. ``None`` means no such carrier has been seen;
+        # an empty dict is a seen-but-malformed carrier and deliberately clears
+        # any older snapshot.
+        self._task_card_event_metadata: dict | None = None
         self._task_card_event_lock = threading.Lock()
         self._task_card_tail_thread: threading.Thread | None = None
         self._task_card_tail_stop = threading.Event()
@@ -1780,17 +1785,18 @@ class TelegramManager:
     #
     # The automatic slot is a mechanical, bounded projection of the agent's own
     # authoritative ``logs/events.jsonl`` — a broadcast of the agent's behavior,
-    # not a per-chat/per-route view. It whitelists exactly one event type,
-    # ``tool_call``; every other event type is skipped immediately. Only a
-    # fixed, bounded, safe field allowlist is ever read from a matching row
+    # not a per-chat/per-route view. Tool rows whitelist exactly one event type,
+    # ``tool_call``; every other event type is skipped for row projection. A
+    # final-carrier ``tool_result`` is read separately for the latest whole
+    # ``_meta.agent_meta`` snapshot, from which only the supported session
+    # telemetry fields are projected. Row fields remain the bounded allowlist
     # (``tool_name``, ``tool_args.action``, ``tool_args._reasoning``, and the
     # event's own canonical ``ts`` converted to a row stamp) — raw
     # ``tool_args`` is never forwarded. A missing/malformed ``ts`` safely omits
     # the row's stamp rather than crashing or fabricating one. The projection
     # keeps only the most recent ``_TASK_CARD_EVENT_WINDOW`` matching rows and
-    # never inspects ``tool_result``/dispatch events or reconstructs
-    # completion, elapsed time, or a second lifecycle model; row order alone
-    # conveys recency.
+    # never reconstructs completion, elapsed time, or a second lifecycle model;
+    # row order alone conveys recency.
     #
     # There is no durable cursor/checkpoint file: ``events.jsonl`` is the only
     # durable behavior source. On start (and after any truncation/replacement)
@@ -1814,6 +1820,11 @@ class TelegramManager:
     def _task_card_event_window(self) -> list[dict]:
         with self._task_card_event_lock:
             return list(self._task_card_event_rows)
+
+    def _task_card_event_metadata_snapshot(self) -> dict | None:
+        with self._task_card_event_lock:
+            metadata = self._task_card_event_metadata
+            return dict(metadata) if isinstance(metadata, dict) else None
 
     @staticmethod
     def _project_tool_call_row(event: dict) -> dict | None:
@@ -1849,6 +1860,47 @@ class TelegramManager:
         if started_at:
             row["started_at"] = started_at
         return row
+
+    @staticmethod
+    def _project_tool_result_metadata(event: dict) -> dict | None:
+        """Project current session telemetry from one final-carrier result.
+
+        ``agent_meta`` is a whole current snapshot: only the newest
+        ``tool_result`` carrier is consulted, and only its
+        ``agent_state.token_usage.session`` fields cross into the Task Card.
+        An empty dict is a recognized-but-malformed carrier, so it clears an
+        older snapshot instead of leaving stale telemetry visible. ``None``
+        means this event is not a final carrier and must not change state.
+        """
+        if event.get("type") != "tool_result":
+            return None
+        envelope = event.get("_meta")
+        if envelope is None:
+            return None
+        if not isinstance(envelope, dict):
+            return {}
+        agent_meta = envelope.get("agent_meta")
+        if not isinstance(agent_meta, dict):
+            return {}
+        state = agent_meta.get("agent_state")
+        if not isinstance(state, dict):
+            return {}
+        token_usage = state.get("token_usage")
+        if not isinstance(token_usage, dict):
+            return {}
+        session = token_usage.get("session")
+        if not isinstance(session, dict):
+            return {}
+        supported = (
+            "session_cache_rate",
+            "cache_miss_tokens",
+            "cache_miss_budget",
+            "api_calls",
+            "context_tokens",
+            "context_window",
+            "context_usage",
+        )
+        return {key: session[key] for key in supported if key in session}
 
     @staticmethod
     def _format_task_card_row_timestamp(ts: object) -> str:
@@ -1888,6 +1940,7 @@ class TelegramManager:
                 self._task_card_event_size = 0
                 self._task_card_event_inode = None
                 self._task_card_event_rows = []
+                self._task_card_event_metadata = None
             return
 
         result = self._reverse_tail_latest_rows(path, stat.st_size)
@@ -1902,18 +1955,20 @@ class TelegramManager:
                 self._task_card_event_size = 0
                 self._task_card_event_inode = None
                 self._task_card_event_rows = []
+                self._task_card_event_metadata = None
             return
-        rows, offset = result
+        rows, offset, metadata = result
         with self._task_card_event_lock:
             self._task_card_event_path = path
             self._task_card_event_offset = offset
             self._task_card_event_size = stat.st_size
             self._task_card_event_inode = getattr(stat, "st_ino", None)
             self._task_card_event_rows = rows
+            self._task_card_event_metadata = metadata
 
     def _reverse_tail_latest_rows(
         self, path: Path, size: int,
-    ) -> tuple[list[dict], int] | None:
+    ) -> tuple[list[dict], int, dict | None] | None:
         """Reverse-scan bounded chunks from EOF to collect the latest-N matches.
 
         Reads growing chunks backward from the end of the file until either
@@ -1922,8 +1977,10 @@ class TelegramManager:
         The tail chunk may start mid-line; the leading partial fragment is
         discarded (its predecessor chunk will complete it on the next round).
 
-        Returns ``(rows, offset)`` where ``offset`` is the forward byte offset
-        the poller should resume from — ``size`` unless the file's final line
+        Returns ``(rows, offset, metadata)`` where ``offset`` is the forward
+        byte offset the poller should resume from and ``metadata`` is the latest
+        final-carrier session projection (or ``None`` when no carrier exists)
+        — ``size`` unless the file's final line
         has no trailing newline yet (writer mid-append), in which case it is
         the start of that incomplete tail so the poller re-reads it whole once
         it is completed, instead of treating it as an already-consumed row.
@@ -1932,6 +1989,7 @@ class TelegramManager:
         """
         window = self._TASK_CARD_EVENT_WINDOW
         matches: list[dict] = []
+        latest_metadata: dict | None = None
         tail_offset = size
         try:
             with open(path, "rb") as f:
@@ -1939,6 +1997,10 @@ class TelegramManager:
                 chunk_size = self._TASK_CARD_EVENT_TAIL_CHUNK
                 carry = b""
                 first_chunk = True
+                # Reverse order means the first recognized carrier in the
+                # bounded tail is the latest one available to this rehydrate.
+                # Keep the existing latest-row bound; a log without a nearby
+                # carrier must not turn startup into an unbounded full scan.
                 while end > 0 and len(matches) < window:
                     start = max(0, end - chunk_size)
                     f.seek(start)
@@ -1965,18 +2027,29 @@ class TelegramManager:
                     carry = lines[0] if start > 0 else b""
                     complete = lines[1:] if start > 0 else lines
                     round_matches: list[dict] = []
+                    round_metadata: dict | None = None
                     for raw in complete:
-                        row = self._decode_and_project_line(raw)
+                        event = self._decode_event_line(raw)
+                        if event is None:
+                            continue
+                        row = self._project_tool_call_row(event)
                         if row is not None:
                             round_matches.append(row)
+                        candidate = self._project_tool_result_metadata(event)
+                        if candidate is not None:
+                            # ``complete`` is oldest-to-newest within this
+                            # chunk; the last candidate is the newest here.
+                            round_metadata = candidate
+                    if latest_metadata is None and round_metadata is not None:
+                        latest_metadata = round_metadata
                     matches = round_matches + matches
                     chunk_size *= 2
         except OSError:
             return None
-        return matches[-window:], tail_offset
+        return matches[-window:], tail_offset, latest_metadata
 
     @staticmethod
-    def _decode_and_project_line(raw: bytes) -> dict | None:
+    def _decode_event_line(raw: bytes) -> dict | None:
         line = raw.strip()
         if not line:
             return None
@@ -1984,9 +2057,12 @@ class TelegramManager:
             event = json.loads(line.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return None
-        if not isinstance(event, dict):
-            return None
-        return TelegramManager._project_tool_call_row(event)
+        return event if isinstance(event, dict) else None
+
+    @staticmethod
+    def _decode_and_project_line(raw: bytes) -> dict | None:
+        event = TelegramManager._decode_event_line(raw)
+        return TelegramManager._project_tool_call_row(event) if event is not None else None
 
     def _poll_event_tail(self) -> None:
         """Read any newly appended complete lines and broadcast on change.
@@ -2002,7 +2078,8 @@ class TelegramManager:
             with self._task_card_event_lock:
                 path = self._task_card_event_path
                 rehydrated_rows = bool(self._task_card_event_rows)
-            if rehydrated_rows:
+                rehydrated_metadata = self._task_card_event_metadata is not None
+            if rehydrated_rows or rehydrated_metadata:
                 self._broadcast_task_card_event_window()
             return
 
@@ -2062,23 +2139,33 @@ class TelegramManager:
         new_offset = offset + len(complete)
 
         new_rows: list[dict] = []
+        latest_metadata: dict | None = None
         for raw in complete.split(b"\n"):
-            row = self._decode_and_project_line(raw)
+            event = self._decode_event_line(raw)
+            if event is None:
+                continue
+            row = self._project_tool_call_row(event)
             if row is not None:
                 new_rows.append(row)
-
-        if not new_rows:
-            with self._task_card_event_lock:
-                self._task_card_event_offset = new_offset
-                self._task_card_event_size = size
-            return False
+            candidate = self._project_tool_result_metadata(event)
+            if candidate is not None:
+                # Forward append order is oldest-to-newest, so the last
+                # candidate is the only current snapshot.
+                latest_metadata = candidate
 
         with self._task_card_event_lock:
-            rows = self._task_card_event_rows + new_rows
-            self._task_card_event_rows = rows[-self._TASK_CARD_EVENT_WINDOW:]
+            metadata_changed = (
+                latest_metadata is not None
+                and latest_metadata != self._task_card_event_metadata
+            )
+            if latest_metadata is not None:
+                self._task_card_event_metadata = latest_metadata
             self._task_card_event_offset = new_offset
             self._task_card_event_size = size
-        return True
+            if new_rows:
+                rows = self._task_card_event_rows + new_rows
+                self._task_card_event_rows = rows[-self._TASK_CARD_EVENT_WINDOW:]
+        return bool(new_rows) or metadata_changed
 
     def _resident_task_card_targets(self) -> list[tuple[str, int]]:
         """Enumerate every ``(account, chat_id)`` with a resident Task Card.
@@ -2114,7 +2201,10 @@ class TelegramManager:
         normal_rows = self._taskcard_normal_rows()
         rows = self._task_card_event_window()[-normal_rows:]
         automatic = self._format_task_card_text(
-            "", "", "", rows=rows, normal_rows=normal_rows)
+            "", "", "", rows=rows,
+            metadata=self._task_card_event_metadata_snapshot(),
+            normal_rows=normal_rows,
+        )
         for account, chat_id in self._resident_task_card_targets():
             try:
                 self._deliver_channel_frame(
