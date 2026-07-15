@@ -4,8 +4,8 @@ configured, Gitee. Uploads the SAME bytes already produced by the build
 matrix — this script never rebuilds anything per platform/provider.
 
 Safety: every mutating action requires --execute. Without it (the default)
-the script only prints the plan (a "dry run") and exits 0. This session must
-never pass --execute; it exists for a future authorized release run.
+the script only prints the plan (a "dry run") and exits 0. Callers must pass
+--execute only for an explicitly authorized release publication.
 
 GitHub upload uses the `gh` CLI (`gh release upload`/`gh release create`),
 consistent with the TUI repo's existing release.yml. Gitee upload speaks the
@@ -41,6 +41,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "lib"))
 from release_manifest import ManifestError, manifest_from_dict, sha256_file  # noqa: E402
 
 GITEE_API_BASE = "https://gitee.com/api/v5"
+GITEE_API_TIMEOUT_SECONDS = 15
+GITEE_TRANSFER_TIMEOUT_SECONDS = 300
 
 
 class PublishError(RuntimeError):
@@ -209,7 +211,14 @@ def execute_github_upload(tag: str, repo_slug: str, files: list[Path]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _gitee_request(method: str, path: str, token: str, data: bytes | None = None, content_type: str | None = None) -> dict:
+def _gitee_request(
+    method: str,
+    path: str,
+    token: str,
+    data: bytes | None = None,
+    content_type: str | None = None,
+    timeout: int = GITEE_API_TIMEOUT_SECONDS,
+) -> dict | list:
     url = f"{GITEE_API_BASE}{path}"
     headers = {"Content-Type": content_type} if content_type else {}
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
@@ -218,7 +227,7 @@ def _gitee_request(method: str, path: str, token: str, data: bytes | None = None
     sep = "&" if "?" in url else "?"
     req.full_url = url + f"{sep}access_token={token}"
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read()
     except urllib.error.HTTPError as exc:
         body = exc.read()
@@ -237,8 +246,14 @@ def gitee_find_release_by_tag(owner: str, repo: str, tag: str, token: str) -> di
         raise
 
 
-def gitee_create_release(owner: str, repo: str, tag: str, name: str, token: str) -> dict:
-    payload = json.dumps({"tag_name": tag, "name": name, "body": f"Release {name}", "prerelease": False}).encode()
+def gitee_create_release(owner: str, repo: str, tag: str, name: str, target_commitish: str, token: str) -> dict:
+    payload = json.dumps({
+        "tag_name": tag,
+        "name": name,
+        "body": f"Release {name}",
+        "target_commitish": target_commitish,
+        "prerelease": False,
+    }).encode()
     return _gitee_request("POST", f"/repos/{owner}/{repo}/releases", token, data=payload, content_type="application/json;charset=UTF-8")
 
 
@@ -247,15 +262,37 @@ def gitee_verify_tag_synchronized(owner: str, repo: str, tag: str, expected_comm
     was built from. Never force-pushes or otherwise mutates the Gitee git
     repository — synchronization is a precondition this script checks, not an
     action it performs."""
+    ref = None
+    page = 1
     try:
-        ref = _gitee_request("GET", f"/repos/{owner}/{repo}/tags/{tag}", token)
+        while True:
+            refs = _gitee_request(
+                "GET", f"/repos/{owner}/{repo}/tags?per_page=100&page={page}", token
+            )
+            if not isinstance(refs, list):
+                raise PublishError("Gitee tag-list response is not a JSON array")
+            matches = [item for item in refs if isinstance(item, dict) and item.get("name") == tag]
+            if len(matches) > 1:
+                raise PublishError(f"Gitee tag-list response contains duplicate entries for {tag!r}")
+            if matches:
+                ref = matches[0]
+                break
+            if len(refs) < 100:
+                break
+            page += 1
     except PublishError as exc:
         raise PublishError(
-            f"Gitee tag {tag!r} not found on {owner}/{repo} (or lookup failed): {exc}\n"
+            f"Gitee tag {tag!r} lookup failed on {owner}/{repo}: {exc}\n"
             f"The kernel Gitee mirror must be synchronized to commit {expected_commit} "
             f"and tag {tag} before publishing there. This script will not push or "
             f"force-sync the mirror — synchronize it out of band, then retry."
         ) from exc
+    if ref is None:
+        raise PublishError(
+            f"Gitee tag {tag!r} not found on {owner}/{repo}. The kernel Gitee mirror "
+            f"must be synchronized to commit {expected_commit} and tag {tag} before "
+            f"publishing there. This script will not push or force-sync the mirror."
+        )
     commit_sha = (ref.get("commit") or {}).get("sha", "")
     if commit_sha != expected_commit:
         raise PublishError(
@@ -296,7 +333,7 @@ def _gitee_download_sha256(attachment: dict, filename: str, token: str) -> str:
     separator = "&" if "?" in url else "?"
     request = urllib.request.Request(url + f"{separator}access_token={token}")
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=GITEE_TRANSFER_TIMEOUT_SECONDS) as response:
             with destination.open("xb") as output:
                 while chunk := response.read(1024 * 1024):
                     output.write(chunk)
@@ -347,6 +384,7 @@ def execute_gitee_upload(owner: str, repo: str, release_id: int, files: list[Pat
             token,
             data=body,
             content_type=f"multipart/form-data; boundary={boundary}",
+            timeout=GITEE_TRANSFER_TIMEOUT_SECONDS,
         )
         print(f"  [gitee] uploaded {path.name}")
 
@@ -408,7 +446,14 @@ def main(argv: list[str] | None = None) -> int:
     if release is None:
         print(f"  [gitee] release {manifest.kernel_tag} does not exist yet")
         if args.execute:
-            release = gitee_create_release(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, manifest.kernel_tag, gitee_token)
+            release = gitee_create_release(
+                args.gitee_owner,
+                args.gitee_repo,
+                manifest.kernel_tag,
+                manifest.kernel_tag,
+                manifest.commit,
+                gitee_token,
+            )
         else:
             print(f"  [gitee] DRY RUN: would create release {manifest.kernel_tag}")
             print("  [gitee] DRY RUN: cannot plan attachment uploads without a release id (would create first)")

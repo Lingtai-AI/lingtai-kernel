@@ -194,29 +194,64 @@ def test_execute_github_upload_requires_no_files_is_noop(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_gitee_create_release_includes_target_commitish(monkeypatch):
+    captured = {}
+
+    def fake_request(method, path, token, **kwargs):
+        captured.update(method=method, path=path, token=token, **kwargs)
+        return {"id": 1}
+
+    monkeypatch.setattr(pub, "_gitee_request", fake_request)
+    pub.gitee_create_release("owner", "repo", "v0.16.4", "v0.16.4", "a" * 40, "tok")
+    payload = json.loads(captured["data"])
+    assert payload["target_commitish"] == "a" * 40
+    assert payload["tag_name"] == "v0.16.4"
+
+
 def test_gitee_verify_tag_synchronized_passes_on_matching_commit(monkeypatch):
     monkeypatch.setattr(
         pub, "_gitee_request",
-        lambda method, path, token, **kw: {"commit": {"sha": "a" * 40}},
+        lambda method, path, token, **kw: [
+            {"name": "v0.16.4", "commit": {"sha": "a" * 40}},
+        ],
     )
     pub.gitee_verify_tag_synchronized("owner", "repo", "v0.16.4", "a" * 40, "tok")  # no raise
+
+
+def test_gitee_verify_tag_synchronized_follows_tag_list_pagination(monkeypatch):
+    paths = []
+
+    def fake_request(method, path, token, **kw):
+        paths.append(path)
+        if path.endswith("page=1"):
+            return [
+                {"name": f"v0.0.{index}", "commit": {"sha": "b" * 40}}
+                for index in range(100)
+            ]
+        return [{"name": "v0.16.4", "commit": {"sha": "a" * 40}}]
+
+    monkeypatch.setattr(pub, "_gitee_request", fake_request)
+    pub.gitee_verify_tag_synchronized("owner", "repo", "v0.16.4", "a" * 40, "tok")
+    assert paths == [
+        "/repos/owner/repo/tags?per_page=100&page=1",
+        "/repos/owner/repo/tags?per_page=100&page=2",
+    ]
 
 
 def test_gitee_verify_tag_synchronized_fails_loud_on_mismatched_commit(monkeypatch):
     monkeypatch.setattr(
         pub, "_gitee_request",
-        lambda method, path, token, **kw: {"commit": {"sha": "b" * 40}},
+        lambda method, path, token, **kw: [
+            {"name": "v0.16.4", "commit": {"sha": "b" * 40}},
+        ],
     )
     with pytest.raises(pub.PublishError, match="mismatched"):
         pub.gitee_verify_tag_synchronized("owner", "repo", "v0.16.4", "a" * 40, "tok")
 
 
 def test_gitee_verify_tag_synchronized_fails_loud_when_tag_missing(monkeypatch):
-    def raise_404(method, path, token, **kw):
-        raise pub.PublishError("Gitee API GET /x failed: HTTP 404: b''")
-
-    monkeypatch.setattr(pub, "_gitee_request", raise_404)
-    with pytest.raises(pub.PublishError, match="synchronize"):
+    monkeypatch.setattr(pub, "_gitee_request", lambda *args, **kwargs: [])
+    with pytest.raises(pub.PublishError, match="not found"):
         pub.gitee_verify_tag_synchronized("owner", "repo", "v0.16.4", "a" * 40, "tok")
 
 
@@ -246,13 +281,20 @@ class _FakeResponse:
 def test_plan_gitee_uploads_same_byte_collision_skips_without_upload(tmp_path, monkeypatch, capsys):
     manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
     wheel = manifest.artifacts[0].filename
+    timeouts = []
     monkeypatch.setattr(
         pub, "_gitee_request",
         lambda *a, **k: {"attach_files": [{"id": 42, "name": wheel, "browserDownloadUrl": "https://gitee.test/wheel"}]},
     )
-    monkeypatch.setattr(pub.urllib.request, "urlopen", lambda request, timeout=15: _FakeResponse((assets_dir / wheel).read_bytes()))
+
+    def fake_urlopen(request, timeout):
+        timeouts.append(timeout)
+        return _FakeResponse((assets_dir / wheel).read_bytes())
+
+    monkeypatch.setattr(pub.urllib.request, "urlopen", fake_urlopen)
     to_upload = pub.plan_gitee_uploads(manifest, assets_dir, manifest_path, "owner", "repo", 1, "secret-token")
     assert wheel not in {p.name for p in to_upload}
+    assert timeouts == [pub.GITEE_TRANSFER_TIMEOUT_SECONDS]
     assert "existing bytes sha256" in capsys.readouterr().out
 
 
@@ -291,6 +333,26 @@ def test_plan_gitee_uploads_duplicate_name_is_ambiguous(tmp_path, monkeypatch):
     monkeypatch.setattr(pub, "_gitee_request", lambda *a, **k: {"attach_files": [{"name": name}, {"name": name}]})
     with pytest.raises(pub.PublishError, match="ambiguous duplicate"):
         pub.plan_gitee_uploads(manifest, assets_dir, manifest_path, "owner", "repo", 1, "tok")
+
+
+def test_execute_gitee_upload_uses_transfer_timeout(tmp_path, monkeypatch):
+    asset = tmp_path / "large.whl"
+    asset.write_bytes(b"wheel-bytes")
+    requests = []
+
+    def fake_request(method, path, token, **kwargs):
+        requests.append((method, path, token, kwargs))
+        return {}
+
+    monkeypatch.setattr(pub, "_gitee_request", fake_request)
+    pub.execute_gitee_upload("owner", "repo", 42, [asset], "secret-token")
+
+    assert len(requests) == 1
+    method, path, token, kwargs = requests[0]
+    assert method == "POST"
+    assert path == "/repos/owner/repo/releases/42/attach_files"
+    assert token == "secret-token"
+    assert kwargs["timeout"] == pub.GITEE_TRANSFER_TIMEOUT_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +402,11 @@ def test_main_never_echoes_gitee_token(tmp_path, monkeypatch, capsys):
     secret = "super-secret-token-value-12345"
     monkeypatch.setenv("GITEE_ACCESS_TOKEN", secret)
     monkeypatch.setattr(pub.subprocess, "run", lambda *a, **k: _FakeCompletedProcess(returncode=1))
-    monkeypatch.setattr(pub, "_gitee_request", lambda *a, **k: {"commit": {"sha": "a" * 40}})
+    monkeypatch.setattr(
+        pub,
+        "_gitee_request",
+        lambda *a, **k: [{"name": "v0.16.4", "commit": {"sha": "a" * 40}}],
+    )
     monkeypatch.setattr(pub, "gitee_find_release_by_tag", lambda *a, **k: None)
     rc = pub.main([
         "--manifest", str(manifest_path),
