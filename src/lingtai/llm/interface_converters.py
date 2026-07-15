@@ -21,6 +21,109 @@ from lingtai.kernel.llm.interface import (
 )
 
 
+_RUNTIME_ROOTS = frozenset({"tool_meta", "agent_meta"})
+_HISTORICAL_ROOTS = frozenset({
+    "tool_meta", "agent_meta", "notifications", "notification_persistent",
+    "guidance", "notification_guidance",
+})
+
+
+def _normalize_runtime_envelope(raw: Any) -> dict | None:
+    """Normalize runtime ownership without classifying business ``_meta``."""
+    if not isinstance(raw, dict) or not set(raw).intersection(_HISTORICAL_ROOTS):
+        return None
+    tool_meta = copy.deepcopy(raw.get("tool_meta")) if isinstance(raw.get("tool_meta"), dict) else {}
+    old_agent = raw.get("agent_meta")
+    agent = copy.deepcopy(old_agent) if isinstance(old_agent, dict) else {}
+    has_agent_axis = bool(agent) or any(k in raw for k in (
+        "agent_meta", "notifications", "notification_persistent", "guidance", "notification_guidance"
+    ))
+    agent_state = agent.get("agent_state")
+    if not isinstance(agent_state, dict):
+        agent_state = {}
+    # Historical kernel envelopes put state in tool_meta and/or directly in
+    # agent_meta. Move ownership only in the projected copy; canonical history
+    # remains byte/value-equivalent.
+    for key in ("current_time", "token_usage", "context"):
+        if key in tool_meta:
+            agent_state.setdefault(key, copy.deepcopy(tool_meta.pop(key)))
+    for key in ("current_tool_result_chars", "adapter_comment", "active_turn_tool_calls"):
+        if key in agent and key not in {"agent_state", "notifications", "guidance", "instruction"}:
+            agent_state.setdefault(key, copy.deepcopy(agent.pop(key)))
+    if "reconstruction" in tool_meta:
+        agent_state.setdefault("events", {})["reconstruction"] = copy.deepcopy(tool_meta.pop("reconstruction"))
+    if not has_agent_axis:
+        return {"tool_meta": tool_meta}
+    agent["agent_state"] = agent_state
+    agent.setdefault("instruction", "Only the latest agent_meta in conversation is current; older ones are historical traces.")
+    notifications = agent.get("notifications")
+    if not isinstance(notifications, dict):
+        notifications = {}
+    if "notifications" in raw:
+        notifications.setdefault("attention", copy.deepcopy(raw["notifications"]))
+    if "notification_persistent" in raw:
+        notifications.setdefault("persistent", copy.deepcopy(raw["notification_persistent"]))
+    agent["notifications"] = notifications
+    guidance = agent.get("guidance")
+    if not isinstance(guidance, dict):
+        guidance = {}
+    if "guidance" in raw:
+        guidance.setdefault("persistent", copy.deepcopy(raw["guidance"]))
+    if "notification_guidance" in raw:
+        guidance.setdefault("transient", copy.deepcopy(raw["notification_guidance"]))
+    agent["guidance"] = guidance
+    return {"tool_meta": tool_meta, "agent_meta": agent}
+
+
+def _project_tool_result(block: ToolResultBlock) -> Any:
+    """Project exactly the runtime axes; handler ``_meta`` is never merged."""
+    if isinstance(block.content, dict):
+        projected = dict(block.content)
+        business_meta = projected.get("_meta")
+        envelope = _normalize_runtime_envelope(business_meta)
+        if isinstance(block.metadata, dict) and block.metadata:
+            envelope = _normalize_runtime_envelope(block.metadata) or {}
+            projected.pop("_meta", None)
+        elif envelope is not None:
+            projected.pop("_meta", None)
+        if business_meta is not None or envelope is not None:
+            if envelope is not None:
+                projected["_meta"] = envelope
+        return projected
+    if block.metadata:
+        envelope = _normalize_runtime_envelope(block.metadata)
+        return {"result": block.content, "_meta": envelope}
+    return block.content
+
+
+def _restore_projected_result(value: Any) -> tuple[Any, dict]:
+    """Recover a sidecar when a provider round-trip returns the projected JSON."""
+    if isinstance(value, dict) and isinstance(value.get("_meta"), dict):
+        body = dict(value)
+        metadata = _normalize_runtime_envelope(body.get("_meta"))
+        if metadata is None:
+            return value, {}
+        body.pop("_meta")
+        if set(body) == {"result"}:
+            return body["result"], metadata
+        return body, metadata
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return value, {}
+        if isinstance(parsed, dict) and isinstance(parsed.get("_meta"), dict):
+            body = dict(parsed)
+            metadata = _normalize_runtime_envelope(body.get("_meta"))
+            if metadata is None:
+                return value, {}
+            body.pop("_meta")
+            if set(body) == {"result"}:
+                return body["result"], metadata
+            return body, metadata
+    return value, {}
+
+
 # ---------------------------------------------------------------------------
 # Anthropic
 # ---------------------------------------------------------------------------
@@ -61,7 +164,7 @@ def _to_anthropic_block(block: ContentBlock) -> dict:
     elif isinstance(block, ToolCallBlock):
         return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.args}
     elif isinstance(block, ToolResultBlock):
-        content = block.content
+        content = _project_tool_result(block)
         return {
             "type": "tool_result",
             "tool_use_id": block.id,
@@ -102,7 +205,8 @@ def from_anthropic(messages: list[dict], system_prompt: str | None = None) -> Ch
 
 
 def _from_anthropic_tool_result(b: dict) -> ToolResultBlock:
-    return ToolResultBlock(id=b["tool_use_id"], name=b.get("name", ""), content=b.get("content", ""))
+    content, metadata = _restore_projected_result(b.get("content", ""))
+    return ToolResultBlock(id=b["tool_use_id"], name=b.get("name", ""), content=content, metadata=metadata)
 
 
 def _from_anthropic_block(b: dict) -> ContentBlock:
@@ -146,7 +250,7 @@ def to_openai(iface: ChatInterface) -> list[dict]:
             if entry.content and isinstance(entry.content[0], ToolResultBlock):
                 for block in entry.content:
                     if isinstance(block, ToolResultBlock):
-                        content = block.content
+                        content = _project_tool_result(block)
                         messages.append({
                             "role": "tool",
                             "tool_call_id": block.id,
@@ -314,7 +418,7 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
             if entry.content and isinstance(entry.content[0], ToolResultBlock):
                 for block in entry.content:
                     if isinstance(block, ToolResultBlock):
-                        content = block.content
+                        content = _project_tool_result(block)
                         output = (
                             content
                             if isinstance(content, str)
@@ -417,7 +521,7 @@ def _to_gemini_block(block: ContentBlock) -> dict:
     elif isinstance(block, ToolCallBlock):
         return {"type": "function_call", "id": block.id, "name": block.name, "arguments": block.args}
     elif isinstance(block, ToolResultBlock):
-        content = block.content
+        content = _project_tool_result(block)
         return {
             "type": "function_result",
             "call_id": block.id,
@@ -459,7 +563,8 @@ def _from_gemini_block(b: dict) -> ContentBlock:
     elif btype == "function_call":
         return ToolCallBlock(id=b.get("id", ""), name=b["name"], args=b.get("arguments", {}))
     elif btype == "function_result":
-        return ToolResultBlock(id=b.get("call_id", ""), name=b.get("name", ""), content=b.get("result", ""))
+        content, metadata = _restore_projected_result(b.get("result", ""))
+        return ToolResultBlock(id=b.get("call_id", ""), name=b.get("name", ""), content=content, metadata=metadata)
     elif btype == "thought":
         text = ""
         for s in b.get("summary", []):

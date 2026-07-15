@@ -20,6 +20,7 @@ from ..tool_result_artifacts import CompactionStats, compact_oversized_history
 from ..meta_block import (
     attach_active_notifications,
     attach_active_runtime,
+    finalize_two_axis_sidecars,
     build_meta,
     build_reconstruction_tool_meta,
     render_meta,
@@ -1801,6 +1802,10 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 reason="attach_active_runtime raised",
             )
 
+        # Canonicalize the completed batch exactly once.  The sidecar is the
+        # only runtime transport; handler payloads remain untouched.
+        finalize_two_axis_sidecars(tool_results)
+
         # Log the actual canonical ``_meta`` envelope that was stamped onto the
         # tool result so the TUI /notification command can show real snapshots.
         # Only log when a genuinely new notification holder was established
@@ -1810,17 +1815,20 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # notifications/notification_guidance).
         if not _batch_includes_context_molt(response.tool_calls):
             _new_holder = agent._notification_live_holder
-            _new_meta = _new_holder.get("_meta") if isinstance(_new_holder, dict) else None
+            _new_meta = (
+                getattr(_new_holder, "metadata", None)
+                if _new_holder is not None else None
+            )
             if (
                 _new_holder is not None
                 and _new_holder is not _prior_holder
                 and isinstance(_new_meta, dict)
-                and "notifications" in _new_meta
+                and "notifications" in _new_meta.get("agent_meta", {})
             ):
                 try:
                     _carrier_call_id = ""
                     for _result in tool_results:
-                        if getattr(_result, "content", None) is _new_holder:
+                        if _result is _new_holder:
                             _carrier_call_id = str(getattr(_result, "id", "") or "")
                             break
                     agent._log_notification_block_injected(

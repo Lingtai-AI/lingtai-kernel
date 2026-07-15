@@ -35,7 +35,6 @@ from lingtai.kernel._fsutil import atomic_write_json
 from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.kernel.tool_glossary import append_tool_glossary
 from lingtai.kernel.loop_guard import LoopGuard
-from lingtai.kernel.meta_block import build_meta
 from lingtai.kernel.tool_executor import ToolExecutor
 from lingtai.kernel.trace_redaction import redact_text
 from .run_dir import DaemonRunDir
@@ -2215,7 +2214,10 @@ class DaemonManager:
             known_tools=set(dispatch),
             parallel_safe_tools=set(),
             logger_fn=_daemon_tool_logger,
-            meta_fn=lambda: build_meta(self._agent),
+            # Daemons receive only universal per-execution tool_meta.  Parent
+            # agent/session state is intentionally not shared across this
+            # boundary.
+            meta_fn=None,
             working_dir=self._agent._working_dir,
             tool_call_guard=getattr(self._agent, "_tool_call_guard", None),
         )

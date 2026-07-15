@@ -1718,13 +1718,18 @@ class BaseAgent:
                             raw_count = len(raw_data["voices"])
                 notification_summary_counts[raw_source] = raw_count
 
-        # Nest the canonical notification payload under the unified ``_meta``
-        # envelope so the synthesized pair presents notifications the same way
-        # an ACTIVE tool result does (``_meta.notifications`` +
-        # ``_meta.notification_guidance``).
+        # Build the canonical two-axis sidecar. The handler-shaped body remains
+        # independent; adapters project this sidecar into model-visible _meta.
         notification_persistent_payload = build_notification_persistent_payload(
             self, notifications_with_guidance
         )
+        # Delivery accounting and the model-visible envelope must describe the
+        # same persistent lane.  Merge the separately built durable snapshot
+        # before constructing the ToolResultBlock sidecar.
+        if isinstance(notification_persistent_payload, dict):
+            notifications_with_guidance["notification_persistent"] = (
+                notification_persistent_payload.get("notification_persistent", {})
+            )
         # Move (not duplicate): curated durable IM context now lives in
         # persistent lanes, so strip it from the model-visible ephemeral lane
         # before it is nested into the synthesized pair's _meta (and the
@@ -1738,18 +1743,12 @@ class BaseAgent:
         sanitize_feishu_notification_after_persistent(notifications_with_guidance)
         sanitize_whatsapp_notification_after_persistent(notifications_with_guidance)
         sanitize_email_notification_after_persistent(notifications_with_guidance)
-        body_meta = dict(notifications_with_guidance)
-        if notification_persistent_payload:
-            body_meta.update(notification_persistent_payload)
         body = {
             "_synthesized": True,
-            "_meta": body_meta,
         }
-        # Flatten the remaining safe build_meta fields into body top-level —
-        # these are the synthesized pair's own freshness/uniqueness fields
-        # (for example injection_seq), distinct from the tool-result metadata
-        # blocks under ``_meta``.
-        body.update(meta)
+        # Only the freshness marker belongs in the handler-shaped synthetic
+        # body; current agent state remains in the sidecar.
+        body["injection_seq"] = self._notification_inject_seq
         # Store body as a dict (not a JSON string) so it can be mutated
         # in-place when this pair is skeletonized later.  All adapters
         # already handle dict content via isinstance checks — see
@@ -1821,7 +1820,10 @@ class BaseAgent:
         result_block = ToolResultBlock(
             id=call_id,
             name="notification",
-            content=content_dict,  # dict, serialized directly by every adapter
+            content=content_dict,
+            metadata=build_synthetic_meta_envelope(
+                self, notifications_with_guidance, call_id=call_id
+            ),
             synthesized=True,
         )
 
@@ -1848,7 +1850,7 @@ class BaseAgent:
         # can release tracking of it without touching conversation history.
         # _notification_block_id is retained for informational / molt-reset
         # purposes; it is no longer used for remove_pair_by_call_id.
-        self._notification_live_holder = content_dict
+        self._notification_live_holder = result_block
         self._notification_block_id = call_id
         if notification_persistent_payload:
             record_notification_persistent_delivery(
@@ -1865,19 +1867,9 @@ class BaseAgent:
             summary=summary_text,
             meta=meta,
         )
-        # Reconstruct the full four-block ``_meta`` envelope for the durable
-        # snapshot so the TUI /notification view shows the same ``_meta.*``
-        # blocks (tool_meta/agent_meta/guidance/notifications/
-        # notification_guidance) a synthesized pair would carry.  The live wire
-        # body keeps its notification-only ``_meta``; this is logging-side only.
+        # Log the exact canonical sidecar that was attached to the live block.
         from ..meta_block import build_synthetic_meta_envelope
-        synthetic_envelope = build_synthetic_meta_envelope(
-            self,
-            notifications_with_guidance,
-            call_id=call_id,
-        )
-        if notification_persistent_payload:
-            synthetic_envelope.update(notification_persistent_payload)
+        synthetic_envelope = result_block.metadata
         self._log_notification_block_injected(
             synthetic_envelope,
             mode="synthetic_notification_pair",
@@ -1910,7 +1902,8 @@ class BaseAgent:
         corrupt the logged snapshot.
         """
         try:
-            notifications = meta_envelope.get("notifications", {})
+            agent_meta = meta_envelope.get("agent_meta", {})
+            notifications = agent_meta.get("notifications", {}).get("attention", {}) if isinstance(agent_meta, dict) else {}
             sources = sorted(notifications.keys()) if isinstance(notifications, dict) else []
             self._log(
                 "notification_block_injected",

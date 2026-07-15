@@ -83,6 +83,20 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 
 ## State
 
+Tool-result metadata is stored canonically on `ToolResultBlock.metadata` and
+projected by Anthropic, OpenAI Chat Completions, OpenAI Responses, and Gemini
+converters. Dictionary and string results use the same projected `_meta` roots;
+canonical history retains the sidecar separately and replay does not strip old
+agent snapshots. No provider converter implies inbound recovery unless that
+provider has a matching converter.
+
+Provider converters project the canonical `ToolResultBlock.metadata` sidecar
+into one model-visible `_meta` envelope. This projection is deliberately
+handler-agnostic: dictionary results merge the envelope and string/non-dict
+results use a structured `{result, _meta}` output. Canonical history stores the
+sidecar separately so replay/deserialization preserves it without rewriting
+historical holders.
+
 - **Class-level** — `LLMService._adapter_registry` (shared across all instances); `LLMAdapter._gate` (per-adapter instance).
 - **Instance-level** — `LLMService._adapters` cache; `LLMService._sessions` registry; `APICallGate._timestamps` deque for RPM window.
 - **Provider defaults** — `LLMService._provider_defaults` dict injected at construction (`service.py:228`). Drives model, base_url, max_rpm, api_compat, `default_headers` (caller/provider headers preserved under the shared LingTai identity defaults), the Codex per-agent identity (`codex_session_anchor`/`codex_thread_salt`), Codex token-file selection (`codex_auth_path`), the optional Codex endpoint pool (`codex_base_urls`; direct host/test defaults may also pass `codex_molt_count`), OpenAI Responses `compact_threshold` settings, and the OpenAI-compatible `wire_api` selector (`auto`/`chat_completions`/`responses`). Build it from `manifest.llm` via `build_provider_defaults_from_manifest_llm()` (`service.py:124`) — opt-in safelists ensure adapter-consulted manifest fields propagate: `_PROVIDER_DEFAULTS_PASS_THROUGH_KEYS` skips `None` values such as `api_compat`, while `_PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS` preserves explicit `None` for settings like `compact_threshold` where `null` means “disable”. Both `cli.py:_load_init` and `agent.py:_setup_from_init` use this helper to stay in sync.
