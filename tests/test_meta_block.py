@@ -273,7 +273,7 @@ def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
     # The block documents both halves: current_call + since-last-molt session.
     assert "session_cache_rate" in readme["tool_meta"]
     assert "api_calls" in readme["tool_meta"]
-    assert "tool_meta.token_usage" in readme["agent_meta"]
+    assert "agent_meta.agent_state.token_usage" in readme["agent_meta"]["agent_state"]
 
 
 def test_build_meta_readme_documents_nested_current_call_and_session_split():
@@ -485,12 +485,11 @@ def test_slim_adapter_comment_for_tail_trims_ledger_without_static_key_guessing(
 
 def test_attach_active_runtime_tail_guidance_is_ref_not_full_sections():
     agent = _runtime_agent(total_calls=1)
-    content = _stamped_result({"current_time": "T"}, 12)
-    block = ToolResultBlock(id="t1", name="x", content=content)
+    block = _stamped_result({"current_time": "T"}, 12)
 
     attach_active_runtime(agent, [block], prior_holder=None)
 
-    guidance = block.content["_meta"][GUIDANCE_KEY]
+    guidance = block.metadata["agent_meta"]["guidance"]["persistent"]
     # Tail guidance is a lightweight ref/hook, not the full ordered sections.
     assert "sections" not in guidance
     assert "meta_guidance" in guidance.get("ref", "") + json.dumps(guidance)
@@ -526,13 +525,11 @@ def test_attach_active_runtime_tail_adapter_comment_has_no_ledger_rows():
             dynamic_adapter_comment=dynamic_comment,
         )
     )
-    block = ToolResultBlock(
-        id="t-adapter", name="x", content=_stamped_result({"current_time": "T"}, 12)
-    )
+    block = _stamped_result({"current_time": "T"}, 12, id="t-adapter")
 
     attach_active_runtime(agent, [block])
 
-    tail = block.content["_meta"]["agent_meta"]["adapter_comment"]
+    tail = block.metadata["agent_meta"]["agent_state"]["adapter_comment"]
     assert calls == {"legacy": 0, "dynamic": 1}
     assert tail["adapter"] == "codex"
     assert tail["turns_since_epoch_reset"] == 4
@@ -647,20 +644,16 @@ def test_render_meta_rounds_usage_to_one_decimal():
     assert "7.2%" in result
 
 
-def test_stamp_meta_records_pending_snapshot_not_runtime_block():
-    # stamp_meta records a transient _runtime_pending snapshot. The real
-    # _meta.agent_meta/_meta.guidance is promoted only at the tool-batch boundary by
-    # attach_active_runtime (latest-only), so stamp_meta itself never writes
-    # _runtime or flat top-level keys.
+def test_stamp_meta_is_deprecated_noop():
+    # Runtime capture belongs to ToolResultBlock._agent_pending; stamp_meta
+    # remains only as a compatibility import and must not create transport state.
     result = {"status": "ok"}
     out = stamp_meta(result, {"current_time": "2026-04-20T10:15:23-07:00"}, 42)
-    assert out is result  # in-place
-    pending = out["_runtime_pending"]
-    assert pending["current_time"] == "2026-04-20T10:15:23-07:00"
-    assert pending["elapsed_ms"] == 42
+    assert out is result
     assert out["status"] == "ok"
-    # No real _meta envelope and no legacy flat keys at the top level.
-    assert "_runtime" not in out
+    assert out == {"status": "ok"}
+    assert "_runtime_pending" not in out
+    assert "_agent_pending" not in out
     assert "current_time" not in out
     assert "_elapsed_ms" not in out
 
@@ -677,22 +670,18 @@ def test_stamp_meta_empty_meta_records_nothing():
     assert out == {"status": "ok"}
 
 
-def test_stamp_meta_future_fields_are_carried_in_pending():
-    # Forward-compatibility: every key in meta lands in _runtime_pending.
+def test_stamp_meta_future_fields_are_not_carried():
+    # Forward-compatible runtime capture is owned by ToolResultBlock sidecars.
     result = {"status": "ok"}
     meta = {"current_time": "2026-04-20T10:15:23-07:00", "future_field": 123}
-    stamp_meta(result, meta, 7)
-    pending = result["_runtime_pending"]
-    assert pending["future_field"] == 123
-    assert pending["current_time"] == "2026-04-20T10:15:23-07:00"
-    assert pending["elapsed_ms"] == 7
+    assert stamp_meta(result, meta, 7) == result
+    assert result == {"status": "ok"}
 
 
-def test_stamp_meta_elapsed_ms_key_under_pending():
-    # elapsed_ms is written as pending["elapsed_ms"] (not _elapsed_ms).
+def test_stamp_meta_does_not_write_elapsed_ms():
     result = {}
     stamp_meta(result, {"current_time": "T"}, 7)
-    assert result["_runtime_pending"]["elapsed_ms"] == 7
+    assert "_runtime_pending" not in result
     assert "_elapsed_ms" not in result
 
 
@@ -759,7 +748,7 @@ def test_build_meta_omits_numeric_context_fields_when_decomp_ran():
 
 def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
     # The full provider-round snapshot is the source; only the compact subset is
-    # placed into the transit key destined for _meta.tool_meta.token_usage. With
+    # placed into the transit key destined for agent_meta.agent_state.token_usage. With
     # no get_token_usage on the agent, only the provider-round half is emitted.
     snapshot = {
         "scope": "provider_round",
@@ -1161,11 +1150,10 @@ def test_build_meta_session_cache_rate_clamps_to_fraction():
     assert session["session_cache_rate"] == 1.0
 
 
-def test_synthetic_meta_envelope_shows_token_usage_in_tool_meta_not_agent_meta():
+def test_synthetic_meta_envelope_shows_token_usage_in_agent_state():
     # /notification synthetic raw meta carries token diagnostics under
-    # tool_meta.token_usage when pending/session data is available; agent_meta
-    # never carries token diagnostics. The nested current_call/session split is
-    # preserved on the synthetic tool_meta too.
+    # agent_meta.agent_state when pending/session data is available. The nested
+    # current_call/session split is preserved on that current-state axis.
     snapshot = {
         "input_tokens": 190_000,
         "cache_miss_tokens": 22_000,
@@ -1188,13 +1176,13 @@ def test_synthetic_meta_envelope_shows_token_usage_in_tool_meta_not_agent_meta()
 
     tool_meta = envelope["tool_meta"]
     assert tool_meta["synthetic"] is True
-    assert tool_meta["token_usage"]["current_call"]["input"] == 190_000
-    assert tool_meta["token_usage"]["session"]["session_cache_rate"] == 0.25
-    assert tool_meta["token_usage"]["session"]["api_calls"] == 4
-    # agent_meta must not carry token diagnostics in any form.
     agent_meta = envelope["agent_meta"]
+    state = agent_meta["agent_state"]
+    assert state["token_usage"]["current_call"]["input"] == 190_000
+    assert state["token_usage"]["session"]["session_cache_rate"] == 0.25
+    assert state["token_usage"]["session"]["api_calls"] == 4
     assert "token_efficiency" not in agent_meta
-    assert "token_usage" not in agent_meta
+    assert "token_usage" in state
     assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in agent_meta
 
 
@@ -1996,15 +1984,16 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
     agent = _notif_agent(tmp_path)
     assert agent._notification_fp == ()
 
-    # First batch: a single dict-shaped tool result, no prior holder.  The very
+    # First batch: a single ToolResultBlock, no prior holder.  The final block
+    # is the metadata carrier regardless of its handler content.  The very
     # first active payload always attaches (no prior signature to compare).
     first = ToolResultBlock(id="t1", name="x", content={"ok": True})
     holder = attach_active_notifications(agent, [first], prior_holder=None)
-    assert holder is first.content
+    assert holder is first
     assert "_notifications" not in first.content
-    # The canonical notification payload nests under the _meta envelope.
+    # The canonical notification payload nests under the carrier sidecar.
     assert "notifications" not in first.content  # not top-level anymore
-    assert first.content["_meta"]["notifications"] == {
+    assert first.metadata["agent_meta"]["notifications"]["attention"] == {
         "email": {
             "header": "Email event",
             "icon": "📬",
@@ -2019,16 +2008,16 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
             ),
         }
     }
-    persistent_email = first.content["_meta"]["notification_persistent"]["email"]
+    persistent_email = first.metadata["agent_meta"]["notifications"]["persistent"]["email"]
     assert persistent_email["email_ids"] == ["email-1"]
     assert persistent_email["emails"][0]["subject"] == "Email subject"
     assert "digest" not in persistent_email
     assert persistent_email["emails"][0]["message"] == "Full email body"
-    assert first.content["_meta"]["notification_guidance"] == {
+    assert first.metadata["agent_meta"]["guidance"]["transient"] == {
         "ref": "meta_guidance.notification_handling",
         "sources": ["email"],
     }
-    assert "notification_guidance" not in first.content["_meta"]["notifications"]["email"]
+    assert "notification_guidance" not in first.metadata["agent_meta"]["notifications"]["attention"]["email"]
     # The sparse change-gate recorded a non-null signature for this payload.
     assert agent._notification_payload_signature is not None
     # Successful stamping must commit the fingerprint, so the IDLE-path
@@ -2039,27 +2028,25 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
 
 
 def test_attach_active_notifications_unchanged_payload_not_restamped(tmp_path):
-    # Sparse contract: an UNCHANGED notification payload must NOT be chased onto
-    # a newer ordinary tool result merely because that result is the latest.
-    # The prior holder keeps the payload as the current-state carrier.
+    # The complete current notification snapshot is repeated on the final
+    # carrier, even when its payload is unchanged.
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
 
     first = ToolResultBlock(id="t1", name="x", content={"ok": True})
     holder = attach_active_notifications(agent, [first], prior_holder=None)
-    assert "notifications" in first.content["_meta"]
+    assert "notifications" in first.metadata["agent_meta"]
 
     # Second batch: the notification files are unchanged.  An ordinary tool
     # result must NOT receive the payload; the prior holder keeps it.
     second = ToolResultBlock(id="t2", name="x", content={"ok": False})
     new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
 
-    assert new_holder is holder
-    # Newer ordinary result carries no notification payload.
-    assert "_meta" not in second.content or "notifications" not in second.content["_meta"]
-    # Prior holder still carries it — it was NOT skeletonized.
-    assert "notifications" in first.content["_meta"]
-    assert first.content["_meta"]["notifications"]["email"]["data"] == {
+    assert new_holder is second
+    assert "notifications" in second.metadata["agent_meta"]
+    # Prior holder remains historical and is not rewritten.
+    assert "notifications" in first.metadata["agent_meta"]
+    assert first.metadata["agent_meta"]["notifications"]["attention"]["email"]["data"] == {
         "email_ids": ["email-1"]
     }
 
@@ -2077,7 +2064,7 @@ def test_attach_active_notifications_changed_payload_reattaches_and_retains_prio
 
     first = ToolResultBlock(id="t1", name="x", content={"ok": True})
     holder = attach_active_notifications(agent, [first], prior_holder=None)
-    assert "notifications" in first.content["_meta"]
+    assert "notifications" in first.metadata["agent_meta"]
     first_sig = agent._notification_payload_signature
 
     # Materially change the email channel payload.
@@ -2092,18 +2079,18 @@ def test_attach_active_notifications_changed_payload_reattaches_and_retains_prio
     second = ToolResultBlock(id="t2", name="x", content={"ok": False})
     new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
 
-    assert new_holder is second.content
+    assert new_holder is second
     # The signature advanced with the material change.
     assert agent._notification_payload_signature != first_sig
     # First holder RETAINS its original payload as a historical trace.
-    assert first.content["_meta"]["notifications"]["email"]["data"] == {
+    assert first.metadata["agent_meta"]["notifications"]["attention"]["email"]["data"] == {
         "email_ids": ["email-1"]
     }
-    assert "notification_guidance" in first.content["_meta"]
-    assert second.content["_meta"]["notifications"]["email"]["data"] == {
+    assert "guidance" in first.metadata["agent_meta"]
+    assert second.metadata["agent_meta"]["notifications"]["attention"]["email"]["data"] == {
         "email_ids": ["email-2"]
     }
-    persistent_email = second.content["_meta"]["notification_persistent"]["email"]
+    persistent_email = second.metadata["agent_meta"]["notifications"]["persistent"]["email"]
     assert "digest" not in persistent_email
     assert persistent_email["emails"][0]["message"] == "Three new email body"
     assert persistent_email["emails"][0]["id"] == "email-2"
@@ -2136,9 +2123,9 @@ def test_attach_active_notifications_unchanged_commits_fp_to_avoid_retry(tmp_pat
     second = ToolResultBlock(id="t2", name="x", content={"ok": False})
     new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
 
-    # Not restamped (unchanged material), but the fingerprint IS committed.
-    assert new_holder is holder
-    assert "_meta" not in second.content or "notifications" not in second.content["_meta"]
+    # The current whole snapshot is present and the fingerprint is committed.
+    assert new_holder is second
+    assert "notifications" in second.metadata["agent_meta"]
     assert agent._notification_fp == fingerprint_notifications(tmp_path)
 
 
@@ -2151,16 +2138,16 @@ def test_attach_active_notifications_unchanged_signature_without_holder_reattach
 
     first = ToolResultBlock(id="t1", name="x", content={"ok": True})
     holder = attach_active_notifications(agent, [first], prior_holder=None)
-    assert holder is first.content
-    assert "notifications" in first.content["_meta"]
+    assert holder is first
+    assert "notifications" in first.metadata["agent_meta"]
 
     # Simulate holder loss while the material signature remains recorded.
     agent._notification_live_holder = None
     second = ToolResultBlock(id="t2", name="x", content={"ok": False})
     new_holder = attach_active_notifications(agent, [second], prior_holder=None)
 
-    assert new_holder is second.content
-    assert "notifications" in second.content["_meta"]
+    assert new_holder is second
+    assert "notifications" in second.metadata["agent_meta"]
 
 
 
@@ -2173,7 +2160,7 @@ def test_attach_active_notifications_check_read_receives_unchanged_payload(tmp_p
     # First, an ordinary batch establishes the holder + signature.
     first = ToolResultBlock(id="t1", name="x", content={"ok": True})
     holder = attach_active_notifications(agent, [first], prior_holder=None)
-    assert "notifications" in first.content["_meta"]
+    assert "notifications" in first.metadata["agent_meta"]
 
     # Now the agent voluntarily calls notification(action=check): its result is
     # the placeholder dict.  Even though the payload is unchanged, the check
@@ -2185,14 +2172,14 @@ def test_attach_active_notifications_check_read_receives_unchanged_payload(tmp_p
     )
     new_holder = attach_active_notifications(agent, [check_result], prior_holder=holder)
 
-    assert new_holder is check_result.content
-    assert "notifications" in check_result.content["_meta"]
-    assert check_result.content["_meta"]["notifications"]["email"]["data"] == {
+    assert new_holder is check_result
+    assert "notifications" in check_result.metadata["agent_meta"]
+    assert check_result.metadata["agent_meta"]["notifications"]["attention"]["email"]["data"] == {
         "email_ids": ["email-1"]
     }
     # The prior ordinary holder RETAINS its payload as a historical trace; the
     # check result is simply the newest (current) emission.
-    assert "notifications" in first.content["_meta"]
+    assert "notifications" in first.metadata["agent_meta"]
 
 
 def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp_path):
@@ -2213,14 +2200,14 @@ def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp
     assert agent._notification_payload_signature is None
     # Prior holder RETAINS its payload as a historical trace (no retroactive
     # strip); it is simply no longer the live holder.
-    assert "notifications" in first.content["_meta"]
+    assert "notifications" in first.metadata["agent_meta"]
 
     # Same payload reappears — must attach afresh (first-active semantics).
     _write_email_notif(tmp_path)
     third = ToolResultBlock(id="t3", name="x", content={"ok": True})
     new_holder = attach_active_notifications(agent, [third], prior_holder=None)
-    assert new_holder is third.content
-    assert "notifications" in third.content["_meta"]
+    assert new_holder is third
+    assert "notifications" in third.metadata["agent_meta"]
 
 
 def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path):
@@ -2235,9 +2222,9 @@ def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path)
     )
     holder = attach_active_notifications(agent, [block], prior_holder=None)
 
-    assert holder is block.content
+    assert holder is block
     # Required path is _meta.notification_persistent.mcp.telegram (Jason #6148).
-    telegram = block.content["_meta"]["notification_persistent"]["mcp"]["telegram"]
+    telegram = block.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["telegram"]
     # Seed block carries the English range comment; historical last-20 context
     # must not be mistaken for a burst of multiple new incoming messages.
     assert set(telegram.keys()) == {
@@ -2291,7 +2278,7 @@ def test_attach_active_notifications_first_block_reseeds_with_retained_ids(tmp_p
     )
     attach_active_notifications(agent, [block], prior_holder=None)
 
-    telegram = block.content["_meta"]["notification_persistent"]["mcp"]["telegram"]
+    telegram = block.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["telegram"]
     assert len(telegram["messages"]) == 20
     assert telegram["messages"][0]["id"] == "main:123:102"
     assert telegram["messages"][-1]["id"] == "main:123:121"
@@ -2309,7 +2296,7 @@ def test_attach_active_notifications_first_block_reseeds_with_retained_ids(tmp_p
     # Move (not duplicate): the ephemeral notifications.mcp.telegram lane is now
     # only a short high-attention identity hook.  Content and routing hooks live
     # in persistent.
-    ephemeral = block.content["_meta"]["notifications"]["mcp.telegram"]
+    ephemeral = block.metadata["agent_meta"]["notifications"]["attention"]["mcp.telegram"]
     assert ephemeral["data"] == {"message_ids": ["main:123:121"]}
     assert "previews" not in ephemeral["data"]
     assert "source" not in ephemeral["data"]
@@ -2329,7 +2316,7 @@ def test_attach_active_notifications_adds_telegram_persistent_delta_with_comment
         content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
     )
     holder = attach_active_notifications(agent, [first], prior_holder=None)
-    first_tg = first.content["_meta"]["notification_persistent"]["mcp"]["telegram"]
+    first_tg = first.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["telegram"]
     assert first_tg["messages"][-1]["id"] == "main:123:20"
     # First block hook: no predecessor.
     assert first_tg["previous_block"]["is_first_block"] is True
@@ -2344,12 +2331,13 @@ def test_attach_active_notifications_adds_telegram_persistent_delta_with_comment
     )
     new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
 
-    assert new_holder is second.content
+    assert new_holder is second
     # The previous holder keeps its persistent context AND its old ephemeral
-    # _meta.notifications payload (historical trace — no retroactive strip).
-    assert "notifications" in first.content["_meta"]
-    assert first.content["_meta"]["notification_persistent"]["mcp"]["telegram"]["messages"]
-    telegram = second.content["_meta"]["notification_persistent"]["mcp"]["telegram"]
+    # Legacy root-notifications payload is retained only as a historical trace;
+    # the current carrier uses agent_meta.notifications.
+    assert "notifications" in first.metadata["agent_meta"]
+    assert first.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["telegram"]["messages"]
+    telegram = second.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["telegram"]
     assert [message["id"] for message in telegram["messages"]] == ["main:123:21"]
     # Every non-first block hooks to the previous block via the prior tool id.
     previous_block = telegram["previous_block"]
@@ -2377,7 +2365,7 @@ def test_attach_active_notifications_sanitizes_telegram_without_new_persistent_b
         content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
     )
     holder = attach_active_notifications(agent, [first], prior_holder=None)
-    assert "notification_persistent" in first.content["_meta"]
+    assert "persistent" in first.metadata["agent_meta"]["notifications"]
 
     check_result = ToolResultBlock(
         id="t2",
@@ -2386,8 +2374,8 @@ def test_attach_active_notifications_sanitizes_telegram_without_new_persistent_b
     )
     new_holder = attach_active_notifications(agent, [check_result], prior_holder=holder)
 
-    assert new_holder is check_result.content
-    meta = check_result.content["_meta"]
+    assert new_holder is check_result
+    meta = check_result.metadata["agent_meta"]
     # No new message ids, but the routing event hook is Telegram content too, so
     # it is emitted in persistent while the transient lane stays generic.
     telegram = meta["notification_persistent"]["mcp"]["telegram"]
@@ -2763,8 +2751,9 @@ def test_sanitize_telegram_notification_after_persistent_is_noop_without_telegra
 # WeChat persistent lane — mirrors the Telegram lane through the shared
 # parametrized IM machinery: seed/delta boundary at the producer's 10-message
 # preview window, `_meta.notification_persistent.mcp.wechat` path, WeChat
-# comment wording (wechat.read), and the transient `_meta.notifications
-# .mcp.wechat` lane reduced to a message_ids identity hook.
+# comment wording (wechat.read), and the transient
+# `agent_meta.notifications.attention.mcp.wechat` lane reduced to a
+# message_ids identity hook.
 # ---------------------------------------------------------------------------
 
 
@@ -2872,10 +2861,10 @@ def test_attach_active_notifications_adds_wechat_persistent_snapshot(tmp_path):
     )
     holder = attach_active_notifications(agent, [block], prior_holder=None)
 
-    assert holder is block.content
+    assert holder is block
     # Required path mirrors Telegram: _meta.notification_persistent.mcp.wechat.
-    assert "wechat" not in block.content["_meta"]["notification_persistent"]
-    wechat = block.content["_meta"]["notification_persistent"]["mcp"]["wechat"]
+    assert "wechat" not in block.metadata["agent_meta"]["notifications"]["persistent"]
+    wechat = block.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["wechat"]
     assert set(wechat.keys()) == {
         "messages",
         "events",
@@ -2913,7 +2902,7 @@ def test_attach_active_notifications_adds_wechat_persistent_snapshot(tmp_path):
 
     # Move (not duplicate): the ephemeral notifications.mcp.wechat lane is now
     # only a short high-attention identity hook.
-    ephemeral = block.content["_meta"]["notifications"]["mcp.wechat"]
+    ephemeral = block.metadata["agent_meta"]["notifications"]["attention"]["mcp.wechat"]
     assert ephemeral["data"] == {"message_ids": ["wc-12"]}
     assert ephemeral["header"] == "WeChat event"
     assert "previews" not in ephemeral["data"]
@@ -2932,7 +2921,7 @@ def test_attach_active_notifications_adds_wechat_persistent_delta_with_comment(t
         content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
     )
     holder = attach_active_notifications(agent, [first], prior_holder=None)
-    first_wc = first.content["_meta"]["notification_persistent"]["mcp"]["wechat"]
+    first_wc = first.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["wechat"]
     assert first_wc["messages"][-1]["id"] == "wc-10"
     assert first_wc["previous_block"]["is_first_block"] is True
 
@@ -2945,12 +2934,13 @@ def test_attach_active_notifications_adds_wechat_persistent_delta_with_comment(t
     )
     new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
 
-    assert new_holder is second.content
+    assert new_holder is second
     # The previous holder keeps its persistent context AND its old ephemeral
-    # _meta.notifications payload (historical trace — no retroactive strip).
-    assert "notifications" in first.content["_meta"]
-    assert first.content["_meta"]["notification_persistent"]["mcp"]["wechat"]["messages"]
-    wechat = second.content["_meta"]["notification_persistent"]["mcp"]["wechat"]
+    # Legacy root-notifications payload is retained only as a historical trace;
+    # the current carrier uses agent_meta.notifications.
+    assert "notifications" in first.metadata["agent_meta"]
+    assert first.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["wechat"]["messages"]
+    wechat = second.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["wechat"]
     assert [message["id"] for message in wechat["messages"]] == ["wc-11"]
     previous_block = wechat["previous_block"]
     assert previous_block["path"] == "_meta.notification_persistent.mcp.wechat"
@@ -3345,14 +3335,14 @@ def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):
 
     attach_active_notifications(agent, [block], prior_holder=None)
 
-    meta = block.content["_meta"]
-    payload = meta["notifications"]["mcp.telegram"]
+    meta = block.metadata["agent_meta"]
+    payload = meta["notifications"]["attention"]["mcp.telegram"]
     assert "_notifications" not in block.content
     assert payload["data"] == {"message_ids": []}
     assert "previews" not in payload["data"]
     # Legacy preview-only Telegram payloads are preserved as persistent fallback
     # messages rather than staying in the transient notification lane.
-    telegram = meta["notification_persistent"]["mcp"]["telegram"]
+    telegram = meta["notifications"]["persistent"]["mcp"]["telegram"]
     assert [message["text"] for message in telegram["messages"]] == [
         "first body",
         "second body",
@@ -3363,7 +3353,7 @@ def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):
         {"from": "bob", "subject": "status"},
     ]
     assert "notification_guidance" not in payload
-    assert meta["notification_guidance"] == {
+    assert meta["guidance"]["transient"] == {
         "ref": "meta_guidance.notification_handling",
         "sources": ["mcp.telegram"],
     }
@@ -3383,7 +3373,7 @@ def test_attach_active_notifications_uses_canonical_system_payload(tmp_path):
 
     attach_active_notifications(agent, [block], prior_holder=None)
 
-    payload = block.content["_meta"]["notifications"]["system"]
+    payload = block.metadata["agent_meta"]["notifications"]["attention"]["system"]
     assert "_notifications" not in block.content
     assert payload["data"]["events"] == [
         {"source": "daemon", "body": "Daemon finished with useful details"}
@@ -3404,7 +3394,7 @@ def test_attach_active_notifications_uses_canonical_soul_payload(tmp_path):
 
     attach_active_notifications(agent, [block], prior_holder=None)
 
-    payload = block.content["_meta"]["notifications"]["soul"]
+    payload = block.metadata["agent_meta"]["notifications"]["attention"]["soul"]
     assert "_notifications" not in block.content
     assert payload["data"]["voices"] == [
         {"source": "insights", "voice": "Remember to verify by email."}
@@ -3419,17 +3409,18 @@ def test_attach_active_notifications_no_active_releases_prior_without_strip(tmp_
     sentinel_fp = (("sentinel.json", 1, 1),)
     agent._notification_fp = sentinel_fp
 
-    # Seed a prior holder as if a previous batch had stamped one (under _meta).
-    prior = {"ok": True, "_meta": {"notifications": {"email": {"header": "stale"}}}}
+    # Explicit legacy-holder input: an old raw dict is accepted and must not be
+    # mutated.  Current outputs use ToolResultBlock metadata sidecars.
+    legacy_prior = {"ok": True, "_meta": {"notifications": {"email": {"header": "stale"}}}}
     new_block = ToolResultBlock(id="t1", name="x", content={"ok": "new"})
 
     result = attach_active_notifications(
-        agent, [new_block], prior_holder=prior
+        agent, [new_block], prior_holder=legacy_prior
     )
     assert result is None
     # The prior normal result RETAINS its old payload as a historical trace
     # (no retroactive strip); it just stops being the live holder.
-    assert prior["_meta"]["notifications"] == {"email": {"header": "stale"}}
+    assert legacy_prior["_meta"]["notifications"] == {"email": {"header": "stale"}}
     assert agent._notification_live_holder is None
     assert "_meta" not in new_block.content
     # Crucially: with no active notifications, we leave the fp alone so
@@ -3437,37 +3428,45 @@ def test_attach_active_notifications_no_active_releases_prior_without_strip(tmp_
     assert agent._notification_fp == sentinel_fp
 
 
-def test_attach_active_notifications_no_target_preserves_fp(tmp_path):
-    # Active notifications exist, but no dict-shaped tool result is
-    # available to stamp onto (e.g. all results were strings, or the
-    # batch is empty). Must NOT commit `_notification_fp` — otherwise
-    # the IDLE-path would silently skip delivering this never-seen state.
+def test_attach_active_notifications_empty_batch_preserves_fp(tmp_path):
+    # An actually empty batch has no carrier, so it must not commit
+    # `_notification_fp` — otherwise the IDLE-path could skip this state.
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
     sentinel_fp = (("sentinel.json", 1, 1),)
     agent._notification_fp = sentinel_fp
 
-    # Case A: empty batch.
     assert attach_active_notifications(agent, [], prior_holder=None) is None
     assert agent._notification_fp == sentinel_fp
+    prior = ToolResultBlock(id="prior", name="x", content={"ok": True})
+    assert attach_active_notifications(agent, [], prior_holder=prior) is prior
+    assert agent._notification_fp == sentinel_fp
 
-    # Case B: batch with only string-content blocks (no dict target).
+
+def test_attach_active_notifications_string_content_is_final_carrier(tmp_path):
+    # A string-content ToolResultBlock is still the final carrier.  Eligibility
+    # depends on the block, not on whether its handler content is a dict.
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+    sentinel_fp = (("sentinel.json", 1, 1),)
+    agent._notification_fp = sentinel_fp
+
     string_only = ToolResultBlock(id="t1", name="x", content="plain text")
-    result = attach_active_notifications(
+    holder = attach_active_notifications(
         agent, [string_only], prior_holder=None
     )
-    assert result is None
-    assert agent._notification_fp == sentinel_fp
+    assert holder is string_only
+    assert "notifications" in string_only.metadata["agent_meta"]
+    assert agent._notification_fp != sentinel_fp
     assert string_only.content == "plain text"
 
 
-def test_attach_active_notifications_picks_latest_dict_in_batch(tmp_path):
+def test_attach_active_notifications_uses_final_block_as_carrier(tmp_path):
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
 
-    # A batch with multiple ToolResultBlocks: a dict, then another dict,
-    # then a string-content block at the tail. The walk-backward logic
-    # should skip the string and land on the *latest* dict (`middle`).
+    # The final ToolResultBlock is the carrier even when its content is a
+    # string; earlier blocks do not receive this batch's current agent_meta.
     earlier = ToolResultBlock(id="t1", name="x", content={"k": "earlier"})
     middle = ToolResultBlock(id="t2", name="x", content={"k": "middle"})
     string_tail = ToolResultBlock(id="t3", name="x", content="plain text")
@@ -3476,10 +3475,13 @@ def test_attach_active_notifications_picks_latest_dict_in_batch(tmp_path):
         agent, [earlier, middle, string_tail], prior_holder=None
     )
 
-    assert holder is middle.content
-    assert "notifications" in middle.content["_meta"]
-    assert "_meta" not in earlier.content
-    # String content is untouched — and it certainly didn't grow a key.
+    assert holder is string_tail
+    assert "agent_meta" not in earlier.metadata
+    assert "agent_meta" not in middle.metadata
+    sidecar = string_tail.metadata["agent_meta"]
+    assert "email" in sidecar["notifications"]["attention"]
+    assert "email" in sidecar["notifications"]["persistent"]
+    assert sidecar["guidance"]["transient"]["sources"] == ["email"]
     assert string_tail.content == "plain text"
 
 
@@ -3592,8 +3594,8 @@ def test_attach_active_notifications_can_stamp_post_molt_after_molt_batch(tmp_pa
     block = ToolResultBlock(id="t1", name="x", content={"ok": True})
     holder = attach_active_notifications(agent, [block], prior_holder=None)
 
-    assert holder is block.content
-    assert "post-molt" in block.content["_meta"]["notifications"]
+    assert holder is block
+    assert "post-molt" in block.metadata["agent_meta"]["notifications"]["attention"]
     assert agent._notification_fp == fingerprint_notifications(tmp_path)
 
 
@@ -3608,9 +3610,9 @@ def test_attach_active_notifications_stamps_post_molt_with_other_channels(tmp_pa
     block = ToolResultBlock(id="t1", name="x", content={"ok": True})
     holder = attach_active_notifications(agent, [block], prior_holder=None)
 
-    assert holder is block.content
-    assert "email" in block.content["_meta"]["notifications"]
-    assert "post-molt" in block.content["_meta"]["notifications"]
+    assert holder is block
+    assert "email" in block.metadata["agent_meta"]["notifications"]["attention"]
+    assert "post-molt" in block.metadata["agent_meta"]["notifications"]["attention"]
     assert agent._notification_fp == fingerprint_notifications(tmp_path)
 
 
@@ -3630,23 +3632,30 @@ def _runtime_agent(*, total_calls: int | None = None):
     return SimpleNamespace(_executor=executor)
 
 
-def _stamped_result(meta, elapsed_ms):
-    """A dict result that has been through stamp_meta (carries _runtime_pending)."""
-    result = {"status": "ok"}
-    stamp_meta(result, meta, elapsed_ms)
-    return result
+def _stamped_result(meta, elapsed_ms, *, result=None, id="t1", name="x"):
+    """A ToolResultBlock carrying runtime capture in its private sidecar."""
+    content = {"status": "ok"} if result is None else result
+    pending = dict(meta)
+    pending["elapsed_ms"] = elapsed_ms
+    return ToolResultBlock(
+        id=id,
+        name=name,
+        content=content,
+        metadata={"tool_meta": {"id": id}},
+        _agent_pending={"agent_state": pending},
+    )
 
 
 def test_attach_active_runtime_counts_current_batch_tool_result_chars():
     agent = _fake_agent()
-    result = {"payload": "B" * 1200}
-    stamp_meta(result, build_meta(agent), elapsed_ms=12)
-    block = ToolResultBlock(id="tc-batch", name="bash", content=result)
+    block = _stamped_result(
+        build_meta(agent), 12, result={"payload": "B" * 1200}, id="tc-batch", name="bash"
+    )
 
     attach_active_runtime(agent, [block])
 
-    agent_meta = block.content["_meta"]["agent_meta"]
-    current = agent_meta["current_tool_result_chars"]
+    agent_meta = block.metadata["agent_meta"]
+    current = agent_meta["agent_state"]["current_tool_result_chars"]
     expected = len(json.dumps({"payload": "B" * 1200}, ensure_ascii=False, default=str))
     assert current["total_chars"] == expected
     assert current["top_results"] == [
@@ -3661,61 +3670,62 @@ def test_attach_active_runtime_counts_current_batch_tool_result_chars():
 def test_attach_active_runtime_does_not_leak_tool_meta_token_usage_to_agent_meta():
     agent = _runtime_agent(total_calls=1)
     snapshot = {"scope": "provider_round", "input_tokens": 100}
-    block = ToolResultBlock(
+    block = _stamped_result(
+        {"current_time": "T", TOOL_META_TOKEN_USAGE_PENDING_KEY: snapshot},
+        12,
         id="tc-token",
         name="bash",
-        content=_stamped_result(
-            {"current_time": "T", TOOL_META_TOKEN_USAGE_PENDING_KEY: snapshot},
-            12,
-        ),
     )
 
     attach_active_runtime(agent, [block])
 
-    agent_meta = block.content["_meta"]["agent_meta"]
+    agent_meta = block.metadata["agent_meta"]
     assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in agent_meta
-    assert "_runtime_pending" not in block.content
+    assert "_agent_pending" not in block.to_dict()
 
 def test_attach_active_runtime_keeps_no_token_efficiency_in_agent_meta():
-    # agent_meta must NOT carry any token diagnostics — those live in
-    # _meta.tool_meta.token_usage only. Even if a stale token_efficiency snapshot
+    # agent_meta must NOT carry any token diagnostics at its top level — those
+    # live in agent_meta.agent_state only. Even if a stale token_efficiency snapshot
     # somehow rode along in pending, it is not promoted into agent_meta.
     agent = _runtime_agent(total_calls=3)
-    result = _stamped_result(
+    block = _stamped_result(
         {"current_time": "T"},
         elapsed_ms=12,
+        id="tc-eff",
+        name="bash",
     )
-    block = ToolResultBlock(id="tc-eff", name="bash", content=result)
 
     attach_active_runtime(agent, [block])
 
-    agent_meta = block.content["_meta"]["agent_meta"]
+    agent_meta = block.metadata["agent_meta"]
     assert "token_efficiency" not in agent_meta
-    assert agent_meta["active_turn_tool_calls"] == 3
+    assert agent_meta["agent_state"]["active_turn_tool_calls"] == 3
 
 
 def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
     agent = _runtime_agent(total_calls=3)
-    content = _stamped_result({"current_time": "T", "context": {"usage": 0.1}}, 12)
-    block = ToolResultBlock(id="t1", name="x", content=content)
+    block = _stamped_result({"current_time": "T", "context": {"usage": 0.1}}, 12)
 
     holder = attach_active_runtime(agent, [block], prior_holder=None)
 
-    assert holder is block.content
-    meta = block.content["_meta"]
+    assert holder is block
+    meta = block.metadata
     agent_meta = meta["agent_meta"]
     assert "current_time" not in agent_meta
-    assert agent_meta["elapsed_ms"] == 12
-    # active_turn_tool_calls is sourced from the guard and lives under agent_meta.
-    assert agent_meta["active_turn_tool_calls"] == 3
+    state = agent_meta["agent_state"]
+    assert state["current_time"] == "T"
+    assert state["context"] == {"usage": 0.1}
+    assert state["elapsed_ms"] == 12
+    # active_turn_tool_calls is sourced from the guard and lives under agent_state.
+    assert state["active_turn_tool_calls"] == 3
     # Tail guidance is now a lightweight ref/hook pointing at the resident
     # meta_guidance system-prompt section — NOT the full ordered sections,
     # which moved into the system prompt to stop riding on every tail _meta.
-    guidance = meta["guidance"]
+    guidance = meta["agent_meta"]["guidance"]["persistent"]
     assert "sections" not in guidance
     assert "meta_guidance" in json.dumps(guidance)
     # The transient scaffolding is consumed.
-    assert "_runtime_pending" not in block.content
+    assert "_agent_pending" not in block.to_dict()
     # No top-level active_turn_tool_calls repetition, and no legacy _runtime key.
     assert "active_turn_tool_calls" not in block.content
     assert "_runtime" not in block.content
@@ -3734,13 +3744,11 @@ def test_attach_active_runtime_refreshes_adapter_comment_at_batch_boundary():
             dynamic_adapter_comment=dynamic_comment,
         )
     )
-    block = ToolResultBlock(
-        id="t-adapter", name="x", content=_stamped_result({"current_time": "T"}, 12)
-    )
+    block = _stamped_result({"current_time": "T"}, 12, id="t-adapter")
 
     attach_active_runtime(agent, [block])
 
-    agent_meta = block.content["_meta"]["agent_meta"]
+    agent_meta = block.metadata["agent_meta"]["agent_state"]
     tail = agent_meta["adapter_comment"]
     assert tail["adapter"] == "fake"
     assert tail["next_reset_in"] == 5
@@ -3750,52 +3758,52 @@ def test_attach_active_runtime_refreshes_adapter_comment_at_batch_boundary():
 def test_attach_active_runtime_moves_to_latest_and_retains_prior():
     agent = _runtime_agent(total_calls=1)
 
-    first_content = _stamped_result({"current_time": "T1"}, 5)
-    first = ToolResultBlock(id="t1", name="x", content=first_content)
+    first = _stamped_result({"current_time": "T1"}, 5, id="t1")
     holder = attach_active_runtime(agent, [first], prior_holder=None)
-    assert "agent_meta" in first.content["_meta"]
+    assert "agent_meta" in first.metadata
 
-    # Second batch: a new dict result takes over as the newest update point.
-    # The prior holder RETAINS its agent_meta/guidance as a historical trace —
-    # agent_meta is timely transient state and canonical history is no longer
-    # retroactively stripped (Jason #4307); only the newest emission is current.
+    # Second batch: the complete current snapshot is carried by the final block;
+    # the prior block remains historical and is not rewritten.
     agent = _runtime_agent(total_calls=2)
-    second_content = _stamped_result({"current_time": "T2"}, 6)
-    second = ToolResultBlock(id="t2", name="x", content=second_content)
+    second = _stamped_result({"current_time": "T2"}, 6, id="t2")
     new_holder = attach_active_runtime(agent, [second], prior_holder=holder)
 
-    assert new_holder is second.content
-    # Previous KEEPS its agent_meta/guidance (historical update point).
-    assert "agent_meta" in first.content["_meta"]
-    assert "guidance" in first.content["_meta"]
-    assert "current_time" not in second.content["_meta"]["agent_meta"]
-    assert second.content["_meta"]["agent_meta"]["active_turn_tool_calls"] == 2
+    assert new_holder is second
+    # Previous KEEPS its agent_meta/guidance as a historical trace.
+    assert "agent_meta" in first.metadata
+    assert "guidance" in first.metadata["agent_meta"]
+    assert second.metadata["agent_meta"]["agent_state"]["current_time"] == "T2"
+    assert second.metadata["agent_meta"]["agent_state"]["active_turn_tool_calls"] == 2
 
 
-def test_attach_active_runtime_picks_latest_dict_in_batch():
+def test_attach_active_runtime_uses_final_block_as_carrier():
     agent = _runtime_agent(total_calls=4)
-    earlier = ToolResultBlock(id="t1", name="x", content=_stamped_result({"current_time": "E"}, 1))
-    middle = ToolResultBlock(id="t2", name="x", content=_stamped_result({"current_time": "M"}, 2))
-    string_tail = ToolResultBlock(id="t3", name="x", content="plain text")
+    earlier = _stamped_result({"current_time": "E"}, 1, id="t1")
+    middle = _stamped_result({"current_time": "M"}, 2, id="t2")
+    string_tail = _stamped_result(
+        {"current_time": "S"}, 3, result="plain text", id="t3"
+    )
 
     holder = attach_active_runtime(agent, [earlier, middle, string_tail], prior_holder=None)
 
-    assert holder is middle.content
-    assert "current_time" not in middle.content["_meta"]["agent_meta"]
-    assert middle.content["_meta"]["agent_meta"]["elapsed_ms"] == 2
-    # The earlier dict gets no agent_meta, and its pending scaffolding is stripped.
-    assert "_meta" not in earlier.content
-    assert "_runtime_pending" not in earlier.content
+    assert holder is string_tail
+    assert "agent_meta" not in earlier.metadata
+    assert "agent_meta" not in middle.metadata
+    state = string_tail.metadata["agent_meta"]["agent_state"]
+    assert state["elapsed_ms"] == 3
+    assert state["active_turn_tool_calls"] == 4
+    # Earlier blocks get no current agent_meta, and their pending scaffolding is stripped.
+    assert "_agent_pending" not in earlier.to_dict()
     assert string_tail.content == "plain text"
 
 
 def test_attach_active_runtime_empty_meta_keeps_prior_snapshot():
-    # A time-blind agent's results carry no _runtime_pending (stamp_meta no-op).
+    # Negative invariant: a time-blind agent's results carry no _runtime_pending
+    # (stamp_meta is a no-op).
     agent = _runtime_agent(total_calls=1)
-    prior_content = _stamped_result({"current_time": "T1"}, 5)
-    prior = ToolResultBlock(id="t1", name="x", content=prior_content)
+    prior = _stamped_result({"current_time": "T1"}, 5, id="t1")
     holder = attach_active_runtime(agent, [prior], prior_holder=None)
-    assert "agent_meta" in prior.content["_meta"]
+    assert "agent_meta" in prior.metadata
 
     # Next batch: result was NOT stamped (no pending) — there is no new snapshot
     # to emit. Under the sparse contract the prior holder's agent_meta stays put
@@ -3805,8 +3813,8 @@ def test_attach_active_runtime_empty_meta_keeps_prior_snapshot():
     new_holder = attach_active_runtime(agent, [blind], prior_holder=holder)
 
     assert new_holder is holder
-    assert "agent_meta" in prior.content["_meta"]
-    assert "_meta" not in blind.content
+    assert "agent_meta" in prior.metadata
+    assert "agent_meta" not in blind.metadata
 
 
 # ---------------------------------------------------------------------------
@@ -3820,39 +3828,35 @@ def test_attach_active_runtime_first_snapshot_is_attached():
     # The very first material snapshot always attaches — there is no prior
     # signature to compare against.
     agent = _runtime_agent(total_calls=1)
-    content = _stamped_result({"current_time": "T1"}, 5)
-    block = ToolResultBlock(id="t1", name="x", content=content)
+    block = _stamped_result({"current_time": "T1"}, 5)
 
     holder = attach_active_runtime(agent, [block], prior_holder=None)
 
-    assert holder is block.content
-    assert "agent_meta" in block.content["_meta"]
-    assert "guidance" in block.content["_meta"]
+    assert holder is block
+    assert "agent_meta" in block.metadata
+    assert "guidance" in block.metadata["agent_meta"]
 
 
 def test_attach_active_runtime_unchanged_snapshot_not_restamped_on_latest():
-    # Same agent, a second batch whose MATERIAL snapshot is identical (only
-    # volatile bookkeeping — elapsed_ms, active_turn_tool_calls, current_time,
-    # total_chars — differs). agent_meta must NOT move onto the new latest
-    # result, and the prior holder keeps its snapshot as a historical update
-    # point.
+    # Same agent, a second batch whose material snapshot is identical. The
+    # complete current snapshot still belongs to the final carrier.
     agent = _runtime_agent(total_calls=1)
-    first = ToolResultBlock(id="t1", name="x", content=_stamped_result({"current_time": "T1"}, 5))
+    first = _stamped_result({"current_time": "T1"}, 5)
     holder = attach_active_runtime(agent, [first], prior_holder=None)
-    assert "agent_meta" in first.content["_meta"]
+    assert "agent_meta" in first.metadata
 
     # Volatile-only change: counter ticks, elapsed differs, time differs.
     agent._executor.guard.total_calls = 2
-    second = ToolResultBlock(id="t2", name="x", content=_stamped_result({"current_time": "T2"}, 6))
+    second = _stamped_result({"current_time": "T2"}, 6, id="t2")
     new_holder = attach_active_runtime(agent, [second], prior_holder=holder)
 
-    # No material change → do not attach to the latest, do not move the holder.
-    assert "_meta" not in second.content or "agent_meta" not in second.content["_meta"]
+    # No material change still produces the explicit latest snapshot.
+    assert "agent_meta" in second.metadata
     # Prior snapshot stays as a historical update point (not stripped).
-    assert "agent_meta" in first.content["_meta"]
-    assert new_holder is holder
-    # Transient scaffolding is still cleared from the un-stamped result.
-    assert "_runtime_pending" not in second.content
+    assert "agent_meta" in first.metadata
+    assert new_holder is second
+    # Private scaffolding is still cleared from the carrier serialization.
+    assert "_agent_pending" not in second.to_dict()
 
 
 def test_attach_active_runtime_material_change_reattaches():
@@ -3860,37 +3864,33 @@ def test_attach_active_runtime_material_change_reattaches():
     # adapter_comment scalar) re-attaches agent_meta to the newest result; the
     # older holder keeps its snapshot as a historical trace.  (The
     # sustained-pressure molt reminder is NO longer an agent_meta signal — it
-    # lives on permanent tool_meta.context.molt now — so a neutral agent_meta
+    # lives on agent_meta.agent_state.context.molt now — so a neutral agent_meta
     # material field drives this mechanism test.)
     agent = _runtime_agent(total_calls=1)
-    first = ToolResultBlock(id="t1", name="x", content=_stamped_result({"current_time": "T1"}, 5))
+    first = _stamped_result({"current_time": "T1"}, 5)
     holder = attach_active_runtime(agent, [first], prior_holder=None)
 
-    # Unchanged batch — no re-attach.
+    # Unchanged batch still emits the explicit latest whole snapshot.
     agent._executor.guard.total_calls = 2
-    second = ToolResultBlock(id="t2", name="x", content=_stamped_result({"current_time": "T2"}, 6))
+    second = _stamped_result({"current_time": "T2"}, 6, id="t2")
     holder2 = attach_active_runtime(agent, [second], prior_holder=holder)
-    assert holder2 is holder
-    assert "agent_meta" not in second.content.get("_meta", {})
+    assert holder2 is second
+    assert "agent_meta" in second.metadata
 
     # Material change: a new adapter_comment scalar appears in the snapshot.
     agent._executor.guard.total_calls = 3
-    third = ToolResultBlock(
-        id="t3",
-        name="x",
-        content=_stamped_result(
-            {"current_time": "T3", "adapter_comment": {"note": "materially new"}}, 7
-        ),
+    third = _stamped_result(
+        {"current_time": "T3", "adapter_comment": {"note": "materially new"}}, 7, id="t3"
     )
-    new_holder = attach_active_runtime(agent, [third], prior_holder=holder)
+    new_holder = attach_active_runtime(agent, [third], prior_holder=holder2)
 
-    assert new_holder is third.content
-    assert "agent_meta" in third.content["_meta"]
-    assert third.content["_meta"]["agent_meta"]["adapter_comment"] == {"note": "materially new"}
+    assert new_holder is third
+    assert "agent_meta" in third.metadata
+    assert third.metadata["agent_meta"]["agent_state"]["adapter_comment"] == {"note": "materially new"}
     # The older holder RETAINS its earlier snapshot as a historical update
     # point (no retroactive strip); the newest emission is the current one.
-    assert "agent_meta" in first.content["_meta"]
-    assert "adapter_comment" not in first.content["_meta"]["agent_meta"]
+    assert "agent_meta" in first.metadata
+    assert "adapter_comment" not in first.metadata["agent_meta"]["agent_state"]
 
 
 def test_attach_active_runtime_new_large_result_is_material():
@@ -3898,21 +3898,17 @@ def test_attach_active_runtime_new_large_result_is_material():
     # is a material change worth re-surfacing agent_meta, even if nothing else
     # changed.
     agent = _fake_agent()
-    small = ToolResultBlock(
-        id="t1", name="x", content=_stamped_result(build_meta(agent), 5)
-    )
+    small = _stamped_result(build_meta(agent), 5, id="t1")
     holder = attach_active_runtime(agent, [small], prior_holder=None)
-    assert "agent_meta" in small.content["_meta"]
+    assert "agent_meta" in small.metadata
 
     # A big result enters the batch — top_results changes materially.
-    big_content = {"payload": "B" * 5000}
-    stamp_meta(big_content, build_meta(agent), elapsed_ms=6)
-    big = ToolResultBlock(id="t2", name="bash", content=big_content)
+    big = _stamped_result(build_meta(agent), 6, result={"payload": "B" * 5000}, id="t2", name="bash")
     new_holder = attach_active_runtime(agent, [big], prior_holder=holder)
 
-    assert new_holder is big.content
-    assert "agent_meta" in big.content["_meta"]
-    top = big.content["_meta"]["agent_meta"]["current_tool_result_chars"]["top_results"]
+    assert new_holder is big
+    assert "agent_meta" in big.metadata
+    top = big.metadata["agent_meta"]["agent_state"]["current_tool_result_chars"]["top_results"]
     assert any(entry["id"] == "t2" for entry in top)
 
 
@@ -3951,33 +3947,32 @@ def test_agent_meta_signature_ignores_volatile_bookkeeping():
     assert agent_meta_signature(base) != agent_meta_signature(material_changed)
 
 
-def test_attach_active_runtime_no_dict_target_keeps_prior_snapshot():
-    # A batch with no dict-shaped result has nowhere to attach a new snapshot.
-    # Under the sparse contract the prior holder's agent_meta remains as the
-    # most recent emitted update point rather than being stripped.
+def test_attach_active_runtime_final_block_without_pending_keeps_prior_snapshot():
+    # A final block without private pending capture has no new snapshot to
+    # attach.  The behavior is due to missing capture, never content type.
     agent = _runtime_agent(total_calls=1)
-    prior_content = _stamped_result({"current_time": "T1"}, 5)
-    prior = ToolResultBlock(id="t1", name="x", content=prior_content)
+    prior = _stamped_result({"current_time": "T1"}, 5, id="t1")
     holder = attach_active_runtime(agent, [prior], prior_holder=None)
 
-    string_only = ToolResultBlock(id="t2", name="x", content="text")
-    new_holder = attach_active_runtime(agent, [string_only], prior_holder=holder)
+    final_without_pending = ToolResultBlock(id="t2", name="x", content="text")
+    new_holder = attach_active_runtime(
+        agent, [final_without_pending], prior_holder=holder
+    )
 
     assert new_holder is holder
-    assert "agent_meta" in prior.content["_meta"]
-    assert string_only.content == "text"
+    assert "agent_meta" in prior.metadata
+    assert final_without_pending.content == "text"
 
 
 def test_attach_active_runtime_omits_counter_when_no_guard():
     agent = _runtime_agent(total_calls=None)  # no executor/guard
-    content = _stamped_result({"current_time": "T"}, 9)
-    block = ToolResultBlock(id="t1", name="x", content=content)
+    block = _stamped_result({"current_time": "T"}, 9)
 
     holder = attach_active_runtime(agent, [block], prior_holder=None)
 
-    assert holder is block.content
-    agent_meta = block.content["_meta"]["agent_meta"]
-    assert "current_time" not in agent_meta
+    assert holder is block
+    agent_meta = block.metadata["agent_meta"]["agent_state"]
+    assert agent_meta["current_time"] == "T"
     assert "active_turn_tool_calls" not in agent_meta
 
 
@@ -4026,7 +4021,7 @@ def test_packaged_guidance_resource_is_valid():
     assert "Do not call `refresh` just to apply a summarize" in body
     assert "does not mean the active provider-side context" in body
     assert "0.6 * context_window" in body
-    # Unified contract: token diagnostics live in tool_meta.token_usage; the
+    # Unified contract: token diagnostics live in agent_meta.agent_state.token_usage; the
     # guidance points there and describes the since-last-molt session aggregate
     # half (cumulative/restored, surviving refresh — Jason FINAL correction).
     assert "token_usage" in body
@@ -4111,8 +4106,8 @@ def test_attach_active_runtime_is_wired_into_turn_boundary():
 
 # ---------------------------------------------------------------------------
 # build_molt_context / context.molt — SUSTAINED context-pressure warning
-# surfaced under permanent _meta.tool_meta.context.molt (persists on every
-# result while active; routed via the _tool_meta_context transit key), not a
+# surfaced under current agent_meta.agent_state.context.molt (persists on every
+# final carrier while active; routed via the _tool_meta_context transit key), not a
 # dismissible notification.
 #
 # Corrected contract (channel B): the warning is NOT the old immediate
@@ -4230,13 +4225,13 @@ def test_build_meta_attaches_context_molt_only_when_streak_armed():
     assert meta_block._current_context_usage(agent) == pytest.approx(0.9)
     # Streak not yet armed -> no context reminder is emitted even though usage is
     # 0.9.  The molt reminder now rides on a transit key destined for the
-    # PERMANENT tool_meta.context block (not the sparse agent_meta.context), so
+    # Current agent_meta.agent_state.context block, so
     # neither the transit key nor a plain "context" key is present.
     assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in meta
     assert "context" not in meta
 
     # Arm the streak; same high usage now surfaces the warning under the transit
-    # key (ToolExecutor._attach_tool_block promotes it into tool_meta.context).
+    # key (ToolExecutor._attach_tool_block promotes it into agent_state.context).
     fake_session.context_pressure_warning_active = True
     fake_session.context_pressure_streak = 3
     meta = build_meta(agent)
@@ -4279,7 +4274,7 @@ def test_build_meta_current_molt_carries_reminder_and_event_payload():
     agent = _molt_agent_with_reminder(reminder)
 
     # build_meta is SIDE-EFFECT-FREE and always carries the reminder text (transit
-    # key, destined for permanent tool_meta.context.molt) AND the emission-event
+    # key, destined for agent_meta.agent_state.context.molt) AND the emission-event
     # payload while the warning is active — the DEDUP happens later, in
     # ToolExecutor._attach_tool_block (keyed on payload.last_round_id), not here.
     meta1 = build_meta(agent)
@@ -4308,7 +4303,7 @@ def test_build_meta_current_molt_carries_reminder_and_event_payload():
 # refresh does NOT reset it (Jason FINAL). Once it reaches/exceeds
 # agent._config.cache_miss_budget, build_meta restamps a "cache miss budget
 # {budget} reached, molt now" reminder into the _tool_meta_context transit
-# sub-object (promoted to permanent tool_meta.context.molt) and surfaces
+# sub-object (promoted to agent_meta.agent_state.context.molt) and surfaces
 # cache_miss_budget / cache_miss_tokens under tool_meta.context. It is a soft
 # signal, not a new event route.
 # ---------------------------------------------------------------------------
@@ -4432,7 +4427,7 @@ def test_build_meta_no_budget_context_below_budget():
 
 def test_build_meta_preserves_both_warnings_when_context_pressure_also_active():
     """When the sustained context-pressure warning AND the cache-miss budget
-    warning are both active, both must survive in tool_meta.context.molt — the
+    warning are both active, both must survive in agent_meta.agent_state.context.molt — the
     budget line is appended and the context-pressure prose is preserved — and the
     budget fields ride alongside."""
     from lingtai.kernel.reminders.context_pressure import ContextPressureReminder
@@ -4475,18 +4470,13 @@ def test_build_meta_preserves_both_warnings_when_context_pressure_also_active():
 
 def test_attach_tool_block_promotes_budget_context_and_pops_transit_key():
     """_attach_tool_block promotes the budget sub-object (molt + budget fields)
-    into permanent tool_meta.context and pops the transit key from
-    _runtime_pending so it never lands on the wire tool_meta."""
+    into agent_meta.agent_state.context and pops the transit key from the
+    private pending capture so it never lands as a transit key on the wire."""
     from lingtai.kernel.loop_guard import LoopGuard
     from lingtai.kernel.tool_executor import _DEFAULT_MAX_RESULT_CHARS, ToolExecutor
 
     agent = _budget_agent(budget=1_000_000, input_tokens=1_200_000, cached_tokens=0)
     meta = build_meta(agent)
-    result = {"ok": True}
-    stamp_meta(result, meta, elapsed_ms=5)
-    # Sanity: the transit key is present before _attach_tool_block consumes it.
-    assert meta_block.TOOL_META_CONTEXT_PENDING_KEY in result["_runtime_pending"]
-
     executor = ToolExecutor(
         dispatch_fn=lambda name, args: {},
         make_tool_result_fn=lambda name, result, **kw: result,
@@ -4494,15 +4484,16 @@ def test_attach_tool_block_promotes_budget_context_and_pops_transit_key():
         working_dir="/tmp",
         max_result_chars=_DEFAULT_MAX_RESULT_CHARS,
     )
+    # Runtime capture is staged by the executor, not written into handler content.
+    executor._pending_meta_by_call_id["tc1"] = dict(meta)
+    result = {"ok": True}
     wire = executor._attach_tool_block(result, tool_call_id="tc1", elapsed_ms=5)
-    context = wire["_meta"]["tool_meta"]["context"]
+    context = wire["_meta"]["agent_meta"]["agent_state"]["context"]
     assert context["molt"] == "cache miss budget 1000000 reached, molt now"
     assert context["cache_miss_budget"] == 1_000_000
     assert context["cache_miss_tokens"] == 1_200_000
-    # The transit key was popped out of _runtime_pending (the batch boundary
-    # strips whatever remains of _runtime_pending; the key itself must not
-    # survive into the promoted tool_meta.context beyond molt + budget fields).
-    assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in result["_runtime_pending"]
+    # The transit key is consumed before agent_meta.agent_state is returned.
+    assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in wire
 
 
 def test_build_context_rebuild_hint_stamps_after_high_ratio():
@@ -4525,7 +4516,7 @@ def test_build_context_rebuild_hint_stamps_after_high_ratio():
 
 # ---------------------------------------------------------------------------
 # Persistent post-forced-rebuild overflow warning routed to the permanent
-# current-state channel tool_meta.context.molt (Jason, 2026-07-12). The adapter
+# current-state channel agent_meta.agent_state.context.molt (Jason, 2026-07-12). The adapter
 # owns the one-shot latch + verification; build_meta only renders + merges the
 # exact sentence, preserving any coexisting sustained-pressure / cache-miss lines.
 # ---------------------------------------------------------------------------

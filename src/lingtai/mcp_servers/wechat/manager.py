@@ -57,7 +57,7 @@ SESSION_EXPIRED_ERRCODE = -14
 # LICC notification preview window and structured-message text cap. The
 # markdown preview and the structured ``recent_messages`` metadata are built
 # from the same merged inbox+sent window so the persistent notification lane
-# (_meta.notification_persistent.mcp.wechat) sees exactly what the preview
+# (_meta.agent_meta.notifications.persistent.mcp.wechat) sees exactly what the preview
 # shows. The per-message cap keeps structured metadata bounded regardless of
 # message size — wechat.read remains the source of truth for full text.
 _CONVERSATION_PREVIEW_MESSAGES = 10
@@ -462,8 +462,8 @@ class WechatManager:
         # unresponded incoming message — older lines are background only.
         # Metadata carries generic routing keys (platform/conversation_ref/
         # message_ref) plus structured recent_messages/latest_incoming so the
-        # kernel can build _meta.notification_persistent.mcp.wechat and keep
-        # the transient _meta.notifications lane a compact identity hook.
+        # kernel can build _meta.agent_meta.notifications.persistent.mcp.wechat and keep
+        # the transient _meta.agent_meta.notifications.attention lane a compact identity hook.
         try:
             contact = self._find_contact_by_user_id(from_user)
             display = contact.get("alias", from_user) if contact else from_user
@@ -895,7 +895,7 @@ class WechatManager:
         The metadata dict carries the same window as bounded structured
         ``recent_messages`` plus ``latest_incoming``, which the kernel inbox
         copies into ``.notification/mcp.wechat.json`` previews to feed
-        ``_meta.notification_persistent.mcp.wechat``.
+        ``_meta.agent_meta.notifications.persistent.mcp.wechat``.
         """
         now = datetime.now(timezone.utc)
 

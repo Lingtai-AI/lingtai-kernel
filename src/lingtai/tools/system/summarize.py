@@ -104,8 +104,8 @@ def _find_tool_result_block(agent, tool_call_id: str):
 def _visible_len(content: Any) -> int:
     """Return visible length of the formal tool-result payload only.
 
-    Kernel/runtime metadata such as ``_meta.notifications`` and
-    ``_meta.guidance`` is channel guidance/state, not the substantive result
+    Kernel/runtime metadata such as ``_meta.agent_meta.notifications`` and
+    ``_meta.agent_meta.guidance`` is channel guidance/state, not the substantive result
     being summarized.
     """
     return formal_tool_result_visible_len(content)

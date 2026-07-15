@@ -61,6 +61,8 @@ def test_tool_result_sidecar_round_trips_and_projects_for_dict_and_string():
 
 
 def test_finalizer_preserves_handler_content_and_canonicalizes_sidecar():
+    # The handler content below is an explicit legacy input envelope. The
+    # finalizer must preserve it byte-for-byte while canonicalizing sidecars.
     block = ToolResultBlock(
         "call-2",
         "notify",

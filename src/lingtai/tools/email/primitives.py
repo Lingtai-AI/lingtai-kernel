@@ -507,7 +507,7 @@ def _rerender_unread_digest(agent) -> str | None:
         icon="📧",
         instructions=(
             "Unread email bodies are injected in full into "
-            "_meta.notification_persistent.email. You do not need "
+            "_meta.agent_meta.notifications.persistent.email. You do not need "
             "email.read merely to see ordinary message content. After you "
             "handle a mail, prefer email(action='dismiss', "
             "email_id=[id1, id2, ...]) to mark it read and clear the "

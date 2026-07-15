@@ -28,7 +28,7 @@ still carry the old raw block until delayed reconstruction applies the compacted
 history.
 
 Use this manual when runtime guidance tells you to summarize, when a result is
-ranked large under `_meta.agent_meta.current_tool_result_chars.top_results`,
+ranked large under `_meta.agent_meta.agent_state.current_tool_result_chars.top_results`,
 when tool output has served its immediate purpose, or when you need to explain
 how summarize differs from molt.
 
@@ -149,12 +149,8 @@ progressive-disclosure entry point.
 ### Urgent cadence: summarize the bulky result now
 
 Use this when a tool result is long or noisy — typically one that ranks high in
-`_meta.agent_meta.current_tool_result_chars.top_results` (above its `threshold`,
-counted in `over_threshold_count`). `agent_meta` is sparse/update-driven: it is
-re-emitted onto a later result when the material snapshot changes (a newly-large
-result counts as a change), so read the ranking from the **most recent emitted**
-`agent_meta` — it may sit on an earlier result than the newest one, not
-necessarily on the last tool result.
+`_meta.agent_meta.agent_state.current_tool_result_chars.top_results` (above its `threshold`,
+counted in `over_threshold_count`). `agent_meta` is a complete current final-carrier snapshot attached to each eligible final carrier. Its nested `agent_state.current_tool_result_chars` is current on the newest emitted snapshot; older snapshots remain retained historical traces and are not actionable.
 
 1. Read or inspect the result first.
 2. Decide what future-you needs from it.

@@ -42,7 +42,7 @@ _CS_WINDOW_NOTE = (
 )
 
 # Bounds for the structured conversation context attached to LICC event
-# metadata (kernel projects it into _meta.notification_persistent.mcp.whatsapp).
+# metadata (kernel projects it into _meta.agent_meta.notifications.persistent.mcp.whatsapp).
 # The MCP inbox drops structured metadata above a 20k JSON cap, so keep the
 # per-message text and message count comfortably under it.
 _CONVERSATION_CONTEXT_MESSAGES = 10
@@ -469,7 +469,7 @@ class WhatsAppManager:
                     body = f"{header}\n\n**Newest WhatsApp message**\n{message_body}"
                     # Routing keys plus structured recent-message context ride on
                     # LICC metadata; the kernel projects them into the durable
-                    # _meta.notification_persistent.mcp.whatsapp lane and keeps
+                    # _meta.agent_meta.notifications.persistent.mcp.whatsapp lane and keeps
                     # the transient notification as an identity-only hook.
                     event_metadata: dict[str, Any] = {
                         "mcp": "whatsapp",

@@ -735,7 +735,7 @@ class TelegramManager:
         # Forward to host via LICC. Body is a conversation preview showing the
         # last 20 messages. The agent uses telegram(action="check"|"read") to
         # fetch the full conversation; metadata carries routing keys plus a
-        # structured recent-message view for _meta.notification_persistent.
+        # structured recent-message view for _meta.agent_meta.notifications.persistent.
         text = payload.get("text", "") or payload.get("callback_query", "") or ""
         preview_metadata: dict[str, Any] = {}
         try:

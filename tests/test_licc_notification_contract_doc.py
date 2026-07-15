@@ -64,7 +64,7 @@ def test_licc_notification_contract_locks_new_channel_two_lane_gate():
     text = " ".join(DOC.read_text(encoding="utf-8").split())
     required_phrases = [
         "New human-message LICC channel acceptance gate",
-        "_meta.notifications.mcp.<channel>",
+        "_meta.agent_meta.notifications.attention.mcp.<channel>",
         "_meta.notification_persistent",
         "data.message_ids",
         "transient hook is identity-only",

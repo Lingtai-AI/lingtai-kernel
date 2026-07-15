@@ -22,7 +22,6 @@ from lingtai.kernel.config import (
 from lingtai.kernel.reminders.context_pressure import (
     ContextPressureReminder,
     CURRENT_MOLT_EVENT,
-    CURRENT_MOLT_TARGET_PATH,
     RECONSTRUCTION_MOLT_EVENT,
     RECONSTRUCTION_MOLT_TARGET_PATH,
     TRANSITION_DUPLICATE,
@@ -367,7 +366,7 @@ def test_meta_block_build_molt_context_compat_fallback_matches_reminder():
 # ---------------------------------------------------------------------------
 # Emission descriptors — pure builders used by the _meta assembly layer to emit
 # structured runtime events ONLY when a reminder is actually attached to the
-# permanent tool_meta.  The reminder abstraction stays pure: it computes
+# current agent-state metadata. The reminder abstraction stays pure: it computes
 # descriptors, it does not log.
 # ---------------------------------------------------------------------------
 
@@ -394,7 +393,7 @@ def test_current_molt_emission_descriptor_fields():
     desc = current_molt_emission_descriptor(r, usage=0.90, message=message)
     assert desc["event_name"] == CURRENT_MOLT_EVENT
     payload = desc["payload"]
-    assert payload["target_path"] == CURRENT_MOLT_TARGET_PATH == "_meta.tool_meta.context.molt"
+    assert payload["target_path"] == "_meta.agent_meta.agent_state.context.molt"
     assert payload["message_hash"] == reminder_message_hash(message)
     assert payload["threshold_high"] == 0.75
     assert payload["recovery_target"] == 0.60
@@ -423,7 +422,7 @@ def test_reconstruction_molt_emission_descriptor_still_high_branch():
     assert desc["event_name"] == RECONSTRUCTION_MOLT_EVENT
     payload = desc["payload"]
     assert payload["target_path"] == RECONSTRUCTION_MOLT_TARGET_PATH
-    assert payload["target_path"] == "_meta.tool_meta.reconstruction.molt"
+    assert payload["target_path"] == "_meta.agent_meta.agent_state.events.reconstruction.molt"
     assert payload["message_hash"] == reminder_message_hash(message)
     assert payload["trigger_threshold"] == 1.0
     assert payload["recovery_target"] == 0.60

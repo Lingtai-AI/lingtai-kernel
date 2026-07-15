@@ -66,10 +66,10 @@ bridge).
 ## NOTIFICATIONS: TRANSIENT HOOK vs PERSISTENT CONTEXT
 
 - Inbound WhatsApp messages surface to the agent in two `_meta` lanes:
-  - `_meta.notifications.mcp.whatsapp` is a compact high-attention hook only —
+  - `_meta.agent_meta.notifications.attention.mcp.whatsapp` is a compact high-attention hook only —
     `data.message_ids` (compound `account:wa_id:wamid` ids) and dismiss
     guidance, never message text or routing context.
-  - `_meta.notification_persistent.mcp.whatsapp` carries the durable context:
+  - `_meta.agent_meta.notifications.persistent.mcp.whatsapp` carries the durable context:
     recent conversation messages (bounded text, both directions), sender/chat
     routing hooks, and per-message comments for the agent's own outgoing
     messages, truncated text, and non-text/media messages.

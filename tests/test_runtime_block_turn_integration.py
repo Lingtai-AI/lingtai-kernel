@@ -31,7 +31,6 @@ from lingtai.kernel.llm.interface import (
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai.kernel.meta_block import stamp_meta
 from tests._notification_store_helpers import notification_store_for
 
 
@@ -55,7 +54,7 @@ class _Guard:
 
 
 class _Executor:
-    """Returns one pre-stamped dict result per batch (mimics ToolExecutor)."""
+    """Returns one sidecar-captured result per batch (mimics ToolExecutor)."""
 
     def __init__(self, contents: list[dict], guard: _Guard) -> None:
         self.guard = guard
@@ -64,9 +63,14 @@ class _Executor:
 
     def execute(self, tool_calls, **kwargs):
         calls = list(tool_calls)
-        content = self._contents[self._i]
+        item = self._contents[self._i]
         self._i += 1
-        block = ToolResultBlock(id=calls[0].id or "call", name=calls[0].name, content=content)
+        if isinstance(item, ToolResultBlock):
+            block = item
+            block.id = calls[0].id or "call"
+            block.name = calls[0].name
+        else:
+            block = ToolResultBlock(id=calls[0].id or "call", name=calls[0].name, content=item)
         return [block], False, ""
 
 
@@ -126,22 +130,28 @@ class _Agent:
         self.logs.append((event, kwargs))
 
 
-def _stamped(meta_value: str, *, material: str | None = None) -> dict:
-    """A dict tool-result content already carrying a _runtime_pending snapshot.
+def _stamped(meta_value: str, *, material: str | None = None) -> ToolResultBlock:
+    """A tool-result block carrying a runtime-only sidecar capture.
 
     ``material`` optionally injects a material ``adapter_comment`` scalar so the
     caller can drive a genuine change in the agent_meta signature between
     batches (``current_time`` and ``echo`` are volatile / non-agent_meta and do
     NOT change the material signature on their own).  Note: the sustained-pressure
-    molt reminder is NOT an agent_meta signal anymore — it rides on permanent
-    ``tool_meta.context.molt`` — so a neutral agent_meta field is used here.
+    molt reminder is current agent state under
+    ``agent_meta.agent_state.context.molt`` — so a neutral agent_meta field is
+    used here.
     """
     content = {"status": "ok", "echo": meta_value}
     meta: dict = {"current_time": meta_value}
     if material is not None:
         meta["adapter_comment"] = {"note": material}
-    stamp_meta(content, meta, 5)
-    return content
+    return ToolResultBlock(
+        id="pending",
+        name="pending",
+        content=content,
+        metadata={"tool_meta": {"id": "pending"}},
+        _agent_pending={"agent_state": meta},
+    )
 
 
 def test_runtime_block_lands_on_latest_result_at_turn_boundary(tmp_path):
@@ -155,20 +165,20 @@ def test_runtime_block_lands_on_latest_result_at_turn_boundary(tmp_path):
 
     holder = agent._runtime_live_holder
     assert holder is not None, "attach_active_runtime was not invoked at the boundary"
-    assert "current_time" not in holder["_meta"]["agent_meta"]
-    assert holder["echo"] == "T1"
+    assert "current_time" not in holder.metadata["agent_meta"]["agent_state"]
+    assert holder.content["echo"] == "T1"
     # The turn records the batch's calls on the guard (2 seeded + 1 this batch),
     # and the boundary stamps the live total under _meta.agent_meta.
-    assert holder["_meta"]["agent_meta"]["active_turn_tool_calls"] == 3
+    assert holder.metadata["agent_meta"]["agent_state"]["active_turn_tool_calls"] == 3
     # The tail guidance is now a lightweight ref/hook pointing at the resident
     # meta_guidance system-prompt section, not the full ordered sections (those
     # moved into the system prompt so they stop riding on every tail _meta).
-    guidance = holder["_meta"]["guidance"]
+    guidance = holder.metadata["agent_meta"]["guidance"]["persistent"]
     assert "sections" not in guidance
     assert guidance["ref"] == "meta_guidance"
     # transient scaffolding is gone; no top-level counter repetition.
-    assert "_runtime_pending" not in holder
-    assert "active_turn_tool_calls" not in holder
+    assert "_agent_pending" not in holder.to_dict()
+    assert "active_turn_tool_calls" not in holder.content
 
 
 def _second_batch(agent, call_id: str = "call_2"):
@@ -185,10 +195,8 @@ def _second_batch(agent, call_id: str = "call_2"):
 
 
 def test_unchanged_snapshot_not_restamped_on_newer_result(tmp_path):
-    # Two batches whose MATERIAL agent snapshot is identical (only the volatile
-    # current_time / non-agent_meta echo differ). agent_meta must stay on the
-    # first holder as a historical update point; the newer result must NOT get
-    # re-stamped merely because it is the latest.
+    # Two batches whose material agent snapshot is identical still carry the
+    # complete current snapshot on the final carrier.
     agent = _Agent(tmp_path, [_stamped("T1"), _stamped("T2")])
 
     _process_response(
@@ -197,16 +205,15 @@ def test_unchanged_snapshot_not_restamped_on_newer_result(tmp_path):
         ledger_source="test",
     )
     first_holder = agent._runtime_live_holder
-    assert "agent_meta" in first_holder["_meta"]
-    assert first_holder["echo"] == "T1"
+    assert "agent_meta" in first_holder.metadata
+    assert first_holder.content["echo"] == "T1"
 
     _second_batch(agent)
 
-    # Sparse: the live holder did not move; the new result carries no agent_meta.
-    assert agent._runtime_live_holder is first_holder
-    assert "agent_meta" in first_holder["_meta"]
-    second_result = agent._chat.committed[-1][0].content
-    assert "agent_meta" not in second_result.get("_meta", {})
+    assert agent._runtime_live_holder is not first_holder
+    assert "agent_meta" in first_holder.metadata
+    second_result = agent._chat.committed[-1][0]
+    assert "agent_meta" in second_result.metadata
 
 
 def test_material_change_reattaches_and_retains_prior(tmp_path):
@@ -222,23 +229,23 @@ def test_material_change_reattaches_and_retains_prior(tmp_path):
         ledger_source="test",
     )
     first_holder = agent._runtime_live_holder
-    assert "agent_meta" in first_holder["_meta"]
+    assert "agent_meta" in first_holder.metadata
 
     _second_batch(agent)
 
     second_holder = agent._runtime_live_holder
     assert second_holder is not first_holder
-    assert second_holder["echo"] == "T2"
-    assert second_holder["_meta"]["agent_meta"]["adapter_comment"] == {"note": "materially new"}
+    assert second_holder.content["echo"] == "T2"
+    assert second_holder.metadata["agent_meta"]["agent_state"]["adapter_comment"] == {"note": "materially new"}
     # The previous holder RETAINS its agent_meta/guidance as a historical
     # update point; the newest emission is the current one.
-    assert "agent_meta" in first_holder["_meta"]
-    assert "adapter_comment" not in first_holder["_meta"]["agent_meta"]
+    assert "agent_meta" in first_holder.metadata
+    assert "adapter_comment" not in first_holder.metadata["agent_meta"]["agent_state"]
 
 
 # ---------------------------------------------------------------------------
 # Sparse / update-driven notifications at the turn boundary.  Mirrors the
-# agent_meta sparse invariant above but for ``_meta.notifications``: an
+# agent_meta sparse invariant above but for ``agent_meta.notifications``: an
 # unchanged notification payload is NOT chased onto every newest ordinary tool
 # result; a material change re-attaches it while the prior holder keeps its
 # old payload as a historical trace (timely transient semantics).
@@ -292,16 +299,16 @@ def test_notification_unchanged_not_restamped_on_newer_result_at_boundary(tmp_pa
     )
     first_holder = agent._notification_live_holder
     assert first_holder is not None
-    assert "notifications" in first_holder["_meta"]
+    assert "notifications" in first_holder.metadata["agent_meta"]
 
     _second_batch(agent)
 
-    # Sparse: the notification holder did not move; the newer ordinary result
-    # carries no notification payload, and the prior holder keeps it.
-    assert agent._notification_live_holder is first_holder
-    assert "notifications" in first_holder["_meta"]
-    second_result = agent._chat.committed[-1][0].content
-    assert "notifications" not in second_result.get("_meta", {})
+    # The final carrier owns the current notification snapshot; the prior
+    # block remains a historical trace.
+    assert agent._notification_live_holder is not first_holder
+    assert "notifications" in first_holder.metadata["agent_meta"]
+    second_result = agent._chat.committed[-1][0]
+    assert "notifications" in second_result.metadata["agent_meta"]
 
 
 def test_notification_material_change_reattaches_at_boundary(tmp_path):
@@ -314,7 +321,7 @@ def test_notification_material_change_reattaches_at_boundary(tmp_path):
         ledger_source="test",
     )
     first_holder = agent._notification_live_holder
-    assert "notifications" in first_holder["_meta"]
+    assert "notifications" in first_holder.metadata["agent_meta"]
 
     # Materially change the notification payload before the second batch.
     _write_email_notif(tmp_path, email_id="email-2", message="Three new emails")
@@ -323,15 +330,15 @@ def test_notification_material_change_reattaches_at_boundary(tmp_path):
 
     new_holder = agent._notification_live_holder
     assert new_holder is not first_holder
-    assert new_holder["_meta"]["notifications"]["email"]["data"] == {
+    assert new_holder.metadata["agent_meta"]["notifications"]["attention"]["email"]["data"] == {
         "email_ids": ["email-2"]
     }
-    persistent_email = new_holder["_meta"]["notification_persistent"]["email"]
+    persistent_email = new_holder.metadata["agent_meta"]["notifications"]["persistent"]["email"]
     assert persistent_email["email_ids"] == ["email-2"]
     assert persistent_email["emails"][0]["message"] == "Three new emails"
     assert "digest" not in persistent_email
     # The previous holder RETAINS its old notification payload as a
     # historical trace; only the newest emission is current.
-    assert first_holder["_meta"]["notifications"]["email"]["data"] == {
+    assert first_holder.metadata["agent_meta"]["notifications"]["attention"]["email"]["data"] == {
         "email_ids": ["email-1"]
     }

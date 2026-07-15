@@ -4,7 +4,7 @@ Contract (Jason #4307/#4313 + adapter-parity follow-up to the
 timely-transient plan in ``reports/context-rebuild-pr-plan/``):
 
 ``_meta.agent_meta`` / ``_meta.guidance`` (family ``agent_meta``) and
-``_meta.notifications`` / ``_meta.notification_guidance`` (family
+legacy-input ``_meta.notifications`` / ``_meta.notification_guidance`` (family
 ``notifications``) are TIMELY transient state — only the newest occurrence per
 family represents current state. Canonical history keeps old copies as
 historical traces (no retroactive strip; see ``meta_block``); every

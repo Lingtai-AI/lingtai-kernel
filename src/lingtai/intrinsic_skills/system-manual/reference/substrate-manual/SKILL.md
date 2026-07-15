@@ -190,7 +190,7 @@ text visible, record a compact summary replacement for its raw payload regardles
 of length. The
 summary preserves the conclusion, evidence, anchors, validation, risks, and next
 steps while lowering active context. Runtime high-attention guidance for this
-behavior is carried in `_meta.guidance`, including the resident 0.75 manual
+behavior is carried in `_meta.agent_meta.guidance`, including the resident 0.75 manual
 rebuild hint and the 1.0 hard forced-rebuild boundary rule.
 Treat guidance as a system-prompt-like appendix placed at the end of context: it
 is an ordered `sections[]` structure, not a loose metadata bag.  The kernel's

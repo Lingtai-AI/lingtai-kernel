@@ -684,6 +684,7 @@ def test_execute_parallel():
     for result in results:
         payload = result["result"]
         assert payload["_meta"]["tool_meta"]["elapsed_ms"] > 0
+        # Negative invariant: the deprecated private transit key is absent.
         assert "_runtime_pending" not in payload
         assert "elapsed_ms" not in payload
 
@@ -872,13 +873,7 @@ def test_reasoning_stripped_from_args():
 
 
 def test_tool_executor_uses_meta_fn_for_stamping():
-    """ToolExecutor calls meta_fn once per tool call and records the returned
-    dict under result["_runtime_pending"] together with elapsed_ms.
-
-    The real latest-only _meta.agent_meta block is promoted from _runtime_pending
-    at the tool-batch boundary by meta_block.attach_active_runtime (covered in
-    test_meta_block.py); ToolExecutor itself only records the pending snapshot.
-    """
+    """ToolExecutor captures runtime state on the result sidecar."""
     meta_calls = {"n": 0}
 
     def meta_fn():
@@ -889,7 +884,7 @@ def test_tool_executor_uses_meta_fn_for_stamping():
         return {"status": "ok", "echo": tc.args}
 
     def make_result(name, result, **kw):
-        return {"name": name, "result": result, **kw}
+        return ToolResultBlock(kw.get("tool_call_id", ""), name, result)
 
     exe = ToolExecutor(
         dispatch_fn=dispatch,
@@ -903,25 +898,20 @@ def test_tool_executor_uses_meta_fn_for_stamping():
     results, intercepted, _ = exe.execute([ToolCall(id="c1", name="noop", args={})])
     assert not intercepted
     assert meta_calls["n"] == 1
-    payload = results[0]["result"]
-    # current_time is promoted into permanent tool_meta; other runtime keys are
-    # recorded under _runtime_pending until the turn boundary promotes them into
-    # latest-only agent_meta.
-    pending = payload["_runtime_pending"]
-    assert "current_time" not in pending
-    assert payload["_meta"]["tool_meta"]["current_time"] == "FAKE-TS"
-    assert pending["future_field"] == 1
-    assert "elapsed_ms" in pending
-    assert "agent_meta" not in payload.get("_meta", {})
-    assert "current_time" not in payload
-    assert "_elapsed_ms" not in payload
+    block = results[0]
+    assert block._agent_pending["agent_state"]["current_time"] == "FAKE-TS"
+    assert block._agent_pending["agent_state"]["future_field"] == 1
+    assert "elapsed_ms" in block._agent_pending["agent_state"]
+    assert "agent_meta" not in block.metadata
+    assert "current_time" not in block.content
 
 
-def test_tool_executor_moves_token_usage_snapshot_to_tool_meta():
+def test_tool_executor_stages_token_usage_snapshot_in_agent_state():
     # build_meta places the NESTED token_usage object (current_call + session
     # halves, plus a shared ref) under the private pending key; the executor
-    # moves it verbatim into _meta.tool_meta.token_usage and must not leak the
-    # private pending key onto the result. current_call carries ONLY this call's
+    # stages it verbatim under the private agent-state capture and must not leak
+    # the private transit key onto the result. The final model-visible owner is
+    # agent_meta.agent_state.token_usage. current_call carries ONLY this call's
     # own token/cache/output facts; current context state (context_*) rides on
     # the session half.
     snapshot = {
@@ -950,7 +940,7 @@ def test_tool_executor_moves_token_usage_snapshot_to_tool_meta():
         return {"status": "ok"}
 
     def make_result(name, result, **kw):
-        return {"name": name, "result": result, **kw}
+        return ToolResultBlock(kw.get("tool_call_id", ""), name, result)
 
     exe = ToolExecutor(
         dispatch_fn=dispatch,
@@ -967,18 +957,17 @@ def test_tool_executor_moves_token_usage_snapshot_to_tool_meta():
     results, intercepted, _ = exe.execute([ToolCall(id="c1", name="noop", args={})])
 
     assert not intercepted
-    payload = results[0]["result"]
-    moved = payload["_meta"]["tool_meta"][TOOL_META_TOKEN_USAGE_KEY]
+    block = results[0]
+    moved = block._agent_pending["agent_state"][TOOL_META_TOKEN_USAGE_KEY]
     assert moved == snapshot
     # current_call carries none of the context-state keys; they live on session.
     assert "context_usage" not in moved["current_call"]
     assert "window" not in moved["current_call"]
     assert moved["session"]["context_usage"] == 0.8
-    assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in payload["_runtime_pending"]
+    assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in block._agent_pending["agent_state"]
 
 def test_tool_executor_meta_fn_covers_parallel_path():
-    """meta_fn is called per-tool in the parallel execution path too,
-    and each result records its meta fields under _runtime_pending."""
+    """meta_fn is called per-tool in the parallel path and captured privately."""
     meta_calls = {"n": 0}
 
     def meta_fn():
@@ -989,7 +978,7 @@ def test_tool_executor_meta_fn_covers_parallel_path():
         return {"status": "ok"}
 
     def make_result(name, result, **kw):
-        return {"name": name, "result": result, **kw}
+        return ToolResultBlock(kw.get("tool_call_id", ""), name, result)
 
     exe = ToolExecutor(
         dispatch_fn=dispatch,
@@ -1007,16 +996,10 @@ def test_tool_executor_meta_fn_covers_parallel_path():
     assert not intercepted
     assert meta_calls["n"] == 2
     for r in results:
-        payload = r["result"]
-        # current_time is promoted into permanent tool_meta; elapsed_ms remains
-        # pending for latest-only agent_meta.
-        pending = payload["_runtime_pending"]
-        assert "current_time" not in pending
-        assert payload["_meta"]["tool_meta"]["current_time"] == "FAKE-TS"
-        assert "elapsed_ms" in pending
-        assert "agent_meta" not in payload.get("_meta", {})
-        assert "current_time" not in payload
-        assert "_elapsed_ms" not in payload
+        assert r._agent_pending["agent_state"]["current_time"] == "FAKE-TS"
+        assert "elapsed_ms" in r._agent_pending["agent_state"]
+        assert "agent_meta" not in r.metadata
+        assert "current_time" not in r.content
 
 def test_deprecated_secondary_arg_is_ignored_not_dispatched():
     seen = []
@@ -1136,13 +1119,14 @@ def test_tool_executor_runtime_counter_stamped_at_boundary():
     executor = make_executor(guard=guard)
     agent = SimpleNamespace(_executor=executor)
 
-    # A stamped result content (carries _runtime_pending via meta_fn-less path:
-    # stamp it explicitly to mimic a time-aware agent's result).
-    from lingtai.kernel.meta_block import stamp_meta
-    content = {"status": "ok"}
-    stamp_meta(content, {"current_time": "T"}, 7)
-    block = ToolResultBlock(id="tc1", name="read", content=content)
+    # Mimic ToolExecutor's private runtime capture without touching handler content.
+    block = ToolResultBlock(
+        id="tc1",
+        name="read",
+        content={"status": "ok"},
+        _agent_pending={"agent_state": {"current_time": "T", "elapsed_ms": 7}},
+    )
 
     holder = attach_active_runtime(agent, [block], prior_holder=None)
-    assert holder is content
-    assert content["_meta"]["agent_meta"]["active_turn_tool_calls"] == 500
+    assert holder is block
+    assert block.metadata["agent_meta"]["agent_state"]["active_turn_tool_calls"] == 500

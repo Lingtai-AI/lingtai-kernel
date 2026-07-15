@@ -645,21 +645,19 @@ class BaseAgent:
         # See `meta_block.skeletonize_notification_holder` and
         # `meta_block.attach_active_notifications`.
         #
-        # The notification payload is SPARSE / update-driven (mirrors the #618
-        # `agent_meta` cadence), not latest-result-only: while notifications stay
-        # active but their material content is unchanged, the payload is NOT
-        # chased onto every newest tool result — the prior holder keeps it.  It
-        # only moves/re-stamps when the notification payload materially changes,
-        # or when the target is a deliberate `notification(action="check")` read.
+        # The current notification payload is merged into the newest final
+        # agent_meta snapshot on every eligible batch. The fingerprint and live
+        # holder remain for delivery bookkeeping and historical ownership, but
+        # they do not suppress the newest whole snapshot.
         self._notification_live_holder: dict | None = None
-        # Material signature of the last emitted `_meta.notifications` payload;
-        # the change gate for the sparse notification attach above.  ``None``
-        # until the first active payload, and reset to ``None`` whenever
-        # notifications go empty so a later reappearance attaches afresh.
+        # Material signature of the last emitted notification payload; retained
+        # for delivery diagnostics and persistent-message bookkeeping. It is
+        # not an attachment gate; reset to ``None`` whenever notifications go
+        # empty so a later reappearance records a fresh diagnostic baseline.
         self._notification_payload_signature: str | None = None
         # Per-IM-channel persistent communication-context lane.  These IDs
         # track which messages have already been emitted in
-        # `_meta.notification_persistent.mcp.<channel>.messages` for the
+        # `_meta.agent_meta.notifications.persistent.mcp.<channel>.messages` for the
         # current provider-visible context, so later deliveries can be deltas
         # with a `previous_block` hook pointing back to the previous block.
         # Reset on context molt. Snapshot-only IM lanes (currently WhatsApp) do
@@ -676,25 +674,22 @@ class BaseAgent:
         # None → no-op for non-Telegram turns.
         self._telegram_task_card_context: dict | None = None
 
-        # Provider-visible tool result currently carrying the live `_meta.agent_meta`
-        # / `_meta.guidance` blocks (kernel runtime state + guidance ref).
-        # `agent_meta` is SPARSE / update-driven, not latest-result-only: it is
-        # (re)attached only when the material agent snapshot changes since the
-        # last emitted `agent_meta` (tracked by `_agent_meta_signature`).  When
-        # the snapshot is unchanged it is NOT chased onto the newest result; the
-        # prior holder keeps it as a historical update point.  When it changes,
-        # the prior *live* holder sheds its blocks and the newer result takes
-        # over.  See `meta_block.attach_active_runtime` / `agent_meta_signature`.
+        # Provider-visible tool result currently carrying the latest whole
+        # `_meta.agent_meta` snapshot (kernel runtime state, notifications, and
+        # guidance). The designated final result becomes current each eligible
+        # batch; older holders remain historical traces. See
+        # `meta_block.attach_active_runtime` / `agent_meta_signature`.
         self._runtime_live_holder: dict | None = None
-        # Material signature of the last emitted `_meta.agent_meta`; the change
-        # gate for the sparse attach above.  ``None`` until the first snapshot.
+        # Material signature of the last emitted `_meta.agent_meta`; retained
+        # for diagnostics/compatibility only. The complete newest snapshot is
+        # emitted whenever private capture exists.
         self._agent_meta_signature: str | None = None
 
         # Large-result hint threshold (chars).  When a main-agent tool result's
         # serialized length exceeds this value it is treated as "large": the
         # ToolExecutor stamps a tool_meta.comment.overflow hint, and the result
         # is surfaced for summarization through
-        # _meta.agent_meta.current_tool_result_chars.top_results.  Large results
+        # _meta.agent_meta.agent_state.current_tool_result_chars.top_results.  Large results
         # no longer raise a `large_tool_result` system notification — see
         # meta_block.current_tool_result_chars and _maybe_notify_large_tool_result.
         # Default: 3000 chars.  Configurable only via manifest.summarize_notification_threshold
@@ -1896,8 +1891,9 @@ class BaseAgent:
 
         The envelope is persisted under a top-level ``_meta`` field on the event
         so the TUI ``/notification`` view renders ``_meta.tool_meta`` /
-        ``_meta.agent_meta`` / ``_meta.guidance`` / ``_meta.notification_guidance``
-        / ``_meta.notifications`` directly.  A deep copy is stored so later
+        ``_meta.agent_meta`` / ``_meta.agent_meta.guidance`` /
+        ``_meta.agent_meta.guidance.transient`` / ``_meta.agent_meta.notifications``
+        directly.  A deep copy is stored so later
         in-place skeletonization or nested mutation of the live holder does not
         corrupt the logged snapshot.
         """
@@ -2175,7 +2171,7 @@ class BaseAgent:
         Delegates to :meth:`SessionManager.get_runtime_session_token_usage`.
         "Runtime session" = the live process, counted since it last started or
         refreshed. This is NOT the source of the injected
-        ``_meta.tool_meta.token_usage.session`` half: that half is "since last
+        ``_meta.agent_meta.agent_state.token_usage.session`` half: that half is "since last
         molt" and reads cumulative :meth:`get_token_usage` totals (which survive
         refresh), so it is not zeroed on refresh. This runtime getter's baseline
         resets on every refresh, so it is used only for since-refresh diagnostics.
@@ -2358,7 +2354,7 @@ class BaseAgent:
 
         Large tool results no longer raise a ``large_tool_result`` system
         notification here.  They are ranked instead through
-        ``_meta.agent_meta.current_tool_result_chars.top_results`` and digested
+        ``_meta.agent_meta.agent_state.current_tool_result_chars.top_results`` and digested
         via ``system(action="summarize")`` (see meta_block.current_tool_result_chars).
         """
         return None
@@ -2438,7 +2434,7 @@ class BaseAgent:
         notification (gated by a total-length threshold) so the agent would be
         reminded to summarize them.  That reminder has been removed: large
         results are surfaced as a ranked list under
-        ``_meta.agent_meta.current_tool_result_chars.top_results`` (see
+        ``_meta.agent_meta.agent_state.current_tool_result_chars.top_results`` (see
         :func:`meta_block.current_tool_result_chars`) and digested via
         ``system(action="summarize")``.  The result still flows into normal
         tool-result history and the char-ranking; it simply creates no

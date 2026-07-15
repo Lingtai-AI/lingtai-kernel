@@ -12,7 +12,7 @@ The abstraction owns:
     warn-after-N-consecutive-high-rounds decision;
   * the current-state reminder **rendering** for
     ``_meta.tool_meta.context.molt`` (:meth:`current_molt_context`) — permanent
-    per-result metadata (moved off the sparse ``agent_meta`` so it persists);
+    per-result metadata (persists inside the emitted ``_meta.agent_meta.agent_state.events`` snapshot because historical snapshots remain retained);
   * the reconstruction-event **annotation** (channel A) for
     ``_meta.tool_meta.reconstruction.molt`` (:meth:`annotate_reconstruction`);
   * pure **emission descriptors** (:func:`current_molt_emission_descriptor`,

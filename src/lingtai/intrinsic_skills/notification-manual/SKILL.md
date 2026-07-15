@@ -33,7 +33,7 @@ is not a notification operation.
 | Action | Use |
 |---|---|
 | `notification(action='manual')` | Return this installed router body. Strictly read-only: it neither reads nor changes notification state. |
-| `notification(action='check')` | Request the live notification payload. The handler returns a placeholder and the kernel stamps `_meta.notifications` plus `_meta.notification_guidance` onto the result. |
+| `notification(action='check')` | Request the live notification payload. The handler returns a placeholder and the kernel stamps `_meta.agent_meta.notifications.attention` plus `_meta.agent_meta.guidance.transient` onto the result. |
 | `notification(action='dismiss_channel', channel=...)` | Clear one dismissible channel mirror whole. |
 | `notification(action='dismiss_event', event_id=..., channel='system')` | Remove one matching system event; `channel` defaults to `system`. |
 | `notification(action='dismiss_ref', ref_id=..., channel='system')` | Remove matching system events by producer reference; `channel` defaults to `system`. |
@@ -80,7 +80,7 @@ producer state, delivery fingerprints, or acknowledgement state.
 
 | Need / keywords | Read |
 |---|---|
-| Channel names; `.notification/*.json`; allowlist; `mcp.` channels; envelope fields; `instructions`; nudge/update checks; `_meta.notifications`; voluntary `check`; producer state versus mirror | `reference/channel-model/SKILL.md` |
+| Channel names; `.notification/*.json`; allowlist; `mcp.` channels; envelope fields; `instructions`; nudge/update checks; `_meta.agent_meta.notifications.attention`; voluntary `check`; producer state versus mirror | `reference/channel-model/SKILL.md` |
 | Which dismiss action; producer-specific handling; guarded/stale mirror; `force`; protected `goal`; post-molt reason; legacy `large_tool_result` event | `reference/dismissal-safety/SKILL.md` |
 | Tool-result ranking, digest quality, `system(action='summarize')`, recovery by `tool_call_id`, summarize versus molt | `../system-manual/reference/summarize-manual/SKILL.md` |
 | Active goal source-of-truth and cancellation/completion | `../system-manual/reference/goal-manual/SKILL.md` |
@@ -95,7 +95,7 @@ producer state, delivery fingerprints, or acknowledgement state.
 - `force=true` is for knowingly clearing a stale or guarded mirror. It does not
   override protected source-of-truth channels and never mutates producer state.
 - Large tool results are ranked under
-  `_meta.agent_meta.current_tool_result_chars`, not emitted as new
+  `_meta.agent_meta.agent_state.current_tool_result_chars`, not emitted as new
   notifications. Follow `../system-manual/reference/summarize-manual/SKILL.md`; do not invent a second
   summarization procedure here.
 

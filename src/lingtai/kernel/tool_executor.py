@@ -345,12 +345,10 @@ class ToolExecutor:
     def _attach_tool_call_progress(self, result: Any) -> Any:
         """Attach the batch-scoped ACTIVE-turn progress *notice* when present.
 
-        The running counter (``active_turn_tool_calls``) is intentionally NOT
-        written here: it lives under the sparse/update-driven
-        ``_meta.agent_meta.active_turn_tool_calls`` snapshot (stamped by
-        ``attach_active_runtime`` at the tool-batch boundary when material
-        agent_meta changes).  Repeating the counter on every result left stale
-        snapshots in history.
+            The running counter (``active_turn_tool_calls``) is intentionally NOT
+            written here: it lives under ``_meta.agent_meta.agent_state`` and is
+            stamped by ``attach_active_runtime`` on the final batch carrier.
+            Handler payloads never carry this runtime state.
 
         The ``active_turn_tool_call_notice`` is a transient soft self-check that
         the guard only emits when a notice interval is crossed and clears after
@@ -413,22 +411,11 @@ class ToolExecutor:
         Fields:
           id                  — tool_call_id (or "<unknown>")
           timestamp           — UTC ISO completion timestamp
-          current_time        — optional agent-aware current time (local timezone
-                                when timezone_awareness=True); absent when
-                                time_awareness=False
           char_count          — current model-visible serialized size: the kernel
                                 ``_meta`` envelope and transient top-level
                                 scaffolding (``_advisory``,
                                 batch progress notice) are excluded from the count.
           elapsed_ms          — execution time in milliseconds
-          token_usage         — optional nested token/cache diagnostics with a
-                                current_call half (ONLY this provider call's own
-                                facts: input, cache_miss, cache_rate, output,
-                                thinking) and a session half (since-last-molt
-                                cumulative aggregate + current context state
-                                context_tokens/context_window/context_usage),
-                                copied verbatim from the transient runtime snapshot
-                                so it remains permanent per-result evidence
           spilled_char_count  — original sidecar character count when a spill occurred;
                                 omitted for ordinary non-spilled results
           status              — "error" when the result carries status=error; omitted otherwise
@@ -451,9 +438,8 @@ class ToolExecutor:
             candidate = pending.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
             if isinstance(candidate, dict):
                 token_usage = dict(candidate)
-            # Current context guidance — permanent per-result metadata at
-            # tool_meta.context.* (build_meta stashes it under a transit key so it
-            # lands on tool_meta, not the sparse agent_meta).  The same transit
+            # Current context guidance — captured for the final agent_state.
+            # build_meta stashes it under a transit key; the same transit
             # sub-object carries the 75% manual rebuild hint, the sustained-pressure
             # molt warning, and the cache-miss budget guard fields.
             candidate_context = pending.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
@@ -503,7 +489,7 @@ class ToolExecutor:
             }
 
         # Channel B event: the current sustained-pressure molt reminder was just
-        # attached to tool_meta.context.molt.  Emit the structured runtime event
+        # captured for agent_state.context.molt. Emit the structured runtime event
         # ONLY on a real attach (context_block present), and dedup to at most once
         # per provider round (the reminder text is permanent — restamped on every
         # result while active — so per-result emission would flood the log).
@@ -525,7 +511,7 @@ class ToolExecutor:
                     "reconstruction"
                 ] = event
                 # Channel A event: the reconstruction molt reminder text was just
-                # attached at tool_meta.reconstruction.molt.  Emit only when the
+                # captured under agent_state.events.reconstruction. Emit only when the
                 # event actually carries that text (still >= recovery target).
                 molt_text = event.get("molt") if isinstance(event, dict) else None
                 if isinstance(molt_text, str) and molt_text:

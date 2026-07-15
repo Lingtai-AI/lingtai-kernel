@@ -1813,7 +1813,7 @@ class Agent(BaseAgent):
             self._prompt_manager.delete_section("procedures")
 
         # --- Runtime guidance mirror ---
-        # `_meta.guidance` is latest-only tool-result metadata, but the TUI
+        # `_meta.agent_meta.guidance` is latest-only tool-result metadata, but the TUI
         # also needs a filesystem-visible copy. Runtime guidance is now authored
         # as a skill-style Markdown catalog (lingtai/prompts/meta_guidance/catalog/INDEX.md +
         # <id>.md sections); the kernel assembles it into the same dict shape and
