@@ -70,13 +70,25 @@ Schema `required: ["action"]`. Relevant properties: `tasks[]` (each requires
 Per-task `context_token_limit` (positive integer; bool rejected) is a
 context-token compaction threshold — rendered/provider-context tokens, never
 cumulative spend — effective only for `backend="lingtai"` tasks whose
-resolved provider is Codex (`codex`/`codex-pool`); every other provider and
-every external CLI backend ignores it. Omitted, it inherits the parent
-service's resolved context window as the threshold; an explicit value wins.
-See `src/lingtai/tools/daemon/DAEMON_CONTRACT.md` (capability invariant 7) for
-the Codex-only/lingtai-backend-only capability boundary and
-`src/lingtai/llm/openai/ANATOMY.md` ("Standalone Codex compaction") for the
-Codex Responses session mechanics this threshold triggers.
+resolved provider is Codex (`codex`/`codex-pool`) or the native `mimo` LLM
+provider (`manifest.llm.provider="mimo"` — distinct from the `backend` enum's
+`mimo`/`mimocode` alias above, which drives the external `mimo` CLI as a
+subprocess and never consults this field); every other provider and every
+external CLI backend ignores it. Omitted, it inherits the parent service's
+resolved context window as the threshold; an explicit value wins. Native
+`mimo` defaults to the stateless OpenAI Responses wire (full-history replay;
+never `store`/`previous_response_id`/`conversation`/generic
+`context_management`) — an explicit `wire_api="chat_completions"` on the
+preset selects the Chat Completions escape hatch instead. **Failure policy
+differs by provider:** a standalone-compaction failure is non-fatal for Codex
+(that turn's compaction is skipped; the loop continues on full history) but a
+HARD failure for native `mimo` (propagates to the caller; never silently
+continues on full history and never falls back to a different wire). See
+`src/lingtai/tools/daemon/DAEMON_CONTRACT.md` (capability invariant 7) for the
+lingtai-backend-only capability boundary and `src/lingtai/llm/openai/ANATOMY.md`
+("Standalone Codex compaction") / `src/lingtai/llm/mimo/ANATOMY.md` for the
+Codex vs. native-MiMo Responses session mechanics and failure-policy
+divergence this threshold triggers.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
@@ -146,7 +158,7 @@ correct cancellation and attribution. Deeper backend-launch details are in
 | `check` surfaces a terminal event for a done emanation and failure error | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_check.py::test_check_includes_terminal_event_for_done_emanation`, `::test_check_includes_failure_error` |
 | CLI-backend `ask` returns immediately and enforces its own timeout | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs`, `::test_ask_codex_silent_subprocess_enforces_timeout` |
 | Token rows are written to both the daemon and parent ledgers, tagged | `src/lingtai/tools/daemon/run_dir.py` | `tests/test_daemon_run_dir.py::test_append_tokens_writes_daemon_ledger`, `::test_append_tokens_writes_parent_ledger_tagged` |
-| `context_token_limit` is validated (positive int, bool rejected), reaches Codex-only via `_daemon_provider_defaults`, and is inert for every other provider and every external CLI backend | `src/lingtai/tools/daemon/__init__.py` | `tests/test_codex_standalone_compaction.py::test_daemon_schema_rejects_bool_context_token_limit`, `::test_daemon_schema_rejects_zero_context_token_limit`, `::test_daemon_provider_defaults_injects_codex_compact_token_limit`, `::test_external_cli_backend_ignores_context_token_limit` |
+| `context_token_limit` is validated (positive int, bool rejected), reaches Codex and native `mimo` via `_daemon_provider_defaults` (`codex_compact_token_limit` / `mimo_compact_token_limit`), and is inert for every other provider and every external CLI backend | `src/lingtai/tools/daemon/__init__.py` | `tests/test_codex_standalone_compaction.py::test_daemon_schema_rejects_bool_context_token_limit`, `::test_daemon_schema_rejects_zero_context_token_limit`, `::test_daemon_provider_defaults_injects_codex_compact_token_limit`, `::test_external_cli_backend_ignores_context_token_limit`; `tests/test_mimo_responses_compaction.py::test_daemon_provider_defaults_injects_mimo_compact_token_limit`, `::test_unrelated_providers_never_receive_mimo_compact_token_limit` |
 | `reclaim` cancels running emanations; agent stop shuts the daemon down first | `src/lingtai/tools/daemon/__init__.py` | `tests/test_lifecycle_daemon_shutdown.py::test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock` |
 
 ## Verification matrix
@@ -159,12 +171,12 @@ correct cancellation and attribution. Deeper backend-launch details are in
 | CLI `ask` never blocks the caller's tool thread | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs` | `ask` a hung CLI daemon, confirm immediate return | Parent loop stalls on a hung subprocess |
 | Reclaim kills the right process group / batch | `tests/test_daemon_cli_watchdog_scope.py`, `tests/test_lifecycle_daemon_shutdown.py` | Emanate two batches, reclaim, confirm scoped kill | A batch kills an unrelated newer batch's procs |
 | Dual-ledger token accounting stays correct | `tests/test_daemon_run_dir.py::test_append_tokens_writes_parent_ledger_tagged` | Inspect both token_ledger.jsonl files after a run | Daemon spend double-counted or lost in totals |
-| `context_token_limit` stays Codex-only and inert everywhere else | `tests/test_codex_standalone_compaction.py` | Emanate a `backend='lingtai'` Codex task with an explicit `context_token_limit`, confirm compaction fires only past that threshold | A bad value silently breaks unrelated providers/backends, or Codex requests start sending `context_management` |
+| `context_token_limit` stays Codex/native-mimo-only and inert everywhere else; native `mimo` compaction failure is a HARD failure (unlike Codex's non-fatal skip) | `tests/test_codex_standalone_compaction.py`, `tests/test_mimo_responses_compaction.py` | Emanate a `backend='lingtai'` Codex task with an explicit `context_token_limit`, confirm compaction fires only past that threshold and a provider error is swallowed non-fatally; repeat with `manifest.llm.provider="mimo"` and confirm a provider error instead propagates to the caller | A bad value silently breaks unrelated providers/backends, Codex/MiMo requests start sending `context_management`, or a MiMo compaction failure is silently swallowed/falls back instead of failing loud |
 
 Run before merging daemon tool-surface changes:
 
 ```bash
-python -m pytest tests/test_daemon.py tests/test_daemon_check.py tests/test_daemon_backend_options.py tests/test_daemon_run_dir.py tests/test_lifecycle_daemon_shutdown.py tests/test_codex_standalone_compaction.py -q
+python -m pytest tests/test_daemon.py tests/test_daemon_check.py tests/test_daemon_backend_options.py tests/test_daemon_run_dir.py tests/test_lifecycle_daemon_shutdown.py tests/test_codex_standalone_compaction.py tests/test_mimo_responses_compaction.py -q
 ```
 
 ## Schema and glossary ownership

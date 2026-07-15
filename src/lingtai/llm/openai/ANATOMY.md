@@ -10,10 +10,14 @@ related_files:
   - src/lingtai/llm/openai/adapter.py
   - src/lingtai/llm/openai/codex_ws.py
   - src/lingtai/llm/openai/defaults.py
+  - src/lingtai/llm/mimo/adapter.py
+  - src/lingtai/llm/mimo/ANATOMY.md
   - src/lingtai/llm/service.py
   - src/lingtai/tools/daemon/ANATOMY.md
+  - src/lingtai/tools/daemon/DAEMON_CONTRACT.md
   - tests/test_codex_prompt_cache_key.py
   - tests/test_codex_standalone_compaction.py
+  - tests/test_mimo_responses_compaction.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -42,7 +46,8 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `OpenAIChatSession` | `adapter.py:1267` | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
 | `OpenAIResponsesSession` | `adapter.py:1782` | Responses API session. Official OpenAI mode is server-stateful via `previous_response_id`; custom/OpenAI-compatible mode can be internally stateless (`stateless_replay=True`) and replays full canonical history via `to_responses_input` while recording assistant turns and exposing no resume id (`adapter.py:1806-1807`, `adapter.py:1974-1975`, `adapter.py:1985-1986`, `adapter.py:2092-2103`). |
 | `OpenAIAdapter` | `adapter.py:2126` | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key`; carries the internal `_responses_stateless_replay` constructor mode into Responses sessions (`adapter.py:2184`, `adapter.py:2189`, `adapter.py:2282-2334`). |
-| `CodexResponsesSession` | `adapter.py:2549` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, honest Codex metadata envelope, and standalone daemon-task-triggered compaction via `POST /responses/compact` (`adapter.py:3389-3683`; see "Standalone Codex compaction" below). |
+| `_StandaloneCompactionMixin` | `adapter.py:2561` | Shared standalone `/responses/compact` machinery extracted from `CodexResponsesSession`: projected-token trigger, turn-aware boundary selection (`_prepare_compact_request`, `adapter.py:2736`), opaque compacted-prefix-plus-delta replay. Mixed into both `CodexResponsesSession` (non-fatal failure policy) and MiMo's `MimoResponsesSession` (`src/lingtai/llm/mimo/adapter.py`, hard-failure policy) — see "Standalone Codex compaction" below. |
+| `CodexResponsesSession` | `adapter.py:2801` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, honest Codex metadata envelope, and standalone daemon-task-triggered compaction via `POST /responses/compact` (mixes in `_StandaloneCompactionMixin`; Codex-specific wire-shaping + non-fatal `_compact_now` at `adapter.py:3647`; see "Standalone Codex compaction" below). |
 | `CodexOpenAIAdapter` | `adapter.py:4776` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. Maps an omitted/`default` thinking level to an explicit `reasoning.effort = "xhigh"` in its `_create_responses_session` (Codex-only default — omitting the field would fall back to the backend's lower default; explicit levels pass through unchanged, and the generic `OpenAIAdapter` keeps omit-on-default). `codex-pool` reuses this adapter, so it inherits the same default. |
 
 ### adapter.py helpers
@@ -169,6 +174,27 @@ are also recorded — safe structural metadata only, never opaque content
 (`adapter.py:2955-2959`, `_usage_extra`).
 
 ### Standalone Codex compaction (`context_token_limit`)
+
+**Shared with MiMo since the mixin extraction.** The trigger/boundary/replay
+machinery described in this section (`_effective_compact_token_limit`,
+`_current_request_representation`, `_projected_provider_tokens`,
+`_maybe_compact_before_send`, `_prepare_compact_request`,
+`_compacted_replay_input`) now lives on `_StandaloneCompactionMixin`
+(`adapter.py:2552`), which `CodexResponsesSession` mixes in unchanged (this
+section still describes CodexResponsesSession's behavior byte-for-byte —
+extraction was a pure refactor, not a behavior change; see
+`tests/test_codex_standalone_compaction.py`, all passing unmodified). MiMo's
+`MimoResponsesSession` (`src/lingtai/llm/mimo/adapter.py`) mixes in the SAME
+class to reuse the calibration/boundary logic for its own native Responses
+wire, differing only in wire-shaping (`_compaction_prefix_input` — MiMo has
+no per-session tool-output freeze map, since that exists only for Codex's
+WebSocket incremental delta path) and, critically, in **failure policy**:
+Codex's `_compact_now` treats a compact failure as non-fatal (this section);
+MiMo's treats the same failure class as a HARD failure that propagates to
+the caller (see `src/lingtai/llm/mimo/ANATOMY.md`). Each provider still owns
+its own `_compact_now()` — the mixin only prepares the request
+(`_prepare_compact_request`), it never calls `client.responses.compact`
+itself.
 
 A separate axis from the hard-boundary forced-rebuild machinery above:
 forced rebuild discards local pressure by re-sending the FULL canonical
@@ -339,10 +365,13 @@ Trigger and lifecycle (`adapter.py:3389-3686`):
   after any invalidation.
 
 Daemon-only wiring: `codex_compact_token_limit` reaches the adapter only
-through `_daemon_provider_defaults`'s Codex-only bucket
-(`src/lingtai/tools/daemon/__init__.py`) — every other provider and every
-external CLI backend (`claude-p`, `opencode`, the `codex` CLI backend, …)
-never sees this field and is behaviorally unchanged.
+through `_daemon_provider_defaults`'s Codex bucket
+(`src/lingtai/tools/daemon/__init__.py`) — the SAME task-level
+`context_token_limit` also reaches the native `mimo` provider as
+`mimo_compact_token_limit` through that same function's `mimo` branch (see
+`src/lingtai/llm/mimo/ANATOMY.md`). Every other provider and every external
+CLI backend (`claude-p`, `opencode`, the `codex` CLI backend, the `mimocode`
+CLI backend, …) never sees this field and is behaviorally unchanged.
 
 ### Prompt cache key (`prompt_cache_key`)
 
