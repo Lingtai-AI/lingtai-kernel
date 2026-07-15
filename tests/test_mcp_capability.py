@@ -7,11 +7,11 @@ registry membership.
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -170,6 +170,151 @@ def test_nokv_workbench_registry_example_is_valid():
     assert spec["type"] == "stdio"
     assert spec["command"] == record["command"]
     assert spec["args"] == record["args"]
+
+
+def test_nokv_workbench_skill_documents_durable_restore_contract():
+    skill_root = Path("src/lingtai/intrinsic_skills/nokv-workbench")
+    skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+    preflight = (skill_root / "assets" / "PREFLIGHT.md").read_text(encoding="utf-8")
+
+    assert "version: 0.4.0" in skill
+    assert "workbench_restore" in skill
+    assert '"at_snapshot": 417' in skill
+    assert "same numeric `snapshot_id`" in skill
+    assert "resend the exact request" in skill
+    assert "No separate LingTai restore state" in skill
+    assert "metadata/restore_manifest.json" in skill
+    assert "nokv.workbench.restore_manifest.v1" in skill
+    assert "restored_from.snapshot_id" in skill
+    assert 'Success means `state="complete"`' in skill
+    assert "expired checkpoints cannot be renewed" in skill
+    assert "lifecycle `state` (`alive`, `expired`, or `reaped`)" in skill
+    assert "lifecycle `status`" not in skill
+    assert "grace window" not in skill
+
+    for code in (
+        "SnapshotNotFound",
+        "SnapshotLeaseExpired",
+        "SnapshotRootMismatch",
+        "SnapshotBindingChanged",
+        "SnapshotRenewContended",
+        "NotOwner",
+        "StaleOwnerEpoch",
+        "InvalidOwnerEpoch",
+        "LeaseExpired",
+        "RestoreTransportUnavailable",
+        "RestoreInProgress",
+        "RestoreRootChanged",
+        "RestoreBindingChanged",
+        "RestoreProtocolMismatch",
+        "RestoreDestinationConflict",
+        "RestoreResourceLimit",
+        "RestoreHardlinkUnsupported",
+        "RestoreCrossShardUnsupported",
+        "StalePreparedArtifactObjectGcEpoch",
+        "SyncLogArchiveFailed",
+        "CapabilityMismatch",
+    ):
+        assert code in skill
+
+    assert "complete 17-tool workbench surface" in preflight
+    assert '"required": ["id", "at_snapshot", "destination_id"]' in preflight
+    assert '"additionalProperties": False' in preflight
+    assert '"type": "integer", "minimum": 0' in preflight
+    assert '"type": "string", "minLength": 1' in preflight
+    assert "restore_to_fork_v1" in preflight
+    assert "raw schema mismatch" in preflight
+    assert "before Agent registration" in preflight
+    assert "--profile full --require-all" in preflight
+    assert "two real MCP" in preflight
+    assert "hard-coded NoKV gate" in preflight
+
+
+def _run_nokv_preflight_contract(monkeypatch, tools):
+    preflight_path = Path(
+        "src/lingtai/intrinsic_skills/nokv-workbench/assets/PREFLIGHT.md"
+    )
+    preflight = preflight_path.read_text(encoding="utf-8")
+    blocks = re.findall(r"<<'PY'\n(.*?)\nPY", preflight, flags=re.DOTALL)
+    code = next(block for block in blocks if "expected_restore_schema" in block)
+
+    class FakeMCPClient:
+        def __init__(self, command, args):
+            self.command = command
+            self.args = args
+
+        def list_tools(self):
+            return copy.deepcopy(tools)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("lingtai.services.mcp.MCPClient", FakeMCPClient)
+    monkeypatch.setenv("NOKV_BIN", "/tmp/nokv")
+    monkeypatch.setenv("NOKV_MCP_ARGS", "[]")
+    exec(compile(code, str(preflight_path), "exec"), {})
+
+
+def _strict_nokv_preflight_tools():
+    names = {
+        "workbench_create", "workbench_put_file", "workbench_append",
+        "workbench_edit", "workbench_stat", "workbench_list", "workbench_read",
+        "workbench_grep", "workbench_search", "workbench_aggregate",
+        "workbench_catalog", "workbench_find", "workbench_commit",
+        "workbench_snapshot", "workbench_snapshot_renew",
+        "workbench_snapshot_list", "workbench_restore",
+    }
+    restore_schema = {
+        "type": "object",
+        "required": ["id", "at_snapshot", "destination_id"],
+        "properties": {
+            "id": {"type": "string", "minLength": 1},
+            "at_snapshot": {
+                "anyOf": [
+                    {"type": "integer", "minimum": 0},
+                    {"type": "string", "minLength": 1},
+                ]
+            },
+            "destination_id": {"type": "string", "minLength": 1},
+        },
+        "additionalProperties": False,
+    }
+    return [
+        {"name": name, "schema": restore_schema if name == "workbench_restore" else {}}
+        for name in sorted(names)
+    ]
+
+
+def test_nokv_preflight_executes_strict_raw_schema_gate(monkeypatch):
+    _run_nokv_preflight_contract(monkeypatch, _strict_nokv_preflight_tools())
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("missing-surface-tool", "NoKV workbench tools missing"),
+        ("capability-tool-absent", "NoKV workbench tools missing"),
+        ("nullable-snapshot", "workbench_restore raw schema mismatch"),
+        ("additional-properties", "workbench_restore raw schema mismatch"),
+    ],
+)
+def test_nokv_preflight_rejects_contract_drift(monkeypatch, mutation, message):
+    tools = _strict_nokv_preflight_tools()
+    if mutation == "missing-surface-tool":
+        tools = [tool for tool in tools if tool["name"] != "workbench_read"]
+    elif mutation == "capability-tool-absent":
+        tools = [tool for tool in tools if tool["name"] != "workbench_restore"]
+    else:
+        restore = next(tool for tool in tools if tool["name"] == "workbench_restore")
+        if mutation == "nullable-snapshot":
+            restore["schema"]["properties"]["at_snapshot"]["anyOf"].append(
+                {"type": "null"}
+            )
+        else:
+            restore["schema"]["additionalProperties"] = True
+
+    with pytest.raises(SystemExit, match=message):
+        _run_nokv_preflight_contract(monkeypatch, tools)
 
 
 def test_expand_agent_placeholders_scopes_workbench_root(tmp_path):

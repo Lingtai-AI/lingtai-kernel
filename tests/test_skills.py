@@ -7,8 +7,6 @@ import json
 import sqlite3
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
-
 from lingtai.agent import Agent
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
@@ -253,6 +251,15 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "name: nokv-workbench" in nokv_body
         assert "workbench_find" in nokv_body
         assert "workbench_commit" in nokv_body
+        assert "version: 0.4.0" in nokv_body
+        assert "workbench_restore" in nokv_body
+        assert "restore-to-fork" in nokv_body
+        assert "same numeric `snapshot_id`" in nokv_body
+        assert "metadata/restore_manifest.json" in nokv_body
+        assert "nokv.workbench.restore_manifest.v1" in nokv_body
+        assert "RestoreInProgress" in nokv_body
+        assert "RestoreDestinationConflict" in nokv_body
+        assert "CapabilityMismatch" in nokv_body
         assert "metadata/run_manifest.json" in nokv_body
         assert (
             nokv_md.parent / "assets" / "mcp_registry.example.jsonl"

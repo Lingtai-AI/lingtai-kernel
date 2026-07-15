@@ -7,10 +7,10 @@ description: >
   manifests through the `workbench_*` MCP tools instead of ordinary local
   file writes. Covers MCP registration, directory layout, append and edit
   discipline, conditional reads, cross-workbench queries, commit discipline,
-  and leased checkpoint snapshots with naming, renewal, discovery, and
-  point-in-time history reads.
-version: 0.3.0
-tags: [nokv, mcp, workbench, artifacts, provenance, snapshots, checkpoints, leases]
+  leased checkpoint snapshots with naming, renewal, discovery, point-in-time
+  history reads, and durable restore-to-fork recovery.
+version: 0.4.0
+tags: [nokv, mcp, workbench, artifacts, provenance, snapshots, checkpoints, leases, restore]
 related_files:
 - src/lingtai/intrinsic_skills/nokv-workbench/assets/PREFLIGHT.md
 - src/lingtai/intrinsic_skills/nokv-workbench/assets/init-snippet.json
@@ -166,9 +166,10 @@ The response adds `name`, `lease_expires_at` (the reap deadline), and an
 gets only the 1-hour default lease** — never hand a raw-CLI snapshot to a
 handoff.
 
-**Name your checkpoints.** `name` is a stable alias you can renew, list, and
-read by, instead of memorizing an opaque `snapshot_id`. The name is the durable
-handle; the id is for pinning an exact version.
+**Name your checkpoints.** `name` is a workbench-scoped alias you can renew,
+list, read, and initially select for restore. The alias is useful only while
+the checkpoint lease is live; it is not an archive or an independent durability
+guarantee. Exact restore requests use the resolved numeric `snapshot_id`.
 
 In final reports or handoff notes, cite the checkpoint `name`, its
 `snapshot_id`, and the returned `lease_expires_at` so a later reader knows both
@@ -188,7 +189,7 @@ the checkpoint by `name` or `snapshot_id`.
 Do not rely on a `snapshot_id` you remembered in a note — that note is exactly
 what goes stale. `workbench_snapshot_list {"id":"spedas-task-001"}` enumerates
 every checkpoint of the workbench with its `name`, `snapshot_id`,
-`lease_expires_at`, and lifecycle `status` (`alive`, `expired`, or `reaped`).
+`lease_expires_at`, and lifecycle `state` (`alive`, `expired`, or `reaped`).
 Use it to see what is still restorable before you try to read history.
 
 ### Read history with at_snapshot
@@ -202,13 +203,106 @@ that checkpoint** instead of its current state:
 ```
 
 Historical `workbench_read` serves the checkpoint's bytes/text-lines. Reading a
-checkpoint whose lease has expired now fails **loudly** — an explicit error that
-tells you to `workbench_snapshot_renew` (if a grace window remains) or re-mint —
-rather than silently returning current state or empty data.
+checkpoint whose lease has expired fails **loudly**. Expiry is terminal:
+expired checkpoints cannot be renewed, even if the background collector has not
+yet removed the pin. Re-mint from the current committed state when that is still
+useful; NoKV never revives a checkpoint whose historical records may already
+have been reclaimed.
+
+## Restore to a new workbench
+
+Use `workbench_restore` to continue from a live checkpoint. The workbench
+contract is restore-to-fork only: it creates a new independently writable
+workbench and never rolls back or overwrites the source.
+
+Before restoring by checkpoint name, call `workbench_snapshot_list`, select an
+entry whose `state` is `alive`, and resolve the name to its numeric
+`snapshot_id`. Build one fixed request using that number:
+
+```json
+{
+  "id": "spedas-task-001",
+  "at_snapshot": 417,
+  "destination_id": "spedas-task-001-restored"
+}
+```
+
+Keep these exact three values for the duration of the workflow. If the MCP
+transport, NoKV server, or Agent connection restarts, resend the same request
+with the same numeric `snapshot_id` and `destination_id`. Do not re-resolve a
+checkpoint name during a retry: an alias can be rebound, while the numeric id
+pins the original request. A retry can return `RestoreInProgress`; use bounded
+backoff and resend the exact request. No separate LingTai restore state or
+multi-step copy protocol is needed.
+
+Success means `state="complete"` and `cleanup_pending=false`. The response
+contains the deterministic `operation_id`, source and destination workbench
+ids, numeric `snapshot_id`, read version, roots, and
+`metadata/restore_manifest.json`. Exact retries return the same completed
+operation even after the source checkpoint registry or source workbench has
+been removed. A request that reuses the destination for a different source or
+snapshot is a conflict.
+
+The destination is first exposed only after its restore manifest is readable
+and the source-owned `metadata/checkpoints.jsonl` has been removed. It does not
+inherit checkpoint aliases. The source remains unchanged throughout the
+restore.
+
+### Validate the completed restore
+
+After a successful response, read the destination's
+`metadata/restore_manifest.json` with `workbench_read`. Parse the JSON and
+require all of the following before using or handing off the destination:
+
+- `schema` is `nokv.workbench.restore_manifest.v1`;
+- `operation_id`, `source_workbench_id`, `destination_workbench_id`, and
+  `snapshot_id` exactly match the restore response and fixed request;
+- `restored_from.workbench_id` is the source id,
+  `restored_from.snapshot_id` is the same numeric snapshot id, and
+  `restored_from.path` identifies that source workbench;
+- `destination_path` identifies the requested destination.
+
+Treat a missing field or mismatch as an integrity failure. Stop and report it;
+do not repair the manifest or silently continue. Do not request in-place
+rollback from an agent workflow—operator recovery APIs are outside this skill.
+
+### Handle structured checkpoint and restore errors
+
+MCP failures preserve top-level `status`, `code`, `message`, `retryable`, and
+`details`. Branch on `code`; never parse the human message:
+
+| Code | Agent action |
+|---|---|
+| `SnapshotNotFound` | Stop. The numeric snapshot was reaped or never existed; never re-resolve an alias as an exact retry. |
+| `SnapshotLeaseExpired` | Do not retry or attempt revival. Mint a new checkpoint from current state when appropriate. |
+| `SnapshotRootMismatch` | Stop. The checkpoint belongs to another workbench root. |
+| `SnapshotBindingChanged` | Refresh workbench resolution and retry once only when `retryable=true`. |
+| `SnapshotRenewContended` | Retry renewal with bounded backoff. |
+| `NotOwner` | Reconnect to the advertised owner endpoint, then resend the exact request when `retryable=true`. |
+| `StaleOwnerEpoch` | Refresh owner routing and resend the exact request with bounded backoff when `retryable=true`. |
+| `InvalidOwnerEpoch` | Stop deployment. The owner epoch configuration is invalid and the unchanged request is not retryable. |
+| `LeaseExpired` | Reconnect or reacquire the transport lease, then resend the exact request with bounded backoff when `retryable=true`. |
+| `RestoreTransportUnavailable` | Restore metadata transport or owner availability, then resend the unchanged numeric restore request with bounded backoff when `retryable=true`; never switch destinations or re-resolve an alias. |
+| `RestoreInProgress` | Retry the exact numeric restore request with bounded backoff. |
+| `RestoreRootChanged` | Stop and escalate to the operator. Detached restore membership no longer matches the durable operation. |
+| `RestoreBindingChanged` | Stop and escalate to the operator. The temporary history-retention binding failed its identity check. |
+| `RestoreProtocolMismatch` | Stop. Do not use or retry the mismatched outcome; preserve the response and escalate to the operator. |
+| `RestoreDestinationConflict` | Stop. Choose a new absent destination only for a new operation, never during an exact retry. |
+| `RestoreResourceLimit` | Do not retry unchanged; reduce the reported subtree or initialization payload before taking a new checkpoint. |
+| `RestoreHardlinkUnsupported` | Stop and remove unsupported non-directory hardlinks before taking a new checkpoint. |
+| `RestoreCrossShardUnsupported` | Stop and choose source and destination under the same metadata shard. |
+| `StalePreparedArtifactObjectGcEpoch` | Discard the stale prepared upload state and resend the exact restore request with bounded backoff when `retryable=true`; do not reuse the stale artifact preparation. |
+| `SyncLogArchiveFailed` | Preserve `details.committed`. Resend the exact request when `retryable=true`; never invent a new destination to work around an ambiguous committed result. |
+| `CapabilityMismatch` | Stop deployment. The connected owner does not support `restore_to_fork_v1`; do not downgrade to a client-side copy. |
+
+Honor `retryable=false` even when a table entry otherwise permits a bounded
+retry. Preserve the original request on every retry; changing any of its three
+fields starts a different operation.
 
 ### Expired is not the same as data lost
 
-An expired checkpoint loses only the **point-in-time view**, not your work. The
+An expired checkpoint loses only the **point-in-time view**, not your current
+work. The
 workbench's committed files stay put: after `workbench_commit`, the current
 artifacts remain reachable with `workbench_read`, `workbench_list`, and
 `workbench_stat` (no `at_snapshot`). Only the frozen historical view needs a
