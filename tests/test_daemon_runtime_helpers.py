@@ -42,9 +42,14 @@ class _TimeoutThenExitProc:
     """Popen stand-in that forces TERM->KILL escalation once."""
 
     pid = 4242
+    _lingtai_pgid = 4242
+    _lingtai_process_identity = "test-process-identity"
 
     def __init__(self):
         self.wait_timeouts: list[float] = []
+
+    def poll(self):
+        return None
 
     def wait(self, timeout):
         self.wait_timeouts.append(timeout)
@@ -61,6 +66,8 @@ class _TimeoutThenExitProc:
 def test_kill_process_group_uses_configured_timeouts(monkeypatch):
     proc = _TimeoutThenExitProc()
     signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(runtime.os, "getpgid", lambda pid: 4242)
+    monkeypatch.setattr(runtime, "process_identity_matches", lambda pid, identity: True)
     monkeypatch.setattr(runtime.os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
 
     runtime.kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)

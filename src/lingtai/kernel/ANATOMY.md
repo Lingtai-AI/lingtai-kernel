@@ -30,6 +30,8 @@ related_files:
   - src/lingtai/kernel/workdir_lease/ANATOMY.md
   - src/lingtai/kernel/refresh_watcher/ANATOMY.md
   - src/lingtai/kernel/refresh_watcher/CONTRACT.md
+  - src/lingtai/kernel/daemon_supervisor/ANATOMY.md
+  - src/lingtai/kernel/daemon_supervisor/CONTRACT.md
   - src/lingtai/kernel/i18n/ANATOMY.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/notification/__init__.py

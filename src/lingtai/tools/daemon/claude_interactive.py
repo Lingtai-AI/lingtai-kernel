@@ -123,6 +123,7 @@ class ClaudeInteractiveBridge:
         resume_session_id: str | None = None,
         env: dict[str, str] | None = None,
         log_callback: Callable[..., None] | None = None,
+        start_new_session: bool = True,
     ) -> None:
         self.em_id = em_id
         self.run_dir = run_dir
@@ -136,6 +137,7 @@ class ClaudeInteractiveBridge:
         self.resume_session_id = resume_session_id
         self.env = dict(env or os.environ)
         self.log_callback = log_callback or (lambda *args, **kwargs: None)
+        self.start_new_session = start_new_session
 
         managed_root = Path(
             self.env.get("LINGTAI_CLAUDE_MANAGED_ROOT")
@@ -625,7 +627,7 @@ class ClaudeInteractiveBridge:
                     stderr=slave_fd,
                     cwd=str(self.claude_cwd),
                     env=env,
-                    start_new_session=True,
+                    start_new_session=self.start_new_session,
                     close_fds=True,
                 )
             finally:
@@ -759,6 +761,7 @@ def run_claude_interactive(
     resume_session_id: str | None = None,
     env: dict[str, str] | None = None,
     log_callback: Callable[..., None] | None = None,
+    start_new_session: bool = True,
 ) -> ClaudeInteractiveResult:
     """Convenience wrapper used by ``DaemonManager`` and tests."""
 
@@ -773,4 +776,5 @@ def run_claude_interactive(
         resume_session_id=resume_session_id,
         env=env,
         log_callback=log_callback,
+        start_new_session=start_new_session,
     ).run()

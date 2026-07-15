@@ -2,49 +2,26 @@
 import threading
 from unittest.mock import MagicMock, patch
 
-from tests._daemon_helpers import make_daemon_agent as _make_agent
+from tests._daemon_helpers import (
+    install_fake_detached_owner,
+    make_daemon_agent as _make_agent,
+    wait_daemon_terminal,
+)
 
 
-def _stub_emanate_internals(mgr):
-    """Patch the heavy parts of _handle_emanate so we can inspect ceilings
-    without actually running an LLM loop. Returns the captured args.
-    """
-    captured = {}
-
-    real_submit = mgr._pools  # placeholder to avoid unused warning
-
-    class _StubFuture:
-        def done(self): return True
-        def exception(self): return None
-        def result(self): return "ok"
-        def add_done_callback(self, fn): pass
-
-    def fake_submit(*args, **kwargs):
-        # _handle_emanate calls pool.submit(self._run_emanation, em_id,
-        # run_dir, schemas, dispatch, task, cancel_event, timeout_event,
-        # preset_llm, max_turns)
-        captured["run_emanation_args"] = args
-        captured["run_emanation_kwargs"] = kwargs
-        return _StubFuture()
-
-    return captured, fake_submit
-
-
-def test_emanate_default_uses_ceiling(tmp_path):
+def test_emanate_default_uses_ceiling(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
-    captured, fake_submit = _stub_emanate_internals(mgr)
+    records = install_fake_detached_owner(monkeypatch)
 
-    with patch("lingtai.tools.daemon.ThreadPoolExecutor") as MockPool:
-        pool = MockPool.return_value
-        pool.submit.side_effect = fake_submit
-        out = mgr.handle({"action": "emanate",
-                          "tasks": [{"task": "x", "tools": ["file"]}]})
+    out = mgr.handle({"action": "emanate",
+                      "tasks": [{"task": "x", "tools": ["file"]}]})
 
     assert out["status"] == "dispatched"
-    # max_turns is the 9th positional arg (index 8) to _run_emanation
+    state = wait_daemon_terminal(records[0]["run_dir"])
     assert mgr._max_turns == 1000
-    assert captured["run_emanation_args"][9] == 1000
+    assert records[0]["manifest"]["max_turns"] == 1000
+    assert state["max_turns"] == 1000
 
 
 
@@ -56,51 +33,48 @@ def test_daemon_schema_advertises_1000_turn_ceiling():
     assert max_turns_schema["maximum"] == 1000
     assert "1000" in max_turns_schema["description"]
 
-def test_emanate_respects_per_batch_max_turns(tmp_path):
+def test_emanate_respects_per_batch_max_turns(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
-    captured, fake_submit = _stub_emanate_internals(mgr)
+    records = install_fake_detached_owner(monkeypatch)
 
-    with patch("lingtai.tools.daemon.ThreadPoolExecutor") as MockPool:
-        pool = MockPool.return_value
-        pool.submit.side_effect = fake_submit
-        out = mgr.handle({"action": "emanate", "max_turns": 50,
-                          "tasks": [{"task": "x", "tools": ["file"]}]})
+    out = mgr.handle({"action": "emanate", "max_turns": 50,
+                      "tasks": [{"task": "x", "tools": ["file"]}]})
 
     assert out["status"] == "dispatched"
-    assert captured["run_emanation_args"][9] == 50
+    state = wait_daemon_terminal(records[0]["run_dir"])
+    assert records[0]["manifest"]["max_turns"] == 50
+    assert state["max_turns"] == 50
 
 
-def test_emanate_caps_max_turns_at_ceiling(tmp_path):
+def test_emanate_caps_max_turns_at_ceiling(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
-    captured, fake_submit = _stub_emanate_internals(mgr)
+    records = install_fake_detached_owner(monkeypatch)
 
     # ceiling is 1000; ask for 9999
-    with patch("lingtai.tools.daemon.ThreadPoolExecutor") as MockPool:
-        pool = MockPool.return_value
-        pool.submit.side_effect = fake_submit
-        out = mgr.handle({"action": "emanate", "max_turns": 9999,
-                          "tasks": [{"task": "x", "tools": ["file"]}]})
+    out = mgr.handle({"action": "emanate", "max_turns": 9999,
+                      "tasks": [{"task": "x", "tools": ["file"]}]})
 
     assert out["status"] == "dispatched"
+    state = wait_daemon_terminal(records[0]["run_dir"])
     assert mgr._max_turns == 1000
-    assert captured["run_emanation_args"][9] == 1000
+    assert records[0]["manifest"]["max_turns"] == 1000
+    assert state["max_turns"] == 1000
 
 
-def test_emanate_allows_new_1000_turn_ceiling(tmp_path):
+def test_emanate_allows_new_1000_turn_ceiling(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
-    captured, fake_submit = _stub_emanate_internals(mgr)
+    records = install_fake_detached_owner(monkeypatch)
 
-    with patch("lingtai.tools.daemon.ThreadPoolExecutor") as MockPool:
-        pool = MockPool.return_value
-        pool.submit.side_effect = fake_submit
-        out = mgr.handle({"action": "emanate", "max_turns": 1000,
-                          "tasks": [{"task": "x", "tools": ["file"]}]})
+    out = mgr.handle({"action": "emanate", "max_turns": 1000,
+                      "tasks": [{"task": "x", "tools": ["file"]}]})
 
     assert out["status"] == "dispatched"
-    assert captured["run_emanation_args"][9] == 1000
+    state = wait_daemon_terminal(records[0]["run_dir"])
+    assert records[0]["manifest"]["max_turns"] == 1000
+    assert state["max_turns"] == 1000
 
 
 def test_emanate_rejects_zero_max_turns(tmp_path):

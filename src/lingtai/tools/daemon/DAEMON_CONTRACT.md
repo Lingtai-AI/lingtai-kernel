@@ -267,6 +267,25 @@ The native stdio/helper set is source-owned by `_codex_mcp_argv`,
 loaded set, this contract treats it as prompt-catalog-only until code and tests
 prove otherwise.
 
+### Execution ownership: one detached supervisor per run
+
+Every backend is created under one detached supervisor process at emanation
+birth. The parent `DaemonManager` validates the request, writes a secret-free
+manifest, launches the POSIX entrypoint, and retains only a durable submit /
+inspect / control facade. `execution_host.py` composes the existing
+`DaemonManager` and `_BackendSpec` execution units inside the supervisor, so
+all backend parsers, option/session behavior, native MCP setup, skills/preset
+setup, and completion gates remain single-source production code. The
+supervisor owns the exact child process group, deadline, run-owned diagnostics,
+terminal state, result/artifact files, and one idempotent terminal notification.
+
+Agent stop and `system.refresh` shut down only parent-local resources; they do
+not inspect or terminate a detached supervisor or its backend child. Explicit
+`daemon(action="reclaim")` is the only parent control that requests run
+cancellation. `daemon(action="ask")` uses the run-local control spool and is
+accepted only while durable state is running. The ownership transition is
+unconditional; `LINGTAI_DAEMON_DETACHED_SUPERVISOR` is not a production gate.
+
 ## Acceptance Gate
 
 Any new daemon backend, backend-family reuse, or contract-impacting daemon

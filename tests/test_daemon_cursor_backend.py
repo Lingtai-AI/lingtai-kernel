@@ -19,9 +19,11 @@ from lingtai.tools.daemon import DaemonManager, _normalize_cursor_usage
 from tests._daemon_helpers import (
     FiniteFakeProc,
     completed_future,
+    install_fake_detached_owner,
     make_daemon_agent,
     make_daemon_run_dir,
     register_daemon_entry,
+    wait_daemon_terminal,
 )
 
 
@@ -272,6 +274,24 @@ def test_cursor_source_usage_is_ui_only_raw_and_model_joined(tmp_path):
     assert not (agent._working_dir / "logs" / "token_ledger.jsonl").exists()
 
 
+def test_cursor_model_transaction_preserves_concurrent_owner_state(tmp_path):
+    """A stale Cursor writer cannot erase fields committed by another owner."""
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
+
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    stale = _make_run_dir(agent, handle="em-cur-model-transaction")
+    concurrent = DaemonRunDir.attach(stale.path)
+    concurrent.update_state(followup_status="done", followup_generation="g-other")
+
+    mgr._cursor_set_model(stale, "gpt-transactional")
+
+    state = json.loads(stale.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["model"] == "gpt-transactional"
+    assert state["followup_status"] == "done"
+    assert state["followup_generation"] == "g-other"
+
+
 def test_cursor_model_join_requires_preceding_matching_init_and_provider_stays_unknown(
     tmp_path,
 ):
@@ -473,39 +493,33 @@ def test_cursor_initial_wait_signal_cannot_persist_usage_candidate(tmp_path):
 
 
 
-def test_emanate_cursor_routes_to_cli_handler(tmp_path):
+def test_emanate_cursor_routes_to_cli_handler(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    captured: dict = {}
+    records = install_fake_detached_owner(monkeypatch)
 
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event,
-                 backend_argv=None):
-        captured["em_id"] = em_id
-        captured["task"] = task
-        captured["backend_argv"] = list(backend_argv or [])
-        captured["state"] = json.loads(run_dir.daemon_json_path.read_text())
-        run_dir.mark_done("[fake cursor done]")
-        return "[fake cursor done]"
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "cursor",
+        "tasks": [{
+            "task": "Summarise the changelog.",
+            "tools": [],
+            "backend_options": {"model": "gpt-5"},
+        }],
+    })
+    assert result["status"] == "dispatched"
+    assert result["backend"] == "cursor"
+    em_id = result["ids"][0]
+    state = wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
 
-    with patch.object(mgr, "_run_cursor_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": "cursor",
-            "tasks": [{
-                "task": "Summarise the changelog.",
-                "tools": [],
-                "backend_options": {"model": "gpt-5"},
-            }],
-        })
-        assert result["status"] == "dispatched"
-        assert result["backend"] == "cursor"
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
-
-    assert captured["task"] == "Summarise the changelog."
-    assert captured["backend_argv"] == ["--model", "gpt-5"]
-    assert captured["state"]["backend"] == "cursor"
-    assert captured["state"]["backend_options"] == {"model": "gpt-5"}
+    manifest = records[0]["manifest"]
+    assert manifest["backend"] == "cursor"
+    assert manifest["task"] == "Summarise the changelog."
+    assert manifest["backend_argv"] == ["--model", "gpt-5"]
+    assert state["backend"] == "cursor"
+    assert state["backend_options"] == {"model": "gpt-5"}
+    assert state["backend_argv"] == ["--model", "gpt-5"]
+    assert "future" not in mgr._emanations[em_id]
 
 
 # ---------------------------------------------------------------------------

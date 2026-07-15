@@ -22,6 +22,8 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
+from lingtai.adapters.posix.process_identity import process_identity_matches
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .run_dir import DaemonRunDir
 
@@ -34,34 +36,52 @@ def kill_process_group(
 ) -> None:
     """Terminate the entire process group for *proc*, then force-kill if needed.
 
-    Requires *proc* to have been started with ``start_new_session=True`` so
-    that its PGID equals its own PID.  Sends SIGTERM to the group, waits up
-    to ``term_timeout`` seconds, then escalates to SIGKILL for any survivors.
-
-    Uses ``proc.pid`` directly as the PGID (since ``start_new_session=True``
-    guarantees PGID == PID) to avoid a ``getpgid`` round-trip that could
-    race with PID recycling.
-
-    Silently ignores ``ProcessLookupError`` (process already dead) and
-    ``OSError`` (permission denied on already-dead group).
+    Requires registration to have recorded the child's PID, PGID, and stable
+    process identity.  Unknown or changed identity is a no-op: PID alone can
+    never authorize a signal.  The owned ``Popen`` is polled before and after
+    signalling so an already-reaped child does not incur zombie wait delays.
     """
-    # start_new_session=True guarantees pgid == pid
-    pgid = proc.pid
+    pid = getattr(proc, "pid", None)
+    pgid = getattr(proc, "_lingtai_pgid", None)
+    saved_identity = getattr(proc, "_lingtai_process_identity", None)
+    if (
+        not isinstance(pid, int)
+        or isinstance(pid, bool)
+        or not isinstance(pgid, int)
+        or isinstance(pgid, bool)
+        or not isinstance(saved_identity, str)
+        or not saved_identity
+    ):
+        return
+    if proc.poll() is not None:
+        return
     try:
+        if os.getpgid(pid) != pgid or not process_identity_matches(pid, saved_identity):
+            return
         os.killpg(pgid, signal.SIGTERM)
-    except (ProcessLookupError, OSError):
-        pass
+    except (ProcessLookupError, PermissionError, OSError):
+        return
+    if proc.poll() is not None:
+        return
     try:
         proc.wait(timeout=term_timeout)
     except subprocess.TimeoutExpired:
+        if proc.poll() is not None:
+            return
         try:
+            if os.getpgid(pid) != pgid or not process_identity_matches(pid, saved_identity):
+                return
             os.killpg(pgid, signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            pass
+        except (ProcessLookupError, PermissionError, OSError):
+            return
+        if proc.poll() is not None:
+            return
         try:
             proc.wait(timeout=kill_timeout)
         except subprocess.TimeoutExpired:
             pass
+    except (ProcessLookupError, OSError):
+        pass
 
 
 # Sentinel placed on the stdout-reader queue when the background reader
