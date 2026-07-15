@@ -66,9 +66,11 @@ The end-to-end path is:
    running process is stale relative to code already on disk. Editable,
    source-checkout, and dev-version runtimes skip this check deliberately.
 4. **Dispatch — `nudge/__init__.py` and `lifecycle.py`.** The heartbeat loop
-   runs the nudge dispatcher once per one-second tick. Each producer has its own
-   roughly 60-second in-memory probe gate; one failing producer is logged and
-   does not block the others.
+   runs the nudge dispatcher once per one-second tick. `kernel_version` and
+   `source_drift` each have their own roughly 60-second in-memory probe gate;
+   `goal` runs on each dispatch while IDLE and applies its configured
+   idle-reminder delay. One failing producer is logged and does not block the
+   others.
 5. **Persist and publish — `nudge/__init__.py` and the Notification Store.**
    Kernel-version daily state lives in
    `.notification/.nudge_state.json`. The user-facing mirror is
@@ -98,11 +100,14 @@ The end-to-end path is:
    bare `pip install --upgrade lingtai` the normal user instruction. Pip/venv
    commands below are diagnostic or developer verification only.
 10. **Refresh and verify — kernel lifecycle plus the operator.**
-    `system(action="refresh")` performs the kernel's full relaunch/rebuild
-    boundary using the installed/on-disk runtime. It does not pull commits,
-    contact PyPI, install a package, or switch an editable checkout. After a
-    confirmed update or refresh, verify the new process's interpreter,
-    `lingtai.__file__`, `lingtai.kernel.__file__`, version, and import path.
+    `system(action="refresh")` requests a deferred relaunch only when the
+    runtime can build a valid launch command and has a configured refresh
+    watcher. Without a launch command it returns without relaunching; without
+    a refresh watcher it raises. Diagnose either outcome before treating the
+    refresh as successful. Refresh never pulls commits, contacts PyPI, installs
+    a package, or switches an editable checkout. After a confirmed update or
+    refresh, verify the new process's interpreter, `lingtai.__file__`,
+    `lingtai.kernel.__file__`, version, and import path.
 
 ## Packaged, editable, and source/dev runtimes
 
