@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/kernel/refresh_watcher/ANATOMY.md
   - src/lingtai/kernel/refresh_watcher/__init__.py
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
+  - src/lingtai/kernel/process_match.py
   - src/lingtai/adapters/posix/refresh_watcher.py
   - src/lingtai/adapters/posix/refresh_watcher_entrypoint.py
 maintenance: |
@@ -53,7 +54,12 @@ data afterward.
    12-attempt relaunch loop with a 10s health-check wait, stale same-agent
    duplicate-process cleanup (SIGTERM → 5s grace → SIGKILL), redacted event
    logging, and the terminal failure artifact/notification. This module
-   performs no OS calls itself.
+   performs no OS calls itself. The rendered program's duplicate-process
+   guard imports the canonical Core process-command matcher
+   (`from lingtai.kernel.process_match import match_agent_run`,
+   `src/lingtai/kernel/process_match.py`) at runtime instead of embedding a
+   second copy of that policy — the same function the CLI's own
+   `_check_duplicate_process` uses.
 3. **The POSIX adapter encodes the request and launches the entrypoint.**
    `PosixRefreshWatcherAdapter.spawn_detached(request)`
    (`src/lingtai/adapters/posix/refresh_watcher.py`) calls
@@ -131,3 +137,15 @@ transport-shape improvement — replacing "raw generated source on argv" with
 Clock/Filesystem/Publication Port abstraction, a Windows adapter, or a
 broader process-supervision redesign, all of which remain explicit non-goals
 for a later slice.
+
+A later slice replaced the rendered program's embedded, duplicated
+`match_agent_run` definition with an import of the canonical Core policy
+(`lingtai.kernel.process_match.match_agent_run`) that the CLI's own
+duplicate-process check already used. Before this, the launch-form matching
+rule set existed as two hand-synchronized copies — the CLI's and one baked
+into every rendered watcher program — kept in parity only by a test that
+string-sliced the generated source back into an executable function. Import
+replaces duplication: the matching policy now has exactly one implementation,
+still shared by both consumers, with no change to the policy itself, the
+watcher's own retry/heartbeat/duplicate-cleanup behavior, or anything else
+this Port renders.

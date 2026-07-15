@@ -15,6 +15,13 @@ preserves the previously shipped runtime behavior; this slice does not claim
 textual byte identity, redesign retry/heartbeat/duplicate policy, or
 introduce a process-supervision Port; that remains a later slice.
 
+The rendered program's stale same-agent duplicate-process guard
+(``_is_same_agent_run``) imports the canonical Core process-command matcher,
+``lingtai.kernel.process_match.match_agent_run``, at runtime via
+``from lingtai.kernel.process_match import match_agent_run`` in the generated
+source, rather than embedding a second local ``match_agent_run`` definition —
+the same matcher ``lingtai.cli._check_duplicate_process`` already uses.
+
 Identity fields cross the request boundary as
 ``RefreshWatcherRequest.identity_fields_json`` — a JSON object snapshot, not
 a live dict or a shallow tuple-of-pairs — because the producer
@@ -337,21 +344,7 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "        if len(parts) >= 2 and parts[1].rstrip(':').isdigit():\n"
         "            return int(parts[1].rstrip(':'))\n"
         "    return None\n"
-        "def match_agent_run(cmdline, working_dir):\n"
-        "    target = os.path.normpath(working_dir)\n"
-        "    for token, label, program_anchored in (\n"
-        "        (' -m lingtai run ', 'module', False),\n"
-        "        ('lingtai-agent run ', 'console', True),\n"
-        "        ('lingtai run ', 'legacy', True),\n"
-        "    ):\n"
-        "        idx = cmdline.find(token)\n"
-        "        while idx != -1:\n"
-        "            if (not program_anchored) or idx == 0 or cmdline[idx - 1] == '/':\n"
-        "                tail = cmdline[idx + len(token):].strip()\n"
-        "                if tail and os.path.normpath(tail) == target:\n"
-        "                    return label\n"
-        "            idx = cmdline.find(token, idx + 1)\n"
-        "    return None\n"
+        "from lingtai.kernel.process_match import match_agent_run\n"
         "def _is_same_agent_run(pid):\n"
         "    if not pid or pid == os.getpid():\n"
         "        return False\n"

@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/kernel/refresh_watcher/__init__.py
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
   - src/lingtai/kernel/refresh_watcher/MANUAL.md
+  - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/adapters/posix/refresh_watcher_entrypoint.py
@@ -51,7 +52,13 @@ what/how/why walkthrough.
   complete watcher program source from a `RefreshWatcherRequest` (decoding
   `identity_fields_json` via `_decode_identity_fields` for the rendered
   literal shape); performs no OS calls
-  (`src/lingtai/kernel/refresh_watcher/watcher_program.py:87-476`).
+  (`src/lingtai/kernel/refresh_watcher/watcher_program.py:87-476`). The
+  rendered program's stale same-agent duplicate-process guard
+  (`_is_same_agent_run`) imports the canonical Core process-command matcher
+  `lingtai.kernel.process_match.match_agent_run`
+  (`src/lingtai/kernel/process_match.py`) at runtime rather than embedding a
+  second local definition — the same matcher `lingtai.cli._check_duplicate_process`
+  uses.
 - `encode_request(request)` / `decode_request(payload)` — pure Core-owned,
   technology-neutral functions defining a compact deterministic JSON wire
   shape for a `RefreshWatcherRequest` (fixed field order; `cmd` round-trips
@@ -116,7 +123,15 @@ For Core-produced requests, `watcher_program.render_watcher_script` preserves
 the previously inline `lifecycle.py` script's runtime behavior (handshake
 deadlines, relaunch retry, stale-duplicate cleanup, redaction) without claiming
 textual byte identity — this Port and its renderer govern only the hand-off to a
-detached process, not a redesign of that policy. `base_agent/ANATOMY.md`
+detached process, not a redesign of that policy. The one deliberate structural
+change since that extraction: the rendered program's stale-duplicate guard now
+imports `lingtai.kernel.process_match.match_agent_run`
+(`src/lingtai/kernel/process_match.py`) instead of embedding its own copy of
+that matching policy, so the launch-form matching rules have exactly one
+implementation shared with the CLI's duplicate-process check — this is not a
+claim that the watcher's own retry/heartbeat/duplicate-cleanup policy became
+independently unit-testable, only that one helper it calls is now imported
+rather than duplicated. `base_agent/ANATOMY.md`
 still narrates that behavior in its `lifecycle.py` entry for readers
 descending from `base_agent/`. The transport that carries a
 `RefreshWatcherRequest` across the process boundary (`encode_request`/
