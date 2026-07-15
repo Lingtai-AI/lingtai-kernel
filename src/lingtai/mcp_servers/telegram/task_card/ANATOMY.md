@@ -25,7 +25,7 @@ maintenance: |
 
 The Telegram-owned Task Card unit drives the programmable slot and names the
 resident boundary shared with the automatic event projection. `TaskCardResident`
-owns channel frames, per-account+chat locks, compose/enablement transitions, and
+owns channel frames, per-account+chat locks, compose, atomic enablement, and
 the deterministic project/ensure boundary; `TelegramManager` remains the
 Telegram transport adapter for the hard-at-most-one / last-message transaction.
 The model-facing `task_card` tool runs an agent-supplied Python renderer and
@@ -37,7 +37,7 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 - `get_schema` / `get_description` — the `task_card` tool schema (`start` /
   `inspect` / `retry` / `stop`) and the description that routes to the manual
   (`controller.py:59`, `controller.py:100`).
-- `TaskCardResident` — deterministic resident owner for shared channel frames, route locks, compose, enablement, and `ensure`/`project` (`resident.py:14`).
+- `TaskCardResident` — resident owner for channel frames, route locks, atomic enablement, and `ensure`/`project` (`resident.py:9`).
 - `TaskCardController` — thin Core: dispatch, synchronous first frame, watch
   registry, fail-loud/recovery wakes (`controller.py:179`). Key methods:
   `handle` (`controller.py:188`), `_start` (`controller.py:213`), `_inspect`
@@ -102,8 +102,8 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 ## Automatic event-tail projection paths
 
 - **Rows/timestamps:** after validating `type == "tool_call"`,
-  `_project_tool_call_row` reads only `tool_name`, `tool_args.action`,
-  `tool_args._reasoning`, and that same event's top-level Unix-epoch `ts`.
+  `_project_tool_call_row` reads only `tool_name`, redacted/bounded
+  `tool_args._reasoning`, and top-level Unix-epoch `ts`; raw action is excluded.
   `_format_task_card_row_timestamp` projects a valid value as optional
   `started_at` in `HH:MM:SS UTC±HH`; missing, boolean, non-numeric, non-finite,
   or out-of-range values omit it. `_meta`, row arguments, notifications, and

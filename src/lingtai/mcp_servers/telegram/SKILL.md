@@ -179,10 +179,10 @@ journal, and it feeds the same Telegram-owned `TaskCardResident` as the
 programmable slot:
 
 1. `TelegramManager` owns one tail worker for its lifetime. It reads
-   `<workdir>/logs/events.jsonl` and recognizes only canonical public response
-   text (`diary`/text aliases) and validated `tool_call` events. Hidden thinking,
-   system prompts, notifications, raw tool arguments/results, auth material, and
-   private runtime diagnostics are never projected.
+   `<workdir>/logs/events.jsonl` and accepts only canonical public `diary` text
+   plus validated `tool_call` name and redacted/bounded `_reasoning`. Hidden
+   thinking, aliases, raw action/arguments/results, auth material, and private
+   runtime diagnostics are never projected.
 2. A provider/API call is identified by its `api_call_id`. All public text and
    safe tool events with the same id remain in one atomic group. The card emits
    exactly one TUI-style divider (`──────────`) before each selected group;

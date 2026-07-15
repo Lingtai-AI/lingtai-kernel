@@ -1,8 +1,8 @@
 """Automatic Task Card as a broadcast projection of the agent's ``events.jsonl``.
 
-Jason's final contract (Telegram 8266-8295): the automatic slot mechanically
-consumes the agent's authoritative ``logs/events.jsonl`` in file order, keeps
-the most recent N ``tool_call`` events using only safe bounded fields, projects
+The automatic slot mechanically consumes the agent's authoritative
+``logs/events.jsonl`` in file order, keeps the most recent N provider-call groups
+of canonical ``diary`` text and safe tool fields, and projects
 current session telemetry only from the latest final-carrier ``notification_block_injected``,
 and broadcasts the same projection to every resident Task Card for the agent
 (no per-route correlation — this is an agent-behavior broadcast, not per-chat
@@ -76,12 +76,16 @@ class FakeAccount:
     def get_last_message_id(self, chat_id):
         return None
 
+    def set_message_reaction(self, *_args, **_kwargs):
+        return None
+
 
 class FakeService:
     def __init__(self, accounts):
         self._accounts = {a.alias: a for a in accounts}
         self._order = [a.alias for a in accounts]
         self.default_account = accounts[0]
+        self.normal_rows = 1
 
     def get_account(self, alias):
         return self._accounts[alias]
@@ -93,7 +97,7 @@ class FakeService:
         return True
 
     def taskcard_normal_rows(self):
-        return 1
+        return self.normal_rows
 
 
 def _manager(tmp_path, *accounts):
@@ -147,6 +151,18 @@ def _pre_resident(account: FakeAccount, chat_id: int, manager: TelegramManager) 
 # ---------------------------------------------------------------------------
 
 
+def test_first_real_inbound_establishes_one_resident(tmp_path):
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    manager.on_incoming("mybot", {"message": {
+        "message_id": 8, "date": 1781600000,
+        "from": {"username": "alice"},
+        "chat": {"id": 123, "type": "private"}, "text": "hello",
+    }})
+    assert acct.get_task_card(123) == "mybot:123:100"
+    assert [call[0] for call in acct.calls] == ["send_message"]
+
+
 def test_broadcast_requires_no_notification_file(tmp_path):
     """The tailer must project from events.jsonl alone, no notification store read."""
     acct = FakeAccount()
@@ -195,11 +211,52 @@ def test_restart_rehydrates_latest_n_from_tail_without_checkpoint_file(tmp_path)
     # Latest-N (default window) ends with the most recent event.
     assert window[-1]["tool"] == "tool4"
     assert window[-1]["reasoning"] == "reason4"
+    acct.calls.clear()
+    manager2._broadcast_task_card_event_window()
+    assert acct.get_task_card(555) == "mybot:555:1"
+    assert [call[0:3] for call in acct.calls] == [("edit_message", 555, 1)]
 
 
 # ---------------------------------------------------------------------------
 # Non-whitelisted / malformed / partial-line rows are skipped safely
 # ---------------------------------------------------------------------------
+
+
+def test_provider_groups_count_calls_and_exclude_private_fields(tmp_path):
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    service.normal_rows = 2
+    visible = "text two " + ("x" * 2000)
+    events = [
+        {"type": "diary", "api_call_id": "api-1", "text": "text one"},
+        {"type": "tool_call", "api_call_id": "api-1", "tool_name": "bash",
+         "tool_args": {"action": "ACTION_SECRET_ONE", "_reasoning": "safe one"}},
+        {"type": "assistant_text", "api_call_id": "api-1", "text": "ALIAS_SECRET"},
+        {"type": "diary", "api_call_id": "api-2", "text": visible},
+        {"type": "tool_call", "api_call_id": "api-2", "tool_name": "read",
+         "tool_args": {"action": "ACTION_SECRET_TWO", "command": "ARG_SECRET",
+                       "_reasoning": "safe two"}},
+        {"type": "thinking", "api_call_id": "api-2", "text": "THINKING_SECRET"},
+        {"type": "tool_result", "api_call_id": "api-2", "result": "RESULT_SECRET"},
+    ]
+    _write_lines(_events_path(tmp_path), [json.dumps(event) for event in events])
+    manager._poll_event_tail()
+    rendered = [call for call in acct.calls if call[0] == "edit_message"][-1][3]
+    divider = manager._TASK_CARD_API_CALL_DIVIDER
+    assert rendered.count(divider) == 2
+    assert all(value in rendered for value in ("text one", "• bash:", "text two", "• read:"))
+    assert len(rendered) <= manager._TASK_CARD_TEXT_LIMIT
+    assert all(secret not in rendered for secret in (
+        "ACTION_SECRET_ONE", "ACTION_SECRET_TWO", "ARG_SECRET", "ALIAS_SECRET",
+        "THINKING_SECRET", "RESULT_SECRET",
+    ))
+
+    service.normal_rows = 1
+    manager._broadcast_task_card_event_window()
+    latest = acct.calls[-1][3]
+    assert latest.count(divider) == 1 and "text two" in latest and "• read:" in latest
+    assert "text one" not in latest and "• bash:" not in latest
 
 
 def test_non_whitelisted_event_types_are_skipped(tmp_path):
@@ -382,9 +439,9 @@ def test_only_safe_bounded_fields_are_projected(tmp_path):
     window = manager._task_card_event_window()
     assert len(window) == 1
     row = window[0]
-    assert set(row.keys()) <= {"tool", "tool_action", "reasoning", "started_at"}
+    assert set(row.keys()) <= {"tool", "reasoning", "started_at"}
     assert row["tool"] == "bash"
-    assert row["tool_action"] == "run"
+    assert "tool_action" not in row
     assert row["reasoning"] == "safe text"
 
     manager._poll_event_tail()
@@ -487,7 +544,7 @@ def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tm
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert edits
     rendered = edits[-1][3]
-    assert "bash.run" in rendered
+    assert "• bash: event-log row" in rendered
     assert f" · {expected_stamp}" in rendered
     assert "session · cache 87.8% · miss 170.6k/1.0M · calls 13" in rendered
     assert "ctx · 171.2k/272.0k · 63%" in rendered

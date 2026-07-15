@@ -468,15 +468,13 @@ class TelegramManager:
         # Duplicate send protection: (account, chat_id, text) → count
         self._last_sent: dict[tuple[str, int, str], int] = {}
         self._dup_free_passes = 2
-        # Resident state and route serialization live in the Telegram-owned
-        # TaskCardResident boundary.  The compatibility properties below keep
-        # existing focused transport tests and programmable callers source-stable
-        # while ensuring automatic and programmable frames share one owner.
         self._resident = TaskCardResident(
-            enabled=self._raw_taskcard_enabled,
+            enabled=self._raw_taskcard_enabled(),
             deliver=self._deliver_channel_frame_locked,
-            on_enabled=self._on_taskcard_enabled,
         )
+        listener = getattr(self._service, "set_taskcard_listener", None)
+        if callable(listener):
+            listener(self._on_taskcard_changed)
         # Automatic Task Card event-tail state (agent-behavior broadcast). See
         # ``## Automatic Task Card event tail`` below for the full contract; kept
         # as plain instance attributes (not a helper object) so no second durable
@@ -485,10 +483,7 @@ class TelegramManager:
         self._task_card_event_offset = 0
         self._task_card_event_size = 0
         self._task_card_event_inode: int | None = None
-        self._task_card_event_rows: list[dict] = []
-        # Grouped by one provider/API call. The compatibility row buffer above
-        # remains a flattened view for old callers; rendering uses these groups
-        # so /taskcard N counts calls rather than tool rows.
+        # Grouped by provider call; the compatibility row view is derived.
         self._task_card_event_groups: list[dict] = []
         # The current telemetry snapshot is carried only by the latest final
         # ``notification_block_injected`` event. ``None`` means no such carrier has been seen;
@@ -515,12 +510,10 @@ class TelegramManager:
     def _task_card_delivery_locks(self, value: dict[str, threading.RLock]) -> None:
         self._resident.locks = value
 
-    def _on_taskcard_enabled(self) -> None:
-        """Re-project/ensure residents once on explicit off -> on."""
-        # The broadcast path enumerates only existing account task_cards, so an
-        # empty event window is safe and still gives the user command one
-        # deterministic ensure/update transition after re-enabling.
-        self._broadcast_task_card_event_window()
+    def _on_taskcard_changed(self, enabled: bool) -> None:
+        """Apply one durable setting transition; reproject once when enabled."""
+        if self._resident.set_enabled(enabled) and enabled:
+            self._broadcast_task_card_event_window()
 
     def _account_dir(self, account: str) -> Path:
         return self._working_dir / "telegram" / account
@@ -535,11 +528,8 @@ class TelegramManager:
         return bool(getter()) if callable(getter) else True
 
     def _taskcard_enabled(self) -> bool:
-        """Read enablement through the resident owner.
-
-        The explicit setting is the only exit from resident mode.  The resident
-        boundary detects off -> on and schedules one deterministic re-projection.
-        """
+        """Read resident state, synchronizing narrow service doubles."""
+        self._resident.set_enabled(self._raw_taskcard_enabled())
         return self._resident.enabled()
 
     def _taskcard_normal_rows(self) -> int:
@@ -1800,28 +1790,12 @@ class TelegramManager:
     # Automatic Task Card event tail (agent-behavior broadcast)
     # ------------------------------------------------------------------
     #
-    # The automatic slot is a mechanical, bounded projection of the agent's own
-    # authoritative ``logs/events.jsonl`` — a broadcast of the agent's behavior,
-    # not a per-chat/per-route view. Tool rows whitelist exactly one event type,
-    # ``tool_call``; every other event type is skipped for row projection. A
-    # final-carrier ``notification_block_injected`` event is read separately for the latest whole
-    # ``_meta.agent_meta`` snapshot, from which only the supported session
-    # telemetry fields are projected. Row fields remain the bounded allowlist
-    # (``tool_name``, ``tool_args.action``, ``tool_args._reasoning``, and the
-    # event's own canonical ``ts`` converted to a row stamp) — raw
-    # ``tool_args`` is never forwarded. A missing/malformed ``ts`` safely omits
-    # the row's stamp rather than crashing or fabricating one. The projection
-    # keeps only the most recent ``_TASK_CARD_EVENT_WINDOW`` matching rows and
-    # never reconstructs completion, elapsed time, or a second lifecycle model;
-    # row order alone conveys recency.
-    #
-    # There is no durable cursor/checkpoint file: ``events.jsonl`` is the only
-    # durable behavior source. On start (and after any truncation/replacement)
-    # the tailer reverse-scans the file tail in bounded chunks to rehydrate the
-    # latest-N window, then sets the forward offset to EOF. Every later poll
-    # seeks from the in-memory offset and reads only newly appended complete
-    # lines — never a full-file scan. The in-memory window/offset are ephemeral
-    # transport optimizations rebuilt from the file after every restart.
+    # The automatic slot tails ``logs/events.jsonl`` and broadcasts one bounded
+    # agent-behavior view. Only public ``diary`` text and validated ``tool_call``
+    # name, redacted/capped ``_reasoning``, and timestamp are projected; raw
+    # action/arguments/results are excluded. Rows group by provider ``api_call_id``.
+    # Latest final-carrier session telemetry is projected separately. There is no
+    # durable cursor: startup and log replacement rehydrate from the bounded tail.
     _TASK_CARD_EVENT_WINDOW = 10
     _TASK_CARD_EVENT_POLL_INTERVAL = 1.0
     _TASK_CARD_EVENT_TAIL_CHUNK = 65536
@@ -1839,9 +1813,8 @@ class TelegramManager:
             return self._task_card_event_offset
 
     def _task_card_event_window(self) -> list[dict]:
-        """Return the flattened compatibility view of the bounded call window."""
         with self._task_card_event_lock:
-            return list(self._task_card_event_rows)
+            return self._flatten_task_card_groups(self._task_card_event_groups)
 
     def _task_card_event_groups_snapshot(self) -> list[dict]:
         """Return bounded provider-call groups for Task Card rendering."""
@@ -1861,12 +1834,10 @@ class TelegramManager:
     def _project_agent_text_event(event: dict) -> dict | None:
         """Project only canonical public agent text, never hidden internals.
 
-        ``diary`` is the current kernel event for response text; the explicit
-        aliases make the projection tolerant of event-journal adapters while
-        remaining allowlisted. Thinking, system prompts, tool args/results,
-        notifications, and runtime diagnostics are intentionally not accepted.
+        ``diary`` is the kernel's public response-text event. Thinking, system
+        prompts, tool args/results, and runtime diagnostics are not accepted.
         """
-        if event.get("type") not in {"diary", "text", "agent_text", "assistant_text", "response_text"}:
+        if event.get("type") != "diary":
             return None
         if event.get("hidden") is True or event.get("visibility") not in (None, "public"):
             return None
@@ -1951,9 +1922,6 @@ class TelegramManager:
         tool_args = event.get("tool_args")
         if not isinstance(tool_args, dict):
             return None
-        action = tool_args.get("action", "")
-        if not isinstance(action, str):
-            action = ""
         reasoning = tool_args.get("_reasoning", "")
         if not isinstance(reasoning, str):
             reasoning = ""
@@ -1964,7 +1932,7 @@ class TelegramManager:
         if len(reasoning) > cap:
             # The ellipsis itself must stay inside the cap, not extend past it.
             reasoning = reasoning[:cap - 1] + "…"
-        row = {"tool": tool_name, "tool_action": action, "reasoning": reasoning}
+        row = {"tool": tool_name, "reasoning": reasoning}
         started_at = TelegramManager._format_task_card_row_timestamp(event.get("ts"))
         if started_at:
             row["started_at"] = started_at
@@ -2050,7 +2018,6 @@ class TelegramManager:
                 self._task_card_event_offset = 0
                 self._task_card_event_size = 0
                 self._task_card_event_inode = None
-                self._task_card_event_rows = []
                 self._task_card_event_groups = []
                 self._task_card_event_metadata = None
             return
@@ -2066,7 +2033,6 @@ class TelegramManager:
                 self._task_card_event_offset = 0
                 self._task_card_event_size = 0
                 self._task_card_event_inode = None
-                self._task_card_event_rows = []
                 self._task_card_event_groups = []
                 self._task_card_event_metadata = None
             return
@@ -2076,12 +2042,8 @@ class TelegramManager:
             self._task_card_event_offset = offset
             self._task_card_event_size = stat.st_size
             self._task_card_event_inode = getattr(stat, "st_ino", None)
-            self._task_card_event_rows = rows
-            # ``rows`` is the flattened compatibility result. Rebuild groups
-            # from its persisted group ids when rehydrating.
             projected = [({"api_call_id": row.get("group_id")}, dict(row)) for row in rows]
             self._task_card_event_groups = self._group_task_card_events(projected)
-            self._task_card_event_rows = self._flatten_task_card_groups(self._task_card_event_groups)
             self._task_card_event_metadata = metadata
 
     def _reverse_tail_latest_rows(
@@ -2106,7 +2068,6 @@ class TelegramManager:
         never advances the offset past bytes that were never actually read.
         """
         window = self._TASK_CARD_EVENT_WINDOW
-        matches: list[dict] = []
         projected_events: list[tuple[dict, dict]] = []
         latest_metadata: dict | None = None
         tail_offset = size
@@ -2145,7 +2106,6 @@ class TelegramManager:
                     # are already at the start of the file.
                     carry = lines[0] if start > 0 else b""
                     complete = lines[1:] if start > 0 else lines
-                    round_matches: list[dict] = []
                     round_projected: list[tuple[dict, dict]] = []
                     round_metadata: dict | None = None
                     for raw in complete:
@@ -2154,7 +2114,6 @@ class TelegramManager:
                             continue
                         row = self._project_task_card_event(event)
                         if row is not None:
-                            round_matches.append(row)
                             round_projected.append((event, row))
                         candidate = self._project_final_carrier_metadata(event)
                         if candidate is not None:
@@ -2163,7 +2122,6 @@ class TelegramManager:
                             round_metadata = candidate
                     if latest_metadata is None and round_metadata is not None:
                         latest_metadata = round_metadata
-                    matches = round_matches + matches
                     projected_events = round_projected + projected_events
                     chunk_size *= 2
         except OSError:
@@ -2204,7 +2162,7 @@ class TelegramManager:
             self._init_event_tail()
             with self._task_card_event_lock:
                 path = self._task_card_event_path
-                rehydrated_rows = bool(self._task_card_event_rows)
+                rehydrated_rows = bool(self._task_card_event_groups)
                 rehydrated_metadata = self._task_card_event_metadata is not None
             if rehydrated_rows or rehydrated_metadata:
                 self._broadcast_task_card_event_window()
@@ -2265,7 +2223,6 @@ class TelegramManager:
         complete, _partial = data[:last_newline + 1], data[last_newline + 1:]
         new_offset = offset + len(complete)
 
-        new_rows: list[dict] = []
         projected_events: list[tuple[dict, dict]] = []
         latest_metadata: dict | None = None
         for raw in complete.split(b"\n"):
@@ -2274,7 +2231,6 @@ class TelegramManager:
                 continue
             row = self._project_task_card_event(event)
             if row is not None:
-                new_rows.append(row)
                 projected_events.append((event, row))
             candidate = self._project_final_carrier_metadata(event)
             if candidate is not None:
@@ -2291,9 +2247,7 @@ class TelegramManager:
                 self._task_card_event_metadata = latest_metadata
             self._task_card_event_offset = new_offset
             self._task_card_event_size = size
-            if new_rows:
-                rows = self._task_card_event_rows + new_rows
-                self._task_card_event_rows = rows[-self._TASK_CARD_EVENT_WINDOW * self._TASK_CARD_MAX_EVENTS_PER_CALL:]
+            if projected_events:
                 existing = self._task_card_event_groups
                 combined: list[tuple[dict, dict]] = []
                 for group in existing:
@@ -2302,8 +2256,7 @@ class TelegramManager:
                         combined.append(({"api_call_id": group_id}, event_row))
                 combined.extend(projected_events)
                 self._task_card_event_groups = self._group_task_card_events(combined)
-                self._task_card_event_rows = self._flatten_task_card_groups(self._task_card_event_groups)
-        return bool(new_rows) or metadata_changed
+        return bool(projected_events) or metadata_changed
 
     def _resident_task_card_targets(self) -> list[tuple[str, int]]:
         """Enumerate every ``(account, chat_id)`` with a resident Task Card.
@@ -2421,22 +2374,7 @@ class TelegramManager:
             return {"status": "error", "error": f"Unknown channel: {channel}"}
         if sub_action not in {"create", "update", "finalize"}:
             return {"status": "error", "error": f"Unknown sub_action: {sub_action}"}
-        # Deliberate presentation suppression happens only after route validation
-        # and before transport, resident-id, or composed-slot mutation. Internal
-        # automatic rows/heartbeats and programmable watches continue calling.
-        if not self._taskcard_enabled():
-            # No transport while suppressed. But stopping a HIDDEN programmable
-            # watch must still clear its committed slot internally, or the stale
-            # frame would resurface the next time /taskcard on re-composes the
-            # resident. This is the smallest targeted internal finalization; it
-            # does not change ordinary hidden create/update (which stay
-            # non-committing) or the per-agent persistence/context contract.
-            if channel == "programmable" and sub_action == "finalize":
-                account = args.get("account")
-                chat_id = args.get("chat_id")
-                if account is not None and chat_id is not None:
-                    self._set_channel_frame(account, chat_id, "programmable", None)
-            return {"status": "ok", "suppressed": True, "taskcard": False}
+        self._resident.set_enabled(self._raw_taskcard_enabled())
         try:
             if channel == "programmable":
                 return self._task_card_programmable(sub_action, args)
