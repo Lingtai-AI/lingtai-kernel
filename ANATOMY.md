@@ -6,12 +6,17 @@ related_files:
   - CONTRIBUTING.md
   - MANIFEST.in
   - README.md
+  - RELEASING.md
   - SECURITY.md
   - SUPPORT.md
   - dev-guide-skill/SKILL.md
   - docs/references/claude-code-guide.md
   - pyproject.toml
   - setup.py
+  - scripts/generate_release_manifest.py
+  - scripts/publish_release_assets.py
+  - scripts/sync_gitee_mirror.py
+  - scripts/lib/release_manifest.py
   - src/lingtai/ANATOMY.md
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
   - src/lingtai/kernel/ANATOMY.md
@@ -156,7 +161,12 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   its skill routes agents into the Anatomy and Contract systems and may grow
   focused scripts, references, templates, or assets as real workflows recur.
 - [`scripts/`](scripts/) — root utility/checker scripts, including the
-  docs-governance validator described below.
+  docs-governance validator described below and the release-manifest
+  generator/publisher/Gitee-mirror-sync scripts described in
+  [`RELEASING.md`](RELEASING.md). `wheels.yml`'s `release-manifest` job
+  actually invokes these with `--execute` on a real `release.published`
+  event (or an explicit `workflow_dispatch` with `publish: true`) — every
+  other trigger shape stays dry-run.
 - [`.github/`](.github/) — GitHub Actions, issue templates, and pull request
   templates.
 - [`crates/lingtai-search-sidecar/`](crates/lingtai-search-sidecar/) — Rust file
@@ -180,6 +190,9 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   and [`tests/test_docs_governance.py`](tests/test_docs_governance.py).
 - [`README.md`](README.md) — public English network entry point; translated
   readmes live under `docs/readmes/`.
+- [`RELEASING.md`](RELEASING.md) — kernel release process: how
+  `.github/workflows/wheels.yml` builds, verifies, and manifests wheel/sdist
+  assets, and how a future authorized run publishes them to GitHub and Gitee.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — public contributor entry point.
 - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), [`SECURITY.md`](SECURITY.md), and
   [`SUPPORT.md`](SUPPORT.md) — community and safety entry points.
