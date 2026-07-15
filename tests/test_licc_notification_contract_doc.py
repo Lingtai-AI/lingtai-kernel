@@ -6,6 +6,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md"
 DOC_REL = "src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md"
+GUIDE = ROOT / "docs/references/licc-notification-wake-runbook.md"
+GUIDE_REL = "docs/references/licc-notification-wake-runbook.md"
+SERVICES_ANATOMY = ROOT / "src/lingtai/services/ANATOMY.md"
+SERVICES_ANATOMY_REL = "src/lingtai/services/ANATOMY.md"
 REQUIRED_ANATOMIES = [
     "src/lingtai/kernel/ANATOMY.md",
     "src/lingtai/kernel/base_agent/ANATOMY.md",
@@ -60,12 +64,34 @@ def test_licc_notification_contract_is_linked_from_relevant_anatomies():
         assert "LICC_NOTIFICATION_CONTRACT.md" in body, rel
 
 
+def test_licc_notification_wake_runbook_links_contract_and_services_anatomy():
+    guide_meta = _frontmatter(GUIDE)
+    assert DOC_REL in guide_meta["related_files"]
+    assert SERVICES_ANATOMY_REL in guide_meta["related_files"]
+
+    for owner in (DOC, SERVICES_ANATOMY):
+        owner_meta = _frontmatter(owner)
+        assert GUIDE_REL in owner_meta["related_files"]
+
+    text = GUIDE.read_text(encoding="utf-8")
+    for phrase in (
+        "LICC Notification Contract",
+        "_meta.agent_meta.notifications.attention",
+        "_meta.agent_meta.notifications.persistent",
+        "woke from asleep: tc_wake",
+        "test_notification_injection_has_no_unbound_local_meta_builder",
+        "test_delta_persistent_lane_paths_match_current_synthetic_metadata",
+        "UnboundLocalError",
+    ):
+        assert phrase in text
+
+
 def test_licc_notification_contract_locks_new_channel_two_lane_gate():
     text = " ".join(DOC.read_text(encoding="utf-8").split())
     required_phrases = [
         "New human-message LICC channel acceptance gate",
         "_meta.agent_meta.notifications.attention.mcp.<channel>",
-        "_meta.notification_persistent",
+        "_meta.agent_meta.notifications.persistent",
         "data.message_ids",
         "transient hook is identity-only",
         "content/context lands in the persistent lane",

@@ -5,7 +5,7 @@ context and the generic routing keys (``platform`` / ``conversation_ref`` /
 ``message_ref``) that the Feishu MCP attaches to LICC events.  The kernel
 inbox allowlists exactly these fields into notification previews, and
 ``meta_block.build_notification_persistent_payload`` moves them into the
-``_meta.notification_persistent.mcp.feishu`` lane.
+``_meta.agent_meta.notifications.persistent.mcp.feishu`` lane.
 """
 from __future__ import annotations
 

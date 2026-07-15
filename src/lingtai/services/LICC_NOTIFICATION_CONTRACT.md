@@ -5,8 +5,9 @@ description: >
   into _meta.agent_meta.notifications.attention and _meta.agent_meta.notifications.persistent.
 status: active
 contract_version: 2
-last_changed_at: "2026-07-12"
+last_changed_at: "2026-07-15"
 related_files:
+  - docs/references/licc-notification-wake-runbook.md
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/services/mcp_inbox.py
   - src/lingtai/services/mcp_licc.py
@@ -70,6 +71,11 @@ how they become model-visible notification metadata. It is intentionally
 anatomy-style: it maps the moving parts, cites the code that owns them, names the
 state boundary, and gives future agents a checklist for deciding whether a
 change must also update the contract.
+
+For diagnosis and live recovery when producer input lands but no reasoning turn
+starts, use the operational
+[LICC notification wake runbook](../../../docs/references/licc-notification-wake-runbook.md).
+This contract remains the normative source for metadata shape and authority.
 
 Scope:
 
@@ -209,16 +215,20 @@ means:
 
 ```json
 "_meta": {
-  "notifications": {
-    "mcp.telegram": {
-      "header": "Telegram event",
-      "data": {"message_ids": ["mimo-1:6859932159:6281"]},
-      "instructions": "High-attention Telegram hook: use notification_persistent for content/context; when handled, dismiss this notification."
-    }
-  },
-  "notification_persistent": {
-    "mcp": {
-      "telegram": {"messages": [...], "events": [...], "previous_block": {...}}
+  "agent_meta": {
+    "notifications": {
+      "attention": {
+        "mcp.telegram": {
+          "header": "Telegram event",
+          "data": {"message_ids": ["mimo-1:6859932159:6281"]},
+          "instructions": "High-attention Telegram hook: use the persistent notification context for content; when handled, dismiss this notification."
+        }
+      },
+      "persistent": {
+        "mcp": {
+          "telegram": {"messages": [...], "events": [...], "previous_block": {...}}
+        }
+      }
     }
   }
 }
