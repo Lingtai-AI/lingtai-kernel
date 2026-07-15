@@ -6,6 +6,7 @@ import queue
 import re
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from lingtai.kernel.config import AgentConfig
@@ -15,6 +16,7 @@ from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
 from tests._daemon_helpers import make_daemon_agent as _make_agent
 from tests._daemon_helpers import make_daemon_run_dir as _make_run_dir
 from tests._notification_store_helpers import store_agent_for
+from lingtai.tools.daemon.run_dir import DaemonRunDir
 
 
 def _reuse_parent_service(monkeypatch, agent):
@@ -33,6 +35,36 @@ def _reuse_parent_service(monkeypatch, agent):
 
 def _assert_compact_daemon_id(em_id: str) -> None:
     assert re.fullmatch(r"em-[0-9a-f]{4}(?:-\d+)?", em_id), em_id
+
+
+def _poll_daemon_terminal(run_dir, expected: str = "done", timeout: float = 15.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = DaemonRunDir.read_state_from_disk(run_dir.path)
+        if state.get("state") == expected:
+            return state
+        if state.get("state") in {"failed", "cancelled", "timeout"}:
+            raise AssertionError(f"daemon reached unexpected state: {state}")
+        time.sleep(0.05)
+    raise AssertionError(f"daemon did not reach {expected}: {run_dir.path}")
+
+
+def _enable_detached_fake_llm(agent, monkeypatch, *, scenario: str | None = None) -> None:
+    agent.service.provider = "lingtai-supervisor-test-fake"
+    agent.service.model = "fake-model"
+    agent.service.api_key = "detached-test-key"
+    agent.service._base_url = None
+    agent.service._provider_defaults = {}
+    monkeypatch.setenv("LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM", "1")
+    monkeypatch.setenv("LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_FINISH", "1")
+    if scenario is not None:
+        monkeypatch.setenv("LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SCENARIO", scenario)
+    tests_dir = str(Path(__file__).parent)
+    src_dir = str(Path(__file__).resolve().parents[1] / "src")
+    existing = os.environ.get("PYTHONPATH", "")
+    parts = [tests_dir, src_dir]
+    parts.extend(p for p in existing.split(os.pathsep) if p)
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(dict.fromkeys(parts)))
 
 
 def _write_daemon_json(tmp_path, run_id, **overrides):
@@ -397,13 +429,14 @@ def test_cli_backend_serializes_task_mcp_context(tmp_path, monkeypatch):
     })
 
     assert result["status"] == "dispatched"
-    future = mgr._emanations[result["ids"][0]]["future"]
-    future.result(timeout=5)
-    assert "## Parent-provided MCP registrations" in captured["task"]
-    assert "demo-mcp" in captured["task"]
-    assert "TOKEN: <redacted>" in captured["task"]
-    assert "secret" not in captured["task"]
+    # Detached CLI ownership has no parent future.  The durable prompt is the
+    # product-visible replacement for the old monkeypatched runner capture.
+    run_dir = mgr._emanations[result["ids"][0]]["run_dir"]
+    captured["prompt"] = run_dir.prompt_path.read_text(encoding="utf-8")
     assert "## Parent-provided MCP registrations" in captured["prompt"]
+    assert "demo-mcp" in captured["prompt"]
+    assert "TOKEN: <redacted>" in captured["prompt"]
+    assert "secret" not in captured["prompt"]
 
 
 def test_build_tool_surface_requires_explicit_email_tool(tmp_path):
@@ -1454,37 +1487,11 @@ def test_run_emanation_respects_cancel_mid_loop(tmp_path, monkeypatch):
 
 
 def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
-    """Full lifecycle: emanate → list → ask → results arrive → reclaim."""
+    """Detached lifecycle: emanate → durable list/check → terminal reclaim."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
-    _reuse_parent_service(monkeypatch, agent)
+    _enable_detached_fake_llm(agent, monkeypatch)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
-
-    tc = ToolCall(name="read", args={"file_path": "/tmp/x"}, id="tc-1")
-    resp1 = MagicMock()
-    resp1.text = "Checking files..."
-    resp1.tool_calls = [tc]
-    resp1.usage = MagicMock(input_tokens=0, output_tokens=0,
-                            thinking_tokens=0, cached_tokens=0)
-    finish_tc = ToolCall(
-        name="finish",
-        args={"status": "done", "summary": "Summarized architecture."},
-        id="tc-finish",
-    )
-    resp2 = MagicMock()
-    resp2.text = "Finishing..."
-    resp2.tool_calls = [finish_tc]
-    resp2.usage = None
-    resp3 = MagicMock()
-    resp3.text = "Task done. Summarized architecture."
-    resp3.tool_calls = []
-    resp3.usage = MagicMock(input_tokens=0, output_tokens=0,
-                            thinking_tokens=0, cached_tokens=0)
-
-    mock_session = MagicMock()
-    mock_session.send = MagicMock(side_effect=[resp1, resp2, resp3])
-    agent.service.create_session = MagicMock(return_value=mock_session)
-    agent.service.make_tool_result = MagicMock(return_value="mock_result")
 
     result = mgr.handle({"action": "emanate", "tasks": [
         {"task": "summarize architecture", "tools": ["file"]},
@@ -1492,18 +1499,34 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
     _assert_compact_daemon_id(em_id)
-
-    time.sleep(0.1)
-    time.sleep(2)
+    run_dir = mgr._emanations[em_id]["run_dir"]
+    state = _poll_daemon_terminal(run_dir)
+    assert state["owner"] == "supervisor"
+    assert "Task done" in run_dir.result_path.read_text(encoding="utf-8")
 
     list_result = mgr._handle_list()
     statuses = {e["id"]: e["status"] for e in list_result["emanations"]}
     assert statuses.get(em_id) == "done"
 
+    check = mgr.handle({"action": "check", "id": em_id})
+    assert check["state"] == "done"
+
     from tests._notification_store_helpers import snapshot_notifications
 
     assert agent.inbox.empty()
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
+    # Terminal state is committed before the detached supervisor publishes the
+    # durable notification receipt.  Assert eventual publication rather than
+    # reintroducing a parent-future/synchronous-callback assumption.
+    notification_deadline = time.monotonic() + 5.0
+    events = []
+    while time.monotonic() < notification_deadline:
+        system = snapshot_notifications(agent._working_dir).get("system", {})
+        events = system.get("data", {}).get("events", [])
+        if any(e.get("source") == "daemon" and e.get("ref_id") == em_id for e in events):
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError(f"detached terminal notification not published for {em_id}")
     assert any(e["source"] == "daemon" and e["ref_id"] == em_id for e in events)
     assert any("Task done" in e["body"] for e in events)
     assert any(f"daemon(action=\"check\", id=\"{em_id}\")" in e["body"] for e in events)
@@ -2144,69 +2167,23 @@ def test_handle_list_includes_run_id_and_path(tmp_path):
 
 
 def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
-    """Full lifecycle: emanate → tool dispatch → completion → forensic folder."""
+    """Detached lifecycle: tool dispatch → completion → forensic folder."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
-    _reuse_parent_service(monkeypatch, agent)
+    _enable_detached_fake_llm(agent, monkeypatch, scenario="artifact")
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
-
-    # Two LLM rounds: first emits a tool call, second completes.
-    tc = ToolCall(name="read", args={"file_path": "/tmp/x"}, id="tc-1")
-    resp1 = MagicMock()
-    resp1.text = "Checking..."
-    resp1.tool_calls = [tc]
-    pool_usage_extra = {
-        "codex_auth_path_sha8": "a1b2c3d4",
-        "codex_pool_source_index": 1,
-        "codex_pool_size": 2,
-        "codex_pool_weight": 1,
-        "codex_pool_model_scope": "gpt-5.6",
-        "codex_pool_source_ref": "must-not-copy",
-        "unsafe": "secret",
-    }
-    resp1.usage = MagicMock(input_tokens=100, output_tokens=20,
-                             thinking_tokens=5, cached_tokens=10,
-                             extra=pool_usage_extra)
-    finish_tc = ToolCall(
-        name="finish",
-        args={"status": "done", "summary": "Found 3 TODOs."},
-        id="tc-finish",
-    )
-    resp2 = MagicMock()
-    resp2.text = "Finishing..."
-    resp2.tool_calls = [finish_tc]
-    resp2.usage = None
-    resp3 = MagicMock()
-    resp3.text = "Task done. Found 3 TODOs."
-    resp3.tool_calls = []
-    resp3.usage = MagicMock(input_tokens=80, output_tokens=15,
-                             thinking_tokens=3, cached_tokens=5,
-                             extra=pool_usage_extra)
-
-    mock_session = MagicMock()
-    mock_session.send = MagicMock(side_effect=[resp1, resp2, resp3])
-    agent.service.create_session = MagicMock(return_value=mock_session)
-    agent.service.make_tool_result = MagicMock(return_value="mock_result")
-    agent.service._base_url = "https://mock.example.com"
-    agent._tool_handlers["read"] = MagicMock(return_value={"content": "file text"})
 
     result = mgr.handle({"action": "emanate", "tasks": [
         {"task": "find TODOs", "tools": ["file"]},
     ]})
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
-
-    # Wait for completion
-    time.sleep(2.0)
-
-    # Find the folder
-    daemons_dir = agent._working_dir / "daemons"
-    folders = list(daemons_dir.iterdir())
-    assert len(folders) == 1
-    folder = folders[0]
+    run_dir = mgr._emanations[em_id]["run_dir"]
+    state = _poll_daemon_terminal(run_dir)
+    folder = run_dir.path
 
     # daemon.json shows terminal state with full info
-    data = json.loads((folder / "daemon.json").read_text())
+    data = state
     assert data["state"] == "done"
     assert data["finished_at"] is not None
     assert data["task"] == "find TODOs"
@@ -2241,7 +2218,6 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
                      if json.loads(line).get("source") == "daemon"]
     assert len(daemon_tagged) == 2
     assert all(e["em_id"] == em_id for e in daemon_tagged)
-    assert all(e["codex_auth_path_sha8"] == "a1b2c3d4" for e in daemon_tagged)
     assert all(e["codex_pool_source_index"] == 1 for e in daemon_tagged)
     assert all(e["codex_pool_size"] == 2 for e in daemon_tagged)
     assert all(e["codex_pool_weight"] == 1 for e in daemon_tagged)
@@ -2690,9 +2666,7 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
 
 
 def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
-    """Omitting a preset builds a fresh daemon-scoped service that mirrors the
-    parent's LLM identity; the daemon does not reuse ``agent.service`` and the
-    run carries no ``preset_name``."""
+    """Omitted preset inherits parent effective identity without allowlist reads."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
     agent.service.provider = "anthropic"
     agent.service.model = "claude-opus-4-8"
@@ -2702,41 +2676,34 @@ def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
     agent.service._provider_defaults = {"anthropic": {"max_rpm": 5}}
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
+    from unittest.mock import patch
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+    records = []
 
-    mock_session = MagicMock()
-    mock_resp = MagicMock()
-    mock_resp.text = "task done — finished successfully"
-    mock_resp.tool_calls = []
-    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
-                                thinking_tokens=0, cached_tokens=0)
-    mock_session.send = MagicMock(return_value=mock_resp)
+    def fake_owner(self, request, *, capsule=None):
+        manifest = json.loads(Path(request.manifest_path).read_text(encoding="utf-8"))
+        run_dir = DaemonRunDir.attach(Path(manifest["run_dir"]))
+        run_dir.update_state(owner="supervisor", supervisor_pid=os.getpid())
+        run_dir.mark_done("[fake detached done]")
+        records.append((manifest, run_dir))
 
-    captured = {}
+    with patch.object(PosixDaemonSupervisorAdapter, "spawn_detached", fake_owner), \
+         patch.object(agent, "_read_preset_from_init") as read_allowlist:
+        result = mgr.handle({"action": "emanate", "tasks": [
+            {"task": "task A", "tools": ["file"]},
+        ]})
 
-    class FakeService:
-        def __init__(self, **kwargs):
-            captured["init"] = kwargs
-            self.model = kwargs["model"]
-            self.provider = kwargs["provider"]
-
-        def create_session(self, **kwargs):
-            return mock_session
-
-    import lingtai.llm.service as service_mod
-    monkeypatch.setattr(service_mod, "LLMService", FakeService)
-
-    result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "task A", "tools": ["file"]},
-    ]})
     assert result["status"] == "dispatched"
-    # A fresh daemon-scoped service mirroring the parent is built — the parent
-    # service is not reused.
-    time.sleep(1.0)
+    state = _poll_daemon_terminal(records[0][1])
+    manifest = records[0][0]
+    read_allowlist.assert_not_called()
     agent.service.create_session.assert_not_called()
-    assert captured["init"]["provider"] == "anthropic"
-    assert captured["init"]["model"] == "claude-opus-4-8"
-    assert captured["init"]["base_url"] == "https://api.anthropic.com"
-    assert captured["init"]["provider_defaults"] == {"anthropic": {"max_rpm": 5}}
+    assert manifest["llm"]["provider"] == "anthropic"
+    assert manifest["llm"]["model"] == "claude-opus-4-8"
+    assert manifest["llm"]["base_url"] == "https://api.anthropic.com"
+    assert manifest.get("preset_name") is None
+    assert "## tools" in records[0][1].prompt_path.read_text(encoding="utf-8")
+    assert state["preset_name"] is None
 
     # daemon.json has no preset_name (None)
     daemons_dir = agent._working_dir / "daemons"
@@ -2758,6 +2725,9 @@ def test_claude_code_env_strips_auth_overrides(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-leaked")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "oauth-leaked")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "stale-claude-code-oauth")
+    # A detached execution child may have restored selected parent credentials;
+    # that transport fact must not override the runner's established policy.
+    monkeypatch.setenv("LINGTAI_DAEMON_CREDENTIALS_RESTORED", "1")
     monkeypatch.setenv("PATH", "/usr/bin:/bin")  # sentinel non-stripped var
     monkeypatch.setenv("HOME", "/tmp/home")
 

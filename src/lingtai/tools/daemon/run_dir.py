@@ -9,12 +9,18 @@ without itself touching the filesystem.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from lingtai.adapters.posix.process_identity import (
+    process_identity,
+    process_identity_matches,
+)
 from lingtai.kernel._fsutil import append_jsonl, atomic_write_json
 from lingtai.kernel.token_ledger import (
     append_token_entry,
@@ -41,6 +47,8 @@ class DaemonRunDir:
     """
 
     DATA_VERSION = 1
+    PENDING_LAUNCH_LEASE_S = 5.0
+    _TERMINAL_STATES = frozenset({"done", "failed", "cancelled", "timeout"})
 
     def __init__(
         self,
@@ -79,6 +87,7 @@ class DaemonRunDir:
         # without reversing that lock order.
         self._state_writer_lock = threading.RLock()
         self._terminal_notification_lock = threading.Lock()
+        self._ephemeral_redactions: tuple[str, ...] = ()
         started_at_iso = self._now_iso()
 
         # New daemon-manager callers pass a compact id as ``run_id`` so the
@@ -134,11 +143,38 @@ class DaemonRunDir:
             "terminal_notified": False,
             "terminal_notification_claim": None,
             "terminal_notification_receipt": None,
+            "pending_followups": [],
+            "child_pid": None,
+            "child_pgid": None,
+            "child_start_identity": None,
+            "child_registered_at": None,
+            "child_history": [],
+            "execution_pid": None,
+            "execution_pgid": None,
+            "execution_start_identity": None,
+            "execution_registered_at": None,
+            "execution_registration": "pending",
+            "resume_generation": 0,
+            "resume_claim": None,
+            "resume_pid": None,
+            "resume_start_identity": None,
+            "resume_state": None,
+            "followup_status": None,
+            "followup_result_path": None,
+            "followup_result_preview": None,
             "preset_name": preset_name,
             "preset_provider": preset_provider,
             "preset_model": preset_model,
             "backend": backend,
             "claude_session_id": None,
+            # "parent": run_dir is executed in-process by the agent's own
+            # DaemonManager pool (legacy path, still true for most backends
+            # in this slice). "supervisor": a detached
+            # lingtai.kernel.daemon_supervisor process owns execution and
+            # terminal truth; parent-owned reaping/shutdown must not touch it.
+            # See DaemonManager._reap_dead_parent_daemon_records.
+            "owner": "parent",
+            "supervisor_pid": None,
         }
 
         self._atomic_write_json(self.daemon_json_path, self._state)
@@ -146,6 +182,63 @@ class DaemonRunDir:
         self.heartbeat_path.touch()
         self._append_jsonl(self.events_path,
                            {"event": "daemon_start", "ts": self._now_iso()})
+
+    @staticmethod
+    def read_state_from_disk(path: Path) -> dict:
+        """Read the current ``daemon.json`` state fresh from disk.
+
+        Unlike ``state_snapshot()`` (which returns this in-process object's
+        own in-memory copy — correct only for the process actually writing
+        it), this is the read a caller uses to observe state a DIFFERENT
+        process wrote — specifically, the agent-side manager or a fresh
+        `DaemonManager` polling a run a detached supervisor process owns.
+        Two live `DaemonRunDir` objects for the same run_id (one per
+        process) never share memory; disk is the only synchronization point.
+        Raises the same errors ``json.loads``/``Path.read_text`` would on a
+        missing/corrupt file — callers polling for a field's appearance
+        should catch ``(OSError, json.JSONDecodeError)`` around a call taken
+        before the file is guaranteed to exist.
+        """
+        state = json.loads((Path(path) / "daemon.json").read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            raise ValueError(f"daemon.json at {path} is not a JSON object")
+        return state
+
+    @classmethod
+    def attach(cls, path: Path, *, log_callback=None) -> "DaemonRunDir":
+        """Bind a ``DaemonRunDir`` to an existing run folder on disk.
+
+        Unlike ``__init__`` (which creates a fresh folder and identity card),
+        this loads the current ``daemon.json`` state from *path* without
+        writing anything. Used by the detached daemon supervisor, which
+        reconstructs its owning ``DaemonRunDir`` from a run directory the
+        agent-side manager already created (folder, ``daemon.json``,
+        ``.prompt``) before spawning the supervisor process — attaching must
+        not re-create or reset that state.
+        """
+        path = Path(path)
+        daemon_json_path = path / "daemon.json"
+        state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            raise ValueError(f"daemon.json at {daemon_json_path} is not a JSON object")
+        instance = object.__new__(cls)
+        instance._handle = state.get("handle") or path.name
+        instance._parent_token_ledger = None  # set below once parent dir is known
+        instance._log_callback = log_callback
+        instance._started_monotonic = time.monotonic()
+        instance._state_writer_lock = threading.RLock()
+        instance._terminal_notification_lock = threading.Lock()
+        instance._ephemeral_redactions = ()
+        instance._run_id = state.get("run_id") or path.name
+        instance._path = path
+        instance._state = state
+        parent_addr = state.get("parent_addr")
+        # The parent working dir is the run dir's grandparent
+        # (<parent>/daemons/<run_id>), which is how every constructor-created
+        # run dir is laid out; recovering it here lets append_tokens continue
+        # writing to the same parent ledger the in-process path would have used.
+        instance._parent_token_ledger = path.parent.parent / "logs" / "token_ledger.jsonl"
+        return instance
 
     # ------------------------------------------------------------------
     # Path properties
@@ -172,6 +265,31 @@ class DaemonRunDir:
     @property
     def daemon_json_path(self) -> Path:
         return self._path / "daemon.json"
+
+    @property
+    def state_lock_path(self) -> Path:
+        return self._path / ".daemon-state.lock"
+
+    @classmethod
+    @contextmanager
+    def state_file_lock(cls, path: Path):
+        """Hold the cross-process daemon.json transaction lock for *path*.
+
+        Recovery code that cannot attach a ``DaemonRunDir`` because daemon.json
+        is missing or invalid still has to serialize with a live detached owner.
+        This narrow boundary exposes the same fixed lock file used by
+        ``_state_transaction`` without constructing or mutating an in-memory run.
+        """
+        import fcntl
+
+        lock_path = Path(path) / ".daemon-state.lock"
+        lock_path.touch(mode=0o600, exist_ok=True)
+        with open(lock_path, "a+") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     @property
     def prompt_path(self) -> Path:
@@ -214,9 +332,251 @@ class DaemonRunDir:
         directly. The lock is re-entrant so a caller already in a state
         transaction can safely compose this helper.
         """
-        with self._state_writer_lock:
-            self._state.update(fields)
+        from lingtai.kernel.daemon_supervisor.manifest import redact_durable_value
+
+        with self._state_transaction():
+            requested = fields.get("state")
+            current = self._state.get("state")
+            if current in self._TERMINAL_STATES and requested not in (None, current):
+                fields = {key: value for key, value in fields.items() if key != "state"}
+            self._state.update({
+                key: self._durable_value(redact_durable_value(value, field=key))
+                for key, value in fields.items()
+            })
             self._atomic_write_json(self.daemon_json_path, self._state)
+
+    @contextmanager
+    def _state_transaction(self):
+        """Serialize one daemon.json read/modify/write across processes."""
+        import fcntl
+
+        with self._state_writer_lock:
+            self.state_lock_path.touch(mode=0o600, exist_ok=True)
+            with open(self.state_lock_path, "a+") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                try:
+                    try:
+                        disk = json.loads(self.daemon_json_path.read_text(encoding="utf-8"))
+                        if isinstance(disk, dict):
+                            self._state = disk
+                    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                        pass
+                    yield
+                finally:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    def set_ephemeral_redactions(self, values) -> None:
+        """Install runtime-only literals that must not reach durable output."""
+        clean = sorted({str(value) for value in (values or ()) if value}, key=len, reverse=True)
+        self._ephemeral_redactions = tuple(clean)
+
+    def _durable_value(self, value):
+        if isinstance(value, str):
+            for secret in self._ephemeral_redactions:
+                value = value.replace(secret, "<redacted>")
+            return value
+        if isinstance(value, dict):
+            return {key: self._durable_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._durable_value(item) for item in value]
+        if isinstance(value, tuple):
+            return [self._durable_value(item) for item in value]
+        return value
+
+    def claim_resume_generation(self) -> dict:
+        """Atomically claim the single detached post-terminal writer.
+
+        Claims are append-only generation records.  A fixed advisory lock
+        serializes the scan/create transaction; the generation record remains
+        after release so a crash is inspectable and never needs destructive
+        cleanup.  A live claim is returned as ``busy``.  A dead owner claim is
+        marked stale and may be replaced by the next generation.
+        """
+        claims_dir = self.path / "resume-claims"
+        claims_dir.mkdir(exist_ok=True)
+        with self._state_transaction():
+            active = None
+            now = time.time()
+            for path in sorted(claims_dir.glob("resume-*.json")):
+                try:
+                    row = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                status = row.get("status")
+                if status == "pending-launch":
+                    if float(row.get("pending_until", 0.0)) > now:
+                        active = row
+                        break
+                    row["status"] = "stale"
+                elif status == "running" or status == "active":
+                    try:
+                        pid = row.get("owner_pid")
+                        saved_identity = row.get("owner_start_identity")
+                        alive = (
+                            isinstance(pid, int)
+                            and not isinstance(pid, bool)
+                            and isinstance(saved_identity, str)
+                            and bool(saved_identity)
+                            and process_identity_matches(pid, saved_identity)
+                        )
+                    except (OSError, ValueError):
+                        alive = False
+                    if alive or not isinstance(saved_identity, str) or not saved_identity:
+                        active = row
+                        break
+                    row["status"] = "stale"
+                if row.get("status") == "stale":
+                    row["released_at"] = self._now_iso()
+                    self._atomic_write_json(path, row)
+            if active is not None:
+                return {"status": "busy", "generation": active.get("generation")}
+            generation_number = self._state.get("resume_generation", 0) + 1
+            generation = f"g{generation_number}-{secrets.token_hex(8)}"
+            owner_pid = os.getpid()
+            nonce = secrets.token_hex(16)
+            claim = {
+                "run_id": self._run_id, "generation": generation,
+                "status": "pending-launch", "owner_pid": owner_pid,
+                "owner_start_identity": process_identity(owner_pid),
+                "launch_nonce": nonce, "claimed_at": self._now_iso(),
+                "pending_until": now + self.PENDING_LAUNCH_LEASE_S,
+            }
+            claim_path = claims_dir / f"resume-{generation}.json"
+            self._atomic_write_json(claim_path, claim)
+            self._state.update({
+                "resume_generation": generation_number,
+                "resume_claim": claim,
+                "resume_state": "claimed",
+            })
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            return {**claim, "status": "running", "launch_status": "pending-launch", "path": str(claim_path)}
+
+    def update_resume_claim(self, generation: str, **fields) -> bool:
+        path = self.path / "resume-claims" / f"resume-{generation}.json"
+        with self._state_transaction():
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                return False
+            if not isinstance(row, dict) or row.get("generation") != generation:
+                return False
+            row.update(fields)
+            self._atomic_write_json(path, row)
+            self._state["resume_claim"] = self._durable_value(row)
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            return True
+
+    def activate_resume_generation(self, generation: str, nonce: str) -> bool:
+        """Promote only this generation's one-shot launch to its child owner."""
+        identity = process_identity(os.getpid())
+        if not isinstance(nonce, str) or not nonce or not identity:
+            return False
+        path = self.path / "resume-claims" / f"resume-{generation}.json"
+        with self._state_transaction():
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                return False
+            if (
+                not isinstance(row, dict)
+                or row.get("generation") != generation
+                or row.get("status") != "pending-launch"
+                or row.get("launch_nonce") != nonce
+                or float(row.get("pending_until", 0.0)) <= time.time()
+            ):
+                return False
+            row.update({"status": "active", "owner_pid": os.getpid(),
+                        "owner_start_identity": identity, "started_at": self._now_iso()})
+            self._atomic_write_json(path, row)
+            self._state.update({"resume_claim": row, "resume_pid": os.getpid(),
+                                "resume_start_identity": identity, "resume_state": "running"})
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            return True
+
+    def release_resume_generation(self, generation: str, nonce: str, *,
+                                  owner_pid: int | None = None,
+                                  owner_identity: str | None = None,
+                                  result_status: str | None = None) -> bool:
+        """Release exactly one generation after validating its owner/nonce."""
+        path = self.path / "resume-claims" / f"resume-{generation}.json"
+        with self._state_transaction():
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                return False
+            if not isinstance(row, dict) or row.get("generation") != generation:
+                return False
+            if row.get("launch_nonce") != nonce:
+                return False
+            if owner_pid is not None and row.get("owner_pid") != owner_pid:
+                return False
+            if owner_identity is not None and row.get("owner_start_identity") != owner_identity:
+                return False
+            if row.get("status") not in {"pending-launch", "active"}:
+                return False
+            row.update({"status": "released", "released_at": self._now_iso()})
+            if result_status is not None:
+                row["result_status"] = result_status
+            self._atomic_write_json(path, row)
+            self._state["resume_claim"] = row
+            self._state["resume_state"] = result_status or self._state.get("resume_state")
+            self._state["resume_pid"] = None
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            return True
+
+    def record_followup(self, generation: str, *, status: str,
+                        output: str = "", error: str | None = None) -> None:
+        """Persist the latest detached follow-up result for ``daemon(check)``."""
+        followups = self.path / "followups"
+        followups.mkdir(exist_ok=True)
+        result_path = followups / f"{generation}.txt"
+        text = output if isinstance(output, str) else str(output)
+        if error:
+            text = error if not text else f"{text}\n{error}"
+        text = self._durable_value(text)
+        result_path.write_text(text, encoding="utf-8")
+        try:
+            result_path.chmod(0o600)
+        except OSError:
+            pass
+        preview = text[:500]
+        self.update_state(
+            followup_status=status,
+            followup_result_path=str(result_path),
+            followup_result_preview=preview,
+            followup_generation=generation,
+            followup_error=error,
+            resume_state=status,
+        )
+
+    def enqueue_followup(self, message: str) -> bool:
+        """Persist a follow-up before acknowledging its control request."""
+        if not isinstance(message, str) or not message:
+            return False
+        message = self._durable_value(message)
+        with self._state_transaction():
+            if self._state.get("state") not in {"running", "active"}:
+                return False
+            queue = self._state.setdefault("pending_followups", [])
+            if not isinstance(queue, list):
+                queue = []
+                self._state["pending_followups"] = queue
+            queue.append(message)
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            return True
+
+    def drain_followups(self) -> str | None:
+        """Atomically consume queued follow-ups at a safe text-only boundary."""
+        with self._state_transaction():
+            queue = self._state.get("pending_followups")
+            if not isinstance(queue, list) or not queue:
+                return None
+            messages = [item for item in queue if isinstance(item, str) and item]
+            self._state["pending_followups"] = []
+            self._atomic_write_json(self.daemon_json_path, self._state)
+        return "\n\n".join(messages) or None
 
     def set_session_id(self, key: str, value: str, *, overwrite: bool = True) -> bool:
         """Persist a backend resume id into daemon.json under *key*.
@@ -240,7 +600,7 @@ class DaemonRunDir:
         """
         if not value:
             return False
-        with self._state_writer_lock:
+        with self._state_transaction():
             if self._state.get(key) == value:
                 return False
             if not overwrite and self._state.get(key):
@@ -276,7 +636,17 @@ class DaemonRunDir:
 
     def _append_jsonl(self, path: Path, entry: dict) -> None:
         """Append one JSON line."""
-        append_jsonl(path, entry, ensure_ascii=False)
+        append_jsonl(path, self._durable_value(entry), ensure_ascii=False)
+
+    def append_event(self, event: str, **fields) -> None:
+        """Append a redacted durable event from detached execution code."""
+        from lingtai.kernel.daemon_supervisor.manifest import redact_durable_event_fields
+
+        safe = redact_durable_event_fields(fields)
+        safe = self._durable_value(safe)
+        safe["event"] = event
+        safe.setdefault("ts", self._now_iso())
+        self._safe("append_event", lambda: self._append_jsonl(self.events_path, safe))
 
     def _safe(self, op: str, fn) -> None:
         """Run `fn`; swallow OSError (best-effort policy for mutation writes).
@@ -303,7 +673,7 @@ class DaemonRunDir:
 
     def _safe_state(self, op: str, fn) -> None:
         """Run a best-effort state/event transaction under the run writer lock."""
-        with self._state_writer_lock:
+        with self._state_transaction():
             self._safe(op, fn)
 
     # ------------------------------------------------------------------
@@ -438,7 +808,7 @@ class DaemonRunDir:
         if len(event_text) > self._CLI_OUTPUT_EVENT_MAX:
             event_text = event_text[:self._CLI_OUTPUT_EVENT_MAX] + "...[truncated]"
             truncated = True
-        last_output = text
+        last_output = self._durable_value(text)
         if len(last_output) > self._LAST_OUTPUT_MAX:
             last_output = last_output[-self._LAST_OUTPUT_MAX:]
 
@@ -569,8 +939,9 @@ class DaemonRunDir:
 
         Skips entirely (no state mutation, no ``calls`` bump, no event) when
         all four totals are zero — there is genuinely nothing to count, and we
-        avoid ledger-style noise. ``raw`` (if provided) is appended to
-        ``logs/events.jsonl`` as a ``cli_usage`` event for forensic inspection.
+        avoid ledger-style noise. ``raw`` (if provided) is redacted at this
+        durable producer boundary, then appended to ``logs/events.jsonl`` as a
+        ``cli_usage`` event for forensic inspection.
         """
         if not (input or output or cached or thinking):
             return
@@ -601,7 +972,8 @@ class DaemonRunDir:
                 "ts": self._now_iso(),
             }
             if raw is not None:
-                entry["raw"] = raw
+                from lingtai.kernel.daemon_supervisor.manifest import redact_durable_value
+                entry["raw"] = redact_durable_value(raw, field="raw")
             self._append_jsonl(self.events_path, entry)
         self._safe_state("record_cli_tokens", _write)
 
@@ -805,9 +1177,21 @@ class DaemonRunDir:
         compact.  A failure to write result.txt must not prevent the terminal
         state transition.
         """
-        text = text or ""
+        text = self._durable_value(text or "")
 
         def _write():
+            try:
+                disk = json.loads(self.daemon_json_path.read_text(encoding="utf-8"))
+                if isinstance(disk, dict):
+                    self._state = disk
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                pass
+            current_state = self._state.get("state")
+            if (
+                current_state in {"done", "failed", "cancelled", "timeout"}
+                and current_state != "done"
+            ):
+                return
             result_path = None
             try:
                 self.result_path.write_text(text, encoding="utf-8")
@@ -858,11 +1242,19 @@ class DaemonRunDir:
         materialize the message string before entering the closure.
         """
         try:
-            msg = str(exc)
+            msg = self._durable_value(str(exc))
         except Exception:
             msg = f"<unrenderable {type(exc).__name__}>"
 
         def _write():
+            try:
+                disk = json.loads(self.daemon_json_path.read_text(encoding="utf-8"))
+                if isinstance(disk, dict):
+                    self._state = disk
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                pass
+            if self._state.get("state") in {"done", "failed", "cancelled", "timeout"}:
+                return
             self._state["state"] = "failed"
             self._state["finished_at"] = self._now_iso()
             self._state["elapsed_s"] = self._now_secs()
@@ -938,7 +1330,13 @@ class DaemonRunDir:
         # All live terminal-notification state transitions use one lock order:
         # terminal-notification lock -> per-run state-writer lock.
         with self._terminal_notification_lock:
-            with self._state_writer_lock:
+            with self._state_transaction():
+                try:
+                    disk = json.loads(self.daemon_json_path.read_text(encoding="utf-8"))
+                    if isinstance(disk, dict):
+                        self._state = disk
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                    pass
                 if self._state.get("terminal_notified") is True:
                     return None
                 if isinstance(self._state.get("terminal_notification_claim"), dict):
@@ -961,7 +1359,13 @@ class DaemonRunDir:
         # Keep the same terminal-notification lock -> state-writer order as
         # claim_terminal_notification and mark_terminal_notification_published.
         with self._terminal_notification_lock:
-            with self._state_writer_lock:
+            with self._state_transaction():
+                try:
+                    disk = json.loads(self.daemon_json_path.read_text(encoding="utf-8"))
+                    if isinstance(disk, dict):
+                        self._state = disk
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                    pass
                 if self._state.get("terminal_notified") is True:
                     return
                 self._state["terminal_notification_claim"] = None
@@ -976,7 +1380,13 @@ class DaemonRunDir:
         # receipt decisions, mutations, and daemon.json persistence stay in the
         # owner transaction so live writers cannot observe a partial transition.
         with self._terminal_notification_lock:
-            with self._state_writer_lock:
+            with self._state_transaction():
+                try:
+                    disk = json.loads(self.daemon_json_path.read_text(encoding="utf-8"))
+                    if isinstance(disk, dict):
+                        self._state = disk
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                    pass
                 self._state["terminal_notified"] = True
                 self._state["terminal_notification_claim"] = None
                 self._state["terminal_notification_receipt"] = {
@@ -993,28 +1403,33 @@ class DaemonRunDir:
         cls, daemon_json_path: Path, *, idempotency_key: str
     ) -> bool:
         """Persist a terminal-notification receipt for an existing run dir."""
+        daemon_json_path = Path(daemon_json_path)
         try:
-            state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+            with cls.state_file_lock(daemon_json_path.parent):
+                state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+                if not isinstance(state, dict) or state.get("terminal_notified") is True:
+                    return False
+                state["terminal_notified"] = True
+                state["terminal_notification_claim"] = None
+                state["terminal_notification_receipt"] = {
+                    "idempotency_key": idempotency_key,
+                    "published_at": cls._now_iso(),
+                }
+                atomic_write_json(daemon_json_path, state, ensure_ascii=False, indent=2)
+                return True
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             return False
-        if not isinstance(state, dict):
-            return False
-        if state.get("terminal_notified") is True:
-            return False
-        state["terminal_notified"] = True
-        state["terminal_notification_claim"] = None
-        state["terminal_notification_receipt"] = {
-            "idempotency_key": idempotency_key,
-            "published_at": cls._now_iso(),
-        }
-        try:
-            atomic_write_json(daemon_json_path, state, ensure_ascii=False, indent=2)
-        except OSError:
-            return False
-        return True
 
     def _mark_terminal(self, state: str, event: str) -> None:
         def _write():
+            try:
+                disk = json.loads(self.daemon_json_path.read_text(encoding="utf-8"))
+                if isinstance(disk, dict):
+                    self._state = disk
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                pass
+            if self._state.get("state") in {"done", "failed", "cancelled", "timeout"}:
+                return
             self._state["state"] = state
             self._state["finished_at"] = self._now_iso()
             self._state["elapsed_s"] = self._now_secs()

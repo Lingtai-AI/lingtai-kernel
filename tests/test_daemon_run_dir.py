@@ -1,5 +1,6 @@
 """Pure FS unit tests for DaemonRunDir — no threads, no LLM mocks."""
 import json
+import multiprocessing
 import os
 import re
 import threading
@@ -332,6 +333,150 @@ def test_record_cli_output_bounds_large_event_and_last_output(tmp_path):
     assert len(last["text"]) <= rd._CLI_OUTPUT_EVENT_MAX + len("...[truncated]")
 
 
+def test_resume_claim_same_process_identity_is_busy(tmp_path, monkeypatch):
+    rd = _make_run_dir(tmp_path)
+    monkeypatch.setattr(
+        "lingtai.tools.daemon.run_dir.process_identity",
+        lambda pid: "stable-parent-identity",
+    )
+    monkeypatch.setattr(
+        "lingtai.tools.daemon.run_dir.process_identity_matches",
+        lambda pid, saved: saved == "stable-parent-identity",
+    )
+
+    first = rd.claim_resume_generation()
+    second = rd.claim_resume_generation()
+
+    assert first["status"] == "running"
+    assert first["owner_start_identity"] == "stable-parent-identity"
+    assert second == {"status": "busy", "generation": first["generation"]}
+
+
+def test_resume_claim_reused_pid_identity_becomes_stale_after_pending_lease(tmp_path, monkeypatch):
+    rd = _make_run_dir(tmp_path)
+    identities = iter(["first-incarnation", "second-incarnation"])
+    monkeypatch.setattr(
+        "lingtai.tools.daemon.run_dir.process_identity",
+        lambda pid: next(identities),
+    )
+    monkeypatch.setattr(
+        "lingtai.tools.daemon.run_dir.process_identity_matches",
+        lambda pid, saved: False,
+    )
+
+    first = rd.claim_resume_generation()
+    claimed_at = time.time()
+    monkeypatch.setattr(
+        "lingtai.tools.daemon.run_dir.time.time",
+        lambda: claimed_at + rd.PENDING_LAUNCH_LEASE_S + 1,
+    )
+    second = rd.claim_resume_generation()
+
+    assert second["status"] == "running"
+    assert second["generation"] != first["generation"]
+    assert second["owner_start_identity"] == "second-incarnation"
+    first_path = rd.path / "resume-claims" / f"resume-{first['generation']}.json"
+    first_on_disk = json.loads(first_path.read_text(encoding="utf-8"))
+    assert first_on_disk["status"] == "stale"
+    assert first_on_disk["released_at"]
+
+
+def test_pending_resume_launch_is_busy_until_lease_expiry(tmp_path, monkeypatch):
+    rd = _make_run_dir(tmp_path)
+    monkeypatch.setattr(
+        "lingtai.tools.daemon.run_dir.process_identity",
+        lambda pid: "launcher-incarnation",
+    )
+    first = rd.claim_resume_generation()
+    pending_path = rd.path / "resume-claims" / f"resume-{first['generation']}.json"
+    pending = json.loads(pending_path.read_text())
+    pending["owner_pid"] = 99999999  # simulated parent death during handoff
+    pending_path.write_text(json.dumps(pending), encoding="utf-8")
+    assert pending["status"] == "pending-launch"
+    assert rd.claim_resume_generation()["status"] == "busy"
+
+    monkeypatch.setattr(
+        "lingtai.tools.daemon.run_dir.time.time",
+        lambda: first["pending_until"] + 0.1,
+    )
+    recovered = rd.claim_resume_generation()
+    assert recovered["status"] == "running"
+    assert recovered["generation"] != first["generation"]
+
+
+def test_resume_promotion_requires_exact_generation_and_nonce(tmp_path, monkeypatch):
+    rd = _make_run_dir(tmp_path)
+    monkeypatch.setattr(
+        "lingtai.tools.daemon.run_dir.process_identity",
+        lambda pid: "owner-incarnation",
+    )
+    claim = rd.claim_resume_generation()
+    assert not rd.activate_resume_generation("wrong-generation", claim["launch_nonce"])
+    assert not rd.activate_resume_generation(claim["generation"], "wrong")
+    assert rd.activate_resume_generation(claim["generation"], claim["launch_nonce"])
+    assert not rd.release_resume_generation(
+        claim["generation"], "wrong", owner_pid=os.getpid(),
+        owner_identity="owner-incarnation",
+    )
+    assert not rd.release_resume_generation(
+        claim["generation"], claim["launch_nonce"], owner_pid=os.getpid(),
+        owner_identity="wrong-owner",
+    )
+    assert rd.release_resume_generation(
+        claim["generation"], claim["launch_nonce"], owner_pid=os.getpid(),
+        owner_identity="owner-incarnation", result_status="done",
+    )
+
+
+def _cross_process_terminal_writer(run_path: str, action: str, ready, start) -> None:
+    run_dir = DaemonRunDir.attach(Path(run_path))
+    ready.set()
+    start.wait(5)
+    if action == "done":
+        run_dir.mark_done("done from child")
+    else:
+        run_dir.mark_timeout()
+
+
+def test_cross_process_terminal_transactions_preserve_one_terminal_truth(tmp_path):
+    """Two real processes cannot overwrite each other's terminal decision."""
+    rd = _make_run_dir(tmp_path)
+    ctx = multiprocessing.get_context("spawn")
+    start = ctx.Event()
+    ready = [ctx.Event(), ctx.Event()]
+    workers = [
+        ctx.Process(target=_cross_process_terminal_writer,
+                    args=(str(rd.path), action, ready[idx], start))
+        for idx, action in enumerate(("done", "timeout"))
+    ]
+    for worker in workers:
+        worker.start()
+    assert all(event.wait(5) for event in ready)
+    start.set()
+    for worker in workers:
+        worker.join(10)
+        assert worker.exitcode == 0
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["state"] in {"done", "timeout"}
+    events = [
+        json.loads(line)
+        for line in rd.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    terminal_events = [
+        event for event in events
+        if event.get("event") in {"daemon_done", "daemon_timeout"}
+    ]
+    assert len(terminal_events) == 1
+    if state["state"] == "done":
+        assert terminal_events[0]["event"] == "daemon_done"
+        assert state["result_preview"] == "done from child"
+        assert Path(state["result_path"]).read_text(encoding="utf-8") == "done from child"
+    else:
+        assert terminal_events[0]["event"] == "daemon_timeout"
+        assert state.get("result_path") is None
+        assert not rd.result_path.exists()
+
+
 @pytest.mark.parametrize(
     "operation,setup,expected_terminal",
     [
@@ -392,35 +537,22 @@ def test_terminal_notification_operations_hold_owner_transaction(
 
     terminal_name = f"terminal-{operation}"
     writer_name = f"live-writer-{operation}"
-    terminal_field_entered = threading.Event()
-    release_terminal_field = threading.Event()
+    terminal_write_entered = threading.Event()
+    release_terminal_write = threading.Event()
     writer_attempted = threading.Event()
     writer_serialized = threading.Event()
     terminal_results: list[object] = []
     errors: list[BaseException] = []
 
-    watched_field = (
-        "terminal_notification_claim"
-        if operation in {"claim", "clear"}
-        else "terminal_notified"
-    )
-
-    class BlockingTerminalState(dict):
-        def __setitem__(self, key, value):
-            if (
-                threading.current_thread().name == terminal_name
-                and key == watched_field
-            ):
-                terminal_field_entered.set()
-                assert release_terminal_field.wait(timeout=5)
-            super().__setitem__(key, value)
-
-    rd._state = BlockingTerminalState(rd._state)
     original_atomic = rd._atomic_write_json
     original_safe_state = rd._safe_state
 
     def coordinated_atomic(path, data):
-        if threading.current_thread().name == writer_name:
+        current_name = threading.current_thread().name
+        if current_name == terminal_name and path == rd.daemon_json_path:
+            terminal_write_entered.set()
+            assert release_terminal_write.wait(timeout=5)
+        if current_name == writer_name:
             writer_serialized.set()
         return original_atomic(path, data)
 
@@ -453,15 +585,15 @@ def test_terminal_notification_operations_hold_owner_transaction(
     terminal_thread = threading.Thread(target=run_terminal, name=terminal_name)
     writer_thread = threading.Thread(target=run_writer, name=writer_name)
     terminal_thread.start()
-    assert terminal_field_entered.wait(timeout=5)
+    assert terminal_write_entered.wait(timeout=5)
     writer_thread.start()
     assert writer_attempted.wait(timeout=5)
 
     # Under the owner transaction the writer is blocked, not merely delayed by
-    # filesystem scheduling: the terminal mutation itself is still in flight.
+    # filesystem scheduling: the terminal persistence itself is still in flight.
     writer_overlapped = writer_serialized.wait(timeout=1)
 
-    release_terminal_field.set()
+    release_terminal_write.set()
     terminal_thread.join(timeout=5)
     writer_thread.join(timeout=5)
     assert not terminal_thread.is_alive()
@@ -622,18 +754,36 @@ def test_record_cli_tokens_backfills_missing_cli_tokens_for_old_state(tmp_path):
     }
 
 
-def test_record_cli_tokens_logs_cli_usage_event_with_raw(tmp_path):
+def test_record_cli_tokens_logs_redacted_cli_usage_event_with_raw(tmp_path):
     rd = _make_run_dir(tmp_path)
-    raw = {"input_tokens": 6950, "cache_read_input_tokens": 15621,
-           "cache_creation_input_tokens": 3068, "output_tokens": 4}
+    api_key = "fake-api-key-for-redaction"
+    authorization = "Bearer fake-authorization-for-redaction"
+    raw = {
+        "input_tokens": 6950,
+        "cache_read_input_tokens": 15621,
+        "cache_creation_input_tokens": 3068,
+        "output_tokens": 4,
+        "api_key": api_key,
+        "metadata": {"authorization": authorization},
+    }
     rd.record_cli_tokens(input=6950, output=4, cached=18689, thinking=0, raw=raw)
-    last = json.loads(rd.events_path.read_text().splitlines()[-1])
+    events_text = rd.events_path.read_text()
+    last = json.loads(events_text.splitlines()[-1])
     assert last["event"] == "cli_usage"
     assert last["input"] == 6950
     assert last["output"] == 4
     assert last["cached"] == 18689
     assert last["thinking"] == 0
-    assert last["raw"] == raw
+    assert last["raw"] == {
+        "input_tokens": 6950,
+        "cache_read_input_tokens": 15621,
+        "cache_creation_input_tokens": 3068,
+        "output_tokens": 4,
+        "api_key": "<redacted>",
+        "metadata": {"authorization": "<redacted>"},
+    }
+    assert api_key not in events_text
+    assert authorization not in events_text
     assert "ts" in last
 
 

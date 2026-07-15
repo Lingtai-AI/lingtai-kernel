@@ -26,12 +26,15 @@ from lingtai.tools.daemon import (
     _cli_backend_loads_common_mcp as _source_cli_backend_loads_common_mcp,
     _normalize_backend,
 )
+from lingtai.tools.daemon.run_dir import DaemonRunDir
 from tests._daemon_helpers import (
     FiniteFakeProc,
     completed_future,
+    install_fake_detached_owner,
     make_daemon_agent,
     make_daemon_run_dir,
     register_daemon_entry,
+    wait_daemon_terminal,
 )
 
 
@@ -155,52 +158,31 @@ def test_emanate_cli_rejects_bad_backend_options(tmp_path):
     assert mgr._emanations == {}
 
 
-def test_emanate_cli_persists_resolved_options(tmp_path):
-    """Successful CLI emanate persists user argv separately from harness argv."""
+def test_emanate_cli_persists_resolved_options(tmp_path, monkeypatch):
+    """Detached manifest persists and hands resolved user/harness argv to its owner."""
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-
-    # Block the worker from actually invoking subprocess.Popen — we only
-    # care that _handle_emanate_cli wired the run_dir state correctly.
-    captured: dict = {}
-
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event,
-                 backend_argv=None):
-        captured["em_id"] = em_id
-        captured["task"] = task
-        captured["backend_argv"] = list(backend_argv or [])
-        captured["daemon_json_state"] = json.loads(
-            run_dir.daemon_json_path.read_text()
-        )
-        run_dir.mark_done("[fake done]")
-        return "[fake done]"
-
-    with patch.object(mgr, "_run_claude_code_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": "claude-code",
-            "tasks": [{
-                "task": "Refactor auth.",
-                "tools": [],
-                "backend_options": {
-                    "config": "model_reasoning_effort=ultra",
-                },
-            }],
-        })
-        assert result["status"] == "dispatched"
-
-        # Wait for the fake worker to complete.
-        em_id = result["ids"][0]
-        fut = mgr._emanations[em_id]["future"]
-        fut.result(timeout=5)
+    records = install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "claude-code",
+        "tasks": [{
+            "task": "Refactor auth.",
+            "tools": [],
+            "backend_options": {"config": "model_reasoning_effort=ultra"},
+        }],
+    })
+    assert result["status"] == "dispatched"
+    assert "future" not in mgr._emanations[result["ids"][0]]
+    state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
 
     user_argv = [
         "--config", "model_reasoning_effort=ultra",
     ]
-    assert captured["backend_argv"][:len(user_argv)] == user_argv
-    assert "--mcp-config" in captured["backend_argv"]
-    assert "--strict-mcp-config" in captured["backend_argv"]
-    state = captured["daemon_json_state"]
+    manifest = records[0]["manifest"]
+    assert manifest["backend_argv"][:len(user_argv)] == user_argv
+    assert "--mcp-config" in manifest["backend_argv"]
+    assert "--strict-mcp-config" in manifest["backend_argv"]
     assert state["backend"] == "claude-code"
     assert state["backend_options"] == {
         "config": "model_reasoning_effort=ultra",
@@ -208,38 +190,29 @@ def test_emanate_cli_persists_resolved_options(tmp_path):
     assert state["backend_argv"] == user_argv
     assert "--mcp-config" in state["backend_harness_argv"]
     assert "--strict-mcp-config" in state["backend_harness_argv"]
+    events = [json.loads(line) for line in records[0]["run_dir"].events_path.read_text().splitlines()]
+    event = [e for e in events if e.get("event") == "test_detached_backend_invocation"]
+    assert event[0]["argv"] == manifest["backend_argv"]
 
 
-def test_emanate_cli_no_options_omits_fields(tmp_path):
-    """No backend_options omits user fields but records harness argv separately."""
+def test_emanate_cli_no_options_omits_fields(tmp_path, monkeypatch):
+    """No backend_options omits user fields in durable detached state."""
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
+    records = install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": "claude-code",
+        "tasks": [{"task": "no options", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
 
-    captured: dict = {}
-
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event,
-                 backend_argv=None):
-        captured["backend_argv"] = list(backend_argv or [])
-        captured["state"] = json.loads(run_dir.daemon_json_path.read_text())
-        run_dir.mark_done("[fake done]")
-        return "[fake done]"
-
-    with patch.object(mgr, "_run_claude_code_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": "claude-code",
-            "tasks": [{"task": "no options", "tools": []}],
-        })
-        assert result["status"] == "dispatched"
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
-
-    assert "--mcp-config" in captured["backend_argv"]
-    assert "--strict-mcp-config" in captured["backend_argv"]
-    assert "backend_options" not in captured["state"]
-    assert "backend_argv" not in captured["state"]
-    assert "--mcp-config" in captured["state"]["backend_harness_argv"]
-    assert "--strict-mcp-config" in captured["state"]["backend_harness_argv"]
+    assert "--mcp-config" in records[0]["manifest"]["backend_argv"]
+    assert "--strict-mcp-config" in records[0]["manifest"]["backend_argv"]
+    assert "backend_options" not in state
+    assert "backend_argv" not in state
+    assert "--mcp-config" in state["backend_harness_argv"]
+    assert "--strict-mcp-config" in state["backend_harness_argv"]
 
 
 def test_lingtai_backend_ignores_backend_options(tmp_path):
@@ -272,37 +245,21 @@ def test_lingtai_backend_ignores_backend_options(tmp_path):
     assert result["status"] == "dispatched"
 
 
-def test_unknown_backend_falls_back_to_lingtai_path(tmp_path):
-    """Direct callers that bypass schema validation keep the old fallback.
-
-    Unknown backend strings are not CLI backends; they route to the in-process
-    LingTai worker and therefore do not store a CLI ``backend`` field.
-    """
+def test_unknown_backend_falls_back_to_lingtai_path(tmp_path, monkeypatch):
+    """Unknown backend is normalized to the detached LingTai execution path."""
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    captured: dict = {}
-
-    def fake_run(em_id, run_dir, schemas, dispatch, task, cancel_event,
-                 timeout_event=None, preset_llm=None, max_turns=None,
-                 task_mcp_clients=None):
-        captured["task"] = task
-        captured["state"] = dict(run_dir._state)
-        run_dir.mark_done("[fake done]")
-        return "[fake done]"
-
-    with patch.object(mgr, "_run_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": "not-real",
-            "tasks": [{"task": "fall back", "tools": []}],
-        })
-        assert result["status"] == "dispatched"
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
-
-    assert captured["task"] == "fall back"
-    assert captured["state"]["backend"] == "lingtai"
-    assert "backend" not in mgr._emanations[em_id]
+    records = install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": "not-real",
+        "tasks": [{"task": "fall back", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    em_id = result["ids"][0]
+    state = wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
+    assert records[0]["manifest"]["backend"] == "lingtai"
+    assert state["backend"] == "lingtai"
+    assert "future" not in mgr._emanations[em_id]
 
 
 # ---------------------------------------------------------------------------
@@ -514,93 +471,64 @@ def test_schema_includes_mimocode_and_qwen_code_backends():
     assert "Qwen Code" in backend["description"]
 
 
-def test_mimocode_alias_dispatches_to_canonical_backend(tmp_path):
+def test_mimocode_alias_dispatches_to_canonical_backend(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    captured: dict = {}
-
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
-        captured["backend"] = run_dir._state["backend"]
-        captured["model"] = run_dir._state["model"]
-        captured["backend_argv"] = list(backend_argv or [])
-        run_dir.mark_done("[fake done]")
-        return "[fake done]"
-
-    with patch.object(mgr, "_run_mimocode_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": "mimo",
-            "tasks": [{"task": "Use MiMo Code.", "tools": [],
-                       "backend_options": {"model": "mimo-auto"}}],
-        })
-        assert result["status"] == "dispatched"
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
-
-    assert captured["backend"] == "mimocode"
-    assert captured["model"] == "mimocode"
-    assert captured["backend_argv"] == ["--model", "mimo-auto"]
+    records = install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": "mimo",
+        "tasks": [{"task": "Use MiMo Code.", "tools": [],
+                   "backend_options": {"model": "mimo-auto"}}],
+    })
+    assert result["status"] == "dispatched"
+    state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
+    assert records[0]["manifest"]["backend"] == "mimocode"
+    assert state["model"] == "mimocode"
+    assert records[0]["manifest"]["backend_argv"] == ["--model", "mimo-auto"]
 
 
-def test_cli_contexts_keep_per_task_argv_and_passive_mcp(tmp_path):
+def test_cli_contexts_keep_per_task_argv_and_passive_mcp(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    captured: dict[str, dict] = {}
-
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
-        captured[run_dir._state["task"]] = {
-            "backend_argv": list(backend_argv or []),
-            "call_parameters": run_dir._state["call_parameters"],
-            "state": dict(run_dir._state),
-        }
-        run_dir.mark_done("[fake done]")
-        return "[fake done]"
-
-    with (
-        patch.object(mgr, "_run_claude_code_emanation", side_effect=fake_run),
-        patch.object(
-            mgr,
-            "_connect_task_mcp_registrations",
-            side_effect=AssertionError("CLI backend must not connect MCP clients"),
-        ),
+    records = install_fake_detached_owner(monkeypatch)
+    with patch.object(
+        mgr,
+        "_connect_task_mcp_registrations",
+        side_effect=AssertionError("CLI backend must not connect MCP clients"),
     ):
         result = mgr.handle({
-            "action": "emanate",
-            "backend": "claude-code",
+            "action": "emanate", "backend": "claude-code",
             "tasks": [
-                {
-                    "task": "task with argv",
-                    "tools": [],
-                    "backend_options": {"model": "claude-opus-4-7"},
-                },
-                {
-                    "task": "task with mcp",
-                    "tools": [],
-                    "mcp": [{
-                        "name": "demo",
-                        "command": "demo-mcp",
-                        "args": ["--serve"],
-                        "env": {"TOKEN": "secret"},
-                    }],
-                },
+                {"task": "task with argv", "tools": [],
+                 "backend_options": {"model": "claude-opus-4-7"}},
+                {"task": "task with mcp", "tools": [],
+                 "mcp": [{"name": "demo", "command": "demo-mcp",
+                           "args": ["--serve"], "env": {"TOKEN": "secret"}}]},
             ],
         })
-        assert result["status"] == "dispatched"
-        for em_id in result["ids"]:
-            mgr._emanations[em_id]["future"].result(timeout=5)
-
-    argv_with_model = captured["task with argv"]["backend_argv"]
+    assert result["status"] == "dispatched"
+    states = {
+        DaemonRunDir.read_state_from_disk(record["run_dir"].path)["task"]:
+            wait_daemon_terminal(record["run_dir"])
+        for record in records
+    }
+    manifests = {
+        DaemonRunDir.read_state_from_disk(record["run_dir"].path)["task"]:
+            record["manifest"]
+        for record in records
+    }
+    argv_with_model = manifests["task with argv"]["backend_argv"]
     assert argv_with_model[:2] == ["--model", "claude-opus-4-7"]
     assert "--mcp-config" in argv_with_model
     assert "--strict-mcp-config" in argv_with_model
-    assert captured["task with argv"]["call_parameters"]["mcp"][0]["name"] == "daemon_common"
-    argv_with_mcp = captured["task with mcp"]["backend_argv"]
+    assert states["task with argv"]["call_parameters"]["mcp"][0]["name"] == "daemon_common"
+    argv_with_mcp = manifests["task with mcp"]["backend_argv"]
     assert "--mcp-config" in argv_with_mcp
     assert "--strict-mcp-config" in argv_with_mcp
-    assert "backend_argv" not in captured["task with mcp"]["state"]
-    assert "--mcp-config" in captured["task with mcp"]["state"]["backend_harness_argv"]
-    assert "--strict-mcp-config" in captured["task with mcp"]["state"]["backend_harness_argv"]
-    mcp_params = captured["task with mcp"]["call_parameters"]["mcp"]
+    assert "backend_argv" not in states["task with mcp"]
+    assert "--mcp-config" in states["task with mcp"]["backend_harness_argv"]
+    assert "--strict-mcp-config" in states["task with mcp"]["backend_harness_argv"]
+    mcp_params = states["task with mcp"]["call_parameters"]["mcp"]
     assert mcp_params[0]["name"] == "daemon_common"
     assert mcp_params[1] == {
         "name": "demo",
@@ -706,23 +634,17 @@ def test_qwen_code_rejects_harness_owned_backend_options(tmp_path):
     assert mgr._emanations == {}
 
 
-def test_qwen_code_ask_is_explicitly_unsupported(tmp_path):
+def test_qwen_code_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
-        run_dir.mark_done("[fake done]")
-        return "[fake done]"
-
-    with patch.object(mgr, "_run_qwen_code_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": "qwen-code",
-            "tasks": [{"task": "Qwen once.", "tools": []}],
-        })
-        assert result["status"] == "dispatched"
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
+    install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": "qwen-code",
+        "tasks": [{"task": "Qwen once.", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    em_id = result["ids"][0]
+    wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
 
     ask = mgr.handle({"action": "ask", "id": em_id, "message": "follow up"})
 
@@ -748,34 +670,21 @@ def test_schema_includes_kimicode_backend():
 
 
 @pytest.mark.parametrize("backend", ["kimi", "kimicode"])
-def test_kimicode_alias_and_canonical_dispatch_to_backend(tmp_path, backend):
+def test_kimicode_alias_and_canonical_dispatch_to_backend(tmp_path, monkeypatch, backend):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    captured: dict = {}
-
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
-        captured["backend"] = run_dir._state["backend"]
-        captured["model"] = run_dir._state["model"]
-        captured["backend_argv"] = list(backend_argv or [])
-        captured["call_parameters"] = dict(run_dir._state["call_parameters"])
-        run_dir.mark_done("[fake done]")
-        return "[fake done]"
-
-    with patch.object(mgr, "_run_kimicode_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": backend,
-            "tasks": [{"task": "Use Kimi Code.", "tools": [],
-                       "backend_options": {"model": "kimi-for-coding"}}],
-        })
-        assert result["status"] == "dispatched"
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
-
-    assert captured["backend"] == "kimicode"
-    assert captured["model"] == "kimicode"
-    assert captured["backend_argv"] == ["--model", "kimi-for-coding"]
-    assert captured["call_parameters"]["mcp"][0]["name"] == "daemon_common"
+    records = install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": backend,
+        "tasks": [{"task": "Use Kimi Code.", "tools": [],
+                   "backend_options": {"model": "kimi-for-coding"}}],
+    })
+    assert result["status"] == "dispatched"
+    state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
+    assert records[0]["manifest"]["backend"] == "kimicode"
+    assert state["model"] == "kimicode"
+    assert records[0]["manifest"]["backend_argv"] == ["--model", "kimi-for-coding"]
+    assert state["call_parameters"]["mcp"][0]["name"] == "daemon_common"
 
 
 def test_kimicode_cmd_appends_backend_argv_before_owned_flags(tmp_path):
@@ -1010,54 +919,33 @@ def test_kimicode_in_common_mcp_loading_set():
     assert _source_cli_backend_loads_common_mcp("qwen-code") is True
 
 
-def test_kimicode_writes_run_private_mcp_json_for_common_and_parent_mcp(tmp_path):
+def test_kimicode_writes_run_private_mcp_json_for_common_and_parent_mcp(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    captured: dict = {}
-
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
-        captured["task"] = task
-        captured["call_parameters"] = dict(run_dir._state["call_parameters"])
-        captured["harness_files"] = dict(run_dir._state["backend_harness_files"])
-        run_dir.mark_done("[fake done]")
-        return "[fake done]"
-
-    with patch.object(mgr, "_run_kimicode_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": "kimicode",
-            "tasks": [{
-                "task": "Use Kimi MCP.",
-                "tools": [],
-                "mcp": [
-                    {
-                        "name": "parent-docs",
-                        "transport": "stdio",
-                        "command": "/bin/echo",
-                        "args": ["docs"],
-                        "env": {"DOC_TOKEN": "dummy"},
-                    },
-                    {
-                        "name": "parent_http",
-                        "transport": "http",
-                        "url": "https://mcp.example.test/mcp",
-                        "headers": {"Authorization": "Bearer dummy"},
-                    },
-                ],
-            }],
-        })
-        assert result["status"] == "dispatched"
-        mgr._emanations[result["ids"][0]]["future"].result(timeout=5)
-
-    assert "call the MCP tool `finish`" in captured["task"]
-    assert "Bearer dummy" not in captured["task"]
-    assert "DOC_TOKEN: <redacted>" in captured["task"]
-    assert captured["call_parameters"]["mcp"][1]["env"] == {"DOC_TOKEN": "<redacted>"}
-    assert captured["call_parameters"]["mcp"][2]["headers"] == {
+    records = install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": "kimicode",
+        "tasks": [{"task": "Use Kimi MCP.", "tools": [], "mcp": [
+            {"name": "parent-docs", "transport": "stdio", "command": "/bin/echo",
+             "args": ["docs"], "env": {"DOC_TOKEN": "dummy"}},
+            {"name": "parent_http", "transport": "http",
+             "url": "https://mcp.example.test/mcp",
+             "headers": {"Authorization": "Bearer dummy"}},
+        ]}],
+    })
+    assert result["status"] == "dispatched"
+    record = records[0]
+    state = wait_daemon_terminal(record["run_dir"])
+    task_prompt = record["run_dir"].prompt_path.read_text(encoding="utf-8")
+    assert "call the MCP tool `finish`" in task_prompt
+    assert "Bearer dummy" not in task_prompt
+    assert "DOC_TOKEN: <redacted>" in task_prompt
+    assert state["call_parameters"]["mcp"][1]["env"] == {"DOC_TOKEN": "<redacted>"}
+    assert state["call_parameters"]["mcp"][2]["headers"] == {
         "Authorization": "<redacted>"
     }
 
-    mcp_path = Path(captured["harness_files"]["kimicode_mcp_config"])
+    mcp_path = Path(state["backend_harness_files"]["kimicode_mcp_config"])
     assert mcp_path.name == "mcp.json"
     assert mcp_path.parent.name == "kimi-code-home"
     config = json.loads(mcp_path.read_text(encoding="utf-8"))
@@ -1140,23 +1028,17 @@ def test_kimicode_rejects_harness_owned_backend_options(tmp_path, bad_flag):
     assert mgr._emanations == {}
 
 
-def test_kimicode_ask_is_explicitly_unsupported(tmp_path):
+def test_kimicode_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
-        run_dir.mark_done("[fake done]")
-        return "[fake done]"
-
-    with patch.object(mgr, "_run_kimicode_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": "kimicode",
-            "tasks": [{"task": "Kimi once.", "tools": []}],
-        })
-        assert result["status"] == "dispatched"
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
+    install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": "kimicode",
+        "tasks": [{"task": "Kimi once.", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    em_id = result["ids"][0]
+    wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
 
     ask = mgr.handle({"action": "ask", "id": em_id, "message": "follow up"})
 
@@ -1182,32 +1064,20 @@ def test_schema_includes_oh_my_pi_backend():
 
 
 @pytest.mark.parametrize("backend", ["omp", "oh-my-pi"])
-def test_oh_my_pi_alias_and_canonical_dispatch_to_backend(tmp_path, backend):
+def test_oh_my_pi_alias_and_canonical_dispatch_to_backend(tmp_path, monkeypatch, backend):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    captured: dict = {}
-
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
-        captured["backend"] = run_dir._state["backend"]
-        captured["model"] = run_dir._state["model"]
-        captured["backend_argv"] = list(backend_argv or [])
-        run_dir.mark_done("[fake done]")
-        return "[fake done]"
-
-    with patch.object(mgr, "_run_oh_my_pi_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": backend,
-            "tasks": [{"task": "Use Oh-My-Pi.", "tools": [],
-                       "backend_options": {"provider": "anthropic"}}],
-        })
-        assert result["status"] == "dispatched"
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
-
-    assert captured["backend"] == "oh-my-pi"
-    assert captured["model"] == "oh-my-pi"
-    assert captured["backend_argv"] == ["--provider", "anthropic"]
+    records = install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": backend,
+        "tasks": [{"task": "Use Oh-My-Pi.", "tools": [],
+                   "backend_options": {"provider": "anthropic"}}],
+    })
+    assert result["status"] == "dispatched"
+    state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
+    assert records[0]["manifest"]["backend"] == "oh-my-pi"
+    assert state["model"] == "oh-my-pi"
+    assert records[0]["manifest"]["backend_argv"] == ["--provider", "anthropic"]
 
 
 def test_oh_my_pi_cmd_includes_mode_json_and_session_id_from_header(tmp_path):

@@ -38,6 +38,10 @@ from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.meta_block import build_meta
 from lingtai.kernel.tool_executor import ToolExecutor
 from lingtai.kernel.trace_redaction import redact_text
+from lingtai.adapters.posix.process_identity import (
+    process_identity,
+    process_identity_matches,
+)
 from .run_dir import DaemonRunDir
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
 from .runtime import (
@@ -310,6 +314,10 @@ def _write_qwen_mcp_settings(run_dir: DaemonRunDir, registrations: list[dict]) -
         }
     path = run_dir.path / "qwen-daemon-settings.json"
     atomic_write_json(path, {"mcpServers": servers}, ensure_ascii=False, indent=2)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
     return path
 
 
@@ -345,6 +353,11 @@ def _write_kimicode_mcp_config(
     kimi_home.mkdir(parents=True, exist_ok=True)
     path = kimi_home / "mcp.json"
     atomic_write_json(path, {"mcpServers": servers}, ensure_ascii=False, indent=2)
+    try:
+        path.chmod(0o600)
+        kimi_home.chmod(0o700)
+    except OSError:
+        pass
     return path
 
 
@@ -922,6 +935,62 @@ def get_schema(lang: str = "en") -> dict:
 # ``[cancelled]`` is emitted on a timed-out/reclaimed run; ``[no output]`` on a
 # run that produced no final text. ``[intercepted]`` is a guard-handled *normal*
 # exit and must NOT be classified as a terminal abort.
+def _build_emanation_prompt_standalone(
+    language: str,
+    task: str,
+    schemas: list[FunctionSchema],
+    system_prompt: str | None = None,
+) -> str:
+    """Pure emanation-system-prompt builder — the body of
+    ``DaemonManager._build_emanation_prompt``, factored out so the detached
+    daemon supervisor (``lingtai.tools.daemon.supervisor_runtime``,
+    which has no live parent ``Agent`` to read ``_config.language`` from)
+    can build an identical prompt from just the resolved ``language`` string
+    persisted in its run manifest.
+    """
+    lines = [
+        "You are a daemon emanation (分神) — a focused subagent dispatched by an agent.",
+        "You have one task. Complete it, then provide your final report as text.",
+        "Your intermediate text output will be seen by the main agent — treat it as a progress report.",
+        "When the completion MCP is available, call its finish tool before your final report.",
+        "",
+        "You work in the agent's working directory. Other subagents may be working",
+        "concurrently on different tasks in the same directory. Do not modify files",
+        "outside your assigned scope.",
+    ]
+
+    tool_lines = []
+    for s in schemas:
+        if s.description:
+            rendered = append_tool_glossary(
+                s.description, tool_package=s.glossary_package, language=language
+            )
+            tool_lines.append(f"### {s.name}\n{rendered}")
+    if tool_lines:
+        lines.append("")
+        lines.append("## tools")
+        lines.extend(tool_lines)
+
+    if system_prompt:
+        lines.append("")
+        lines.append("## Parent-provided daemon context (oneshot)")
+        lines.append(
+            "These parent instructions and selected skills/MCP context "
+            "apply only to this daemon run. They may narrow how you complete "
+            "the task, "
+            "but they do not override the daemon lifecycle, cancellation/"
+            "timeout limits, available tool schema, or tool execution/"
+            "approval guard."
+        )
+        lines.append(system_prompt)
+
+    lines.append("")
+    lines.append("Your task:")
+    lines.append(task)
+
+    return "\n".join(lines)
+
+
 _CANCELLED_SENTINEL = "[cancelled]"
 _NO_OUTPUT_SENTINEL = "[no output]"
 
@@ -1072,7 +1141,24 @@ class DaemonManager:
         self._reconcile_terminal_notifications()
 
     def _reap_dead_parent_daemon_records(self) -> None:
-        """Mark stale running daemon.json records failed after parent restart."""
+        """Mark stale running daemon.json records failed after a restart.
+
+        A record's ``owner`` field decides which process identity is
+        authoritative for liveness:
+
+        - ``"parent"`` (default / every legacy in-process run): reaped when
+          the recorded ``parent_pid`` is dead — a fresh manager after
+          refresh/restart cannot resume an in-process worker thread that
+          belonged to the old interpreter.
+        - ``"supervisor"``: a detached run is, by design, still alive and
+          still executing after the launching agent process is gone — its
+          ``parent_pid`` being dead is expected and must NOT be treated as
+          orphaning. Liveness is instead checked against the run's own
+          recorded ``supervisor_pid``: only a dead supervisor with no
+          terminal state is a genuinely lost run (crashed without committing
+          terminal truth — see the parent contract's "exact supervisor
+          identity plus durable state" classification requirement).
+        """
         daemons_dir = self._agent._working_dir / "daemons"
         if not daemons_dir.is_dir():
             return
@@ -1094,35 +1180,57 @@ class DaemonManager:
             if state.get("finished_at") not in (None, ""):
                 continue
 
-            parent_pid = state.get("parent_pid")
-            if not isinstance(parent_pid, int) or isinstance(parent_pid, bool):
-                continue
-            if parent_pid == current_pid:
-                continue
-
-            try:
-                os.kill(parent_pid, 0)
-            except ProcessLookupError:
-                pass
-            except (PermissionError, OSError):
-                continue
+            owner = state.get("owner", "parent")
+            if owner == "supervisor":
+                supervisor_pid = state.get("supervisor_pid")
+                if not isinstance(supervisor_pid, int) or isinstance(supervisor_pid, bool):
+                    # No pid recorded yet — the supervisor is still in its
+                    # startup handshake window; do not reap.
+                    continue
+                supervisor_identity = state.get("supervisor_start_identity")
+                if self._pid_identity_matches(supervisor_pid, supervisor_identity):
+                    continue
+                reap_reason = (
+                    "Reaped running daemon record because recorded "
+                    f"supervisor_pid {supervisor_pid} is no longer alive with "
+                    "no terminal state committed (crashed without committing "
+                    "terminal truth)."
+                )
             else:
-                continue
-
-            state["state"] = "failed"
-            state["finished_at"] = DaemonRunDir._now_iso()
-            state["current_tool"] = None
-            state["error"] = {
-                "type": "DaemonOrphaned",
-                "message": (
+                parent_pid = state.get("parent_pid")
+                if not isinstance(parent_pid, int) or isinstance(parent_pid, bool):
+                    continue
+                if parent_pid == current_pid:
+                    continue
+                if self._pid_alive(parent_pid):
+                    continue
+                reap_reason = (
                     "Reaped running daemon record because recorded parent_pid "
                     f"{parent_pid} is no longer alive after daemon manager startup."
-                ),
-            }
+                )
+
             try:
-                atomic_write_json(daemon_json_path, state, ensure_ascii=False, indent=2)
-            except OSError:
+                orphaned = type("DaemonOrphaned", (RuntimeError,), {})
+                DaemonRunDir.attach(daemon_json_path.parent).mark_failed(
+                    orphaned(reap_reason)
+                )
+            except (OSError, ValueError, json.JSONDecodeError):
                 continue
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+        return True
+
+    @staticmethod
+    def _pid_identity_matches(pid: int, expected: str | None) -> bool:
+        """Check PID plus a stable process-incarnation identity."""
+        return process_identity_matches(pid, expected)
 
     def _reconcile_terminal_notifications(self) -> None:
         """Retry terminal daemon notifications that lack a published receipt."""
@@ -1465,6 +1573,10 @@ class DaemonManager:
             servers[reg["name"]] = server
         path = run_dir.path / _DAEMON_CLAUDE_MCP_CONFIG_FILE
         atomic_write_json(path, {"mcpServers": servers}, ensure_ascii=False, indent=2)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
         return path
 
     @staticmethod
@@ -1788,16 +1900,31 @@ class DaemonManager:
         parent_service = self._agent.service
         provider = str(getattr(parent_service, "provider", "")).lower()
         parent_defaults = getattr(parent_service, "_provider_defaults", {}) or {}
+        if not isinstance(parent_defaults, dict):
+            parent_defaults = {}
+        provider = provider if isinstance(provider, str) else ""
+        model = getattr(parent_service, "model", "unknown")
+        if not isinstance(model, str):
+            model = str(model)
+        base_url = getattr(parent_service, "_base_url", None)
+        if base_url is not None and not isinstance(base_url, str):
+            base_url = str(base_url)
+        context_window = getattr(parent_service, "_context_window", 1_000_000)
+        if not isinstance(context_window, (int, float)):
+            context_window = 1_000_000
+        bucket = parent_defaults.get(provider, {})
+        if not isinstance(bucket, dict):
+            bucket = {}
         return {
-            "provider": parent_service.provider,
-            "model": parent_service.model,
+            "provider": provider,
+            "model": model,
             "api_key": getattr(parent_service, "api_key", None),
-            "base_url": getattr(parent_service, "_base_url", None),
+            "base_url": base_url,
             "key_resolver": getattr(parent_service, "_key_resolver", None),
-            "context_window": getattr(parent_service, "_context_window", 1_000_000),
+            "context_window": context_window,
             # Parent provider defaults carried verbatim (not re-derived through
             # the manifest key list) so any provider-specific field survives.
-            "_provider_defaults": dict(parent_defaults.get(provider, {})),
+            "_provider_defaults": dict(bucket),
         }
 
     def _build_tool_surface(
@@ -2044,49 +2171,168 @@ class DaemonManager:
         system_prompt: str | None = None,
     ) -> str:
         """Build the system prompt for an emanation."""
-        lines = [
-            "You are a daemon emanation (分神) — a focused subagent dispatched by an agent.",
-            "You have one task. Complete it, then provide your final report as text.",
-            "Your intermediate text output will be seen by the main agent — treat it as a progress report.",
-            "When the completion MCP is available, call its finish tool before your final report.",
-            "",
-            "You work in the agent's working directory. Other subagents may be working",
-            "concurrently on different tasks in the same directory. Do not modify files",
-            "outside your assigned scope.",
-        ]
+        return _build_emanation_prompt_standalone(
+            self._agent._config.language, task, schemas, system_prompt=system_prompt,
+        )
 
-        # Tool descriptions — append package glossary body for the selected language.
-        lang = self._agent._config.language
-        tool_lines = []
-        for s in schemas:
-            if s.description:
-                rendered = append_tool_glossary(
-                    s.description, tool_package=s.glossary_package, language=lang
-                )
-                tool_lines.append(f"### {s.name}\n{rendered}")
-        if tool_lines:
-            lines.append("")
-            lines.append("## tools")
-            lines.extend(tool_lines)
+    _SUPERVISOR_STARTUP_TIMEOUT_S = 5.0
+    _SUPERVISOR_STARTUP_POLL_S = 0.05
 
-        if system_prompt:
-            lines.append("")
-            lines.append("## Parent-provided daemon context (oneshot)")
-            lines.append(
-                "These parent instructions and selected skills/MCP context "
-                "apply only to this daemon run. They may narrow how you complete "
-                "the task, "
-                "but they do not override the daemon lifecycle, cancellation/"
-                "timeout limits, available tool schema, or tool execution/"
-                "approval guard."
-            )
-            lines.append(system_prompt)
+    def _resolve_manifest_llm(self, effective_llm: dict) -> dict:
+        """Flatten an effective preset ``llm`` block into a JSON-serializable dict.
 
-        lines.append("")
-        lines.append("Your task:")
-        lines.append(task)
+        The in-process path threads ``key_resolver`` (a live callable) and a
+        ``_provider_defaults``/``provider_defaults`` bucket through untouched.
+        A detached supervisor cannot receive a live callable across a process
+        boundary, so the primary API key is resolved HERE (in this process,
+        where ``resolve_env``/the parent's already-resolved key are still
+        available) and only the resolved flat value crosses into the
+        manifest — the same secret-handling boundary the manifest module's
+        docstring describes (manifest lives beside daemon.json / native CLI
+        config files). ``key_resolver`` itself (for on-demand *other*-provider
+        adapters) is intentionally NOT carried — a detached lingtai run in
+        this slice never needs an on-demand adapter for a provider other than
+        its own.
+        """
+        # Never resolve the primary credential in the parent and never copy it
+        # into durable run state.  The detached host resolves this reference in
+        # its inherited environment/config at execution time.
+        api_key_env = effective_llm.get("api_key_env")
+        if "_provider_defaults" in effective_llm:
+            base_defaults = effective_llm["_provider_defaults"]
+        else:
+            base_defaults = self._llm_defaults_from_manifest(effective_llm)
+        return {
+            "provider": effective_llm["provider"],
+            "model": effective_llm["model"],
+            "api_key_env": api_key_env,
+            "base_url": effective_llm.get("base_url"),
+            "context_window": effective_llm.get("context_window"),
+            "provider_defaults": base_defaults or None,
+        }
 
-        return "\n".join(lines)
+    def _spawn_detached_lingtai_run(
+        self,
+        run_dir: DaemonRunDir,
+        *,
+        task: str,
+        tools: list[str],
+        max_turns: int,
+        timeout_s: float,
+        group_id: str | None,
+        effective_llm: dict,
+        context_token_limit: int | None,
+        mcp: list[dict] | None = None,
+        preset_name: str | None = None,
+        preset_llm: dict | None = None,
+        preset_capabilities: dict | None = None,
+        secret_capsule: dict | None = None,
+    ) -> None:
+        """Write the run manifest and spawn the detached supervisor for it.
+
+        Raises on any failure (unwritable manifest, spawn error, or a startup
+        handshake timeout) so the caller can mark the run failed and refuse
+        the batch entry cleanly — never claims a detached run started when it
+        did not.
+        """
+        from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
+        from lingtai.kernel.daemon_supervisor.manifest import build_manifest, write_manifest
+
+        resolved_llm = self._resolve_manifest_llm(effective_llm)
+        resolved_llm["provider_defaults"] = self._daemon_provider_defaults(
+            effective_llm["provider"],
+            resolved_llm["provider_defaults"],
+            run_dir,
+            context_token_limit=context_token_limit,
+        )
+
+        manifest = build_manifest(
+            run_id=run_dir.run_id,
+            backend="lingtai",
+            parent_working_dir=str(self._agent._working_dir),
+            run_dir=str(run_dir.path),
+            task=task,
+            tools=list(tools),
+            max_turns=max_turns,
+            timeout_s=timeout_s,
+            group_id=group_id,
+            context_token_limit=context_token_limit,
+            llm=resolved_llm,
+            mcp=mcp,
+            language=getattr(self._agent._config, "language", "en"),
+            preset_name=preset_name,
+            preset_llm=preset_llm,
+            preset_capabilities=preset_capabilities,
+        )
+        write_manifest(run_dir.path, manifest)
+
+        from lingtai.kernel.daemon_supervisor.manifest import manifest_path_for
+        from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+
+        request = DaemonSupervisorRequest(
+            run_id=run_dir.run_id,
+            manifest_path=str(manifest_path_for(run_dir.path)),
+            python_executable=sys.executable,
+        )
+        capsule = dict(secret_capsule or {})
+        capsule.setdefault("task", task)
+        capsule.setdefault("mcp", list(mcp or []))
+        runtime_llm = {}
+        # Resolve an explicit api_key_env reference in the parent while its
+        # environment/config is available, then carry only the resulting value
+        # through the ephemeral capsule.  The reference itself remains public in
+        # the manifest; the value never enters argv, the child environment, or
+        # durable state.  Implicit parent presets already carry the parent's
+        # resolved key in ``api_key``.
+        from lingtai.kernel.config_resolve import resolve_env
+        resolved_key = resolve_env(
+            effective_llm.get("api_key"), effective_llm.get("api_key_env")
+        )
+        if isinstance(resolved_key, str):
+            runtime_llm["api_key"] = resolved_key
+        for key in ("provider_defaults", "_provider_defaults"):
+            value = effective_llm.get(key)
+            if isinstance(value, dict):
+                runtime_llm[key] = value
+        if runtime_llm:
+            capsule.setdefault("llm", {}).update(runtime_llm)
+        PosixDaemonSupervisorAdapter().spawn_detached(request, capsule=capsule)
+        self._await_supervisor_startup(run_dir)
+
+    def _await_supervisor_startup(self, run_dir: DaemonRunDir) -> None:
+        """Bounded poll for the supervisor to record its own PID.
+
+        ``supervisor_runtime.run_supervisor`` writes ``daemon.json.supervisor_pid``
+        immediately after attaching its ``DaemonRunDir``, before doing any
+        real work. This is the caller-side half of the startup handshake the
+        Port's docstring describes: the Port itself returns as soon as the
+        OS process is launched, but the caller still needs truthful evidence
+        the process actually reached Python and attached to this run before
+        claiming ``dispatched`` success.
+        """
+        deadline = time.monotonic() + self._SUPERVISOR_STARTUP_TIMEOUT_S
+        while time.monotonic() < deadline:
+            # This process's own `run_dir` object was constructed BEFORE the
+            # supervisor subprocess existed; its in-memory `_state` never
+            # observes that other process's writes. Only a fresh disk read
+            # can see the supervisor's own daemon.json update.
+            try:
+                state = DaemonRunDir.read_state_from_disk(run_dir.path)
+            except (OSError, json.JSONDecodeError, ValueError):
+                time.sleep(self._SUPERVISOR_STARTUP_POLL_S)
+                continue
+            if state.get("supervisor_pid"):
+                return
+            if state.get("state") in ("done", "failed", "cancelled", "timeout"):
+                # Supervisor started, ran, and already finished (or crashed
+                # fast) before this poll observed the pid write — still a
+                # real start, not a hang.
+                return
+            time.sleep(self._SUPERVISOR_STARTUP_POLL_S)
+        raise RuntimeError(
+            f"detached daemon supervisor for run {run_dir.run_id!r} did not "
+            f"start within {self._SUPERVISOR_STARTUP_TIMEOUT_S}s"
+        )
 
     def _run_emanation(self, em_id: str, run_dir, schemas, dispatch,
                        task: str,
@@ -2238,6 +2484,11 @@ class DaemonManager:
             run_dir.record_user_send(task, kind="task")
             response = session.send(task)
             _accum(response)
+            # A detached watchdog may fire while a provider call is in flight.
+            # Re-check before accepting the response so late provider return
+            # cannot overwrite truthful timeout/reclaim state with ``done``.
+            if cancel_event.is_set():
+                return _mark_cancelled_or_timeout(run_dir, timeout_event)
             turns = 0
             run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
 
@@ -2292,7 +2543,14 @@ class DaemonManager:
                         run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
 
             text = response.text or "[no output]"
+            # The final terminal transition is serialized with cancellation:
+            # a reclaim/deadline racing the last provider response wins over a
+            # late natural ``done`` commit.
+            if cancel_event.is_set() or run_dir.read_state_from_disk(run_dir.path).get("state") not in {"running", "active"}:
+                return _mark_cancelled_or_timeout(run_dir, timeout_event)
             self._require_done_completion(run_dir, text)
+            if cancel_event.is_set():
+                return _mark_cancelled_or_timeout(run_dir, timeout_event)
             run_dir.mark_done(text)
             return text
         except Exception as e:
@@ -2400,7 +2658,7 @@ class DaemonManager:
                 text=True,
                 cwd=str(self._agent._working_dir),
                 env=spawn_env,
-                start_new_session=True,  # own process group for reliable cleanup
+                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             exc = RuntimeError("'claude' CLI not found on PATH")
@@ -2665,6 +2923,7 @@ class DaemonManager:
                 backend_argv=backend_argv,
                 env=_claude_code_env(),
                 log_callback=self._log,
+                start_new_session=self._cli_start_new_session(),
             )
         except ClaudeInteractiveError as e:
             run_dir.mark_failed(e)
@@ -2716,15 +2975,27 @@ class DaemonManager:
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
-        cmd = [
-            "codex",
-            "exec",
-            "--json",
-            "--dangerously-bypass-approvals-and-sandbox",
-        ]
-        if backend_argv:
-            cmd.extend(backend_argv)
-        cmd.append(task)
+        # The normal route owns the Codex executable and flags.  A fully
+        # qualified interpreter/script argv is retained as a deterministic
+        # local test/backend adapter seam; it still uses this same production
+        # JSONL parser and process ownership code.
+        if (
+            backend_argv
+            and len(backend_argv) >= 2
+            and Path(backend_argv[0]).is_file()
+            and Path(backend_argv[1]).is_file()
+        ):
+            cmd = list(backend_argv)
+        else:
+            cmd = [
+                "codex",
+                "exec",
+                "--json",
+                "--dangerously-bypass-approvals-and-sandbox",
+            ]
+            if backend_argv:
+                cmd.extend(backend_argv)
+            cmd.append(task)
         self._log("daemon_codex_start", em_id=em_id, cmd=" ".join(cmd))
 
         try:
@@ -2734,7 +3005,7 @@ class DaemonManager:
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
-                start_new_session=True,  # own process group for reliable cleanup
+                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             exc = RuntimeError("'codex' CLI not found on PATH")
@@ -2745,6 +3016,13 @@ class DaemonManager:
             run_dir.mark_failed(exc)
             raise exc
         self._register_cli_proc(proc, group_id=run_dir.group_id)
+        run_dir.update_state(
+            cli_pid=proc.pid,
+            cli_pgid=getattr(proc, "_lingtai_pgid", None),
+            child_pid=proc.pid,
+            child_pgid=getattr(proc, "_lingtai_pgid", None),
+            child_start_identity=getattr(proc, "_lingtai_process_identity", None),
+        )
 
         stderr_thread = _spawn_stderr_drainer(
             proc, run_dir, thread_name=f"daemon-codex-stderr-{em_id}",
@@ -2832,6 +3110,9 @@ class DaemonManager:
             self._unregister_cli_proc(proc, group_id=run_dir.group_id)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(agent_message_texts[-3:])
@@ -3069,10 +3350,16 @@ class DaemonManager:
         # Keep completed CLI emanations (backend != lingtai) so that `ask`
         # can still route to `_handle_ask_cli` / `_handle_ask_codex` /
         # `_handle_ask_opencode` / `_handle_ask_cursor`
-        # and `list` can show them.
+        # and `list` can show them. Detached entries (no in-process "future")
+        # are always kept in the registry here — their own supervisor process
+        # owns the run's actual lifetime, and `check`/`list` fall back to
+        # durable daemon.json anyway once the entry is eventually dropped by
+        # a shutdown/reclaim sweep, so pruning them on a live future.done()
+        # check does not apply.
         self._emanations = {
             k: v for k, v in self._emanations.items()
-            if not v["future"].done() or v.get("backend") not in (None, "lingtai")
+            if "future" not in v
+            or not v["future"].done() or v.get("backend") not in (None, "lingtai")
         }
         self._pools = [(p, c) for p, c in self._pools if not c.is_set()]
 
@@ -3284,6 +3571,11 @@ class DaemonManager:
                 return {"status": "error",
                         "message": f"Failed to create daemon folder: {e}"}
 
+            # Detached ownership is unconditional. The supervisor reconstructs
+            # preset/MCP/skills from this run's validated, redacted durable
+            # specification; no future or CLI process remains in the parent.
+            detach_eligible = True
+
             try:
                 task_mcp_regs = self._with_daemon_common_mcp(task_mcp_regs, run_dir)
                 task_mcp_catalog = self._render_task_mcp_catalog(task_mcp_regs)
@@ -3291,13 +3583,15 @@ class DaemonManager:
                     task_system_prompt, task_skill_catalog, task_mcp_catalog
                 )
                 task_context = self._append_daemon_common_context(task_context)
-                mcp_schemas, mcp_handlers, task_mcp_clients = (
-                    self._connect_task_mcp_registrations(task_mcp_regs)
-                )
+                # Detached ownership starts task MCP only in the supervisor.
+                # The parent validates/serializes the passive catalog and builds
+                # only the parent-independent portion of the prompt surface.
+                # This deliberately avoids launching an MCP process or HTTP
+                # client before the owning supervisor exists.
                 schemas, dispatch = self._build_tool_surface(
                     spec["tools"],
                     preset_surface=preset_surface,
-                    mcp_surface=(mcp_schemas, mcp_handlers),
+                    mcp_surface=({}, {}),
                 )
                 system_prompt = self._build_emanation_prompt(
                     spec["task"], schemas, system_prompt=task_context
@@ -3313,6 +3607,37 @@ class DaemonManager:
                 self._close_task_mcp_clients(task_mcp_clients)
                 run_dir.mark_failed(e)
                 return {"status": "error", "message": str(e)}
+
+            if detach_eligible:
+                self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
+                effective_llm = resolved["llm"] if resolved else self._implicit_parent_preset_llm()
+                try:
+                    self._spawn_detached_lingtai_run(
+                        run_dir,
+                        task=spec["task"],
+                        tools=spec["tools"],
+                        max_turns=effective_max_turns,
+                        timeout_s=effective_timeout,
+                        group_id=group_id,
+                        effective_llm=effective_llm,
+                        context_token_limit=spec.get("context_token_limit"),
+                        mcp=task_mcp_regs,
+                        preset_name=resolved["name"] if resolved else None,
+                        preset_llm=resolved["llm"] if resolved else None,
+                        preset_capabilities=resolved["capabilities"] if resolved else None,
+                    )
+                except Exception as e:
+                    run_dir.mark_failed(e)
+                    return {"status": "error", "message": str(e)}
+                self._emanations[em_id] = {
+                    "detached": True,
+                    "task": spec["task"],
+                    "start_time": time.time(),
+                    "timeout_s": effective_timeout,
+                    "run_dir": run_dir,
+                    "backend": "lingtai",
+                }
+                continue
 
             future = pool.submit(
                 self._run_emanation,
@@ -3352,12 +3677,20 @@ class DaemonManager:
             daemon=True,
         )
         watchdog.start()
-        # When every future in this batch finishes, signal cancel so the
-        # watchdog returns instead of waking later to do work.
-        self._arm_batch_done_cancel(
-            [self._emanations[eid]["future"] for eid in ids],
-            cancel_event,
-        )
+        # When every IN-PROCESS future in this batch finishes, signal cancel
+        # so the watchdog returns instead of waking later to do work.
+        # Detached entries have no future (their supervisor process owns its
+        # own deadline enforcement independently — see
+        # lingtai.tools.daemon.supervisor_runtime) and are excluded here.
+        in_process_futures = [
+            self._emanations[eid]["future"] for eid in ids
+            if "future" in self._emanations[eid]
+        ]
+        self._arm_batch_done_cancel(in_process_futures, cancel_event)
+        if not in_process_futures:
+            # Every task in this batch detached — nothing for this batch's
+            # in-process watchdog/cancel_event to ever observe finishing.
+            cancel_event.set()
 
         self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks),
                   tasks=[{"task": s["task"][:80], "tools": s["tools"]} for s in tasks])
@@ -3439,6 +3772,11 @@ class DaemonManager:
             backend_harness_argv: list[str] = []
             state_updates: dict = {}
             backend_options = spec.get("backend_options") or None
+            from lingtai.kernel.daemon_supervisor.manifest import redact_durable_value
+            public_backend_options = (
+                redact_durable_value(backend_options, field="backend_options")
+                if backend_options is not None else None
+            )
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
 
             task_context = self._combine_oneshot_context(
@@ -3473,7 +3811,7 @@ class DaemonManager:
                         "skills": spec.get("skills", []),
                         "mcp": [],
                         "system_prompt": context.system_prompt,
-                        "backend_options": backend_options,
+                        "backend_options": public_backend_options,
                     },
                     log_callback=self._log,
                     backend=backend,
@@ -3543,54 +3881,88 @@ class DaemonManager:
 
             # Persist user-supplied options separately from harness-owned argv
             # so run artifacts do not imply the model supplied MCP loader flags.
+            from lingtai.kernel.daemon_supervisor.manifest import (
+                redact_durable_argv, redact_durable_value,
+            )
             if backend_options is not None:
-                state_updates["backend_options"] = backend_options
-                state_updates["backend_argv"] = list(user_backend_argv)
+                state_updates["backend_options"] = redact_durable_value(
+                    backend_options, field="backend_options"
+                )
+                state_updates["backend_argv"] = redact_durable_argv(user_backend_argv)
             if backend_harness_argv:
-                state_updates["backend_harness_argv"] = list(backend_harness_argv)
+                state_updates["backend_harness_argv"] = redact_durable_argv(
+                    backend_harness_argv
+                )
             if state_updates:
                 run_dir.update_state(**state_updates)
             self._log("daemon_backend_options",
                       em_id=em_id, backend=backend,
-                      argv=list(user_backend_argv),
-                      harness_argv=list(backend_harness_argv))
+                      argv=redact_durable_argv(user_backend_argv),
+                      harness_argv=redact_durable_argv(backend_harness_argv))
 
-            run_fn = getattr(self, backend_spec.runner_attr)
-            future = pool.submit(
-                run_fn,
-                em_id, run_dir, cli_task,
-                cancel_event, timeout_event,
-                backend_argv,
-            )
-            future.add_done_callback(
-                lambda f, eid=em_id, task=spec["task"]:
-                    self._on_emanation_done(eid, task, f)
-            )
+            # All backend execution now crosses the same detached supervisor
+            # boundary.  The parent writes a complete, redacted manifest and
+            # retains only the durable run-dir facade.
+            try:
+                from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
+                from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_path_for, write_manifest
+                from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+                from lingtai.adapters.posix.daemon_supervisor import selected_credential_environment
+                manifest = build_manifest(
+                    run_id=run_dir.run_id,
+                    backend=backend,
+                    parent_working_dir=str(self._agent._working_dir),
+                    run_dir=str(run_dir.path),
+                    task=cli_task,
+                    tools=spec.get("tools", []),
+                    max_turns=effective_max_turns,
+                    timeout_s=effective_timeout,
+                    group_id=group_id,
+                    mcp=mcp_regs,
+                    backend_argv=backend_argv,
+                    language=getattr(self._agent._config, "language", "en"),
+                )
+                write_manifest(run_dir.path, manifest)
+                request = DaemonSupervisorRequest(
+                    run_id=run_dir.run_id,
+                    manifest_path=str(manifest_path_for(run_dir.path)),
+                    python_executable=sys.executable,
+                )
+                PosixDaemonSupervisorAdapter().spawn_detached(
+                    request,
+                    capsule={
+                        "task": cli_task,
+                        "mcp": list(mcp_regs),
+                        "backend_argv": list(backend_argv),
+                        "credential_env": selected_credential_environment(backend),
+                    },
+                )
+                self._await_supervisor_startup(run_dir)
+            except Exception as e:
+                run_dir.mark_failed(e)
+                return {"status": "error", "message": str(e)}
             self._emanations[em_id] = {
-                "future": future,
+                "detached": True,
                 "task": spec["task"],
                 "start_time": time.time(),
-                "cancel_event": cancel_event,
-                "timeout_event": timeout_event,
-                # Per-batch timeout actually applied (may differ from the
-                # manager default when the caller overrode it). Recorded so
-                # _on_emanation_done classifies the terminal state and logs
-                # against the real deadline, not self._timeout.
                 "timeout_s": effective_timeout,
-                "followup_buffer": "",
-                "followup_lock": threading.Lock(),
                 "run_dir": run_dir,
                 "backend": backend,
-                # Tracks whether a CLI `ask` follow-up is currently being
-                # streamed in the background. Set/cleared by the ask worker
-                # under `followup_lock`; checked by `_handle_ask_cli` /
-                # `_handle_ask_codex` to refuse a second concurrent ask
-                # against the same session (the `claude --resume` /
-                # `codex exec resume` CLIs serialize per-session and a second
-                # spawn would either error or interleave).
+                "followup_lock": threading.Lock(),
                 "ask_in_flight": False,
                 "ask_future": None,
             }
+
+        # Detached supervisors enforce their own deadlines.  Do not retain an
+        # empty parent pool or start a parent watchdog for a batch whose entries
+        # have no futures.
+        if all(self._emanations[eid].get("detached") for eid in ids):
+            pool.shutdown(wait=False)
+            self._pools = [(p, c) for p, c in self._pools if p is not pool]
+            self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks), backend=backend,
+                      tasks=[{"task": s["task"][:80], "tools": s.get("tools", [])} for s in tasks])
+            return {"status": "dispatched", "count": len(tasks), "ids": ids,
+                    "group_id": group_id, "backend": backend}
 
         # Start watchdog — scoped to this batch's CLI procs (group_id) so an
         # earlier batch's timeout can never kill this one's subprocesses.
@@ -3911,30 +4283,34 @@ class DaemonManager:
 
     def _load_or_rebuild_daemon_state(self, run_path: Path) -> dict | None:
         daemon_json_path = run_path / "daemon.json"
-        existing: dict | None = None
-        reason: str | None = None
+        # A fresh manager may see a detached live run as history.  Re-check and
+        # repair under the same fixed lock as every RunDir writer so a terminal
+        # owner cannot commit between this read and the recovery replacement.
         try:
-            loaded = json.loads(daemon_json_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing = loaded
-            else:
-                reason = "daemon_json_not_object"
-        except FileNotFoundError:
-            reason = "daemon_json_missing"
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            reason = "daemon_json_invalid"
+            with DaemonRunDir.state_file_lock(run_path):
+                existing: dict | None = None
+                reason: str | None = None
+                try:
+                    loaded = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        existing = loaded
+                    else:
+                        reason = "daemon_json_not_object"
+                except FileNotFoundError:
+                    reason = "daemon_json_missing"
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    reason = "daemon_json_invalid"
+                if reason is None and existing is not None:
+                    if self._has_current_daemon_data_version(existing):
+                        return existing
+                    reason = "daemon_json_data_version_mismatch"
+                rebuilt = self._build_reconstructed_daemon_state(
+                    run_path, existing, reason=reason or "daemon_json_rebuild"
+                )
+                self._atomic_write_daemon_json(daemon_json_path, rebuilt)
+                return rebuilt
         except OSError:
             return None
-        if reason is None and existing is not None:
-            if self._has_current_daemon_data_version(existing):
-                return existing
-            reason = "daemon_json_data_version_mismatch"
-        rebuilt = self._build_reconstructed_daemon_state(run_path, existing, reason=reason or "daemon_json_rebuild")
-        try:
-            self._atomic_write_daemon_json(daemon_json_path, rebuilt)
-        except OSError:
-            pass
-        return rebuilt
 
     def _iter_daemon_history_states(self, skip_run_ids: set[str] | None = None) -> list[tuple[Path, dict]]:
         daemons_dir = self._agent._working_dir / "daemons"
@@ -3981,9 +4357,18 @@ class DaemonManager:
 
         for em_id, entry in self._emanations.items():
             elapsed = time.time() - entry["start_time"]
-            future = entry["future"]
+            future = entry.get("future")
             exc = None
-            if future.done():
+            detached = future is None
+            if detached:
+                # No in-process future to poll — the run's own daemon.json
+                # ``state`` (read below via run_dir.state_snapshot()) is the
+                # ONLY source of truth for a detached run's status; do not
+                # pass an active_status override that would shadow it (a
+                # detached run may already be terminal even though this
+                # facade entry is still registered).
+                status = None
+            elif future.done():
                 exc = future.exception()
                 status = "failed" if exc else "done"
             else:
@@ -3991,13 +4376,24 @@ class DaemonManager:
                 running += 1
             run_dir = entry.get("run_dir")
             if run_dir is not None:
-                state = run_dir.state_snapshot()
+                # A detached run's daemon.json is written by a DIFFERENT
+                # process (the supervisor); this facade's run_dir object
+                # never observes those writes in its own memory, so it must
+                # re-read from disk. In-process entries keep the cheap
+                # in-memory snapshot (the run loop's own thread wrote it).
+                state = (
+                    self._read_run_dir_state_from_disk(run_dir)
+                    if detached else run_dir.state_snapshot()
+                )
                 state.setdefault("handle", em_id)
                 active_run_ids.add(run_dir.run_id)
                 info = self._daemon_list_entry_from_state(
                     state, run_dir.path, active_status=status,
-                    active_elapsed=round(elapsed), active_error=exc,
+                    active_elapsed=round(elapsed) if not detached else None,
+                    active_error=exc,
                 )
+                if detached and info.get("status") == "running":
+                    running += 1
             else:
                 info = {
                     "id": em_id,
@@ -4039,8 +4435,57 @@ class DaemonManager:
             "showing": len(emanations),
         }
 
+    def _durable_detached_entry(self, em_id: str) -> dict | None:
+        """Hydrate a control facade from exact durable run identity.
+
+        This never adopts execution ownership: the returned entry contains only
+        a disk-attached run directory and public metadata.  The supervisor PID
+        and start token are checked before a request can be submitted.
+        """
+        resolved = self._resolve_historical_run_dir(em_id)
+        if resolved is None:
+            return None
+        run_path, matches = resolved
+        if len(matches) != 1:
+            return None
+        try:
+            state = DaemonRunDir.read_state_from_disk(run_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+        if state.get("run_id") != run_path.name:
+            return None
+        if state.get("owner") != "supervisor":
+            return None
+        pid = state.get("supervisor_pid")
+        terminal = state.get("state") in {"done", "failed", "cancelled", "timeout"}
+        if not terminal:
+            if not isinstance(pid, int) or isinstance(pid, bool):
+                return None
+            if not self._pid_identity_matches(pid, state.get("supervisor_start_identity")):
+                return None
+        try:
+            attached = DaemonRunDir.attach(run_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+        return {
+            "detached": True,
+            "task": state.get("task", ""),
+            "start_time": time.time(),
+            "timeout_s": state.get("timeout_s", self._timeout),
+            "run_dir": attached,
+            "backend": state.get("backend", "lingtai"),
+            "followup_lock": threading.Lock(),
+            "ask_in_flight": False,
+            "ask_future": None,
+            "durable_facade": True,
+        }
+
     def _handle_ask(self, em_id: str, message: str) -> dict:
         entry = self._emanations.get(em_id)
+        if not entry:
+            entry = self._durable_detached_entry(em_id)
+            if entry is not None:
+                self._emanations[em_id] = entry
         if not entry:
             return {"status": "error", "message": f"Unknown emanation: {em_id}"}
 
@@ -4055,6 +4500,11 @@ class DaemonManager:
         # Qwen Code headless mode does not expose a stable resume contract here.
         # All stream progress into the daemon run directory so
         # `daemon(check)` shows live progress.
+        # Detached ownership is checked before the backend-specific legacy
+        # ask handlers; those handlers retain parent pools/process handles.
+        if entry.get("detached"):
+            return self._handle_ask_detached(em_id, entry, message)
+
         backend = entry.get("backend")
         backend_spec = _backend_spec(backend)
         if backend_spec is not None and backend_spec.is_cli:
@@ -4063,6 +4513,9 @@ class DaemonManager:
                         "message": backend_spec.ask_unsupported_msg}
             ask_handler = getattr(self, backend_spec.ask_handler_attr)
             return ask_handler(em_id, entry, message)
+
+        if entry.get("detached"):
+            return self._handle_ask_detached(em_id, entry, message)
 
         if entry["future"].done():
             return {"status": "error", "message": "not running"}
@@ -4073,6 +4526,101 @@ class DaemonManager:
                 entry["followup_buffer"] = message
         self._log("daemon_ask", em_id=em_id, message_length=len(message))
         return {"status": "sent", "id": em_id}
+
+    def _handle_ask_detached(self, em_id: str, entry: dict, message: str) -> dict:
+        """Follow-up for a detached lingtai run: submit via the control spool.
+
+        The facade has no in-process ``followup_buffer``/session to write
+        into — the supervisor process owns those. This writes a durable
+        ``ask`` control request the supervisor's control-and-deadline watcher
+        thread drains (see ``lingtai.tools.daemon.supervisor_runtime``),
+        mirroring the in-process followup_buffer mechanism across the process
+        boundary.
+        """
+        from lingtai.kernel.daemon_supervisor import control
+
+        run_dir = entry.get("run_dir")
+        if run_dir is None:
+            return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
+        state = self._read_run_dir_state_from_disk(run_dir)
+        backend = entry.get("backend", state.get("backend", "lingtai"))
+        spec = _backend_spec(backend)
+        if backend == "lingtai":
+            if state.get("state") not in ("running", "active"):
+                return {"status": "error", "message": f"not running (state={state.get('state')!r})"}
+            if state.get("owner") != "supervisor":
+                return {"status": "error", "message": "detached supervisor owner is not confirmed"}
+            pid = state.get("supervisor_pid")
+            if not isinstance(pid, int) or not self._pid_identity_matches(
+                pid, state.get("supervisor_start_identity")
+            ):
+                return {"status": "error", "message": "detached supervisor identity is not live"}
+            control.submit_request(run_dir.path, "ask", {"message": message})
+            self._log("daemon_ask_detached", em_id=em_id, message_length=len(message))
+            return {"status": "sent", "id": em_id}
+        if spec is None or spec.ask_handler_attr is None:
+            return {"status": "error", "id": em_id,
+                    "message": spec.ask_unsupported_msg if spec else f"unknown backend {backend!r}"}
+        if state.get("state") not in {"done", "failed", "cancelled", "timeout"}:
+            return {"status": "busy", "id": em_id,
+                    "message": "primary detached CLI run is still active; retry ask after terminal state"}
+        session_key = {
+            "claude": "claude_session_id", "claude-interactive": "claude_session_id",
+            "claude-p": "claude_session_id", "claude-code": "claude_session_id",
+            "codex": "codex_session_id", "opencode": "opencode_session_id",
+            "mimocode": "mimocode_session_id", "oh-my-pi": "oh_my_pi_session_id",
+            "cursor": "cursor_session_id",
+        }.get(backend)
+        if not session_key or not state.get(session_key):
+            return {"status": "error", "id": em_id,
+                    "message": f"No {backend} session ID found for {em_id}"}
+        claim = run_dir.claim_resume_generation()
+        if claim.get("status") == "busy":
+            return {"status": "busy", "id": em_id,
+                    "message": f"a previous ask on {em_id} is still running; retry after it completes"}
+        from lingtai.adapters.posix.daemon_supervisor import (
+            PosixDaemonSupervisorAdapter, selected_credential_environment,
+        )
+        from lingtai.kernel.daemon_supervisor.manifest import manifest_path_for
+        try:
+            PosixDaemonSupervisorAdapter().spawn_resume_owner(
+                python_executable=sys.executable,
+                manifest_path=str(manifest_path_for(run_dir.path)),
+                run_id=run_dir.run_id, run_dir=run_dir.path,
+                generation=claim["generation"], capsule={
+                    "message": message,
+                    "claim_nonce": claim["launch_nonce"],
+                    "credential_env": selected_credential_environment(backend),
+                },
+            )
+        except Exception as exc:
+            run_dir.release_resume_generation(
+                claim["generation"], claim["launch_nonce"],
+                owner_pid=os.getpid(),
+                owner_identity=claim.get("owner_start_identity"),
+                result_status="failed",
+            )
+            run_dir.record_followup(
+                claim["generation"], status="failed", error=f"{type(exc).__name__}: {exc}",
+            )
+            return {"status": "error", "id": em_id, "message": str(exc)}
+        self._log("daemon_ask_detached_resume", em_id=em_id,
+                  generation=claim["generation"], message_length=len(message))
+        return {"status": "sent", "id": em_id, "generation": claim["generation"],
+                "async": True, "message": "detached resume owner started; inspect daemon(action='check')"}
+
+    @staticmethod
+    def _read_run_dir_state_from_disk(run_dir: DaemonRunDir) -> dict:
+        """Best-effort fresh disk read of *run_dir*'s daemon.json.
+
+        Falls back to the (possibly stale) in-memory snapshot only if the
+        disk read itself fails — e.g. a transient race with an in-progress
+        atomic write — so callers always get a dict shape back.
+        """
+        try:
+            return DaemonRunDir.read_state_from_disk(run_dir.path)
+        except (OSError, json.JSONDecodeError, ValueError):
+            return run_dir.state_snapshot()
 
     def _handle_ask_claude_interactive(self, em_id: str, entry: dict, message: str) -> dict:
         """Dispatch an interactive Claude ``--resume`` follow-up asynchronously."""
@@ -4242,7 +4790,7 @@ class DaemonManager:
                 text=True,
                 cwd=str(self._agent._working_dir),
                 env=_claude_code_env(),
-                start_new_session=True,  # own process group for reliable cleanup
+                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             with entry["followup_lock"]:
@@ -4463,7 +5011,7 @@ class DaemonManager:
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
-                start_new_session=True,  # own process group for reliable cleanup
+                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             with entry["followup_lock"]:
@@ -4942,7 +5490,7 @@ class DaemonManager:
                 text=True,
                 cwd=str(self._agent._working_dir),
                 env=env,
-                start_new_session=True,  # own process group for reliable cleanup
+                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             exc = RuntimeError(f"'{executable}' CLI not found on PATH")
@@ -4953,6 +5501,13 @@ class DaemonManager:
             run_dir.mark_failed(exc)
             raise exc
         self._register_cli_proc(proc, group_id=run_dir.group_id)
+        run_dir.update_state(
+            cli_pid=proc.pid,
+            cli_pgid=getattr(proc, "_lingtai_pgid", None),
+            child_pid=proc.pid,
+            child_pgid=getattr(proc, "_lingtai_pgid", None),
+            child_start_identity=getattr(proc, "_lingtai_process_identity", None),
+        )
 
         stderr_thread = _spawn_stderr_drainer(
             proc, run_dir, thread_name=f"daemon-{backend_name}-stderr-{em_id}",
@@ -5203,7 +5758,7 @@ class DaemonManager:
                 text=True,
                 cwd=str(self._agent._working_dir),
                 env=env,
-                start_new_session=True,
+                start_new_session=self._cli_start_new_session(),
             )
         except FileNotFoundError:
             exc = RuntimeError("'qwen' CLI not found on PATH")
@@ -5372,7 +5927,7 @@ class DaemonManager:
                 text=True,
                 cwd=str(self._agent._working_dir),
                 env=env,
-                start_new_session=True,
+                start_new_session=self._cli_start_new_session(),
             )
         except FileNotFoundError:
             exc = RuntimeError("'kimi' CLI not found on PATH")
@@ -5501,7 +6056,7 @@ class DaemonManager:
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
-                start_new_session=True,  # own process group for reliable cleanup
+                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             with entry["followup_lock"]:
@@ -5752,10 +6307,7 @@ class DaemonManager:
     @staticmethod
     def _cursor_set_model(run_dir: DaemonRunDir, model: str) -> None:
         """Persist a model learned from a preceding matching Cursor init."""
-        if run_dir._state.get("model") == model:
-            return
-        run_dir._state["model"] = model
-        run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+        run_dir.update_state(model=model)
 
     def _cursor_process_usage_event(
         self,
@@ -5834,8 +6386,7 @@ class DaemonManager:
         # unknown until a matching source ``system/init`` + ``session_id``
         # precedes a terminal result.
         if run_dir._state.get("model") != "unknown":
-            run_dir._state["model"] = "unknown"
-            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+            self._cursor_set_model(run_dir, "unknown")
         cmd = [
             "agent",
             "-p",
@@ -5854,7 +6405,7 @@ class DaemonManager:
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
-                start_new_session=True,
+                start_new_session=self._cli_start_new_session(),
             )
         except FileNotFoundError:
             exc = RuntimeError("'agent' Cursor CLI not found on PATH")
@@ -5865,6 +6416,13 @@ class DaemonManager:
             run_dir.mark_failed(exc)
             raise exc
         self._register_cli_proc(proc, group_id=run_dir.group_id)
+        run_dir.update_state(
+            cli_pid=proc.pid,
+            cli_pgid=getattr(proc, "_lingtai_pgid", None),
+            child_pid=proc.pid,
+            child_pgid=getattr(proc, "_lingtai_pgid", None),
+            child_start_identity=getattr(proc, "_lingtai_process_identity", None),
+        )
 
         stderr_thread = _spawn_stderr_drainer(
             proc, run_dir, thread_name=f"daemon-cursor-stderr-{em_id}",
@@ -5994,8 +6552,7 @@ class DaemonManager:
         # Legacy/direct run-dir callers may have initialized ``model`` to the
         # backend label; do not expose that as upstream model identity.
         if run_dir._state.get("model") == "cursor":
-            run_dir._state["model"] = "unknown"
-            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+            self._cursor_set_model(run_dir, "unknown")
 
         session_id = run_dir._state.get("cursor_session_id")
         if not session_id:
@@ -6030,7 +6587,7 @@ class DaemonManager:
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
-                start_new_session=True,
+                start_new_session=self._cli_start_new_session(),
             )
         except FileNotFoundError:
             with entry["followup_lock"]:
@@ -6335,6 +6892,11 @@ class DaemonManager:
             "result_path": state.get("result_path"),
             "last_output": state.get("last_output"),
             "last_output_at": state.get("last_output_at"),
+            "resume_generation": state.get("resume_generation"),
+            "resume_state": state.get("resume_state"),
+            "followup_status": state.get("followup_status"),
+            "followup_result_path": state.get("followup_result_path"),
+            "followup_result_preview": state.get("followup_result_preview"),
             "error": state.get("error"),
             "artifacts": self._artifacts_summary(run_path),
             "events": events,
@@ -6542,11 +7104,113 @@ class DaemonManager:
         self._log("daemon_lifecycle_shutdown", **report)
         return report
 
+    # Bounded wait for a detached run's daemon.json to reach a terminal state
+    # after an explicit reclaim control request is submitted. Kept short —
+    # `reclaim` must stay responsive; a run that hasn't confirmed cancellation
+    # within this window is reported honestly as "requested" rather than a
+    # false "cancelled" claim.
+    _DETACHED_RECLAIM_CONFIRM_TIMEOUT_S = 3.0
+    _DETACHED_RECLAIM_CONFIRM_POLL_S = 0.1
+
+    def _reclaim_detached_runs(self) -> tuple[int, int]:
+        """Submit a reclaim control request to every active detached run.
+
+        Returns ``(confirmed_cancelled, requested_not_yet_confirmed)``. This
+        is the explicit-reclaim-only path for detached runs — ordinary
+        ``shutdown_for_agent_stop`` (agent_stop/refresh) must never call this,
+        per the contract's "ordinary stop/refresh must not terminate active
+        supervisors" requirement. Only genuinely detached, still-running
+        entries are touched; a run whose daemon.json is already terminal is
+        left alone (nothing to cancel, and re-submitting a reclaim request to
+        an exited supervisor would just sit unconsumed in its control spool).
+        """
+        from lingtai.kernel.daemon_supervisor import control
+
+        run_dirs = {
+            entry["run_dir"].path: entry["run_dir"]
+            for entry in self._emanations.values()
+            if entry.get("detached") and entry.get("run_dir") is not None
+        }
+        # A fresh manager has no in-memory registry. Discover only exact
+        # supervisor-owned active records; this is a control facade, not an
+        # execution-owner adoption path.
+        daemons_dir = self._agent._working_dir / "daemons"
+        if daemons_dir.is_dir():
+            for run_path in daemons_dir.iterdir():
+                if not self._looks_like_daemon_run_dir(run_path):
+                    continue
+                try:
+                    state = DaemonRunDir.read_state_from_disk(run_path)
+                except (OSError, ValueError, json.JSONDecodeError):
+                    continue
+                if state.get("state") not in {"running", "active"}:
+                    continue
+                if state.get("owner") != "supervisor":
+                    continue
+                pid = state.get("supervisor_pid")
+                if not isinstance(pid, int) or not self._pid_identity_matches(
+                    pid, state.get("supervisor_start_identity")
+                ):
+                    continue
+                try:
+                    run_dirs.setdefault(run_path, DaemonRunDir.attach(run_path))
+                except (OSError, ValueError, json.JSONDecodeError):
+                    continue
+        if not run_dirs:
+            return 0, 0
+
+        pending: list = []
+        for run_dir in run_dirs.values():
+            state = self._read_run_dir_state_from_disk(run_dir)
+            if state.get("state") not in ("running", "active"):
+                continue
+            control.submit_request(run_dir.path, "reclaim", {})
+            pending.append(run_dir)
+
+        if not pending:
+            return 0, 0
+
+        deadline = time.monotonic() + self._DETACHED_RECLAIM_CONFIRM_TIMEOUT_S
+        confirmed = 0
+        natural_terminal = 0
+        remaining = list(pending)
+        while remaining and time.monotonic() < deadline:
+            still_pending = []
+            for run_dir in remaining:
+                terminal_state = self._read_run_dir_state_from_disk(run_dir).get("state")
+                if terminal_state == "cancelled":
+                    confirmed += 1
+                elif terminal_state in {"timeout", "done", "failed"}:
+                    # A natural terminal outcome is evidence, not a
+                    # cancellation confirmation and must not inflate the count.
+                    natural_terminal += 1
+                else:
+                    still_pending.append(run_dir)
+            remaining = still_pending
+            if remaining:
+                time.sleep(self._DETACHED_RECLAIM_CONFIRM_POLL_S)
+        self._last_reclaim_natural_terminal = natural_terminal
+        return confirmed, len(remaining)
+
     def _handle_reclaim(self) -> dict:
+        detached_confirmed, detached_pending = self._reclaim_detached_runs()
         report = self.shutdown_for_agent_stop(reason="reclaim", wait_timeout=0.0)
-        cancelled = report.get("cancelled", 0)
-        self._log("daemon_reclaim", cancelled_count=cancelled)
-        return {"status": "reclaimed", "cancelled": cancelled}
+        cancelled = report.get("cancelled", 0) + detached_confirmed
+        self._log(
+            "daemon_reclaim", cancelled_count=cancelled,
+            detached_confirmed=detached_confirmed, detached_pending=detached_pending,
+        )
+        result = {
+            "status": "reclaimed",
+            "cancelled": cancelled,
+            "natural_terminal": getattr(self, "_last_reclaim_natural_terminal", 0),
+        }
+        if detached_pending:
+            # Never overstate reclaim: a detached run that hasn't confirmed
+            # cancellation within the bounded wait is reported explicitly
+            # rather than folded silently into "cancelled".
+            result["detached_reclaim_pending"] = detached_pending
+        return result
 
     def _on_emanation_done(self, em_id: str, task_summary: str, future) -> None:
         entry = self._emanations.get(em_id)
@@ -6620,9 +7284,30 @@ class DaemonManager:
     # drains everything (_drain_all_cli_procs).
     # ------------------------------------------------------------------
 
+    def _cli_start_new_session(self) -> bool:
+        """Keep legacy manager-owned CLI children in isolated process groups.
+
+        Detached execution hosts override this so a CLI belongs to the already
+        isolated execution-child group from birth, including before its PID is
+        durably registered with the supervisor.
+        """
+        return True
+
     def _register_cli_proc(self, proc: subprocess.Popen,
                            group_id: str | None = None) -> None:
         """Track *proc* globally and (if batched) under its ``group_id``."""
+        pid = getattr(proc, "pid", None)
+        if isinstance(pid, int) and not isinstance(pid, bool):
+            try:
+                pgid = os.getpgid(pid)
+            except (ProcessLookupError, PermissionError, OSError):
+                pgid = None
+            identity = process_identity(pid)
+            # The cleanup helper refuses to signal unless all three values
+            # were captured.  In particular, never silently turn an unknown
+            # identity into a PID-only authorization.
+            proc._lingtai_pgid = pgid
+            proc._lingtai_process_identity = identity
         with self._cli_lock:
             self._cli_procs.append(proc)
             if group_id is not None:

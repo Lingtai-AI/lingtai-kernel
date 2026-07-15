@@ -7,12 +7,17 @@ processes, and in-memory daemon entries.
 """
 from __future__ import annotations
 
+import json
+import os
 import threading
+import time
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, Iterable
 from unittest.mock import MagicMock
 
+from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+from lingtai.adapters.posix.process_identity import process_identity
 from lingtai.agent import Agent
 from lingtai.tools.daemon.run_dir import DaemonRunDir
 from lingtai.kernel.config import AgentConfig
@@ -78,6 +83,48 @@ def make_daemon_run_dir(
         backend=backend,
         call_parameters=call_parameters,
     )
+
+
+def install_fake_detached_owner(monkeypatch: Any) -> list[dict[str, Any]]:
+    """Install a deterministic detached owner that commits durable evidence."""
+    records: list[dict[str, Any]] = []
+
+    def spawn(self, request, *, capsule=None):
+        manifest = json.loads(Path(request.manifest_path).read_text(encoding="utf-8"))
+        run_dir = DaemonRunDir.attach(Path(manifest["run_dir"]))
+        pid = os.getpid()
+        run_dir.update_state(
+            owner="supervisor",
+            supervisor_pid=pid,
+            supervisor_start_identity=process_identity(pid),
+            test_owner="detached-fake",
+        )
+        run_dir._append_jsonl(run_dir.events_path, {
+            "event": "test_detached_backend_invocation",
+            "backend": manifest["backend"],
+            "argv": list(manifest.get("backend_argv") or []),
+            "capsule_argv": list((capsule or {}).get("backend_argv") or []),
+        })
+        run_dir.mark_done("[fake detached done]")
+        records.append({
+            "manifest": manifest,
+            "capsule": capsule or {},
+            "run_dir": run_dir,
+        })
+
+    monkeypatch.setattr(PosixDaemonSupervisorAdapter, "spawn_detached", spawn)
+    return records
+
+
+def wait_daemon_terminal(run_dir: DaemonRunDir, timeout: float = 5.0) -> dict:
+    """Wait until detached durable state reaches one of the terminal states."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = DaemonRunDir.read_state_from_disk(run_dir.path)
+        if state.get("state") in {"done", "failed", "cancelled", "timeout"}:
+            return state
+        time.sleep(0.02)
+    raise AssertionError(f"run did not reach terminal state: {run_dir.path}")
 
 
 class FiniteFakeProc:

@@ -30,9 +30,11 @@ from lingtai.tools.daemon import DaemonManager
 from tests._daemon_helpers import (
     FiniteFakeProc,
     completed_future,
+    install_fake_detached_owner,
     make_daemon_agent,
     make_daemon_run_dir,
     register_daemon_entry,
+    wait_daemon_terminal,
 )
 
 
@@ -341,49 +343,38 @@ def test_opencode_emanate_missing_cli_raises_runtime_error(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_emanate_opencode_routes_to_cli_handler(tmp_path):
-    """`emanate` with backend='opencode' must go through
-    `_handle_emanate_cli` (which skips preset resolution) and ultimately
-    submit `_run_opencode_emanation` to the pool."""
+def test_emanate_opencode_routes_to_cli_handler(tmp_path, monkeypatch):
+    """OpenCode dispatch persists the exact detached CLI execution contract."""
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
+    records = install_fake_detached_owner(monkeypatch)
 
-    captured: dict = {}
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "opencode",
+        "tasks": [{
+            "task": "Summarise the changelog.",
+            "tools": [],
+            "backend_options": {"model": "openai/gpt-5"},
+        }],
+    })
+    assert result["status"] == "dispatched"
+    assert result["backend"] == "opencode"
+    em_id = result["ids"][0]
+    state = wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
 
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event,
-                 backend_argv=None):
-        captured["em_id"] = em_id
-        captured["task"] = task
-        captured["backend_argv"] = list(backend_argv or [])
-        captured["state"] = json.loads(run_dir.daemon_json_path.read_text())
-        run_dir.mark_done("[fake opencode done]")
-        return "[fake opencode done]"
-
-    with patch.object(mgr, "_run_opencode_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": "opencode",
-            "tasks": [{
-                "task": "Summarise the changelog.",
-                "tools": [],
-                "backend_options": {"model": "openai/gpt-5"},
-            }],
-        })
-        assert result["status"] == "dispatched"
-        assert result["backend"] == "opencode"
-
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
-
-    assert captured["task"].endswith("Task:\nSummarise the changelog.")
-    assert "call the MCP tool `finish`" in captured["task"]
-    assert "daemon_common" in captured["task"]
-    assert captured["backend_argv"][:2] == ["--model", "openai/gpt-5"]
-    assert "__lingtai_opencode_config_content" in captured["backend_argv"]
-    assert captured["state"]["backend"] == "opencode"
-    assert captured["state"]["backend_options"] == {"model": "openai/gpt-5"}
-    assert captured["state"]["backend_argv"] == ["--model", "openai/gpt-5"]
-    assert "__lingtai_opencode_config_content" in captured["state"]["backend_harness_argv"]
+    manifest = records[0]["manifest"]
+    assert manifest["backend"] == "opencode"
+    assert manifest["task"].endswith("Task:\nSummarise the changelog.")
+    assert "call the MCP tool `finish`" in manifest["task"]
+    assert "daemon_common" in manifest["task"]
+    assert manifest["backend_argv"][:2] == ["--model", "openai/gpt-5"]
+    assert "__lingtai_opencode_config_content" in manifest["backend_argv"]
+    assert state["backend"] == "opencode"
+    assert state["backend_options"] == {"model": "openai/gpt-5"}
+    assert state["backend_argv"] == ["--model", "openai/gpt-5"]
+    assert "__lingtai_opencode_config_content" in state["backend_harness_argv"]
+    assert "future" not in mgr._emanations[em_id]
 
 
 # ---------------------------------------------------------------------------

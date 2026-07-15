@@ -13,7 +13,12 @@ import pytest
 
 from lingtai.tools.daemon import get_schema
 from lingtai.tools.daemon.claude_interactive import ClaudeInteractiveError, run_claude_interactive
-from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir
+from tests._daemon_helpers import (
+    install_fake_detached_owner,
+    make_daemon_agent,
+    make_daemon_run_dir,
+    wait_daemon_terminal,
+)
 
 
 def _make_run_dir(tmp_path: Path, *, backend: str = "claude"):
@@ -144,68 +149,57 @@ def test_schema_hides_interactive_claude_backends_keeps_print_mode():
     assert "claude-code" in desc
 
 
-def test_emanate_claude_dispatches_interactive_runner(tmp_path):
+def test_emanate_claude_dispatches_interactive_runner(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    captured = {}
+    records = install_fake_detached_owner(monkeypatch)
 
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
-        captured["backend"] = run_dir._state["backend"]
-        captured["task"] = task
-        captured["backend_argv"] = list(backend_argv or [])
-        run_dir._state["claude_session_id"] = "session-from-fake"
-        run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
-        run_dir.mark_done("done")
-        return "done"
-
-    with patch.object(mgr, "_run_claude_interactive_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": "claude",
-            "tasks": [{
-                "task": "Use interactive Claude",
-                "tools": [],
-                "backend_options": {"model": "opus", "verbose": True},
-            }],
-        })
-        assert result["status"] == "dispatched"
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
-
-    assert captured == {
+    result = mgr.handle({
+        "action": "emanate",
         "backend": "claude",
-        "task": "Use interactive Claude",
-        "backend_argv": ["--model", "opus", "--verbose"],
-    }
+        "tasks": [{
+            "task": "Use interactive Claude",
+            "tools": [],
+            "backend_options": {"model": "opus", "verbose": True},
+        }],
+    })
+    assert result["status"] == "dispatched"
+    em_id = result["ids"][0]
+    state = wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
+
+    manifest = records[0]["manifest"]
+    assert manifest["backend"] == "claude"
+    assert manifest["task"] == "Use interactive Claude"
+    assert manifest["backend_argv"] == ["--model", "opus", "--verbose"]
+    assert state["backend"] == "claude"
+    assert state["backend_options"] == {"model": "opus", "verbose": True}
+    assert "future" not in mgr._emanations[em_id]
 
 
-def test_emanate_claude_p_dispatches_legacy_print_runner(tmp_path):
+def test_emanate_claude_p_dispatches_legacy_print_runner(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    captured = {}
+    records = install_fake_detached_owner(monkeypatch)
 
-    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
-        captured["backend"] = run_dir._state["backend"]
-        captured["task"] = task
-        run_dir.mark_done("done")
-        return "done"
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "claude-p",
+        "tasks": [{"task": "Use print mode", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    em_id = result["ids"][0]
+    state = wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
 
-    with patch.object(mgr, "_run_claude_code_emanation", side_effect=fake_run):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": "claude-p",
-            "tasks": [{"task": "Use print mode", "tools": []}],
-        })
-        assert result["status"] == "dispatched"
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
-
-    assert captured["backend"] == "claude-p"
+    manifest = records[0]["manifest"]
+    assert manifest["backend"] == "claude-p"
     # claude-p tasks are prefixed with the daemon_common MCP completion
     # contract, then the original task.
-    assert captured["task"].endswith("Task:\nUse print mode")
-    assert "call the MCP tool `finish`" in captured["task"]
-    assert "background-and-wait is invalid" in captured["task"]
+    assert manifest["task"].endswith("Task:\nUse print mode")
+    assert "call the MCP tool `finish`" in manifest["task"]
+    assert "background-and-wait is invalid" in manifest["task"]
+    assert "--mcp-config" in manifest["backend_argv"]
+    assert state["backend"] == "claude-p"
+    assert "future" not in mgr._emanations[em_id]
 
 
 @pytest.mark.parametrize(
@@ -218,44 +212,32 @@ def test_emanate_claude_p_dispatches_legacy_print_runner(tmp_path):
     ],
 )
 def test_claude_backend_ids_are_preserved_while_sharing_runners(
-    tmp_path, backend, expected_runner,
+    tmp_path, monkeypatch, backend, expected_runner,
 ):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    captured = {}
+    records = install_fake_detached_owner(monkeypatch)
 
-    def fake_interactive(em_id, run_dir, task, cancel_event, timeout_event,
-                         backend_argv=None):
-        captured["runner"] = "interactive"
-        captured["backend"] = run_dir._state["backend"]
-        run_dir.mark_done("done")
-        return "done"
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": backend,
+        "tasks": [{"task": "Use Claude", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    em_id = result["ids"][0]
+    state = wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
 
-    def fake_print(em_id, run_dir, task, cancel_event, timeout_event,
-                   backend_argv=None):
-        captured["runner"] = "print"
-        captured["backend"] = run_dir._state["backend"]
-        run_dir.mark_done("done")
-        return "done"
-
-    with (
-        patch.object(
-            mgr,
-            "_run_claude_interactive_emanation",
-            side_effect=fake_interactive,
-        ),
-        patch.object(mgr, "_run_claude_code_emanation", side_effect=fake_print),
-    ):
-        result = mgr.handle({
-            "action": "emanate",
-            "backend": backend,
-            "tasks": [{"task": "Use Claude", "tools": []}],
-        })
-        assert result["status"] == "dispatched"
-        em_id = result["ids"][0]
-        mgr._emanations[em_id]["future"].result(timeout=5)
-
-    assert captured == {"runner": expected_runner, "backend": backend}
+    manifest = records[0]["manifest"]
+    assert manifest["backend"] == backend
+    assert state["backend"] == backend
+    if expected_runner == "interactive":
+        assert manifest["task"] == "Use Claude"
+        assert "--mcp-config" not in manifest["backend_argv"]
+    else:
+        assert manifest["task"].endswith("Task:\nUse Claude")
+        assert "call the MCP tool `finish`" in manifest["task"]
+        assert "--mcp-config" in manifest["backend_argv"]
+    assert "future" not in mgr._emanations[em_id]
 
 
 

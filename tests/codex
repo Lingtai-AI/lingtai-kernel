@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "${PYTHON:-python}" "$(dirname "$0")/_fake_resume_cli.py" "$@"
