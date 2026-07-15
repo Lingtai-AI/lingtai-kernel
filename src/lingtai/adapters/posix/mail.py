@@ -34,12 +34,41 @@ from lingtai.kernel.services.mail import _new_mailbox_id
 
 logger = logging.getLogger(__name__)
 
+# A single strict 2s heartbeat read is too brittle for cross-network email on
+# external volumes or during agent wake/refresh.  Delivery still requires the
+# same Core presence predicate, but the mailman thread gives transient heartbeat
+# lag a short grace window before refusing and emitting a bounce.
+MAIL_DELIVERY_LIVENESS_GRACE_SECONDS: float = 1.5
+MAIL_DELIVERY_LIVENESS_RETRY_INTERVAL_SECONDS: float = 0.2
+
 
 def _presence_store_for(recipient_dir: Path):
     """Build a target-bound POSIX presence adapter for a recipient directory."""
     from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
 
     return PosixAgentPresenceStoreAdapter(recipient_dir)
+
+
+
+def _recipient_alive_with_grace(presence_store) -> bool:
+    """Return True once the recipient is observed alive within the mail grace.
+
+    CPR and other lifecycle actions still use the Core strict heartbeat
+    predicate directly.  Email delivery is different because the mailman thread
+    can afford a brief wait before producing a user-visible bounce; this avoids
+    false "not running" failures from heartbeat write/read races while
+    preserving the same liveness source of truth.
+    """
+
+    deadline = time.monotonic() + max(0.0, MAIL_DELIVERY_LIVENESS_GRACE_SECONDS)
+    interval = max(0.0, MAIL_DELIVERY_LIVENESS_RETRY_INTERVAL_SECONDS)
+    while True:
+        if _presence_observe_alive(presence_store, wall_now=time.time()):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(interval, remaining))
 
 
 class PosixFilesystemMailAdapter(MailTransportPort):
@@ -126,11 +155,12 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         if not _presence_is_agent(recipient_presence.observe_manifest()):
             return f"No agent at {address}"
 
-        if not _presence_observe_alive(
-            recipient_presence,
-            wall_now=time.time(),
-        ):
-            return f"Agent at {address} is not running"
+        if not _recipient_alive_with_grace(recipient_presence):
+            return (
+                f"Agent at {address} is not currently deliverable "
+                "(liveness uncertain: heartbeat was not fresh during the "
+                f"{MAIL_DELIVERY_LIVENESS_GRACE_SECONDS:g}s mail-delivery grace window)"
+            )
 
         # --- create inbox entry ---------------------------------------
         msg_id = _new_mailbox_id()
