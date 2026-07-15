@@ -44,6 +44,7 @@ class TelegramService:
         self._taskcard_path = self._working_dir / "telegram" / "taskcard.json"
         self._taskcard_lock = threading.RLock()
         self._taskcard, self._taskcard_normal_rows = self._load_taskcard_state()
+        self._taskcard_listener: Callable[[bool], None] | None = None
 
         for cfg in accounts_config:
             alias = cfg["alias"]
@@ -102,13 +103,25 @@ class TelegramService:
         with self._taskcard_lock:
             return self._taskcard
 
+    def set_taskcard_listener(self, listener: Callable[[bool], None]) -> None:
+        """Install the manager callback for durable enablement transitions."""
+        with self._taskcard_lock:
+            self._taskcard_listener = listener
+
     def set_taskcard_enabled(self, enabled: bool) -> None:
-        """Durably set Task Card delivery, committing memory only after fsync."""
+        """Persist state, then notify the resident outside the state lock."""
         if type(enabled) is not bool:
             raise TypeError("enabled must be a boolean")
         with self._taskcard_lock:
+            changed = self._taskcard != enabled
             self._persist_taskcard_state(enabled, self._taskcard_normal_rows)
             self._taskcard = enabled
+            listener = self._taskcard_listener if changed else None
+        if listener is not None:
+            try:
+                listener(enabled)
+            except Exception as e:
+                logger.warning("Task Card setting persisted but projection failed: %s", e)
 
     def taskcard_normal_rows(self) -> int:
         """Return the current agent-wide normal-row window."""

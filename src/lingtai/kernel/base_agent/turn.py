@@ -1674,7 +1674,14 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
 
         if response.text:
             collected_text_parts.append(response.text)
-            agent._log("diary", text=response.text)
+            # Preserve the provider round boundary for the Telegram-owned
+            # Task Card projection.  Only canonical response text is carried;
+            # thoughts remain a separate hidden event and are never projected.
+            agent._log(
+                "diary",
+                text=response.text,
+                api_call_id=getattr(response, "api_call_id", None),
+            )
             if response.tool_calls:
                 agent._intermediate_text_streamed = False
 

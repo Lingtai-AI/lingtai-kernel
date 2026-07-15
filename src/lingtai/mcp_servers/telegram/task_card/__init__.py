@@ -34,9 +34,11 @@ from .controller import (
     setup,
 )
 from .interface import TelegramTaskCardAgent
+from .resident import TaskCardResident
 
 __all__ = [
     "TaskCardController",
+    "TaskCardResident",
     "TaskCardControllerError",
     "TelegramTaskCardAgent",
     "get_description",

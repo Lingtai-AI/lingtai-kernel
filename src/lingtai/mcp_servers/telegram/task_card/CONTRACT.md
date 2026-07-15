@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/task_card/interface.py
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
+  - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/mcp_servers/telegram/task_card/assets/render_bash_async.py
@@ -17,6 +18,7 @@ related_files:
   - pyproject.toml
   - tests/test_task_card_controller.py
   - tests/test_telegram_task_card_programmable.py
+  - tests/test_telegram_task_card_event_tail.py
   - tests/test_telegram_task_card_toggle.py
   - tests/test_telegram_task_card_templates.py
   - tests/test_mcp_skill_manuals.py
@@ -41,8 +43,8 @@ maintenance: |
 
 ## Purpose
 
-This component owns the *programmable* slot of Telegram's **one tracked resident
-Task Card target** (per account+chat): the model-facing `task_card` capability
+This component owns Telegram's **one tracked resident Task Card target** (per
+account+chat) and its programmable slot: the model-facing `task_card` capability
 that binds agent state to that card by running an agent-supplied Python renderer
 and projecting only validated data. It is Telegram MCP-owned — registration is
 gated by the Telegram reverse route, projection targets
@@ -157,9 +159,28 @@ the procedure lives in [`SKILL.md`](SKILL.md), not here:
    ordinary Telegram messages are never enumerated, guessed at, or deleted.
 9. Agents must read the manual before authoring a renderer and MUST NOT weaken
    these promises to match implementation drift.
+10. The Telegram-owned `TaskCardResident` is the single owner of in-memory
+    channel frames, per-account+chat locks, compose, atomic enablement, and the
+    `ensure`/`project` boundary. `TelegramManager` is its transport adapter;
+    automatic and programmable frames feed the same owner. The resident boundary
+    is not coupled to BaseAgent turn, molt, heartbeat, or latest-route state.
+11. A first real inbound message for an established enabled account+chat calls
+    `ensure` once; the existing account `task_cards` id is rehydrated on restart
+    and updated in place. Explicit `taskcard: false` suppresses presentation;
+    explicit on notifies the resident and reprojects the same id exactly once.
+12. Automatic events accept only canonical public `diary` text and tool name plus
+    redacted/bounded `_reasoning`; raw action/arguments/results are excluded.
+    Hidden thinking, system prompts, raw tool args/results, auth/secrets, and
+    private runtime logs never reach the card. Rows/text are redacted and bounded.
+    Events sharing one provider `api_call_id` form one render group and produce
+    exactly one TUI-equivalent divider. `/taskcard N` counts these groups, not
+    tool rows; truncation can occur inside a chosen group only.
 
 ## Port
 
+The resident boundary exposes the minimal Telegram-addon-owned operations
+`rehydrate`, `ensure`, `project`, and `set_enabled` (implemented by
+`TaskCardResident`); the manager supplies only the transport adapter callbacks.
 The inbound driving port is the `task_card` tool (`start | inspect | retry |
 stop`; schema in `controller.py` `get_schema`). Core's outbound host dependency
 is the `TelegramTaskCardAgent` Protocol in `interface.py`: `_working_dir`,
@@ -323,8 +344,8 @@ The automatic slot is a bounded projection of the agent's authoritative
 one source of truth for each projection axis:
 
 1. **Tool rows and timestamps.** A row is projected only from a validated
-   `type == "tool_call"` event. Its allowlisted fields are `tool_name`,
-   `tool_args.action`, and redacted/capped `tool_args._reasoning`. Its optional
+   `type == "tool_call"` event. Its allowlisted fields are `tool_name` and
+   redacted/capped `tool_args._reasoning`; raw `action` is excluded. Its optional
    `started_at` is derived only from that same event's top-level Unix-epoch `ts`
    and uses `HH:MM:SS UTC±HH`. Missing, boolean, non-numeric, non-finite, or
    out-of-range `ts` omits `started_at` without failing the tail. `_meta`, row
@@ -344,7 +365,7 @@ one source of truth for each projection axis:
    bounded two-line metadata footer and its 150-character joined budget. The
    rows continue through `_format_rows_task_card_text`; telemetry never changes
    row ordering, row timestamps, or the programmable slot. A broadcast occurs
-   when either the bounded tool-row window or the current telemetry projection
+   when either the bounded API-call group window or current telemetry projection
    changes.
 4. **Implementation and tests.** The event path is
    `manager.py:_decode_event_line` → `_project_tool_call_row` /
@@ -361,6 +382,18 @@ one source of truth for each projection axis:
    `test_row_started_at_is_...` cases. Update this contract and its paired
    anatomy/tests together if the event schema, final-carrier path, supported
    fields, formatter budget, or timestamp provenance changes.
+
+## Resident and API-call-group conformance
+
+The resident-owner boundary and call-group projection are covered by the focused
+Telegram Task Card tests. In addition to the existing singleton, persistence,
+toggle, fail-open, and programmable-slot cases, the behavioral contract requires
+coverage for first-inbound `ensure`, restart rehydration preserving the same
+compound id, explicit off then one deterministic on transition, two API calls
+with multiple text/tool events producing two dividers, bounded public text with
+hidden/internal exclusions, and numeric windows counting calls rather than tool
+rows. These tests must use the existing account `task_cards` state and must not
+introduce a latest-route file or schema.
 
 ## Maintenance
 
