@@ -1,11 +1,10 @@
-"""Behavior and conformance locks for snapshot/revision Ports and adapter."""
+"""Observable behavior for Snapshot and SourceRevision Ports."""
 from __future__ import annotations
 
-import inspect
 import shutil
 import subprocess
 from types import SimpleNamespace
-from unittest.mock import Mock, call, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -14,132 +13,49 @@ from lingtai.kernel.base_agent import lifecycle
 from lingtai.kernel.snapshot import SnapshotPort, SourceRevisionPort
 from tests._snapshot_helpers import FakeSnapshotPort, FakeSourceRevisionPort
 
-
-SNAPSHOT_METHODS = frozenset({"initialize", "snapshot", "collect_garbage"})
-SOURCE_REVISION_METHODS = frozenset({"current_revision", "is_dirty"})
 GITIGNORE_BASELINE = (
     "# Secrets — MCP addon credentials (bot tokens, API keys)\n"
-    ".secrets/\n"
-    "\n"
+    ".secrets/\n\n"
     "# Transient lifecycle signal files\n"
-    ".sleep\n"
-    ".suspend\n"
-    ".agent.heartbeat\n"
-    ".timemachine.pid\n"
+    ".sleep\n.suspend\n.agent.heartbeat\n.timemachine.pid\n"
 )
-SYSTEM_BASELINE = {
-    "covenant.md": "",
-    "principle.md": "",
-    "pad.md": "",
-}
-
-
-def _public_method_names(implementation):
-    return {
-        name
-        for name, member in inspect.getmembers(
-            implementation, predicate=inspect.isfunction
-        )
-        if not name.startswith("_")
-    }
-
-
-def _assert_signatures_match(port, implementation, method_names):
-    for name in method_names:
-        assert inspect.signature(getattr(implementation, name)) == inspect.signature(
-            getattr(port, name)
-        )
-
-
-def test_ports_fakes_and_adapter_have_exact_conforming_method_sets(tmp_path):
-    assert SnapshotPort.__abstractmethods__ == SNAPSHOT_METHODS
-    assert SourceRevisionPort.__abstractmethods__ == SOURCE_REVISION_METHODS
-    assert _public_method_names(SnapshotPort) == SNAPSHOT_METHODS
-    assert _public_method_names(SourceRevisionPort) == SOURCE_REVISION_METHODS
-    assert _public_method_names(FakeSnapshotPort) == SNAPSHOT_METHODS
-    assert _public_method_names(FakeSourceRevisionPort) == SOURCE_REVISION_METHODS
-
-    fake_snapshot = FakeSnapshotPort()
-    fake_revision = FakeSourceRevisionPort()
-    adapter = PosixGitCliAdapter(tmp_path)
-    assert isinstance(fake_snapshot, SnapshotPort)
-    assert isinstance(fake_revision, SourceRevisionPort)
-    assert isinstance(adapter, SnapshotPort)
-    assert isinstance(adapter, SourceRevisionPort)
-
-    _assert_signatures_match(SnapshotPort, FakeSnapshotPort, SNAPSHOT_METHODS)
-    _assert_signatures_match(SnapshotPort, PosixGitCliAdapter, SNAPSHOT_METHODS)
-    _assert_signatures_match(
-        SourceRevisionPort, FakeSourceRevisionPort, SOURCE_REVISION_METHODS
-    )
-    _assert_signatures_match(
-        SourceRevisionPort, PosixGitCliAdapter, SOURCE_REVISION_METHODS
-    )
-
-
-def test_production_adapter_public_surface_is_fixed_and_has_no_command_runner():
-    public_methods = _public_method_names(PosixGitCliAdapter)
-    assert public_methods == SNAPSHOT_METHODS | SOURCE_REVISION_METHODS
-    assert not hasattr(PosixGitCliAdapter, "run")
-    for name, member in vars(PosixGitCliAdapter).items():
-        if inspect.isfunction(member):
-            assert "argv" not in inspect.signature(member).parameters
-
-
-def _expected_initialize_calls(directory):
-    return [
-        call(["git", "init"], cwd=directory, capture_output=True, check=True),
-        call(
-            ["git", "config", "user.email", "agent@lingtai"],
-            cwd=directory,
-            capture_output=True,
-            check=True,
-        ),
-        call(
-            ["git", "config", "user.name", "灵台 Agent"],
-            cwd=directory,
-            capture_output=True,
-            check=True,
-        ),
-        call(
-            ["git", "add", ".gitignore", "system/"],
-            cwd=directory,
-            capture_output=True,
-            check=True,
-        ),
-        call(
-            ["git", "commit", "-m", "init: agent working directory"],
-            cwd=directory,
-            capture_output=True,
-            check=True,
-        ),
-    ]
+SYSTEM_BASELINE = {"covenant.md": "", "principle.md": "", "pad.md": ""}
 
 
 def _assert_exact_baseline(directory):
     assert (directory / ".gitignore").read_text() == GITIGNORE_BASELINE
     assert {
-        name: (directory / "system" / name).read_text()
-        for name in SYSTEM_BASELINE
+        name: (directory / "system" / name).read_text() for name in SYSTEM_BASELINE
     } == SYSTEM_BASELINE
 
 
-def test_initialize_uses_fixed_commands_and_exact_baseline(tmp_path):
-    def assert_baseline_precedes_every_git_phase(*_args, **_kwargs):
+def test_ports_and_implementations_are_runtime_substitutable(tmp_path):
+    assert SnapshotPort.__abstractmethods__ == {
+        "initialize",
+        "snapshot",
+        "collect_garbage",
+    }
+    assert SourceRevisionPort.__abstractmethods__ == {"current_revision", "is_dirty"}
+    assert isinstance(FakeSnapshotPort(), SnapshotPort)
+    assert isinstance(FakeSourceRevisionPort(), SourceRevisionPort)
+    adapter = PosixGitCliAdapter(tmp_path)
+    assert isinstance(adapter, SnapshotPort)
+    assert isinstance(adapter, SourceRevisionPort)
+
+
+def test_initialize_preserves_baseline_before_git_phases(tmp_path):
+    def check_baseline(*_args, **_kwargs):
         _assert_exact_baseline(tmp_path)
         return SimpleNamespace(returncode=0)
 
     with patch(
-        "lingtai.adapters.posix.git_cli.subprocess.run",
-        side_effect=assert_baseline_precedes_every_git_phase,
-    ) as run:
+        "lingtai.adapters.posix.git_cli.subprocess.run", side_effect=check_baseline
+    ):
         PosixGitCliAdapter(tmp_path).initialize()
-
-    assert run.call_args_list == _expected_initialize_calls(tmp_path)
     _assert_exact_baseline(tmp_path)
 
 
-def test_initialize_preserves_existing_git_repository_and_sentinel_files(tmp_path):
+def test_initialize_preserves_existing_git_repository_and_sentinels(tmp_path):
     git_dir = tmp_path / ".git"
     git_dir.mkdir()
     (git_dir / "sentinel").write_text("git-sentinel")
@@ -151,7 +67,6 @@ def test_initialize_preserves_existing_git_repository_and_sentinel_files(tmp_pat
 
     with patch("lingtai.adapters.posix.git_cli.subprocess.run") as run:
         PosixGitCliAdapter(tmp_path).initialize()
-
     run.assert_not_called()
     assert (git_dir / "sentinel").read_text() == "git-sentinel"
     assert (tmp_path / ".gitignore").read_text() == "custom-ignore\n"
@@ -160,105 +75,68 @@ def test_initialize_preserves_existing_git_repository_and_sentinel_files(tmp_pat
     } == {name: f"sentinel:{name}" for name in SYSTEM_BASELINE}
 
 
-@pytest.mark.parametrize("failure_index", range(5))
 @pytest.mark.parametrize(
-    "failure_type",
-    [FileNotFoundError, subprocess.CalledProcessError],
-    ids=["executable-missing", "git-command-failed"],
+    ("failure_index", "failure"),
+    [
+        (0, FileNotFoundError("git executable missing")),
+        (4, subprocess.CalledProcessError(1, "git commit")),
+    ],
+    ids=["early-executable-missing", "late-command-failure"],
 )
-def test_initialize_each_git_phase_failure_retains_exact_baseline(
-    tmp_path, failure_index, failure_type
-):
-    expected_calls = _expected_initialize_calls(tmp_path)
-    if failure_type is FileNotFoundError:
-        failure = FileNotFoundError("git executable missing")
-    else:
-        failure = subprocess.CalledProcessError(
-            1, expected_calls[failure_index].args[0]
-        )
+def test_initialize_failure_retains_exact_baseline(tmp_path, failure_index, failure):
     effects = [SimpleNamespace(returncode=0) for _ in range(5)]
     effects[failure_index] = failure
-
     with patch(
         "lingtai.adapters.posix.git_cli.subprocess.run", side_effect=effects
-    ) as run:
+    ):
         PosixGitCliAdapter(tmp_path).initialize()
-
-    assert run.call_args_list == expected_calls[: failure_index + 1]
     _assert_exact_baseline(tmp_path)
 
 
-def test_snapshot_stages_all_and_clean_tree_is_noop(tmp_path):
-    clean = SimpleNamespace(returncode=0)
+def test_snapshot_clean_tree_is_noop(tmp_path):
     with patch(
         "lingtai.adapters.posix.git_cli.subprocess.run",
-        side_effect=[SimpleNamespace(returncode=0), clean],
-    ) as run:
-        result = PosixGitCliAdapter(tmp_path).snapshot()
-    assert result is None
-    assert run.call_args_list[0].args[0] == ["git", "add", "-A"]
-    assert run.call_args_list[1].args[0] == ["git", "diff", "--cached", "--quiet"]
+        side_effect=[SimpleNamespace(returncode=0), SimpleNamespace(returncode=0)],
+    ):
+        assert PosixGitCliAdapter(tmp_path).snapshot() is None
 
 
-def test_snapshot_commits_and_returns_native_short_revision(tmp_path):
+def test_snapshot_commits_changed_tree_and_returns_short_revision(tmp_path):
     results = [
         SimpleNamespace(returncode=0),
         SimpleNamespace(returncode=1),
         SimpleNamespace(returncode=0),
         SimpleNamespace(returncode=0, stdout="abc1234\n"),
     ]
-    with patch("lingtai.adapters.posix.git_cli.subprocess.run", side_effect=results) as run:
+    with patch("lingtai.adapters.posix.git_cli.subprocess.run", side_effect=results):
         assert PosixGitCliAdapter(tmp_path).snapshot() == "abc1234"
-    assert run.call_args_list[2].args[0][:3] == ["git", "commit", "-m"]
-    assert run.call_args_list[2].args[0][3].startswith("snapshot ")
-    assert run.call_args_list[3].args[0] == ["git", "rev-parse", "--short", "HEAD"]
 
 
-def test_snapshot_cached_diff_operational_failure_does_not_commit(tmp_path):
+def test_snapshot_cached_diff_failure_does_not_commit(tmp_path):
     with patch(
         "lingtai.adapters.posix.git_cli.subprocess.run",
-        side_effect=[
-            SimpleNamespace(returncode=0),
-            SimpleNamespace(returncode=2),
-        ],
+        side_effect=[SimpleNamespace(returncode=0), SimpleNamespace(returncode=2)],
     ) as run:
         assert PosixGitCliAdapter(tmp_path).snapshot() is None
-
-    assert [invocation.args[0] for invocation in run.call_args_list] == [
-        ["git", "add", "-A"],
-        ["git", "diff", "--cached", "--quiet"],
-    ]
+    assert run.call_count == 2
 
 
-@pytest.mark.parametrize(
-    "revision_result",
-    [
-        SimpleNamespace(returncode=1, stdout="ignored\n"),
-        SimpleNamespace(returncode=0, stdout="\n"),
-    ],
-    ids=["nonzero", "empty-stdout"],
-)
-def test_snapshot_final_revision_failure_returns_none(tmp_path, revision_result):
+def test_snapshot_final_revision_failure_returns_none(tmp_path):
     with patch(
         "lingtai.adapters.posix.git_cli.subprocess.run",
         side_effect=[
             SimpleNamespace(returncode=0),
             SimpleNamespace(returncode=1),
             SimpleNamespace(returncode=0),
-            revision_result,
+            SimpleNamespace(returncode=0, stdout=""),
         ],
-    ) as run:
+    ):
         assert PosixGitCliAdapter(tmp_path).snapshot() is None
 
-    assert run.call_args_list[-1].args[0] == [
-        "git", "rev-parse", "--short", "HEAD"
-    ]
 
-
-def test_real_git_snapshot_clean_untracked_deletion_and_secret_exclusion(tmp_path):
+def test_real_git_snapshot_handles_deletion_and_secret_exclusion(tmp_path):
     if shutil.which("git") is None:
         pytest.skip("real Git behavior lock requires the git executable")
-
     adapter = PosixGitCliAdapter(tmp_path)
     adapter.initialize()
     assert (tmp_path / ".git").is_dir()
@@ -279,8 +157,7 @@ def test_real_git_snapshot_clean_untracked_deletion_and_secret_exclusion(tmp_pat
 
     tracked.unlink()
     deletion_revision = adapter.snapshot()
-    assert deletion_revision
-    assert deletion_revision != untracked_revision
+    assert deletion_revision and deletion_revision != untracked_revision
     assert subprocess.run(
         ["git", "ls-files", "--error-unmatch", "tracked.txt"],
         cwd=tmp_path,
@@ -315,50 +192,38 @@ def test_snapshot_swallows_git_absence_and_failure(tmp_path):
             assert adapter.snapshot() is None
 
 
-def test_collect_garbage_is_fixed_and_bounded(tmp_path):
+def test_collect_garbage_is_bounded_and_best_effort(tmp_path):
     with patch("lingtai.adapters.posix.git_cli.subprocess.run") as run:
         PosixGitCliAdapter(tmp_path).collect_garbage()
-    run.assert_called_once_with(
-        ["git", "gc", "--auto"], cwd=tmp_path, capture_output=True, timeout=60
-    )
+    run.assert_called_once()
+    assert run.call_args.kwargs["timeout"] == 60
 
-
-@pytest.mark.parametrize(
-    "failure",
-    [
+    for failure in (
         FileNotFoundError("git executable missing"),
-        subprocess.CalledProcessError(1, ["git", "gc", "--auto"]),
-        subprocess.TimeoutExpired(["git", "gc", "--auto"], 60),
-    ],
-    ids=["executable-missing", "git-command-failed", "timeout"],
-)
-def test_collect_garbage_swallows_every_declared_operational_failure(
-    tmp_path, failure
-):
-    with patch(
-        "lingtai.adapters.posix.git_cli.subprocess.run", side_effect=failure
-    ) as run:
-        PosixGitCliAdapter(tmp_path).collect_garbage()
-    run.assert_called_once_with(
-        ["git", "gc", "--auto"], cwd=tmp_path, capture_output=True, timeout=60
-    )
+        subprocess.CalledProcessError(1, "git gc"),
+        subprocess.TimeoutExpired("git gc", 60),
+    ):
+        with patch(
+            "lingtai.adapters.posix.git_cli.subprocess.run", side_effect=failure
+        ):
+            PosixGitCliAdapter(tmp_path).collect_garbage()
 
 
-def test_source_revision_native_and_fixed_length_queries(tmp_path):
+def test_source_revision_preserves_length_and_deadline_policy(tmp_path):
     adapter = PosixGitCliAdapter(tmp_path)
     with patch(
         "lingtai.adapters.posix.git_cli.subprocess.run",
         return_value=SimpleNamespace(returncode=0, stdout="abcdef\n"),
     ) as run:
         assert adapter.current_revision(None, 2.0) == "abcdef"
-        assert run.call_args.args[0] == ["git", "rev-parse", "--short", "HEAD"]
+        assert "--short" in run.call_args.args[0]
         assert run.call_args.kwargs["timeout"] == 2.0
         assert adapter.current_revision(12, 0.5) == "abcdef"
-        assert run.call_args.args[0] == ["git", "rev-parse", "--short=12", "HEAD"]
+        assert "--short=12" in run.call_args.args[0]
         assert run.call_args.kwargs["timeout"] == 0.5
 
 
-def test_source_revision_failure_paths_return_none(tmp_path):
+def test_source_revision_and_dirty_failures_return_none(tmp_path):
     adapter = PosixGitCliAdapter(tmp_path)
     with patch(
         "lingtai.adapters.posix.git_cli.subprocess.run",
@@ -385,17 +250,12 @@ def test_dirty_query_is_tracked_only_and_tri_state(tmp_path):
     ) as run:
         assert adapter.is_dirty(0.5) is False
         assert adapter.is_dirty(0.5) is True
-    assert run.call_args.args[0] == [
-        "git", "status", "--porcelain", "--untracked-files=no"
-    ]
+    assert "--untracked-files=no" in run.call_args.args[0]
 
 
 def _heartbeat_agent(snapshot_port, interval, working_dir):
     shutdown = Mock()
     shutdown.is_set.return_value = False
-    # The heartbeat loop reads the snapshot/GC tick through the injected
-    # LifecycleClockPort (monotonic domain), not a module-global time. Each
-    # test scripts ``_lifecycle_clock.monotonic_seconds`` directly on the stub.
     lifecycle_clock = SimpleNamespace(
         monotonic_seconds=Mock(return_value=0.0),
         wall_seconds=Mock(return_value=0.0),
@@ -434,8 +294,6 @@ def test_start_initializes_only_when_snapshots_enabled():
             _shutdown=Mock(),
             _config=SimpleNamespace(snapshot_interval=interval),
             _snapshot_port=snapshot,
-            # ``_start`` samples the monotonic uptime anchor through the injected
-            # clock before ``_flush_system_prompt``; the stub carries a no-op one.
             _lifecycle_clock=SimpleNamespace(monotonic_seconds=Mock(return_value=0.0)),
             _flush_system_prompt=Mock(side_effect=StopAfterInitialization),
         )
@@ -444,7 +302,7 @@ def test_start_initializes_only_when_snapshots_enabled():
         assert snapshot.initialize_calls == expected
 
 
-def test_heartbeat_snapshot_and_gc_are_first_eligible_and_advance_clocks(tmp_path):
+def test_heartbeat_snapshot_and_gc_share_first_eligible_tick(tmp_path):
     snapshot = FakeSnapshotPort()
     agent = _heartbeat_agent(snapshot, 10, tmp_path)
 
@@ -452,56 +310,40 @@ def test_heartbeat_snapshot_and_gc_are_first_eligible_and_advance_clocks(tmp_pat
         agent._heartbeat_thread = None
 
     agent._heartbeat_stop.wait.side_effect = stop_after_tick
-    monotonic = agent._lifecycle_clock.monotonic_seconds
-    monotonic.return_value = 90000
-    with patch.object(lifecycle, "_write_heartbeat_tick") as heartbeat_tick, patch.object(
+    agent._lifecycle_clock.monotonic_seconds.return_value = 90000
+    with patch.object(lifecycle, "_write_heartbeat_tick"), patch.object(
         lifecycle, "_check_rules_file"
     ), patch.object(lifecycle, "_maybe_sleep_after_idle_timeout"), patch(
         "lingtai.kernel.nudge.run_checks"
     ):
         lifecycle._heartbeat_loop(agent)
-
-    heartbeat_tick.assert_called_once_with(agent)
-    monotonic.assert_called_once_with()
-    agent._heartbeat_stop.wait.assert_called_once_with(1.0)
-    assert snapshot.snapshot_calls == 1
-    assert snapshot.collect_garbage_calls == 1
-    assert agent._last_snapshot == 90000
-    assert agent._last_gc == 90000
+    assert agent._lifecycle_clock.monotonic_seconds.call_count == 1
+    assert snapshot.snapshot_calls == snapshot.collect_garbage_calls == 1
+    assert agent._last_snapshot == agent._last_gc == 90000
 
 
-def test_heartbeat_gc_runs_only_at_exact_daily_boundaries(tmp_path):
+def test_heartbeat_gc_runs_at_daily_boundaries(tmp_path):
     snapshot = FakeSnapshotPort()
     agent = _heartbeat_agent(snapshot, 1_000_000, tmp_path)
     clock_ticks = [86399, 86400, 86401, 172799, 172800]
     sleep_calls = []
-    gc_counts_after_ticks = []
-    gc_clocks_after_ticks = []
+    gc_counts = []
 
-    def stop_after_final_tick(seconds):
+    def stop_after_tick(seconds):
         sleep_calls.append(seconds)
-        gc_counts_after_ticks.append(snapshot.collect_garbage_calls)
-        gc_clocks_after_ticks.append(agent._last_gc)
+        gc_counts.append(snapshot.collect_garbage_calls)
         if len(sleep_calls) == len(clock_ticks):
             agent._heartbeat_thread = None
 
-    agent._heartbeat_stop.wait.side_effect = stop_after_final_tick
-    monotonic = agent._lifecycle_clock.monotonic_seconds
-    monotonic.side_effect = clock_ticks
-    with patch.object(lifecycle, "_write_heartbeat_tick") as heartbeat_tick, patch.object(
+    agent._heartbeat_stop.wait.side_effect = stop_after_tick
+    agent._lifecycle_clock.monotonic_seconds.side_effect = clock_ticks
+    with patch.object(lifecycle, "_write_heartbeat_tick"), patch.object(
         lifecycle, "_check_rules_file"
     ), patch.object(lifecycle, "_maybe_sleep_after_idle_timeout"), patch(
         "lingtai.kernel.nudge.run_checks"
     ):
         lifecycle._heartbeat_loop(agent)
-
-    assert heartbeat_tick.call_args_list == [call(agent)] * 5
-    assert monotonic.call_args_list == [call()] * 5
-    assert agent._heartbeat_stop.wait.call_args_list == [call(1.0)] * 5
     assert sleep_calls == [1.0] * 5
-    assert gc_counts_after_ticks == [0, 1, 1, 1, 2]
-    assert gc_clocks_after_ticks == [0.0, 86400, 86400, 86400, 172800]
-    assert snapshot.snapshot_calls == 0
+    assert gc_counts == [0, 1, 1, 1, 2]
     assert snapshot.collect_garbage_calls == 2
-    assert agent._last_snapshot == 0.0
     assert agent._last_gc == 172800

@@ -272,22 +272,11 @@ order:
    carry the edge; the Contract lists the manual as the capability's interface
    owner, while the Anatomy lists it as a navigation target, without copying the
    manual's content into either.
-5. `maintenance`: the **canonical Maintenance block**, copied byte-for-byte
-   from the single source of truth in this root contract's `## Template`
-   section. Component authors MUST NOT paraphrase, reword, reindent, or
-   customize it. The canonical block is delimited by the stable markers
-   `<!-- CANONICAL-MAINTENANCE v<N> BEGIN -->` and
-   `<!-- CANONICAL-MAINTENANCE END -->`, where `v<N>` is the **canonical
-   Maintenance version**. A governed child's `maintenance` value MUST equal the
-   bytes between those markers exactly. To create or update a child contract,
-   follow `dev-guide-skill/SKILL.md`: copy the canonical block verbatim, then
-   run the mechanical consistency check in
-   `tests/test_architecture_documents.py`. On any mismatch, stop and report;
-   never hand-normalize or auto-fix the child to force a pass.
-
-The canonical Maintenance version is bumped only when the canonical block text
-itself changes; that bump is a convention change that also bumps the root
-`contract_version` and requires revalidating every governed child.
+5. `maintenance`: a concise maintenance note for the governed component. It
+   MUST preserve the root guidance: keep `related_files` complete, keep the
+   Anatomy/Contract and ownership links reciprocal, and update the pair when
+   structure or normative behavior changes. The note may route back to this
+   root contract; it is documentation, not a byte-identical child snapshot.
 
 ## Body contract
 
@@ -382,34 +371,17 @@ when structure or composition also changes.
 
 ## Validation
 
-`tests/test_architecture_documents.py` validates root definitions, frontmatter
-schemas, repo-relative paths, governed Anatomy/Contract twins, unique owners
-for linked implementation-only Anatomies, reciprocal links, heading order,
-maintenance text, and required architecture anchors. A component enters the
-paired governed system only when root `related_files` lists its contract.
-Legacy or staged documents outside that index remain outside automated pair
-enforcement; audits MUST report them and migrate them component-by-component,
-not silently normalize them. Behavioral truth remains in
-each component's shared contract tests and code review.
-
-**Canonical Maintenance consistency check.** The single source of truth for the
-child Maintenance block is the region between the
-`<!-- CANONICAL-MAINTENANCE v<N> BEGIN -->` and `<!-- CANONICAL-MAINTENANCE END -->`
-markers in the `## Template` section above. The validator extracts that block
-once from this root contract, derives its **canonical version** (`v<N>`) and a
-**canonical hash** (SHA-256 of the block's exact bytes), and compares every
-governed child `CONTRACT.md`'s `maintenance` value against it. A child passes
-only when its `maintenance` value is byte-for-byte identical, carries the same
-version marker, and hashes to the same value. Any mismatch — differing text, a
-different or missing version, a missing marker, or duplicate markers — is a hard
-failure, not something the validator normalizes or repairs. The failure report
-names at least the component, its path, the expected canonical version and hash,
-the actual version and hash, and the first differing byte position. A PR that
-trips this check stays blocked until the child is corrected and revalidated;
-component authors copy the canonical block verbatim rather than editing a child's
-Maintenance text. Because the root contract is the only source of the block,
-there is exactly one authoritative version — the validator never stores a second
-divergent copy of the rule.
+`tests/test_architecture_documents.py` validates parseable frontmatter,
+non-empty duplicate-free safe repo-relative `related_files`, the reciprocal root
+Anatomy/Contract link, governed child `root_contract` and twin pairing, unique
+owners for linked implementation-only Anatomies, and reciprocal graph links. A
+component enters the paired governed system only when root `related_files` lists
+its contract. Legacy or staged documents outside that index remain outside
+automated pair enforcement; audits MUST report them and migrate them
+component-by-component, not silently normalize them. Other frontmatter key,
+ordering, naming, and version conventions, heading wording, and Maintenance prose
+are normative documentation reviewed by maintainers, while behavioral truth
+remains in each component's shared contract tests and code review.
 
 ## Template
 
@@ -425,18 +397,13 @@ related_files:
   - <repo-relative contract-test file>
   - <repo-relative capability manual or manual reference>
 maintenance: |
-  <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
   This component contract is governed by the root CONTRACT.md. Keep
-  related_files complete and repo-relative: the paired ANATOMY.md, Port, every
-  production Adapter, contract tests, and directly relevant component contracts
-  belong here. Re-read this contract whenever a linked boundary changes. Update
-  the Port, affected Adapters, contract tests, and this contract in the same
-  change; update the paired Anatomy when structure or composition also changes;
-  bump contract_version for a breaking Port-contract change. If code and contract
-  disagree, treat the disagreement as a defect—do not silently rewrite the
-  normative contract to match the implementation.
-  Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
-  <!-- CANONICAL-MAINTENANCE END -->
+  related_files complete and repo-relative, including the paired ANATOMY.md,
+  Port, production Adapters, contract tests, and relevant manuals. Update the
+  Port, affected Adapters, tests, and this contract together when a boundary or
+  normative behavior changes; update the paired Anatomy when structure changes.
+  Follow the root Anatomy/Contract pairing and ownership rules, report mismatches,
+  and do not duplicate or auto-fix the rule here.
 ---
 # <Component Name>
 

@@ -94,7 +94,7 @@ fields, in this order:
    files. It includes the paired `CONTRACT.md` for a governed component, the
    parent and direct-child anatomies needed to traverse the graph, and the code
    files that own the mapped layer.
-2. `maintenance`: the canonical generic text in the template below. The root
+2. `maintenance`: a concise generic note based on the template below. The root
    uses a root-specific maintenance statement because it also governs the
    system.
 
@@ -204,16 +204,12 @@ listed in `related_files`; the distributed interface graph starts at
 `CONTRACT.md`. A governed component joins both graphs through its co-located
 pair.
 
-Every paired document carries a uniform `maintenance` frontmatter entry that
-backlinks to its normative root: each governed component anatomy copies the
-canonical anatomy `maintenance` text from this file's `## Template`, and each
-governed component contract copies the canonical Maintenance block from
-[`CONTRACT.md`](CONTRACT.md). The contract-side canonical block is the single
-source of truth for that promise — its exact text, version, and hash are owned
-by `CONTRACT.md` and mechanically enforced by
-[`tests/test_architecture_documents.py`](tests/test_architecture_documents.py).
-This anatomy only points at that rule; it does not restate a second, possibly
-divergent, copy of it.
+Every paired document carries a maintenance frontmatter entry that routes
+back to its normative root. Keep each entry concise, preserve the root's
+maintenance and ownership guidance, and update the pair when structure or
+normative behavior changes. [`tests/test_architecture_documents.py`](tests/test_architecture_documents.py)
+checks the graph and path safety; the maintenance prose remains normative
+documentation rather than a byte-identical snapshot.
 
 ## State
 
