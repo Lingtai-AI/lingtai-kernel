@@ -1,4 +1,4 @@
-"""Shared test fakes for the Snapshot and Source Revision Ports."""
+"""Small policy fakes for Snapshot and SourceRevision Ports."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

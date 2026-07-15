@@ -108,37 +108,25 @@ Contract for filename symmetry. If the relationship does not satisfy the root
 rule, stop and report the root-defined mismatch fields and suggested action;
 do not normalize or auto-fix it without authorization.
 
-### Copy the canonical Maintenance block exactly
+### Keep Maintenance guidance aligned
 
-When you create or update a child component `CONTRACT.md`, its `maintenance`
-frontmatter value is not yours to write. It is the **canonical Maintenance
-block** owned by the root [`CONTRACT.md`](../CONTRACT.md), delimited by the
-`<!-- CANONICAL-MAINTENANCE v<N> BEGIN -->` and `<!-- CANONICAL-MAINTENANCE END -->`
-markers in its `## Template` section:
+When you create or update a child component `CONTRACT.md`, keep its
+`maintenance` note concise and aligned with root [`CONTRACT.md`](../CONTRACT.md):
+retain complete, safe `related_files`, reciprocal Anatomy/Contract and ownership
+links, and the rule to update the pair when structure or normative behavior
+changes. The note is documentation, not a byte-identical snapshot; do not add a
+second registry or a generated/hash-based maintenance mechanism.
 
-1. Copy that block **byte-for-byte** into the child's `maintenance` value —
-   including the marker comment lines and the version tag. Do not paraphrase,
-   reword, reindent, translate, or "improve" it. Every governed child carries
-   the identical block; a root edit therefore requires every governed child to
-   be recopied and revalidated before the graph can pass again.
-2. Run the mechanical consistency check:
+Run the focused architecture check when the graph changes:
 
-   ```bash
-   python -m pytest -q tests/test_architecture_documents.py
-   ```
+```bash
+python -m pytest -q tests/test_architecture_documents.py
+```
 
-   It extracts the canonical block from the root, computes its version and hash,
-   and compares every governed child's `maintenance` value byte-for-byte.
-3. On any mismatch — different text, a different or missing version marker, a
-   missing or duplicated marker — the check hard-fails and reports the
-   component, path, expected canonical version/hash, actual version/hash, and
-   the first differing position. **Stop and report that diagnostic.** Do not
-   silently normalize, hand-edit, or auto-fix the child to force a pass; a
-   mismatch means either the child drifted (recopy the canonical block) or the
-   root block genuinely changed (a convention change that bumps the canonical
-   version and the root `contract_version` and revalidates every child under
-   explicit authorization). The affected change stays blocked until the check
-   passes again.
+It validates frontmatter path safety, root and child pairing, reciprocal graph
+links, and unique ownership for linked implementation Anatomies. If it reports
+a mismatch, stop and report the offending path and links rather than silently
+normalizing or auto-fixing documents.
 
 ## Validate in layers
 
