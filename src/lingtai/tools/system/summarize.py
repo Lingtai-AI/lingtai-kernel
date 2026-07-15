@@ -104,8 +104,8 @@ def _find_tool_result_block(agent, tool_call_id: str):
 def _visible_len(content: Any) -> int:
     """Return visible length of the formal tool-result payload only.
 
-    Kernel/runtime metadata such as ``_meta.notifications`` and
-    ``_meta.guidance`` is channel guidance/state, not the substantive result
+    Kernel/runtime metadata such as ``_meta.agent_meta.notifications`` and
+    ``_meta.agent_meta.guidance`` is channel guidance/state, not the substantive result
     being summarized.
     """
     return formal_tool_result_visible_len(content)
@@ -122,8 +122,8 @@ def _truthy_flag(value: Any) -> bool:
 
 # Rough chars-per-token divisor for the clearly-labeled token estimate in the
 # dynamic pending-summary totals. This is a display heuristic only — the exact
-# token counts live in _meta.tool_meta.token_usage; the char-derived figure is
-# a rough guide so the agent can weigh a rebuild.
+# token counts live in _meta.agent_meta.agent_state.token_usage; the char-derived
+# figure is a rough guide so the agent can weigh a rebuild.
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
 
@@ -179,8 +179,8 @@ def _summary_totals_over(agent, *, predicate) -> dict:
 def _current_context_snapshot(agent) -> dict:
     """Return current context usage/tokens/window when resolvable, else Nones.
 
-    Reuses the same meta_block sources the tool-meta token_usage block uses so the
-    figures reported here match ``_meta.tool_meta.token_usage.session``.
+    Reuses the same meta_block sources the agent-state token_usage block uses so the
+    figures reported here match ``_meta.agent_meta.agent_state.token_usage.session``.
     """
     from lingtai.kernel.meta_block import _current_context_usage, _session_context_window
 
@@ -336,11 +336,11 @@ def _build_rebuild_reconstruction(snapshot: dict, applied_totals, *, requested: 
         f"applied to the provider-context rebuild path (their markers are now marked "
         f"done) and will take effect on the next model request. Context figures shown "
         f"on this result, including the `context` snapshot and "
-        f"_meta.tool_meta.token_usage.session.context_usage, belong to the provider "
+        f"_meta.agent_meta.agent_state.token_usage.session.context_usage, belong to the provider "
         f"round that requested this rebuild. Post-rebuild context usage does not exist "
         f"yet; it first becomes observable on the next provider round. "
         f"{_pending_totals_line(applied_totals, applied=True)}After that round, inspect "
-        f"_meta.tool_meta.token_usage.session.context_usage and the reconstruction "
+        f"_meta.agent_meta.agent_state.token_usage.session.context_usage and the reconstruction "
         f"metadata to decide whether context recovered. If it remains above the 0.6 "
         f"recovery target, tend durable stores and molt rather than repeating rebuild. "
         f"Be tactical with token efficiency — do not loop rebuild/summarize. See "

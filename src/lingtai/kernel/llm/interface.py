@@ -54,13 +54,23 @@ class ToolResultBlock:
     id: str
     name: str
     content: Any  # str or dict
+    # Runtime metadata is a canonical sidecar, not handler content.  Adapters
+    # project it into the provider payload; durable canonical history keeps it
+    # here so strings and other supported handler results have the same
+    # contract as dictionaries.
+    metadata: dict = field(default_factory=dict)
     # True iff this block was created by close_pending_tool_calls (heal path),
     # not by a real tool execution. add_tool_results will overwrite a
     # synthesized block in place when the real result for the same id arrives.
     synthesized: bool = False
+    # Runtime-only capture.  It is deliberately not part of the canonical
+    # dataclass serialization or provider payload.
+    _agent_pending: dict | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict:
         d: dict = {"type": "tool_result", "id": self.id, "name": self.name, "content": self.content}
+        if self.metadata:
+            d["metadata"] = self.metadata
         if self.synthesized:
             d["synthesized"] = True
         return d
@@ -213,6 +223,7 @@ def content_block_from_dict(d: dict) -> ContentBlock:
             id=d["id"],
             name=d["name"],
             content=d["content"],
+            metadata=d.get("metadata", {}),
             synthesized=d.get("synthesized", False),
         )
     elif btype == "thinking":

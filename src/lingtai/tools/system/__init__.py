@@ -12,7 +12,7 @@ Actions (voluntary, agent-callable):
     presets   — list available presets in the agent's library
     summarize — record an agent-authored compact replacement for a prior
                 tool-result block in runtime history. Pick targets from
-                ``_meta.agent_meta.current_tool_result_chars.top_results``.
+                ``_meta.agent_meta.agent_state.current_tool_result_chars.top_results``.
                 (Legacy: a successful summarize of a ``large_tool_result``
                 tool_call_id still auto-clears any leftover reminder.)
 
@@ -26,7 +26,7 @@ reads/clears via the ``notification`` tool.
 
 Identity and runtime state surface via other channels:
     - identity prompt section — every turn, cached prefix
-    - per-result `_meta.tool_meta` / sparse update-driven `_meta.agent_meta` on tool results
+    - per-result immutable `_meta.tool_meta` plus complete current final-carrier `_meta.agent_meta` on eligible tool results
     - `.status.json` — written by the kernel; read with read({".status.json"})
       when the agent wants the deep dive
 
@@ -96,7 +96,7 @@ def handle(agent, args: dict) -> dict:
     verb).  Legacy: a successful summarize still auto-clears any leftover
     ``large_tool_result`` reminder internally — though the kernel no longer
     raises new ones (large results are ranked under
-    ``_meta.agent_meta.current_tool_result_chars``).
+    ``_meta.agent_meta.agent_state.current_tool_result_chars``).
     """
     action = args.get("action")
     handler = {

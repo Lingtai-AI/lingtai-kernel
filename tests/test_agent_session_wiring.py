@@ -1,7 +1,7 @@
 """Wiring tests for the explicit runtime-session / agent-session objects.
 
 These cover the SAME-PR wiring (Jason 2026-07-02): the injected
-``_meta.tool_meta.token_usage.session`` half must be backed by AGENT-SESSION
+``_meta.agent_meta.agent_state.token_usage.session`` half must be backed by AGENT-SESSION
 (since-current-molt) semantics, and a refresh/restart must PRESERVE the
 since-molt counters instead of restoring LIFETIME ledger totals.
 

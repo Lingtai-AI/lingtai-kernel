@@ -3,11 +3,10 @@
 Root cause being guarded here (see report
 ``reports/claude-p-codex-tool-result-canonicalization.md``):
 
-The kernel moves the *latest-only* ``_meta`` blocks (``agent_meta`` / ``guidance``
-/ ``notifications``) off an older tool result and onto the freshest one each turn
-(``meta_block.attach_active_runtime`` / ``attach_active_notifications``). That
-mutation rewrites an OLDER ``ToolResultBlock.content`` in place, so the same tool
-call's ``function_call_output.output`` string legitimately differs between turns.
+The kernel records each batch's coherent current ``_meta.agent_meta`` snapshot
+on its final tool result. Older ``ToolResultBlock`` content remains historical,
+so the same tool call's ``function_call_output.output`` can legitimately differ
+between turns when canonical history is replayed.
 
 For the stateful Codex WS delta path that is fatal: the next request's full
 converted input must *strict-prefix-match* the prior baseline, and a changed

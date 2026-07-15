@@ -190,7 +190,7 @@ text visible, record a compact summary replacement for its raw payload regardles
 of length. The
 summary preserves the conclusion, evidence, anchors, validation, risks, and next
 steps while lowering active context. Runtime high-attention guidance for this
-behavior is carried in `_meta.guidance`, including the resident 0.75 manual
+behavior is carried in `_meta.agent_meta.guidance`, including the resident 0.75 manual
 rebuild hint and the 1.0 hard forced-rebuild boundary rule.
 Treat guidance as a system-prompt-like appendix placed at the end of context: it
 is an ordered `sections[]` structure, not a loose metadata bag.  The kernel's
@@ -207,7 +207,7 @@ cache/continuation prefix rather than *reconstructing* it each turn; rebuilding
 that prefix on every summarize would discard the cache benefit. So below the
 full-context boundary the summarize stays pending and the session keeps appending —
 this delay is normal. Once context is at/above 0.75, the runtime stamps
-`_meta.tool_meta.context.rebuild`; if an earlier fresh provider context is worth
+`_meta.agent_meta.agent_state.context.rebuild`; if an earlier fresh provider context is worth
 the cost, make one proactive tactical `system(action="summarize", rebuild=true)`
 call — with new items (record then apply the pending set) or with no items (pure
 rebuild of the already-pending summaries); applied summaries flip to
@@ -221,7 +221,7 @@ context. Every 1.0 forced rebuild ALWAYS carries a one-shot
 `reconstruction.warning` (before→after context, proactive-0.75-rebuild advice, and
 "if still above the 0.6 recovery target, molt"). If that one forced rebuild does
 NOT clear the overflow (post-rebuild context stays strictly above 1.0), every
-result then also carries a permanent `_meta.tool_meta.context.molt` line `100%
+result then also carries a permanent `_meta.agent_meta.agent_state.context.molt` line `100%
 context Forced Rebuilt Failed. Context overflowed!! (xxx %) Molt IMMEDIATELY!!` —
 molt immediately. Waiting until full context is not
 ideal — prefer the proactive 0.75 rebuild; if the pending total is 0, the forced

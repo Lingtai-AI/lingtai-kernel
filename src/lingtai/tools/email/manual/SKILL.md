@@ -125,7 +125,7 @@ The `email` tool dispatches by `action`. All actions take optional `mode` for ou
 
 ### `read` vs `dismiss` — when to use which
 
-Unread email bodies are injected in full into `_meta.notification_persistent.email` (up to the 50,000-character send-layer cap described below). You do **not** need `email.read` merely to see ordinary message text. After you have handled the visible content, prefer `dismiss`: same read-state effect, no body returned, and the unread notification clears once count reaches zero.
+Unread email bodies are injected in full into `_meta.agent_meta.notifications.persistent.email` (up to the 50,000-character send-layer cap described below). You do **not** need `email.read` merely to see ordinary message text. After you have handled the visible content, prefer `dismiss`: same read-state effect, no body returned, and the unread notification clears once count reaches zero.
 
 Use `read` when you need to refresh the source-of-truth mailbox record, inspect attachment/metadata details, or deliberately fetch the producer state before a reply/audit. Use `reply`/`reply_all` when answering. Failing to `dismiss`, `read`, `archive`, or `delete` a handled mail keeps the notification reminding you on every heartbeat.
 

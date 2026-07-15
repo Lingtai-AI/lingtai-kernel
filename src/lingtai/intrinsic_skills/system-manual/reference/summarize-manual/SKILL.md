@@ -28,7 +28,7 @@ still carry the old raw block until delayed reconstruction applies the compacted
 history.
 
 Use this manual when runtime guidance tells you to summarize, when a result is
-ranked large under `_meta.agent_meta.current_tool_result_chars.top_results`,
+ranked large under `_meta.agent_meta.agent_state.current_tool_result_chars.top_results`,
 when tool output has served its immediate purpose, or when you need to explain
 how summarize differs from molt.
 
@@ -149,12 +149,8 @@ progressive-disclosure entry point.
 ### Urgent cadence: summarize the bulky result now
 
 Use this when a tool result is long or noisy — typically one that ranks high in
-`_meta.agent_meta.current_tool_result_chars.top_results` (above its `threshold`,
-counted in `over_threshold_count`). `agent_meta` is sparse/update-driven: it is
-re-emitted onto a later result when the material snapshot changes (a newly-large
-result counts as a change), so read the ranking from the **most recent emitted**
-`agent_meta` — it may sit on an earlier result than the newest one, not
-necessarily on the last tool result.
+`_meta.agent_meta.agent_state.current_tool_result_chars.top_results` (above its `threshold`,
+counted in `over_threshold_count`). `agent_meta` is a complete current final-carrier snapshot attached to each eligible final carrier. Its nested `agent_state.current_tool_result_chars` is current on the newest emitted snapshot; older snapshots remain retained historical traces and are not actionable.
 
 1. Read or inspect the result first.
 2. Decide what future-you needs from it.
@@ -232,7 +228,7 @@ summarize would discard cache benefit.
 - **Below 1.0 of the context window:** summarize stays pending at the provider
   layer and the session keeps appending. This delay is normal, not a failure; do
   not call `refresh` merely to "apply" the summary.
-- **At or above 0.75 of the context window:** `_meta.tool_meta.context.rebuild`
+- **At or above 0.75 of the context window:** `_meta.agent_meta.agent_state.context.rebuild`
   is stamped continuously. It is a decision prompt / permission, not an automatic
   rebuild — recording summaries never triggers a provider-context rebuild on its
   own. If making already-recorded summaries active in the provider context earlier
@@ -261,7 +257,7 @@ summarize would discard cache benefit.
   holder
   per family represents current state, older holders are historical traces
   and must not be acted on. Every 1.0 forced rebuild ALWAYS carries a one-shot
-  `_meta.tool_meta.reconstruction.warning`: it reports the before→after context
+  `_meta.agent_meta.agent_state.events.reconstruction.warning`: it reports the before→after context
   change, advises that reaching the full boundary means waiting was not ideal (prefer
   a proactive 0.75 `rebuild=true`), and says that if the rebuilt context is still
   above the 0.6 recovery target you should tend durable stores and molt. This is
@@ -272,7 +268,7 @@ summarize would discard cache benefit.
   first provider response is observed and that post-rebuild provider input is still
   **strictly above** `1.0` (a failed forced request keeps verification pending
   until a successful provider-usage result exists), EVERY following result carries
-  a permanent `_meta.tool_meta.context.molt` line, verbatim:
+  a permanent `_meta.agent_meta.agent_state.context.molt` line, verbatim:
   `100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! (xxx %) Molt IMMEDIATELY!!`
   (`xxx` = the current measured percentage, one decimal). It rides the same
   permanent current-state channel as the sustained-pressure and cache-miss-budget

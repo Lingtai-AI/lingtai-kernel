@@ -507,7 +507,7 @@ class SessionManager:
     def context_pressure_warning_active(self) -> bool:
         """True once context has been high for >= WARN_AFTER_ROUNDS fresh rounds.
 
-        This drives the permanent ``_meta.tool_meta.context.molt`` warning. It
+        This drives the ``_meta.agent_meta.agent_state.context.molt`` warning. It
         is *current state*, not a one-shot event: it stays True as long as the
         streak remains at/above the warn count and drops the moment context
         relaxes below the threshold (which resets the streak).
@@ -725,7 +725,7 @@ class SessionManager:
 
         "Runtime session" = the live process/session, counted since it last
         started or refreshed/restored. This is deliberately DISTINCT from the
-        injected ``_meta.tool_meta.token_usage.session`` half, whose contract is
+        injected ``_meta.agent_meta.agent_state.token_usage.session`` half, whose contract is
         "since last molt": that reads the cumulative :meth:`get_token_usage`
         totals (which SURVIVE ``restore_token_state``), so a refresh does not zero
         it out. Do NOT feed this runtime-session getter into that injected
@@ -915,7 +915,7 @@ class SessionManager:
         """Re-baseline the RUNTIME-SESSION token deltas at the current totals.
 
         Runtime session = since last refresh/process start. This helper does NOT
-        reset the injected ``_meta.tool_meta.token_usage.session`` half; it only
+        reset the injected ``_meta.agent_meta.agent_state.token_usage.session`` half; it only
         changes the baseline used by :meth:`get_runtime_session_token_usage`.
 
         The named :class:`RuntimeSession` object is re-minted here so it follows
@@ -935,7 +935,7 @@ class SessionManager:
         """Start a fresh SESSION token counter after a successful molt.
 
         Session = since last molt. A deliberate/system molt creates a new
-        session for injected ``_meta.tool_meta.token_usage.session`` purposes, so
+        session for injected ``_meta.agent_meta.agent_state.token_usage.session`` purposes, so
         cumulative token/API counters reset to zero while the durable event log
         remains the source for older historical accounting. The runtime-session
         (since-refresh) baseline is re-anchored to the new zero totals too.

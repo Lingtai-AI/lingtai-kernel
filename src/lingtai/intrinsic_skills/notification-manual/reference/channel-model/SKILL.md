@@ -23,11 +23,11 @@ maintenance: |
 
 A channel is the filename stem in `.notification/<channel>.json`:
 
-- `.notification/email.json` becomes `_meta.notifications.email`;
-- `.notification/system.json` becomes `_meta.notifications.system`;
+- `.notification/email.json` becomes `_meta.agent_meta.notifications.attention.email`;
+- `.notification/system.json` becomes `_meta.agent_meta.notifications.attention.system`;
 - `.notification/mcp.telegram.json` becomes
-  `_meta.notifications["mcp.telegram"]`;
-- `.notification/goal.json` becomes `_meta.notifications.goal`.
+  `_meta.agent_meta.notifications.attention["mcp.telegram"]`;
+- `.notification/goal.json` becomes `_meta.agent_meta.notifications.attention.goal`.
 
 The kernel accepts built-in channels including `email`, `system`, `soul`,
 `nudge`, `post-molt`, `tool_loop_guard`, `bash`, `btw`, `cron`, `molt`, and
@@ -71,7 +71,8 @@ replacement so readers never observe a partial JSON file.
 
 `notification(action='check')` returns a dict placeholder. The turn-loop
 post-hook stamps the canonical live payload onto that same result under
-`_meta.notifications` and `_meta.notification_guidance`. The handler does not
+`_meta.agent_meta.notifications.attention` and
+`_meta.agent_meta.guidance.transient`. The handler does not
 assemble a second bare channel representation and does not write notification
 state.
 

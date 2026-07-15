@@ -63,8 +63,8 @@ adaptation, and installed-manual retrieval.
   `handle()` into the agent tool surface
   (`src/lingtai/kernel/base_agent/__init__.py:783-796`).
 - The turn loop calls `attach_active_notifications()` after ordinary tool
-  results so `check` receives the canonical `_meta.notifications` and
-  `_meta.notification_guidance` stamp
+  results so `check` receives the canonical `_meta.agent_meta.notifications.attention` and
+  `_meta.agent_meta.guidance.transient` stamp
   (`src/lingtai/kernel/base_agent/turn.py:1748-1764`;
   `src/lingtai/kernel/meta_block.py:2944`).
 - All three dismissal handlers delegate to

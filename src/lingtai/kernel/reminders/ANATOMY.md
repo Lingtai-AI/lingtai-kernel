@@ -43,12 +43,13 @@ pulls the state machine + decisions + prose into one debuggable object:
   `initial` / `high_round` / `warning_active` / `relieved` / `duplicate_round` /
   `unknown_usage`). Not persisted — a fresh/restored session starts fresh.
 - **Channel B — current-state reminder** — `current_molt_context(usage)` returns
-  the natural-language string for `_meta.tool_meta.context.molt` (PERMANENT
-  per-result metadata — moved off the sparse `agent_meta` so it persists on every
-  result while the warning is active), or `None` unless `active`.
+  the natural-language string for `_meta.agent_meta.agent_state.context.molt`
+  (current agent state, carried on the designated final batch result as part of
+  the whole `agent_meta` snapshot), or `None` unless `active`.
 - **Channel A — reconstruction annotation** — `annotate_reconstruction(after_usage,
-  *, recovery_target=None)` returns the `_meta.tool_meta.reconstruction.molt`
-  string, or `None` when the rebuilt after-context is below the recovery target.
+  *, recovery_target=None)` returns the
+  `_meta.agent_meta.agent_state.events.reconstruction.molt` string, or `None`
+  when the rebuilt after-context is below the recovery target.
   It owns only the *warning decision + prose*; the event assembly (provider-vs-
   local after-context resolution, event shape, one-shot pop) stays in
   `meta_block.build_reconstruction_tool_meta`.
@@ -56,7 +57,8 @@ pulls the state machine + decisions + prose into one debuggable object:
   hash), `current_molt_emission_descriptor(reminder, *, usage, message)`, and
   `reconstruction_molt_emission_descriptor(event, *, message)` return a compact,
   JSON-safe `{event_name, payload}` used by the `_meta` assembly layer to log a
-  structured runtime event when a reminder is *actually attached* to `tool_meta`.
+  structured runtime event when a reminder is *actually attached* to the
+  current `agent_meta.agent_state` snapshot.
   Event names: `context_pressure_current_molt_reminder_emitted` and
   `context_pressure_reconstruction_molt_reminder_emitted`. Payloads carry a
   `message_hash` (never the full prose), the thresholds, and the state/branch
@@ -101,30 +103,30 @@ which values applied and tests can inject variants.
   `session.context_pressure_reminder.current_molt_context(usage)` and falls back
   to `render_current_molt_context(streak, usage)` for lightweight session
   stand-ins that only expose the compat `context_pressure_*` attributes.
-  `build_meta` (side-effect-free) routes the returned text into permanent
-  `tool_meta.context.molt` via a transit key (`_tool_meta_context`) that
-  `ToolExecutor._attach_tool_block` promotes, and always carries the
+  `build_meta` (side-effect-free) routes the returned text into current
+  `agent_meta.agent_state.context.molt` via a transit key (`_tool_meta_context`)
+  that `ToolExecutor._attach_tool_block` promotes, and always carries the
   emission-event payload (`_tool_meta_context_event`) while active. The
   cache-miss budget guard (`meta_block.build_cache_miss_budget_context`, NOT part
   of this abstraction) reuses the SAME `_tool_meta_context` sub-object: when both
   fire, `build_meta` appends its `molt now` line to the pressure prose and adds
   `cache_miss_budget`/`cache_miss_tokens` — the channel-B emission event still
   hashes only the pure pressure message, and the budget guard emits no event.
-  `build_reconstruction_tool_meta` keeps the event assembly (molt text stays on
-  `tool_meta.reconstruction.molt`). Both emission events fire only on a real
-  attach.
+  `build_reconstruction_tool_meta` keeps the event assembly (molt text lands on
+  `agent_meta.agent_state.events.reconstruction.molt`). Both emission events
+  fire only on a real attach.
 - **Persistent forced-rebuild overflow warning** — the Codex adapter
   (`CodexResponsesSession`) owns a one-shot forced-rebuild latch + post-rebuild
   verification and exposes `context_overflow_status()` (default `None` on the
   `ChatSession` base, forwarded through the gate proxy).
   `meta_block.build_context_overflow_warning` reads it via `session.chat` and, when
   active, renders `render_forced_rebuild_failed_warning(usage)` and merges the fixed
-  sentence into the SAME permanent `tool_meta.context.molt` channel (its own
-  newline, preserving any coexisting sustained-pressure / cache-miss lines). This is
-  a current-state warning, not an event route — it attaches no
+  sentence into the SAME current `agent_meta.agent_state.context.molt` channel (its
+  own newline, preserving any coexisting sustained-pressure / cache-miss lines). This
+  is a current-state warning, not an event route — it attaches no
   `_tool_meta_context_event`.
 - `tool_executor.py` — `ToolExecutor._attach_tool_block` promotes the transit
-  keys into permanent `tool_meta.context` and emits both reminder events via
+  keys into current `agent_meta.agent_state.context` and emits both reminder events via
   `self._log` (best-effort, never breaks a turn). The current-molt event is
   deduped to once per provider round using the per-turn executor's own
   `_last_current_molt_event_round` memory (one executor per turn), so the
@@ -140,20 +142,25 @@ which values applied and tests can inject variants.
 
 - Warn only after sustained high provider rounds (3 consecutive `>= 0.75`); the
   old immediate `>= 0.60` trip-wire stays retired.
-- The reconstruction event is one-shot permanent evidence (channel A) at
-  `tool_meta.reconstruction`, distinct from the current-state reminder (channel B).
+- The reconstruction event is one-shot current-agent evidence (channel A) at
+  `agent_meta.agent_state.events.reconstruction`, distinct from the
+  current-state reminder (channel B).
 - The persistent `Forced Rebuilt Failed` overflow warning is a current-state line
-  on `tool_meta.context.molt`, gated by the adapter's one-shot forced-rebuild latch
-  + post-rebuild verification (active only when the forced rebuild fired, its first
-  post-rebuild provider response was observed, and current provider usage is
-  strictly `> 1.0`; exactly `1.0` carries no warning). It coexists on its own
-  newline with the sustained-pressure and cache-miss-budget molt lines and emits no
-  event.
-- Reminder prose and thresholds are unchanged. The one `_meta` contract change:
-  the current sustained-pressure reminder moved from `agent_meta.context.molt`
-  to PERMANENT `tool_meta.context.molt` (so it persists on every result while
-  active); the reconstruction reminder stays at `tool_meta.reconstruction.molt`.
+  on `agent_meta.agent_state.context.molt`, gated by the adapter's one-shot
+  forced-rebuild latch + post-rebuild verification (active only when the forced
+  rebuild fired, its first post-rebuild provider response was observed, and
+  current provider usage is strictly `> 1.0`; exactly `1.0` carries no warning).
+  It coexists on its own newline with the sustained-pressure and
+  cache-miss-budget molt lines and emits no event.
+- Reminder prose and thresholds are unchanged. Under the two-axis `_meta`
+  contract (root `_meta` has only `tool_meta` and `agent_meta`), both reminders
+  are current agent state, not immutable tool facts: the sustained-pressure
+  reminder lives at `agent_meta.agent_state.context.molt`; the reconstruction
+  reminder lives at `agent_meta.agent_state.events.reconstruction.molt`. Both
+  ride the designated final batch result as part of the whole current
+  `agent_meta` snapshot — older snapshots remain historical traces.
 - Reminder-emission events are logged only when the reminder text is actually
-  attached to the outgoing `tool_meta` (in `_attach_tool_block`), never on a bare
-  render / condition check. The current-molt event is deduped to once per
-  provider round so the permanent restamping does not flood the log.
+  attached to the current `agent_meta.agent_state` snapshot (in
+  `_attach_tool_block`), never on a bare render / condition check. The
+  current-molt event is deduped to once per provider round so the restamping
+  on every result while active does not flood the log.

@@ -71,10 +71,10 @@ descriptions; you do not need to call it before every send.
 ## NOTIFICATIONS: TRANSIENT HOOK vs PERSISTENT CONTEXT
 
 - Inbound Feishu messages surface to the agent in two `_meta` lanes:
-  - `_meta.notifications.mcp.feishu` is a compact high-attention hook only —
+  - `_meta.agent_meta.notifications.attention.mcp.feishu` is a compact high-attention hook only —
     `data.message_ids` (compound `{alias}:{chat_id}:{feishu_message_id}` ids)
     and dismiss guidance, never message text or routing context.
-  - `_meta.notification_persistent.mcp.feishu` carries durable context:
+  - `_meta.agent_meta.notifications.persistent.mcp.feishu` carries durable context:
     recent conversation messages (bounded text, both directions), sender/chat
     routing hooks, reply refs when present, and per-message comments for the
     agent's own outgoing messages or truncated text.

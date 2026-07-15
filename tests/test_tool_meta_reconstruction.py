@@ -1,16 +1,19 @@
-"""Tests for the one-shot reconstruction event on ``_meta.tool_meta`` (channel A).
+"""Tests for the one-shot reconstruction event on ``_meta.agent_meta.agent_state`` (channel A).
 
 When the runtime performs an actual delayed-summarize reconstruction, the
 adapter records a pending before-context (A) event. The kernel attaches the
-A->B event to the NEXT visible tool result's ``_meta.tool_meta.reconstruction``
+A->B event to the NEXT visible tool result's
+``_meta.agent_meta.agent_state.events.reconstruction``
 exactly once, then clears it (one-shot). This rides on the permanent
-``tool_meta`` block (per-result evidence), NOT the latest-only ``agent_meta``.
+current ``agent_meta.agent_state`` block.
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 from lingtai.kernel.llm.base import ToolCall
+from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.meta_block import (
     TOOL_META_CONTEXT_EVENT_PENDING_KEY,
@@ -19,7 +22,6 @@ from lingtai.kernel.meta_block import (
 )
 from lingtai.kernel.reminders.context_pressure import (
     CURRENT_MOLT_EVENT,
-    CURRENT_MOLT_TARGET_PATH,
 )
 from lingtai.kernel.tool_executor import (
     _DEFAULT_MAX_RESULT_CHARS,
@@ -34,8 +36,9 @@ def _make_executor(
     reconstruction_event_fn=None,
     logger_fn=None,
     meta_fn=None,
+    result_factory_fn=None,
 ):
-    captured = MagicMock(side_effect=lambda name, result, **kw: result)
+    captured = MagicMock(side_effect=result_factory_fn or (lambda name, result, **kw: result))
     executor = ToolExecutor(
         dispatch_fn=dispatch_fn,
         make_tool_result_fn=captured,
@@ -52,6 +55,11 @@ def _make_executor(
 def _tool_meta(wire):
     assert isinstance(wire, dict), wire
     return wire.get("_meta", {}).get("tool_meta", {})
+
+
+def _agent_state(wire):
+    assert isinstance(wire, dict), wire
+    return wire.get("_meta", {}).get("agent_meta", {}).get("agent_state", {})
 
 
 # A 1.0 forced-rebuild event as build_reconstruction_tool_meta emits it: one
@@ -113,17 +121,17 @@ def test_reconstruction_event_attaches_to_tool_meta(tmp_path):
 
     tm = _tool_meta(wire)
     assert tm["id"] == "tc-1"
-    # Event rides on tool_meta (permanent), not agent_meta.
-    assert tm["reconstruction"]["type"] == "delayed_summarize_reconstruction"
-    assert tm["reconstruction"]["before"]["usage"] == 1.0
-    assert tm["reconstruction"]["after"]["usage"] == 0.70
+    event = _agent_state(wire)["events"]["reconstruction"]
+    assert event["type"] == "delayed_summarize_reconstruction"
+    assert event["before"]["usage"] == 1.0
+    assert event["after"]["usage"] == 0.70
     # 1.0 forced rebuild: one unified warning, no proactive_hint/molt.
-    assert isinstance(tm["reconstruction"]["warning"], str)
-    assert "Forced provider-context rebuild" in tm["reconstruction"]["warning"]
-    assert "rebuild=true" in tm["reconstruction"]["warning"]
-    assert "molt" in tm["reconstruction"]["warning"]
-    assert "proactive_hint" not in tm["reconstruction"]
-    assert "molt" not in tm["reconstruction"]
+    assert isinstance(event["warning"], str)
+    assert "Forced provider-context rebuild" in event["warning"]
+    assert "rebuild=true" in event["warning"]
+    assert "molt" in event["warning"]
+    assert "proactive_hint" not in event
+    assert "molt" not in event
 
 
 def test_reconstruction_event_is_one_shot_across_batch(tmp_path):
@@ -147,8 +155,48 @@ def test_reconstruction_event_is_one_shot_across_batch(tmp_path):
         ]
     )
     wires = [c.args[1] for c in captured.call_args_list]
-    with_event = [w for w in wires if "reconstruction" in _tool_meta(w)]
+    with_event = [w for w in wires if "reconstruction" in _agent_state(w).get("events", {})]
     assert len(with_event) == 1
+
+
+def test_reconstruction_event_promotes_to_final_batch_wire(tmp_path):
+    """An event consumed by result one is carried only by the final carrier."""
+    from lingtai.kernel.meta_block import attach_active_runtime, finalize_two_axis_sidecars
+    from lingtai.llm.interface_converters import to_responses_input
+
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        return _EVENT if calls["n"] == 1 else None
+
+    def make_result(name, result, tool_call_id=None):
+        return ToolResultBlock(tool_call_id or "", name, result)
+
+    executor, _ = _make_executor(
+        dispatch_fn=lambda tc: {"ok": True},
+        working_dir=tmp_path,
+        reconstruction_event_fn=fn,
+        meta_fn=lambda: {"agent_state": {}},
+        result_factory_fn=make_result,
+    )
+    results, _, _ = executor.execute([
+        ToolCall(name="read", args={}, id="tc-a"),
+        ToolCall(name="read", args={}, id="tc-b"),
+    ])
+    agent = type("AgentStub", (), {"_agent_meta_signature": None, "_executor": executor})()
+    attach_active_runtime(agent, results)
+    finalize_two_axis_sidecars(results)
+
+    assert "agent_meta" not in results[0].metadata
+    assert results[0]._agent_pending is None
+    assert results[1].metadata["agent_meta"]["agent_state"]["events"]["reconstruction"] == _EVENT
+    from lingtai.kernel.llm.interface import ChatInterface
+    interface = ChatInterface()
+    interface.add_tool_results(results)
+    wire = to_responses_input(interface)[-1]["output"]
+    assert json.loads(wire)["_meta"]["agent_meta"]["agent_state"]["events"]["reconstruction"] == _EVENT
+    assert calls["n"] == 2
 
 
 def test_no_event_when_none_pending(tmp_path):
@@ -159,7 +207,7 @@ def test_no_event_when_none_pending(tmp_path):
     )
     executor.execute([ToolCall(name="read", args={}, id="tc-x")])
     _, wire = captured.call_args.args
-    assert "reconstruction" not in _tool_meta(wire)
+    assert "reconstruction" not in _agent_state(wire).get("events", {})
 
 
 def test_no_fn_configured_is_safe(tmp_path):
@@ -172,12 +220,12 @@ def test_no_fn_configured_is_safe(tmp_path):
     _, wire = captured.call_args.args
     tm = _tool_meta(wire)
     assert tm["id"] == "tc-y"
-    assert "reconstruction" not in tm
+    assert "reconstruction" not in _agent_state(wire).get("events", {})
 
 
 # ---------------------------------------------------------------------------
 # Reconstruction reminder-emission event: logged ONLY when the reconstruction
-# event actually carries the molt reminder text at tool_meta.reconstruction.molt.
+# event actually carries the molt reminder text at agent_meta.agent_state.events.reconstruction.molt.
 # ---------------------------------------------------------------------------
 
 
@@ -203,13 +251,13 @@ def test_reconstruction_event_emits_reminder_event_when_molt_attached(tmp_path):
     )
     executor.execute([ToolCall(name="read", args={}, id="tc-1")])
     _, wire = captured.call_args.args
-    # The reminder text stays at tool_meta.reconstruction.molt (NOT moved).
-    assert isinstance(_tool_meta(wire)["reconstruction"]["molt"], str)
+    # The reminder text stays at agent_meta.agent_state.events.reconstruction.molt.
+    assert isinstance(_agent_state(wire)["events"]["reconstruction"]["molt"], str)
 
     emitted = [e for e in events if e[0] == "context_pressure_reconstruction_molt_reminder_emitted"]
     assert len(emitted) == 1
     payload = emitted[0][1]
-    assert payload["target_path"] == "_meta.tool_meta.reconstruction.molt"
+    assert payload["target_path"] == "_meta.agent_meta.agent_state.events.reconstruction.molt"
     assert payload["before_usage"] == 0.85
     assert payload["after_usage"] == 0.70
     assert payload["branch"] == "above_recovery"
@@ -235,29 +283,28 @@ def test_forced_rebuild_warning_does_not_emit_molt_reminder_event(tmp_path):
     )
     executor.execute([ToolCall(name="read", args={}, id="tc-1")])
     _, wire = captured.call_args.args
-    tm = _tool_meta(wire)
-    assert "reconstruction" in tm
-    assert "warning" in tm["reconstruction"]
-    assert "molt" not in tm["reconstruction"]
+    event = _agent_state(wire)["events"]["reconstruction"]
+    assert "warning" in event
+    assert "molt" not in event
     emitted = [e for e in events if e[0] == "context_pressure_reconstruction_molt_reminder_emitted"]
     assert emitted == []
-    assert "molt" not in _tool_meta(wire)["reconstruction"]
+    assert "molt" not in event
     assert not any(
         e[0] == "context_pressure_reconstruction_molt_reminder_emitted" for e in events
     )
 
 
 # ---------------------------------------------------------------------------
-# Current sustained-pressure molt reminder: PERMANENT tool_meta.context.molt,
+# Current sustained-pressure molt reminder: agent_meta.agent_state.context.molt,
 # with a deduped emission event.  build_meta stashes the reminder (and, on a new
 # emission, the event payload) under transit keys; _attach_tool_block promotes
-# the reminder into tool_meta.context and logs the event.
+# the reminder into agent_meta.agent_state.context and logs the event.
 # ---------------------------------------------------------------------------
 
 
 _CURRENT_MOLT_TEXT = "Context has stayed high across 3 consecutive fresh model calls ..."
 _CURRENT_MOLT_EVENT_PAYLOAD = {
-    "target_path": CURRENT_MOLT_TARGET_PATH,
+    "target_path": "_meta.agent_meta.agent_state.context.molt",
     "message_hash": "abcdef012345",
     "threshold_high": 0.75,
     "recovery_target": 0.60,
@@ -289,15 +336,12 @@ def test_current_molt_promoted_to_tool_meta_context_and_emits_event(tmp_path):
     executor.execute([ToolCall(name="read", args={}, id="tc-1")])
     _, wire = captured.call_args.args
 
-    # Reminder text landed on PERMANENT tool_meta.context.molt.
-    tm = _tool_meta(wire)
-    assert tm["context"]["molt"] == _CURRENT_MOLT_TEXT
-    # ...and NOT in an agent_meta block (that stays sparse and molt-free now).
-    assert "agent_meta" not in wire.get("_meta", {})
+    # Reminder text landed on current agent_meta.agent_state.context.molt.
+    assert _agent_state(wire)["context"]["molt"] == _CURRENT_MOLT_TEXT
 
     emitted = [e for e in events if e[0] == CURRENT_MOLT_EVENT]
     assert len(emitted) == 1
-    assert emitted[0][1]["target_path"] == "_meta.tool_meta.context.molt"
+    assert emitted[0][1]["target_path"] == "_meta.agent_meta.agent_state.context.molt"
     assert emitted[0][1]["streak"] == 3
     assert emitted[0][1]["last_round_id"] == 7
 
@@ -315,7 +359,7 @@ def test_current_molt_attached_without_event_payload_does_not_emit(tmp_path):
     executor.execute([ToolCall(name="read", args={}, id="tc-1")])
     _, wire = captured.call_args.args
 
-    assert _tool_meta(wire)["context"]["molt"] == _CURRENT_MOLT_TEXT
+    assert _agent_state(wire)["context"]["molt"] == _CURRENT_MOLT_TEXT
     assert not any(e[0] == CURRENT_MOLT_EVENT for e in events)
 
 
@@ -358,7 +402,7 @@ def test_current_molt_event_deduped_across_results_in_same_round(tmp_path):
     )
     # Every result still carries the permanent reminder text.
     for call in captured.call_args_list:
-        assert call.args[1]["_meta"]["tool_meta"]["context"]["molt"] == _CURRENT_MOLT_TEXT
+        assert call.args[1]["_meta"]["agent_meta"]["agent_state"]["context"]["molt"] == _CURRENT_MOLT_TEXT
     # ...but the event was logged only ONCE for round 7.
     assert sum(1 for e in events if e[0] == CURRENT_MOLT_EVENT) == 1
 
@@ -370,7 +414,7 @@ def test_current_molt_event_deduped_across_results_in_same_round(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Cache-miss budget warning: rides the SAME _tool_meta_context transit key and
-# is promoted into permanent tool_meta.context.molt with the budget fields
+# is promoted into agent_meta.agent_state.context.molt with the budget fields
 # (cache_miss_budget / cache_miss_tokens) alongside — through the full executor
 # pipeline. Not a new event route: no emission-event payload is attached.
 # ---------------------------------------------------------------------------
@@ -388,7 +432,7 @@ def _budget_meta(*, molt, budget, cache_miss):
 
 def test_forced_rebuild_failed_overflow_line_persists_on_every_result_no_event(tmp_path):
     # The persistent overflow warning rides the SAME `_tool_meta_context.molt`
-    # transit key, so it is promoted to PERMANENT `tool_meta.context.molt` on EVERY
+    # transit key, so it is promoted to `agent_meta.agent_state.context.molt` on EVERY
     # result in a multi-tool batch. It is a current-state warning, not an event
     # route: no `_tool_meta_context_event` is attached, so no molt-reminder event
     # is logged for it.
@@ -419,12 +463,12 @@ def test_forced_rebuild_failed_overflow_line_persists_on_every_result_no_event(t
     wires = [c.args[1] for c in captured.call_args_list]
     assert len(wires) == 3
     for wire in wires:
-        assert _tool_meta(wire)["context"]["molt"] == overflow
+        assert _agent_state(wire)["context"]["molt"] == overflow
     # Current-state warning, not an event route.
     assert not any(e[0] == CURRENT_MOLT_EVENT for e in events)
 
 
-def test_budget_context_promoted_to_tool_meta_context_through_pipeline(tmp_path):
+def test_budget_context_promoted_to_agent_state_context_through_pipeline(tmp_path):
     events, logger = _capture_logger()
     executor, captured = _make_executor(
         dispatch_fn=lambda tc: {"ok": True},
@@ -439,15 +483,15 @@ def test_budget_context_promoted_to_tool_meta_context_through_pipeline(tmp_path)
     executor.execute([ToolCall(name="read", args={}, id="tc-1")])
     _, wire = captured.call_args.args
 
-    ctx = _tool_meta(wire)["context"]
+    ctx = _agent_state(wire)["context"]
     assert ctx["molt"] == "cache miss budget 1000000 reached, molt now"
     assert ctx["cache_miss_budget"] == 1_000_000
     assert ctx["cache_miss_tokens"] == 1_200_000
     # The budget transit key is consumed by _attach_tool_block: it must not leak
-    # onto the wire (neither at the top level, nor left inside _runtime_pending,
-    # nor into the promoted tool_meta beyond molt + budget fields).
+    # onto the wire (neither at the top level, nor left inside private pending,
+    # nor into the promoted agent_state beyond molt + budget fields).
     assert TOOL_META_CONTEXT_PENDING_KEY not in wire
-    assert TOOL_META_CONTEXT_PENDING_KEY not in wire.get("_runtime_pending", {})
+    assert TOOL_META_CONTEXT_PENDING_KEY not in wire.get("_agent_pending", {})
     assert TOOL_META_CONTEXT_PENDING_KEY not in _tool_meta(wire)
     # Budget guard is not a new event route.
     assert not any(e[0] == CURRENT_MOLT_EVENT for e in events)

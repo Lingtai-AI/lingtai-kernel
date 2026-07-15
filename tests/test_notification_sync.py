@@ -863,7 +863,8 @@ def test_sync_idle_injects_post_molt_after_molt_batch_deferred_stamp(tmp_path: P
     assert len(entries) == 2, "post-molt continuation must be injected at IDLE"
     body = entries[1].content[0].content
     assert isinstance(body, dict)
-    assert "post-molt" in body["_meta"]["notifications"]
+    result_block = entries[1].content[0]
+    assert "post-molt" in result_block.metadata["agent_meta"]["notifications"]["attention"]
     # ...and post a wake so the run loop reorients around the continuation.
     msg = agent.inbox.get_nowait()
     assert msg.type == MSG_TC_WAKE
@@ -950,14 +951,15 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     body = result_block.content
     assert isinstance(body, dict)
     assert body["_synthesized"] is True
-    # Notification payload nests under the unified _meta envelope.
-    meta = body["_meta"]
-    assert meta["notification_guidance"] == {
+    # The model-visible ownership is the canonical sidecar, not handler content.
+    meta = result_block.metadata["agent_meta"]
+    assert meta["guidance"]["transient"] == {
         "ref": "meta_guidance.notification_handling",
         "sources": ["email"],
     }
-    assert "email" in meta["notifications"]
-    assert "notification_guidance" not in meta["notifications"]["email"]
+    attention = meta["notifications"]["attention"]
+    assert "email" in attention
+    assert "notification_guidance" not in attention["email"]
 
     assert agent._notification_block_id == call_block.id
 
@@ -1024,7 +1026,8 @@ def test_sync_idle_releases_then_reinjects(tmp_path: Path) -> None:
     assert len(agent._chat_stub.interface.entries) == 4
     first_body = agent._chat_stub.interface.entries[1].content[0].content
     assert first_body["_synthesized"] is True
-    assert first_body["_meta"]["notifications"]["email"]["count"] == 1
+    first_block = agent._chat_stub.interface.entries[1].content[0]
+    assert first_block.metadata["agent_meta"]["notifications"]["attention"]["email"]["count"] == 1
 
 
 def test_sync_idle_empty_releases_holder(tmp_path: Path) -> None:
@@ -1082,7 +1085,8 @@ def test_sync_idle_empty_releases_holder(tmp_path: Path) -> None:
     assert len(agent._chat_stub.interface.entries) == 2
     body = agent._chat_stub.interface.entries[1].content[0].content
     assert body["_synthesized"] is True
-    assert body["_meta"]["notifications"]["email"]["count"] == 1
+    result_block = agent._chat_stub.interface.entries[1].content[0]
+    assert result_block.metadata["agent_meta"]["notifications"]["attention"]["email"]["count"] == 1
     assert agent._notification_live_holder is None
 
 
@@ -1418,7 +1422,7 @@ def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) ->
     body = result_block.content
     assert isinstance(body, dict)
     assert body["_synthesized"] is True
-    assert "system" in body["_meta"]["notifications"]
+    assert "system" in result_block.metadata["agent_meta"]["notifications"]["attention"]
     assert isinstance(result_block.content, dict)
 
 
@@ -1976,7 +1980,7 @@ def test_non_molt_batch_after_molt_can_consume_post_molt(tmp_path):
             agent, [later_result], prior_holder=agent._notification_live_holder
         )
 
-    assert "post-molt" in later_result.content["_meta"]["notifications"]
+    assert "post-molt" in later_result.metadata["agent_meta"]["notifications"]["attention"]
     assert agent._notification_fp == fingerprint_notifications(tmp_path)
 
 
@@ -2156,7 +2160,7 @@ def test_inject_notification_pair_adds_telegram_persistent_and_strips_ephemeral(
     assert "telegram message" not in transient["instructions"]
 
 
-def test_inject_notification_pair_strips_tool_meta_context_transit_keys(
+def test_inject_notification_pair_strips_legacy_tool_meta_context_transit_keys(
     tmp_path: Path, monkeypatch
 ) -> None:
     """Synthesized notification pairs must not expose tool-meta transit keys."""
@@ -2167,6 +2171,8 @@ def test_inject_notification_pair_strips_tool_meta_context_transit_keys(
         TOOL_META_CONTEXT_PENDING_KEY,
     )
 
+    # Historical logged-input path label: projection must strip this legacy
+    # tool-meta route and emit only the current agent-state axes.
     transit_event = {
         "event_name": "context_pressure_current_molt_reminder_emitted",
         "payload": {
@@ -2234,7 +2240,7 @@ def test_block_injected_payload_not_mutated_by_skeletonization(tmp_path: Path) -
 
     block_logs = [f for evt, f in agent._logs if evt == "notification_block_injected"]
     assert block_logs
-    logged_notifs = block_logs[-1]["_meta"]["notifications"]
+    logged_notifs = block_logs[-1]["_meta"]["agent_meta"]["notifications"]["attention"]
     assert "email" in logged_notifs
 
     # Simulate later delivery: publish new state and re-sync; this skeletonizes

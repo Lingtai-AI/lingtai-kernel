@@ -14,8 +14,8 @@ cleared:
 Actions:
     check          — voluntary read of the live notification surface.  Returns
                      a placeholder dict; the turn loop's meta-block post-hook
-                     stamps the canonical ``_meta.notifications`` +
-                     ``_meta.notification_guidance`` payload onto this same result.
+                     stamps the canonical ``_meta.agent_meta.notifications.attention`` +
+                     ``_meta.agent_meta.guidance.transient`` payload onto this same result.
     dismiss_channel — clear one ``.notification/<channel>.json`` surface whole.
                      Rejects ``event_id``/``ref_id`` (those are atomic-event
                      verbs).  Producer-owned state is never touched; guarded
@@ -33,7 +33,7 @@ All three dismiss verbs delegate to the single canonical
 ack-reason, protected channels, generic-dismiss guard, and stale-channel-version
 refusal) lives there, so every guard holds through this tool by construction.
 Legacy ``large_tool_result`` reminders — the kernel no longer raises these
-(large results are ranked under ``_meta.agent_meta.current_tool_result_chars``
+(large results are ranked under ``_meta.agent_meta.agent_state.current_tool_result_chars``
 and compacted via ``system(action="summarize")``) — but any event still present
 from before this change (or a pre-molt session) may be dismissed as an escape
 hatch; doing so acknowledges the ref_id.  Summarization via
@@ -49,15 +49,15 @@ from .schema import get_description, get_schema  # noqa: F401
 from lingtai.kernel.notifications import dismiss_channel
 
 
-# Placeholder returned by ``check`` — the live payload (``_meta.notifications``
-# + ``_meta.notification_guidance``) is stamped onto this same result dict by
+# Placeholder returned by ``check`` — the live payload (``_meta.agent_meta.notifications.attention``
+# + ``_meta.agent_meta.guidance.transient``) is stamped onto this same result dict by
 # ``attach_active_notifications`` in the turn loop.  Returning a dict (not a
 # string) is what makes that stamp possible: the meta-block walks backward for
 # the freshest *dict-shaped* tool result.
 _CHECK_PLACEHOLDER_MESSAGE = (
     "Voluntary notification(action=check) read. The live notification payload "
-    "is delivered via the kernel meta-block under the `_meta.notifications` and "
-    "`_meta.notification_guidance` keys on this same result. If those keys are "
+    "is delivered via the kernel meta-block under the `_meta.agent_meta.notifications.attention` and "
+    "`_meta.agent_meta.guidance.transient` keys on this same result. If those keys are "
     "absent, no notifications are active."
 )
 

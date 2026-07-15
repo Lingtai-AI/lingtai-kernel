@@ -1,7 +1,7 @@
 ---
 kind: meta-guidance-catalog
 schema_version: 1
-guidance_version: 0.7.0
+guidance_version: 0.8.0
 priority: high
 render_mode: latest_tool_result_only
 summary: >

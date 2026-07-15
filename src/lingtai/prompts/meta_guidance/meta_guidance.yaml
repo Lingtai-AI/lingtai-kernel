@@ -8,7 +8,10 @@ name_definition: >
 purpose: >
   Exists as a resident, protected hook so the agent has a stable interpretation of
   dynamic runtime signals without those rules riding on every tail `_meta` payload. The
-  tail now carries only a lightweight ref back to this section.
+  tail now carries only a lightweight ref back to this section. The
+  model-visible result root has exactly tool_meta and (for main-agent tool
+  batches) agent_meta. Only the latest agent_meta is current; older holders are
+  historical traces preserved for replay. Daemon results carry tool_meta only.
 scope:
   owns:
     - Static rules for reading dynamic `_meta` blocks and notifications.

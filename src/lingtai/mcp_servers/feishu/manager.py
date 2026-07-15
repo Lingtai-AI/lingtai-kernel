@@ -979,7 +979,7 @@ class FeishuManager:
         The metadata carries the curated structured fields the kernel inbox
         allowlists for IM producers (``recent_messages`` + ``latest_incoming``)
         so the agent-facing persistent notification lane
-        (``_meta.notification_persistent.mcp.feishu``) gets structured message
+        (``_meta.agent_meta.notifications.persistent.mcp.feishu``) gets structured message
         objects instead of having to parse the markdown transcript.
         """
         messages = self._conversation_messages(account_alias, chat_id, max_messages)

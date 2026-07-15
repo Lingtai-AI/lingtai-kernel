@@ -69,7 +69,7 @@ required canonical-English `action` and optional dismiss fields `channel`,
 Observable action contracts are:
 
 - `check` returns `{_notification_placeholder: true, message}`; the turn-loop
-  adapter may stamp `_meta.notifications` and `_meta.notification_guidance` onto
+  adapter may stamp `_meta.agent_meta.notifications.attention` and `_meta.agent_meta.guidance.transient` onto
   that same dict.
 - `dismiss_channel` requires `channel`, rejects event/ref targets, and delegates
   a whole-mirror clear to notification Core.

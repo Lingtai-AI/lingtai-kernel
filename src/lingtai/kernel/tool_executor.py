@@ -10,7 +10,6 @@ from typing import Any, Callable
 from .llm.base import ToolCall
 from .loop_guard import LoopGuard
 from .meta_block import (
-    stamp_meta,
     now_iso_plain,
     build_tool_meta_overflow_comment,
     TOOL_META_COMMENT_KEY,
@@ -25,6 +24,7 @@ from .meta_block import (
     TOOL_META_TOKEN_USAGE_PENDING_KEY,
     TOOL_META_CURRENT_TIME_KEY,
 )
+from .llm.interface import ToolResultBlock
 from .reminders.context_pressure import (
     RECONSTRUCTION_MOLT_EVENT,
     reconstruction_molt_emission_descriptor,
@@ -122,6 +122,9 @@ class ToolExecutor:
         # ``summary=true`` fails closed to a summary-layer error (the raw is
         # never dumped into context); see ``maybe_summarize_result``.
         self._summarizer_fn = summarizer_fn
+        # Per-call capture stays outside handler payloads.  The entry is
+        # consumed exactly once when the canonical ToolResultBlock is built.
+        self._pending_meta_by_call_id: dict[str, dict] = {}
         # Dedup memory for the current sustained-pressure molt EMISSION EVENT.
         # The reminder text is permanent (restamped on every tool result while
         # active), so the ``context_pressure_current_molt_reminder_emitted`` event
@@ -342,12 +345,10 @@ class ToolExecutor:
     def _attach_tool_call_progress(self, result: Any) -> Any:
         """Attach the batch-scoped ACTIVE-turn progress *notice* when present.
 
-        The running counter (``active_turn_tool_calls``) is intentionally NOT
-        written here: it lives under the sparse/update-driven
-        ``_meta.agent_meta.active_turn_tool_calls`` snapshot (stamped by
-        ``attach_active_runtime`` at the tool-batch boundary when material
-        agent_meta changes).  Repeating the counter on every result left stale
-        snapshots in history.
+            The running counter (``active_turn_tool_calls``) is intentionally NOT
+            written here: it lives under ``_meta.agent_meta.agent_state`` and is
+            stamped by ``attach_active_runtime`` on the final batch carrier.
+            Handler payloads never carry this runtime state.
 
         The ``active_turn_tool_call_notice`` is a transient soft self-check that
         the guard only emits when a notice interval is crossed and clears after
@@ -372,7 +373,6 @@ class ToolExecutor:
     # remaining keys are transient top-level scaffolding/advisories.
     _AUX_RESULT_KEYS = (
         "_meta",
-        "_runtime_pending",
         "_advisory",
         "active_turn_tool_calls",
         "active_turn_tool_call_notice",
@@ -397,11 +397,12 @@ class ToolExecutor:
         result: Any,
         *,
         tool_call_id: str | None,
+        tool_trace_id: str | None = None,
         elapsed_ms: int | float,
         spilled_char_count: int | None = None,
         status: str | None = None,
-    ) -> Any:
-        """Inject the permanent ``_meta.tool_meta`` identity block into dict results.
+    ) -> dict:
+        """Build immutable per-execution metadata without touching handler content.
 
         This block is tiny, written once, and survives context history. It records
         facts intrinsic to this specific tool result invocation. The tool name is
@@ -410,22 +411,11 @@ class ToolExecutor:
         Fields:
           id                  — tool_call_id (or "<unknown>")
           timestamp           — UTC ISO completion timestamp
-          current_time        — optional agent-aware current time (local timezone
-                                when timezone_awareness=True); absent when
-                                time_awareness=False
           char_count          — current model-visible serialized size: the kernel
                                 ``_meta`` envelope and transient top-level
-                                scaffolding (``_runtime_pending``, ``_advisory``,
+                                scaffolding (``_advisory``,
                                 batch progress notice) are excluded from the count.
           elapsed_ms          — execution time in milliseconds
-          token_usage         — optional nested token/cache diagnostics with a
-                                current_call half (ONLY this provider call's own
-                                facts: input, cache_miss, cache_rate, output,
-                                thinking) and a session half (since-last-molt
-                                cumulative aggregate + current context state
-                                context_tokens/context_window/context_usage),
-                                copied verbatim from the transient runtime snapshot
-                                so it remains permanent per-result evidence
           spilled_char_count  — original sidecar character count when a spill occurred;
                                 omitted for ordinary non-spilled results
           status              — "error" when the result carries status=error; omitted otherwise
@@ -435,13 +425,8 @@ class ToolExecutor:
                                 is preserved (``logs/events.jsonl`` by ``tool_call_id``),
                                 how to retrieve it, and the summarize cleanup action.
         """
-        if not isinstance(result, dict):
-            return result
-        meta = result.get("_meta")
-        if isinstance(meta, dict) and "tool_meta" in meta:
-            return result
-
-        pending = result.get("_runtime_pending")
+        capture_id = str(tool_call_id) if tool_call_id is not None else str(tool_trace_id)
+        pending = self._pending_meta_by_call_id.pop(capture_id, {})
         token_usage = None
         current_time = None
         context_block = None
@@ -453,9 +438,8 @@ class ToolExecutor:
             candidate = pending.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
             if isinstance(candidate, dict):
                 token_usage = dict(candidate)
-            # Current context guidance — permanent per-result metadata at
-            # tool_meta.context.* (build_meta stashes it under a transit key so it
-            # lands on tool_meta, not the sparse agent_meta).  The same transit
+            # Current context guidance — captured for the final agent_state.
+            # build_meta stashes it under a transit key; the same transit
             # sub-object carries the 75% manual rebuild hint, the sustained-pressure
             # molt warning, and the cache-miss budget guard fields.
             candidate_context = pending.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
@@ -479,7 +463,7 @@ class ToolExecutor:
             if isinstance(candidate_event, dict):
                 current_molt_event = candidate_event
 
-        char_count = self._intrinsic_char_count(result)
+        char_count = self._intrinsic_char_count(result) if isinstance(result, dict) else len(str(result))
 
         tool_block: dict = {
             "id": tool_call_id or "<unknown>",
@@ -487,12 +471,6 @@ class ToolExecutor:
             "char_count": char_count,
             "elapsed_ms": int(elapsed_ms),
         }
-        if current_time:
-            tool_block[TOOL_META_CURRENT_TIME_KEY] = current_time
-        if token_usage:
-            tool_block[TOOL_META_TOKEN_USAGE_KEY] = token_usage
-        if context_block:
-            tool_block[TOOL_META_CONTEXT_KEY] = context_block
         if spilled_char_count is not None:
             tool_block["spilled_char_count"] = int(spilled_char_count)
         if status == "error":
@@ -510,13 +488,8 @@ class ToolExecutor:
                 ),
             }
 
-        if not isinstance(meta, dict):
-            meta = {}
-            result["_meta"] = meta
-        meta["tool_meta"] = tool_block
-
         # Channel B event: the current sustained-pressure molt reminder was just
-        # attached to tool_meta.context.molt.  Emit the structured runtime event
+        # captured for agent_state.context.molt. Emit the structured runtime event
         # ONLY on a real attach (context_block present), and dedup to at most once
         # per provider round (the reminder text is permanent — restamped on every
         # result while active — so per-result emission would flood the log).
@@ -534,9 +507,11 @@ class ToolExecutor:
             except Exception:
                 event = None
             if event:
-                tool_block["reconstruction"] = event
+                pending.setdefault("agent_state", {}).setdefault("events", {})[
+                    "reconstruction"
+                ] = event
                 # Channel A event: the reconstruction molt reminder text was just
-                # attached at tool_meta.reconstruction.molt.  Emit only when the
+                # captured under agent_state.events.reconstruction. Emit only when the
                 # event actually carries that text (still >= recovery target).
                 molt_text = event.get("molt") if isinstance(event, dict) else None
                 if isinstance(molt_text, str) and molt_text:
@@ -547,7 +522,32 @@ class ToolExecutor:
                         self._emit_reminder_event(descriptor)
                     except Exception:
                         pass
-        return result
+        # Token/context/reconstruction are current agent state, not immutable
+        # result-local facts.  Keep the capture private until batch finalization.
+        agent_pending = {}
+        if current_time:
+            agent_pending.setdefault("agent_state", {})[TOOL_META_CURRENT_TIME_KEY] = current_time
+        if token_usage:
+            agent_pending.setdefault("agent_state", {})[TOOL_META_TOKEN_USAGE_KEY] = token_usage
+        if context_block:
+            agent_pending.setdefault("agent_state", {})[TOOL_META_CONTEXT_KEY] = context_block
+        if pending:
+            for key, value in pending.items():
+                if key not in {TOOL_META_CURRENT_TIME_KEY, "elapsed_ms"}:
+                    if key == "agent_state" and isinstance(value, dict):
+                        agent_pending.setdefault("agent_state", {}).update(value)
+                    else:
+                        agent_pending.setdefault("agent_state", {})[key] = value
+        if agent_pending:
+            tool_block["_agent_pending"] = agent_pending
+        return tool_block
+
+    def _stage_meta(self, tool_call_id: str | None, elapsed_ms: int | float, tool_trace_id: str | None = None) -> None:
+        meta = self._meta_fn()
+        if meta:
+            capture_id = str(tool_call_id) if tool_call_id is not None else str(tool_trace_id)
+            self._pending_meta_by_call_id[capture_id] = dict(meta)
+            self._pending_meta_by_call_id[capture_id]["elapsed_ms"] = elapsed_ms
 
     def _maybe_emit_current_molt_event(self, descriptor: dict) -> None:
         """Emit the current-molt event, deduped to once per provider round.
@@ -722,7 +722,7 @@ class ToolExecutor:
             decision=decision,
             elapsed_ms=elapsed,
         )
-        stamp_meta(result, self._meta_fn(), elapsed)
+        self._stage_meta(getattr(tc, "id", None), elapsed, trace_id)
         tc_id = getattr(tc, "id", None)
         self._log_lifecycle(
             "tool_call_denied",
@@ -825,14 +825,19 @@ class ToolExecutor:
             except Exception:
                 pass
         # Attach permanent _meta.tool_meta identity block to the final (possibly spilled) result.
-        self._attach_tool_block(
+        tool_metadata = self._attach_tool_block(
             capped,
             tool_call_id=tool_call_id,
+            tool_trace_id=tool_trace_id,
             elapsed_ms=elapsed_ms,
             spilled_char_count=spilled_char_count,
             status=status,
         )
         msg = self._make_tool_result_fn(tool_name, capped, tool_call_id=tool_call_id)
+        if isinstance(msg, ToolResultBlock):
+            agent_pending = tool_metadata.pop("_agent_pending", None)
+            msg.metadata = {"tool_meta": tool_metadata}
+            msg._agent_pending = agent_pending or None
         self._log_lifecycle(
             "tool_result_model_visible",
             tool_name=tool_name,
@@ -1124,7 +1129,7 @@ class ToolExecutor:
                     validation_reason="unknown_tool",
                     available_tools=sorted(self._known_tools),
                 )
-                stamp_meta(err_result, self._meta_fn(), timer.elapsed_ms)
+                self._stage_meta(tc_id, timer.elapsed_ms, trace_id)
                 self._log_tool_result(
                     tool_name=tc.name,
                     tool_call_id=tc_id,
@@ -1185,8 +1190,8 @@ class ToolExecutor:
                     ToolCall(name=tc.name, args=args, id=tc_id)
                 )
 
+            self._stage_meta(tc_id, timer.elapsed_ms, trace_id)
             if isinstance(result, dict):
-                stamp_meta(result, self._meta_fn(), timer.elapsed_ms)
                 self._attach_duplicate_advisory(result, verdict)
                 self._attach_guard_advisory(result, proposal=proposal, decision=decision)
 
@@ -1287,7 +1292,7 @@ class ToolExecutor:
                 elapsed_ms=timer.elapsed_ms,
                 traceback_tail=self._traceback_tail(e),
             )
-            stamp_meta(err_result, self._meta_fn(), timer.elapsed_ms)
+            self._stage_meta(tc_id, timer.elapsed_ms, trace_id)
             self._attach_duplicate_advisory(err_result, verdict)
             if proposal is not None and decision is not None:
                 self._attach_guard_advisory(err_result, proposal=proposal, decision=decision)
@@ -1381,7 +1386,7 @@ class ToolExecutor:
                     validation_reason="unknown_tool",
                     available_tools=sorted(self._known_tools),
                 )
-                stamp_meta(result, self._meta_fn(), 0)
+                self._stage_meta(tc_id, 0, trace_id)
                 self._log_tool_result(
                     tool_name=tc.name,
                     tool_call_id=tc_id,
@@ -1487,7 +1492,7 @@ class ToolExecutor:
                     elapsed_ms=timer.elapsed_ms,
                     traceback_tail=self._traceback_tail(e),
                 )
-                stamp_meta(err_result, self._meta_fn(), timer.elapsed_ms)
+                self._stage_meta(tc_id, timer.elapsed_ms, trace_id)
                 self._attach_duplicate_advisory(err_result, verdict)
                 self._attach_guard_advisory(err_result, proposal=proposal, decision=decision)
                 self._log_tool_result(
@@ -1502,8 +1507,8 @@ class ToolExecutor:
                     exception_message=str(e),
                 )
                 return index, err_result, timer.elapsed_ms
+            self._stage_meta(tc_id, timer.elapsed_ms, trace_id)
             if isinstance(result, dict):
-                stamp_meta(result, self._meta_fn(), timer.elapsed_ms)
                 self._attach_duplicate_advisory(result, verdict)
                 self._attach_guard_advisory(result, proposal=proposal, decision=decision)
             status = result.get("status", "success") if isinstance(result, dict) else "success"
@@ -1585,7 +1590,7 @@ class ToolExecutor:
                         elapsed_ms=0,
                         traceback_tail=self._traceback_tail(e),
                     )
-                    stamp_meta(err_result, self._meta_fn(), 0)
+                    self._stage_meta(tc_id, 0, trace_id)
                     self._attach_duplicate_advisory(err_result, verdict)
                     self._attach_guard_advisory(err_result, proposal=proposal, decision=decision)
                     errors_map[idx] = err_result
@@ -1644,7 +1649,7 @@ class ToolExecutor:
                         elapsed_ms=0,
                         retryable=True,
                     )
-                    stamp_meta(err_result, self._meta_fn(), 0)
+                    self._stage_meta(tc_id_t, 0, trace_id_t)
                     self._attach_duplicate_advisory(err_result, verdict_t)
                     self._attach_guard_advisory(err_result, proposal=proposal_t, decision=decision_t)
                     errors_map[idx] = err_result
@@ -1669,17 +1674,6 @@ class ToolExecutor:
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 
-        def _elapsed_ms_from_result(result: Any) -> int:
-            if not isinstance(result, dict):
-                return 0
-            pending = result.get("_runtime_pending")
-            if isinstance(pending, dict):
-                pending_elapsed = pending.get("elapsed_ms")
-                if isinstance(pending_elapsed, (int, float)):
-                    return int(pending_elapsed)
-            elapsed = result.get("elapsed_ms", 0)
-            return int(elapsed) if isinstance(elapsed, (int, float)) else 0
-
         # Phase 3: Build result messages (sequential) and invoke the result hook.
         # The hook sees results in input order (same as sequential execution) so
         # notification/intercept semantics are consistent across both paths.
@@ -1688,7 +1682,9 @@ class ToolExecutor:
             if i in results_map:
                 result = results_map[i]
                 status = result.get("status", "success") if isinstance(result, dict) else "success"
-                _elapsed = elapsed_map.get(i, _elapsed_ms_from_result(result))
+                # Parallel execution records elapsed time in the lifecycle
+                # tuple; do not recover it from handler payload keys.
+                _elapsed = elapsed_map.get(i, 0)
                 # A-priori summary: raw already durably logged in Phase 2; replace
                 # the visible payload before the wire. Intercept results are
                 # guarded out inside the summarizer, but keep error/intercept

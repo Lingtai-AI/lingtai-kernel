@@ -113,7 +113,7 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "preset": dict,
     # Large-result hint threshold.  `current_tool_result_chars` always ranks
     # tool results over a fixed 1000-char floor into
-    # `_meta.agent_meta.current_tool_result_chars.top_results` as summarize
+    # `_meta.agent_meta.agent_state.current_tool_result_chars.top_results` as summarize
     # candidates, regardless of this value (see `tools/system/ANATOMY.md`).
     # This field only gates `over_threshold_count` in that same block and the
     # inline `tool_meta.comment.overflow` hint in ToolExecutor. Default: 3000.

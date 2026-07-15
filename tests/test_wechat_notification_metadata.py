@@ -5,7 +5,7 @@ markdown conversation preview in ``body`` plus structured ``recent_messages``
 / ``latest_incoming`` metadata built from the same merged inbox+sent window.
 The kernel inbox copies those fields into ``.notification/mcp.wechat.json``
 previews, which feed the durable ``_meta.notification_persistent.mcp.wechat``
-lane while the transient ``_meta.notifications.mcp.wechat`` lane stays a
+lane while the transient ``_meta.agent_meta.notifications.attention.mcp.wechat`` lane stays a
 compact identity hook.  These tests pin the producer half of that contract:
 bounded per-message text, window size, current/latest selection, direction
 and sender attribution, item-type passthrough, and routing keys — with no

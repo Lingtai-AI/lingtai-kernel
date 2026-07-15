@@ -20,6 +20,7 @@ from ..tool_result_artifacts import CompactionStats, compact_oversized_history
 from ..meta_block import (
     attach_active_notifications,
     attach_active_runtime,
+    finalize_two_axis_sidecars,
     build_meta,
     build_reconstruction_tool_meta,
     render_meta,
@@ -995,14 +996,14 @@ def _handle_message(agent, msg: Message) -> None:
         logger.warning(f"[{agent.agent_name}] Unknown message type: {msg.type}")
 
 
-# Context-pressure molt reminders are emitted as `_meta.tool_meta.context.molt`
+# Context-pressure molt reminders are emitted as `_meta.agent_meta.agent_state.context.molt`
 # by meta_block.build_meta; the notification channel is kept only for
 # post-molt continuation/event signals.
 def _check_molt_pressure(agent) -> None:
     """Clear the legacy pressure-warning notification channel.
 
     Context pressure is current agent state and is now exposed under permanent
-    `_meta.tool_meta.context.molt` by ``meta_block.build_meta``. It should not
+    `_meta.agent_meta.agent_state.context.molt` by ``meta_block.build_meta``. It should not
     be a dismissible notification. Post-molt continuation still uses the
     notification system and is handled separately.
     """
@@ -1028,7 +1029,7 @@ def _turn_boundary_housekeeping(agent) -> None:
        ACTIVE this defers delivery to the next IDLE boundary).
     3. ``_rescan_large_tool_results`` — retained inert no-op. Large results are
        no longer re-notified at the turn boundary; they are ranked under
-       ``_meta.agent_meta.current_tool_result_chars`` instead. The call is kept
+       ``_meta.agent_meta.agent_state.current_tool_result_chars`` instead. The call is kept
        so the trio's order and error-handling contract are unchanged.
 
     Steps 2 and 3 are best-effort and must never abort the turn, so each is
@@ -1771,23 +1772,18 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 prior_holder=_prior_holder,
             )
 
-        # Attach the live `_meta.agent_meta` / `_meta.guidance` blocks (kernel
-        # runtime state + guidance ref) SPARSELY: agent_meta is attached to the
-        # latest tool-result dict from this batch only when its MATERIAL snapshot
-        # changed since the last emitted agent_meta (per attach_active_runtime /
-        # agent_meta_signature, which ignores volatile bookkeeping).  When the
-        # snapshot is unchanged, nothing is attached or moved — the prior holder
-        # keeps its snapshot as a historical update point (so _runtime_live_holder
-        # is left pointing there).  When it changes, the prior *live* holder sheds
-        # its blocks and the newer result takes over.  Mirrors the notification
-        # holder above, but gated by the change signature rather than latest-only.
+        # Attach the complete `_meta.agent_meta` snapshot to the designated final
+        # ToolResultBlock whenever private capture exists. The compatibility
+        # signature may describe material changes, but never gates emission;
+        # unchanged runtime state is still carried by the newest final block.
+        # Older blocks retain their snapshots as historical traces.
         # Unlike notifications there is no molt-race special case: these are pure
         # per-turn snapshots, not kernel-synchronized channel state.
         #
         # MUST run before _log_notification_block_injected below: the durable
         # snapshot copies the holder's full ``_meta`` envelope, and
         # ``attach_active_runtime`` is what populates ``_meta.agent_meta`` /
-        # ``_meta.guidance`` on that holder.  Logging before this ran would
+        # ``_meta.agent_meta.guidance`` on that holder.  Logging before this ran would
         # persist rows missing those two blocks.
         try:
             agent._runtime_live_holder = attach_active_runtime(
@@ -1801,6 +1797,10 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 reason="attach_active_runtime raised",
             )
 
+        # Canonicalize the completed batch exactly once.  The sidecar is the
+        # only runtime transport; handler payloads remain untouched.
+        finalize_two_axis_sidecars(tool_results)
+
         # Log the actual canonical ``_meta`` envelope that was stamped onto the
         # tool result so the TUI /notification command can show real snapshots.
         # Only log when a genuinely new notification holder was established
@@ -1810,17 +1810,20 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # notifications/notification_guidance).
         if not _batch_includes_context_molt(response.tool_calls):
             _new_holder = agent._notification_live_holder
-            _new_meta = _new_holder.get("_meta") if isinstance(_new_holder, dict) else None
+            _new_meta = (
+                getattr(_new_holder, "metadata", None)
+                if _new_holder is not None else None
+            )
             if (
                 _new_holder is not None
                 and _new_holder is not _prior_holder
                 and isinstance(_new_meta, dict)
-                and "notifications" in _new_meta
+                and "notifications" in _new_meta.get("agent_meta", {})
             ):
                 try:
                     _carrier_call_id = ""
                     for _result in tool_results:
-                        if getattr(_result, "content", None) is _new_holder:
+                        if _result is _new_holder:
                             _carrier_call_id = str(getattr(_result, "id", "") or "")
                             break
                     agent._log_notification_block_injected(
@@ -1913,7 +1916,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         agent._save_chat_history(ledger_source=ledger_source)
 
         # Mid-loop turn-boundary housekeeping. Context pressure is now surfaced
-        # on every tool result under permanent _meta.tool_meta.context.molt
+        # on every tool result under _meta.agent_meta.agent_state.context.molt
         # (meta_block.build_meta), so _check_molt_pressure here only clears any
         # stale legacy molt.json; the rescan keeps summarize reminders in sync
         # across tool-loop LLM rounds, not only at request/notification-wake

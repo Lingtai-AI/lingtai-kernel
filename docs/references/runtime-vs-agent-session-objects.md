@@ -178,7 +178,7 @@ minimal object (§7) that content is:
   began, retained so a later incremental refresh does not rescan.
 
 The token aggregate is intentionally the **same shape** the injected
-`_meta.tool_meta.token_usage.session` half already reports (§6), so the injected
+`_meta.agent_meta.agent_state.token_usage.session` half already reports (§6), so the injected
 metadata can consume the object instead of recomputing.
 
 ### 3.3 Source-of-truth ordering
@@ -306,7 +306,7 @@ numeric getters (`get_runtime_session_token_usage`, `get_token_usage`) are the
 back-compat surface and keep their exact contracts
 (`src/lingtai/kernel/session.py:649-694`, `session.py:625-647`).
 
-### 6.2 `_meta.tool_meta.token_usage` should consume these objects
+### 6.2 `_meta.agent_meta.agent_state.token_usage` should consume these objects
 
 `meta_block.build_tool_meta_token_usage` builds the injected `current_call` and
 `session` halves (`src/lingtai/kernel/meta_block.py:1250+`). Per the #679 fix,

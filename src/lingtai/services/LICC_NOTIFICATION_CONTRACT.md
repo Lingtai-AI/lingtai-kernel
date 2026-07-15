@@ -2,7 +2,7 @@
 name: licc-notification-contract
 description: >
   Contract for LICC/MCP notification events and their model-visible projection
-  into _meta.notifications and _meta.notification_persistent.
+  into _meta.agent_meta.notifications.attention and _meta.agent_meta.notifications.persistent.
 status: active
 contract_version: 2
 last_changed_at: "2026-07-12"
@@ -75,8 +75,8 @@ Scope:
 
 - LICC v1 producer/consumer files under `.mcp_inbox/`.
 - Coalesced `.notification/mcp.<server>.json` files produced from LICC events.
-- The `_meta.notifications` high-attention hook visible to the agent.
-- The `_meta.notification_persistent` communication-context lane when a producer
+- The `_meta.agent_meta.notifications.attention` high-attention hook visible to the agent.
+- The `_meta.agent_meta.notifications.persistent` communication-context lane when a producer
   has one (currently Telegram, WeChat, Feishu, WhatsApp, and built-in email).
 - Producer-owned read/reply/dismiss state that remains the source of truth.
 
@@ -103,7 +103,7 @@ where they share the `.notification/` filesystem protocol.
    `instructions`, and producer-owned `data`) and `notifications.publish` writes
    it atomically (`src/lingtai/kernel/notifications.py:260-275`,
    `src/lingtai/kernel/notifications.py:1054-1087`).
-4. **Model-visible transient hook.** `_meta.notifications` is sparse and
+4. **Model-visible transient hook.** `_meta.agent_meta.notifications.attention` is sparse and
    update-driven. `attach_active_notifications` attaches or moves the canonical
    payload only on first appearance, material change, or deliberate
    `notification(action="check")` (`src/lingtai/kernel/meta_block.py:2939`).
@@ -114,10 +114,10 @@ where they share the `.notification/` filesystem protocol.
    `sanitize_wechat_notification_after_persistent` /
    `sanitize_feishu_notification_after_persistent` /
    `sanitize_whatsapp_notification_after_persistent` wrappers) reduces
-   `_meta.notifications.mcp.<channel>.data` to stable `message_ids` only; content,
+   `_meta.agent_meta.notifications.attention.mcp.<channel>.data` to stable `message_ids` only; content,
    sender/subject, routing details, counts, and summaries must not remain in the
    transient lane (`src/lingtai/kernel/meta_block.py:2589-2655`).
-5. **Model-visible persistent communication context.** When structured IM metadata is available, `build_notification_persistent_payload` emits `_meta.notification_persistent.mcp.<channel>` with `messages`, `events`, and comments through the shared `_ImPersistentLane` machinery. Delta lanes (Telegram, WeChat, Feishu) also carry `previous_block`; WhatsApp is snapshot/no-previous-block because the producer sends the current bounded conversation window per event. Telegram additionally carries full out-of-window reply targets under `referenced_messages`. For built-in email it emits `_meta.notification_persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate)
+5. **Model-visible persistent communication context.** When structured IM metadata is available, `build_notification_persistent_payload` emits `_meta.agent_meta.notifications.persistent.mcp.<channel>` with `messages`, `events`, and comments through the shared `_ImPersistentLane` machinery. Delta lanes (Telegram, WeChat, Feishu) also carry `previous_block`; WhatsApp is snapshot/no-previous-block because the producer sends the current bounded conversation window per event. Telegram additionally carries full out-of-window reply targets under `referenced_messages`. For built-in email it emits `_meta.agent_meta.notifications.persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate)
    (`src/lingtai/kernel/meta_block.py:1857-2489`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`
    metadata. Every Telegram message object in those fields carries the explicit
@@ -138,7 +138,7 @@ where they share the `.notification/` filesystem protocol.
    its producer preview window (Telegram 20, WeChat 10, Feishu 10).
 6. **Producer source of truth.** Notification files are mirrors/hooks, not the
    authoritative mailbox/chat store. Producer tools own real state changes and
-   side effects. Email is the built-in mirror example: unread mail state is rendered into `.notification/email.json`, model-visible content is projected into `_meta.notification_persistent.email`, and read/dismiss/reply actions live on the email tool (`src/lingtai/kernel/base_agent/messaging.py:60-130`).
+   side effects. Email is the built-in mirror example: unread mail state is rendered into `.notification/email.json`, model-visible content is projected into `_meta.agent_meta.notifications.persistent.email`, and read/dismiss/reply actions live on the email tool (`src/lingtai/kernel/base_agent/messaging.py:60-130`).
 
 ## Connections
 
@@ -150,8 +150,8 @@ MCP/server state
   -> MCPInboxPoller coalesced notification (.notification/mcp.<mcp>.json)
   -> BaseAgent notification sync (IDLE synthetic notification check, or ACTIVE
      sparse _meta attachment)
-  -> _meta.notifications high-attention hook
-  -> optional _meta.notification_persistent communication context
+  -> _meta.agent_meta.notifications.attention high-attention hook
+  -> optional _meta.agent_meta.notifications.persistent communication context
   -> producer tool read/reply/dismiss for exact data and state changes
 ```
 
@@ -160,8 +160,8 @@ The transient and persistent lanes have different jobs:
 | Lane | Job | Must not become |
 |---|---|---|
 | `.notification/<channel>.json` | Producer-owned live mirror/hook that wakes the agent and carries enough structured data for the kernel projection. | A durable arrival log. |
-| `_meta.notifications.<channel>` | High-attention hook saying "this producer needs handling" and carrying only the minimal identity needed to correlate/dismiss. | A second copy of chat/mail content when a persistent lane exists. |
-| `_meta.notification_persistent...` | Context lane for conversation content, routing hooks, and continuity comments that should survive sparse notification movement. | A dismiss/action channel or producer source of truth. |
+| `_meta.agent_meta.notifications.attention.<channel>` | High-attention hook saying "this producer needs handling" and carrying only the minimal identity needed to correlate/dismiss. | A second copy of chat/mail content when a persistent lane exists. |
+| `_meta.agent_meta.notifications.persistent...` | Context lane for conversation content, routing hooks, and continuity comments that should survive sparse notification movement. | A dismiss/action channel or producer source of truth. |
 | Producer tool/store | Exact read/reply/dismiss state and external side effects. | A passive mirror inferred from `_meta`. |
 
 ### New human-message LICC channel acceptance gate
@@ -169,14 +169,14 @@ The transient and persistent lanes have different jobs:
 A new human-message LICC channel is not complete until its PR defines both
 model-visible surfaces and the producer authority boundary:
 
-1. **Transient attention hook** (`_meta.notifications.mcp.<channel>`): wakes the
+1. **Transient attention hook** (`_meta.agent_meta.notifications.attention.mcp.<channel>`): wakes the
    agent and carries only identity needed to correlate, reply, read, or dismiss
    (for IM channels, `data.message_ids` or an equivalent stable event-id list,
    plus generic scaffolding such as `header`, `priority`, and `published_at`). It
    must not carry message bodies, summaries, sender/subject, conversation refs,
    platform/routing refs, counts, or `content_moved_to` breadcrumbs once a
    conventional persistent path exists.
-2. **Persistent context lane** (`_meta.notification_persistent...`): carries
+2. **Persistent context lane** (`_meta.agent_meta.notifications.persistent...`): carries
    bounded conversation/mail context, events/routing hooks, continuity comments,
    and producer-safe metadata. Delta lanes should include `previous_block`;
    snapshot lanes must explicitly document why they have no `previous_block` or
@@ -204,7 +204,7 @@ uses compound message IDs; after PR #705 the transient hook carries them as
 ### 2. Content has one model-visible home
 
 When a producer has a persistent context lane, message content and routing context
-MUST be moved there, not duplicated into `_meta.notifications`. For Telegram that
+MUST be moved there, not duplicated into `_meta.agent_meta.notifications.attention`. For Telegram that
 means:
 
 ```json
@@ -226,7 +226,7 @@ means:
 
 WeChat follows the same shape at `mcp.wechat`, with `data.message_ids` carrying
 the producer's landed local message ids and content/context living in
-`_meta.notification_persistent.mcp.wechat`.
+`_meta.agent_meta.notifications.persistent.mcp.wechat`.
 
 Feishu follows the same delta-lane shape at `mcp.feishu`. WhatsApp follows the
 same transient identity-hook shape at `mcp.whatsapp`, but its persistent lane is
@@ -251,7 +251,7 @@ surface; adding a persistent lane turns on the move-not-duplicate rule.
 
 ### 4. Persistent blocks are context, not unread state
 
-`_meta.notification_persistent` can remain in history after the transient hook is
+`_meta.agent_meta.notifications.persistent` can remain in history after the transient hook is
 handled. It is a communication-context lane, not a notification action channel.
 Do not dismiss it, do not mutate producer state from it, and do not treat its
 presence as proof that there is still an unhandled event. Telegram persistent
@@ -270,7 +270,7 @@ the high-attention hook.
 
 ### 6. Secret and volume boundaries are part of the contract
 
-Producer metadata copied into `.notification` or `_meta.notification_persistent`
+Producer metadata copied into `.notification` or `_meta.agent_meta.notifications.persistent`
 MUST be bounded and secret-safe. The MCP inbox copies only allowlisted scalar IM
 metadata and bounded JSON-safe structured fields (`src/lingtai/services/mcp_inbox.py:183-219`).
 Curated MCPs that add new structured metadata must update this contract and tests
@@ -292,8 +292,8 @@ Persistent/on-disk state involved in this contract:
 - Producer stores such as Telegram/WeChat/Feishu/WhatsApp inbox/sent JSON and
   email mailbox state —
   authoritative source for exact read/reply/dismiss semantics.
-- Chat history/tool results — where `_meta.notifications` and
-  `_meta.notification_persistent` blocks are recorded for the model and replay.
+- Chat history/tool results — where `_meta.agent_meta.notifications.attention` and
+  `_meta.agent_meta.notifications.persistent` blocks are recorded for the model and replay.
 
 In-memory state involved in this contract:
 
@@ -318,7 +318,7 @@ Re-check this contract whenever a change touches any of these areas:
   or generic-dismiss guards: `src/lingtai/kernel/notifications.py` and
   `src/lingtai/tools/notification/`.
 - Notification injection, sparse live-holder movement, `notification_guidance`,
-  `_meta.notifications`, `_meta.notification_persistent`, or sanitizer logic:
+  `_meta.agent_meta.notifications.attention`, `_meta.agent_meta.notifications.persistent`, or sanitizer logic:
   `src/lingtai/kernel/meta_block.py`, `src/lingtai/kernel/base_agent/__init__.py`,
   and `src/lingtai/kernel/base_agent/turn.py`.
 - Built-in producers that create notification mirrors or human-message metadata:
@@ -330,27 +330,27 @@ Re-check this contract whenever a change touches any of these areas:
 ## Current implementation status
 
 - **Telegram:** compliant with the content split. Transient
-  `_meta.notifications.mcp.telegram` is an identity-only high-attention hook;
-  content/context lives in `_meta.notification_persistent.mcp.telegram`.
+  `_meta.agent_meta.notifications.attention.mcp.telegram` is an identity-only high-attention hook;
+  content/context lives in `_meta.agent_meta.notifications.persistent.mcp.telegram`.
 - **WeChat:** compliant with the content split. The producer attaches
   structured `recent_messages`/`latest_incoming` plus generic routing keys to
-  its LICC events; transient `_meta.notifications.mcp.wechat` is an
+  its LICC events; transient `_meta.agent_meta.notifications.attention.mcp.wechat` is an
   identity-only high-attention hook; content/context lives in
-  `_meta.notification_persistent.mcp.wechat`. WeChat inbox/sent records and
+  `_meta.agent_meta.notifications.persistent.mcp.wechat`. WeChat inbox/sent records and
   `wechat.read` remain source of truth.
 - **Feishu:** compliant with the content split. The producer attaches bounded
   `recent_messages`/`latest_incoming` plus generic routing keys; transient
-  `_meta.notifications.mcp.feishu` is identity-only; content/context lives in
-  the Feishu delta lane at `_meta.notification_persistent.mcp.feishu`.
+  `_meta.agent_meta.notifications.attention.mcp.feishu` is identity-only; content/context lives in
+  the Feishu delta lane at `_meta.agent_meta.notifications.persistent.mcp.feishu`.
 - **WhatsApp:** compliant with the content split. The producer attaches bounded
   current conversation context plus generic routing keys; transient
-  `_meta.notifications.mcp.whatsapp` is identity-only; content/context lives in
-  the WhatsApp snapshot lane at `_meta.notification_persistent.mcp.whatsapp`
+  `_meta.agent_meta.notifications.attention.mcp.whatsapp` is identity-only; content/context lives in
+  the WhatsApp snapshot lane at `_meta.agent_meta.notifications.persistent.mcp.whatsapp`
   with no `previous_block` or delivery tracker.
 - **Generic LICC/MCP:** still publishes bounded previews into the raw
   `.notification/mcp.<name>.json` mirror. That is allowed until the producer has
   a persistent context lane.
-- **Email:** migrated to the same attention/context split. Transient `_meta.notifications.email` is an identity-only high-attention hook carrying `email_ids`; unread context lives in `_meta.notification_persistent.email`; the email tool/store remains source of truth.
+- **Email:** migrated to the same attention/context split. Transient `_meta.agent_meta.notifications.attention.email` is an identity-only high-attention hook carrying `email_ids`; unread context lives in `_meta.agent_meta.notifications.persistent.email`; the email tool/store remains source of truth.
 
 ## Notes
 

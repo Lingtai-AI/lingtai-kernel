@@ -11,10 +11,12 @@ The abstraction owns:
     input (usage + round id), the transient streak state, and the
     warn-after-N-consecutive-high-rounds decision;
   * the current-state reminder **rendering** for
-    ``_meta.tool_meta.context.molt`` (:meth:`current_molt_context`) — permanent
-    per-result metadata (moved off the sparse ``agent_meta`` so it persists);
+    ``_meta.agent_meta.agent_state.context.molt`` (:meth:`current_molt_context`)
+    — current agent state, carried on the designated final batch result as part
+    of the whole ``agent_meta`` snapshot;
   * the reconstruction-event **annotation** (channel A) for
-    ``_meta.tool_meta.reconstruction.molt`` (:meth:`annotate_reconstruction`);
+    ``_meta.agent_meta.agent_state.events.reconstruction.molt``
+    (:meth:`annotate_reconstruction`);
   * pure **emission descriptors** (:func:`current_molt_emission_descriptor`,
     :func:`reconstruction_molt_emission_descriptor`, :func:`reminder_message_hash`)
     that the ``_meta`` assembly layer turns into structured runtime events when a
@@ -24,10 +26,11 @@ The abstraction owns:
 
 Reminder prose now separates the 0.75 high-context/manual-rebuild threshold from
 the 1.0 hard forced-rebuild boundary: high rounds still drive the sustained
-3-round warning, while the forced rebuild at full context is rarer.  The
-current sustained-pressure reminder lives in permanent tool metadata: it moved
-from ``_meta.agent_meta.context.molt`` to permanent ``_meta.tool_meta.context.molt``;
-the reconstruction reminder stays at ``_meta.tool_meta.reconstruction.molt``.  See
+3-round warning, while the forced rebuild at full context is rarer.  Under the
+two-axis ``_meta`` contract both reminders are current agent state, not
+immutable tool facts: the sustained-pressure reminder lives at
+``_meta.agent_meta.agent_state.context.molt``; the reconstruction reminder
+lives at ``_meta.agent_meta.agent_state.events.reconstruction.molt``.  See
 ``config.py`` for the constants' rationale and ``meta_block.py`` /
 ``session.py`` for the callers.
 """
@@ -55,10 +58,12 @@ from ..config import (
 # ``agent._log(...)`` call, because only it knows whether the reminder text was
 # really attached to the wire (not merely rendered in a test / dry-run).
 #
-# Both reminders now live in PERMANENT tool metadata:
-#   * the sustained current-state warning at ``_meta.tool_meta.context.molt``;
+# Both reminders live under current agent state (``_meta.agent_meta.agent_state``),
+# carried on the designated final batch result:
+#   * the sustained current-state warning at
+#     ``_meta.agent_meta.agent_state.context.molt``;
 #   * the one-shot reconstruction warning at
-#     ``_meta.tool_meta.reconstruction.molt``.
+#     ``_meta.agent_meta.agent_state.events.reconstruction.molt``.
 #
 # Payloads are compact, JSON-safe, and redaction-safe: they carry a
 # ``message_hash`` of the emitted text, never the full long reminder prose.
@@ -67,8 +72,8 @@ from ..config import (
 CURRENT_MOLT_EVENT = "context_pressure_current_molt_reminder_emitted"
 RECONSTRUCTION_MOLT_EVENT = "context_pressure_reconstruction_molt_reminder_emitted"
 
-CURRENT_MOLT_TARGET_PATH = "_meta.tool_meta.context.molt"
-RECONSTRUCTION_MOLT_TARGET_PATH = "_meta.tool_meta.reconstruction.molt"
+CURRENT_MOLT_TARGET_PATH = "_meta.agent_meta.agent_state.context.molt"
+RECONSTRUCTION_MOLT_TARGET_PATH = "_meta.agent_meta.agent_state.events.reconstruction.molt"
 
 
 def reminder_message_hash(text: object) -> str:
@@ -274,7 +279,7 @@ class ContextPressureReminder:
     # ------------------------------------------------------------------
 
     def current_molt_context(self, usage: float) -> str | None:
-        """Return the ``_meta.tool_meta.context.molt`` reminder, or ``None``.
+        """Return the ``_meta.agent_meta.agent_state.context.molt`` reminder, or ``None``.
 
         Returns ``None`` unless the sustained-pressure warning is :attr:`active`.
         ``usage`` is the current context-window fraction to name in the prose
@@ -479,7 +484,7 @@ def render_forced_rebuild_failed_warning(usage: float) -> str:
     Distinct from :func:`render_forced_rebuild_warning` (the one-shot channel-A
     reconstruction warning describing a before→after rebuild): this is the fixed
     human-authored sentence (Jason, 2026-07-12) that stays on EVERY
-    ``_meta.tool_meta.context.molt`` result while the automatic one-shot forced
+    ``_meta.agent_meta.agent_state.context.molt`` result while the automatic one-shot forced
     provider-context rebuild has already fired for the current ``>= 1.0`` episode
     and the post-rebuild provider context is STILL strictly above the full-context
     boundary — i.e. the forced rebuild failed to clear the overflow.

@@ -544,7 +544,7 @@ def test_system_event_dismiss_with_malformed_data_is_noop(tmp_path: Path) -> Non
 # Codex ws_full / fresh-epoch reset on notification dismiss/cleanup.
 #
 # Dismissing or clearing a notification rewrites the resident
-# ``_meta.notifications`` block on older tool results, breaking the Codex WS
+# legacy-input root ``_meta.notifications`` block on older tool results, breaking the Codex WS
 # incremental (previous_response_id) chain — exactly like summarize. So a real
 # dismiss must notify the chat session via ``on_notification_dismissed`` so the
 # adapter starts a fresh ws_full epoch. A no-op / refused dismiss must NOT.

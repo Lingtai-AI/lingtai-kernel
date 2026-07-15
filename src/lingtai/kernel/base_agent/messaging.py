@@ -8,7 +8,7 @@ from ..message import _make_message, MSG_REQUEST
 # Default large-result *hint* threshold (chars).  A tool result whose effective
 # length exceeds this is treated as "large": the ToolExecutor stamps a
 # tool_meta.comment.overflow hint and the result is surfaced for summarization
-# through ``_meta.agent_meta.current_tool_result_chars`` (see
+# through ``_meta.agent_meta.agent_state.current_tool_result_chars`` (see
 # meta_block.current_tool_result_chars).  Large results no longer raise a
 # ``large_tool_result`` system notification.  Configurable via
 # ``manifest.summarize_notification_threshold`` in init.json + refresh.  Imported
@@ -212,7 +212,7 @@ def _rescan_large_tool_results(agent) -> int:
     system notification for each pending case (gated by a combined
     total-length threshold).  That mechanism has been removed: large results
     are surfaced as a ranked list under
-    ``_meta.agent_meta.current_tool_result_chars.top_results`` (see
+    ``_meta.agent_meta.agent_state.current_tool_result_chars.top_results`` (see
     :func:`meta_block.current_tool_result_chars`) and digested via
     ``system(action="summarize")``.  Nothing is published or injected here.
 

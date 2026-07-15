@@ -7,36 +7,30 @@ tool-result stamp (in ToolExecutor) — read from here.
 Curate carefully: every field added to `build_meta` ships on every text input
 and every tool result.
 
-All four tool-result metadata blocks live under a single ``_meta`` envelope on
-the result dict:
+The canonical runtime sidecar has exactly two model-visible axes:
 
-- ``_meta.tool_meta`` — permanent per-result identity facts, written once by
+- ``_meta.tool_meta`` — immutable per-result execution facts, written once by
   ``ToolExecutor._attach_tool_block`` and never moved.
-- ``_meta.agent_meta`` — SPARSE / update-driven agent/current-state snapshot.
-  Attached to a tool result only when the *material* snapshot changes since the
-  last emitted ``agent_meta`` (not re-stamped onto every latest result when
-  unchanged).  Older emitted snapshots stay in history as update points.
-- ``_meta.guidance`` — a lightweight ref/hook pointing at the resident
+- ``_meta.agent_meta`` — one coherent current main-agent snapshot. It is
+  attached to the designated final result every batch; older snapshots remain
+  historical traces.
+- ``agent_meta.guidance`` — a lightweight ref/hook pointing at the resident
   ``meta_guidance`` system-prompt section (built by ``build_meta_guidance``),
   where the full kernel guidance sections, the ``_meta`` readme, and any static
   adapter runtime rules now live.  The full ordered appendix is no longer
-  re-stamped on every tail result.  It rides with ``agent_meta`` and is
-  attached/moved on the same sparse update cadence.
-- ``_meta.notifications`` / ``_meta.notification_guidance`` — SPARSE /
-  update-driven channel-owned notification payloads plus kernel safety framing.
-  Attached on first appearance and re-attached only when the notification
-  payload *materially* changes (or on a deliberate ``notification(action=check)``
-  read) — NOT re-stamped onto every newest tool result when unchanged.  The
-  prior holder keeps the payload as the current-state carrier between updates.
+  re-stamped on every tail result.  It rides with ``agent_meta`` on the
+  designated final result.
+- ``agent_meta.notifications`` / ``agent_meta.guidance.transient`` — the
+  notification portion of that same current snapshot. Delivery fingerprints
+  are independent and never suppress the current snapshot.
 
 Channel encoding:
-- Tool-result channel: ``stamp_meta`` records a per-tool runtime snapshot,
-  which ``attach_active_runtime`` promotes into ``_meta.agent_meta`` plus
-  ``_meta.guidance`` — but only when the material snapshot changed since the
-  last emitted one (sparse; on no change nothing is attached/moved and the prior
-  holder keeps its snapshot).  ``attach_active_notifications`` promotes the
-  channel-owned notification payload into ``_meta.notifications`` /
-  ``_meta.notification_guidance`` on the same sparse/update-driven cadence.
+- Tool-result channel: the executor captures runtime state on a non-serialized
+  ToolResultBlock field, which ``attach_active_runtime`` promotes into the final
+  block's complete ``agent_meta`` sidecar whenever private capture exists.
+  ``attach_active_notifications`` merges the current channel-owned notification
+  payload into that same final snapshot; delivery fingerprints are diagnostic
+  and compatibility state, not gates on snapshot attachment.
 - Text-input channel: `render_meta` formats the same dict into a prose
   prefix line. Inbox content is NOT rendered here — it lives in the
   user-turn body, drained by ``_concat_queued_messages`` upstream.
@@ -53,6 +47,7 @@ from __future__ import annotations
 import hashlib as _hashlib
 import json as _json
 import time as _time
+import copy as _copy
 from collections.abc import Mapping
 from typing import NamedTuple
 
@@ -73,14 +68,13 @@ from .reminders.context_pressure import (
 from .time_veil import now_iso
 
 # ---------------------------------------------------------------------------
-# The single ``_meta`` envelope key and its four nested blocks.  Every dict
-# tool result carries ``result["_meta"]``; the blocks beneath it are:
-#   * ``tool_meta``            — permanent, per-result (every tool result)
-#   * ``agent_meta``           — sparse/update-driven agent/current state
-#   * ``guidance``             — sparse/update-driven kernel guidance ref
-#                                (rides with agent_meta)
-#   * ``notifications`` +
-#     ``notification_guidance``— sparse/update-driven channel payloads
+# The single ``_meta`` envelope key and its two nested axes.  Every projected
+# main-agent tool result carries only ``tool_meta`` and ``agent_meta`` beneath
+# ``result["_meta"]``; notification and guidance ownership is nested below the
+# latter axis.
+#   * ``tool_meta``            — immutable, per-result (every tool result)
+#   * ``agent_meta``           — current agent state,
+#                                notifications, and guidance
 # ---------------------------------------------------------------------------
 META_ENVELOPE_KEY = "_meta"
 TOOL_META_KEY = "tool_meta"
@@ -89,9 +83,14 @@ GUIDANCE_KEY = "guidance"
 NOTIFICATIONS_KEY = "notifications"
 NOTIFICATION_GUIDANCE_KEY = "notification_guidance"
 NOTIFICATION_PERSISTENT_KEY = "notification_persistent"
+AGENT_META_INSTRUCTION = (
+    "Only the latest agent_meta in conversation is current; older ones are "
+    "historical traces."
+)
 # Telegram lives under an `mcp` namespace level to mirror the ephemeral
 # `notifications.mcp.telegram` shape and match Jason #6148: the required path is
-# `_meta.notification_persistent.mcp.telegram` (NOT `...notification_persistent.telegram`).
+# `_meta.agent_meta.notifications.persistent.mcp.telegram` (NOT
+# `...notifications.persistent.telegram`).
 NOTIFICATION_PERSISTENT_MCP_KEY = "mcp"
 NOTIFICATION_PERSISTENT_TELEGRAM_CHANNEL = "telegram"
 # Full dotted path used in hook comments / docs so both the string and the
@@ -109,7 +108,7 @@ NOTIFICATION_PERSISTENT_EMAIL_PATH = (
 )
 
 # WeChat mirrors the Telegram persistent lane at
-# `_meta.notification_persistent.mcp.wechat`. Its producer preview window is
+# `_meta.agent_meta.notifications.persistent.mcp.wechat`. Its producer preview window is
 # 10 messages (vs Telegram's 20), so the seed/delta boundary matches that
 # producer window instead of Telegram's.
 NOTIFICATION_PERSISTENT_WECHAT_CHANNEL = "wechat"
@@ -121,7 +120,7 @@ NOTIFICATION_PERSISTENT_WECHAT_MIN_CONTEXT = 10
 NOTIFICATION_PERSISTENT_WECHAT_SEEN_LIMIT = 200
 
 # Feishu mirrors the Telegram/WeChat persistent lane at
-# `_meta.notification_persistent.mcp.feishu`. The Feishu producer's structured
+# `_meta.agent_meta.notifications.persistent.mcp.feishu`. The Feishu producer's structured
 # preview carries the last 10 conversation messages
 # (FeishuManager._build_conversation_preview_and_metadata), so the seed/delta
 # boundary matches that window rather than Telegram's 20.
@@ -133,7 +132,7 @@ NOTIFICATION_PERSISTENT_FEISHU_PATH = (
 NOTIFICATION_PERSISTENT_FEISHU_MIN_CONTEXT = 10
 NOTIFICATION_PERSISTENT_FEISHU_SEEN_LIMIT = 200
 
-# WhatsApp lives at `_meta.notification_persistent.mcp.whatsapp` but runs the
+# WhatsApp lives at `_meta.agent_meta.notifications.persistent.mcp.whatsapp` but runs the
 # shared IM lane in snapshot mode (email-style): every block carries the
 # producer's current bounded context in full, with no delivered-id delta
 # tracking and no previous_block hook, so it has no min-context/seen-limit
@@ -199,7 +198,9 @@ NOTIFICATION_PERSISTENT_FEISHU_TRUNCATED_COMMENT = (
 # tracking, so the comments focus on producer authority and the Cloud API
 # reply rules rather than block-to-block continuity.
 NOTIFICATION_PERSISTENT_WHATSAPP_CONTEXT_COMMENT = (
-    "Durable WhatsApp context moved here from _meta.notifications.mcp.whatsapp. "
+    "Durable WhatsApp context moved here from the legacy input path "
+    "_meta.agent_meta.notifications.attention.mcp.whatsapp. The canonical path is "
+    "_meta.agent_meta.notifications.persistent.mcp.whatsapp. "
     "The whatsapp tool remains the source of truth: building this block marks "
     "nothing read — use whatsapp.read/check for exact producer state. Reply on "
     "WhatsApp when the message arrived through WhatsApp (whatsapp.reply with "
@@ -220,7 +221,9 @@ NOTIFICATION_PERSISTENT_WHATSAPP_MEDIA_COMMENT = (
 )
 
 NOTIFICATION_PERSISTENT_EMAIL_CONTEXT_COMMENT = (
-    "Unread email content moved here from _meta.notifications.email. Bodies "
+    "Unread email content moved here from the legacy input path "
+    "_meta.agent_meta.notifications.attention.email. The canonical path is "
+    "_meta.agent_meta.notifications.persistent.email. Bodies "
     "are injected in full up to the 50,000 character send-layer limit; prefer "
     "email.dismiss after handling content, and use email.read/reply for "
     "source-of-truth actions."
@@ -241,7 +244,7 @@ TOOL_META_COMMENT_KEY = "comment"
 TOOL_META_COMMENT_OVERFLOW_KEY = "overflow"
 TOOL_META_TOKEN_USAGE_KEY = "token_usage"
 TOOL_META_TOKEN_USAGE_PENDING_KEY = "_tool_meta_token_usage"
-# The two nested halves of ``tool_meta.token_usage``.  ``current_call`` carries
+# The two nested halves of ``agent_meta.agent_state.token_usage``.  ``current_call`` carries
 # ONLY this result's own provider-call token/cache/output fields; ``session``
 # carries the since-last-molt cumulative aggregate (surviving refresh) plus the
 # current context state.  Splitting them into named sub-objects (vs the former
@@ -251,30 +254,29 @@ TOKEN_USAGE_CURRENT_CALL_KEY = "current_call"
 TOKEN_USAGE_SESSION_KEY = "session"
 TOOL_META_CURRENT_TIME_KEY = "current_time"
 # Current sustained-pressure molt reminder — permanent per-result metadata at
-# ``tool_meta.context.molt`` (moved here from the former sparse
-# ``agent_meta.context.molt`` so the reminder persists on every result while the
-# warning is active).  ``build_meta`` stashes the reminder under the transit key
-# and carries the emission-event descriptor under the event transit key while
+# ``agent_meta.agent_state.context.molt``. ``build_meta`` stashes the reminder
+# under the transit key and carries the emission-event descriptor under the event
+# transit key while
 # active; ``ToolExecutor._attach_tool_block`` pops both — promoting the reminder
-# into the permanent ``tool_meta.context`` block and logging with per-round dedup.
+# into the final ``agent_meta.agent_state`` snapshot and logging with per-round dedup.
 TOOL_META_CONTEXT_KEY = "context"
 TOOL_META_CONTEXT_PENDING_KEY = "_tool_meta_context"
 TOOL_META_CONTEXT_EVENT_PENDING_KEY = "_tool_meta_context_event"
 TOOL_META_CONTEXT_REBUILD_KEY = "rebuild"
 
 # Cache-miss budget guard — the two compact numeric fields surfaced under
-# ``tool_meta.context`` alongside the ``molt`` warning when the current-session
+# ``agent_meta.agent_state.context`` alongside the ``molt`` warning when the current-session
 # cache-miss total reaches/exceeds the configured budget (see
 # :func:`build_cache_miss_budget_context`).  They ride the SAME
 # ``_tool_meta_context`` transit sub-object as the sustained-pressure ``molt``
 # reminder, so ``ToolExecutor._attach_tool_block`` promotes them into the
-# permanent ``tool_meta.context`` block in one step.
+# final ``agent_meta.agent_state.context`` snapshot in one step.
 TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY = "cache_miss_budget"
 TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 
 # Always-on since-last-molt cache-miss/budget telemetry surfaced inside the
-# ``session`` (since-last-molt cumulative) half of ``tool_meta.token_usage`` (see
-# :func:`_build_session_token_economy`).  Unlike the ``tool_meta.context`` guard
+# ``session`` (since-last-molt cumulative) half of ``agent_meta.agent_state.token_usage`` (see
+# :func:`_build_session_token_economy`).  Unlike the ``agent_state.context`` guard
 # above — which appears ONLY once the session cache-miss total reaches/exceeds
 # the budget — these three fields ride on EVERY result whenever the session
 # aggregate token usage is available, so an agent can always read its current
@@ -291,7 +293,7 @@ TOKEN_USAGE_CACHE_MISS_BUDGET_KEY = "cache_miss_budget"
 TOKEN_USAGE_CACHE_MISS_REMAINING_KEY = "cache_miss_remaining_tokens"
 
 # Current context state carried under the ``session`` half of
-# ``tool_meta.token_usage`` (moved off ``current_call``, since context usage is
+# ``agent_meta.agent_state.token_usage`` (moved off ``current_call``, since context usage is
 # current session/context state, not this provider call's own facts).  Emitted
 # only when resolvable: ``context_tokens`` from the cumulative
 # ``get_token_usage().ctx_total_tokens``; ``context_window`` from the provider
@@ -346,7 +348,6 @@ def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
 # or counted toward a result's size.
 FORMAL_TOOL_RESULT_EXCLUDED_KEYS = frozenset({
     META_ENVELOPE_KEY,
-    "_runtime_pending",
     "_advisory",
     "active_turn_tool_calls",
     "active_turn_tool_call_notice",
@@ -537,9 +538,8 @@ DEFAULT_LARGE_RESULT_THRESHOLD = 3000
 TOOL_RESULT_CHARS_README = (
     "listing top 5 tool results over 1000 chars by char count "
     "(id, tool_name, chars; no preview); no need to summarize this helper "
-    "(it rides on agent_meta, which is sparse/update-driven — re-emitted on a "
-    "later result when the material snapshot changes, so read the most recent "
-    "emitted agent_meta for the current list); these are summarize candidates, "
+    "(it rides on agent_meta; read the current final-carrier snapshot for the "
+    "current list); these are summarize candidates, "
     "not a directive to summarize "
     "every entry: prefer summarizing prior results that are already "
     "consumed/digested and useless, irrelevant, obsolete, or no longer needed "
@@ -619,8 +619,8 @@ def _meta_block(result: dict) -> dict:
     """Return ``result["_meta"]``, creating an empty dict if absent.
 
     Centralizes the envelope so the per-result ``tool_meta`` writer and the
-    sparse ``agent_meta``/``guidance`` updater and the sparse/update-driven
-    notification mover all share one container.
+    current ``agent_meta``/``guidance`` updater and notification merger all share
+    one container.
     """
     meta = result.get(META_ENVELOPE_KEY)
     if not isinstance(meta, dict):
@@ -630,238 +630,41 @@ def _meta_block(result: dict) -> dict:
 
 
 def build_meta_readme() -> dict:
-    """Self-describing readme for the five ``_meta`` blocks.
+    """Self-describing readme for the two canonical ``_meta`` axes.
 
     This readme is rendered once into the resident ``meta_guidance``
     system-prompt section (via :func:`build_meta_guidance`), not stamped onto
-    every tool result; the tail ``_meta.guidance`` carries only a lightweight
+    every tool result; the tail ``_meta.agent_meta.guidance`` carries only a lightweight
     ref back to that section.  Each entry states what the block is for and
-    whether it is per-result, sparse/update-driven, or current-state — no policy,
+    whether it is per-result or current-state — no policy,
     just structural orientation.
     """
     return {
         TOOL_META_KEY: (
-            "Per-result tool/call metadata (id, timestamp, optional current_time, "
-            "char_count, elapsed_ms, optional token_usage, optional context). "
-            "Present on every tool result; "
-            "permanent. context, when present, may carry context.rebuild — a "
-            "lightweight line stamped continuously once context is >= 0.75 saying "
-            "the agent may manually rebuild via summarize(rebuild=true). It "
-            "may also carry the SUSTAINED-pressure context.molt reminder string — "
-            "a stronger warning that appears only after context has been high "
-            "(>= 0.75) for several consecutive fresh provider rounds and clears "
-            "when pressure drops. The context block lives here (permanent, "
-            "restamped on every result while active) rather than in the sparse "
-            "agent_meta so the reminder persists. context also carries the "
-            "cache-miss budget guard: a soft per-molt/session cap on total "
-            "cache-miss (uncached input) tokens for the CURRENT runtime session "
-            "(default 1,000,000). Once the session cache-miss total reaches/exceeds "
-            "cache_miss_budget, context.molt carries a 'cache miss budget {N} "
-            "reached, molt now' warning and context.cache_miss_budget / "
-            "context.cache_miss_tokens report the configured budget and the current "
-            "cache-miss total. When the sustained-pressure warning is also active, "
-            "both warnings are preserved in context.molt (the budget line is "
-            "appended). The action when warned is to molt. token_usage is the single token-diagnostics block "
-            "(see meta_guidance.token_efficiency). It is NESTED into two explicitly "
-            "named halves (not one flat dict): current_call — ONLY this provider "
-            "call's own token/cache/output facts, keys input, cache_miss, cache_rate, "
-            "output, thinking (context state is NOT here); and session — the "
-            "SINCE-LAST-MOLT cumulative aggregate, keys session_cache_rate, api_calls, "
-            "input_tokens, cached_tokens, avg_input_tokens_per_api_call, the current "
-            "context state context_tokens/context_window/context_usage (when "
-            "resolvable), plus ALWAYS-ON since-last-molt cache-miss/budget telemetry: "
-            "cache_miss_tokens (since-last-molt cumulative cache miss = "
-            "max(input_tokens - cached_tokens, 0)), cache_miss_budget (the configured "
-            "budget), and cache_miss_remaining_tokens (max(cache_miss_budget - "
-            "cache_miss_tokens, 0)). The nesting removes the confusing flat "
-            "current_call.input vs session.input_tokens adjacency. These three "
-            "cache-miss fields ride under session on EVERY result whenever session "
-            "aggregate token usage is available (cache_miss_budget/"
-            "cache_miss_remaining_tokens are present only when a budget is "
-            "configured), so you can always read your current cumulative cache miss "
-            "and remaining budget here without recomputing input_tokens - "
-            "cached_tokens or remembering the default budget — distinct from the "
-            "context.* guard above, which appears only once you have reached/exceeded "
-            "the budget. If you have reached or are nearing the cache-miss budget, do "
-            "NOT use summarize to reconstruct context because reconstruction itself "
-            "will create a large cache miss; molt proactively. The session-half "
-            "fields are SINCE-LAST-MOLT cumulative/restored totals — they SURVIVE a "
-            "refresh/restart (they read the durable cumulative counters, NOT the "
-            "since-refresh runtime-session deltas), so a refresh does not zero them "
-            "and cache_miss_remaining_tokens does not reset. The "
-            "block also carries a short top-level ref sentence ('See "
-            "meta_guidance.token_efficiency for details.') hooking the guidance "
-            "subsection that explains how to act on it. Each "
-            "half (current_call, session) appears only "
-            "when its source data is available (an empty half is omitted, not left "
-            "empty); missing inner values are omitted, not "
-            "invented. Copied here so agents can inspect historical high-context "
-            "summarize/rebuild costs after newer results arrive. May also "
-            "carry a one-shot 'reconstruction' event when the runtime just "
-            "rebuilt provider context at the 1.0 forced boundary or for a manual "
-            "rebuild: it records the event type (delayed_summarize_reconstruction or "
-            "summarize_rebuild_only_reconstruction), the before (A) and after (B) "
-            "context tokens/usage, context_window, trigger_threshold (1.0 hard "
-            "forced-rebuild boundary), threshold_high (0.75 manual/high-context "
-            "hint), and recovery_target (0.6). A 1.0 forced-rebuild event ALWAYS "
-            "carries a single unified reconstruction.warning (before->after change, "
-            "proactive 0.75-rebuild advice, and the conditional 'if still above 0.6, "
-            "molt' instruction, no high/low branching). Manual rebuild events do "
-            "not carry that warning; if B is still at/above the recovery target they "
-            "instead include a natural-language molt reminder at reconstruction.molt "
-            "(a one-shot; distinct from the sustained-pressure tool_meta.context.molt "
-            "above). This is permanent evidence of a past event, not current state."
+            "Immutable facts for one tool execution only: correlation id, tool "
+            "name when needed, completion time, elapsed time, status/error phase, "
+            "character counts, spill and a-priori-summary effects. It has no "
+            "agent/session/current-state semantics and remains valid historically."
         ),
-        AGENT_META_KEY: (
-            "Agent/current-state snapshot (elapsed_ms, active_turn_tool_calls, "
-            "current_tool_result_chars, optional "
-            "adapter_comment). Numeric context/token diagnostics are deliberately "
-            "not duplicated here: the per-call token/cache facts and the "
-            "since-last-molt session aggregate (including current context state "
-            "context_tokens/context_window/context_usage) live permanently in "
-            "tool_meta.token_usage instead (see "
-            "meta_guidance.token_efficiency). The sustained-pressure context.molt "
-            "reminder is NOT here either — it now lives in permanent "
-            "tool_meta.context.molt so it persists on every result while active. "
-            "SPARSE / "
-            "update-driven: agent_meta is attached to a tool result only when its "
-            "MATERIAL snapshot changes since the last emitted agent_meta — it is "
-            "NOT re-stamped onto the newest tool result merely because that result "
-            "is the latest when nothing material changed. Volatile bookkeeping "
-            "(elapsed_ms, active_turn_tool_calls, current_time, and the running "
-            "current_tool_result_chars.total_chars) does not count as a change. "
-            "So the most recent agent_meta may sit on an EARLIER result than the "
-            "newest one; scan backward for the last-emitted snapshot, and read "
-            "each emitted agent_meta as the agent state at that update point. "
-            "agent_meta is a timely runtime/current-state hint: older emitted "
-            "snapshots stay in historical context and logs as historical traces "
-            "(they are not retroactively removed), and if several appear, only "
-            "the NEWEST one is current — older snapshots are past state, not "
-            "current state. Model-facing full-history serialization / a fresh "
-            "provider replay preserves every historical agent_meta/guidance "
-            "holder's content — replay does not strip or remove old copies. "
-            "Only the LATEST holder in history represents current agent state; "
-            "every older holder is a historical trace, not a current instruction "
-            "or a fact to act on. "
-            "agent_meta carries NO token diagnostics: all token/cache "
-            "facts — both this call's own facts and the since-last-molt session "
-            "aggregate — live "
-            "permanently in tool_meta.token_usage instead (see "
-            "meta_guidance.token_efficiency). "
-            "current_tool_result_chars is a compact dict with total_chars, "
-            "threshold (the large-result hint size in chars), "
-            "over_threshold_count (how many in-context formal results exceed it), "
-            "and top_results (id, tool_name, chars; no preview) for "
-            "proactive summarization candidates. adapter_comment is a small "
-            "provider/adapter-authored note carrying only dynamic per-turn "
-            "runtime scalars; the adapter's static "
-            "rules live in the system-prompt section meta_guidance."
-        ),
-        GUIDANCE_KEY: (
-            "Lightweight ref/hook to the resident system-prompt section "
-            "meta_guidance, where the full kernel guidance sections, this "
-            "_meta envelope readme, and any static adapter runtime rules live. "
-            "Rides with agent_meta on the same sparse/update-driven cadence "
-            "(attached only when agent_meta is re-emitted); carries no full "
-            "guidance body."
-        ),
-        NOTIFICATION_GUIDANCE_KEY: (
-            "Kernel safety framing for channel notification handling. Rides with "
-            "notifications on the same sparse/update-driven cadence (attached only "
-            "when notifications is (re)attached)."
-        ),
-        NOTIFICATIONS_KEY: (
-            "Channel notification payloads. Static safety framing lives under "
-            "notification_guidance/meta_guidance; per-channel duplicate guidance is omitted. "
-            "SPARSE / update-driven and channel-owned: attached on first "
-            "appearance and re-attached only when the notification payload "
-            "MATERIALLY changes (or on a deliberate notification(action=check) "
-            "read) — NOT re-stamped onto the newest tool result merely because "
-            "that result is the latest when the payload is unchanged. The most "
-            "recent notifications may therefore sit on an EARLIER result than the "
-            "newest one; scan backward for the last-emitted payload and read it "
-            "as the current channel state. "
-            "Notification payloads are timely/current-state hints: older payloads "
-            "stay in historical context and logs as historical traces (they are "
-            "not retroactively removed), and if several appear, only the NEWEST "
-            "one is current — older payloads are not current instructions or "
-            "unhandled events; act on new messages through the producer channel "
-            "(telegram.read, email.read, ...), which remains the source of truth "
-            "for actionable channel content. Model-facing full-history "
-            "serialization / a fresh provider replay preserves every historical "
-            "notifications/notification_guidance holder's content — replay "
-            "does not strip or remove old copies. Only the LATEST holder in "
-            "history represents the current channel state; every older holder "
-            "is a historical trace, not a current instruction or an unhandled "
-            "event to act on. "
-            "Not part of the formal tool-result payload; do not summarize "
-            "notification contents as the result body."
-        ),
-        NOTIFICATION_PERSISTENT_KEY: (
-            "Sparse communication-context lane, currently the curated IM "
-            "producers (Telegram, WeChat, Feishu, WhatsApp) and built-in email. "
-            "All IM channels share one typed lane primitive and carry "
-            "structured recent/new messages under "
-            f"{NOTIFICATION_PERSISTENT_TELEGRAM_PATH}.messages / "
-            f"{NOTIFICATION_PERSISTENT_WECHAT_PATH}.messages / "
-            f"{NOTIFICATION_PERSISTENT_FEISHU_PATH}.messages / "
-            f"{NOTIFICATION_PERSISTENT_WHATSAPP_PATH}.messages, "
-            "event/routing hooks under `.events`, and concise English machine "
-            "comments. Delta lanes (Telegram, WeChat, Feishu) additionally "
-            "carry a previous_block hook "
-            "pointing to the prior block for the same channel (and an optional "
-            "human-readable comment), plus `.context_comment` (a seed block's "
-            "historical id range plus the current/new message id) and "
-            "`.burst_comment` (multiple new incoming messages arrived together "
-            "— one burst), and `.referenced_messages` (Telegram only: the "
-            "full reply target with a per-item `comment` when the current reply "
-            "points at a message absent from `.messages`). The snapshot lane "
-            "(WhatsApp, email-style) carries a standing `.context_comment` "
-            "(producer authority + reply rules) on every block with no "
-            "previous_block hook and no delivered-id delta tracking. "
-            "Per-message `comment`s mark the agent's own outgoing continuity "
-            "messages, truncated messages, and (WhatsApp) non-text/media "
-            "messages — all of which point to the producer read tool "
-            "(telegram.read / wechat.read / feishu.read / whatsapp.read) for "
-            "exact full producer state. This is the durable source of truth for "
-            "IM conversation context and routing details — the "
-            "ephemeral _meta.notifications.mcp.<channel> lane is only a short "
-            "high-attention hook carrying message_ids, not a holder for message "
-            "text, sender/subject, routing refs, counts, or content-location "
-            "pointers. Unread email content lives under "
-            f"{NOTIFICATION_PERSISTENT_EMAIL_PATH}. It is not a "
-            "notification/action/dismiss channel and is not part of the formal "
-            "tool-result payload; older delta-lane blocks intentionally remain "
-            "in history so later deltas can refer to them via their "
-            "previous_block hook (snapshot lanes re-emit the current window)."
-        ),
+        AGENT_META_KEY: {
+            "instruction": AGENT_META_INSTRUCTION,
+            "agent_state": "Current main-agent/runtime state, token/session/context diagnostics, and one-shot events such as reconstruction.",
+            "notifications": "Current attention notifications plus persistent communication context.",
+            "guidance": {
+                "persistent": "Stable references and rules.",
+                "transient": "Current warnings and hooks.",
+            },
+        },
     }
 
 
 def now_iso_plain() -> str:
-    """Return the current UTC time as a plain ISO-8601 string (no agent needed).
-
-    Used by ``_meta.tool_meta`` block stamping where no agent context is available.
-    Always returns UTC with a Z suffix, e.g. ``2026-06-20T12:34:56Z``.
-    Falls back to empty string on any error.
-    """
+    """Return the UTC completion timestamp used by universal tool metadata."""
     try:
         import datetime as _dt
         return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
         return ""
-
-
-# ---------------------------------------------------------------------------
-# Runtime guidance catalog — prompt package resource, loaded once.
-# ---------------------------------------------------------------------------
-
-_GUIDANCE_CACHE: dict | None = None
-
-# Allowed values for the small fixed-vocabulary fields. Kept permissive on
-# purpose: the kernel must not reject a future render strategy it does not yet
-# know about, only structurally malformed payloads.
-_GUIDANCE_REQUIRED_TOP_KEYS = ("schema_version", "guidance_version", "priority", "render_mode", "sections")
 
 
 class GuidanceSchemaError(ValueError):
@@ -883,13 +686,13 @@ def build_meta_readme_section() -> Dict[str, str]:
 
     This readme is one ordered section among the kernel guidance sections; both
     are rendered into the resident ``meta_guidance`` system-prompt section (see
-    :func:`build_meta_guidance`).  The tail ``_meta.guidance`` on tool results is
+    :func:`build_meta_guidance`).  The tail ``_meta.agent_meta.guidance`` on tool results is
     only a lightweight ref back to that section, never the full body.
     """
     readme = build_meta_readme()
     body_lines = [
         "This section explains the `_meta` envelope carried on tool results.",
-        "These explanations are resident here in the `meta_guidance` system-prompt section; the tail `_meta.guidance` on each tool result carries only a lightweight ref back to this section, not the full body.",
+        "These explanations are resident here in the `meta_guidance` system-prompt section; the tail `_meta.agent_meta.guidance` on each tool result carries only a lightweight ref back to this section, not the full body.",
         "",
     ]
     body_lines.extend(f"- `{key}`: {value}" for key, value in readme.items())
@@ -926,7 +729,7 @@ def build_guidance_with_meta_readme(base_guidance: Dict[str, Any] | None = None)
 # meta_guidance — resident system-prompt section.
 #
 # The static, rule-like content that used to ride in every tail
-# ``_meta.guidance`` (the runtime guidance sections + the ``_meta`` readme) and
+# ``_meta.agent_meta.guidance`` (the runtime guidance sections + the ``_meta`` readme) and
 # in the adapter's ``adapter_comment`` (the long full-epoch/summarize prose) is
 # rendered once here and appended as the final, always-resident system-prompt
 # section named ``meta_guidance``.  The tail ``_meta`` then carries only a
@@ -935,7 +738,7 @@ def build_guidance_with_meta_readme(base_guidance: Dict[str, Any] | None = None)
 
 META_GUIDANCE_SECTION_ID = "meta_guidance"
 
-# Short hook the unified ``tool_meta.token_usage`` block carries back to the
+# Short hook the unified ``agent_meta.agent_state.token_usage`` block carries back to the
 # resident guidance subsection that explains how to read/act on it. A short
 # sentence (not a bare path) pointing at the ``token_efficiency`` subsection of
 # the ``meta_guidance`` system-prompt section.
@@ -945,7 +748,7 @@ TOKEN_USAGE_GUIDANCE_REF = (
 
 
 def build_meta_guidance_ref() -> dict:
-    """Return the lightweight ``_meta.guidance`` hook for a sparse runtime block."""
+    """Return the lightweight guidance hook for the current runtime block."""
     return {"ref": META_GUIDANCE_SECTION_ID}
 
 def _render_guidance_sections_markdown(guidance: dict) -> list[str]:
@@ -988,11 +791,11 @@ def build_meta_guidance(agent) -> str:
       * the runtime guidance sections from the Markdown guidance catalog (e.g.
         summarize/molt best practice);
       * the ``_meta`` envelope readme (which blocks exist and whether each is
-        per-result, sparse/update-driven, or current-state);
+        per-result or current-state);
       * the active adapter's *static* runtime rules (from
         :func:`static_adapter_comment`), if any.
 
-    Dynamic per-result / sparse state (tool_meta, current context/molt hints,
+    Dynamic per-result state (tool_meta, current context/molt hints,
     notifications, current_tool_result_chars, adapter epoch counters, cache
     ledger summary, …) is deliberately NOT rendered here — it stays in the tail
     ``_meta`` so this section can remain a stable, cache-friendly prefix.
@@ -1005,7 +808,7 @@ def build_meta_guidance(agent) -> str:
         "Resident kernel guidance for reading runtime metadata. This is the "
         "static, rule-like material; dynamic per-turn state stays in the tail "
         "`_meta` block on tool results (which points back here via "
-        "`_meta.guidance.ref`).",
+        "`_meta.agent_meta.guidance.ref`).",
         "",
     ]
     lines.extend(_render_guidance_sections_markdown(guidance))
@@ -1103,9 +906,10 @@ def build_molt_context(agent, usage: float) -> str | None:
     # sustained-pressure molt reminder.
     """Return the sustained-pressure molt reminder string, or ``None``.
 
-    The returned text is attached to PERMANENT ``_meta.tool_meta.context.molt``
+    The returned text is attached to current ``_meta.agent_meta.agent_state.context.molt``
     (``build_meta`` routes it there via a transit key so it persists on every
-    result while the warning is active — it is NOT the sparse ``agent_meta``).
+    result while the warning is active — it is part of the complete current
+    ``agent_meta.agent_state`` snapshot).
     The contract (channel B)
     replaces the old immediate ``usage >= 0.60`` trip-wire with a
     *sustained-pressure* signal: the reminder appears only once context has been
@@ -1146,7 +950,7 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
     """Return the lightweight 75% manual provider-context rebuild hint.
 
     This is not a molt warning and not an event route.  It is a current-state line
-    stamped under ``_meta.tool_meta.context.rebuild`` whenever context is at/above
+    stamped under ``_meta.agent_meta.agent_state.context.rebuild`` whenever context is at/above
     ``CONTEXT_PRESSURE_HIGH_RATIO`` and the system intrinsic is available, so the
     agent may explicitly request a rebuild via
     ``system(action='summarize', rebuild=true)`` instead of letting the
@@ -1180,7 +984,7 @@ def build_context_overflow_warning(agent) -> str | None:
     the 3-round streak) and the one-shot reconstruction event
     (:func:`build_reconstruction_tool_meta`, a historical A→B rebuild record):
     this is the human-authored hard-boundary warning that stays on EVERY
-    ``_meta.tool_meta.context.molt`` result while the automatic one-shot forced
+    ``_meta.agent_meta.agent_state.context.molt`` result while the automatic one-shot forced
     provider-context rebuild has already fired for the current ``>= 1.0`` episode,
     its first post-rebuild provider response has been observed, and current
     provider-reported usage is still STRICTLY above 1.0 (the forced rebuild failed
@@ -1252,9 +1056,9 @@ def build_cache_miss_budget_context(agent) -> dict | None:
         }
 
     ``ToolExecutor._attach_tool_block`` promotes the whole sub-object into the
-    permanent ``tool_meta.context`` block, so the warning persists (restamped on
-    every result) at ``tool_meta.context.molt`` and the budget value is surfaced
-    at ``tool_meta.context.cache_miss_budget`` while the guard is tripped.
+    current ``agent_meta.agent_state.context`` snapshot, so the warning is
+    available on the newest final carrier and the budget value is surfaced at
+    ``agent_meta.agent_state.context.cache_miss_budget`` while the guard is tripped.
 
     Returns ``None`` (no guard) when: the ``psyche`` intrinsic is absent (matching
     :func:`build_molt_context`, since ``molt`` presupposes the molt action), the
@@ -1325,9 +1129,10 @@ def _current_molt_emission_event(agent, *, usage, message) -> dict | None:
 def build_reconstruction_tool_meta(agent) -> dict | None:
     """Build the one-shot delayed-summarize reconstruction event (channel A).
 
-    Permanent per-result evidence, destined for ``_meta.tool_meta.reconstruction``.
+    One-shot evidence, destined for ``_meta.agent_meta.agent_state.events.reconstruction``.
     Distinct from :func:`build_molt_context` (channel B, current-state reminder
-    routed to permanent ``tool_meta.context.molt``): this records a *historical event* — the runtime actually rebuilt the
+    routed to ``agent_meta.agent_state.events.reconstruction``): this records a
+    *historical event* — the runtime actually rebuilt the
     provider context around the compacted history when context crossed the 0.75
     reconstruction threshold.
 
@@ -1585,7 +1390,7 @@ def _build_session_token_economy(agent) -> dict:
 
     And the ALWAYS-ON since-last-molt cache-miss/budget telemetry so an agent
     never has to recompute ``input_tokens - cached_tokens`` or remember the
-    default budget (contrast the ``tool_meta.context`` guard, which appears only
+    default budget (contrast the ``agent_state.context`` guard, which appears only
     at/above budget):
 
     * ``cache_miss_tokens`` = ``max(input_tokens - cached_tokens, 0)`` — the
@@ -1663,10 +1468,10 @@ def _build_session_token_economy(agent) -> dict:
 
 
 def build_tool_meta_token_usage(agent) -> dict | None:
-    """Return the token diagnostics block for permanent ``tool_meta``.
+    """Return the token diagnostics block for ``agent_meta.agent_state``.
 
-    ALL token-related diagnostics live in ONE ``_meta.tool_meta.token_usage``
-    block — there is no separate ``tool_meta.token_efficiency`` nor
+    ALL token-related diagnostics live in ONE ``_meta.agent_meta.agent_state.token_usage``
+    block — there is no separate ``agent_meta.agent_state.token_efficiency`` nor
     ``agent_meta.token_efficiency``.  The block is NESTED into two explicitly
     named halves so the confusing flat ``input`` vs ``input_tokens`` adjacency is
     gone; each half keeps its own local key convention:
@@ -1709,10 +1514,10 @@ def _current_context_usage(agent) -> float:
     """Return the current context-window usage ratio for warnings/events.
 
     This helper owns the local (system + history) / window estimate that used to
-    be serialized under ``agent_meta.context``.  The number is still needed for
+    be serialized under ``agent_meta.agent_state.context``.  The number is still needed for
     current-state decisions such as ``context.molt`` and reconstruction event
     fallbacks, but it is no longer exposed in ``agent_meta`` because
-    ``tool_meta.token_usage`` is the permanent token-diagnostics carrier.
+    ``agent_meta.agent_state.token_usage`` is the current token-diagnostics carrier.
     """
     session = getattr(agent, "_session", None)
     chat_obj = getattr(session, "chat", None) if session is not None else None
@@ -1763,8 +1568,8 @@ def build_meta(agent) -> dict:
     Shape::
 
         {
-            "current_time": "<iso>",          # transient; promoted into tool_meta
-            "_tool_meta_context": {           # transient; promoted into tool_meta.context
+            "current_time": "<iso>",          # transient; promoted into agent_state
+            "_tool_meta_context": {           # transient; promoted into agent_state.context
                 "rebuild": str,               # 75%+ manual rebuild permission hint
                 "molt": str,                  # sustained-pressure and/or cache-miss-budget reminder
                 "cache_miss_budget": int,     # present only when the budget guard is tripped
@@ -1775,17 +1580,15 @@ def build_meta(agent) -> dict:
         }
 
     ``current_time`` and the two ``_tool_meta_context*`` keys are transient
-    transit keys: ``ToolExecutor._attach_tool_block`` promotes ``current_time``
-    and the sustained-pressure ``molt`` reminder into the PERMANENT per-result
-    ``tool_meta`` block (``tool_meta.current_time`` / ``tool_meta.context.molt``),
+    transit keys: ``ToolExecutor._attach_tool_block`` promotes them into the
+    current ``agent_state`` (including ``context`` and its rebuild/molt state),
     and logs ``context_pressure_current_molt_reminder_emitted`` from the
     ``_tool_meta_context_event`` payload — deduped there to once per provider
     round (this function is side-effect-free and carries the payload on every
     build while the warning is active, since it also runs for the text-input
-    prefix).  The molt reminder is therefore permanent per-result metadata, not
-    the sparse ``agent_meta``.  Numeric context/token diagnostics are not
-    duplicated in ``agent_meta``; provider-round ``context_usage``/``window`` and
-    session token stats live in ``tool_meta.token_usage``.
+    prefix).  Final tool-result batches carry the resulting state under
+    ``agent_meta.agent_state``; ``tool_meta`` remains limited to immutable
+    result-local execution facts.
 
     The ``_tool_meta_context`` sub-object is emitted when the lightweight 75%+
     manual-rebuild hint is active, OR the sustained-pressure warning is active,
@@ -1813,12 +1616,10 @@ def build_meta(agent) -> dict:
             TOOL_META_CONTEXT_REBUILD_KEY: rebuild_hint
         }
 
-    # Sustained-pressure molt reminder — now PERMANENT per-result metadata at
-    # ``tool_meta.context.molt`` (moved off the sparse ``agent_meta.context`` so
-    # it persists on every result while the warning is active).  It rides via a
-    # transit key that ``ToolExecutor._attach_tool_block`` promotes into the
-    # permanent ``tool_meta.context`` block.  Numeric context/token diagnostics
-    # stay in ``tool_meta.token_usage``.
+    # Sustained-pressure molt reminder — current agent state at
+    # ``agent_meta.agent_state.context.molt``.  It rides via a transit key that
+    # ``ToolExecutor._attach_tool_block`` promotes into the private final-batch
+    # capture; finalization carries it on the whole agent snapshot.
     molt = build_molt_context(agent, usage)
     if molt:
         existing_context = meta.get(TOOL_META_CONTEXT_PENDING_KEY)
@@ -1835,7 +1636,7 @@ def build_meta(agent) -> dict:
             meta[TOOL_META_CONTEXT_EVENT_PENDING_KEY] = event
 
     # Persistent post-forced-rebuild overflow warning — the human-authored hard
-    # boundary sentence, routed to the SAME permanent ``tool_meta.context.molt``
+    # boundary sentence, routed to the same ``agent_meta.agent_state.context.molt``
     # channel.  It is a current-state warning (the adapter owns the one-shot latch
     # + verification), NOT a new event route, so it never attaches a
     # ``_tool_meta_context_event``.  When the sustained-pressure reminder is also
@@ -1889,21 +1690,15 @@ def build_meta(agent) -> dict:
         # are resident in the ``meta_guidance`` system-prompt section.
         meta["adapter_comment"] = slim_adapter_comment_for_tail(comment)
 
-    # Notifications are deliberately NOT included here. Active-state
-    # notification payload is a moving live block attached SPARSELY /
-    # update-driven — on first appearance and re-attached only on a material
-    # change (or a deliberate notification(action=check) read) — by
-    # ``attach_active_notifications`` at the tool-batch boundary.  Putting it in
-    # ``build_meta`` would stamp it onto every tool result and accumulate
-    # forever in history. The IDLE-state synthesized notification pair and the
-    # ACTIVE-state tool-result holder both use the same canonical
-    # ``notifications`` payload shape instead.
+    # Notifications are attached at the batch boundary to the same final
+    # agent_meta snapshot. Producer fingerprints handle delivery dedup; they do
+    # not suppress current state on later results.
 
     return meta
 
 
 # ---------------------------------------------------------------------------
-# Active-state notification stamping — sparse/update-driven canonical payload.
+# Active-state notification stamping — canonical current payload.
 # ---------------------------------------------------------------------------
 
 
@@ -1961,8 +1756,8 @@ class _ImPersistentLane(NamedTuple):
     type/id metadata for non-text messages.
     """
 
-    channel: str            # e.g. "telegram" — key under notification_persistent.mcp
-    source_key: str         # e.g. "mcp.telegram" — key under _meta.notifications
+    channel: str            # e.g. "telegram" — key under notifications.persistent.mcp
+    source_key: str         # e.g. "mcp.telegram" — key under agent_meta.notifications.attention
     path: str               # full dotted persistent path, for hooks/comments
     display_name: str       # e.g. "Telegram" — English comment wording
     mode: str               # "delta" or "snapshot" (see class docstring)
@@ -2406,7 +2201,7 @@ def _build_snapshot_im_persistent_payload(
 def _build_im_notification_persistent_payload(
     agent, notification_payload: dict, lane: _ImPersistentLane
 ) -> dict | None:
-    """Build the `_meta.notification_persistent` payload for one IM lane.
+    """Build the `_meta.agent_meta.notifications.persistent` payload for one IM lane.
 
     ``mode == "delta"`` lanes (Telegram, WeChat, Feishu) use the seed/delta
     shape: the first delivery after startup/molt (or when fewer than the minimum
@@ -2675,8 +2470,8 @@ def _sanitize_im_notification_after_persistent(
 
     Message text, structured context, routing hooks, sender/subject, platform,
     counts, and summaries live under the lane's
-    ``_meta.notification_persistent.mcp.<channel>`` path.  The transient
-    ``_meta.notifications.mcp.<channel>`` block remains only a short
+    ``_meta.agent_meta.notifications.persistent.mcp.<channel>`` path.  The transient
+    ``_meta.agent_meta.notifications.attention.mcp.<channel>`` block remains only a short
     high-attention/progressive-disclosure hook that names the producer event IDs
     requiring explicit handling through the producer tool.
 
@@ -2735,8 +2530,10 @@ def sanitize_whatsapp_notification_after_persistent(notification_payload: dict) 
     )
 
 
-def _result_tool_call_id(result: dict) -> str | None:
-    meta = result.get("_meta")
+def _result_tool_call_id(result) -> str | None:
+    meta = getattr(result, "metadata", None)
+    if not isinstance(meta, dict):
+        meta = result.get("_meta") if isinstance(result, dict) else None
     if not isinstance(meta, dict):
         return None
     tool_meta = meta.get(TOOL_META_KEY)
@@ -2777,7 +2574,7 @@ def build_synthetic_meta_envelope(
     *,
     call_id: str,
 ) -> dict:
-    """Assemble the full ``_meta`` envelope for a synthesized notification pair.
+    """Assemble the canonical two-axis sidecar for a synthesized notification pair.
 
     Produces the same ``_meta`` envelope an ACTIVE tool result persists:
 
@@ -2791,39 +2588,45 @@ def build_synthetic_meta_envelope(
         ``notification_guidance``— from ``notification_payload`` (the dict
         returned by :func:`build_notification_payload`)
 
-    Used only for the durable ``notification_block_injected`` snapshot so the TUI
-    ``/notification`` view shows the same ``_meta.*`` blocks for synthesized
-    pairs as for ACTIVE tool results.  The live wire body keeps its own
-    (notification-only) ``_meta`` — this is a logging-side reconstruction.
+    Used for both the live synthetic result and its durable notification log.
     """
+    context = None
     try:
         agent_meta = build_meta(agent)
-        # Token diagnostics never ride on agent_meta — pull the unified
-        # token_usage block out of the transit key so it can be stamped onto the
-        # synthetic tool_meta instead (Jason FINAL: all token diagnostics live in
-        # tool_meta.token_usage only).
         token_usage = agent_meta.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
-        # Tool-meta context/reminder transit keys are consumed only by real
-        # ToolExecutor tool-result stamping.  Synthetic notification snapshots
-        # are log-side reconstructions, so do not expose internal transit
-        # payloads as agent_meta.
-        agent_meta.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
+        context = agent_meta.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
         agent_meta.pop(TOOL_META_CONTEXT_EVENT_PENDING_KEY, None)
     except (AttributeError, TypeError):
         agent_meta = {}
         token_usage = None
 
     tool_meta = build_synthetic_tool_meta(call_id)
+    raw_state = agent_meta.get("agent_state") if isinstance(agent_meta, dict) else None
+    state = dict(raw_state) if isinstance(raw_state, dict) else dict(agent_meta)
+    if isinstance(agent_meta, dict):
+        state.update({k: v for k, v in agent_meta.items() if k != "agent_state"})
     if isinstance(token_usage, dict) and token_usage:
-        tool_meta[TOOL_META_TOKEN_USAGE_KEY] = token_usage
-
+        state[TOOL_META_TOKEN_USAGE_KEY] = token_usage
+    if isinstance(context, dict) and context:
+        state[TOOL_META_CONTEXT_KEY] = context
     envelope: dict = {
         TOOL_META_KEY: tool_meta,
-        AGENT_META_KEY: agent_meta,
-        GUIDANCE_KEY: build_meta_guidance_ref(),
+        AGENT_META_KEY: {
+            "instruction": AGENT_META_INSTRUCTION,
+            "agent_state": state,
+            "notifications": {
+                "attention": notification_payload.get(NOTIFICATIONS_KEY, {}),
+                "persistent": notification_payload.get(NOTIFICATION_PERSISTENT_KEY, {}),
+            },
+            "guidance": {
+                "persistent": build_meta_guidance_ref(),
+                "transient": notification_payload.get(NOTIFICATION_GUIDANCE_KEY, {}),
+            },
+        },
     }
-    # notifications + notification_guidance from the canonical payload.
-    envelope.update(notification_payload)
+    persistent = notification_payload.get(NOTIFICATION_PERSISTENT_KEY, {})
+    if isinstance(persistent, dict) and persistent:
+        envelope[AGENT_META_KEY]["notifications"]["persistent"] = persistent
     return envelope
 
 
@@ -2847,20 +2650,11 @@ def _collect_active_notifications_payload(agent) -> dict | None:
         return None
 
 
-def _last_dict_result(tool_results: list) -> dict | None:
-    """Return the dict carried by the latest tool-result block in ``tool_results``.
-
-    Adapter-built ToolResultBlocks store the tool's return value in
-    ``.content``. The notification stamp is only meaningful when that content
-    is a dict (the JSON shape the agent already parses); other shapes
-    (e.g. a string from a tool that returned text) are skipped. Walks
-    backward from the tail so the freshest dict result wins even when
-    later tools returned non-dicts.
-    """
+def _final_tool_result_block(tool_results: list):
+    """Return the designated final ToolResultBlock, independent of content type."""
     for block in reversed(tool_results):
-        content = getattr(block, "content", None)
-        if isinstance(content, dict):
-            return content
+        if _is_tool_result_block(block):
+            return block
     return None
 
 
@@ -2928,11 +2722,9 @@ def sanitize_email_notification_after_persistent(notification_payload: dict) -> 
 def notification_payload_signature(payload: Mapping[str, Any] | None) -> str:
     """Return a stable signature of the *material* notification payload.
 
-    ``_meta.notifications`` is **sparse / update-driven** (mirrors the #618
-    ``agent_meta`` cadence): while notifications stay active but their material
-    content is unchanged, the payload is NOT chased onto every newest tool
-    result — the prior holder keeps it.  This signature is the change detector
-    used by :func:`attach_active_notifications`.
+    The signature describes the material notification payload for delivery
+    diagnostics and persistent-message bookkeeping. It does not gate copying
+    the current payload onto the newest final agent_meta carrier.
 
     The whole ``build_notification_payload`` output is signed — the per-channel
     ``notifications`` payloads *and* the ``notification_guidance`` (whose
@@ -2956,8 +2748,8 @@ def _is_notification_check_placeholder(content) -> bool:
     ``_notification_placeholder: True`` (see
     ``tools/notification/__init__._check``).  A deliberate check is a read
     request: its result must receive the current notification payload even when
-    the payload is materially unchanged, so the sparse change-gate is bypassed
-    when the target is such a placeholder.  The IDLE/ASLEEP synthesized pair
+    the payload is materially unchanged, so the ordinary final-carrier path and
+    deliberate read both receive the current payload. The IDLE/ASLEEP synthesized pair
     also carries this key but is built by ``_inject_notification_pair`` on its
     own fingerprint-gated path and never reaches here.
     """
@@ -2989,18 +2781,13 @@ def attach_active_notifications(
     *,
     prior_holder: dict | None = None,
 ) -> dict | None:
-    """Attach the canonical notification payload — sparsely / update-driven.
+    """Attach the current notification payload to the final agent_meta carrier.
 
-    ``_meta.notifications`` is **sparse / update-driven**, not
-    latest-result-only: while notifications stay active but their *material*
-    payload is unchanged (tracked by ``agent._notification_payload_signature``
-    via :func:`notification_payload_signature`), the payload is NOT moved onto
-    the newest tool result merely because that result is the latest.  The prior
-    holder keeps its payload as the current-state carrier, and ordinary
-    unrelated tool results do not restamp it.  Mirrors the #618
-    :func:`attach_active_runtime` change-gate, preserving notification
-    semantics (channel-owned current state, just update-driven rather than
-    newest-result-only).
+    The current channel payload is merged into the newest final
+    ``ToolResultBlock`` on every eligible batch, including when its material
+    content is unchanged. ``agent._notification_payload_signature`` remains for
+    delivery diagnostics and persistent-message bookkeeping; it is not an
+    attachment gate. Older holders remain historical traces.
 
     Contract:
         * When there are no active notifications, no stamping happens,
@@ -3010,23 +2797,18 @@ def attach_active_notifications(
           ``_notification_payload_signature`` is reset to ``None``
           (so a later reappearance of the same payload attaches afresh as the
           first active payload), and ``None`` is returned.
-        * When active notifications exist but this batch has no dict-shaped
-          result to receive them, the prior holder is kept intact,
+        * When active notifications exist but this batch has no final
+          ``ToolResultBlock`` to receive them, the prior holder is kept intact,
           ``_notification_fp`` is left uncommitted, and ``prior_holder`` is
           returned — the state can still be delivered later.
-        * When the payload's material signature is UNCHANGED and the target is
-          an ordinary tool result, the payload is NOT moved/restamped and the
-          prior holder stays the live holder; ``prior_holder`` is returned.  The
-          fingerprint is still committed so equivalent rewrites / same-material
-          payloads do not retry forever against the IDLE synthesized pair.
-        * When the payload materially CHANGED, or the target is a deliberate
-          ``notification(action="check")`` placeholder (a read request that must
-          always receive the current payload), the prior holder is released (a
+        * The current payload is copied for both unchanged and changed
+          signatures, including a deliberate ``notification(action="check")``
+          read. The prior holder is released (a
           synthesized pair is skeletonized; a normal tool result RETAINS its old
           payload as a historical trace — timely transient semantics, Jason
           #4307), the same ``notifications`` + ``notification_guidance`` payload
           shape used by the synthesized notification pair is stamped under
-          ``_meta`` on the latest dict-shaped result, the fingerprint is
+          ``_meta`` on the latest final result, the fingerprint is
           committed, the new signature is recorded, and that dict is returned as
           the new holder.  Only the newest emitted payload is current;
           model-facing full-history serialization preserves every
@@ -3053,12 +2835,18 @@ def attach_active_notifications(
     meta, again via the synthesized pair).
     """
     payload = _collect_active_notifications_payload(agent)
+    target = _final_tool_result_block(tool_results)
     if not payload:
-        # Underlying notification files are gone/empty. Release the prior
-        # holder (synthesized pairs skeletonize; normal results keep their old
-        # payload as a historical trace) and report no live holder remains.
-        # Reset the sparse signature so a later reappearance of the same payload
-        # attaches again as the first active payload.
+        # Explicitly clear the current axis on the newest final carrier. Older
+        # blocks remain untouched historical traces.
+        if target is not None:
+            current = target.metadata.get(AGENT_META_KEY)
+            if not isinstance(current, dict):
+                current = {"instruction": AGENT_META_INSTRUCTION, "agent_state": {}, "guidance": {}}
+            current["instruction"] = AGENT_META_INSTRUCTION
+            current["notifications"] = {}
+            current.setdefault("guidance", {})["transient"] = {}
+            target.metadata[AGENT_META_KEY] = current
         if prior_holder is not None:
             agent._notification_live_holder = prior_holder
             skeletonize_notification_holder(agent)
@@ -3068,32 +2856,22 @@ def attach_active_notifications(
             pass
         return None
 
-    target = _last_dict_result(tool_results)
     if target is None:
-        # Active notifications exist, but this batch has no dict-shaped
+        # Active notifications exist, but this batch has no final
         # result to receive the moving payload. Keep the prior live holder
         # (if any) intact and leave _notification_fp uncommitted so the
         # state can still be delivered later via another tool result or
         # the IDLE synthesized-pair path.
         return prior_holder
 
-    # Sparse gate: attach/move only when the payload materially changed since the
-    # last emitted one, OR the target is a deliberate notification(action=check)
-    # read (which must always receive the current payload).
+    # Signature and placeholder status remain delivery/accounting inputs only;
+    # the current payload is always copied onto the final carrier.
     signature = notification_payload_signature(payload)
-    is_check_read = _is_notification_check_placeholder(target)
+    is_check_read = _is_notification_check_placeholder(getattr(target, "content", None))
     unchanged = signature == getattr(agent, "_notification_payload_signature", None)
 
-    if unchanged and not is_check_read and prior_holder is not None:
-        # No material change on an ordinary batch with an existing holder: do
-        # not move/restamp and do not skeletonize the prior holder — it keeps
-        # the payload as the current-state carrier.  Still commit the
-        # fingerprint so equivalent rewrites / same-material payloads do not
-        # retry forever against the IDLE-path synthesized pair.  If the holder
-        # has somehow been lost, fall through and reattach so the payload stays
-        # visible instead of committing an invisible state.
-        _commit_notification_fp(agent)
-        return prior_holder
+    # ``signature`` and ``is_check_read`` remain delivery/accounting inputs only;
+    # an unchanged active payload is still copied onto this final carrier.
 
     # Material change (or deliberate check read). Release the previous holder:
     # a synthesized pair is skeletonized; a normal tool result keeps its old
@@ -3102,8 +2880,8 @@ def attach_active_notifications(
         agent._notification_live_holder = prior_holder
         skeletonize_notification_holder(agent)
 
-    # Nest the canonical notification payload under the result's _meta
-    # envelope (alongside any tool_meta/agent_meta/guidance blocks).
+    # Nest the canonical notification payload under the result's agent_meta
+    # sidecar. Handler content is never used as a transport holder.
     persistent_payload = build_notification_persistent_payload(agent, payload)
     # Move (not duplicate): curated durable IM fields are always stripped
     # from the model-visible ephemeral lane, even when every message id was
@@ -3115,15 +2893,28 @@ def attach_active_notifications(
     sanitize_feishu_notification_after_persistent(payload)
     sanitize_whatsapp_notification_after_persistent(payload)
     sanitize_email_notification_after_persistent(payload)
-    meta_block = _meta_block(target)
-    meta_block.update(payload)
+    agent_meta = target.metadata.setdefault(AGENT_META_KEY, {
+        "instruction": AGENT_META_INSTRUCTION,
+        "agent_state": {},
+        "notifications": {},
+        "guidance": {},
+    })
+    # Compose the two current axes. Runtime owns agent_state and persistent
+    # guidance; notification attachment owns notifications and transient
+    # guidance. Neither phase may replace the other phase's current subtree.
+    agent_meta["instruction"] = AGENT_META_INSTRUCTION
+    agent_meta.setdefault("notifications", {})["attention"] = payload.get(NOTIFICATIONS_KEY, {})
+    agent_meta.setdefault("guidance", {})["transient"] = payload.get(NOTIFICATION_GUIDANCE_KEY, {})
     if persistent_payload:
-        meta_block.update(persistent_payload)
-        record_notification_persistent_delivery(
-            agent,
-            persistent_payload,
-            tool_call_id=_result_tool_call_id(target),
+        agent_meta.setdefault("notifications", {})["persistent"] = persistent_payload.get(
+            NOTIFICATION_PERSISTENT_KEY, {}
         )
+        if not unchanged or is_check_read:
+            record_notification_persistent_delivery(
+                agent,
+                persistent_payload,
+                tool_call_id=_result_tool_call_id(target),
+            )
     # Register this dict as the new live holder.
     agent._notification_live_holder = target
 
@@ -3195,62 +2986,31 @@ def _render_context_fragment(agent, meta: dict) -> str:
 
 
 def stamp_meta(result: dict, meta: dict, elapsed_ms: int) -> dict:
-    """Record per-tool runtime ``meta`` on the result for the boundary holder.
-
-    ``_meta.agent_meta`` / ``_meta.guidance`` are **sparse / update-driven**
-    blocks: they are (re)attached only when the material agent snapshot changes.
-    Stamping them on every result (the old behaviour) would leave stale
-    snapshots in history, so this function records the per-tool ``meta`` snapshot
-    and measured ``elapsed_ms`` under a transient ``_runtime_pending`` key, which
-    :func:`attach_active_runtime` consumes at the tool-batch boundary (analogous
-    to the notification holder), compares against the last-emitted snapshot, and
-    then deletes.
-
-    When ``meta`` is empty nothing is recorded — matching the pre-existing
-    time-blind behaviour where no timing signal appears.
-
-    ``_runtime_pending`` is internal scaffolding and never reaches the wire: the
-    boundary holder strips it from every result it inspects.  The
-    ``_meta.tool_meta`` block written by ``ToolExecutor._attach_tool_block`` is
-    separate and permanent; ``stamp_meta`` does not touch it.
-    """
-    if not meta:
-        return result
-    pending: dict = dict(meta)
-    pending["elapsed_ms"] = elapsed_ms
-    result["_runtime_pending"] = pending
+    """Deprecated compatibility no-op; runtime capture now belongs to ToolResultBlock."""
+    # Runtime callers now capture metadata in ``ToolExecutor`` keyed by exact
+    # tool-call id and place it on ``ToolResultBlock.metadata``. Keeping this
+    # function as a no-op avoids reintroducing a model-visible transport when
+    # an older extension still imports the symbol.
     return result
 
 
 # ---------------------------------------------------------------------------
-# agent_meta / guidance blocks — sparse/update-driven moving holder under _meta.
-# Like the notification payload pattern in ``attach_active_notifications``, but
-# gated: the holder moves only when the material agent snapshot changes, so an
-# unchanged snapshot is not chased onto every latest tool result.
+# agent_meta / guidance blocks — coherent current snapshot under _meta. A
+# delivery signature may remain for diagnostics, but never gates the final
+# whole snapshot carried by the latest ToolResultBlock.
 # ---------------------------------------------------------------------------
 
 
-def _strip_runtime_pending(tool_results: list) -> None:
-    """Remove the transient ``_runtime_pending`` scaffolding from every result.
-
-    ``stamp_meta`` records a per-tool ``_runtime_pending`` snapshot on each
-    dict result; only the latest result's snapshot is promoted into the real
-    ``_meta.agent_meta`` / ``_meta.guidance`` blocks.  This clears the
-    scaffolding from the rest so it never reaches the wire or lingers in
-    history.
-    """
+def _strip_agent_pending(tool_results: list) -> None:
+    """Clear runtime-only captures without touching handler content."""
     for block in tool_results:
-        content = getattr(block, "content", None)
-        if isinstance(content, dict):
-            content.pop("_runtime_pending", None)
+        if _is_tool_result_block(block):
+            block._agent_pending = None
 
 
-# Volatile agent_meta bookkeeping that ticks every batch regardless of whether
-# the agent's material state changed.  These must NOT contribute to the
-# sparse-attach signature: if they did, agent_meta would be forced onto every
-# latest result and the "if no change, don't re-stamp" contract would never
-# hold.  ``current_time`` is normally popped before promotion, but is listed
-# defensively.
+# Legacy volatile-field set retained for diagnostic/compatibility signatures.
+# It is not a carrier gate: the complete current snapshot is emitted on the
+# final block whenever private capture exists.
 _AGENT_META_VOLATILE_KEYS = frozenset({
     "elapsed_ms",
     "active_turn_tool_calls",
@@ -3268,20 +3028,15 @@ _TOOL_RESULT_CHARS_VOLATILE_KEYS = frozenset({"total_chars"})
 def agent_meta_signature(agent_meta: Mapping[str, Any]) -> str:
     """Return a stable signature of the *material* agent_meta content.
 
-    ``_meta.agent_meta`` is sparse / update-driven: it is attached to a tool
-    result only when the material snapshot changed since the last emitted one
-    (see :func:`attach_active_runtime`).  This signature is the change detector.
+    The signature is retained for diagnostics and compatibility only.
+    ``_meta.agent_meta`` is attached to the designated final result whenever
+    private capture exists; this signature never suppresses that snapshot.
 
-    Volatile bookkeeping that ticks every batch — ``elapsed_ms``,
-    ``active_turn_tool_calls``, ``current_time``, and the running
-    ``current_tool_result_chars.total_chars`` — is deliberately excluded so it
-    cannot defeat the "if no change" requirement by forcing agent_meta onto
-    every result.  Material signals (changed dynamic ``adapter_comment`` scalars,
-    a newly-large tool result in ``current_tool_result_chars.top_results`` / a
-    changed ``over_threshold_count``) DO change the signature and re-surface
-    agent_meta.  (The sustained-pressure molt reminder no longer rides on
-    agent_meta — it is permanent ``tool_meta.context.molt`` now — so it is not a
-    signal here.)
+    Volatile bookkeeping is excluded from this diagnostic signature so callers
+    can compare material state without churn.  Material signals still change
+    the signature, but that comparison does not control current-state emission.
+    Runtime/context/token/reconstruction state remains under
+    ``agent_meta.agent_state``.
     """
     material: dict = {}
     for key, value in (agent_meta or {}).items():
@@ -3307,38 +3062,33 @@ def attach_active_runtime(
     *,
     prior_holder: dict | None = None,
 ) -> dict | None:
-    """Attach the live ``agent_meta``/``guidance`` blocks — sparsely.
+    """Attach the complete current ``agent_meta`` snapshot to the final block.
 
-    ``_meta.agent_meta`` is **sparse / update-driven**, not latest-result-only:
-    it is attached to a tool result only when the *material* agent snapshot has
-    changed since the last emitted ``agent_meta`` (tracked by
-    ``agent._agent_meta_signature`` via :func:`agent_meta_signature`).  When the
-    snapshot has not materially changed, ``agent_meta`` is NOT attached to (nor
-    moved onto) the newest result merely because it is the latest — the prior
-    holder keeps its snapshot as a historical update point, and older emitted
-    snapshots remain in history rather than being chased to the tail every batch.
+    The complete current ``agent_meta`` is attached to the designated final
+    ``ToolResultBlock`` whenever private capture exists, regardless of material
+    change.  ``agent._agent_meta_signature`` may be updated for diagnostics or
+    compatibility, but it never gates emission.  Older blocks retain their
+    snapshots as historical traces.
 
     Mirrors :func:`attach_active_notifications`, but with the change gate:
 
-      * Build the candidate ``agent_meta`` from the latest dict-shaped result's
-        per-tool ``_runtime_pending`` snapshot (recorded by :func:`stamp_meta`):
-        kernel runtime state — no token diagnostics, which live in
-        ``tool_meta.token_usage`` — plus ``elapsed_ms`` + ``active_turn_tool_calls``
+      * Build the candidate ``agent_meta`` from the final block's private runtime
+        capture:
+        kernel runtime state, including token/context/reconstruction state, plus
+        ``elapsed_ms`` + ``active_turn_tool_calls``
         + ``current_tool_result_chars`` + a slimmed dynamic ``adapter_comment``.
-      * Compute its material signature.  **Only when it differs** from
-        ``agent._agent_meta_signature`` do we: promote ``agent_meta`` + the
-        ``_meta.guidance`` ref onto the new target, record the new signature,
-        and return the new holder.  The prior holder RETAINS its snapshot as a
-        historical trace — ``agent_meta`` is timely transient state (Jason
-        #4307): canonical history is not retroactively stripped and only the
-        newest emitted snapshot is current. Model-facing full-history
+      * Compute the diagnostic signature and record it.  Always promote the
+        complete ``agent_meta`` + the ``_meta.agent_meta.guidance`` ref onto
+        the new target and return the new holder.  The prior holder RETAINS its
+        snapshot as a historical trace: canonical history is not retroactively
+        stripped and only the newest snapshot is current. Model-facing full-history
         serialization preserves every holder's content and does not strip
         ``agent_meta`` or ``guidance`` keys (see
         ``lingtai.llm.interface_converters``).
       * When the signature is **unchanged**, nothing is attached or moved and
         ``prior_holder`` is returned unchanged — its ``agent_meta`` stays put.
-      * The transient ``_runtime_pending`` scaffolding is stripped from *all*
-        results regardless of the change outcome.
+      * Private runtime captures are cleared from *all* results regardless of
+        the change outcome.
 
     Volatile bookkeeping (``elapsed_ms``, ``active_turn_tool_calls``,
     ``current_time``, ``current_tool_result_chars.total_chars``) is excluded from
@@ -3346,33 +3096,62 @@ def attach_active_runtime(
     :func:`agent_meta_signature`.
 
     ``active_turn_tool_calls`` is read from the agent's executor guard.
-    ``elapsed_ms`` comes from the latest result's own ``_runtime_pending``
-    snapshot.
+    ``elapsed_ms`` is part of the final block's private capture when supplied.
 
-    No live runtime is produced (and the prior holder is returned unchanged) when
-    the batch has no dict-shaped target or the latest target carried no pending
-    snapshot (e.g. a time-blind agent whose ``meta`` is empty).
+    No live runtime is produced (and the prior holder is returned unchanged) only
+    when the batch has no final ``ToolResultBlock`` or the final block carries no
+    private pending snapshot (e.g. a time-blind agent whose ``meta`` is empty).
     """
-    target = _last_dict_result(tool_results)
-    pending = target.pop("_runtime_pending", None) if target is not None else None
+    target_block = _final_tool_result_block(tool_results)
+    pending = None
+    if target_block is not None:
+        pending = getattr(target_block, "_agent_pending", None)
+        target_block._agent_pending = None
+
+    # Reconstruction is a one-shot capture, so it can be consumed while an
+    # earlier result is being stamped in a multi-tool batch.  It is current
+    # batch state, not an earlier result's snapshot: promote only this event to
+    # the designated final carrier and do not copy any other earlier state.
+    reconstruction_event = None
+    for block in tool_results:
+        if block is target_block or not _is_tool_result_block(block):
+            continue
+        candidate = getattr(block, "_agent_pending", None)
+        if not isinstance(candidate, dict):
+            continue
+        state = candidate.get("agent_state")
+        events = state.get("events") if isinstance(state, dict) else None
+        event = events.get("reconstruction") if isinstance(events, dict) else None
+        if isinstance(event, dict):
+            reconstruction_event = _copy.deepcopy(event)
+            break
+    if reconstruction_event is None and isinstance(pending, dict):
+        state = pending.get("agent_state")
+        events = state.get("events") if isinstance(state, dict) else None
+        event = events.get("reconstruction") if isinstance(events, dict) else None
+        if isinstance(event, dict):
+            reconstruction_event = _copy.deepcopy(event)
+    if reconstruction_event is not None and isinstance(pending, dict):
+        state = pending.setdefault("agent_state", {})
+        if isinstance(state, dict):
+            state.setdefault("events", {})["reconstruction"] = reconstruction_event
 
     # Clear scaffolding from every other result regardless of outcome.
-    _strip_runtime_pending(tool_results)
+    _strip_agent_pending(tool_results)
 
-    if target is None or not isinstance(pending, dict) or not pending:
+    if target_block is None or not isinstance(pending, dict) or not pending:
         # No live runtime this batch: leave any prior holder (and its historical
         # agent_meta) untouched.
         return prior_holder
 
-    agent_meta: dict = dict(pending)
+    agent_state = pending.get("agent_state", {}) if isinstance(pending, dict) else {}
+    agent_meta: dict = {"agent_state": dict(agent_state) if isinstance(agent_state, dict) else {}}
     agent_meta.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
-    # Defensive backstop: normal ToolExecutor paths promote current_time into
-    # tool_meta before the turn boundary.  Hand-built tests or future producers
-    # should still not be able to reintroduce time into sparse agent_meta.
+    # Defensive backstop: current_time belongs in agent_state. Hand-built tests
+    # or future producers must not create a second top-level state axis.
     agent_meta.pop(TOOL_META_CURRENT_TIME_KEY, None)
-    # The sustained-pressure molt reminder is PERMANENT tool_meta metadata now:
-    # its transit keys are promoted into tool_meta by ``_attach_tool_block`` and
-    # must never leak into the sparse agent_meta (nor into its change signature).
+    # Context/rebuild/molt transit keys belong in agent_state; keep them out of
+    # the compatibility signature's top-level carrier.
     agent_meta.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
     agent_meta.pop(TOOL_META_CONTEXT_EVENT_PENDING_KEY, None)
     calls = _active_turn_tool_calls(agent)
@@ -3389,26 +3168,63 @@ def attach_active_runtime(
     if comment:
         agent_meta["adapter_comment"] = slim_adapter_comment_for_tail(comment)
 
-    # Sparse gate: only attach/move agent_meta when its material content changed
-    # since the last emitted snapshot.  Volatile bookkeeping is excluded so an
-    # unchanged agent state does not chase agent_meta onto every latest result.
+    # The signature is diagnostic/compatibility state only. The final block
+    # always receives the newest whole snapshot.
     signature = agent_meta_signature(agent_meta)
-    if signature == getattr(agent, "_agent_meta_signature", None):
-        # Unchanged: keep the prior holder's snapshot as a historical update
-        # point; do not re-stamp the tail.
-        return prior_holder
-
-    # Material change: the new target receives agent_meta plus the lightweight
-    # guidance ref.  The prior holder keeps its snapshot as a historical trace —
-    # only the newest emission is current (timely transient semantics).
-    meta = _meta_block(target)
-    meta[AGENT_META_KEY] = agent_meta
-    meta[GUIDANCE_KEY] = build_meta_guidance_ref()
+    # The signature remains useful for diagnostics/dedup compatibility, but it
+    # is not a current-state gate: the newest whole snapshot must be present.
+    existing_agent_meta = target_block.metadata.get(AGENT_META_KEY)
+    existing_agent_meta = existing_agent_meta if isinstance(existing_agent_meta, dict) else {}
+    target_block.metadata[AGENT_META_KEY] = {
+        "instruction": AGENT_META_INSTRUCTION,
+        "agent_state": agent_meta["agent_state"],
+        "notifications": existing_agent_meta.get("notifications", {}),
+        "guidance": {
+            "persistent": build_meta_guidance_ref(),
+            **({"transient": existing_agent_meta["guidance"]["transient"]}
+               if isinstance(existing_agent_meta.get("guidance"), dict)
+               and "transient" in existing_agent_meta["guidance"] else {}),
+        },
+    }
+    # Keep runtime diagnostics alongside the state, never as a second wrapper.
+    target_block.metadata[AGENT_META_KEY]["agent_state"].update(
+        {k: v for k, v in agent_meta.items() if k != "agent_state"}
+    )
     try:
         agent._agent_meta_signature = signature
     except Exception:
         pass
-    return target
+    return target_block
+
+
+def finalize_two_axis_sidecars(tool_results: list) -> None:
+    """Move boundary metadata into the canonical two-axis ToolResultBlock sidecar.
+
+    Handler content is deliberately left as the handler returned it.  This is
+    called once after notification/runtime attachment and before results return
+    to the model; old holders in history are never rewritten.
+    """
+    for block in tool_results:
+        metadata = getattr(block, "metadata", None)
+        if not isinstance(metadata, dict):
+            continue
+        # The batch runtime hook consumes `_agent_pending` only from the
+        # designated final carrier. Every other result must lose the private
+        # capture without becoming an agent-meta carrier.
+        metadata.pop("_agent_pending", None)
+        agent = metadata.get(AGENT_META_KEY)
+        if isinstance(agent, dict):
+            agent["instruction"] = AGENT_META_INSTRUCTION
+            metadata[AGENT_META_KEY] = {
+                "instruction": agent["instruction"],
+                "agent_state": agent.get("agent_state", {}),
+                "notifications": agent.get("notifications", {}),
+                "guidance": agent.get("guidance", {}),
+            }
+        # No private transport or obsolete root siblings can reach adapters.
+        for key in list(metadata):
+            if key not in {TOOL_META_KEY, AGENT_META_KEY}:
+                metadata.pop(key, None)
 
 
 def _active_turn_tool_calls(agent) -> int | None:

@@ -31,14 +31,14 @@ MOLT_NOTICE_THRESHOLD = 0.60  # legacy name; now the molt RECOVERY TARGET (see b
 # Sustained context-pressure / manual-rebuild / molt-warning constants
 # (kernel-fixed).
 #
-# The warning surfaced in ``_meta.tool_meta.context.molt`` is no longer an
-# immediate ``usage >= 0.60`` trip-wire.  It is a *sustained-pressure* signal,
-# while provider-context reconstruction is a separate, rarer event:
+# The warning surfaced in ``_meta.agent_meta.agent_state.context.molt`` is no
+# longer an immediate ``usage >= 0.60`` trip-wire.  It is a *sustained-pressure*
+# signal, while provider-context reconstruction is a separate, rarer event:
 #
 #   * CONTEXT_PRESSURE_HIGH_RATIO (0.75) — a fresh provider round whose context
 #     usage is at/above this fraction counts as a "high" round.  The same
 #     inclusive threshold (``usage >= 0.75``) also continuously stamps
-#     ``_meta.tool_meta.context.rebuild`` with permission to manually rebuild via
+#     ``_meta.agent_meta.agent_state.context.rebuild`` with permission to manually rebuild via
 #     ``system(action='summarize', rebuild=true)``.  It does NOT force an
 #     automatic provider-context rebuild — it is the proactive hint boundary.
 #   * CONTEXT_PRESSURE_FORCED_REBUILD_RATIO (1.0) — the HARD boundary. Once
@@ -106,9 +106,9 @@ class AgentConfig:
     context_limit: int | None = None  # max context tokens; None = use model default
     # Soft since-last-molt cache-miss token budget. Once the cumulative/restored
     # cache-miss (uncached input) total reaches or exceeds this value, a "molt
-    # now" reminder is restamped into _meta.tool_meta.context.molt (see
+    # now" reminder is restamped into _meta.agent_meta.agent_state.context.molt (see
     # meta_block.build_cache_miss_budget_context) and the budget value is surfaced
-    # under _meta.tool_meta.context. It is a soft cap — nothing is blocked; the
+    # under _meta.agent_meta.agent_state.context. It is a soft cap — nothing is blocked; the
     # agent is expected to molt. The cache-miss total is read from the cumulative
     # get_token_usage() totals (which SURVIVE restore_token_state), so a refresh
     # does NOT reset the remaining budget; a successful molt starts a new
