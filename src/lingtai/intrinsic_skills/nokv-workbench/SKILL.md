@@ -6,10 +6,10 @@ description: >
   asked to persist task inputs, scripts, outputs, logs, provenance, or run
   manifests through the `workbench_*` MCP tools instead of ordinary local
   file writes. Covers MCP registration, directory layout, append and edit
-  discipline, conditional reads, cross-workbench queries, commit discipline,
-  leased checkpoint snapshots with naming, renewal, discovery, point-in-time
-  history reads, and durable restore-to-fork recovery.
-version: 0.4.0
+  discipline, conditional reads, cross-workbench queries, content-identified
+  commits, leased checkpoint snapshots with annotations, renewal, retirement,
+  discovery, point-in-time history reads, and durable restore-to-fork recovery.
+version: 0.5.0
 tags: [nokv, mcp, workbench, artifacts, provenance, snapshots, checkpoints, leases, restore]
 related_files:
 - src/lingtai/intrinsic_skills/nokv-workbench/assets/PREFLIGHT.md
@@ -97,10 +97,12 @@ local LingTai workdir.
 ```
 
 2. Write inputs, scripts, outputs, and evidence with
-   `workbench_put_file`. Pass `replace=true` only when intentionally
-   replacing a prior artifact. When `section` is set, `path` is relative to
-   that section: use `section="outputs", path="spectrum.csv"`, not
-   `path="outputs/spectrum.csv"`.
+   `workbench_put_file`. It is not upsert: `replace=false` (the default) is
+   create-only and fails when the target exists; `replace=true` is
+   replace-only and fails when the target is missing. Pass `replace=true` only
+   when intentionally replacing an existing whole artifact. When `section` is
+   set, `path` is relative to that section: use `section="outputs",
+   path="spectrum.csv"`, not `path="outputs/spectrum.csv"`.
 
 3. Grow logs and journals with `workbench_append` — one file per stream,
    appended record by record:
@@ -126,6 +128,7 @@ local LingTai workdir.
 ```json
 {
   "id": "spedas-task-001",
+  "content_digest_uri": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "manifest": {
     "task": "spedas-task-001",
     "inputs": ["input/event.json", "input/dataset-ref.json"],
@@ -137,8 +140,14 @@ local LingTai workdir.
 }
 ```
 
-`workbench_commit` publishes `metadata/run_manifest.json`. In v0 this file
-is the completion marker. A workbench without it is not complete.
+`workbench_commit` publishes `metadata/run_manifest.json` with schema
+`nokv.workbench.run_manifest.v1`. The caller must compute the stable
+`content_digest_uri` before the call; it is not a phase label and must have the
+exact form `sha256:<64 lowercase hex>`. NoKV separately hashes the canonical
+manifest and derives `commit_identity`. Replaying the same identity is
+idempotent, while a different content identity conflicts even when the two
+manifests have the same phase. Use `replace=true` only for an intentional
+replacement. A workbench without the v1 commit file is not complete.
 
 6. Snapshot the committed workbench with `workbench_snapshot`, choosing a
    `ttl_days` that outlasts how long the handoff must stay restorable — see
@@ -157,14 +166,19 @@ unreachable a couple of days later because nobody extended it.
 along with a `name`:
 
 ```json
-{"id":"spedas-task-001","name":"final-v1","ttl_days":30}
+{"id":"spedas-task-001","name":"final-v1","ttl_days":30,"reason":"handoff","metadata":{"job_hash":"sha256:...","owner":"scout"}}
 ```
 
 The response adds `name`, `lease_expires_at` (the reap deadline), and an
-`expiry_warning` when the lease is short, alongside the usual `snapshot_id` and
-`read_version`. **A snapshot minted with the bare NoKV CLI outside this tool
-gets only the 1-hour default lease** — never hand a raw-CLI snapshot to a
-handoff.
+`expiry_warning` when the default TTL was used, alongside the usual
+`snapshot_id`, `read_version`, and optional `annotation`. `reason` and
+`metadata` are bounded registry annotations; they are not encoded into the
+64-character checkpoint
+name. If the snapshot pin is created but its registry annotation cannot be
+appended, the tool returns `SnapshotRegistryWritePartial` with the authoritative
+snapshot id and explicit compensation instead of reporting success. **A
+snapshot minted with the bare NoKV CLI outside this tool gets only the 1-hour
+default lease** — never hand a raw-CLI snapshot to a handoff.
 
 **Name your checkpoints.** `name` is a workbench-scoped alias you can renew,
 list, read, and initially select for restore. The alias is useful only while
@@ -189,8 +203,26 @@ the checkpoint by `name` or `snapshot_id`.
 Do not rely on a `snapshot_id` you remembered in a note — that note is exactly
 what goes stale. `workbench_snapshot_list {"id":"spedas-task-001"}` enumerates
 every checkpoint of the workbench with its `name`, `snapshot_id`,
-`lease_expires_at`, and lifecycle `state` (`alive`, `expired`, or `reaped`).
+`lease_expires_at`, and lifecycle `state` (`alive`, `expired`, `retired`, or
+`reaped`).
 Use it to see what is still restorable before you try to read history.
+
+### Retire a checkpoint explicitly
+
+Use `workbench_snapshot_retire` when the point-in-time view is no longer
+needed. Pass the workbench `id` and exactly one of `snapshot_id` or `name`; an
+optional bounded `reason` is recorded on the lifecycle event:
+
+```json
+{"id":"spedas-task-001","snapshot_id":417,"reason":"handoff accepted"}
+```
+
+The operation releases the retention pin. The first successful retirement
+returns `retired=true`; an exact retry after the pin is absent returns
+`retired=false` and does not fabricate deletion attribution. A checkpoint list
+reports `state="retired"` only after an acknowledged `retired=true` event;
+otherwise an absent pin remains `state="reaped"`. Root mismatches and active
+fork retention remain typed errors.
 
 ### Read history with at_snapshot
 
@@ -321,8 +353,10 @@ For the MVP, use a parent-created workbench and child-filled files:
   serialized by the server with automatic retry. Everything else stays
   disjoint: assign prefixes such as `outputs/agent-a/` and never let two
   agents `put_file` or `edit` the same path. Same-path `put_file` with
-  `replace=false` intentionally fails with an exists conflict; treat that as
-  a coordination bug, not a reason to bypass with `replace=true`.
+  `replace=false` intentionally fails with an exists conflict; `replace=true`
+  on a missing target intentionally fails with not-found. Neither mode is
+  upsert. Treat either race as a coordination bug, not a reason to flip the
+  flag and retry blindly.
 
 ## Read and search
 
@@ -338,10 +372,14 @@ Reading inside one workbench:
 - Files larger than the structured limit: use `format="bytes"` with
   `offset`/`limit` ranges (bytes come back base64-encoded), or
   `workbench_grep` to locate lines first.
-- Record shape depends on content type: `.json` files parse into JSON
-  records; `.jsonl`, `.log`, and other text files come back as `text_lines`
-  records whose `value.text` holds the raw line — parse it yourself when the
-  line is JSON.
+- Record shape depends on content type. `.json` files parse into JSON records;
+  YAML and UTF-8 `text/*` files use their corresponding structured modes.
+  NoKV does not natively parse `application/x-ndjson` and does not promise
+  NDJSON record pagination. A `.jsonl` suffix alone selects no parser: write it
+  with a `text/*` content type to receive raw `text_lines` whose `value.text`
+  you parse yourself, or use `format="bytes"` for
+  `application/x-ndjson`/other unsupported types. At-snapshot non-bytes reads
+  are a raw UTF-8 text-lines mode, not an NDJSON record parser.
 - `workbench_grep` searches file bodies for case-insensitive **literal**
   substrings (not regex). Pass several alternatives at once with
   `patterns: ["营养", "食谱", "recipe"]` (OR semantics); a single `pattern`
@@ -391,3 +429,5 @@ Before calling `workbench_commit`, verify:
 - `metadata/provenance.json` exists when provenance is required.
 - `logs/` contains the evidence streams (appended files are fine).
 - The manifest lists relative paths inside the workbench sections.
+- A stable caller-owned `content_digest_uri` has been computed from the
+  committed content before the call; a phase name alone is not an identity.

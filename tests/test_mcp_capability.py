@@ -177,7 +177,7 @@ def test_nokv_workbench_skill_documents_durable_restore_contract():
     skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
     preflight = (skill_root / "assets" / "PREFLIGHT.md").read_text(encoding="utf-8")
 
-    assert "version: 0.4.0" in skill
+    assert "version: 0.5.0" in skill
     assert "workbench_restore" in skill
     assert '"at_snapshot": 417' in skill
     assert "same numeric `snapshot_id`" in skill
@@ -188,7 +188,7 @@ def test_nokv_workbench_skill_documents_durable_restore_contract():
     assert "restored_from.snapshot_id" in skill
     assert 'Success means `state="complete"`' in skill
     assert "expired checkpoints cannot be renewed" in skill
-    assert "lifecycle `state` (`alive`, `expired`, or `reaped`)" in skill
+    assert "lifecycle `state` (`alive`, `expired`, `retired`, or" in skill
     assert "lifecycle `status`" not in skill
     assert "grace window" not in skill
 
@@ -217,7 +217,11 @@ def test_nokv_workbench_skill_documents_durable_restore_contract():
     ):
         assert code in skill
 
-    assert "complete 17-tool workbench surface" in preflight
+    assert "complete 18-tool restore-capable workbench surface" in preflight
+    assert "The base surface has 17 tools" in preflight
+    assert '"workbench_snapshot_retire"' in preflight
+    assert '"required": ["id", "manifest", "content_digest_uri"]' in preflight
+    assert '"metadata": {' in preflight
     assert '"required": ["id", "at_snapshot", "destination_id"]' in preflight
     assert '"additionalProperties": False' in preflight
     assert '"type": "integer", "minimum": 0' in preflight
@@ -228,6 +232,48 @@ def test_nokv_workbench_skill_documents_durable_restore_contract():
     assert "--profile full --require-all" in preflight
     assert "two real MCP" in preflight
     assert "hard-coded NoKV gate" in preflight
+
+
+def test_nokv_workbench_docs_pin_write_read_and_lifecycle_contracts():
+    skill_root = Path("src/lingtai/intrinsic_skills/nokv-workbench")
+    skill = " ".join(
+        (skill_root / "SKILL.md").read_text(encoding="utf-8").split()
+    )
+    preflight = " ".join(
+        (skill_root / "assets" / "PREFLIGHT.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+
+    assert (
+        "`replace=false` (the default) is create-only and fails when the "
+        "target exists; `replace=true` is replace-only and fails when the "
+        "target is missing"
+    ) in skill
+    assert "It is not upsert" in skill
+    assert "NoKV does not natively parse `application/x-ndjson`" in skill
+    assert "does not promise NDJSON record pagination" in skill
+    assert "A `.jsonl` suffix alone selects no parser" in skill
+    assert (
+        "write it with a `text/*` content type to receive raw `text_lines` "
+        "whose `value.text` you parse yourself"
+    ) in skill
+    assert "use `format=\"bytes\"` for `application/x-ndjson`" in skill
+
+    assert "`nokv.workbench.run_manifest.v1`" in skill
+    assert "`content_digest_uri` before the call" in skill
+    assert "different content identity conflicts even when" in skill
+    assert "`reason` and `metadata` are bounded registry annotations" in skill
+    assert "`SnapshotRegistryWritePartial`" in skill
+    assert "Use `workbench_snapshot_retire`" in skill
+    assert "returns `retired=false` and does not fabricate deletion attribution" in skill
+
+    assert "complete 18-tool restore-capable workbench surface" in preflight
+    assert "The base surface has 17 tools" in preflight
+    assert '"workbench_snapshot_retire"' in preflight
+    assert '"required": ["id", "manifest", "content_digest_uri"]' in preflight
+    assert '"reason": {' in preflight
+    assert '"metadata": {' in preflight
 
 
 def _run_nokv_preflight_contract(monkeypatch, tools):
@@ -262,7 +308,113 @@ def _strict_nokv_preflight_tools():
         "workbench_grep", "workbench_search", "workbench_aggregate",
         "workbench_catalog", "workbench_find", "workbench_commit",
         "workbench_snapshot", "workbench_snapshot_renew",
-        "workbench_snapshot_list", "workbench_restore",
+        "workbench_snapshot_retire", "workbench_snapshot_list",
+        "workbench_restore",
+    }
+    commit_schema = {
+        "type": "object",
+        "required": ["id", "manifest", "content_digest_uri"],
+        "properties": {
+            "id": {"type": "string"},
+            "manifest": {"type": "object"},
+            "content_digest_uri": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "description": (
+                    "Stable caller-computed digest of the committed content. "
+                    "It must be known before this call and exactly match "
+                    "sha256:<64 lowercase hex>."
+                ),
+            },
+            "replace": {
+                "type": "boolean",
+                "description": (
+                    "Explicitly replace a different or legacy commit. "
+                    "Concurrent identity changes still fail closed. Defaults false."
+                ),
+            },
+        },
+        "additionalProperties": False,
+    }
+    snapshot_schema = {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+            "id": {"type": "string"},
+            "name": {
+                "type": ["string", "null"],
+                "description": (
+                    "Checkpoint alias matching [A-Za-z0-9_-]{1,64}. Resolves "
+                    "to this snapshot in workbench_snapshot_renew, "
+                    "workbench_snapshot_list, and at_snapshot reads."
+                ),
+            },
+            "ttl_days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 90,
+                "description": (
+                    "Lease length in days. Defaults to 7; values above 90 are "
+                    "rejected."
+                ),
+            },
+            "reason": {
+                "type": ["string", "null"],
+                "minLength": 1,
+                "maxLength": 256,
+                "description": (
+                    "Optional human-readable checkpoint reason. At most 256 "
+                    "Unicode characters and 1024 UTF-8 bytes."
+                ),
+            },
+            "metadata": {
+                "type": ["object", "null"],
+                "maxProperties": 64,
+                "description": (
+                    "Optional JSON annotation object. Canonical encoded size "
+                    "is at most 4096 bytes, with at most 8 container levels "
+                    "and 64 object keys across the complete value."
+                ),
+            },
+        },
+        "additionalProperties": False,
+    }
+    retire_schema = {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+            "id": {"type": "string", "minLength": 1},
+            "snapshot_id": {
+                "type": "integer",
+                "minimum": 0,
+                "description": (
+                    "Snapshot id to retire. Provide exactly one of snapshot_id "
+                    "or name."
+                ),
+            },
+            "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": (
+                    "Checkpoint name to retire. Provide exactly one of "
+                    "snapshot_id or name."
+                ),
+            },
+            "reason": {
+                "type": ["string", "null"],
+                "minLength": 1,
+                "maxLength": 256,
+                "description": (
+                    "Optional human-readable retirement reason. At most 256 "
+                    "Unicode characters and 1024 UTF-8 bytes."
+                ),
+            },
+        },
+        "oneOf": [
+            {"required": ["snapshot_id"]},
+            {"required": ["name"]},
+        ],
+        "additionalProperties": False,
     }
     restore_schema = {
         "type": "object",
@@ -279,8 +431,14 @@ def _strict_nokv_preflight_tools():
         },
         "additionalProperties": False,
     }
+    schemas = {
+        "workbench_commit": commit_schema,
+        "workbench_snapshot": snapshot_schema,
+        "workbench_snapshot_retire": retire_schema,
+        "workbench_restore": restore_schema,
+    }
     return [
-        {"name": name, "schema": restore_schema if name == "workbench_restore" else {}}
+        {"name": name, "schema": schemas.get(name, {})}
         for name in sorted(names)
     ]
 
@@ -294,6 +452,9 @@ def test_nokv_preflight_executes_strict_raw_schema_gate(monkeypatch):
     [
         ("missing-surface-tool", "NoKV workbench tools missing"),
         ("capability-tool-absent", "NoKV workbench tools missing"),
+        ("commit-content-identity", "workbench_commit raw schema mismatch"),
+        ("snapshot-annotation", "workbench_snapshot raw schema mismatch"),
+        ("retire-target", "workbench_snapshot_retire raw schema mismatch"),
         ("nullable-snapshot", "workbench_restore raw schema mismatch"),
         ("additional-properties", "workbench_restore raw schema mismatch"),
     ],
@@ -304,6 +465,19 @@ def test_nokv_preflight_rejects_contract_drift(monkeypatch, mutation, message):
         tools = [tool for tool in tools if tool["name"] != "workbench_read"]
     elif mutation == "capability-tool-absent":
         tools = [tool for tool in tools if tool["name"] != "workbench_restore"]
+    elif mutation == "commit-content-identity":
+        commit = next(tool for tool in tools if tool["name"] == "workbench_commit")
+        commit["schema"]["required"].remove("content_digest_uri")
+    elif mutation == "snapshot-annotation":
+        snapshot = next(
+            tool for tool in tools if tool["name"] == "workbench_snapshot"
+        )
+        del snapshot["schema"]["properties"]["metadata"]
+    elif mutation == "retire-target":
+        retire = next(
+            tool for tool in tools if tool["name"] == "workbench_snapshot_retire"
+        )
+        del retire["schema"]["oneOf"]
     else:
         restore = next(tool for tool in tools if tool["name"] == "workbench_restore")
         if mutation == "nullable-snapshot":

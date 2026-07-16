@@ -2,7 +2,7 @@
 related_files:
 - src/lingtai/intrinsic_skills/nokv-workbench/SKILL.md
 maintenance: |
-  Developer-facing TUI deployment preflight referenced by nokv-workbench/SKILL.md; update it whenever the 17-tool workbench MCP surface, checkpoint/restore contract, capability gate, or runtime-version compatibility check changes.
+  Developer-facing TUI deployment preflight referenced by nokv-workbench/SKILL.md; update it whenever the 18-tool restore-capable workbench MCP surface, checkpoint/restore contract, capability gate, or runtime-version compatibility check changes.
 ---
 
 # TUI runtime preflight (developer-facing)
@@ -36,10 +36,13 @@ PY
 
 ## NoKV contract gate
 
-The v0.4 skill requires the complete 17-tool workbench surface, strict terminal
-checkpoint expiry, root-bound snapshot operations, and the metadata capability
-`restore_to_fork_v1`. Do not silently downgrade to an older NoKV build or
-replace restore with a client-side read/copy loop.
+The v0.5 skill requires the complete 18-tool restore-capable workbench surface,
+strict terminal checkpoint expiry, root-bound snapshot operations, stable v1
+commit identity, bounded snapshot annotations, explicit snapshot retirement,
+and the metadata capability `restore_to_fork_v1`. The base surface has 17 tools;
+`workbench_restore` is the capability-gated eighteenth tool. Do not silently
+downgrade to an older NoKV build or replace restore with a client-side read/copy
+loop.
 
 Run this gate against the exact NoKV command, metadata owner, object store, and
 resolved per-agent workbench root that the deployment will use. `NOKV_MCP_ARGS`
@@ -62,7 +65,83 @@ expected_tools = {
     "workbench_grep", "workbench_search", "workbench_aggregate",
     "workbench_catalog", "workbench_find", "workbench_commit",
     "workbench_snapshot", "workbench_snapshot_renew",
-    "workbench_snapshot_list", "workbench_restore",
+    "workbench_snapshot_retire", "workbench_snapshot_list",
+    "workbench_restore",
+}
+expected_commit_schema = {
+    "type": "object",
+    "required": ["id", "manifest", "content_digest_uri"],
+    "properties": {
+        "id": {"type": "string"},
+        "manifest": {"type": "object"},
+        "content_digest_uri": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "description": "Stable caller-computed digest of the committed content. It must be known before this call and exactly match sha256:<64 lowercase hex>.",
+        },
+        "replace": {
+            "type": "boolean",
+            "description": "Explicitly replace a different or legacy commit. Concurrent identity changes still fail closed. Defaults false.",
+        },
+    },
+    "additionalProperties": False,
+}
+expected_snapshot_schema = {
+    "type": "object",
+    "required": ["id"],
+    "properties": {
+        "id": {"type": "string"},
+        "name": {
+            "type": ["string", "null"],
+            "description": "Checkpoint alias matching [A-Za-z0-9_-]{1,64}. Resolves to this snapshot in workbench_snapshot_renew, workbench_snapshot_list, and at_snapshot reads.",
+        },
+        "ttl_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 90,
+            "description": "Lease length in days. Defaults to 7; values above 90 are rejected.",
+        },
+        "reason": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Optional human-readable checkpoint reason. At most 256 Unicode characters and 1024 UTF-8 bytes.",
+        },
+        "metadata": {
+            "type": ["object", "null"],
+            "maxProperties": 64,
+            "description": "Optional JSON annotation object. Canonical encoded size is at most 4096 bytes, with at most 8 container levels and 64 object keys across the complete value.",
+        },
+    },
+    "additionalProperties": False,
+}
+expected_retire_schema = {
+    "type": "object",
+    "required": ["id"],
+    "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "snapshot_id": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Snapshot id to retire. Provide exactly one of snapshot_id or name.",
+        },
+        "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Checkpoint name to retire. Provide exactly one of snapshot_id or name.",
+        },
+        "reason": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Optional human-readable retirement reason. At most 256 Unicode characters and 1024 UTF-8 bytes.",
+        },
+    },
+    "oneOf": [
+        {"required": ["snapshot_id"]},
+        {"required": ["name"]},
+    ],
+    "additionalProperties": False,
 }
 expected_restore_schema = {
     "type": "object",
@@ -86,16 +165,23 @@ try:
     missing = sorted(expected_tools - tools.keys())
     if missing:
         raise SystemExit(f"NoKV workbench tools missing: {missing}")
-    actual = tools["workbench_restore"].get("schema")
-    if actual != expected_restore_schema:
-        raise SystemExit(
-            "workbench_restore raw schema mismatch:\n"
-            + json.dumps(actual, indent=2, sort_keys=True)
-        )
+    expected_schemas = {
+        "workbench_commit": expected_commit_schema,
+        "workbench_snapshot": expected_snapshot_schema,
+        "workbench_snapshot_retire": expected_retire_schema,
+        "workbench_restore": expected_restore_schema,
+    }
+    for name, expected in expected_schemas.items():
+        actual = tools[name].get("schema")
+        if actual != expected:
+            raise SystemExit(
+                f"{name} raw schema mismatch:\n"
+                + json.dumps(actual, indent=2, sort_keys=True)
+            )
 finally:
     client.close()
 
-print("NoKV workbench v0.4 raw contract: OK")
+print("NoKV workbench v0.5 raw contract: OK")
 PY
 ```
 

@@ -251,7 +251,7 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "name: nokv-workbench" in nokv_body
         assert "workbench_find" in nokv_body
         assert "workbench_commit" in nokv_body
-        assert "version: 0.4.0" in nokv_body
+        assert "version: 0.5.0" in nokv_body
         assert "workbench_restore" in nokv_body
         assert "restore-to-fork" in nokv_body
         assert "same numeric `snapshot_id`" in nokv_body
@@ -261,6 +261,10 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "RestoreDestinationConflict" in nokv_body
         assert "CapabilityMismatch" in nokv_body
         assert "metadata/run_manifest.json" in nokv_body
+        assert "nokv.workbench.run_manifest.v1" in nokv_body
+        assert "content_digest_uri" in nokv_body
+        assert "workbench_snapshot_retire" in nokv_body
+        assert "application/x-ndjson" in nokv_body
         assert (
             nokv_md.parent / "assets" / "mcp_registry.example.jsonl"
         ).is_file()
