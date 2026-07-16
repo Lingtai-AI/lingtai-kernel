@@ -40,8 +40,8 @@ composes them.
 **Tool sub-packages:** `email/`, `system/`, `psyche/`, `soul/`, `notification/`
 (the five mandatory intrinsics); canonical `shell` (retained `bash/` implementation), `knowledge/`, `skills/`, `avatar/`,
 `daemon/`, `mcp/`, `read/`, `write/`, `edit/`, `glob/`, `grep/` (always-on
-floor); `vision/`, `web_search/` (opt-in). `avatar/` registers two tools
-(`avatar_spawn`, `avatar_rules`).
+floor); `vision/`, `web_search/` (opt-in). `avatar/` registers one tool,
+`avatar`, dispatched by `action` (`spawn`\|`rules`\|`manual`).
 
 ## Connections
 
