@@ -191,6 +191,174 @@ def test_lingtai_run_scoped_checkpoint_persists_and_projects(tmp_path, monkeypat
     assert "ghp_" not in json.dumps(parent_events)
 
 
+def test_checkpoint_complete_does_not_mark_run_done_or_bypass_finish(
+    tmp_path, monkeypatch
+):
+    from lingtai.kernel._fsutil import atomic_write_json
+    from lingtai.mcp_servers.daemon_common.server import (
+        DESCRIPTION as FINISH_DESCRIPTION,
+        FINISH_SCHEMA,
+        _validate_finish,
+    )
+    import lingtai.llm.service as service_mod
+
+    checkpoint_call = ToolCall(
+        name="checkpoint",
+        id="checkpoint-complete",
+        args={
+            "phase_id": "phase-one",
+            "phase_status": "complete",
+            "next_action": "Create auto-next-action.txt with content EXECUTED",
+        },
+    )
+    finish_call = ToolCall(
+        name="finish",
+        id="finish-done",
+        args={"status": "done", "summary": "phase two completed explicitly"},
+    )
+    observations = []
+    run_dir_holder = {}
+
+    class _InspectingSession(_FakeSession):
+        def send(self, message):
+            if isinstance(message, list):
+                run_dir = run_dir_holder["run_dir"]
+                state = DaemonRunDir.read_state_from_disk(run_dir.path)
+                events = [
+                    json.loads(line)
+                    for line in run_dir.events_path.read_text().splitlines()
+                ]
+                observations.append(
+                    {
+                        "state": state["state"],
+                        "finished_at": state["finished_at"],
+                        "phase_status": state.get("latest_checkpoint", {}).get(
+                            "phase_status"
+                        ),
+                        "completion_exists": (
+                            run_dir.path / "daemon_completion.json"
+                        ).exists(),
+                        "next_action_executed": (
+                            run_dir.path / "auto-next-action.txt"
+                        ).exists(),
+                        "daemon_done_seen": any(
+                            event.get("event") == "daemon_done" for event in events
+                        ),
+                    }
+                )
+            return super().send(message)
+
+    class _InspectingService(_FakeService):
+        def create_session(self, *, system_prompt, interface=None, **kwargs):
+            self.create_session_kwargs.append(
+                {"system_prompt": system_prompt, "interface": interface, **kwargs}
+            )
+            session = _InspectingSession(
+                self._session_responses.pop(0),
+                system_prompt=system_prompt,
+                interface=interface,
+            )
+            self.sessions.append(session)
+            return session
+
+    service = _InspectingService(
+        [
+            [
+                _resp(tool_calls=[checkpoint_call]),
+                _resp(tool_calls=[finish_call]),
+                _resp("done"),
+            ]
+        ]
+    )
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    em_id = "em-finish-authority"
+    run_dir = make_daemon_run_dir(
+        agent,
+        em_id=em_id,
+        call_parameters={"mcp": [{"name": "daemon_common", "transport": "stdio"}]},
+    )
+    run_dir_holder["run_dir"] = run_dir
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    finish_schema = FunctionSchema(
+        name="finish",
+        description=FINISH_DESCRIPTION,
+        parameters=FINISH_SCHEMA,
+    )
+
+    def finish(args):
+        monkeypatch.setenv("LINGTAI_DAEMON_RUN_ID", run_dir.run_id)
+        payload = _validate_finish(args)
+        atomic_write_json(
+            run_dir.path / "daemon_completion.json",
+            payload,
+            ensure_ascii=False,
+            indent=2,
+        )
+        return {
+            "status": "ok",
+            "completion_status": payload["status"],
+            "message": "daemon completion recorded",
+        }
+
+    result = mgr._run_emanation(
+        em_id,
+        run_dir,
+        [finish_schema],
+        {"finish": finish},
+        "complete two phases",
+        threading.Event(),
+    )
+
+    assert result == "done"
+    assert observations == [
+        {
+            "state": "running",
+            "finished_at": None,
+            "phase_status": "complete",
+            "completion_exists": False,
+            "next_action_executed": False,
+            "daemon_done_seen": False,
+        },
+        {
+            "state": "running",
+            "finished_at": None,
+            "phase_status": "complete",
+            "completion_exists": True,
+            "next_action_executed": False,
+            "daemon_done_seen": False,
+        },
+    ]
+    final_state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    assert final_state["state"] == "done"
+    assert final_state["finished_at"] is not None
+    assert not (run_dir.path / "auto-next-action.txt").exists()
+
+    events = [json.loads(line) for line in run_dir.events_path.read_text().splitlines()]
+    checkpoint_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.get("event") == "checkpoint"
+    )
+    finish_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.get("event") == "tool_call" and event.get("name") == "finish"
+    )
+    done_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.get("event") == "daemon_done"
+    )
+    assert checkpoint_index < finish_index < done_index
+
+
 def test_checkpoint_reserved_schema_replaces_external_collision(tmp_path, monkeypatch):
     external_calls = []
     external_schema = FunctionSchema(
@@ -485,7 +653,7 @@ def test_fresh_manager_reads_historical_checkpoint_from_disk(tmp_path):
 
 
 def test_checkpoint_schema_survives_compact_reconstruction(tmp_path, monkeypatch):
-    compact = ToolCall(name="compact", args={"_reason": "handoff"}, id="compact-1")
+    compact = ToolCall(name="compact", args={"action": "run", "_reason": "handoff"}, id="compact-1")
     checkpoint = ToolCall(
         name="checkpoint",
         args={"phase_id": "after-compact", "phase_status": "complete"},
