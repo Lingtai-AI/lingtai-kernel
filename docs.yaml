@@ -57,6 +57,7 @@ related_files:
   - dev-guide-skill/SKILL.md
   - tests/test_architecture_documents.py
   - ANATOMY.md
+  - GLOSSARY.md
 maintenance: |
   This file is the canonical, machine-readable authoring template and
   validation contract for every Markdown document in the repository — all

@@ -239,6 +239,7 @@ def _safe_mcp(mcp: list[dict] | None) -> list[dict]:
 def build_manifest(
     *, run_id: str, backend: str, parent_working_dir: str, run_dir: str,
     task: str, tools: list[str], max_turns: int, timeout_s: float,
+    prompt: str | None = None,
     group_id: str | None, mcp: list[dict] | None = None,
     context_token_limit: int | None = None, llm: dict | None = None,
     backend_argv: list[str] | None = None, language: str = "en",
@@ -253,6 +254,7 @@ def build_manifest(
         "parent_working_dir": parent_working_dir,
         "run_dir": run_dir,
         "task": task,
+        "prompt": prompt,
         "tools": list(tools or []),
         "mcp": _safe_mcp(mcp),
         "max_turns": max_turns,
@@ -297,6 +299,8 @@ def read_manifest(path: Path) -> dict:
     for field in ("run_id", "backend", "parent_working_dir", "run_dir", "task", "group_id"):
         if field != "group_id" and not isinstance(data[field], str):
             raise ValueError(f"manifest field {field!r} must be a string")
+    if "prompt" in data and data["prompt"] is not None and not isinstance(data["prompt"], str):
+        raise ValueError("manifest field 'prompt' must be a string or null")
     if not isinstance(data["tools"], list) or not all(isinstance(x, str) for x in data["tools"]):
         raise ValueError("manifest tools must be an array of strings")
     if isinstance(data["max_turns"], bool) or not isinstance(data["max_turns"], int) or data["max_turns"] < 1:

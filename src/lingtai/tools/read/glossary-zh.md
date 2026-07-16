@@ -11,6 +11,7 @@ related_files:
 - src/lingtai/tools/read/glossary-wen.md
 maintenance: |
   Simplified-Chinese (zh) glossary for the `read` tool package (lingtai.tools.read); body must stay non-empty — tests/test_tool_glossary.py::test_chinese_body_is_non_empty exercises exactly this file. Update in lockstep with glossary-en.md/glossary-wen.md whenever read's public tool schema changes.
+  Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---
 **术语对照**
 

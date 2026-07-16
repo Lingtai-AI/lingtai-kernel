@@ -48,7 +48,7 @@ and source — route to the current authority instead of memorizing snapshots.
 4. **Completion contract** — the built-in `daemon_common` MCP is added
    automatically and `finish(status="done")` is the only terminal-success
    signal. The maintainer-facing architecture invariants are
-   `src/lingtai/tools/daemon/DAEMON_CONTRACT.md`; the current tool schema
+   `src/lingtai/tools/daemon/CONTRACT.md`; the current tool schema
    description is the caller-facing authority.
 
 ## Example: explicit preset, tools, skills, and MCP

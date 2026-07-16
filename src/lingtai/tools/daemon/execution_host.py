@@ -418,6 +418,9 @@ class DetachedDaemonExecutionHost:
         runtime_task = self._capsule.get("task")
         if isinstance(runtime_task, str):
             self._manifest = dict(self._manifest, task=runtime_task)
+        runtime_prompt = self._capsule.get("prompt")
+        if runtime_prompt is None or isinstance(runtime_prompt, str):
+            self._manifest = dict(self._manifest, prompt=runtime_prompt)
         runtime_mcp = self._capsule.get("mcp")
         if isinstance(runtime_mcp, list):
             # The public manifest intentionally contains redacted env/header
@@ -466,6 +469,7 @@ class DetachedDaemonExecutionHost:
                     self._max_turns,
                     self._task_mcp_clients,
                     self._manifest.get("context_token_limit"),
+                    prompt=self._manifest.get("prompt"),
                 )
             finally:
                 self._task_mcp_clients = []

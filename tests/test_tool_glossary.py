@@ -25,6 +25,7 @@ from lingtai.kernel.base_agent.tools import _refresh_tool_inventory_section
 from lingtai.kernel.llm.base import WIRE_TOOL_DESCRIPTION
 from lingtai.kernel.tool_glossary import (
     GlossaryValidationError,
+    TOOL_GLOSSARY_BODY_POLICY,
     _cache,
     _warned,
     _lock,
@@ -106,13 +107,25 @@ _GOOD_FM = textwrap.dedent("""\
     language: zh
     related_files:
       - docs.yaml
-    maintenance: Test fixture glossary for parse_glossary unit tests.
+    maintenance: |
+      Test fixture glossary for parse_glossary unit tests.
+      Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
     ---
     body text""")
 
 
 class TestStrictGrammar:
     def test_valid_frontmatter_returns_body(self):
+        body = parse_glossary(_GOOD_FM, tool_package="lingtai.tools.test", language="zh")
+        assert body.strip() == "body text"
+
+    def test_maintenance_policy_sentence_required(self):
+        text = _GOOD_FM.replace(f"  {TOOL_GLOSSARY_BODY_POLICY}\n", "")
+        with pytest.raises(GlossaryValidationError, match="maintenance.*GLOSSARY.md"):
+            parse_glossary(text, tool_package="lingtai.tools.test", language="zh")
+
+    def test_maintenance_policy_sentence_accepts_canonical_constant(self):
+        assert TOOL_GLOSSARY_BODY_POLICY in _GOOD_FM
         body = parse_glossary(_GOOD_FM, tool_package="lingtai.tools.test", language="zh")
         assert body.strip() == "body text"
 
@@ -598,6 +611,33 @@ class TestSchemaInvariance:
 
 
 class TestSourceValidation:
+    def test_root_glossary_owns_policy_and_templates(self):
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parents[1]
+        root_glossary = repo_root / "GLOSSARY.md"
+        text = root_glossary.read_text(encoding="utf-8")
+        compact_text = " ".join(text.split())
+        assert root_glossary.is_file()
+        assert TOOL_GLOSSARY_BODY_POLICY in text
+        for phrase in (
+            "Glossary of Glossaries",
+            "not human UI",
+            "not schema",
+            "not a manual",
+            "not a Contract",
+            "not Anatomy",
+            "glossary-en.md",
+            "glossary-zh.md",
+            "glossary-wen.md",
+            "English",
+            "Simplified Chinese",
+            "Classical Chinese",
+            "Review checklist",
+            "next glossary-governance PR",
+        ):
+            assert phrase in compact_text
+
     def test_validator_passes(self):
         """The validator module should pass on the current source tree."""
         import subprocess
@@ -725,14 +765,19 @@ class TestDocsGovernanceFields:
 
     def test_missing_maintenance_rejected(self):
         text = _GOOD_FM.replace(
-            "maintenance: Test fixture glossary for parse_glossary unit tests.\n", ""
+            "maintenance: |\n"
+            "  Test fixture glossary for parse_glossary unit tests.\n"
+            f"  {TOOL_GLOSSARY_BODY_POLICY}\n",
+            "",
         )
         with pytest.raises(GlossaryValidationError, match="missing"):
             parse_glossary(text, tool_package="lingtai.tools.test", language="zh")
 
     def test_empty_maintenance_rejected(self):
         text = _GOOD_FM.replace(
-            "maintenance: Test fixture glossary for parse_glossary unit tests.\n",
+            "maintenance: |\n"
+            "  Test fixture glossary for parse_glossary unit tests.\n"
+            f"  {TOOL_GLOSSARY_BODY_POLICY}\n",
             "maintenance: \"\"\n",
         )
         with pytest.raises(GlossaryValidationError, match="maintenance"):
@@ -740,8 +785,12 @@ class TestDocsGovernanceFields:
 
     def test_extra_field_beyond_six_still_rejected(self):
         text = _GOOD_FM.replace(
-            "maintenance: Test fixture glossary for parse_glossary unit tests.\n",
-            "maintenance: Test fixture glossary for parse_glossary unit tests.\n"
+            "maintenance: |\n"
+            "  Test fixture glossary for parse_glossary unit tests.\n"
+            f"  {TOOL_GLOSSARY_BODY_POLICY}\n",
+            "maintenance: |\n"
+            "  Test fixture glossary for parse_glossary unit tests.\n"
+            f"  {TOOL_GLOSSARY_BODY_POLICY}\n"
             "extra: field\n",
         )
         with pytest.raises(GlossaryValidationError, match="unknown"):

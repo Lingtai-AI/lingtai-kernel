@@ -10,7 +10,7 @@ version: 1.13.0
 last_changed_at: "2026-07-09T19:24:35-07:00"
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
-- src/lingtai/tools/daemon/DAEMON_CONTRACT.md
+- src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/lingtai/SKILL.md
 maintenance: |
   Tracks the daemon CLI backends topic it documents; update when that integration changes.
@@ -132,7 +132,7 @@ catalog. Only backends with proven demand get a page.
 folders. By default it scans `daemons/*/daemon.json` and returns completed,
 failed, cancelled, timed-out, and running entries with `run_id`, `group_id`,
 `status`, `backend`, task preview, visible call parameters (`task`, `tools`,
-`skills`, redacted `mcp`, system-prompt preview when recorded), result preview,
+`prompt`, `skills`, redacted `mcp`, system-prompt preview when recorded), result preview,
 and filesystem paths. If a historical run folder has no `daemon.json`, has
 invalid JSON, or has a mismatched `data_version`, `list` lazily writes a
 best-effort replacement using the folder name, `.prompt`, `result.txt`,
@@ -208,20 +208,20 @@ resolving.
 | `kimicode` / `kimi` | `KIMI_CODE_HOME=<run>/kimi-code-home kimi --prompt <prompt> --output-format text` (same per-run env: telemetry/auto-update off, `KIMI_MODEL_API_KEY` mapped from `KIMICODE_API_KEY`/`KIMI_API_KEY`/`MOONSHOT_API_KEY` when unset, provider/base-url/model/context defaults only when absent) | Not supported yet; `ask` returns an explicit unsupported-backend error | MoonshotAI Kimi Code CLI backend (official `MoonshotAI/kimi-code`, binary `kimi`, source-verified v0.22.3 for MCP config). `kimi` canonicalizes to `kimicode`. LingTai owns `--prompt`/`--output-format` and forbids `--yolo` (the CLI refuses `--prompt` + `--yolo`); session/`--continue` flags are reserved because resume is not wired. Stable session-id output was not verified, so `ask`/resume is intentionally unsupported. The daemon writes `<run>/kimi-code-home/mcp.json` with `daemon_common` plus parent stdio and HTTP MCP registrations; secret env/header values stay out of prompts/logs and live only in the native per-run config. |
 | `cursor` | `agent -p <prompt>` | `agent -p --resume <cursor_session_id> ...` via `ask` (async) | Cursor Agent CLI backend. Per-run MCP injection is not wired yet; local `agent --help` could not be inspected in this environment because the CLI attempted macOS keychain access and failed before printing help. |
 
-**Per-task system prompt.** Every task item may include `system_prompt`. Use it
-as the parent agent's one-run behavior contract: the daemon's role, constraints,
-tool-use policy, collaboration boundaries, safety posture, and interpretation
-rules. Keep `task` focused on the concrete objective and deliverable; put the
-explanation of *how to behave while doing it* in `system_prompt`. When the
-daemon needs a workflow, pass `skills: [...]` as skill directories or direct
-`SKILL.md` paths; the daemon runtime renders them into a compact YAML skill list
-in the one-run prompt. Omit `system_prompt` or leave it blank for the default
-daemon persona. For the built-in `lingtai` backend
-it is appended to the daemon's system prompt as a bounded oneshot parent
-instruction; it cannot override lifecycle limits, tool schemas, or the
-ToolExecutor/ToolCallGuard execution gate. For CLI backends, the same text is
-also embedded at the top of the task prompt and persisted in the daemon `.prompt`
-file for forensics.
+**Per-task mapping.** `task` is the complete parent-controlled system
+instruction for LingTai and the exact CLI prompt for external backends. LingTai
+alone accepts optional `prompt` as its first ordinary user message (blank or
+omitted defaults to `Begin the assigned daemon task.`). External CLI tasks that
+contain `prompt` are rejected before run-dir creation. The removed
+`system_prompt` field has no alias: migrate its complete behavior contract into
+`task`. When the daemon needs a workflow, pass `skills: [...]` as skill
+directories or direct `SKILL.md` paths; the runtime renders a compact YAML
+catalog in the one-run context. Omit `prompt` for the exact default.
+For the built-in `lingtai` backend the complete `task` is compiled into the
+daemon system prompt beside selected skills/MCP/tool guidance; it cannot
+override lifecycle limits, tool schemas, or the ToolExecutor/ToolCallGuard
+execution gate. For CLI backends, `task` remains the exact CLI prompt and is
+persisted in the daemon `.prompt` file for forensics.
 
 **LingTai backend tool surface.** The built-in `lingtai` backend uses preset
 resolution plus daemon tool curation. Parent MCP tools are not auto-inherited:
@@ -244,7 +244,7 @@ when explicitly requested in the task `tools` list, so result-only/no-tool
 emanations cannot communicate in the local agent network unless the parent opted
 in. Other intrinsics remain unavailable to keep daemon lightweight and
 non-recursive. As with file/shell/web/MCP tools, technical availability is not a
-policy by itself: the parent should use `system_prompt` to say when and how the
+policy by itself: the parent should use `task` to say when and how the
 daemon may use any available tool, including who it may contact and what context
 it may share if email is involved.
 

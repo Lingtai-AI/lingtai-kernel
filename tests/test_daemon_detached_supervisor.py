@@ -28,7 +28,12 @@ import time
 from pathlib import Path
 
 from lingtai.tools.daemon.run_dir import DaemonRunDir
-from lingtai.kernel.daemon_supervisor.manifest import build_manifest, write_manifest, manifest_path_for
+from lingtai.kernel.daemon_supervisor.manifest import (
+    build_manifest,
+    write_manifest,
+    manifest_path_for,
+    read_manifest,
+)
 from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
 from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
 from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
@@ -729,6 +734,28 @@ def test_manager_capsule_sentinel_redacts_public_mcp_and_cli_values(tmp_path):
     assert manifest["backend_argv"] == ["--api-key=<redacted>", "--safe-flag"]
     assert manifest["mcp"][0]["env"]["MCP_TOKEN"] == "<redacted>"
     assert manifest["mcp"][1]["headers"]["Authorization"] == "<redacted>"
+
+
+def test_manifest_prompt_must_be_string_or_null(tmp_path):
+    """Detached manifests accept prompt only as string-or-null runtime input."""
+    run_dir = _make_run_dir(tmp_path, task="manifest prompt", timeout_s=30)
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="manifest prompt", prompt="first user", tools=[],
+        max_turns=1, timeout_s=30, group_id=None,
+    )
+    write_manifest(run_dir.path, manifest)
+    assert read_manifest(manifest_path_for(run_dir.path))["prompt"] == "first user"
+
+    manifest["prompt"] = None
+    write_manifest(run_dir.path, manifest)
+    assert read_manifest(manifest_path_for(run_dir.path))["prompt"] is None
+
+    manifest["prompt"] = {"bad": "shape"}
+    write_manifest(run_dir.path, manifest)
+    with pytest.raises(ValueError, match="prompt.*string or null"):
+        read_manifest(manifest_path_for(run_dir.path))
 
 
 def test_capsule_is_bounded_before_spawn_and_env_is_secret_scrubbed(tmp_path, monkeypatch):

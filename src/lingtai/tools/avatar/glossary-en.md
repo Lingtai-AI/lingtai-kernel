@@ -11,4 +11,5 @@ related_files:
 - src/lingtai/tools/avatar/glossary-wen.md
 maintenance: |
   English glossary for the `avatar` tool package (lingtai.tools.avatar); the English body must stay empty per tool_glossary.py's language contract — update only the identity/schema fields here, and update the zh/wen bodies in lockstep when avatar's public tool schema (function names, JSON property names, action/enum values) changes.
+  Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---

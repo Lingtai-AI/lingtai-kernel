@@ -10,7 +10,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from lingtai.kernel.config import AgentConfig
-from lingtai.kernel.llm.base import FunctionSchema, ToolCall
+from lingtai.kernel.llm.base import FunctionSchema, LLMResponse, ToolCall
+from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock, ToolResultBlock
 from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
 
 from tests._daemon_helpers import make_daemon_agent as _make_agent
@@ -66,6 +67,69 @@ def _enable_detached_fake_llm(agent, monkeypatch, *, scenario: str | None = None
     parts = [tests_dir, src_dir]
     parts.extend(p for p in existing.split(os.pathsep) if p)
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(dict.fromkeys(parts)))
+
+
+class _CanonicalFakeSession:
+    def __init__(self, responses, *, system_prompt: str, interface: ChatInterface | None = None):
+        self.interface = interface or ChatInterface()
+        if interface is None:
+            self.interface.add_system(system_prompt)
+        self._responses = list(responses)
+        self.sent_messages = []
+        self.request_snapshots = []
+
+    def send(self, message):
+        self.sent_messages.append(message)
+        if isinstance(message, str):
+            self.interface.add_user_message(message)
+        elif isinstance(message, list):
+            self.interface.add_tool_results(message)
+        else:
+            raise TypeError(f"unsupported fake message: {type(message)!r}")
+        self.request_snapshots.append(self.interface.to_dict())
+        if not self._responses:
+            raise AssertionError("fake session has no queued response")
+        response = self._responses.pop(0)
+        blocks = []
+        if response.text:
+            blocks.append(TextBlock(response.text))
+        for tc in response.tool_calls or []:
+            blocks.append(ToolCallBlock(id=tc.id or "", name=tc.name, args=dict(tc.args or {})))
+        if blocks:
+            self.interface.add_assistant_message(blocks)
+        return response
+
+
+class _CanonicalFakeService:
+    provider = "mock"
+    model = "mock-model"
+    api_key = "fake"
+    _base_url = None
+    _provider_defaults = {}
+
+    def __init__(self, session_responses):
+        self._session_responses = [list(responses) for responses in session_responses]
+        self.sessions = []
+        self.make_tool_result_calls = []
+
+    def create_session(self, *, system_prompt, interface=None, **_kwargs):
+        if not self._session_responses:
+            raise AssertionError("fake service has no queued session")
+        session = _CanonicalFakeSession(
+            self._session_responses.pop(0),
+            system_prompt=system_prompt,
+            interface=interface,
+        )
+        self.sessions.append(session)
+        return session
+
+    def make_tool_result(self, tool_name, result, *, tool_call_id=None, provider=None):
+        self.make_tool_result_calls.append((tool_name, result, tool_call_id, provider))
+        return ToolResultBlock(id=tool_call_id or "", name=tool_name, content=result)
+
+
+def _resp(text="", tool_calls=None):
+    return LLMResponse(text=text, tool_calls=list(tool_calls or []), usage=None)
 
 
 def _write_daemon_json(tmp_path, run_id, **overrides):
@@ -384,13 +448,14 @@ def test_connect_task_mcp_registrations_builds_surface_and_closes(tmp_path, monk
     assert created[0].closed
 
 
-def test_daemon_schema_accepts_task_system_prompt_and_skills():
-    """Task items expose current oneshot system_prompt, skills, and MCP registrations."""
+def test_daemon_schema_exposes_prompt_and_removes_system_prompt():
+    """Task items expose LingTai first-user prompt and reject the old field."""
     from lingtai.tools.daemon import get_schema
 
     task_props = get_schema("en")["properties"]["tasks"]["items"]["properties"]
-    assert "system_prompt" in task_props
-    assert task_props["system_prompt"]["type"] == "string"
+    assert "prompt" in task_props
+    assert task_props["prompt"]["type"] == "string"
+    assert "system_prompt" not in task_props
     assert "skills" in task_props
     assert task_props["skills"]["type"] == "array"
     assert task_props["skills"]["items"]["type"] == "string"
@@ -448,13 +513,36 @@ def test_build_tool_surface_requires_explicit_email_tool(tmp_path):
     schemas, dispatch = mgr._build_tool_surface([])
 
     names = {s.name for s in schemas}
+    assert "compact" in names
     assert "email" not in names
     assert "email" not in dispatch
 
     schemas, dispatch = mgr._build_tool_surface(["email"])
     names = {s.name for s in schemas}
+    assert "compact" in names
     assert "email" in names
     assert "email" in dispatch
+
+
+def test_compact_is_auto_present_on_lingtai_surfaces(tmp_path):
+    """LingTai daemon self-compact is automatic and idempotent."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    preset_schema = FunctionSchema(
+        name="bash",
+        description="Preset-provided bash",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    default_schemas, _ = mgr._build_tool_surface([])
+    explicit_schemas, _ = mgr._build_tool_surface(["compact"])
+    preset_schemas, _ = mgr._build_tool_surface(
+        [], preset_surface=({"bash": preset_schema}, {"bash": lambda args: {}})
+    )
+
+    assert [s.name for s in default_schemas].count("compact") == 1
+    assert [s.name for s in explicit_schemas].count("compact") == 1
+    assert [s.name for s in preset_schemas].count("compact") == 1
 
 
 def test_build_tool_surface_preset_requires_explicit_email_tool(tmp_path):
@@ -482,6 +570,7 @@ def test_build_tool_surface_preset_requires_explicit_email_tool(tmp_path):
     # receive communication tools.
     schemas, dispatch = mgr._build_tool_surface([], preset_surface=preset_surface)
     names = {s.name for s in schemas}
+    assert "compact" in names
     assert "email" not in names
     assert "email" not in dispatch
 
@@ -490,6 +579,7 @@ def test_build_tool_surface_preset_requires_explicit_email_tool(tmp_path):
         ["email"], preset_surface=preset_surface
     )
     names = {s.name for s in schemas}
+    assert "compact" in names
     assert "email" in names
     assert "email" in dispatch
 
@@ -513,13 +603,74 @@ def test_build_emanation_prompt_includes_oneshot_system_prompt(tmp_path):
 
 
 
-def test_task_system_prompt_allows_blank_string(tmp_path):
-    """Blank system_prompt is accepted and treated as no extra prompt."""
+def test_task_prompt_defaults_and_preserves_nonblank_whitespace(tmp_path):
+    """Blank prompt defaults; nonblank prompt is preserved byte-for-byte."""
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
 
-    assert mgr._task_system_prompt({"task": "x", "tools": [], "system_prompt": ""}) is None
-    assert mgr._task_system_prompt({"task": "x", "tools": [], "system_prompt": "   "}) is None
+    assert mgr._task_first_prompt({"task": "x", "tools": []}) == "Begin the assigned daemon task."
+    assert mgr._task_first_prompt({"task": "x", "tools": [], "prompt": ""}) == "Begin the assigned daemon task."
+    assert mgr._task_first_prompt({"task": "x", "tools": [], "prompt": "   "}) == "Begin the assigned daemon task."
+    assert mgr._task_first_prompt({"task": "x", "tools": [], "prompt": "  start here  "}) == "  start here  "
+
+
+def test_obsolete_system_prompt_fails_before_run_dir(tmp_path):
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle({
+        "action": "emanate",
+        "tasks": [{"task": "x", "tools": [], "system_prompt": "old"}],
+    })
+
+    assert result["status"] == "error"
+    assert "system_prompt is obsolete" in result["message"]
+    assert "complete daemon system instruction" in result["message"]
+    assert not (agent._working_dir / "daemons").exists()
+
+
+def test_external_cli_prompt_fails_before_run_dir(tmp_path):
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "codex",
+        "tasks": [{"task": "x", "tools": [], "prompt": "first user"}],
+    })
+
+    assert result["status"] == "error"
+    assert "prompt is supported only for backend='lingtai'" in result["message"]
+    assert not (agent._working_dir / "daemons").exists()
+
+
+def test_handle_emanate_maps_prompt_default_and_preserves_whitespace_before_detach(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    captured = []
+
+    def fake_spawn(run_dir, **kwargs):
+        captured.append((run_dir, kwargs))
+        run_dir.mark_done("ok")
+
+    monkeypatch.setattr(mgr, "_spawn_detached_lingtai_run", fake_spawn)
+    result = mgr.handle({
+        "action": "emanate",
+        "tasks": [
+            {"task": "system task one", "tools": [], "prompt": "  first user  "},
+            {"task": "system task two", "tools": [], "prompt": "   "},
+        ],
+    })
+
+    assert result["status"] == "dispatched"
+    assert [row[1]["prompt"] for row in captured] == [
+        "  first user  ",
+        "Begin the assigned daemon task.",
+    ]
+    prompts = [row[0].prompt_path.read_text(encoding="utf-8") for row in captured]
+    assert "system task one" in prompts[0]
+    assert "  first user  " not in prompts[0]
+    assert "system task two" in prompts[1]
 
 
 def test_task_skills_render_compact_catalog_from_dir_and_file(tmp_path):
@@ -1019,6 +1170,196 @@ def test_run_emanation_dispatches_tools(tmp_path, monkeypatch):
                                 "read a file", cancel)
     assert "Read the file" in result
     assert mock_handler.called
+
+
+def test_run_emanation_uses_prompt_as_first_user_without_task_duplication(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["daemon"])
+    service = _CanonicalFakeService([[ _resp("done") ]])
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    mgr = agent.get_capability("daemon")
+    em_id = "em-test"
+    run_dir = _make_run_dir(agent, em_id=em_id, task="system objective")
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(
+        em_id, run_dir, *mgr._build_tool_surface([]),
+        "system objective", threading.Event(), prompt="  custom first user  ",
+    )
+
+    assert result == "done"
+    assert service.sessions[0].sent_messages[0] == "  custom first user  "
+    first_request = service.sessions[0].request_snapshots[0]
+    user_entries = [e for e in first_request if e["role"] == "user"]
+    assert [e["content"][0]["text"] for e in user_entries] == ["  custom first user  "]
+    assert all("system objective" not in e["content"][0]["text"] for e in user_entries)
+
+
+def test_compact_blank_reason_does_not_reset_context(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["daemon"])
+    compact_call = ToolCall(name="compact", args={"_reason": "   "}, id="compact-blank")
+    service = _CanonicalFakeService([[
+        _resp(tool_calls=[compact_call]),
+        _resp("done after blank"),
+    ]])
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    mgr = agent.get_capability("daemon")
+    em_id = "em-test"
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(
+        em_id, run_dir, *mgr._build_tool_surface([]),
+        "task", threading.Event(),
+    )
+
+    assert result == "done after blank"
+    assert len(service.sessions) == 1
+    second_request = service.sessions[0].request_snapshots[1]
+    assert any(e["role"] == "user" and e["content"][0]["type"] == "text" for e in second_request)
+    result_entry = second_request[-1]
+    assert result_entry["role"] == "user"
+    result_content = result_entry["content"][0]["content"]
+    assert result_content["status"] == "error"
+    assert "context was not reset" in result_content["message"]
+
+
+def test_compact_success_prunes_to_system_call_and_result(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["daemon"])
+    compact_call = ToolCall(name="compact", args={"_reason": "handoff: continue"}, id="compact-1")
+    service = _CanonicalFakeService([
+        [_resp(tool_calls=[compact_call])],
+        [_resp("done after compact")],
+    ])
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    mgr = agent.get_capability("daemon")
+    em_id = "em-test"
+    run_dir = _make_run_dir(agent, em_id=em_id, task="task")
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(
+        em_id, run_dir, *mgr._build_tool_surface([]),
+        "task", threading.Event(),
+    )
+
+    assert result == "done after compact"
+    assert len(service.sessions) == 2
+    retained_request = service.sessions[1].request_snapshots[0]
+    assert [e["role"] for e in retained_request] == ["system", "assistant", "user"]
+    assert retained_request[1]["content"][0] == {
+        "type": "tool_call",
+        "id": "compact-1",
+        "name": "compact",
+        "args": {"_reason": "handoff: continue"},
+    }
+    result_block = retained_request[2]["content"][0]
+    assert result_block["type"] == "tool_result"
+    assert result_block["id"] == "compact-1"
+    assert result_block["name"] == "compact"
+    payload = result_block["content"]
+    assert payload["status"] == "success"
+    assert "surviving compact call _reason" in payload["instruction"]
+    assert "handoff" not in payload
+    assert payload["recovery"] == {
+        "run_directory": str(run_dir.path),
+        "state": str(run_dir.daemon_json_path),
+        "chat_history": str(run_dir.chat_path),
+        "event_log": str(run_dir.events_path),
+    }
+    assert not any(
+        e["role"] == "user"
+        and e["content"][0].get("type") == "text"
+        for e in retained_request
+    )
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    assert state["run_id"] == run_dir.run_id
+    assert state["state"] == "done"
+
+
+def test_compact_is_repeatable_same_run(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["daemon"])
+    first = ToolCall(name="compact", args={"_reason": "first handoff"}, id="compact-1")
+    second = ToolCall(name="compact", args={"_reason": "second handoff"}, id="compact-2")
+    service = _CanonicalFakeService([
+        [_resp(tool_calls=[first])],
+        [_resp(tool_calls=[second])],
+        [_resp("done after repeat")],
+    ])
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    mgr = agent.get_capability("daemon")
+    em_id = "em-test"
+    run_dir = _make_run_dir(agent, em_id=em_id, task="task")
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(
+        em_id, run_dir, *mgr._build_tool_surface([]),
+        "task", threading.Event(),
+    )
+
+    assert result == "done after repeat"
+    assert len(service.sessions) == 3
+    second_retained = service.sessions[2].request_snapshots[0]
+    assert [e["role"] for e in second_retained] == ["system", "assistant", "user"]
+    assert second_retained[1]["content"][0]["id"] == "compact-2"
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["run_id"] == run_dir.run_id
+
+
+def test_compact_mixed_batch_does_not_dispatch_siblings_and_pairs_all_calls(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    sibling_handler = MagicMock(return_value={"content": "should not run"})
+    agent._tool_handlers["read"] = sibling_handler
+    calls = [
+        ToolCall(name="compact", args={"_reason": "handoff"}, id="compact-mixed"),
+        ToolCall(name="read", args={"file_path": "/tmp/x"}, id="read-mixed"),
+    ]
+    service = _CanonicalFakeService([[
+        _resp(tool_calls=calls),
+        _resp("done after mixed error"),
+    ]])
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    mgr = agent.get_capability("daemon")
+    em_id = "em-test"
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(
+        em_id, run_dir, *mgr._build_tool_surface(["file"]),
+        "task", threading.Event(),
+    )
+
+    assert result == "done after mixed error"
+    sibling_handler.assert_not_called()
+    assert len(service.sessions) == 1
+    tool_result_entry = service.sessions[0].request_snapshots[1][-1]
+    assert tool_result_entry["role"] == "user"
+    paired = tool_result_entry["content"]
+    assert [block["id"] for block in paired] == ["compact-mixed", "read-mixed"]
+    assert all(block["content"]["status"] == "error" for block in paired)
+    assert "no tools in this batch were executed" in paired[0]["content"]["message"]
 
 
 def test_run_emanation_uses_tool_call_guard_before_dispatch(tmp_path, monkeypatch):
@@ -2205,7 +2546,12 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
     chat_lines = (folder / "history" / "chat_history.jsonl").read_text().splitlines()
     assert len(chat_lines) >= 4  # task + assistant1 + tool_results + assistant2
     chat_entries = [json.loads(line) for line in chat_lines]
-    assert any(e["role"] == "user" and e["kind"] == "task" for e in chat_entries)
+    assert any(
+        e["role"] == "user"
+        and e["kind"] == "kickoff"
+        and e["text"] == "Begin the assigned daemon task."
+        for e in chat_entries
+    )
     assert any(e["role"] == "assistant" and "Found 3 TODOs" in e["text"] for e in chat_entries)
 
     # events.jsonl has daemon_start, tool_call, tool_result, daemon_done
