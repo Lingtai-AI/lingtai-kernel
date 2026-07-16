@@ -17,6 +17,15 @@ maintenance: |
 This is the provider-neutral fallback for `vision`. It contains guidance only;
 it does not discover, install, start, or invoke a backend.
 
+## OpenRouter and custom try first
+
+For OpenRouter and custom OpenAI-compatible presets, `vision(action="analyze")`
+first tries the current endpoint, model, and credential. It does not reject the
+route merely because downstream image support cannot be known in advance. If
+the real request fails, the sanitized vision tool result reports the failure
+type and points here for explicit alternatives; it does not expose exception
+contents or silently switch provider, model, credential, or MCP.
+
 ## Direct route
 
 When `vision` reports a direct setup or request failure, inspect the identity

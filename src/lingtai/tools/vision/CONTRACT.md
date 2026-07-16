@@ -29,8 +29,12 @@ requires it and resolves relative paths against the agent working directory.
 `claude_code`. The local mlx-vlm pseudo-provider remains available only through
 explicit `add_capability(..., provider="local")` opt-in and is intentionally not
 advertised to wizards/check-caps. Claude Code is manual-only; Codex aliases use
-native Codex Responses; MiniMax uses the Anthropic route; compatible aliases use
-the current OpenAI/Anthropic identity.
+native Codex Responses; MiniMax uses the Anthropic route. OpenRouter and custom
+deliberately try the current OpenAI-compatible model/endpoint/credential without
+preflighting image support; other compatible aliases use the current
+OpenAI/Anthropic identity. A real request failure is returned as a sanitized
+vision tool error that points to `vision(action="manual")` for explicit
+alternatives, without silently switching model/provider or invoking MCP.
 
 ## Current identity and wires
 

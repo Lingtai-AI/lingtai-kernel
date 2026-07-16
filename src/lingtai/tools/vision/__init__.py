@@ -70,7 +70,12 @@ PROVIDERS = {
 }
 
 def get_description(lang: str = "en") -> str:
-    return "Analyze an image with the active preset when directly supported. Use action='manual' for read-only guidance when unsupported or after a direct failure. No provider or MCP fallback is automatic."
+    return (
+        "Analyze an image with the active preset. OpenRouter/custom first try the "
+        "current OpenAI-compatible route; a real request failure returns a "
+        "sanitized error and points to action='manual' for read-only alternatives. "
+        "No provider, model, credential, or MCP fallback is automatic."
+    )
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -87,7 +92,12 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "string",
                 "enum": ["analyze", "manual"],
                 "default": "analyze",
-                "description": "manual returns bundled read-only vision guidance; analyze performs the direct request.",
+                "description": (
+                    "analyze performs the direct request; OpenRouter/custom try the "
+                    "current OpenAI-compatible route even when downstream image "
+                    "support is unknown. On real failure the sanitized tool result "
+                    "points to manual, which returns bundled read-only alternatives."
+                ),
             },
         },
         "required": [],
