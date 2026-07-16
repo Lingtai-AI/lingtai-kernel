@@ -51,7 +51,7 @@ Single file. No internal state — `VisionManager` instances hold agent + servic
 
 ## Notes
 
-- OpenAI-compat fallback: if the agent's provider isn't in `PROVIDERS` but the main LLM's `_provider_defaults["api_compat"] == "openai"`, vision routes through `OpenAIVisionService` using the LLM's own `base_url`/`model`/`api_key`. Lets `custom`/`openrouter`/`deepseek`/`kimi` users opt into vision via `vision: {"provider": "inherit"}` in their preset. Succeeds only if the relay+model actually support OpenAI-style `image_url` content blocks; otherwise the runtime call surfaces the relay's error.
+- OpenAI-compat fallback: if the agent's provider isn't in `PROVIDERS` but the main LLM's provider-keyed `_provider_defaults[provider.lower()]["api_compat"] == "openai"`, vision routes through `OpenAIVisionService` using the LLM's own `base_url`/`model`/`api_key`. Lets `custom`/`openrouter`/`deepseek`/`kimi` users opt into vision via `vision: {"provider": "inherit"}` in their preset. Succeeds only if the relay+model actually support OpenAI-style `image_url` content blocks; otherwise the runtime call surfaces the relay's error.
 - Graceful skip: if the agent's provider isn't in `PROVIDERS` AND the LLM is not OpenAI-compatible, setup returns `None` silently. Agent logs `capability_skipped`.
 - Codex-family aliases flow to `create_vision_service("codex", api_key=None)` (L173-207); pool aliases select a non-secret auth path first, while direct Codex honors its provider bucket's `codex_auth_path`. Active Codex-family model/endpoint values are forwarded only for a Codex-family main service.
 - Provider-specific kwarg injection is opt-in per provider — prevents `TypeError` from passing unsupported kwargs to heterogeneous service constructors.
