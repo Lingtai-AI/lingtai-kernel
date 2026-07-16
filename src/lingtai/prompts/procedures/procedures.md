@@ -117,7 +117,7 @@ CLI daemon backends skip LingTai preset resolution entirely. See
 
 ### Use the Right Body
 
-Use bash for one-off deterministic host work, daemons for disposable parallel
+Use shell for one-off deterministic host work, daemons for disposable parallel
 exploration and cheap deterministic work that would otherwise consume the main
 agent's context, avatars for persistent specialists, MCPs for durable external
 integrations, knowledge for private facts, and skills for reusable procedures.
@@ -130,7 +130,7 @@ or model by exercising judgment about the task; when the human gives an explicit
 instruction, follow that instruction.
 
 When the same coding harness is available as a daemon backend option, prefer the
-daemon backend over launching that harness through Bash async, using the
+daemon backend over launching that harness through shell async, using the
 first-class daemon context-isolation and supervision path. Read `daemon-manual`
 for backend details.
 

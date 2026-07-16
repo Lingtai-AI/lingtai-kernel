@@ -20,7 +20,9 @@ _CONTROL_WORDS = {
     "return", "switch", "throw", "trap", "try", "until", "using", "while",
 }
 _ASSIGNMENT_RE = re.compile(r"^(?:\$[A-Za-z_][\w:]*|[A-Za-z_][\w-]*)$")
-_TOKEN_RE = re.compile(r"(?:'[^']*(?:''[^']*)*'|\"(?:`.|[^\"])*\"|[^\s|;&(){}]+)")
+_TOKEN_RE = re.compile(
+    r"(?:'[^']*(?:''[^']*)*'|\"(?:`.|[^\"])*\"|&(?=\s|$)|\.(?=\s|$)|[^\s|;&(){}]+)"
+)
 
 
 def _balanced_inner(script: str, start: int, opener: str, closer: str) -> tuple[str, int] | None:
@@ -146,22 +148,38 @@ def _commands(script: str) -> tuple[str, ...]:
             if not tokens:
                 result.extend(nested)
                 continue
-            first = tokens[0].strip("'\"")
-            if first in {"&", "."}:
-                if len(tokens) < 2 or tokens[1].startswith("$"):
+            # A call/dot-source operator is syntax, not the command being
+            # invoked.  Only an unquoted literal or a single-quoted literal is
+            # statically knowable; variables, expandable strings, and array or
+            # subexpression targets must fail closed under policy enforcement.
+            index = 0
+            if tokens[0] in {"&", "."}:
+                if len(tokens) < 2:
                     result.append(_UNSUPPORTED)
                     result.extend(nested)
                     continue
-                first = tokens[1].strip("'\"")
+                target = tokens[1]
+                if target.startswith(("$", "@", '"', "`")):
+                    result.append(_UNSUPPORTED)
+                    result.extend(nested)
+                    continue
+                if target.startswith("'") and not target.endswith("'"):
+                    result.append(_UNSUPPORTED)
+                    result.extend(nested)
+                    continue
+                index = 2
+                first = target[1:-1].replace("''", "'") if target.startswith("'") else target
+            else:
+                first = tokens[0].strip("'\"")
             # Skip assignments and PowerShell control syntax.  A bare control
             # statement without a block is unsupported rather than guessed.
-            index = 0
             while index + 2 < len(tokens) and _ASSIGNMENT_RE.fullmatch(tokens[index]) and tokens[index + 1] == "=":
                 index += 2
-            if index >= len(tokens):
-                result.extend(nested)
-                continue
-            first = tokens[index].strip("'\"")
+            if index == 0:
+                if index >= len(tokens):
+                    result.extend(nested)
+                    continue
+                first = tokens[index].strip("'\"")
             if first.casefold() in _CONTROL_WORDS:
                 result.extend(nested)
                 continue
@@ -190,19 +208,49 @@ class PowerShellDialect(ShellDialect):
 
     def make_invocation(self, script: str) -> ShellInvocation:
         # ``pwsh -Command`` otherwise collapses an external program's native
-        # exit status to PowerShell's generic 0/1 process status.  Capture the
-        # final pipeline truth immediately after the user script block: a
-        # successful final pipeline is 0, a failed native final pipeline keeps
-        # its exact ``$LASTEXITCODE``, and a failed PowerShell pipeline is 1.
+        # exit status to PowerShell's generic 0/1 process status.  PowerShell
+        # 7.3+ can expose non-zero native results as a typed ErrorRecord without
+        # changing command flow.  Capture that final-operation type together
+        # with ``$?`` and ``$LASTEXITCODE`` inside the user's script scope.
+        # Crucially, the wrapper never resets or rewrites ``$LASTEXITCODE``
+        # between user statements, so ordinary PowerShell status checks retain
+        # their native semantics.
         wrapped = (
-            "$global:LASTEXITCODE = 0\n"
-            "& {\n"
+            "$global:__lingtai_success = $false\n"
+            "$global:__lingtai_native_exit = 0\n"
+            "$global:__lingtai_final_native_failure = $false\n"
+            "$__lingtai_old_native_pref = $PSNativeCommandUseErrorActionPreference\n"
+            "try {\n"
+            "  $PSNativeCommandUseErrorActionPreference = $true\n"
+            "  & {\n"
             f"{script}\n"
+            # These assignments run in the same runtime scope as the user's
+            # final pipeline, before the wrapper performs any later command.
+            "    $global:__lingtai_success = $?\n"
+            "    $global:__lingtai_native_exit = [int]$global:LASTEXITCODE\n"
+            "    $global:__lingtai_final_native_failure = (\n"
+            "      (-not $global:__lingtai_success) -and\n"
+            "      ($Error.Count -gt 0) -and\n"
+            "      ($Error[0].FullyQualifiedErrorId -eq 'ProgramExitedWithNonZeroCode')\n"
+            "    )\n"
+            "  }\n"
+            "} catch {\n"
+            "  $global:__lingtai_success = $false\n"
+            "  $global:__lingtai_native_exit = [int]$global:LASTEXITCODE\n"
+            "  $global:__lingtai_final_native_failure = (\n"
+            "    $_.FullyQualifiedErrorId -eq 'ProgramExitedWithNonZeroCode'\n"
+            "  )\n"
+            "  if (-not $global:__lingtai_final_native_failure) {\n"
+            "    [Console]::Error.WriteLine($_.ToString())\n"
+            "  }\n"
+            "} finally {\n"
+            "  $PSNativeCommandUseErrorActionPreference = $__lingtai_old_native_pref\n"
             "}\n"
-            "$__lingtai_success = $?\n"
-            "$__lingtai_native_exit = [int]$global:LASTEXITCODE\n"
-            "if ($__lingtai_success) { exit 0 }\n"
-            "if ($__lingtai_native_exit -ne 0) { exit $__lingtai_native_exit }\n"
+            "if ($global:__lingtai_success) { exit 0 }\n"
+            "if ($global:__lingtai_final_native_failure -and "
+            "$global:__lingtai_native_exit -ne 0) {\n"
+            "  exit $global:__lingtai_native_exit\n"
+            "}\n"
             "exit 1\n"
         )
         return ShellInvocation(

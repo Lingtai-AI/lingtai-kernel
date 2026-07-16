@@ -321,22 +321,38 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
 
     def wait(self, owned: _Owned, cancellation_requested: Callable[[], bool]):
         process = owned.process
-        try:
-            while process.poll() is None:
-                if cancellation_requested():
-                    terminated = bool(_kernel32().TerminateJobObject(owned.job_handle, 1))
-                    if not terminated:
-                        return ProcessCompletion(process.wait(), "unconfirmed")
-                    # The Job Object is signaled only after every assigned child
-                    # exits, which is the full-tree ownership proof.
-                    if not _wait_job(owned.job_handle, 5.0):
-                        return ProcessCompletion(process.wait(), "unconfirmed")
-                    return ProcessCompletion(process.wait(), "group_cancelled")
-                time.sleep(0.05)
-            code = process.wait()
+
+        def cancel_owned_tree() -> ProcessCompletion | None:
+            if not cancellation_requested():
+                return None
+            terminated = bool(_kernel32().TerminateJobObject(owned.job_handle, 1))
+            if not terminated:
+                return ProcessCompletion(process.wait(), "unconfirmed")
+            # The Job Object is signaled only after every assigned child exits,
+            # which is the full-tree ownership proof.
             if not _wait_job(owned.job_handle, 5.0):
-                return ProcessCompletion(code, "unconfirmed")
-            return ProcessCompletion(code)
+                return ProcessCompletion(process.wait(), "unconfirmed")
+            return ProcessCompletion(process.wait(), "group_cancelled")
+
+        try:
+            while True:
+                cancellation = cancel_owned_tree()
+                if cancellation is not None:
+                    return cancellation
+                if process.poll() is None:
+                    time.sleep(0.05)
+                    continue
+
+                # The root Popen may have exited while a descendant is still in
+                # the Job.  Keep the Job handle owned and poll it in short
+                # intervals so a later durable cancel request still gets the
+                # confirmed TerminateJobObject/group_cancelled path.
+                code = process.wait()
+                while not _wait_job(owned.job_handle, 0.05):
+                    cancellation = cancel_owned_tree()
+                    if cancellation is not None:
+                        return cancellation
+                return ProcessCompletion(code)
         finally:
             owned.close()
 

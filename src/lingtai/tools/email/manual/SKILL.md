@@ -179,7 +179,7 @@ email(action="send", address="<your-own-name>", delay=3600,
 
 Combined with self-send, this gives you cheap one-shot alarms without standing up a cron. The notification is delivered exactly once. For **recurring** reminders, use a host scheduler (cron, launchd, systemd, or an event watcher) via `shell-manual`; do not use the email tool for recurring execution.
 
-Use delayed self-send as a **future nudge**, not delayed tool execution. The message should tell the future you what to inspect and why, then let that future turn decide with current context whether to run `bash(action="poll")`, `daemon(check)`, a channel read, or nothing at all. This is the preferred escape hatch when a repeated-call `_advisory` tells you that you may be polling the same thing: write one concrete reminder, then yield/idle instead of immediately calling the same tool again.
+Use delayed self-send as a **future nudge**, not delayed tool execution. The message should tell the future you what to inspect and why, then let that future turn decide with current context whether to run `shell(action="poll")`, `daemon(check)`, a channel read, or nothing at all. This is the preferred escape hatch when a repeated-call `_advisory` tells you that you may be polling the same thing: write one concrete reminder, then yield/idle instead of immediately calling the same tool again.
 
 ## 8. Recurring reminders live outside email
 

@@ -4,7 +4,7 @@ description: >
   Nested daemon-cli-backends reference for the claude-p (alias claude-code)
   daemon backend's flag surface. Read this only when a daemon task needs
   Claude Code-specific CLI flags (model selection, fallback model, tool
-  restrictions): it routes you to the installed CLI's live help via bash and
+  restrictions): it routes you to the installed CLI's live help via shell and
   shows how to translate that help into the generic `backend_options`
   mechanism. It is not a flag catalog.
 version: 0.1.0

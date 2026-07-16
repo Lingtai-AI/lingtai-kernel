@@ -30,7 +30,7 @@ maintenance: |
 
 LingTai exposes Codex in two forms. They are **not interchangeable** — pick the one whose shape matches the work.
 
-### CLI (`codex exec ...` via bash)
+### CLI (`codex exec ...` via shell)
 
 A single synchronous subprocess. You wait for it to finish, you get one transcript back, the conversation ends when the bash call returns.
 

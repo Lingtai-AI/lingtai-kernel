@@ -7,7 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.adapters.windows.powershell import PowerShellDialect
+from lingtai.adapters.windows.powershell_process import _Owned, WindowsShellAsyncProcessAdapter
 from lingtai.tools.bash import ShellManager, ShellPolicy, setup
+from lingtai.tools.bash._async_process import ProcessRef
 from lingtai.tools.bash._async_supervisor import _invocation_from_state
 from lingtai.tools.registry import (
     BUILTIN_TOOLS,
@@ -57,8 +59,8 @@ def test_powershell_invocation_and_extractor_are_not_posix():
     args, kwargs = invocation.process_args()
     assert args[:5] == ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
     assert "Write-Output hi" in args[-1]
-    assert "$__lingtai_success = $?" in args[-1]
-    assert "exit $__lingtai_native_exit" in args[-1]
+    assert "$global:__lingtai_success = $?" in args[-1]
+    assert "exit $global:__lingtai_native_exit" in args[-1]
     assert kwargs == {"shell": False}
     assert invocation.encoding == "utf-8"
 
@@ -76,6 +78,60 @@ def test_powershell_policy_is_case_insensitive_and_dynamic_syntax_fails_closed(t
     assert "not allowed" in denied["message"]
     dynamic = manager.handle({"command": "& $command"})
     assert dynamic["status"] == "error"
+    expandable = manager.handle({"command": '& "$command" victim'})
+    assert expandable["status"] == "error"
+    static = manager.handle({"command": "& Remove-Item victim"})
+    assert static["status"] == "error"
+    quoted_static = manager.handle({"command": "& 'Remove-Item' victim"})
+    assert quoted_static["status"] == "error"
+
+
+def test_powershell_exit_wrapper_observes_final_native_type_without_rewriting_script():
+    script = "& $env:ComSpec /d /c exit 7; if ($LASTEXITCODE -ne 7) { throw 'lost' }"
+    wrapped = PowerShellDialect(executable="pwsh").make_invocation(script).script
+    assert script in wrapped
+    assert "$PSNativeCommandUseErrorActionPreference = $true" in wrapped
+    assert "ProgramExitedWithNonZeroCode" in wrapped
+    assert "$global:LASTEXITCODE = 0" not in wrapped
+
+
+def test_windows_root_exit_child_live_cancel_race_keeps_job_owned(monkeypatch):
+    import lingtai.adapters.windows.powershell_process as process_adapter
+
+    class FakeProcess:
+        def poll(self):
+            return 0
+
+        def wait(self):
+            return 0
+
+    class FakeKernel:
+        def __init__(self):
+            self.terminated = []
+
+        def TerminateJobObject(self, handle, code):
+            self.terminated.append((handle, code))
+            return 1
+
+        def CloseHandle(self, handle):
+            return 1
+
+    kernel = FakeKernel()
+    waits = []
+    monkeypatch.setattr(process_adapter, "_kernel32", lambda: kernel)
+
+    def wait_job(_handle, timeout):
+        waits.append(timeout)
+        return timeout == 5.0
+
+    monkeypatch.setattr(process_adapter, "_wait_job", wait_job)
+    requests = iter([False, True])
+    job_handle = object()
+    owned = _Owned(FakeProcess(), ProcessRef(123, "test"), job_handle)
+    completion = WindowsShellAsyncProcessAdapter().wait(owned, lambda: next(requests))
+    assert completion.cancellation_outcome == "group_cancelled"
+    assert kernel.terminated == [(job_handle, 1)]
+    assert waits == [0.05, 5.0]
 
 
 def test_windows_selector_modules_are_real_adapter_composition_points(monkeypatch):

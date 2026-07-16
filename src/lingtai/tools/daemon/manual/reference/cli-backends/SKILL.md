@@ -39,7 +39,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the Codex daemon backend's flag
     surface. Read this only when a daemon task needs Codex-specific CLI flags
     (model selection, reasoning effort, config overrides): it routes to the
-    installed CLI's live help via bash and shows how to translate that help
+    installed CLI's live help via shell and shows how to translate that help
     into generic `backend_options` (e.g. repeated `--config` overrides).
 - name: daemon-backend-opencode
   location: reference/backends/opencode/SKILL.md
@@ -47,7 +47,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the OpenCode daemon backend's
     flag surface. Read this only when a daemon task needs OpenCode-specific
     CLI flags (model selection, reasoning variants, agent choice): it routes
-    to the installed CLI's live help via bash and shows how to translate that
+    to the installed CLI's live help via shell and shows how to translate that
     help into generic `backend_options` (e.g. `--model provider/model`).
 - name: daemon-backend-claude-p
   location: reference/backends/claude-p/SKILL.md
@@ -55,7 +55,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the claude-p (alias claude-code)
     daemon backend's flag surface. Read this only when a daemon task needs
     Claude Code-specific CLI flags (model selection, fallback model, tool
-    restrictions): it routes to the installed CLI's live help via bash and
+    restrictions): it routes to the installed CLI's live help via shell and
     shows how to translate that help into generic `backend_options` (e.g.
     underscore keys becoming dashed long flags like `--fallback-model`).
 - name: daemon-backend-mimocode
@@ -64,7 +64,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the MiMo Code (`mimocode` /
     `mimo`) daemon backend's flag surface. Read this only when a daemon task
     needs MiMo-specific CLI flags (model selection, provider switches): it
-    routes to the installed CLI's live help via bash (`mimo run --help`) and
+    routes to the installed CLI's live help via shell (`mimo run --help`) and
     shows how to translate that help into generic `backend_options`.
 - name: daemon-backend-qwen-code
   location: reference/backends/qwen-code/SKILL.md
@@ -72,7 +72,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the Qwen Code (`qwen-code` /
     `qwen`) daemon backend's flag surface. Read this only when a daemon task
     needs Qwen-specific CLI flags (model selection, provider tunables): it
-    routes to the installed CLI's live help via bash and shows how to
+    routes to the installed CLI's live help via shell and shows how to
     translate that help into generic `backend_options`, plus the backend's
     reserved-flag and no-resume boundaries.
 - name: daemon-backend-kimicode
@@ -81,7 +81,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the Kimi Code daemon backend's
     flag surface. Read this only when a daemon task needs Kimi-specific CLI
     flags (model selection, skills/workspace directories): it routes to the
-    installed CLI's live help via bash and shows how to translate that help
+    installed CLI's live help via shell and shows how to translate that help
     into generic `backend_options`, plus the exact reserved harness flags,
     the run-private `mcp.json` loader, and the current ask/resume limitation.
 - name: daemon-backend-cursor
@@ -90,7 +90,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the Cursor daemon backend's flag
     surface. Read this only when a daemon task needs Cursor-specific CLI
     flags (model selection, output/tooling switches): it routes to the
-    installed `agent` CLI's live help via bash and shows how to translate
+    installed `agent` CLI's live help via shell and shows how to translate
     that help into generic `backend_options`.
 - name: daemon-backend-oh-my-pi
   location: reference/backends/oh-my-pi/SKILL.md
@@ -98,7 +98,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the Oh-My-Pi (`omp`) daemon
     backend's flag surface. Read this only when a daemon task needs
     Oh-My-Pi-specific CLI flags (model selection, tool or provider
-    switches): it routes to the installed CLI's live help via bash, lists
+    switches): it routes to the installed CLI's live help via shell, lists
     the exact harness-reserved flags, and shows how to translate that help
     into generic `backend_options`.
 - name: daemon-backend-lingtai

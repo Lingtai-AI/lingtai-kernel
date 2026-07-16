@@ -88,7 +88,7 @@ If the variable is hard-coded in a shell startup file, comment out only that exp
 
 LingTai exposes Claude Code in two forms. They are **not interchangeable** — pick the one whose shape matches the work.
 
-### CLI (`claude -p ...` via bash)
+### CLI (`claude -p ...` via shell)
 
 A single synchronous subprocess. You wait for it to finish, you get one transcript, the conversation ends when the bash call returns.
 

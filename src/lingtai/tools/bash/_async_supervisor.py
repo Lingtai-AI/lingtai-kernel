@@ -52,11 +52,15 @@ def _write_state_atomic(job_dir: Path, value: dict[str, Any]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, state_path(job_dir))
-    directory_fd = os.open(job_dir, os.O_RDONLY)
-    try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
+    # POSIX directory descriptors provide the durability barrier for the
+    # replacement. Windows does not support opening a directory with os.open;
+    # the file flush plus atomic replace above is the portable boundary there.
+    if os.name == "posix":
+        directory_fd = os.open(job_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
 
 def write_initial_state(job_dir: Path, value: dict[str, Any]) -> None:

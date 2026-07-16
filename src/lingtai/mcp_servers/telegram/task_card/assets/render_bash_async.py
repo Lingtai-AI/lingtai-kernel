@@ -14,7 +14,7 @@ it MUST print exactly one Task Card JSON object and exit 0. It receives no
 command-line arguments and runs with your working directory as the process cwd,
 so it locates its state by the fixed relative path `STATE_FILE` below.
 
-WHY it reads a snapshot file, not bash internals
+WHY it reads a snapshot file, not shell internals
 -------------------------------------------------
 The shell async job's own on-disk state under `system/jobs/<job_id>/` is PRIVATE
 to the shell capability, and `shell(action="poll")` is a one-shot, consuming read
@@ -34,7 +34,7 @@ renders an explicit "awaiting orchestrator update" frame — never a fabricated
 `starting`/`running`.
 
     {
-      "job_id":   "job-a1b2...",             # REQUIRED str: the id bash(async=true) returned
+      "job_id":   "job-a1b2...",             # REQUIRED str: the id shell(async=true) returned
       "status":   "running",                 # REQUIRED str: starting|running|done|failed|cancelled|unknown
       "title":    "Refactor auth module",    # optional str headline
       "exit_code": 0,                        # optional int, once a terminal poll reports a known exit code
@@ -118,7 +118,7 @@ _MAX_INT = 10**9  # ignore an exit_code outside this sane magnitude.
 
 # The only accepted display states, mapped to a small status glyph. These are
 # DISPLAY states the orchestrator derives from the sanctioned poll/cancel result
-# (see the module docstring), not the raw top-level bash ``status``. ``unknown``
+# (see the module docstring), not the raw top-level shell ``status``. ``unknown``
 # is the exit-status-unavailable terminal: it claims neither success nor failure.
 _STATUS_GLYPH = {
     "starting": "…",

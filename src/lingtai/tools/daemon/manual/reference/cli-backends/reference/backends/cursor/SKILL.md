@@ -4,7 +4,7 @@ description: >
   Nested daemon-cli-backends reference for the Cursor daemon backend's flag
   surface. Read this only when a daemon task needs Cursor-specific CLI flags
   (model selection, output/tooling switches): it routes you to the installed
-  CLI's live help via bash and shows how to translate that help into the
+  CLI's live help via shell and shows how to translate that help into the
   generic `backend_options` mechanism. It is not a flag catalog.
 version: 0.1.0
 last_changed_at: "2026-07-09T19:23:56-07:00"

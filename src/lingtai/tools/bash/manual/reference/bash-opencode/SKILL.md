@@ -54,7 +54,7 @@ OpenCode stores provider credentials in `~/.local/share/opencode/auth.json`. It 
 
 This sub-skill is about using OpenCode directly from the shell. For longer work, first check whether your active LingTai daemon schema explicitly supports an OpenCode backend; otherwise supervise OpenCode through bash/worktrees.
 
-### CLI (`opencode run ...` via bash)
+### CLI (`opencode run ...` via shell)
 
 A single synchronous subprocess. You wait for it to finish, review its transcript/diff, and decide the next step in your own context.
 

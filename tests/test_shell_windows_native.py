@@ -102,6 +102,23 @@ def test_native_powershell_failure_and_sync_timeout_are_explicit(tmp_path):
     assert failed["ok"] is False
     assert "powershell-failure" in failed["stderr"]
 
+    sticky_native_then_powershell = manager.handle({
+        "command": (
+            "& $env:ComSpec /d /c exit 7; "
+            "Write-Error 'final-powershell-failure'"
+        ),
+        "timeout": 10,
+    })
+    assert sticky_native_then_powershell["status"] == "ok"
+    assert sticky_native_then_powershell["exit_code"] == 1
+
+    native_then_success = manager.handle({
+        "command": "& $env:ComSpec /d /c exit 7; Write-Output 'final-success'",
+        "timeout": 10,
+    })
+    assert native_then_success["status"] == "ok"
+    assert native_then_success["exit_code"] == 0
+
     timed_out = manager.handle({"command": "Start-Sleep -Seconds 10", "timeout": 0.5})
     assert timed_out["status"] == "error"
     assert "timed out" in timed_out["message"].lower()
@@ -163,6 +180,43 @@ with WindowsShellStateLockAdapter().exclusive(root):
     stdout, stderr = process.communicate(timeout=5)
     assert process.returncode == 0, {"stdout": stdout, "stderr": stderr}
     assert elapsed >= 0.3
+
+
+def test_native_job_object_cancel_after_root_exit_terminates_descendant_tree(tmp_path):
+    manager = _manager(tmp_path)
+    ready = tmp_path / "root-exited.ready"
+    survived = tmp_path / "root-exited-survived.txt"
+
+    child_script = (
+        "Start-Sleep -Seconds 5; "
+        f"Set-Content -LiteralPath {_ps_literal(survived)} -Value 'survived'"
+    )
+    encoded_child = base64.b64encode(child_script.encode("utf-16le")).decode("ascii")
+    parent_script = (
+        "$null = Start-Process -FilePath (Get-Command pwsh).Source "
+        "-ArgumentList @('-NoLogo','-NoProfile','-NonInteractive',"
+        f"'-EncodedCommand','{encoded_child}'); "
+        f"Set-Content -LiteralPath {_ps_literal(ready)} -Value 'root spawned'; "
+        "exit 0"
+    )
+
+    started = manager.handle({
+        "command": parent_script,
+        "async": True,
+        "reminder": 30,
+    })
+    assert started["status"] == "ok", started
+    _wait_for_file(ready)
+    cancelled = manager.handle({"action": "cancel", "job_id": started["job_id"]})
+    assert cancelled == {"status": "cancelled", "job_id": started["job_id"]}
+
+    state_path = tmp_path / "system" / "jobs" / started["job_id"] / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["status"] == "completed"
+    assert state["exit_status_known"] is True
+    assert state["cancellation_outcome"] == "group_cancelled"
+    time.sleep(1.0)
+    assert not survived.exists(), "a descendant escaped after the root pwsh exited"
 
 
 def test_native_job_object_cancel_terminates_descendant_tree(tmp_path):

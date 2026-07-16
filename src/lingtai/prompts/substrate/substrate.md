@@ -38,14 +38,14 @@ You have one active mind and several extensions:
 
 | Extension | Use for |
 |---|---|
-| **Bash** | One-off deterministic host work: git, tests, scripts, curl |
+| **Shell** | One-off deterministic host work: git, tests, scripts, curl |
 | **Daemon** | Disposable, context-isolated exploration where only the conclusion matters |
 | **Avatar** | Persistent specialists or collaborators that should learn over time |
 | **MCP** | Durable external services and integrations |
 | **Knowledge** | Private durable facts, decisions, journals, local paths |
 | **Skills** | Reusable procedures, checklists, scripts, and templates |
 
-Choose the smallest durable form that fits: bash for commands, daemon for
+Choose the smallest durable form that fits: shell for commands, daemon for
 throwaway parallel work, avatar for persistent ownership, MCP for external
 services, knowledge for private facts, skills for reusable know-how.
 
