@@ -1,317 +1,250 @@
 ---
 name: telegram-task-card-manual
 description: |
-  Manual for the programmable Telegram Task Card (`task_card` tool). Read this to
-  surface your latest reported state snapshot — a shell async job, a daemon task,
-  a build — on the resident Telegram Task Card by supplying a small Python
-  renderer whose stdout is one Task Card JSON object. Covers the renderer
-  contract, the snapshot truthfulness model, the two co-located renderer
-  templates (shell async, daemon) shipped as skill assets, the
-  start | inspect | retry | stop lifecycle, path/timeout/validation rules,
-  fail-loud error wakes, and how the /taskcard toggle interacts.
-last_changed_at: "2026-07-14T19:22:00-07:00"
+  Manual for the programmable Telegram Task Card (`task_card` tool). Read this
+  when a task needs a truthful, task-specific watcher: inspect the actual task
+  and producer evidence, design a small renderer, and use the start | inspect |
+  retry | stop lifecycle without prescribing a fixed layout or data source.
+last_changed_at: "2026-07-16T14:57:00-07:00"
 related_files:
 - src/lingtai/mcp_servers/telegram/SKILL.md
 - src/lingtai/mcp_servers/telegram/task_card/controller.py
 - src/lingtai/mcp_servers/telegram/task_card/interface.py
 - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
 maintenance: |
-  Tracks the Telegram Task Card renderer/controller behavior it documents; update when that integration changes.
+  Tracks the Telegram Task Card renderer/controller behavior and task-specific
+  watcher method it documents; update when that integration or its guidance changes.
 ---
 
-# Programmable Telegram Task Card — manual (what / how / why)
+# Programmable Telegram Task Card — task-specific watcher manual
 
-The `task_card` tool lets you surface your own **latest reported snapshot** on
-Telegram's one tracked resident Task Card. You write a small Python **renderer**
-file under your working directory; the controller runs it on an interval and
-projects its output onto the Task Card's **programmable** slot, side by side with
-the automatic tool-activity slot. The one tracked resident target carries both
-slots. The renderer reflects a state snapshot you keep current — it is not an
-autonomous progress feed.
+The `task_card` tool lets you surface a truthful, latest-reported snapshot on
+Telegram's one tracked resident Task Card. You supply a small Python renderer
+under your working directory. The controller runs it on an interval and forwards
+only its validated data to the programmable slot beside Telegram's automatic
+activity slot. The renderer is a view of evidence you keep current; it is not an
+autonomous progress monitor.
 
-## When to reach for this
+This manual teaches a method, not a renderer template. The task, its producer, and
+the evidence they expose determine the watcher's fields, update cadence, and
+presentation. Do not copy a fixed layout or assume one data source works for every
+job.
 
-During a **Telegram-originated turn**, when you launch a meaningful
-**long-running `shell(async=true)` job or daemon task** and then go idle to await
-its result, add a human-visible programmable Task Card watcher so the human
-watching Telegram sees the latest reported snapshot instead of a silent gap. Two
-ready templates cover exactly these two cases — see **Two ready templates** below.
-This is the default for long, human-visible background work; skip it only for
-quick or invisible jobs.
+## When to reach for a watcher
 
-## WHAT it is
+During a Telegram-originated turn, use a watcher when a meaningful task will run
+long enough that a person would otherwise see a silent gap—for example, while you
+wait for a background job, daemon, build, or other producer. First inspect the
+actual task and producer evidence. A quick or invisible operation does not need a
+watcher, and collecting updates on every turn is not a goal.
 
-- A model-facing controller with four actions: `start`, `inspect`, `retry`,
-  `stop`.
-- A binding between *your state* (whatever your renderer reads — a job log, a
-  status file, a queue depth) and *the resident Task Card*.
-- English-only. There is no i18n here and none should be added.
+The watcher should make the current task understandable without pretending to know
+more than its producer reports. Choose only facts that demonstrate movement or an
+honest lack of movement, and say when a fact is unavailable.
 
-The resident Telegram Task Card has two independent slots:
+## The watcher information contract
 
-- **automatic** — a manager-owned mechanical projection of recent exact
-  `tool_call` events from `logs/events.jsonl`, broadcast identically to every
-  tracked resident Task Card. It does not reconstruct heartbeat, completion,
-  elapsed time, API errors, or per-chat routing. You do not drive it.
-- **programmable** — the slot this tool owns. Updating one slot never disturbs
-  the other; with both present the programmable block appears under a `— WATCH —`
-  header.
+For the current task, design a concise frame that communicates these facts when
+reliably available:
 
-The automatic source/filter/broadcast and refresh/molt rehydration workflow is
-explained in the parent [Telegram MCP manual](../SKILL.md#automatic-task-card-eventsjsonl-resident-broadcast)
-and mapped structurally in the owning
-[`mcp_servers` Anatomy](../../ANATOMY.md). This manual and the paired
-[`ANATOMY.md`](ANATOMY.md) cover the programmable controller only.
+1. **Purpose** — what the watcher is for and what outcome the task is pursuing.
+2. **Time lapse** — how long the task or current stage has been running, based on a
+   reliable recorded start or stage time. If that evidence is unavailable, say
+   `unavailable`; do not infer duration from renderer refreshes.
+3. **Recent activity / last meaningful movement** — what actually changed most
+   recently, where that evidence came from, and when it happened or was last
+   checked. A refreshed card is not itself activity.
+4. **Token usage** — show usage only from a trustworthy producer/ledger. If it is
+   unavailable, say `unavailable` rather than guessing or substituting a counter.
+5. **Current state, next gate, and blocker** — name the state the producer supports,
+   the next evidence-based transition or review gate, and any blocker. Do not call
+   work `running`, `done`, or `healthy` without evidence; say `unknown` or
+   `unavailable` when that is the truth.
+6. **Feedback and improvement** — after the watcher has had meaningful real use,
+   proactively ask whether it helped and what should improve. Use the answer to
+   improve this current watcher first; only then extract a reusable method into a
+   skill.
 
-## HOW to use it
+These are information requirements, not a visual template. The frame may use any
+layout that keeps the facts legible and bounded. Do not add decorative fields just
+to make a card look active.
 
-### The renderer contract
+## Inspect the task and producer before writing the renderer
 
-A renderer is an ordinary Python file inside your working directory. Each run, it
-must print **exactly one** JSON object to stdout and exit `0`. The object may
-carry any of:
+Before choosing a source, identify:
 
-- `title` — a string headline (optional).
-- `lines` — an array of strings, at most 20 (optional).
-- `footer` — a string footer (optional).
+- the task's purpose, stages, gates, and known blockers;
+- the producer that owns state (job, daemon, build system, queue, or another
+  workflow) and its documented read/check surface;
+- the authoritative start/activity/token fields, their units, and their freshness;
+- what the producer does **not** expose, so the watcher can state `unavailable`;
+- how you will record a small, orchestrator-owned snapshot after launch and after
+  each meaningful producer event, justified check, or terminal result.
 
-At least one of the three must be non-empty. Anything else is rejected:
+Prefer the producer's documented status/check result or an orchestrator-owned
+snapshot over private tool internals. Never let a passive renderer consume a
+one-shot poll, reach into versioned forensic state, or treat a wall-clock redraw as
+proof of progress. If the task has no reliable activity or token signal, report
+that limitation plainly and choose another truthful signal rather than inventing
+one. Write snapshots atomically when the orchestrator owns them, so a renderer
+never mistakes a half-written update for a real state.
 
-- non-zero exit, a timeout, empty stdout, output that is not a single JSON
-  object (multiple concatenated objects included), a non-object, or a wrong field
-  type (e.g. `lines` containing a number) all fail validation.
-- The renderer runs with the **runtime interpreter** (`sys.executable`) with your
-  working directory as the process `cwd`, under a per-run timeout.
-- `renderer_path` must resolve (symlinks included) to a regular file **inside**
-  the working directory. Path traversal or an absolute escape is refused.
+## Safe custom renderer example
 
-Secrets are redacted at the render boundary by the Telegram manager, and raw
-renderer output never appears in error wakes — but keep secrets out of the card
-anyway; it is a progress view, not a data channel.
+The following is a runnable, stdlib-only example—not a required data source or
+layout. It reads an orchestrator-owned `task_snapshot.json`; replace that source,
+labels, and arrangement only after inspecting the actual producer. The example
+clips strings, accepts an object only, uses `unavailable` for absent facts, and
+prints exactly one bounded Task Card object. Keep the renderer in your working
+directory, and keep secrets and raw logs out of its snapshot.
 
-### The state source: read a snapshot file you own, not tool internals
+```python
+#!/usr/bin/env python3
+import json
+from pathlib import Path
 
-The renderer receives **no arguments** and runs with your working directory as
-its cwd, so it locates state by a fixed relative path. Point it at a small
-**state snapshot file that you (the orchestrator) keep truthful** — not at a
-tool's private internals:
+STATE = Path("task_snapshot.json")  # example only; choose evidence for this task
+MAX_SNAPSHOT_BYTES = 16_384
+MAX_TEXT = 160
 
-- A `shell(async=true)` job's own state under `system/jobs/<job_id>/` is **private
-  to the shell capability**, and `shell(action="poll")` is a **one-shot, consuming**
-  read (the first terminal poll marks the job consumed). A passive renderer must
-  not touch either.
-- A daemon run's `daemons/<id>/daemon.json` is a **versioned forensic** artifact,
-  not a stable machine API; the sanctioned surface is `daemon(action="check",
-  id=...)`, which is read-only and safe to poll.
 
-So the honest pattern is: **you** own a tiny JSON snapshot in the working
-directory and rewrite it from your own turn — right after the launch returns your
-`job_id`/`id`, after each **meaningful** `poll` / `check`, and at the **terminal**
-result or completion notification. The renderer shows only the **latest reported
-snapshot** — the frame it prints reflects what you last recorded, not autonomous
-job progress. It never invents or introspects tool state.
+def text(value):
+    if not isinstance(value, str):
+        return "unavailable"
+    value = "".join(ch for ch in value if ch == " " or ch.isprintable()).strip()
+    if not value:
+        return "unavailable"
+    return value[: MAX_TEXT - 1] + "…" if len(value) >= MAX_TEXT else value
 
-**Truthfulness contract (both templates enforce this):** a live/terminal card is
-shown **only** when the snapshot carries both a nonempty **identity** (`job_id`
-for shell, `id` for daemon) **and** an exact allow-listed **state** string. A
-missing file, non-JSON, non-object, missing identity/state, an unknown state, or
-a wrong-typed field renders an explicit `awaiting orchestrator update` frame —
-never a fabricated `starting`/`running`. So an empty or half-written snapshot can
-never claim progress.
 
-Write the snapshot **completely** each time: build the whole JSON object in
-memory and write it in one operation. Writing to a temporary file in the same
-directory and then `os.replace`-ing it over the snapshot makes the update atomic,
-so the renderer never reads a partially written object. Keep secrets and raw log
-bodies out of the snapshot — the card is a progress view, not a data channel. The
-manager also redacts at the render boundary, but that cannot rescue a snapshot you
-fill with secrets in violation of the schema.
+def load_snapshot():
+    try:
+        with STATE.open("rb") as stream:
+            raw = stream.read(MAX_SNAPSHOT_BYTES + 1)
+        if len(raw) > MAX_SNAPSHOT_BYTES:
+            return {}
+        data = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
-### Two ready templates (locate, copy, adapt, bind)
 
-Two co-located, stdlib-only renderer templates implement exactly this pattern.
-Each prints exactly one bounded Task Card object, enforces the truthfulness
-contract above, and stays valid even when the snapshot is missing, partial, or
-malformed:
+def main():
+    data = load_snapshot()
 
-- **`render_bash_async.py`** — for a `shell(async=true)` job. Reads
-  `task_card_state.json`. Requires `job_id` (str) + `status` (str, one of
-  `starting|running|done|failed|cancelled|unknown`); also surfaces optional
-  `title`, `exit_code` (int), `stage`, `updated_at`, `note`. Here `status` is a
-  **display state you derive from the sanctioned poll/cancel result**, not the raw
-  top-level shell `status` (which is always `done` on completion — see the mapping
-  under **Deriving the shell display state** below).
-- **`render_daemon.py`** — for a daemon task (emanation). Reads
-  `daemon_card_state.json`. Requires `id` (str) + `state` (str, one of
-  `running|done|failed|cancelled|timeout`); also surfaces optional `title`,
-  `current`, `elapsed_s` (finite number), `last_activity`, `health`
-  (`alive|stalled|unknown`), `updated_at`, `note`.
+    labels = (
+        ("purpose", "purpose"),
+        ("time lapse", "time_lapse"),
+        ("last movement", "last_movement"),
+        ("token usage", "token_usage"),
+        ("state", "state"),
+        ("next gate", "next_gate"),
+        ("blocker", "blocker"),
+    )
+    lines = [f"{label}: {text(data.get(key))}" for label, key in labels]
+    card = {
+        "title": text(data.get("title")) if data.get("title") else "Task watcher",
+        "lines": lines[:20],
+        "footer": "snapshot reported by orchestrator",
+    }
+    print(json.dumps(card, ensure_ascii=False))
 
-**Deriving the shell display state.** The shell `status` you record is a **display
-state derived from the sanctioned action result**, not the raw top-level shell
-`status`. Shell's terminal `shell(action="poll")` is **always** top-level
-`status: "done"` — a nonzero inner command does **not** make it a top-level
-`"failed"`; the pass/fail signal is in the additive fidelity fields
-(`exit_status_known`, `exit_code`, `ok`, `command_status`). Map the result:
 
-| `shell` result | record `status` |
-|---|---|
-| `{"status": "running", ...}` | `running` (resident) |
-| `{"status": "done", "exit_status_known": true, "exit_code": 0, "ok": true, "command_status": "success"}` | `done` (terminal) |
-| `{"status": "done", "exit_status_known": true, "exit_code": <nonzero>, "ok": false, "command_status": "failed"}` | `failed` (terminal) |
-| `{"status": "done", "exit_status_known": false, "exit_code": null, ...}` | `unknown` (terminal) |
-| `shell(action="cancel")` → `{"status": "cancelled", ...}` | `cancelled` (terminal) |
-
-So a nonzero completion is recorded `failed` (never `done` by copying the raw
-top-level `status`), and an exit-status-unavailable terminal completion is
-recorded `unknown` — a distinct **terminal** state that reports the exit status is
-unavailable and claims **neither** success **nor** failure (Shell never invents
-`-1` or a false `command_status: "failed"` for it, so neither does the card). Copy
-`exit_code` only when `exit_status_known` is true; omit it for `unknown`. All four
-terminal display states (`done`, `failed`, `cancelled`, `unknown`) render the
-stop/clear footer and require the same terminal closeout below.
-
-**Locate and copy the asset.** The asset lives next to this manual under
-`task_card/assets/`. Resolve it relative to the **absolute manual path** that the
-Telegram `manual` action returns (`telegram(action='manual')` → its `path`; this
-manual sits at `task_card/SKILL.md` beside that directory), then **copy it into
-your working directory** — the controller confines `renderer_path` to the agent
-working directory, so the renderer must physically live there. Do not reference
-the source-tree or installed-package path directly. Rename the copy per job if you
-run several, and adapt only its `STATE_FILE` and labels; each file's docstring
-documents its full snapshot schema and orchestrator update points.
-
-Then bind it:
-
-```json
-{"action": "start", "renderer_path": "render_bash_async.py", "interval_s": 5}
+if __name__ == "__main__":
+    main()
 ```
 
-As you rewrite the snapshot, the card's programmable slot follows the latest
-reported snapshot. Starting a watch **drives the programmable slot of the
-`TelegramManager`-owned single resident Task Card**; the manager reuses the one
-resident card it already tracks, or **creates its single resident** if none is
-tracked yet — it never starts a second manager or a second card. `TelegramManager`
-stays the one render/compose/persistence/transport owner; the controller is a thin
-driver that forwards validated frames.
+A real renderer may use another safe source, calculate a duration from an
+authoritative timestamp, or omit a field that has no truthful value. It must still
+print exactly one JSON object and avoid claiming progress that the producer did
+not report. Start it with the controller only after adapting and testing it:
 
-### The lifecycle: start | inspect | retry | stop
+```json
+{"action": "start", "renderer_path": "watcher.py", "interval_s": 5, "timeout_s": 10}
+```
 
-- **start** — validate and run the renderer **once, synchronously**. If that first
-  run fails (bad path, timeout, non-zero exit, invalid frame) you get an
-  immediate tool error and **no watch is created**. On success the first frame is
-  projected and a background watch begins; you receive a `watch_id`. Optional
-  `interval_s` (seconds between runs, minimum 1; default 5) and `timeout_s`
-  (per-run timeout; default 10). **Initial partial:** if the first frame was sent
-  and is visible but its resident id could not be durably saved, `start` still
-  returns `status: ok` with your `watch_id`, plus `partial: true`,
-  `resident_persist_failed: true`, and the sent `message_id` — the watch is fully
-  usable (`inspect`/`retry`/`stop` all work) and the error clears on the next
-  accepted update. A send that returns no usable message id (or a
-  malformed/cross-route id) is instead a plain error with **no** watch — the addon
-  never invents or adopts an unknown card.
-- **inspect** — report a watch's state (`watching`, `error`, `stopping`, or
-  `stop_failed`), its `last_valid_frame`, `last_valid_frame_at` (a UTC ISO-8601
-  timestamp of when that frame was captured — set on the first accepted frame and
-  every later accepted/recovered one, and left unchanged while attempts fail), and
-  the current `error` (if any). Pass the `watch_id`.
-- **retry** — re-run the renderer **now** for an active (failed or healthy) watch
-  instead of waiting for the next interval, then report the fresh state. Once you
-  have asked to `stop`, `retry` continues the stop path only — it re-checks
-  quiescence and re-attempts the clear, and will **not** re-run your renderer.
-  Pass the `watch_id`.
-- **stop** — stop the renderer thread and clear **only** the programmable frame;
-  the automatic slot and the resident message remain, and renderer files are
-  **never** deleted. The watch is removed and `stopped` is returned **only after**
-  the watcher thread has actually stopped **and** the clear is accepted — `stop`
-  never reports `stopped` while a renderer or an in-flight update is still
-  running. If the renderer, or an update projection, has not stopped yet (still
-  running past the join budget) or the clear fails (a
-  transient backend edit failure), `stop` returns a truthful, retryable
-  `stop_failed` error and **keeps** the watch; call `stop` again (or `retry`) to
-  re-check quiescence and re-attempt the clear — it never re-runs your renderer.
-  A renderer or an update that returns after you asked to stop cannot resurrect
-  the watch: its result is dropped, and an update that may already have landed is
-  cleared for you so the late frame does not linger. When the programmable slot
-  is the only content on the card, stopping
-  shows a stable `— WATCH STOPPED —` marker (an empty Telegram message is not
-  allowed) and leaves the resident message reusable. Pass the `watch_id`.
+## Renderer contract
 
-### Terminal cleanup: stop a finished watch
+A renderer is an ordinary Python file inside the agent working directory. Each run
+must exit `0` and print exactly one JSON object to stdout:
 
-A watcher does not end itself — the renderer is passive and has no `watch_id`, so
-**you** must stop it when the work finishes. When your job reaches a terminal
-display state — shell `status` `done`/`failed`/`cancelled`/`unknown`, or daemon
-`state` `done`/`failed`/`cancelled`/`timeout` (learned from the terminal shell
-`shell(action="poll")`/`shell(action="cancel")` or the terminal `daemon`
-notification/`daemon(action="check")`) — record that terminal snapshot, then
-**immediately call `task_card(action="stop", watch_id="<watch_id>")`** (the
-`watch_id` that `task_card(action="start", ...)` returned) to quiesce the watcher
-and clear the programmable slot so the completed card does not stay resident. The
-shell `unknown` display state (a terminal poll whose `exit_status_known` is
-`false`) is terminal too — it reports the exit status is unavailable, claims
-neither success nor failure, and must still be stopped/cleared, not left resident.
-The two shipped templates surface this by rendering the footer
-`terminal snapshot — stop/clear this watch now` on a terminal snapshot. If it
-returns a retryable `stop_failed`, **call the same `task_card(action="stop", ...)`
-again** — do not restart or duplicate the watch. Non-terminal states
-(`starting`/`running`) stay resident and keep updating.
+- `title` is a string (optional);
+- `lines` is an array of at most 20 strings (optional);
+- `footer` is a string (optional);
+- at least one of those values must be non-empty.
 
-### When a watch fails
+Nonzero exit, timeout, empty or multi-object output, a non-object, or wrong field
+types are handled failures. The controller uses `sys.executable`, the working
+directory as `cwd`, a per-run timeout, and symlink-resolved containment for
+`renderer_path`. Telegram receives only the validated card data, never renderer
+code. Keep secrets, credentials, raw logs, and unbounded output out of the frame;
+the manager also redacts at its boundary but cannot make an unsafe source safe.
 
-The watch keeps its **last valid frame** and does not tear itself down on a
-transient failure. Each new failure *episode* raises one deduped, fail-loud
-system-notification wake (`task_card.error`, high priority) carrying only a
-stable code, a safe message, and watch metadata — never renderer output. Repeated
-identical failures inside one episode stay silent; the next good frame emits one
-`recovered` wake and resumes. Use `inspect` to read the error, fix the renderer,
-and `retry`.
+## Lifecycle: `start` | `inspect` | `retry` | `stop`
 
-Failure codes you may see: `renderer_timeout`, `renderer_nonzero_exit`,
-`invalid_frame`, `renderer_failed`, `backend_edit_failed`,
-`resident_persist_failed` (the card is visible but its resident id was not durably
-saved — retryable; clears on the next accepted update), and — for a `stop`
-that is not yet complete — `stop_thread_alive` (the renderer thread is still
-running; retry `stop` once quiescent) or `stop_finalize_failed` (the clear was
-rejected; retry `stop`). All are retryable.
+- **`start`** validates the path and runs the renderer once synchronously. A bad
+  first run returns an error and creates no watch. On an accepted first frame it
+  projects the programmable slot and returns a `watch_id`; the watcher then runs
+  at the requested interval (minimum 1 second, default 5). Each run uses
+  `timeout_s` as its renderer timeout (minimum 0.1 second, default 10). A validated
+  visible frame whose durable resident-id write failed is surfaced as a retryable partial,
+  not mislabeled as full success. An indeterminate or malformed transport id is a
+  plain error and no unknown card is adopted.
+- **`inspect`** reports `watching`, `error`, `stopping`, or `stop_failed`, including
+  the last valid frame, its UTC ISO-8601 `last_valid_frame_at`, and the current
+  error. A failed attempt does not overwrite the last valid frame or timestamp.
+- **`retry`** runs the renderer immediately for an active watch. After `stop` has
+  been requested it continues only the stop path; it never starts another render.
+- **`stop`** quiesces the watcher and clears only the programmable slot. It returns
+  `stopped` and removes the watch only after the watcher thread is quiescent and
+  the backend accepts the clear. A live thread or transient clear failure returns
+  a retryable `stop_failed` and retains the watch; call the same stop again. A late
+  result after stop is dropped and compensated if it could have landed. Renderer
+  files are never deleted, and the automatic slot is not disturbed.
 
-## WHY it is designed this way
+The Telegram manager remains the single owner of the tracked resident, composition,
+transport, persistence, and the independent automatic slot. `/taskcard off` hides
+both slots at presentation time while rendering, watches, retries, and bookkeeping
+continue; re-enabling needs no restart.
 
-- **Telegram never runs your code as a card.** The controller runs your renderer
-  as a normal subprocess and forwards only a **validated data object** to Telegram
-  over the private reverse channel. Telegram renders text, never executes a
-  function. This keeps a clear trust boundary: the transport sees data, not code.
-- **One owner, one tracked resident target.** `TelegramManager` remains the single
-  render / compose / persistence / transport owner, including the hard-at-most-one
-  resident that stays at the chat's last message (it rotates old-first when a newer
-  message appears below it, and can briefly leave zero cards rather than two). The
-  controller is a thin driver; there is no competing rendering system and no
-  cross-channel abstraction.
-- **Synchronous first frame, fail-loud after.** A bad renderer fails *before* you
-  get a handle, so a broken watch never lingers. After the handle exists,
-  failures are surfaced as deduped wakes rather than silently dropping the card,
-  and the last good frame stays on screen.
-- **Confined and bounded.** Renderer-path confinement, a per-run timeout, a line
-  cap, and strict single-object validation keep a runaway or hostile renderer
-  from escaping the workdir or flooding the card.
+## Terminal cleanup and fail-loud behavior
 
-## Interaction with `/taskcard off`
+A passive renderer cannot stop itself. When the producer reaches a terminal state,
+record that terminal evidence and immediately call
+`task_card(action="stop", watch_id="<watch_id>")`. Retry the same call if it
+returns `stop_failed`; do not restart or duplicate the watch. Terminal evidence
+must still distinguish success, failure, cancellation, timeout, or an unavailable
+outcome according to the producer's contract. Do not leave a completed watcher
+resident merely because its card can still refresh.
 
-`/taskcard off` hides delivery of **both** slots at the Telegram presentation
-boundary. It does **not** stop the mechanics: your renderer keeps running,
-watches keep ticking, the last-valid frame keeps updating, and error/recovery
-bookkeeping continues. Turning it back on needs no restart — the next projection
-updates the resident card again. Do not infer the toggle state from whether an
-old card is visible; read the current `taskcard` value.
+After a handle exists, a renderer or backend failure preserves the last valid frame
+and emits one deduplicated, fail-loud `task_card.error` wake per failure episode,
+then one recovery wake after the next good frame. Use `inspect` to read the safe
+error and `retry` after correcting the producer snapshot or renderer. Raw renderer
+output and secrets never belong in a wake.
 
-## Reaching this manual
+## Feedback and reuse loop
 
-This manual is co-located with the unit at
-`src/lingtai/mcp_servers/telegram/task_card/SKILL.md` in the source tree. From the
-Telegram MCP manual (`telegram(action='manual')`), the **Programmable Task Card**
-section routes here. The two renderer templates ship as co-located skill assets
-under `task_card/assets/` (`render_bash_async.py`, `render_daemon.py`); resolve
-them relative to the absolute manual `path` the `manual` action returns and copy
-one into your working directory, as **Two ready templates** describes — that path,
-not any fixed source-tree location, is the usable one. The paired `CONTRACT.md`
-states the interface promise and `ANATOMY.md` maps the structure.
+After a meaningful real use-cycle or stage boundary, ask the user a focused question,
+for example: “Did this watcher help you understand the task, and what should change?”
+Do not ask every turn or turn feedback collection into ritual or harassment. First
+adapt this watcher to the answer—its facts, freshness, wording, or noise level—then
+consider whether the lesson is genuinely reusable. Deposit only that reusable,
+source-grounded method as a skill; do not turn a one-off task layout into a product
+contract or a fixed template.
+
+## Why these boundaries exist
+
+A watcher is useful when it makes producer evidence legible during a meaningful wait.
+It is harmful when a static renderer, guessed token count, or redraw timestamp
+creates the appearance of movement. The controller therefore owns validation,
+confinement, lifecycle, and fail-loud recovery, while the Agent owns judgment about
+the task, evidence source, facts to show, and how to improve the current watcher.
+The paired `CONTRACT.md` defines the stable interface and behavior promises; this
+manual defines how an Agent should design and operate a watcher without weakening
+those promises.
+
+This manual is co-located at
+`src/lingtai/mcp_servers/telegram/task_card/SKILL.md`. The top-level Telegram
+manual routes here for the programmable Task Card procedure. The paired
+`ANATOMY.md` maps the controller, resident, transport, and producer connections.

@@ -182,10 +182,10 @@ def test_telegram_task_card_subpackage_ships_manual_and_architecture_docs():
     entries = package_data["lingtai.mcp_servers.telegram.task_card"]
     for document in ("SKILL.md", "ANATOMY.md", "CONTRACT.md"):
         assert document in entries, document
-    # The renderer template assets the manual routes agents to are shipped by an
-    # explicit assets glob (same reason as the docs: the parent telegram glob does
-    # not recurse into this subpackage), so they cannot silently drop from wheels.
-    assert "assets/**/*" in entries
+    # The Task Card subpackage intentionally ships no fixed renderer assets. Agents
+    # design task-specific renderers in their own workdirs; only governed docs are
+    # packaged with this subpackage.
+    assert "assets/**/*" not in entries
     # The nested unit is a real subpackage, so the parent glob cannot cover it:
     # a bare ``SKILL.md`` in the parent entry only matches ``telegram/SKILL.md``.
     assert (

@@ -5,12 +5,11 @@ description: |
   you need detail beyond the one-line action descriptions: media.type='document'
   vs 'photo' for charts/reports/generated artifacts, placeholder/live-status
   messages, reply vs send, read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
-  the programmable Task Card (task_card tool) — including the default to add a
-  human-visible watcher for long-running shell-async/daemon work — and error
-  surfacing. Pulled on demand via action='manual'; you do not need to call it
-  before every send.
+  the programmable Task Card (task_card tool) — including task-specific watcher
+  design for meaningful long-running work — and error surfacing. Pulled on demand
+  via action='manual'; you do not need to call it before every send.
 version: 1.5.2
-last_changed_at: "2026-07-14T19:22:00-07:00"
+last_changed_at: "2026-07-16T14:57:00-07:00"
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/manager.py
@@ -245,15 +244,12 @@ structure lives in the separate
 
 ## PROGRAMMABLE TASK CARD (`task_card` tool)
 
-- **Default during Telegram-originated turns: when you launch a meaningful
-  long-running `shell(async=true)` job or daemon task and then go idle to await it,
-  create a human-visible programmable Task Card watcher for it** so the person
-  watching Telegram sees the latest reported snapshot instead of a silent gap
-  (you refresh that snapshot after launch, after meaningful polls/checks, and at
-  the terminal result). Two ready, copy-and-adapt renderer templates cover exactly
-  these two cases (`render_bash_async.py` and `render_daemon.py`); the full manual
-  below routes to them and explains how to copy an asset into your working
-  directory. Skip the watcher only for quick or invisible jobs.
+- **Task-specific watcher guidance during Telegram-originated turns:** when you
+  launch meaningful long-running work and then wait for its producer, inspect the
+  actual task and producer evidence and design a human-visible watcher when it will
+  prevent a silent gap. Record a truthful snapshot after launch, after meaningful
+  polls/checks, and at the terminal result. Skip it for quick or invisible work;
+  do not treat a watcher as a fixed layout or an autonomous live feed.
 - The resident Task Card has two independent slots: the **automatic** event-journal
   slot (manager-owned, described under **AUTOMATIC TASK CARD: `events.jsonl` →
   resident broadcast**) and a **programmable** slot you drive with the separate
@@ -273,13 +269,14 @@ structure lives in the separate
   failures keep the last valid frame and raise a deduped fail-loud system wake.
 - `/taskcard off` hides delivery of **both** slots (see **TASKCARD STATE**) while
   the renderer, watches, and last-valid bookkeeping keep running.
-- **Full manual (renderer contract, the two ready shell-async/daemon renderer
-  templates, the snapshot truthfulness model, and the full start|inspect|retry|stop
-  walkthrough):** follow the relative path `task_card/SKILL.md` from this manual's
-  directory (the co-located Programmable Task Card manual). Starting a watch drives
-  the programmable slot of the `TelegramManager`-owned single resident card,
-  reusing the tracked resident or creating its one resident if none exists yet; it
-  does not start another manager or a second card.
+- **Full task-specific manual (evidence selection, required watcher facts, safe
+  custom-renderer example, renderer contract, and the full
+  start|inspect|retry|stop walkthrough):** follow the relative path
+  `task_card/SKILL.md` from this manual's directory (the co-located Programmable
+  Task Card manual). Starting a watch drives the programmable slot of the
+  `TelegramManager`-owned single resident card, reusing the tracked resident or
+  creating its one resident if none exists yet; it does not start another manager
+  or a second card.
 
 ## ERROR SURFACING
 
