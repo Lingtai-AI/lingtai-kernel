@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 
 from lingtai.agent import Agent
 from lingtai.kernel.base_agent import BaseAgent, _build_identity_section
-from lingtai.kernel.base_agent.identity import _build_manifest, _safe_llm_from_service
+from lingtai.kernel.base_agent.identity import _build_manifest, _safe_llm_from_service, sanitize_endpoint
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
@@ -126,6 +126,22 @@ def test_safe_llm_from_service_unit():
         "model": "m",
         "base_url": "https://example.test",
     }
+
+
+def test_sanitize_endpoint_removes_userinfo_query_and_fragment():
+    assert sanitize_endpoint("https://user:secret@example.test/v1?key=secret#frag") == "https://example.test/v1"
+
+
+def test_sanitize_endpoint_preserves_ipv6_and_port_without_secrets():
+    assert sanitize_endpoint("https://user:secret@[::1]:8443/v1?token=x#frag") == "https://[::1]:8443/v1"
+
+
+def test_sanitize_endpoint_rejects_malformed_port_with_credentials():
+    assert sanitize_endpoint("https://user:secret@example.test:not-a-port/v1") == ""
+
+
+def test_sanitize_endpoint_rejects_non_url_secret_like_input():
+    assert sanitize_endpoint("api_key=super-secret-value") == ""
 
 
 def test_safe_llm_from_service_uses_provider_default_base_url():

@@ -2,56 +2,52 @@
 related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/vision/__init__.py
-  - src/lingtai/services/vision/ANATOMY.md
+  - src/lingtai/tools/vision/CONTRACT.md
   - src/lingtai/tools/vision/glossary-en.md
   - src/lingtai/tools/vision/glossary-zh.md
   - src/lingtai/tools/vision/glossary-wen.md
+  - src/lingtai/tools/vision/manual/SKILL.md
+  - src/lingtai/services/vision/ANATOMY.md
 maintenance: |
-  Keep related_files as repo-relative paths to real files. Include neighboring
-  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
-  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
-  maintenance field. If you notice drift between this anatomy and the code,
-  report it. See lingtai-dev-guide for details.
+  Keep related_files as repo-relative paths to real files and keep anatomy links
+  reciprocal. Update citations with structural code changes and run the document
+  validators after edits.
 ---
 # src/lingtai/tools/vision/
 
-Vision capability — image understanding via pluggable VisionService backends.
-
-> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues.
+The `vision` tool registers direct current-preset image analysis plus a
+provider-neutral manual route when direct setup is unavailable.
 
 ## Components
 
-| File | LOC | Role |
-|---|---|---|
-| `__init__.py` | 153 | `VisionManager`, `setup()`, provider registry, tool schema |
-
-**Key symbols:**
-- `PROVIDERS` (L27-31) — supported providers: `minimax`, `zhipu`, `mimo`, `gemini`, `anthropic`, `openai`, `codex`. No static default; OpenAI-compat inherit fallback lives in `setup()`, not the registry.
-- `VisionManager` (L53) — handles tool calls; resolves relative image paths via `agent._working_dir` (L73).
-- `setup()` (L90) — entry point called by `capabilities.setup_capability()`. Creates `VisionManager`, registers `"vision"` tool on agent (L134).
+- `__init__.py:34-41` — exact same-provider alias check; only GLM/Zhipu and codex-pool spelling pairs share current identity.
+- `__init__.py:44-52` — exact advertised provider registry; the local pseudo-provider remains explicit opt-in and intentionally excluded.
+- `__init__.py:58-76` — compatible tool schema; neither action requires an image path at schema level.
+- `__init__.py:80-128` — `VisionManager`; `manual` reads bundled guidance without a backend, while `analyze` validates and reads the image.
+- `__init__.py:131-379` — `setup`; resolves only the same current model/endpoint/credential/headers/wire, creates supported services, fails closed to manual guidance when identity is incomplete, and always registers the tool.
 
 ## Connections
 
-- **→ `lingtai.i18n.t`** (L21) — i18n for tool description and schema strings.
-- **→ `lingtai.services.vision.VisionService`** (L22) — abstract service interface + `create_vision_service()` factory.
-- **→ `capabilities._media_host.resolve_media_host`** (L120) — injected for `minimax` provider.
-- **→ `capabilities._zhipu_mode.resolve_z_ai_mode`** (L123) — injected for `zhipu` provider.
-- **→ `lingtai.kernel.base_agent.BaseAgent`** — type-only (L25).
-- **← `capabilities.__init__`** — registered as `".vision"` in `_BUILTIN`.
+- Setup lazily reaches `lingtai.services.vision` and the Codex pool selector.
+- Direct compatible aliases (`openrouter`, `deepseek`, `zhipu`, `glm`, `grok`,
+  `qwen`, `kimi`, `custom`) use current OpenAI/Anthropic-compatible identity.
+- MiniMax uses Anthropic; Codex aliases use the Codex service; Claude Code and
+  unresolved/unsupported routes remain manual-only. No MCP fallback is used.
 
 ## Composition
 
-Single file. No internal state — `VisionManager` instances hold agent + service refs.
+`VisionManager` owns the agent, optional service, and safe manual reason. The
+capability is registered by the built-in capability loader and registers one
+`vision` tool with the schema and glossary package.
 
 ## State
 
-- `VisionManager._agent` / `_vision_service` (L61-62) — per-agent instance state. Stateless tool handler otherwise.
-- `PROVIDERS` dict is module-level constant.
+Only the in-memory manager/service references persist. Manual content is bundled
+with the package; analyses are not persisted.
 
 ## Notes
 
-- OpenAI-compat fallback: if the agent's provider isn't in `PROVIDERS` but the main LLM's `_provider_defaults["api_compat"] == "openai"`, vision routes through `OpenAIVisionService` using the LLM's own `base_url`/`model`/`api_key`. Lets `custom`/`openrouter`/`deepseek`/`kimi` users opt into vision via `vision: {"provider": "inherit"}` in their preset. Succeeds only if the relay+model actually support OpenAI-style `image_url` content blocks; otherwise the runtime call surfaces the relay's error.
-- Graceful skip: if the agent's provider isn't in `PROVIDERS` AND the LLM is not OpenAI-compatible, setup returns `None` silently. Agent logs `capability_skipped`.
-- Codex is exposed through `PROVIDERS` and flows to `create_vision_service("codex", api_key=None)`; the service uses ChatGPT OAuth rather than an API key.
-- Provider-specific kwarg injection is opt-in per provider — prevents `TypeError` from passing unsupported kwargs to heterogeneous service constructors.
-- Local mlx-vlm provider exists in `services/vision/local.py` but is intentionally hidden from `PROVIDERS` (see docstring L11-14).
+Setup failures retain provider plus exception type, never exception text. Direct
+request failures likewise expose only the exception type and a manual pointer.
+Active MiMo Responses/other unsupported wires are manual-only; supported Chat
+Completions does not receive unsupported headers or wire kwargs.

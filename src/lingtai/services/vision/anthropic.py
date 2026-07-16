@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 
-from . import VisionService, _read_image
+from . import VisionService, _read_image, _require_api_key
 
 
 class AnthropicVisionService(VisionService):
@@ -20,7 +20,9 @@ class AnthropicVisionService(VisionService):
         model: str = "claude-sonnet-4-20250514",
         base_url: str | None = None,
         max_tokens: int = 1024,
+        default_headers: dict | None = None,
     ) -> None:
+        api_key = _require_api_key(api_key, "anthropic")
         import anthropic as _anthropic
 
         client_kwargs: dict = {"api_key": api_key}
@@ -28,6 +30,8 @@ class AnthropicVisionService(VisionService):
             # anthropic-compat local proxies (e.g. JoyCodeProxy) need an explicit
             # endpoint; the SDK otherwise defaults to api.anthropic.com.
             client_kwargs["base_url"] = base_url
+        if default_headers:
+            client_kwargs["default_headers"] = dict(default_headers)
         self._client = _anthropic.Anthropic(**client_kwargs)
         self._model = model
         self._max_tokens = max_tokens

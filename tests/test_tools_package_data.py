@@ -163,6 +163,10 @@ def test_wheel_ships_every_tool_contract(wheel_entries: set[str]):
     assert not missing, "tool contracts missing from wheel: %r" % missing
 
 
+def test_wheel_ships_vision_manual(wheel_entries: set[str]):
+    assert "lingtai/tools/vision/manual/SKILL.md" in wheel_entries
+
+
 def test_wheel_ships_exact_expected_tool_contracts(wheel_entries: set[str]):
     # Keep the manifest closed: the 18 top-level tool contracts plus the one
     # intentional daemon component contract. No other nested/manual contract

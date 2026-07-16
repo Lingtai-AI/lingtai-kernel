@@ -1,7 +1,7 @@
 """Gemini vision service — standalone image analysis via Google's genai SDK."""
 from __future__ import annotations
 
-from . import VisionService, _read_image
+from . import VisionService, _read_image, _require_api_key
 
 
 class GeminiVisionService(VisionService):
@@ -17,6 +17,7 @@ class GeminiVisionService(VisionService):
         api_key: str,
         model: str = "gemini-3-flash-preview",
     ) -> None:
+        api_key = _require_api_key(api_key, "gemini")
         from google import genai
         from google.genai import types
 

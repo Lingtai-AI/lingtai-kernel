@@ -9,12 +9,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
-
 # The validator lives outside the package tree; import it directly.
 _SCRIPTS = Path(__file__).resolve().parents[1] / "src" / "lingtai" / "tools" / "skills" / "manual" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
-from validate import _parse_frontmatter, validate_frontmatter  # noqa: E402
+from validate import _parse_frontmatter, validate_frontmatter, validate_skill  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +153,12 @@ class TestValidateFrontmatterMultiline:
         passed, msgs = validate_frontmatter(skill_dir)
         assert not passed
         assert any("Missing 'description'" in m for m in msgs)
+
+    def test_vision_manual_passes_repository_validator(self):
+        """The shipped vision manual must pass the repository validator directly."""
+        root = Path(__file__).resolve().parents[1]
+        manual = root / "src" / "lingtai" / "tools" / "vision" / "manual"
+        assert validate_skill(str(manual))
 
     def test_name_as_number_does_not_crash(self, tmp_path):
         """Non-string YAML scalar names should be handled gracefully."""

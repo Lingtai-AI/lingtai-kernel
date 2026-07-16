@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import MagicMock
 from lingtai.agent import Agent
 from lingtai.services.vision import VisionService
 from lingtai.services.websearch import SearchService, SearchResult
@@ -45,8 +44,8 @@ def test_agent_no_capabilities_boots_core_floor(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_agent_unsupported_vision_skip_is_not_registered(tmp_path):
-    """A skipped capability must not appear registered or callable."""
+def test_agent_unsupported_vision_registers_manual_route(tmp_path):
+    """Unsupported vision remains registered for explicit manual guidance."""
     agent = Agent(
         service=make_mock_service(),
         agent_name="test",
@@ -57,10 +56,10 @@ def test_agent_unsupported_vision_skip_is_not_registered(tmp_path):
         manifest_registered = {
             name for name, _ in agent._build_manifest().get("capabilities", [])
         }
-        assert agent.has_capability("vision") is False
-        assert agent.get_capability("vision") is None
-        assert "vision" not in agent._tool_handlers
-        assert "vision" not in manifest_registered
+        assert agent.has_capability("vision") is True
+        assert agent.get_capability("vision") is not None
+        assert "vision" in agent._tool_handlers
+        assert "vision" in manifest_registered
     finally:
         agent.stop(timeout=1.0)
 
@@ -170,17 +169,13 @@ def test_agent_seal_after_start(tmp_path):
 
 
 def test_vision_requires_provider(tmp_path):
-    """Vision capability is skipped when no provider or service is given.
-
-    setup() raises ValueError, but the agent catches it (capability_skipped)
-    and simply doesn't register the tool.
-    """
+    """No provider still registers vision's manual route."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["vision"],
     )
-    assert agent.get_capability("vision") is None
-    assert "vision" not in {s.name for s in agent._tool_schemas}
+    assert agent.get_capability("vision") is not None
+    assert "vision" in {s.name for s in agent._tool_schemas}
     agent.stop(timeout=1.0)
 
 
