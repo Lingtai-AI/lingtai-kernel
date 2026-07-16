@@ -6,7 +6,7 @@ description: |
   vs 'photo' for charts/reports/generated artifacts, placeholder/live-status
   messages, reply vs send, read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
   the programmable Task Card (task_card tool) — including the default to add a
-  human-visible watcher for long-running bash-async/daemon work — and error
+  human-visible watcher for long-running shell-async/daemon work — and error
   surfacing. Pulled on demand via action='manual'; you do not need to call it
   before every send.
 version: 1.5.2
@@ -246,7 +246,7 @@ structure lives in the separate
 ## PROGRAMMABLE TASK CARD (`task_card` tool)
 
 - **Default during Telegram-originated turns: when you launch a meaningful
-  long-running `bash(async=true)` job or daemon task and then go idle to await it,
+  long-running `shell(async=true)` job or daemon task and then go idle to await it,
   create a human-visible programmable Task Card watcher for it** so the person
   watching Telegram sees the latest reported snapshot instead of a silent gap
   (you refresh that snapshot after launch, after meaningful polls/checks, and at
@@ -273,7 +273,7 @@ structure lives in the separate
   failures keep the last valid frame and raise a deduped fail-loud system wake.
 - `/taskcard off` hides delivery of **both** slots (see **TASKCARD STATE**) while
   the renderer, watches, and last-valid bookkeeping keep running.
-- **Full manual (renderer contract, the two ready bash-async/daemon renderer
+- **Full manual (renderer contract, the two ready shell-async/daemon renderer
   templates, the snapshot truthfulness model, and the full start|inspect|retry|stop
   walkthrough):** follow the relative path `task_card/SKILL.md` from this manual's
   directory (the co-located Programmable Task Card manual). Starting a watch drives

@@ -1,11 +1,11 @@
 ---
-name: bash-manual
+name: shell-manual
 description: >
   **Read this before running long-lived agent/coding CLIs (`claude -p`,
   `codex exec`, `opencode run`, Cursor Agent, Gemini CLI, Aider, Goose,
   OpenHands, Crush, or similar harnesses), or before setting up cron,
   launchd, systemd timers, crontab jobs, or scheduled reminders.** Router for
-  Bash-related operational depth beyond the bash tool schema: async + poll
+  Shell-related operational depth beyond the shell tool schema: async + poll
   discipline for long-running child agents, host-scheduler setup, LingTai
   wake-by-mailbox-drop, built-in async last-resort reminders, script hygiene, one-shot `.notification/cron.json`
   reminders, debugging silent jobs, and safe cleanup. Start here for any
@@ -22,9 +22,9 @@ maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
-# Bash Manual — Router
+# Shell Manual — Router
 
-The `bash` tool schema covers one-off command execution. This manual routes to
+The `shell` tool schema covers one-off command execution. This manual routes to
 operational depth that is too long for the schema: host scheduling, mailbox-drop
 wakeups, async last-resort reminders, reminder files, debugging, and cleanup.
 
@@ -35,7 +35,7 @@ rule below), start here.
 
 ## Nested reference catalog
 
-`bash-manual` owns these nested references. They are parent-owned drill-down
+`shell-manual` owns these nested references. They are parent-owned drill-down
 files, not standalone top-level skills.
 
 ```yaml
@@ -140,12 +140,12 @@ files, not standalone top-level skills.
 ## Quick decision tree
 
 1. **Short deterministic host work** (finishes in seconds: `ls`, `git status`,
-   `grep`, a quick build)? Use `bash` synchronously; this manual is not needed
+   `grep`, a quick build)? Use `shell` synchronously; this manual is not needed
    unless the command is risky, scheduled, or failing mysteriously.
 2. **Long-running agent/coding CLI** (`claude -p`, `codex exec`, `opencode run`,
    Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider,
    Goose, OpenHands, Crush, or any sub-agent that may think/run tools for minutes)?
-   **Never run it synchronously.** Use `bash(async=true)` and poll — see the
+   **Never run it synchronously.** Use `shell(async=true)` and poll — see the
    resident rule below.
 3. **Time itself is the trigger?** Read `reference/scheduled-work/SKILL.md`.
 4. **You only need a single future nudge?** Read
@@ -155,7 +155,7 @@ files, not standalone top-level skills.
 
 ## Reading command results — never trust top-level `status` alone
 
-The top-level `status` of a `bash` result (`ok`/`done`) means only that the
+The top-level `status` of a `shell` result (`ok`/`done`) means only that the
 **shell spawned** the command — **not** that the command succeeded. A failed
 build, a missing file, a Python traceback, or a missing import all come back
 under `status: "ok"`. Proceeding on that false success is the single most
@@ -181,7 +181,7 @@ common way agents corrupt their own downstream work.
 ## Avoid broad recursive scans
 
 Unbounded recursive walks over large roots (`work/projects/.lingtai`) are the
-top cause of `bash` timeouts. On a timeout the tool appends an `rg` recipe when
+top cause of `shell` timeouts. On a timeout the tool appends an `rg` recipe when
 it detects this shape, but prefer it from the start:
 
 - Replace `find <root> -name …`, `Path(...).rglob(...)`, `os.walk(...)`, and
@@ -204,10 +204,10 @@ reading the whole file when you only need recent events.
 
 ## Core rules to keep resident
 
-- **Synchronous `bash` is only for short, deterministic commands.** A long-running
+- **Synchronous `shell` is only for short, deterministic commands.** A long-running
   agent/coding CLI session — `claude -p`, `codex exec`, `opencode run`, the Cursor
   agent CLI, or any sub-agent that may think and run tools for minutes — must
-  **never** be a synchronous `bash` call. Run it with `bash(async=true)` and poll
+  **never** be a synchronous `shell` call. Run it with `shell(async=true)` and poll
   the returned `job_id`. A synchronous call blocks the whole turn until the child
   exits: you stay `ACTIVE` and stop seeing channel notifications (mail, refresh,
   interrupts) for the entire duration. Async + poll keeps you responsive and
@@ -215,21 +215,21 @@ reading the whole file when you only need recent events.
 
   ```text
   # Start the child agent in the background — returns immediately with a job_id:
-  bash(async=true, reminder=1800, command="claude -p 'refactor the auth module' --output-format json")
+  shell(async=true, reminder=1800, command="claude -p 'refactor the auth module' --output-format json")
   # → {"status": "ok", "job_id": "job-a1b2c3d4e5f678901234567890abcdef", "pid": 4321}
 
   # Later turns: poll until done (handle mail/other work between polls):
-  bash(action="poll", job_id="job-a1b2c3d4e5f678901234567890abcdef", reminder=1800)
+  shell(action="poll", job_id="job-a1b2c3d4e5f678901234567890abcdef", reminder=1800)
   # → {"status": "running", …}   then eventually
   # → {"status": "done", "exit_code": 0, "ok": true, "command_status": "success", "stdout": "…", "stderr": "…"}
   #   On failure: {"status": "done", "exit_code": 1, "ok": false,
   #                "command_status": "failed", "warning": "command exited with code 1; …"}
 
   # Abandon it if needed:
-  bash(action="cancel", job_id="job-a1b2c3d4e5f678901234567890abcdef", reminder=1800)
+  shell(action="cancel", job_id="job-a1b2c3d4e5f678901234567890abcdef", reminder=1800)
   ```
 
-- **If repeated-call `_advisory` appears on `bash(action="poll")`, stop
+- **If repeated-call `_advisory` appears on `shell(action="poll")`, stop
   tight polling.** The poll already executed; the advisory is not a block. If
   the job is still running and nothing meaningful changed, handle any human
   messages, do other work, or set one future reminder (`bash` notification
@@ -238,7 +238,7 @@ reading the whole file when you only need recent events.
   reason to expect new state.
 
 - **Idle care: set an async `reminder` that matches the expected duration.**
-  Every `bash(async=true)` call has a last-resort `reminder` delay, required in
+  Every `shell(async=true)` call has a last-resort `reminder` delay, required in
   the top-level provider schema and defaulted by the runtime to 1800 seconds
   when omitted by older direct callers. Provider-facing sync commands, `poll`,
   and `cancel` also carry `reminder` because of that schema shape, but the field
@@ -250,17 +250,17 @@ reading the whole file when you only need recent events.
   `Popen`, or after the command is durably `running` but before async `run` has
   completed its return transition. Successful `run` atomically resets the
   deadline to `returned_at + reminder` and arms the guard, so startup latency does
-  not consume the interval you requested. Bash reports `status: ok` only when this
+  not consume the interval you requested. Shell reports `status: ok` only when this
   still-valid transition wins (or an exact completed/failed result already won
   under the valid guard). If the owner resumes after expiry, it returns
   `status: error` with the durable `job_id`/`pid` and an explicit "remains
   pollable" recovery message rather than claiming false success. A live job keeps
   the expired fallback; an expired launch or definitively dead supervisor becomes
   explicit unrecoverable state instead.
-  If the job is still non-terminal when its final deadline expires, Bash publishes
+  If the job is still non-terminal when its final deadline expires, Shell publishes
   a `bash.reminder` event into `.notification/system.json`.
   The deadline and stable `bash.reminder:<job_id>` claim survive agent
-  stop/relaunch: Bash re-arms a future deadline or retries an overdue/stale claim.
+  stop/relaunch: Shell re-arms a future deadline or retries an overdue/stale claim.
   Cancellation temporarily uses a bounded durable `suppressing` state; if the
   manager crashes or the supervisor does not commit before it expires, reminder
   publication becomes recoverable again. Exact supervisor terminal commit
@@ -282,7 +282,7 @@ reading the whole file when you only need recent events.
   interactive prompt or a provider/model error. If there is no progress, do not
   keep waiting — cancel, downgrade, or switch path, and report to the human.
   Use a separate `.notification/cron.json` reminder or delayed self-email only
-  for a broader workflow wake that is not tied to one Bash async job. Do not
+  for a broader workflow wake that is not tied to one Shell async job. Do not
   conflate them: a Bash reminder belongs to one persisted `job_id`, while
   `.notification/cron.json` is a separately scheduled workflow wake.
 

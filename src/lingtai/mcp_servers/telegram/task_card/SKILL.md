@@ -2,11 +2,11 @@
 name: telegram-task-card-manual
 description: |
   Manual for the programmable Telegram Task Card (`task_card` tool). Read this to
-  surface your latest reported state snapshot — a bash async job, a daemon task,
+  surface your latest reported state snapshot — a shell async job, a daemon task,
   a build — on the resident Telegram Task Card by supplying a small Python
   renderer whose stdout is one Task Card JSON object. Covers the renderer
   contract, the snapshot truthfulness model, the two co-located renderer
-  templates (bash async, daemon) shipped as skill assets, the
+  templates (shell async, daemon) shipped as skill assets, the
   start | inspect | retry | stop lifecycle, path/timeout/validation rules,
   fail-loud error wakes, and how the /taskcard toggle interacts.
 last_changed_at: "2026-07-14T19:22:00-07:00"
@@ -32,7 +32,7 @@ autonomous progress feed.
 ## When to reach for this
 
 During a **Telegram-originated turn**, when you launch a meaningful
-**long-running `bash(async=true)` job or daemon task** and then go idle to await
+**long-running `shell(async=true)` job or daemon task** and then go idle to await
 its result, add a human-visible programmable Task Card watcher so the human
 watching Telegram sees the latest reported snapshot instead of a silent gap. Two
 ready templates cover exactly these two cases — see **Two ready templates** below.
@@ -96,8 +96,8 @@ its cwd, so it locates state by a fixed relative path. Point it at a small
 **state snapshot file that you (the orchestrator) keep truthful** — not at a
 tool's private internals:
 
-- A `bash(async=true)` job's own state under `system/jobs/<job_id>/` is **private
-  to the Bash capability**, and `bash(action="poll")` is a **one-shot, consuming**
+- A `shell(async=true)` job's own state under `system/jobs/<job_id>/` is **private
+  to the shell capability**, and `shell(action="poll")` is a **one-shot, consuming**
   read (the first terminal poll marks the job consumed). A passive renderer must
   not touch either.
 - A daemon run's `daemons/<id>/daemon.json` is a **versioned forensic** artifact,
@@ -113,7 +113,7 @@ job progress. It never invents or introspects tool state.
 
 **Truthfulness contract (both templates enforce this):** a live/terminal card is
 shown **only** when the snapshot carries both a nonempty **identity** (`job_id`
-for bash, `id` for daemon) **and** an exact allow-listed **state** string. A
+for shell, `id` for daemon) **and** an exact allow-listed **state** string. A
 missing file, non-JSON, non-object, missing identity/state, an unknown state, or
 a wrong-typed field renders an explicit `awaiting orchestrator update` frame —
 never a fabricated `starting`/`running`. So an empty or half-written snapshot can
@@ -134,38 +134,38 @@ Each prints exactly one bounded Task Card object, enforces the truthfulness
 contract above, and stays valid even when the snapshot is missing, partial, or
 malformed:
 
-- **`render_bash_async.py`** — for a `bash(async=true)` job. Reads
+- **`render_bash_async.py`** — for a `shell(async=true)` job. Reads
   `task_card_state.json`. Requires `job_id` (str) + `status` (str, one of
   `starting|running|done|failed|cancelled|unknown`); also surfaces optional
   `title`, `exit_code` (int), `stage`, `updated_at`, `note`. Here `status` is a
   **display state you derive from the sanctioned poll/cancel result**, not the raw
-  top-level bash `status` (which is always `done` on completion — see the mapping
-  under **Deriving the bash display state** below).
+  top-level shell `status` (which is always `done` on completion — see the mapping
+  under **Deriving the shell display state** below).
 - **`render_daemon.py`** — for a daemon task (emanation). Reads
   `daemon_card_state.json`. Requires `id` (str) + `state` (str, one of
   `running|done|failed|cancelled|timeout`); also surfaces optional `title`,
   `current`, `elapsed_s` (finite number), `last_activity`, `health`
   (`alive|stalled|unknown`), `updated_at`, `note`.
 
-**Deriving the bash display state.** The bash `status` you record is a **display
-state derived from the sanctioned action result**, not the raw top-level bash
-`status`. Bash's terminal `bash(action="poll")` is **always** top-level
+**Deriving the shell display state.** The shell `status` you record is a **display
+state derived from the sanctioned action result**, not the raw top-level shell
+`status`. Shell's terminal `shell(action="poll")` is **always** top-level
 `status: "done"` — a nonzero inner command does **not** make it a top-level
 `"failed"`; the pass/fail signal is in the additive fidelity fields
 (`exit_status_known`, `exit_code`, `ok`, `command_status`). Map the result:
 
-| `bash` result | record `status` |
+| `shell` result | record `status` |
 |---|---|
 | `{"status": "running", ...}` | `running` (resident) |
 | `{"status": "done", "exit_status_known": true, "exit_code": 0, "ok": true, "command_status": "success"}` | `done` (terminal) |
 | `{"status": "done", "exit_status_known": true, "exit_code": <nonzero>, "ok": false, "command_status": "failed"}` | `failed` (terminal) |
 | `{"status": "done", "exit_status_known": false, "exit_code": null, ...}` | `unknown` (terminal) |
-| `bash(action="cancel")` → `{"status": "cancelled", ...}` | `cancelled` (terminal) |
+| `shell(action="cancel")` → `{"status": "cancelled", ...}` | `cancelled` (terminal) |
 
 So a nonzero completion is recorded `failed` (never `done` by copying the raw
 top-level `status`), and an exit-status-unavailable terminal completion is
 recorded `unknown` — a distinct **terminal** state that reports the exit status is
-unavailable and claims **neither** success **nor** failure (Bash never invents
+unavailable and claims **neither** success **nor** failure (Shell never invents
 `-1` or a false `command_status: "failed"` for it, so neither does the card). Copy
 `exit_code` only when `exit_status_known` is true; omit it for `unknown`. All four
 terminal display states (`done`, `failed`, `cancelled`, `unknown`) render the
@@ -241,14 +241,14 @@ driver that forwards validated frames.
 
 A watcher does not end itself — the renderer is passive and has no `watch_id`, so
 **you** must stop it when the work finishes. When your job reaches a terminal
-display state — bash `status` `done`/`failed`/`cancelled`/`unknown`, or daemon
-`state` `done`/`failed`/`cancelled`/`timeout` (learned from the terminal bash
-`bash(action="poll")`/`bash(action="cancel")` or the terminal `daemon`
+display state — shell `status` `done`/`failed`/`cancelled`/`unknown`, or daemon
+`state` `done`/`failed`/`cancelled`/`timeout` (learned from the terminal shell
+`shell(action="poll")`/`shell(action="cancel")` or the terminal `daemon`
 notification/`daemon(action="check")`) — record that terminal snapshot, then
 **immediately call `task_card(action="stop", watch_id="<watch_id>")`** (the
 `watch_id` that `task_card(action="start", ...)` returned) to quiesce the watcher
 and clear the programmable slot so the completed card does not stay resident. The
-bash `unknown` display state (a terminal poll whose `exit_status_known` is
+shell `unknown` display state (a terminal poll whose `exit_status_known` is
 `false`) is terminal too — it reports the exit status is unavailable, claims
 neither success nor failure, and must still be stopped/cleared, not left resident.
 The two shipped templates surface this by rendering the footer

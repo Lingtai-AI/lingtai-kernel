@@ -95,7 +95,7 @@ Read `daemon.json` once. The fields you want:
 - `result_preview` / `result_path` — bounded terminal preview and full `result.txt` path after completion
 - `elapsed_s` — wall clock since start
 
-If `current_tool` is null AND `tool_call_count` hasn't changed for a while, the LLM is thinking — wait. If `current_tool` is set and stays set, that tool is slow (e.g., a big file read or a long bash command).
+If `current_tool` is null AND `tool_call_count` hasn't changed for a while, the LLM is thinking — wait. If `current_tool` is set and stays set, that tool is slow (e.g., a big file read or a long shell command).
 
 ### "What has it figured out so far?"
 

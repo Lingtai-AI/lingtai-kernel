@@ -10,11 +10,11 @@ related_files:
 - src/lingtai/tools/bash/glossary-en.md
 - src/lingtai/tools/bash/glossary-zh.md
 maintenance: |
-  Classical-Chinese (wen) glossary for the `bash` tool package (lingtai.tools.bash); body must stay non-empty and distinct from glossary-zh.md. Update in lockstep with glossary-en.md/glossary-zh.md whenever bash's public tool schema changes.
+  Classical-Chinese (wen) glossary for the canonical `shell` tool (retained implementation package lingtai.tools.bash); body must stay non-empty and distinct from glossary-zh.md. Update in lockstep with glossary-en.md/glossary-zh.md whenever shell's public tool schema changes.
 ---
 **名相对照**
 
-- `bash`：执行指令，返 stdout/stderr。可运行系统上一切可用之程——脚本、git、curl、pip、数据管道等。返 exit_code、stdout、stderr，兼附 ok（真伪）与 command_status（'success'/'failed'）。须知：命令虽败，顶层 status 仍作 'ok'——此仅言 shell 已运，非言命令已成。必察 exit_code/ok，且阅 warning 一字（标非零之退、Python 之回溯、缺失之模块）；勿独凭 status 而断其成。忌大范围递归之扫（find … -name、rglob、os.walk、glob('**')）——易致超时；宜先用 `rg --files`。JSONL 当逐行而解，勿混作一 JSON。支持异步：设 async=true 取 job_id，后以 poll/cancel 查之。用此器前，必先读 `bash-manual` 一技（含定时之设、异步之规、进阶之用），无所例外。
+- `shell`：执行指令，返 stdout/stderr。可运行系统上一切可用之程——脚本、git、curl、pip、数据管道等。返 exit_code、stdout、stderr，兼附 ok（真伪）与 command_status（'success'/'failed'）。须知：命令虽败，顶层 status 仍作 'ok'——此仅言 shell 已运，非言命令已成。必察 exit_code/ok，且阅 warning 一字（标非零之退、Python 之回溯、缺失之模块）；勿独凭 status 而断其成。忌大范围递归之扫（find … -name、rglob、os.walk、glob('**')）——易致超时；宜先用 `rg --files`。JSONL 当逐行而解，勿混作一 JSON。支持异步：设 async=true 取 job_id，后以 poll/cancel 查之。用此器前，必先读 `shell-manual` 一技（含定时之设、异步之规、进阶之用），无所例外。
 - `action`：所行之事：'run'（默认）执行指令，'poll' 查异步任务之状，'cancel' 斩异步任务
 - `command`：欲执行之指令
 - `timeout`：超时秒数（默认：30，唯同步执行时生效）

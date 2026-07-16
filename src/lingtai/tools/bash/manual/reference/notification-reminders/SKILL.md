@@ -1,7 +1,7 @@
 ---
 name: bash-notification-reminders
 description: >
-  Nested bash-manual reference for one-shot wakeup reminders using
+  Nested shell-manual reference for one-shot wakeup reminders using
   `.notification/cron.json`: payload shape, atomic writer, shell example, and the
   rest checklist for agents leaving work pending.
 version: 1.0.0
@@ -16,7 +16,7 @@ maintenance: |
 
 # Notification Reminder Reference
 
-Nested bash-manual reference. Open this when you need a one-shot reminder or a
+Nested shell-manual reference. Open this when you need a one-shot reminder or a
 lightweight wakeup nudge rather than a full recurring host scheduler.
 
 ## One-shot wakeup reminders via `.notification/cron.json`

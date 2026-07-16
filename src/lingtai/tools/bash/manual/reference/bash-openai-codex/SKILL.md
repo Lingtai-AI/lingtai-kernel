@@ -1,7 +1,7 @@
 ---
 name: bash-openai-codex
 description: >
-  Nested bash-manual reference for OpenAI Codex CLI. Manual (not a tool) for OpenAI Codex CLI — OpenAI's coding agent that runs
+  Nested shell-manual reference for OpenAI Codex CLI. Manual (not a tool) for OpenAI Codex CLI — OpenAI's coding agent that runs
   locally from your terminal. Built in Rust for speed and efficiency. Supports
   headless remote control, Vim editing, plugin management, hooks, and Chrome
   browser integration. Read this when the human asks to use OpenAI Codex CLI,
@@ -19,7 +19,7 @@ maintenance: |
 
 # OpenAI Codex CLI
 
-> Ownership: this CLI-agent reference now lives under `bash-manual`
+> Ownership: this CLI-agent reference now lives under `shell-manual`
 > because the workflow is executed as a long-running shell subprocess.
 > It was moved from `swiss-knife` during the bash harness migration.
 
@@ -30,7 +30,7 @@ maintenance: |
 
 LingTai exposes Codex in two forms. They are **not interchangeable** — pick the one whose shape matches the work.
 
-### CLI (`codex exec ...` via bash)
+### CLI (`codex exec ...` via shell)
 
 A single synchronous subprocess. You wait for it to finish, you get one transcript back, the conversation ends when the bash call returns.
 

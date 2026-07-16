@@ -39,7 +39,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the Codex daemon backend's flag
     surface. Read this only when a daemon task needs Codex-specific CLI flags
     (model selection, reasoning effort, config overrides): it routes to the
-    installed CLI's live help via bash and shows how to translate that help
+    installed CLI's live help via shell and shows how to translate that help
     into generic `backend_options` (e.g. repeated `--config` overrides).
 - name: daemon-backend-opencode
   location: reference/backends/opencode/SKILL.md
@@ -47,7 +47,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the OpenCode daemon backend's
     flag surface. Read this only when a daemon task needs OpenCode-specific
     CLI flags (model selection, reasoning variants, agent choice): it routes
-    to the installed CLI's live help via bash and shows how to translate that
+    to the installed CLI's live help via shell and shows how to translate that
     help into generic `backend_options` (e.g. `--model provider/model`).
 - name: daemon-backend-claude-p
   location: reference/backends/claude-p/SKILL.md
@@ -55,7 +55,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the claude-p (alias claude-code)
     daemon backend's flag surface. Read this only when a daemon task needs
     Claude Code-specific CLI flags (model selection, fallback model, tool
-    restrictions): it routes to the installed CLI's live help via bash and
+    restrictions): it routes to the installed CLI's live help via shell and
     shows how to translate that help into generic `backend_options` (e.g.
     underscore keys becoming dashed long flags like `--fallback-model`).
 - name: daemon-backend-mimocode
@@ -64,7 +64,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the MiMo Code (`mimocode` /
     `mimo`) daemon backend's flag surface. Read this only when a daemon task
     needs MiMo-specific CLI flags (model selection, provider switches): it
-    routes to the installed CLI's live help via bash (`mimo run --help`) and
+    routes to the installed CLI's live help via shell (`mimo run --help`) and
     shows how to translate that help into generic `backend_options`.
 - name: daemon-backend-qwen-code
   location: reference/backends/qwen-code/SKILL.md
@@ -72,7 +72,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the Qwen Code (`qwen-code` /
     `qwen`) daemon backend's flag surface. Read this only when a daemon task
     needs Qwen-specific CLI flags (model selection, provider tunables): it
-    routes to the installed CLI's live help via bash and shows how to
+    routes to the installed CLI's live help via shell and shows how to
     translate that help into generic `backend_options`, plus the backend's
     reserved-flag and no-resume boundaries.
 - name: daemon-backend-kimicode
@@ -81,7 +81,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the Kimi Code daemon backend's
     flag surface. Read this only when a daemon task needs Kimi-specific CLI
     flags (model selection, skills/workspace directories): it routes to the
-    installed CLI's live help via bash and shows how to translate that help
+    installed CLI's live help via shell and shows how to translate that help
     into generic `backend_options`, plus the exact reserved harness flags,
     the run-private `mcp.json` loader, and the current ask/resume limitation.
 - name: daemon-backend-cursor
@@ -90,7 +90,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the Cursor daemon backend's flag
     surface. Read this only when a daemon task needs Cursor-specific CLI
     flags (model selection, output/tooling switches): it routes to the
-    installed `agent` CLI's live help via bash and shows how to translate
+    installed `agent` CLI's live help via shell and shows how to translate
     that help into generic `backend_options`.
 - name: daemon-backend-oh-my-pi
   location: reference/backends/oh-my-pi/SKILL.md
@@ -98,7 +98,7 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the Oh-My-Pi (`omp`) daemon
     backend's flag surface. Read this only when a daemon task needs
     Oh-My-Pi-specific CLI flags (model selection, tool or provider
-    switches): it routes to the installed CLI's live help via bash, lists
+    switches): it routes to the installed CLI's live help via shell, lists
     the exact harness-reserved flags, and shows how to translate that help
     into generic `backend_options`.
 - name: daemon-backend-lingtai
@@ -152,21 +152,21 @@ ownership:
 - This page owns the daemon API contract: backend names, `daemon(...)` behavior,
   `backend_options`, result/session capture, `ask`/resume, and backend-specific
   parser caveats.
-- `bash-manual` owns the shell subprocess recipes for the underlying CLIs. Before
+- `shell-manual` owns the shell subprocess recipes for the underlying CLIs. Before
   launching or troubleshooting a long-running coding CLI directly from bash,
   read the matching nested bash reference:
-  - Claude Code: `bash-manual` → `reference/bash-claude-code/SKILL.md`
-  - OpenAI Codex: `bash-manual` → `reference/bash-openai-codex/SKILL.md`
-  - OpenCode: `bash-manual` → `reference/bash-opencode/SKILL.md`
-  - Cursor Agent: `bash-manual` → `reference/bash-cursor-agent/SKILL.md`
-  - MiMo Code: `bash-manual` → `reference/bash-mimocode/SKILL.md`
-  - Qwen Code: `bash-manual` → `reference/bash-qwen-code/SKILL.md`
-  - Oh-My-Pi / Pi Coding Agent: `bash-manual` →
+  - Claude Code: `shell-manual` → `reference/bash-claude-code/SKILL.md`
+  - OpenAI Codex: `shell-manual` → `reference/bash-openai-codex/SKILL.md`
+  - OpenCode: `shell-manual` → `reference/bash-opencode/SKILL.md`
+  - Cursor Agent: `shell-manual` → `reference/bash-cursor-agent/SKILL.md`
+  - MiMo Code: `shell-manual` → `reference/bash-mimocode/SKILL.md`
+  - Qwen Code: `shell-manual` → `reference/bash-qwen-code/SKILL.md`
+  - Oh-My-Pi / Pi Coding Agent: `shell-manual` →
     `reference/bash-oh-my-pi/SKILL.md`
-  - Kimi Code: `bash-manual` → `reference/bash-kimicode/SKILL.md`
+  - Kimi Code: `shell-manual` → `reference/bash-kimicode/SKILL.md`
 
 Candidate harnesses that are not daemon backends yet (Gemini CLI, Aider, Goose,
-OpenHands, Crush, and Zed/ACP bridges) are tracked under `bash-manual` as
+OpenHands, Crush, and Zed/ACP bridges) are tracked under `shell-manual` as
 `reference/bash-*/SKILL.md` pages until their command/session contracts are
 stable enough for backend promotion.
 
@@ -243,7 +243,7 @@ intrinsic is available only
 when explicitly requested in the task `tools` list, so result-only/no-tool
 emanations cannot communicate in the local agent network unless the parent opted
 in. Other intrinsics remain unavailable to keep daemon lightweight and
-non-recursive. As with file/bash/web/MCP tools, technical availability is not a
+non-recursive. As with file/shell/web/MCP tools, technical availability is not a
 policy by itself: the parent should use `system_prompt` to say when and how the
 daemon may use any available tool, including who it may contact and what context
 it may share if email is involved.
@@ -308,7 +308,7 @@ loader), read `reference/backends/kimicode/SKILL.md`. For Cursor (binary `agent`
 This is intentionally a passthrough, not a fixed table. Claude Code, Codex,
 OpenCode, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, and Cursor rev their flag
 lists between releases. Before adding new options, run the installed CLI's
-`--help` in `bash` to discover what it supports today (`claude --help`,
+`--help` in `shell` to discover what it supports today (`claude --help`,
 `codex exec --help`, `opencode run --help`, `mimo run --help`, `qwen --help`,
 `omp --help`, `kimi --help`, or `agent --help`). Anything here is illustrative,
 not authoritative. Note that each backend reserves its own harness-owned flags

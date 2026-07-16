@@ -1,7 +1,7 @@
 ---
 name: bash-goose
 description: >
-  Nested bash-manual reference for Goose CLI. Read this when you need to run,
+  Nested shell-manual reference for Goose CLI. Read this when you need to run,
   validate, or document `goose` as a long-running shell subprocess or LingTai
   daemon harness candidate.
 version: 0.1.0
@@ -15,7 +15,7 @@ maintenance: |
 
 # Goose CLI
 
-Nested bash-manual reference. This page owns **shell execution hygiene** for
+Nested shell-manual reference. This page owns **shell execution hygiene** for
 `goose`: command shape, async/poll discipline, approval flags, session/resume
 caveats, and whether the CLI is ready for a LingTai daemon backend.
 
@@ -30,7 +30,7 @@ goose run/session commands (verify current `goose --help`)
 ```
 
 Before relying on the command in production, run the current CLI's `--help` and
-prefer `bash(async=true)` for work that can think, edit files, or run tools for
+prefer `shell(async=true)` for work that can think, edit files, or run tools for
 minutes. Do not run long coding CLIs synchronously from the parent turn.
 
 ## LingTai daemon notes

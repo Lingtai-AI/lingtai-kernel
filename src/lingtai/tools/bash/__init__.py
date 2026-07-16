@@ -1,12 +1,12 @@
-"""Bash capability — shell command execution with file-based policy.
+"""Canonical shell capability — shell command execution with file-based policy.
 
 Adds the ability to run shell commands. This is a capability (not intrinsic)
 because not every agent should have shell access — it's a powerful
 capability that should be explicitly opted into.
 
 Usage:
-    agent.add_capability("bash", policy_file="path/to/policy.json")
-    agent.add_capability("bash", yolo=True)  # no restrictions
+    agent.add_capability("shell", policy_file="path/to/policy.json")
+    agent.add_capability("shell", yolo=True)  # no restrictions
 """
 from __future__ import annotations
 
@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 PROVIDERS = {"providers": [], "default": "builtin"}
 
 _DEFAULT_POLICY_FILE = Path(__file__).parent / "bash_policy.json"
+_POWERSHELL_POLICY_FILE = Path(__file__).parent / "powershell_policy.json"
 _DEFAULT_ASYNC_REMINDER_SECONDS = 1800.0
 _SUPERVISOR_START_LEASE_SECONDS = 3.0
 # The parent may spend one start lease launching the supervisor and another
@@ -56,17 +57,30 @@ _CANCEL_COMMIT_TIMEOUT_SECONDS = 3.0
 _JOB_ID_RE = re.compile(r"job-(?:[0-9a-f]{32}|[0-9a-f]{8})\Z")
 
 
-def _select_bash_shell_dialect() -> ShellDialect:
-    """Load the outer selector lazily to keep adapter → Port imports acyclic."""
-    from lingtai.adapters.bash import select_bash_shell_dialect
+def _select_shell_dialect() -> ShellDialect:
+    """Load the canonical outer selector lazily to keep imports acyclic."""
+    from lingtai.adapters.shell import select_shell_dialect
 
-    return select_bash_shell_dialect()
+    return select_shell_dialect()
 
 
-def _select_bash_async_process() -> BashAsyncProcessPort:
-    """Load the process adapter lazily so the capability remains composition-led."""
-    from lingtai.adapters.bash_process import select_bash_async_process
-    return select_bash_async_process()
+def _describe_host_os() -> str:
+    """Load setup-time host metadata from the outer composition layer."""
+    from lingtai.adapters.shell import describe_host_os
+
+    return describe_host_os()
+
+
+def _select_shell_async_process() -> BashAsyncProcessPort:
+    """Load the canonical process selector lazily."""
+    from lingtai.adapters.shell_process import select_shell_async_process
+    return select_shell_async_process()
+
+
+# Retained private names keep old implementation-only callers readable during
+# the PR1 rollout; they do not create another registered tool.
+_select_bash_shell_dialect = _select_shell_dialect
+_select_bash_async_process = _select_shell_async_process
 
 # Length of the stderr tail surfaced in the failure warning. Short on purpose:
 # the full stderr is already present in the result; the tail just makes the
@@ -209,8 +223,18 @@ def _augment_command_result(result: dict) -> dict:
     result["warning"] = "; ".join(parts)
     return result
 
-def get_description(lang: str = "en") -> str:
-    return "Execute a shell command and return stdout/stderr. Any system program — scripts, git, curl, pip, data pipelines. Returns exit_code, stdout, stderr, plus ok (bool) and command_status ('success'/'failed'). IMPORTANT: top-level status stays 'ok' even when the command FAILS — it only means the shell ran. Always check exit_code/ok and read the warning field (it names nonzero exits, Python tracebacks, and missing modules); never assume success from status alone. Avoid broad recursive scans (find … -name, rglob, os.walk, glob('**')) — they time out; prefer `rg --files`. Parse JSONL line-by-line, not as one JSON blob. Supports async mode (async=true → job_id, then poll/cancel). Before using this tool, read the `bash-manual` skill — it covers cron setup, async hygiene, and advanced usage; no exceptions."
+def get_description(
+    lang: str = "en",
+    dialect: str = "posix",
+    host_os: str | None = None,
+) -> str:
+    host = f" Host OS: {host_os}." if host_os else ""
+    return (f"Execute a shell command and return stdout/stderr. Active shell dialect: {dialect}.{host} "
+            "The dialect and host OS are detected at setup time; calls cannot choose them. Any system program — scripts, git, curl, pip, data pipelines. "
+            "Returns exit_code, stdout, stderr, plus ok (bool) and command_status ('success'/'failed'). IMPORTANT: top-level status stays 'ok' even when the command FAILS — it only means the shell ran. "
+            "Always check exit_code/ok and read the warning field (it names nonzero exits, Python tracebacks, and missing modules); never assume success from status alone. "
+            "Avoid broad recursive scans (find … -name, rglob, os.walk, glob('**')) — they time out; prefer `rg --files`. Parse JSONL line-by-line, not as one JSON blob. "
+            "Supports async mode (async=true → job_id, then poll/cancel). Before using this tool, read the `shell-manual` skill — it covers async hygiene and advanced usage; no exceptions.")
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -243,7 +267,7 @@ def get_schema(lang: str = "en") -> dict:
             },
             "reminder": {
                 "type": "number",
-                "description": "Last-resort async wake delay in seconds (default: 1800). For async run only: if the job is still non-terminal when the durable deadline expires, publish a system notification reminding you to poll it; exact completion suppresses this stale watchdog and publishes the Bash completion wake instead.",
+                "description": "Last-resort async wake delay in seconds (default: 1800). For async run only: if the job is still non-terminal when the durable deadline expires, publish a system notification reminding you to poll it; exact completion suppresses this stale watchdog and publishes the shell completion wake instead.",
                 "default": _DEFAULT_ASYNC_REMINDER_SECONDS,
             },
             "job_id": {
@@ -261,7 +285,7 @@ def get_schema(lang: str = "en") -> dict:
 
 
 
-class BashPolicy:
+class ShellPolicy:
     """Command execution policy — allow/deny lists with pipe awareness.
 
     Two modes, determined by the policy file content:
@@ -278,7 +302,7 @@ class BashPolicy:
         self._deny = set(deny) if deny and not allow else None
 
     @classmethod
-    def from_file(cls, path: str) -> "BashPolicy":
+    def from_file(cls, path: str) -> "ShellPolicy":
         """Load policy from a JSON file with allow/deny lists."""
         p = Path(path)
         if not p.is_file():
@@ -287,7 +311,7 @@ class BashPolicy:
         return cls(allow=data.get("allow"), deny=data.get("deny"))
 
     @classmethod
-    def yolo(cls) -> "BashPolicy":
+    def yolo(cls) -> "ShellPolicy":
         """Create a policy that allows everything."""
         return cls()
 
@@ -315,16 +339,23 @@ class BashPolicy:
         commands = self._extract_commands(command)
         return all(self._check_single(cmd) for cmd in commands)
 
-    def _check_single(self, cmd: str) -> bool:
-        """Check a single command name against policy.
+    def _check_single(self, cmd: str, *, case_insensitive: bool = False) -> bool:
+        """Check one command name against policy.
 
-        Allowlist mode: command must be in allow set.
-        Denylist mode: command must not be in deny set.
+        PowerShell command names are case-insensitive; POSIX retains its
+        historical case-sensitive matching.  The manager supplies the dialect
+        fact rather than making this policy object inspect the host.
         """
-        if self._allow is not None:
-            return cmd in self._allow
-        if self._deny is not None:
-            return cmd not in self._deny
+        if case_insensitive:
+            cmd = cmd.casefold()
+            allow = {item.casefold() for item in self._allow} if self._allow is not None else None
+            deny = {item.casefold() for item in self._deny} if self._deny is not None else None
+        else:
+            allow, deny = self._allow, self._deny
+        if allow is not None:
+            return cmd in allow
+        if deny is not None:
+            return cmd not in deny
         return True
 
     @staticmethod
@@ -337,12 +368,12 @@ class BashPolicy:
         return list(extract_posix_commands(command))
 
 
-class BashManager:
+class ShellManager:
     """Manages shell commands; async terminal truth belongs to a durable child."""
 
     def __init__(
         self,
-        policy: BashPolicy,
+        policy: ShellPolicy,
         working_dir: str,
         agent: "BaseAgent",
         max_output: int = 50_000,
@@ -353,8 +384,8 @@ class BashManager:
         self._working_dir = working_dir
         self._max_output = max_output
         self._agent = agent
-        self._dialect = dialect or _select_bash_shell_dialect()
-        self._async_process = async_process or _select_bash_async_process()
+        self._dialect = dialect or _select_shell_dialect()
+        self._async_process = async_process or _select_shell_async_process()
         self._jobs_dir: Path | None = None
         self._reminder_lock = threading.Lock()
         self._reminder_cancel_events: dict[str, threading.Event] = {}
@@ -395,8 +426,19 @@ class BashManager:
         """Validate command is non-empty and allowed by policy. Returns error dict or None."""
         if not command.strip():
             return {"status": "error", "message": "command is required"}
-        commands = self._dialect.extract_commands(command)
-        if not all(self._policy._check_single(cmd) for cmd in commands):
+        try:
+            commands = self._dialect.extract_commands(command)
+        except (NotImplementedError, ValueError) as exc:
+            return {"status": "error", "message": f"Shell dialect cannot validate command safely: {exc}"}
+        powershell = self._dialect.state_key() == "powershell"
+        if powershell and "__powershell_unsupported__" in commands and (
+            self._policy._allow is not None or self._policy._deny is not None
+        ):
+            return {
+                "status": "error",
+                "message": "PowerShell policy validation does not support this syntax; refusing to run it",
+            }
+        if not all(self._policy._check_single(cmd, case_insensitive=powershell) for cmd in commands):
             denied = commands
             return {
                 "status": "error",
@@ -758,8 +800,8 @@ class BashManager:
                     }
                 return {
                     "status": "ok", "job_id": job_id, "pid": pid,
-                    "message": f'Job started. Use bash(action="poll", job_id="{job_id}") to check.',
-                    "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read bash-manual and notification-manual for details.",
+                    "message": f'Job started. Use shell(action="poll", job_id="{job_id}") to check.',
+                    "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read shell-manual and notification-manual for details.",
                 }
             if state and self._terminal(state.get("status")):
                 break
@@ -951,8 +993,8 @@ class BashManager:
 
     def _publish_async_reminder(self, job_id: str) -> bool:
         body = (
-            f"Bash async job {job_id} may still be running. "
-            f"Poll it with bash(action=\"poll\", job_id=\"{job_id}\")."
+            f"Shell async job {job_id} may still be running. "
+            f"Poll it with shell(action=\"poll\", job_id=\"{job_id}\")."
         )
         agent = self._agent
         if hasattr(agent, "_enqueue_system_notification"):
@@ -1445,12 +1487,18 @@ class BashManager:
         """Compatibility no-op: durable supervisors own and close their logs."""
         return None
 
+# Compatibility names for direct imports from the retained implementation
+# package.  The canonical public symbols are ShellPolicy and ShellManager.
+BashPolicy = ShellPolicy
+BashManager = ShellManager
+
+
 def setup(
     agent: "BaseAgent",
     policy_file: str | None = None,
     yolo: bool = False,
-) -> BashManager:
-    """Set up the bash capability on an agent.
+) -> ShellManager:
+    """Set up the canonical shell capability on an agent.
 
     Args:
         agent: The agent to extend.
@@ -1460,29 +1508,29 @@ def setup(
     Returns:
         The BashManager instance for programmatic access.
     """
-    # Resolve policy: explicit arg or default
+    # Resolve the dialect before the default policy so PowerShell does not
+    # silently reuse a POSIX denylist.  An explicit policy remains authoritative.
+    dialect = _select_shell_dialect()
     resolved_policy_file = policy_file
-
     if yolo:
-        policy = BashPolicy.yolo()
+        policy = ShellPolicy.yolo()
     elif resolved_policy_file is not None:
-        policy = BashPolicy.from_file(resolved_policy_file)
+        policy = ShellPolicy.from_file(resolved_policy_file)
     else:
-        policy = BashPolicy.from_file(str(_DEFAULT_POLICY_FILE))
+        default_policy = _POWERSHELL_POLICY_FILE if dialect.state_key() == "powershell" else _DEFAULT_POLICY_FILE
+        policy = ShellPolicy.from_file(str(default_policy))
 
-
-    dialect = _select_bash_shell_dialect()
-    mgr = BashManager(
+    mgr = ShellManager(
         policy=policy,
         working_dir=str(agent._working_dir),
         agent=agent,
         dialect=dialect,
     )
-    # Build description with policy rules
-    desc = get_description()
+    # Description is setup-time metadata derived from the injected adapter and host.
+    desc = get_description(dialect=dialect.state_key(), host_os=_describe_host_os())
     policy_summary = policy.describe()
     if policy_summary:
         desc = f"{desc}\n\n{policy_summary}"
 
-    agent.add_tool("bash", schema=get_schema(), handler=mgr.handle, description=desc, glossary_package=__package__)
+    agent.add_tool("shell", schema=get_schema(), handler=mgr.handle, description=desc, glossary_package=__package__)
     return mgr

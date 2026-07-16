@@ -76,7 +76,10 @@ CAPABILITY_UNAVAILABLE = _CapabilityUnavailable()
 BUILTIN_TOOLS: dict[str, str] = {
     "knowledge": "lingtai.tools.knowledge",
     "skills": "lingtai.tools.skills",
-    "bash": "lingtai.tools.bash",
+    # ``bash`` remains a one-way input alias only; the public capability is
+    # canonically named ``shell`` while its PR1 implementation stays in the
+    # retained internal package.
+    "shell": "lingtai.tools.bash",
     "avatar": "lingtai.tools.avatar",
     "daemon": "lingtai.tools.daemon",
     "mcp": "lingtai.tools.mcp",
@@ -98,14 +101,14 @@ _GROUPS: dict[str, list[str]] = {
 # init.json's ``manifest.capabilities`` only needs to declare overrides (kwargs)
 # or opt-ins beyond this set; ``manifest.disable`` is the opt-out channel.
 #
-# ``bash`` defaults to {"yolo": True} (unsandboxed). Hosts that want a sandbox
+# ``shell`` defaults to {"yolo": True} (unsandboxed). Hosts that want a sandbox
 # pass {"policy_file": "..."} in init.json, which overrides the default kwargs.
 # ``vision`` and ``web_search`` are NOT in this set — they require provider
 # config and API keys, so they stay explicit opt-in.
 CORE_DEFAULTS: dict[str, dict] = {
     "knowledge": {},
     "skills": {},
-    "bash": {"yolo": True},
+    "shell": {"yolo": True},
     "avatar": {},
     "daemon": {},
     "mcp": {},
@@ -134,7 +137,9 @@ def apply_core_defaults(
     """
     out: dict[str, dict] = {name: dict(kwargs) for name, kwargs in CORE_DEFAULTS.items()}
     if capabilities:
-        for name, kwargs in capabilities.items():
+        # Normalize here too because callers loading init/preset data may call
+        # this helper directly without first passing through Agent.
+        for name, kwargs in normalize_capabilities(capabilities).items():
             if kwargs is None:
                 # Explicit ``"name": null`` from JSON — disable without needing
                 # the ``disable`` list. Useful for one-off opt-outs in init.json.
@@ -148,25 +153,36 @@ def apply_core_defaults(
                 out[name] = kwargs
     if disable:
         for name in disable:
-            out.pop(name, None)
+            out.pop(canonical_capability_name(name), None)
     return out
 
 
-def normalize_capabilities(capabilities: dict[str, dict]) -> dict[str, dict]:
-    """Normalize capability configuration.
+_LEGACY_CAPABILITY_ALIASES: dict[str, str] = {"bash": "shell"}
 
-    ``knowledge`` is the only private durable knowledge capability name. The
-    former ``library`` and ``codex`` names are intentionally not normalized:
-    this is a breaking rename while the user base is still small. The only
-    normalization left here is group expansion fallout and deterministic merge
-    of duplicate ``skills.paths`` values.
+
+def canonical_capability_name(name: str) -> str:
+    """Return the public capability name for a retained legacy input key."""
+    return _LEGACY_CAPABILITY_ALIASES.get(name, name)
+
+
+def normalize_capabilities(capabilities: dict[str, dict]) -> dict[str, dict]:
+    """Normalize capability configuration to canonical public names.
+
+    PR1 accepts the old ``bash`` key as a one-way input migration, but stores
+    and resolves only ``shell``.  If both keys are present, the explicit
+    canonical key wins regardless of input order.
     """
     out: dict[str, dict] = {}
 
     def merge_dict(dst: str, value: object) -> None:
-        if value is None:
-            value = {}
         if dst not in out:
+            out[dst] = value if isinstance(value, dict) else value  # type: ignore[assignment]
+            return
+        # A canonical value already present wins over a legacy alias, including
+        # an explicit null/disable sentinel.
+        if value is None:
+            return
+        if out[dst] is None:
             out[dst] = value if isinstance(value, dict) else value  # type: ignore[assignment]
             return
         if isinstance(out[dst], dict) and isinstance(value, dict):
@@ -186,8 +202,20 @@ def normalize_capabilities(capabilities: dict[str, dict]) -> dict[str, dict]:
                     merged["paths"] = paths
             out[dst] = merged
 
-    for name, kwargs in capabilities.items():
-        merge_dict(name, kwargs)
+    # Process canonical keys first so a legacy alias can never overwrite one,
+    # including an explicit canonical null/disable sentinel.
+    items = list(capabilities.items())
+    canonical_destinations = {
+        canonical_capability_name(name)
+        for name, _ in items
+        if name not in _LEGACY_CAPABILITY_ALIASES
+    }
+    items.sort(key=lambda item: item[0] in _LEGACY_CAPABILITY_ALIASES)
+    for name, kwargs in items:
+        destination = canonical_capability_name(name)
+        if name in _LEGACY_CAPABILITY_ALIASES and destination in canonical_destinations:
+            continue
+        merge_dict(destination, kwargs)
     return out
 
 
@@ -212,6 +240,7 @@ def setup_capability(agent: "BaseAgent", name: str, **kwargs: Any) -> Any:
 
     Raises ``ValueError`` if the name is unknown or the module lacks ``setup``.
     """
+    name = canonical_capability_name(name)
     module_path = BUILTIN_TOOLS.get(name)
     if module_path is None:
         raise ValueError(
@@ -237,7 +266,7 @@ def get_all_providers() -> dict[str, dict]:
     """
     _USER_FACING: dict[str, str] = {
         "file": "lingtai.tools.read",
-        "bash": "lingtai.tools.bash",
+        "shell": "lingtai.tools.bash",
         "web_search": "lingtai.tools.web_search",
         "knowledge": "lingtai.tools.knowledge",
         "skills": "lingtai.tools.skills",

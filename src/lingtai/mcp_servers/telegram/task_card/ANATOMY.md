@@ -176,7 +176,7 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 - **Manual:** [`SKILL.md`](SKILL.md).
 - **Manual assets:** [`assets/render_bash_async.py`](assets/render_bash_async.py)
   and [`assets/render_daemon.py`](assets/render_daemon.py) — the two co-located,
-  stdlib-only renderer templates the manual routes agents to (bash-async job and
+  stdlib-only renderer templates the manual routes agents to (shell-async job and
   daemon task). They read an orchestrator-owned working-dir state snapshot and
   print one bounded Task Card object; they are packaged skill assets, not runtime
   code (the controller never imports them — it runs the agent's own working-dir

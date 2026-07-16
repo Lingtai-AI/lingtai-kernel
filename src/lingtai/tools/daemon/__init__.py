@@ -145,7 +145,7 @@ def _parent_host_tool_floor() -> frozenset[str]:
     the TUI preset wizard only writes overrides/opt-ins into
     ``manifest.capabilities``. So those floor tools must still resolve from the
     parent surface under a preset. But the floor is exactly the host
-    primitives — ``bash`` and the ``file`` group (read/write/edit/glob/grep) —
+    primitives — ``shell`` and the ``file`` group (read/write/edit/glob/grep) —
     and nothing more: optional/provider parent tools (e.g. ``vision``,
     ``web_search``) must NOT silently fall back to the parent when a preset
     omits or fails them.
@@ -156,7 +156,7 @@ def _parent_host_tool_floor() -> frozenset[str]:
         register no emanation-usable tool surface;
       * ``mcp`` — the MCP host registers no regular tool of its own; parent MCP
         tools are inherited only via task ``mcp`` registrations, never the floor.
-    The result is exactly {bash, read, write, edit, glob, grep}.
+    The result is exactly {shell, read, write, edit, glob, grep}.
     """
     from lingtai.tools.registry import CORE_DEFAULTS  # noqa: PLC0415
     return frozenset(set(CORE_DEFAULTS) - EMANATION_BLACKLIST - {"mcp"})
@@ -925,7 +925,7 @@ def get_schema(lang: str = "en") -> dict:
                     },
                     "required": ["task", "tools"],
                 },
-                "description": "List of task objects for 'emanate'. Each: {task: str (required — instructions including where to save work), tools: list[str] (required — capability names, e.g. ['file', 'bash']), skills: list[str] (optional — skill directory or SKILL.md paths to render into the daemon prompt), mcp: list[object] (optional — full one-run MCP registrations to serialize into daemon context; LingTai backend also loads them as task-scoped MCP tools), preset: str (optional — preset file path, use name from system(action='presets') output). Omit preset to inherit the parent's regular tool surface. Parent MCP tools are not auto-inherited; provide complete task mcp registrations when needed. See daemon-manual for preset inheritance and capability resolution details.",
+                "description": "List of task objects for 'emanate'. Each: {task: str (required — instructions including where to save work), tools: list[str] (required — capability names, e.g. ['file', 'shell']), skills: list[str] (optional — skill directory or SKILL.md paths to render into the daemon prompt), mcp: list[object] (optional — full one-run MCP registrations to serialize into daemon context; LingTai backend also loads them as task-scoped MCP tools), preset: str (optional — preset file path, use name from system(action='presets') output). Omit preset to inherit the parent's regular tool surface. Parent MCP tools are not auto-inherited; provide complete task mcp registrations when needed. See daemon-manual for preset inheritance and capability resolution details.",
             },
             "id": {
                 "type": "string",
@@ -2023,7 +2023,7 @@ class DaemonManager:
         preset's pre-instantiated sandbox supplies the child LLM's
         provider-specific capabilities (``preset_surface =
         (schemas_by_name, handlers_by_name)``), but it does NOT replace the
-        parent's always-on host tool floor. Only that narrow floor — ``bash``
+        parent's always-on host tool floor. Only that narrow floor — ``shell``
         and the file primitives (read/write/edit/glob/grep) the preset wizard
         omits from ``manifest.capabilities`` — stays available from the parent,
         so requested host tools are not rejected as unknown just because a
@@ -2060,7 +2060,7 @@ class DaemonManager:
             preset_schemas, preset_handlers = preset_surface
             # A preset selects the child LLM + provider-specific capabilities;
             # it does NOT re-declare the parent's always-on CORE_DEFAULTS host
-            # floor (bash / read / write / edit / glob / grep), because the
+            # floor (shell / read / write / edit / glob / grep), because the
             # preset wizard only writes overrides/opt-ins into
             # manifest.capabilities. So those floor tools must remain available
             # — they must not become "unknown" just because a preset was
@@ -2155,10 +2155,11 @@ class DaemonManager:
 
     def _expand_requested_tools(self, requested: list[str]) -> set[str]:
         """Expand requested daemon tools after group aliases and blacklist."""
-        from lingtai.tools.registry import _GROUPS
+        from lingtai.tools.registry import _GROUPS, canonical_capability_name
 
         tool_names: set[str] = set()
         for name in requested:
+            name = canonical_capability_name(name)
             if name in EMANATION_BLACKLIST:
                 continue
             if name in _GROUPS:

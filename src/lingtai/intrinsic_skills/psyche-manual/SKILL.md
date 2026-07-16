@@ -221,7 +221,7 @@ If you wake up after a *system-performed* molt (triggered by karma, `.clear`, or
 2. `email(check)` — see what arrived while you were down
 3. Check `knowledge/session-journal/KNOWLEDGE.md` — your session history index
 4. `skills(action="info")` — confirm which skills you have
-5. `bash({"command": "tail -n 200 logs/events.jsonl | grep ..."})` — surgical reads if needed
+5. `shell({"command": "tail -n 200 logs/events.jsonl | grep ..."})` — surgical reads if needed
 
 Reconstruct your situation from these sources.
 

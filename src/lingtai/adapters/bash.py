@@ -1,4 +1,4 @@
-"""Composition selector for Bash shell-language adapters."""
+"""Compatibility selector for the retained internal Bash implementation."""
 from __future__ import annotations
 
 import os

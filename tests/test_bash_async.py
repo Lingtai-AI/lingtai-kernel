@@ -75,7 +75,7 @@ class TestBashAsync:
         token = state["supervisor_start_lease"]["token"]
         _async_supervisor.write_initial_state(job_dir, state)
         monkeypatch.setattr(
-            "lingtai.adapters.bash_process.select_bash_async_process",
+            "lingtai.adapters.shell_process.select_shell_async_process",
             lambda: pytest.fail("malformed durable state selected a process adapter"),
         )
 
@@ -272,7 +272,7 @@ class TestBashAsync:
         assert result["status"] == "ok"
         assert result["handoff"] == (
             "While waiting, go idle or call system(action='sleep'); the terminal result "
-            "will arrive and wake you as a notification; read bash-manual and "
+            "will arrive and wake you as a notification; read shell-manual and "
             "notification-manual for details."
         )
         mgr.handle({"action": "cancel", "command": "", "job_id": result["job_id"]})
@@ -1120,7 +1120,7 @@ class TestBashAsyncTerminalRaces:
             state["supervisor_start_lease"]["deadline_at"] = time.time() - 1
         _async_supervisor.write_initial_state(job_dir, state)
         monkeypatch.setattr(
-            "lingtai.adapters.bash_process.select_bash_async_process",
+            "lingtai.adapters.shell_process.select_shell_async_process",
             lambda: pytest.fail("expired/terminal supervisor selected a process adapter"),
         )
 

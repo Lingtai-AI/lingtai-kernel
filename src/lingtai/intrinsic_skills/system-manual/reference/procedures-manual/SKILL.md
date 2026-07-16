@@ -152,7 +152,7 @@ standing exceptions.
 
 Choose the smallest durable body:
 
-- Use bash for deterministic local work.
+- Use shell for deterministic local work.
 - Use daemon for noisy, isolated, disposable exploration, batch analysis, and
   long-context branches that would otherwise burden the parent.
 - Use avatar for persistent specialization or recurring collaboration.
@@ -218,7 +218,7 @@ Tool results may carry `_advisory.type == "duplicate_tool_call"` when the same
 semantic tool call repeats more than the free-pass threshold. This is
 advisory-only: the tool already ran and the kernel did not block it. Treat it as
 a pause point. If the repeat is intentional, continue; otherwise switch to the
-relevant manual (`bash-manual`, `daemon-manual`, `email-manual`) and use the
+relevant manual (`shell-manual`, `daemon-manual`, `email-manual`) and use the
 recommended pattern: wait for completion notifications, back off, set one future
 reminder, centralize polling, or yield/idle rather than immediately repeating the
 same call.
@@ -244,7 +244,7 @@ a default wait loop. If waiting for a human or peer, ensure the current state is
 in pad/knowledge and then sleep or stop the turn.
 
 **Idle care for unverified long-running work.** Before entering idle, if you have
-launched any async/long-running child — a backgrounded `bash(async=true)` agent
+launched any async/long-running child — a backgrounded `shell(async=true)` agent
 CLI, a daemon emanation, a scheduled job, a PR/CI run — whose health you have not
 just verified, do **not** hand yourself entirely to its completion/IDLE
 notification. Arm at least one self-wake (a `.notification/cron.json` reminder or
@@ -253,7 +253,7 @@ fixed interval. On wake, health-check before assuming progress: log growing,
 PID/child/daemon events alive, output file/worktree advancing, not stuck on an
 interactive prompt or a provider/model error. If there is no progress, act —
 cancel/downgrade/switch path and report to the human — rather than waiting
-indefinitely. Mechanics live in `bash-manual` (async + reminders) and
+indefinitely. Mechanics live in `shell-manual` (async + reminders) and
 `daemon-manual` → `reference/inspection/SKILL.md` (daemon health checks).
 
 Use `reference/substrate-manual/SKILL.md` for lifecycle semantics. Use forceful karma
@@ -286,7 +286,7 @@ mechanics here. For the checklist, templates, and summary rules, go to
 | Daemon inspection/debugging | `daemon-manual` |
 | Skill authoring/publishing | `skills-manual` |
 | Knowledge entries | `knowledge-manual` |
-| Shell commands, cron, host scheduling | `bash-manual` |
+| Shell commands, cron, host scheduling | `shell-manual` |
 | Querying LingTai runtime logs / SQLite log sidecar | `system-manual` → `reference/sqlite-log-query/SKILL.md` |
 | Kernel architecture / breaking changes | `lingtai-kernel-anatomy` |
 | TUI / portal code navigation | `lingtai-tui-anatomy` |

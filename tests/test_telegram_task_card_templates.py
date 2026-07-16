@@ -116,7 +116,7 @@ _NON_TERMINAL_STATES = {
 }
 
 # The exact model-facing stop call the templates/manual must teach (action-based,
-# like bash(action="poll") / daemon(action="check")) and the terminal footer text.
+# like shell(action="poll") / daemon(action="check")) and the terminal footer text.
 _STOP_CALL = 'task_card(action="stop", watch_id="<watch_id>")'
 _TERMINAL_FOOTER_TEXT = "terminal snapshot — stop/clear this watch now"
 _TERMINAL_FOOTER_MARKER = "stop/clear this watch"
@@ -162,7 +162,7 @@ def test_top_level_manual_binds_watcher_default_in_taskcard_section():
     assert "human-visible" in section
     assert "watcher" in section
     # Both kinds of long-running work.
-    assert "bash(async=true)" in section
+    assert "shell(async=true)" in section
     assert "daemon" in section
     # Route onward to the concrete templates + nested manual.
     assert "render_bash_async.py" in section and "render_daemon.py" in section
@@ -224,7 +224,7 @@ def test_nested_manual_binds_watcher_default_in_when_to_reach_section():
     assert "telegram-originated turn" in section
     assert "meaningful" in section and "long-running" in section
     # Both kinds of long-running work.
-    assert "bash(async=true)" in section
+    assert "shell(async=true)" in section
     assert "daemon" in section
     # A human-visible watcher is the recommended response.
     assert "human-visible" in section
@@ -462,7 +462,7 @@ def test_non_terminal_state_footer_stays_resident_awaiting(asset, state_file, id
 # =========================================================================
 #
 # The bash `status` an orchestrator records is a DISPLAY state derived from the
-# sanctioned `bash(action="poll")` / `bash(action="cancel")` result — NOT the raw
+# sanctioned `shell(action="poll")` / `shell(action="cancel")` result — NOT the raw
 # top-level bash `status`, which is ALWAYS "done" on completion (a nonzero inner
 # command is signalled by the additive `exit_status_known`/`exit_code`/`ok`/
 # `command_status` fields, never by a top-level "failed"). These fixtures are the

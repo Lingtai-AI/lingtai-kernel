@@ -27,6 +27,9 @@ _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     "UnknownToolError": ("lingtai.kernel.types", "UnknownToolError"),
     # Tools
     "setup_capability": ("lingtai.tools.registry", "setup_capability"),
+    "ShellManager": ("lingtai.tools.bash", "ShellManager"),
+    # Retained Python import compatibility; the registered capability/tool is
+    # only ``shell``.
     "BashManager": ("lingtai.tools.bash", "BashManager"),
     "AvatarManager": ("lingtai.tools.avatar", "AvatarManager"),
     "EmailManager": ("lingtai.tools.email", "EmailManager"),
@@ -74,7 +77,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from lingtai.kernel.state import AgentState
     from lingtai.kernel.types import UnknownToolError
     from lingtai.tools.avatar import AvatarManager
-    from lingtai.tools.bash import BashManager
+    from lingtai.tools.bash import BashManager, ShellManager
     from lingtai.tools.email import EmailManager
     from lingtai.tools.registry import setup_capability
 
@@ -138,6 +141,7 @@ __all__ = [
     "UnknownToolError",
     # Capabilities
     "setup_capability",
+    "ShellManager",
     "BashManager",
     "AvatarManager",
     "EmailManager",

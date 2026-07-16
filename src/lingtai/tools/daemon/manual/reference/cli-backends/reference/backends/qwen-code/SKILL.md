@@ -4,7 +4,7 @@ description: >
   Nested daemon-cli-backends reference for the Qwen Code (`qwen-code` /
   `qwen`) daemon backend's flag surface. Read this only when a daemon task
   needs Qwen-specific CLI flags (model selection, provider tunables): it
-  routes you to the installed CLI's live help via bash and shows how to
+  routes you to the installed CLI's live help via shell and shows how to
   translate that help into the generic `backend_options` mechanism. It is
   not a flag catalog.
 version: 0.1.0
@@ -26,7 +26,7 @@ ship. The alias `qwen` canonicalizes to the `qwen-code` backend id.
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-qwen-code/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-qwen-code/SKILL.md` has
    broader Qwen Code CLI context).
 2. Run, in bash: `qwen --version` and `qwen --help`. The daemon backend wraps
    the top-level `qwen` binary directly — it spawns

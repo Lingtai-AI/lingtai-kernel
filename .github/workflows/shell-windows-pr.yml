@@ -1,0 +1,52 @@
+name: Shell PowerShell PR contract
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/shell-windows-pr.yml"
+      - "src/lingtai/adapters/shell*.py"
+      - "src/lingtai/adapters/windows/**"
+      - "src/lingtai/tools/bash/**"
+      - "src/lingtai/tools/registry.py"
+      - "tests/test_shell_pr1_contract.py"
+      - "tests/test_shell_windows_native.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-windows-shell:
+    name: Native Windows / PowerShell 7
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify PowerShell 7
+        shell: pwsh
+        run: |
+          if ($PSVersionTable.PSVersion.Major -lt 7) {
+            throw "PowerShell 7 is required"
+          }
+          pwsh -NoLogo -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
+
+      - name: Install focused test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          python -m pip install --disable-pip-version-check --no-deps -e .
+
+      - name: Run shell PR1 contract
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m pytest -q tests/test_shell_pr1_contract.py tests/test_shell_windows_native.py

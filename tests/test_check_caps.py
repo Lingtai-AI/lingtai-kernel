@@ -11,7 +11,7 @@ from lingtai.tools.registry import get_all_providers
 def test_get_all_providers_returns_all_capabilities():
     result = get_all_providers()
     expected = {
-        "file", "bash", "web_search", "knowledge",
+        "file", "shell", "web_search", "knowledge",
         "skills", "vision", "avatar", "daemon",
     }
     assert expected == set(result.keys())
@@ -27,7 +27,7 @@ def test_get_all_providers_structure():
 
 def test_builtin_capabilities_have_empty_providers():
     result = get_all_providers()
-    builtins = ["file", "bash", "knowledge", "skills", "avatar", "daemon"]
+    builtins = ["file", "shell", "knowledge", "skills", "avatar", "daemon"]
     for name in builtins:
         assert result[name]["providers"] == [], f"{name} should have empty providers"
         assert result[name]["default"] == "builtin", f"{name} should default to builtin"

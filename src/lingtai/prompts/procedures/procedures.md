@@ -117,7 +117,7 @@ CLI daemon backends skip LingTai preset resolution entirely. See
 
 ### Use the Right Body
 
-Use bash for one-off deterministic host work, daemons for disposable parallel
+Use shell for one-off deterministic host work, daemons for disposable parallel
 exploration and cheap deterministic work that would otherwise consume the main
 agent's context, avatars for persistent specialists, MCPs for durable external
 integrations, knowledge for private facts, and skills for reusable procedures.
@@ -130,7 +130,7 @@ or model by exercising judgment about the task; when the human gives an explicit
 instruction, follow that instruction.
 
 When the same coding harness is available as a daemon backend option, prefer the
-daemon backend over launching that harness through Bash async, using the
+daemon backend over launching that harness through shell async, using the
 first-class daemon context-isolation and supervision path. Read `daemon-manual`
 for backend details.
 
@@ -190,7 +190,7 @@ discipline keeps multiple same-day molts chronologically stable.
 | Daemon inspection/debugging | `daemon-manual` |
 | Skill authoring/publishing | `skills-manual` |
 | Knowledge entries | `knowledge-manual` |
-| Shell commands, cron, host scheduling | `bash-manual` |
+| Shell commands, cron, host scheduling | `shell-manual` |
 | SQLite / log.sqlite / LingTai runtime logs / `lingtai-agent log doctor|query|rebuild` / trace inspection | `system-manual` → `reference/sqlite-log-query/SKILL.md` |
 | Kernel architecture / breaking changes | `lingtai-kernel-anatomy` |
 | TUI / portal code navigation | `lingtai-tui-anatomy` |

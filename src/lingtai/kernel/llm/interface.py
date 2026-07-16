@@ -82,23 +82,23 @@ def _tool_call_context(tool_call: "ToolCallBlock | None") -> str:
         return ""
     lines = [f"Tool call id: {tool_call.id}"]
     args = tool_call.args if isinstance(tool_call.args, dict) else {}
-    if tool_call.name == "bash":
+    if tool_call.name in {"shell", "bash"}:
         action = args.get("action", "run")
-        lines.append(f"bash action: {action}")
+        lines.append(f"shell action: {action}")
         if "working_dir" in args:
-            lines.append(f"bash working_dir: {args.get('working_dir')}")
+            lines.append(f"shell working_dir: {args.get('working_dir')}")
         if "timeout" in args:
-            lines.append(f"bash timeout: {args.get('timeout')}")
+            lines.append(f"shell timeout: {args.get('timeout')}")
         if "async" in args:
-            lines.append(f"bash async: {args.get('async')}")
+            lines.append(f"shell async: {args.get('async')}")
         if "job_id" in args:
-            lines.append(f"bash job_id: {args.get('job_id')}")
+            lines.append(f"shell job_id: {args.get('job_id')}")
         command = args.get("command")
         if isinstance(command, str) and command:
             preview = command.replace("\n", "\\n")
             if len(preview) > 240:
                 preview = preview[:240] + "..."
-            lines.append(f"bash command preview: {preview}")
+            lines.append(f"shell command preview: {preview}")
     elif args:
         keys = ", ".join(sorted(str(k) for k in args.keys())[:12])
         if keys:

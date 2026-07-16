@@ -4,7 +4,7 @@ description: >
   Nested daemon-cli-backends reference for the Codex daemon backend's flag
   surface. Read this only when a daemon task needs Codex-specific CLI flags
   (model selection, reasoning effort, config overrides): it routes you to the
-  installed CLI's live help via bash and shows how to translate that help into
+  installed CLI's live help via shell and shows how to translate that help into
   the generic `backend_options` mechanism. It is not a flag catalog.
 version: 0.1.0
 last_changed_at: "2026-07-09T18:55:23-07:00"
@@ -24,7 +24,7 @@ flag list LingTai could ship.
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-openai-codex/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-openai-codex/SKILL.md` has
    broader Codex CLI context).
 2. Run, in bash: `codex --version`, `codex --help`, and `codex exec --help`.
    The daemon backend wraps `codex exec`, so `codex exec --help` is the

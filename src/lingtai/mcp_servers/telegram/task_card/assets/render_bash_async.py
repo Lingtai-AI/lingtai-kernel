@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Task Card renderer TEMPLATE for a long-running `bash(async=true)` job.
+"""Task Card renderer TEMPLATE for a long-running `shell(async=true)` job.
 
 Locate this asset relative to the ABSOLUTE manual path that Telegram's
 `manual` action returns (its directory has `task_card/assets/`), then COPY it
@@ -14,13 +14,13 @@ it MUST print exactly one Task Card JSON object and exit 0. It receives no
 command-line arguments and runs with your working directory as the process cwd,
 so it locates its state by the fixed relative path `STATE_FILE` below.
 
-WHY it reads a snapshot file, not bash internals
+WHY it reads a snapshot file, not shell internals
 -------------------------------------------------
-The bash async job's own on-disk state under `system/jobs/<job_id>/` is PRIVATE
-to the Bash capability, and `bash(action="poll")` is a one-shot, consuming read
+The shell async job's own on-disk state under `system/jobs/<job_id>/` is PRIVATE
+to the shell capability, and `shell(action="poll")` is a one-shot, consuming read
 (the first terminal poll marks the job consumed). A passive renderer must not
 touch either. Instead, YOU — the orchestrator — own a tiny snapshot file and
-keep it truthful: write it right after `bash(async=true)` returns your `job_id`,
+keep it truthful: write it right after `shell(async=true)` returns your `job_id`,
 and rewrite it after each meaningful poll and at the terminal result. The
 renderer shows only the LATEST REPORTED SNAPSHOT; it never invents job state and
 never claims progress you have not recorded.
@@ -34,7 +34,7 @@ renders an explicit "awaiting orchestrator update" frame — never a fabricated
 `starting`/`running`.
 
     {
-      "job_id":   "job-a1b2...",             # REQUIRED str: the id bash(async=true) returned
+      "job_id":   "job-a1b2...",             # REQUIRED str: the id shell(async=true) returned
       "status":   "running",                 # REQUIRED str: starting|running|done|failed|cancelled|unknown
       "title":    "Refactor auth module",    # optional str headline
       "exit_code": 0,                        # optional int, once a terminal poll reports a known exit code
@@ -44,11 +44,11 @@ renders an explicit "awaiting orchestrator update" frame — never a fabricated
     }
 
 `status` is a DISPLAY STATE you derive from the sanctioned action result — it is
-NOT the raw top-level `status` of the poll. Bash's terminal poll is ALWAYS
+NOT the raw top-level `status` of the poll. Shell's terminal poll is ALWAYS
 top-level `status: "done"`: a nonzero inner command does not change it to a
 top-level `"failed"`. Read the additive fidelity fields and map them:
 
-    bash(action="poll") result                              -> record status=
+    shell(action="poll") result                              -> record status=
     ----------------------------------------------------------  ---------------
     {"status": "running", ...}                                  "running"
     {"status": "done", "exit_status_known": true,               "done"
@@ -58,12 +58,12 @@ top-level `"failed"`. Read the additive fidelity fields and map them:
         "command_status": "failed"}
     {"status": "done", "exit_status_known": false,              "unknown"
         "exit_code": null, ...}
-    bash(action="cancel") -> {"status": "cancelled", ...}       "cancelled"
+    shell(action="cancel") -> {"status": "cancelled", ...}       "cancelled"
 
 So a nonzero completion is recorded `failed` (never `done`), and an
 exit-status-unknown terminal completion is recorded `unknown` — a distinct
 TERMINAL state that reports the exit status is unavailable and claims NEITHER
-success NOR failure (Bash itself never invents `-1` or a false
+success NOR failure (Shell itself never invents `-1` or a false
 `command_status: "failed"` for it, so neither may this card). Only copy the exit
 code into `exit_code` when `exit_status_known` is true; for `unknown` leave it
 out. Update the snapshot from your turn on each meaningful poll and at the
@@ -82,7 +82,7 @@ This renderer is PASSIVE: it only prints title/lines/footer and has no
 `watch_id` and no tool access, so it CANNOT stop the watch or clear the card by
 itself. When the job reaches a terminal status (`done`, `failed`, `cancelled`,
 or `unknown` — the exit-status-unavailable terminal) — which you learn from the
-terminal `bash(action="poll")` or `bash(action="cancel")` result — record that
+terminal `shell(action="poll")` or `shell(action="cancel")` result — record that
 terminal snapshot, then IMMEDIATELY call
 `task_card(action="stop", watch_id="<watch_id>")` (the `watch_id` that
 `task_card(action="start", ...)` returned) to quiesce the watcher and clear the
@@ -118,7 +118,7 @@ _MAX_INT = 10**9  # ignore an exit_code outside this sane magnitude.
 
 # The only accepted display states, mapped to a small status glyph. These are
 # DISPLAY states the orchestrator derives from the sanctioned poll/cancel result
-# (see the module docstring), not the raw top-level bash ``status``. ``unknown``
+# (see the module docstring), not the raw top-level shell ``status``. ``unknown``
 # is the exit-status-unavailable terminal: it claims neither success nor failure.
 _STATUS_GLYPH = {
     "starting": "…",

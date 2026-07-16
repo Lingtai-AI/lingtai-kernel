@@ -4,7 +4,7 @@ description: >
   Nested daemon-cli-backends reference for the OpenCode daemon backend's flag
   surface. Read this only when a daemon task needs OpenCode-specific CLI flags
   (model selection, provider-specific reasoning variants, agent choice): it
-  routes you to the installed CLI's live help via bash and shows how to
+  routes you to the installed CLI's live help via shell and shows how to
   translate that help into the generic `backend_options` mechanism. It is not
   a flag catalog.
 version: 0.1.0
@@ -25,7 +25,7 @@ flag list LingTai could ship.
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-opencode/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-opencode/SKILL.md` has
    broader OpenCode CLI context: providers, agents, config files).
 2. Run, in bash: `opencode --version`, `opencode --help`, and
    `opencode run --help`. The daemon backend wraps `opencode run`, so

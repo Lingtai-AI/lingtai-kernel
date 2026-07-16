@@ -70,7 +70,7 @@ If any of those is false, the emanation is making progress — wait. Reclaim is 
 - `current_tool` — tracks the CLI's own tool calls (set on `tool_use` / cleared on `tool_result`).
 - `logs/events.jsonl` `cli_output` entries — stdout/stderr stream.
 
-Because the only progress signal is `last_output_at`, the right cadence on CLI backends is **"compare `last_output_at` to `now()`"** rather than a fixed interval: if it advanced since your last look, the emanation is alive; if it hasn't advanced in 5+ minutes AND `current_tool` is unchanged, apply the stall heuristic. Don't confuse a slow tool (large bash, big file read) with a stall — check `current_tool` first.
+Because the only progress signal is `last_output_at`, the right cadence on CLI backends is **"compare `last_output_at` to `now()`"** rather than a fixed interval: if it advanced since your last look, the emanation is alive; if it hasn't advanced in 5+ minutes AND `current_tool` is unchanged, apply the stall heuristic. Don't confuse a slow tool (large shell, big file read) with a stall — check `current_tool` first.
 
 ### Anti-patterns
 
@@ -82,7 +82,7 @@ Because the only progress signal is `last_output_at`, the right cadence on CLI b
 
 ### Resting while daemon work is pending: set a cron notification reminder
 
-If the daemon is healthy but unfinished and you are about to rest, do **not** keep polling and do **not** rely on memory. Set a lightweight wakeup reminder through the `bash-manual` section **"One-shot wakeup reminders via `.notification/cron.json`"**.
+If the daemon is healthy but unfinished and you are about to rest, do **not** keep polling and do **not** rely on memory. Set a lightweight wakeup reminder through the `shell-manual` section **"One-shot wakeup reminders via `.notification/cron.json`"**.
 
 **This is mandatory idle care, not an optimization.** Completion is push-notified, but a daemon can also die silently, stall, exit immediately, or get stuck on a provider/model error *without* producing a terminal-state notification — and a CLI-backend emanation gives you no live `tokens`/`turn` signal to fall back on. So before going IDLE with daemon work pending and **unverified-healthy**, arm at least one self-wake. Choose the delay from the task's *expected* duration, not a fixed value: a focused scan might warrant a 2-minute check; a long multi-file synthesis, 10–15 minutes.
 
@@ -123,11 +123,11 @@ read("daemons/em-3-20260427-094215-abc123/daemon.json")
 # → state=running, turn=8, current_tool=null, tool_call_count=15, tokens.input=22000
 
 # Last few lines of the transcript
-bash("tail -n 20 daemons/em-3-20260427-094215-abc123/history/chat_history.jsonl")
+shell("tail -n 20 daemons/em-3-20260427-094215-abc123/history/chat_history.jsonl")
 # → assistant: "Found a potential SQL injection in db.py:42. Continuing..."
 
 # Recent tool activity
-bash("tail -n 10 daemons/em-3-20260427-094215-abc123/logs/events.jsonl")
+shell("tail -n 10 daemons/em-3-20260427-094215-abc123/logs/events.jsonl")
 # → series of read/grep events on src/db/, src/auth/
 ```
 

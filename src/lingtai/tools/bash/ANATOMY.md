@@ -10,6 +10,12 @@ related_files:
   - src/lingtai/adapters/bash.py
   - src/lingtai/adapters/bash_process.py
   - src/lingtai/adapters/bash_state_lock.py
+  - src/lingtai/adapters/shell.py
+  - src/lingtai/adapters/shell_process.py
+  - src/lingtai/adapters/shell_state_lock.py
+  - src/lingtai/adapters/windows/powershell.py
+  - src/lingtai/adapters/windows/powershell_process.py
+  - src/lingtai/adapters/windows/powershell_state_lock.py
   - src/lingtai/adapters/posix/bash.py
   - src/lingtai/adapters/posix/bash_process.py
   - src/lingtai/adapters/posix/bash_state_lock.py
@@ -28,9 +34,9 @@ maintenance: |
   maintenance field. If you notice drift between this anatomy and the code,
   report it. See lingtai-dev-guide for details.
 ---
-# core/bash
+# core/shell (retained implementation: bash)
 
-Bash capability — shell command execution with file-based policy. Adds the
+Canonical `shell` capability — shell command execution with file-based policy; PR1 retains the internal Bash package and durable namespace. Adds the
 ability to run shell commands. This is a capability (not intrinsic) because
 not every agent should have shell access — it's a powerful ability that should
 be explicitly opted into.
@@ -40,16 +46,17 @@ be explicitly opted into.
 - `bash/__init__.py` — public schema/setup plus policy, sync execution, and durable async manager orchestration. `get_description` (`__init__.py:195`), `get_schema` (`__init__.py:199`), and `setup` (`__init__.py:1416`) define the public capability surface. `BashManager` owns validation, manager semantics, durable-state rehydration, notification publication, and poll/cancel consumption (`__init__.py:338`). `_augment_command_result` adds `ok`/`command_status`/`warning` fidelity fields (`__init__.py:141`).
 - `bash/_shell_dialect.py` — the Bash-local `ShellDialect` port and serializable `ShellInvocation`; the POSIX extraction helper preserves the existing policy grammar.
 - `adapters/posix/bash.py` — `PosixBashDialect`, the first production adapter; it provides POSIX policy extraction and script-form shell invocation.
-- `adapters/bash.py` — `select_bash_shell_dialect`, the fail-loud setup selector.
-- `bash/_async_process.py` and `bash/_state_lock.py` — Bash-local Ports for neutral process refs/observations/owned lifecycle handles and cross-process state serialization.
-- `adapters/bash_process.py` and `adapters/bash_state_lock.py` — fail-loud selectors for the process and lock capabilities.
+- `adapters/shell.py` — `select_shell_dialect`, the outer selector for POSIX and PowerShell dialects; `adapters/bash.py` remains a private compatibility selector.
+- `bash/_async_process.py` and `bash/_state_lock.py` — retained implementation Ports (also exported as `ShellAsyncProcessPort`/`ShellStateLockPort`) for neutral process refs/observations/owned lifecycle handles and cross-process state serialization.
+- `adapters/shell_process.py` and `adapters/shell_state_lock.py` — canonical outer selectors; the old Bash-named selectors remain compatibility-only.
 - `adapters/posix/bash_process.py` and `adapters/posix/bash_state_lock.py` — production POSIX implementations owning `Popen`, identity/liveness, process groups/signals/quiescence, exact waits, and `flock`.
+- `adapters/windows/powershell.py`, `powershell_process.py`, and `powershell_state_lock.py` — PowerShell 7 argv dialect, Job Object process-tree ownership, and native cross-process byte-range locking.
 - `bash/_async_supervisor.py` — private detached policy runner that selects the same Ports, claims leases, delegates spawn/wait, and atomically persists terminal truth.
 - `bash/bash_policy.json` — default denylist policy shipped with the kernel. Denies destructive (`rm`, `rmdir`, `shred`, `dd`), privilege escalation (`sudo`, `su`, `doas`), permission changes (`chmod`, `chown`, `chgrp`), disk management (`mount`, `umount`, `mkfs`, `fdisk`), package managers (`apt`, `apt-get`, `yum`, `dnf`, `brew`), process control (`kill`, `killall`, `pkill`, `shutdown`, `reboot`, `systemctl`), network (`nc`, `ncat`), and code execution (`eval`, `exec`).
 
 ## Public API
 
-The `bash` tool supports synchronous and asynchronous execution:
+The canonical `shell` tool supports synchronous and asynchronous execution:
 
 | Parameter      | Type     | Description |
 |----------------|----------|-------------|
@@ -141,4 +148,4 @@ bash/__init__.py
 - **Parent:** `src/lingtai/tools/` (tool package).
 - **Siblings:** `daemon/`, `avatar/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog).
 - **Manual:** `bash/manual/SKILL.md` — operational guide for agents covering async/poll/reminder durability plus scheduled / cron-driven work, wake-by-mailbox-drop, hygiene rules, OS-specific scheduler recipes, and debugging walkthroughs.
-- **Kernel hooks:** `setup()` is called during capability initialization; `BashManager.handle()` is registered as the `bash` tool handler.
+- **Kernel hooks:** `setup()` is called during capability initialization; `ShellManager.handle()` is registered as the canonical `shell` tool handler.

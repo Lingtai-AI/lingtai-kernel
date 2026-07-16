@@ -124,7 +124,7 @@ selects that topic.
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |
 | Knowledge-entry layout and private durable memory | `knowledge-manual` |
 | MCP registration/activation/addon ownership | `mcp-manual` |
-| Bash/cron/host scheduling details | `bash-manual` |
+| Bash/cron/host scheduling details | `shell-manual` |
 | Daemon lifecycle/inspection/debugging | `daemon-manual` |
 | Avatar spawning/management/escalation | `avatar-manual` |
 | Kernel architecture/code truth | `lingtai-kernel-anatomy`, then cited code |

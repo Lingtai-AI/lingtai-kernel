@@ -35,6 +35,10 @@ def _dispatch_tool(agent, tc) -> dict:
         return agent._intrinsics[tc.name](args)
     elif tc.name in agent._tool_handlers:
         return agent._tool_handlers[tc.name](tc.args or {})
+    elif tc.name == "bash" and "shell" in agent._tool_handlers:
+        # One-way rolling compatibility for historical/pending calls.  Do not
+        # register a second schema or expose ``bash`` in provider tools.
+        return agent._tool_handlers["shell"](tc.args or {})
     else:
         raise UnknownToolError(tc.name)
 

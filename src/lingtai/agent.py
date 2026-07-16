@@ -397,7 +397,10 @@ class Agent(BaseAgent):
                     continue
                 src = entry / "manual"
                 if src.is_dir():
-                    shutil.copytree(src, intrinsic_dir / subdir / entry.name)
+                    # The retained implementation directory is ``bash``; its
+                    # agent-facing manual is installed under canonical ``shell``.
+                    destination_name = "shell" if entry.name == "bash" else entry.name
+                    shutil.copytree(src, intrinsic_dir / subdir / destination_name)
 
         def install_skills_from(pkg, subdir: str) -> None:
             """Install standalone skill bundles (no companion code, no manual/ wrapper).
@@ -1160,11 +1163,13 @@ class Agent(BaseAgent):
 
     def has_capability(self, name: str) -> bool:
         """Check if a capability is registered."""
-        return name in self._capability_managers
+        from lingtai.tools.registry import canonical_capability_name
+        return canonical_capability_name(name) in self._capability_managers
 
     def get_capability(self, name: str) -> Any:
-        """Return the manager instance for a registered capability, or None."""
-        return self._capability_managers.get(name)
+        """Return a capability manager, accepting the retained ``bash`` alias."""
+        from lingtai.tools.registry import canonical_capability_name
+        return self._capability_managers.get(canonical_capability_name(name))
 
     # ------------------------------------------------------------------
     # Deep refresh — full reconstruct from init.json

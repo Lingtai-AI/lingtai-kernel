@@ -7,7 +7,7 @@ description: >
   channel the message arrived on), addressing (bare paths like `human`,
   `mimo-1`), self-send for persistent notes that survive molt, time
   capsules (delayed self-send via `delay`; for recurring alarms use the
-  host scheduler — see `bash-manual` and `system-manual`), the full-body
+  host scheduler — see `shell-manual` and `system-manual`), the full-body
   persistent notification contract, the 50,000-character send cap, and addon
   ownership. This is for INTERNAL email
   only — for real internet email via IMAP/SMTP, see the `mcp-manual`
@@ -177,16 +177,16 @@ email(action="send", address="<your-own-name>", delay=3600,
       subject="check on long task", message="Did `daemon(check, id=...)` finish?")
 ```
 
-Combined with self-send, this gives you cheap one-shot alarms without standing up a cron. The notification is delivered exactly once. For **recurring** reminders, use a host scheduler (cron, launchd, systemd, or an event watcher) via `bash-manual`; do not use the email tool for recurring execution.
+Combined with self-send, this gives you cheap one-shot alarms without standing up a cron. The notification is delivered exactly once. For **recurring** reminders, use a host scheduler (cron, launchd, systemd, or an event watcher) via `shell-manual`; do not use the email tool for recurring execution.
 
-Use delayed self-send as a **future nudge**, not delayed tool execution. The message should tell the future you what to inspect and why, then let that future turn decide with current context whether to run `bash(action="poll")`, `daemon(check)`, a channel read, or nothing at all. This is the preferred escape hatch when a repeated-call `_advisory` tells you that you may be polling the same thing: write one concrete reminder, then yield/idle instead of immediately calling the same tool again.
+Use delayed self-send as a **future nudge**, not delayed tool execution. The message should tell the future you what to inspect and why, then let that future turn decide with current context whether to run `shell(action="poll")`, `daemon(check)`, a channel read, or nothing at all. This is the preferred escape hatch when a repeated-call `_advisory` tells you that you may be polling the same thing: write one concrete reminder, then yield/idle instead of immediately calling the same tool again.
 
 ## 8. Recurring reminders live outside email
 
 The internal `email` tool no longer has a recurring scheduling API. Use delayed
 self-send (`delay=`) for one-shot time capsules only. For repeating reminders or
 agent-side scheduled work, use a host scheduler (cron, launchd, systemd, or an
-event watcher) following `bash-manual`; consult `system-manual` for lifecycle and
+event watcher) following `shell-manual`; consult `system-manual` for lifecycle and
 notification behavior.
 
 ## 9. Privacy — internal IDs
@@ -205,7 +205,7 @@ This skill is the manual for the **kernel-intrinsic `email` tool** only. Adjacen
 | Send Telegram / Feishu / WeChat messages           | `mcp-manual` → respective MCP addon          |
 | Send a notification-style ping to another agent    | This skill — it IS the notification channel  |
 | Schedule a one-off wake-up of your own loop        | This skill, `delay` + self-send (§7)         |
-| Run recurring agent-side work                       | Host scheduler / event watcher via `bash-manual` (§8) |
+| Run recurring agent-side work                       | Host scheduler / event watcher via `shell-manual` (§8) |
 
 The IMAP, Telegram, Feishu, and WeChat MCP addons each ship their own SKILL.md and `mcp-manual` entry. They are separate processes, separate auth surfaces, and separate failure modes. Do not try to use the `email` tool for an external address: an unknown target is refused without creating a recipient inbox entry and is reported through `email.bounce`.
 
@@ -236,7 +236,7 @@ email(action="send", address="<self>", delay=300,
       subject="ding", message="check the deploy")
 
 # Recurring nudges/work are not an email feature; use a host scheduler
-# or event watcher via bash-manual/system-manual instead.
+# or event watcher via shell-manual/system-manual instead.
 
 # Find related mail
 email(action="search", query="helmholtz",

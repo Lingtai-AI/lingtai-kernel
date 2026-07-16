@@ -38,7 +38,7 @@ composes them.
 | `_media_host.py`, `_zhipu_mode.py` | Provider-host / z.ai-mode helpers for `vision` + `web_search` |
 
 **Tool sub-packages:** `email/`, `system/`, `psyche/`, `soul/`, `notification/`
-(the five mandatory intrinsics); `knowledge/`, `skills/`, `bash/`, `avatar/`,
+(the five mandatory intrinsics); canonical `shell` (retained `bash/` implementation), `knowledge/`, `skills/`, `avatar/`,
 `daemon/`, `mcp/`, `read/`, `write/`, `edit/`, `glob/`, `grep/` (always-on
 floor); `vision/`, `web_search/` (opt-in). `avatar/` registers two tools
 (`avatar_spawn`, `avatar_rules`).

@@ -4,7 +4,7 @@ description: >
   Nested daemon-cli-backends reference for the Oh-My-Pi (`omp`) daemon
   backend's flag surface. Read this only when a daemon task needs
   Oh-My-Pi-specific CLI flags (model selection, tool or provider switches):
-  it routes you to the installed CLI's live help via bash and shows how to
+  it routes you to the installed CLI's live help via shell and shows how to
   translate that help into the generic `backend_options` mechanism. It is
   not a flag catalog.
 version: 0.1.0
@@ -27,7 +27,7 @@ could ship. `omp` is an accepted backend alias that canonicalizes to
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-oh-my-pi/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-oh-my-pi/SKILL.md` has
    broader Oh-My-Pi CLI context).
 2. Run, in bash: `omp --version` and `omp --help`. The daemon backend wraps
    the root `omp` invocation (no subcommand), so the root help is the

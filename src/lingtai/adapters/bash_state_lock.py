@@ -1,13 +1,9 @@
-"""Fail-loud Bash async state-lock composition selector."""
+"""Compatibility selector for the retained internal Bash package."""
 from __future__ import annotations
 
-import os
-
 from lingtai.tools.bash._state_lock import BashStateLockPort
-from .posix.bash_state_lock import PosixBashStateLockAdapter
+from .shell_state_lock import select_shell_state_lock
 
 
 def select_bash_state_lock() -> BashStateLockPort:
-    if os.name == "posix":
-        return PosixBashStateLockAdapter()
-    raise NotImplementedError(f"Bash async state locking is unsupported on {os.name!r}")
+    return select_shell_state_lock()

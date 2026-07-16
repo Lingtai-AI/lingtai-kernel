@@ -39,8 +39,8 @@ def load_state(job_dir: Path) -> dict[str, Any] | None:
 @contextlib.contextmanager
 def _state_lock(job_dir: Path):
     """Serialize read-modify-write state transitions across managers/runner."""
-    from lingtai.adapters.bash_state_lock import select_bash_state_lock
-    with select_bash_state_lock().exclusive(job_dir):
+    from lingtai.adapters.shell_state_lock import select_shell_state_lock
+    with select_shell_state_lock().exclusive(job_dir):
         yield
 
 
@@ -52,11 +52,15 @@ def _write_state_atomic(job_dir: Path, value: dict[str, Any]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, state_path(job_dir))
-    directory_fd = os.open(job_dir, os.O_RDONLY)
-    try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
+    # POSIX directory descriptors provide the durability barrier for the
+    # replacement. Windows does not support opening a directory with os.open;
+    # the file flush plus atomic replace above is the portable boundary there.
+    if os.name == "posix":
+        directory_fd = os.open(job_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
 
 def write_initial_state(job_dir: Path, value: dict[str, Any]) -> None:
@@ -197,6 +201,10 @@ def _invocation_from_state(state: dict[str, Any], command: str) -> ShellInvocati
     has_dialect = "shell_dialect" in state
     has_invocation = "invocation" in state
     if not has_dialect and not has_invocation:
+        if os.name != "posix":
+            raise ValueError(
+                "legacy durable shell state has no dialect/invocation; refusing to reinterpret it on a non-POSIX host"
+            )
         return ShellInvocation(script=command)
     dialect = state.get("shell_dialect")
     if not isinstance(dialect, str) or not dialect.strip():
@@ -238,8 +246,8 @@ def supervise(job_dir: Path, start_token: str) -> int:
         if isinstance(deadline, (int, float)) and time.time() >= float(deadline):
             _mark_launch_failure(job_dir, "supervisor start lease expired before claim")
         return 2
-    from lingtai.adapters.bash_process import select_bash_async_process
-    process_port = select_bash_async_process()
+    from lingtai.adapters.shell_process import select_shell_async_process
+    process_port = select_shell_async_process()
     supervisor_ref = process_port.identify_current_process()
     supervisor_pid = supervisor_ref.public_id if supervisor_ref else os.getpid()
     supervisor_identity = supervisor_ref.incarnation if supervisor_ref else None

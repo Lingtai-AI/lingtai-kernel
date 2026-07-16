@@ -382,7 +382,7 @@ To expand your skill catalog with another source directory:
 Two skills with the same `name` in the catalog would collide. Before authoring or installing a skill in `custom/`, grep the existing catalog:
 
 ```
-bash({"command": "grep -rh '^name:' .library/ ~/.lingtai-tui/utilities/ 2>/dev/null"})
+shell({"command": "grep -rh '^name:' .library/ ~/.lingtai-tui/utilities/ 2>/dev/null"})
 ```
 
 If you hit a collision: rename, or adapt the existing skill instead of forking a second one.

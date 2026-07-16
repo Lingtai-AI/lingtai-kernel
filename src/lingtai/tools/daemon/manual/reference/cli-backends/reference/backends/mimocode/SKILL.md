@@ -4,7 +4,7 @@ description: >
   Nested daemon-cli-backends reference for the MiMo Code (`mimocode` / `mimo`)
   daemon backend's flag surface. Read this only when a daemon task needs
   MiMo-specific CLI flags (model selection, provider switches): it routes you
-  to the installed CLI's live help via bash and shows how to translate that
+  to the installed CLI's live help via shell and shows how to translate that
   help into the generic `backend_options` mechanism. It is not a flag catalog.
 version: 0.2.0
 last_changed_at: "2026-07-11T00:00:00-07:00"
@@ -31,7 +31,7 @@ between the harness flags and the trailing prompt positional.
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-mimocode/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-mimocode/SKILL.md` has
    broader MiMo Code CLI context).
 2. Run, in bash: `mimo --version`, `mimo --help`, and `mimo run --help`.
    The daemon backend wraps `mimo run`, so `mimo run --help` is the relevant
