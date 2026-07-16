@@ -585,6 +585,105 @@ def test_malformed_current_telemetry_carrier_clears_previous_snapshot(tmp_path):
     assert "session ·" not in edits[-1][3]
 
 
+def _programmable_update(manager, account, chat_id, lines):
+    return manager._handle_task_card_update({
+        "sub_action": "update",
+        "channel": "programmable",
+        "account": account,
+        "chat_id": chat_id,
+        "card": {"lines": lines},
+    })
+
+
+def test_automatic_footer_label_is_last_updated(tmp_path):
+    """The automatic channel's footer timestamp is labeled ``Last Updated``,
+    reporting when its event-tail snapshot was rendered — not a wall clock
+    that must change on unrelated Telegram edits."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [_tool_call_line()])
+    manager._poll_event_tail()
+
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    rendered = edits[-1][3]
+    assert "Last Updated: " in rendered
+    assert "Current Time: " not in rendered
+
+
+def test_programmable_frame_includes_its_own_last_updated_line(tmp_path):
+    """A non-empty programmable frame carries its own ``Last Updated`` line,
+    independent of the automatic channel's timestamp."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    result = _programmable_update(manager, acct.alias, 555, ["watch line"])
+    assert result["status"] == "ok"
+
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    rendered = edits[-1][3]
+    assert "watch line" in rendered
+    assert "Last Updated: " in rendered
+
+
+def test_programmable_update_leaves_automatic_frame_unchanged(tmp_path):
+    """A programmable edit must not read, advance, or override the automatic
+    channel's committed frame/session footer."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [
+        _tool_call_line(),
+        json.dumps({
+            "type": "notification_block_injected",
+            "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+                "session": {"api_calls": 1},
+            }}}},
+        }),
+    ])
+    manager._poll_event_tail()
+    key = manager._channel_key(acct.alias, 555)
+    committed_automatic_before = manager._resident.frames[key]["automatic"]
+
+    # New telemetry lands, but only a programmable edit runs — no automatic
+    # poll re-reads events.jsonl in between.
+    _write_lines(events_path, [json.dumps({
+        "type": "notification_block_injected",
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+            "session": {"api_calls": 42},
+        }}}},
+    })])
+
+    result = _programmable_update(manager, acct.alias, 555, ["watch line"])
+    assert result["status"] == "ok"
+
+    assert manager._resident.frames[key]["automatic"] == committed_automatic_before
+    assert "calls 42" not in manager._resident.frames[key]["automatic"]
+
+
+def test_automatic_update_leaves_programmable_frame_unchanged(tmp_path):
+    """An automatic event-tail broadcast must preserve the committed
+    programmable frame byte-for-byte."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    programmable_before = "— WATCH —\nprogrammable content"
+    manager._set_channel_frame(acct.alias, 555, "programmable", programmable_before)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [_tool_call_line()])
+    manager._poll_event_tail()
+
+    key = manager._channel_key(acct.alias, 555)
+    assert manager._resident.frames[key]["programmable"] == programmable_before
+
+
 def test_row_started_at_omitted_when_ts_missing(tmp_path):
     acct = FakeAccount()
     manager, service = _manager(tmp_path, acct)

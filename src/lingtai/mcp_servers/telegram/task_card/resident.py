@@ -61,6 +61,7 @@ class TaskCardResident:
             return changed
 
     def set_frame(self, account: str, chat_id: int, channel: str, frame: str | None) -> None:
+        """Store one channel's last frame; ``None`` clears that channel only."""
         if channel not in self.CHANNELS:
             raise ValueError(f"unknown Task Card channel: {channel}")
         key = self.key(account, chat_id)
@@ -80,6 +81,14 @@ class TaskCardResident:
         channel: str | None = None,
         frame: str | None = None,
     ) -> str:
+        """Compose the resident message from the two channel frames.
+
+        ``channel``/``frame`` build a *proposed* payload for a not-yet-committed
+        edit: that slot uses ``frame`` (``None`` clears it) instead of the
+        stored frame, WITHOUT mutating ``_frames``. Callers commit the frame
+        via ``set_frame`` only after the transport succeeds, so a failed edit
+        never poisons the stored state.
+        """
         slots = dict(self._frames.get(self.key(account, chat_id), {}))
         if channel is not None:
             if channel not in self.CHANNELS:

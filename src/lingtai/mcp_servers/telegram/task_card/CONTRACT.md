@@ -382,6 +382,29 @@ one source of truth for each projection axis:
    `test_row_started_at_is_...` cases. Update this contract and its paired
    anatomy/tests together if the event schema, final-carrier path, supported
    fields, formatter budget, or timestamp provenance changes.
+5. **Two fully independent channels, each with its own `Last Updated` line.**
+   The automatic channel is updated ONLY from the event-tail poll/broadcast
+   path (`_poll_event_tail` → `_broadcast_task_card_event_window`); its footer
+   line is labeled `Last Updated: HH:MM:SS UTC±HH` (`_TASK_CARD_TIME_PREFIX`)
+   and means when that automatic event-tail snapshot was last rendered — it is
+   not a wall clock that changes on an unrelated programmable edit. The
+   programmable channel is updated ONLY from its own renderer/watch/update
+   path (`_task_card_programmable` → `_format_programmable_card_text`); every
+   non-empty programmable frame carries its own `Last Updated: HH:MM:SS UTC±HH`
+   line meaning when that programmable frame itself was accepted/rendered for
+   delivery. Neither channel's update path reads, polls, advances, overrides,
+   proposes, or commits the other channel's state: `_deliver_channel_frame_locked`
+   composes and commits exactly the one channel (`channel` argument) it was
+   called for, and a programmable edit never touches
+   `_task_card_event_offset`/`_task_card_event_metadata`/`_task_card_event_groups`
+   or the automatic frame. An automatic update therefore always leaves the
+   committed programmable frame byte-for-byte unchanged, and a programmable
+   update always leaves the committed automatic frame and session footer
+   byte-for-byte unchanged. Regression coverage:
+   `tests/test_telegram_task_card_event_tail.py:test_automatic_footer_label_is_last_updated`,
+   `test_programmable_frame_includes_its_own_last_updated_line`,
+   `test_programmable_update_leaves_automatic_frame_unchanged`, and
+   `test_automatic_update_leaves_programmable_frame_unchanged`.
 
 ## Resident and API-call-group conformance
 

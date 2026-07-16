@@ -182,7 +182,7 @@ def test_timestamped_moderate_rows_stay_under_text_limit():
         if ln.startswith(("•", "✓")):
             assert "04:08:08 UTC-07" in ln
     # The bottom line is the single render-time stamp, distinct from row stamps.
-    assert text.splitlines()[-1] == "Current Time: 17:18:36 UTC-07"
+    assert text.splitlines()[-1] == "Last Updated: 17:18:36 UTC-07"
 
 
 def test_extreme_row_count_exceeds_budget_but_keeps_every_row():
@@ -213,7 +213,7 @@ def test_extreme_row_count_exceeds_budget_but_keeps_every_row():
     assert not text.endswith("…")
     # The fixed footer and the single render-time line still render.
     assert _TASK_CARD_FOOTER in text
-    assert text.splitlines()[-1] == "Current Time: 17:18:36 UTC-07"
+    assert text.splitlines()[-1] == "Last Updated: 17:18:36 UTC-07"
 
 
 def test_timestamped_rows_redaction_before_truncation():

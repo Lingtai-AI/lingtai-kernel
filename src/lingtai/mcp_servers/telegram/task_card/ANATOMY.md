@@ -37,7 +37,8 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 - `get_schema` / `get_description` — the `task_card` tool schema (`start` /
   `inspect` / `retry` / `stop`) and the description that routes to the manual
   (`controller.py:59`, `controller.py:100`).
-- `TaskCardResident` — resident owner for channel frames, route locks, atomic enablement, and `ensure`/`project` (`resident.py:9`).
+- `TaskCardResident` — resident owner for channel frames, route locks, atomic
+  enablement, and `ensure`/`project` (`resident.py:9`).
 - `TaskCardController` — thin Core: dispatch, synchronous first frame, watch
   registry, fail-loud/recovery wakes (`controller.py:179`). Key methods:
   `handle` (`controller.py:188`), `_start` (`controller.py:213`), `_inspect`
@@ -108,8 +109,8 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   `started_at` in `HH:MM:SS UTC±HH`; missing, boolean, non-numeric, non-finite,
   or out-of-range values omit it. `_meta`, row arguments, notifications, and
   render time are never timestamp sources. Navigation:
-  `manager.py:_project_tool_call_row`, `_format_task_card_row_timestamp`, and
-  `_format_rows_task_card_text` (currently around lines 1819, 1854, and 2720).
+  `manager.py:_project_tool_call_row` (`:1934`), `_format_task_card_row_timestamp`
+  (`:2005`), and `_format_rows_task_card_text` (`:2864`).
 - **Current telemetry:** `_project_final_carrier_metadata` accepts only a
   final-carrier `type == "notification_block_injected"` event's latest whole
   `_meta.agent_meta`, then projects
@@ -120,17 +121,44 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   `_format_task_card_metadata` two-line/150-character formatter through
   `_broadcast_task_card_event_window`; malformed or missing values omit safely.
   It never reads retired `tool_meta.token_usage`, row args, notifications, or
-  render time. Navigation: `manager.py:_project_final_carrier_metadata`,
-  `_reverse_tail_latest_rows`, `_append_new_lines`, and
-  `_broadcast_task_card_event_window` (currently around lines 1849, 1980, 2140,
-  and 2190).
+  render time. Navigation: `manager.py:_project_final_carrier_metadata`
+  (`:1966`), `_reverse_tail_latest_rows` (`:2073`), `_append_new_lines`
+  (`:2226`), and `_broadcast_task_card_event_window` (`:2305`).
+- **Two independent channels, each following only its own update path.** The
+  automatic channel is updated ONLY by `_poll_event_tail` (`manager.py:2176`) →
+  `_broadcast_task_card_event_window` (`manager.py:2305`); its footer line is
+  `Last Updated: HH:MM:SS UTC±HH` (`_TASK_CARD_TIME_PREFIX`, `manager.py:111`),
+  meaning when that event-tail snapshot was last rendered — not a wall clock
+  tied to unrelated programmable edits. The programmable channel is updated
+  ONLY by `_task_card_programmable` (`manager.py:2694`) →
+  `_format_programmable_card_text` (`manager.py:1774`), which appends its own
+  `Last Updated` line to every non-empty frame, meaning when that programmable
+  frame itself was accepted/rendered for delivery. `_deliver_channel_frame_locked`
+  (`manager.py:1668`) composes and commits exactly the one `channel` it was
+  called for via `_compose_channels`/`_set_channel_frame` (`manager.py:1644`,
+  `:1638`) — it never reads or mutates the other channel's stored frame, the
+  event-tail offset/metadata/groups, or session state. So an automatic update
+  always leaves the committed programmable frame byte-for-byte unchanged, and a
+  programmable update always leaves the committed automatic frame and session
+  footer byte-for-byte unchanged. Navigation: `manager.py:_poll_event_tail`,
+  `_broadcast_task_card_event_window`, `_deliver_channel_frame_locked`,
+  `_compose_channels`, `_set_channel_frame`, `_task_card_programmable`,
+  `_format_programmable_card_text`; `resident.py:TaskCardResident.set_frame`,
+  `.compose`.
 - **Regression/drift triggers:** the event-to-final-render coverage is
   `tests/test_telegram_task_card_event_tail.py:test_event_log_final_carrier_projects_session_telemetry_into_final_render`
-  plus `test_malformed_current_telemetry_carrier_clears_previous_snapshot` and the adjacent timestamp/malformed-input cases. Update this anatomy and
-  the paired contract/tests together if event types, the final-carrier metadata
-  path, supported session fields, the two-line formatter budget, or timestamp
-  provenance changes; do not broaden the automatic source without revisiting
-  the authoritative-event rule.
+  plus `test_malformed_current_telemetry_carrier_clears_previous_snapshot` and
+  the adjacent timestamp/malformed-input cases. Two-channel independence
+  coverage is `test_automatic_footer_label_is_last_updated`,
+  `test_programmable_frame_includes_its_own_last_updated_line`,
+  `test_programmable_update_leaves_automatic_frame_unchanged`, and
+  `test_automatic_update_leaves_programmable_frame_unchanged`. Update this
+  anatomy and the paired contract/tests together if event types, the
+  final-carrier metadata path, supported session fields, the two-line
+  formatter budget, or timestamp provenance changes; do not broaden the
+  automatic source without revisiting the authoritative-event rule, and do not
+  reintroduce any cross-channel read/refresh — the two channels' update paths
+  must stay fully independent.
 
 ## Composition
 
