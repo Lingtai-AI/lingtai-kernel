@@ -27,6 +27,11 @@ from unittest.mock import patch
 import pytest
 
 from lingtai.tools.daemon import DaemonManager
+from lingtai.tools.daemon.process_port import (
+    DaemonProcessCommand,
+    DaemonProcessExit,
+    DaemonProcessHandle,
+)
 from tests._daemon_helpers import (
     FiniteFakeProc,
     completed_future,
@@ -57,6 +62,61 @@ def _make_run_dir(agent, *, handle="em-test"):
         system_prompt="[stub]",
         backend="opencode",
     )
+
+
+class _RecordingPort:
+    """Small caller-side Port fake; adapter internals are deliberately absent."""
+
+    class _Stderr:
+        lines: list[str] = []
+
+        def join(self, timeout: float = 2.0) -> None:
+            return None
+
+    def __init__(self, stdout_by_spawn=(), *, timeout_on_iter=False):
+        self.stdout_by_spawn = [list(lines) for lines in stdout_by_spawn]
+        self.timeout_on_iter = timeout_on_iter
+        self.commands: list[DaemonProcessCommand] = []
+        self.group_ids: list[str | None] = []
+        self.deadlines: list[float | None] = []
+        self.waits: list[float | None] = []
+        self.terminations: list[str | None] = []
+        self.releases: list[DaemonProcessHandle] = []
+        self._handles: list[DaemonProcessHandle] = []
+
+    def spawn(self, command, *, group_id=None):
+        handle = DaemonProcessHandle(len(self._handles))
+        self.commands.append(command)
+        self.group_ids.append(group_id)
+        self._handles.append(handle)
+        return handle
+
+    def iter_stdout(self, handle, *, deadline=None):
+        self.deadlines.append(deadline)
+        if self.timeout_on_iter:
+            raise TimeoutError("silent child")
+        return iter(self.stdout_by_spawn[self._handles.index(handle)])
+
+    def drain_stderr(self, handle, *, on_line=None, thread_name="daemon-stderr"):
+        return self._Stderr()
+
+    def wait(self, handle, *, timeout=None):
+        self.waits.append(timeout)
+        return DaemonProcessExit(0)
+
+    def terminate(self, handle, *, reason=None):
+        self.terminations.append(reason)
+        return DaemonProcessExit(-15, reason)
+
+    def release(self, handle):
+        self.releases.append(handle)
+        return True
+
+    def terminate_group(self, group_id, *, reason=None):
+        return 0
+
+    def terminate_all(self, *, reason=None):
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +226,93 @@ def test_opencode_emanate_cmd_includes_run_and_format_json(tmp_path):
     # contains the user task verbatim, and carries the daemon contract intro.
     assert cmd[-1].rstrip().endswith("Refactor the auth module.")
     assert "LingTai daemon" in cmd[-1]
+
+
+def test_opencode_emanation_uses_injected_port_contract(tmp_path):
+    """The shared initial runner owns policy; the Port owns process access."""
+    from lingtai.tools.daemon import setup
+
+    port = _RecordingPort([[
+        '{"type":"session.created","session_id":"port-session"}\n',
+        '{"type":"session.completed","text":"port result"}\n',
+    ]])
+    agent = make_daemon_agent(tmp_path, capabilities={})
+    mgr = setup(agent, process_port=port)
+    run_dir = _make_run_dir(agent, handle="em-oc-port")
+
+    result = mgr._run_opencode_emanation(
+        "em-oc-port", run_dir, "Use the Port.", threading.Event(),
+        backend_argv=["__lingtai_opencode_config_content", '{"mcp":{}}'],
+    )
+
+    command = port.commands[0]
+    assert command.argv[:4] == ("opencode", "run", "--format", "json")
+    assert command.argv[-1].endswith("Use the Port.")
+    assert dict(command.environment or ()) ["OPENCODE_CONFIG_CONTENT"] == '{"mcp":{}}'
+    assert command.cwd == agent._working_dir
+    assert port.group_ids == [run_dir.group_id]
+    assert result == "port result"
+    assert json.loads(run_dir.daemon_json_path.read_text())["opencode_session_id"] == "port-session"
+    assert len(port.waits) == 1
+    assert len(port.releases) == 1
+
+
+def test_opencode_ask_uses_injected_port_with_deadline_and_releases(tmp_path):
+    """Ask uses the exact resume argv and the Port-owned deadline contract."""
+    from lingtai.tools.daemon import setup
+
+    port = _RecordingPort([[
+        '{"type":"result","text":"follow-up result"}\n',
+    ]])
+    agent = make_daemon_agent(tmp_path, capabilities={})
+    mgr = setup(agent, timeout=30, process_port=port)
+    run_dir = _make_run_dir(agent, handle="em-oc-ask-port")
+    run_dir._state["opencode_session_id"] = "port-resume"
+    run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+    entry = register_daemon_entry(
+        mgr, "em-oc-ask-port", run_dir, future=completed_future("done"),
+        backend="opencode", ask_in_flight=False,
+    )
+
+    result = mgr._handle_ask_opencode("em-oc-ask-port", entry, "Continue now")
+    assert result == {
+        "status": "sent", "id": "em-oc-ask-port", "async": True,
+        "message": "ask dispatched; check daemon(action='check', id='em-oc-ask-port') for progress and final reply",
+    }
+    entry["ask_future"].result(timeout=5)
+
+    assert port.commands[0].argv == (
+        "opencode", "run", "--session", "port-resume", "--format", "json", "Continue now",
+    )
+    assert port.group_ids == [None]
+    assert len(port.deadlines) == 1 and port.deadlines[0] is not None
+    assert entry["ask_in_flight"] is False
+    assert len(port.waits) == 1
+    assert len(port.releases) == 1
+
+
+def test_opencode_ask_port_timeout_terminates_and_preserves_timeout_result(tmp_path):
+    from lingtai.tools.daemon import setup
+
+    port = _RecordingPort([[]], timeout_on_iter=True)
+    agent = make_daemon_agent(tmp_path, capabilities={})
+    mgr = setup(agent, timeout=1, process_port=port)
+    run_dir = _make_run_dir(agent, handle="em-oc-ask-timeout")
+    run_dir._state["opencode_session_id"] = "port-timeout"
+    run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+    entry = register_daemon_entry(
+        mgr, "em-oc-ask-timeout", run_dir, future=completed_future("done"),
+        backend="opencode", ask_in_flight=False,
+    )
+
+    result = mgr._handle_ask_opencode("em-oc-ask-timeout", entry, "Wait")
+    entry["ask_future"].result(timeout=5)
+
+    assert port.terminations == ["timeout"]
+    assert len(port.releases) == 1
+    assert entry["ask_in_flight"] is False
+    assert result["status"] == "sent"
+    assert "timed out" in entry["ask_future"].result()["message"]
 
 
 def test_opencode_emanate_appends_backend_argv_before_prompt(tmp_path):

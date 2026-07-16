@@ -76,8 +76,19 @@ def main(argv: list[str]) -> int:
         from lingtai.tools.daemon.supervisor_runtime import _maybe_register_test_fake_llm
         _maybe_register_test_fake_llm()
         from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+        from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
+        from lingtai.adapters.posix.interactive_terminal import (
+            PosixInteractiveTerminalAdapter,
+        )
+        # This child already owns the detached session/process group. Both
+        # production Ports therefore inherit it; the host binds its immutable
+        # observation callback before the first backend spawn.
         host = DetachedDaemonExecutionHost(
-            run_dir, manifest, Event(), Event(), capsule=capsule
+            run_dir, manifest, Event(), Event(), capsule=capsule,
+            process_port=PosixDaemonProcessPort(start_new_session=False),
+            interactive_terminal_port=PosixInteractiveTerminalAdapter(
+                start_new_session=False,
+            ),
         )
         if mode == "resume":
             host.run_resume(generation or "")

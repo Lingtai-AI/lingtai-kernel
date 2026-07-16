@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +22,10 @@ from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.adapters.posix.process_identity import (
     process_identity,
     process_identity_matches,
+)
+from lingtai.tools.daemon.process_port import (
+    DaemonProcessObservation,
+    DaemonProcessTerminationScope,
 )
 
 
@@ -44,11 +49,17 @@ class DetachedDaemonExecutionHost:
 
     def __init__(
         self, run_dir, manifest: dict, cancel_event, timeout_event,
-        *, capsule: dict | None = None,
+        *, capsule: dict | None = None, process_port=None,
+        interactive_terminal_port=None,
     ) -> None:
         from lingtai.tools.daemon import DaemonManager
 
         self._run_dir = run_dir
+        # Keep the owner events available to the Port observation callback even
+        # during construction-time/direct composition tests; run_with_events
+        # and run_resume replace these with their active loop events.
+        self._cancel_event = cancel_event
+        self._timeout_event = timeout_event
         self._manifest = manifest
         self._capsule = capsule if isinstance(capsule, dict) else {}
         self._agent = DaemonSupervisorAgentStub(
@@ -72,6 +83,32 @@ class DetachedDaemonExecutionHost:
         self._cli_term_reasons = {}
         self._cli_lock = threading.Lock()
 
+        # Detached execution already owns the session/process group. Compose
+        # adapters with inheritance enabled and bind the immutable observation
+        # callback before any backend runner can spawn a child. The callback is
+        # deliberately adapter-facing: Core sees no Popen object, only a
+        # portable PID/PGID/start-identity receipt.
+        if process_port is None:
+            if os.name != "posix":
+                raise RuntimeError(
+                    "detached POSIX execution composition is unsupported on this platform"
+                )
+            from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
+            process_port = PosixDaemonProcessPort(start_new_session=False)
+        if interactive_terminal_port is None and os.name == "posix":
+            from lingtai.adapters.posix.interactive_terminal import (
+                PosixInteractiveTerminalAdapter,
+            )
+            interactive_terminal_port = PosixInteractiveTerminalAdapter(
+                start_new_session=False,
+            )
+        self._process_port = process_port
+        self._interactive_terminal_port = interactive_terminal_port
+        for port in (self._process_port, self._interactive_terminal_port):
+            setter = getattr(port, "set_observation_callback", None)
+            if callable(setter):
+                setter(self._publish_process_observation)
+
         # Reconstruct the ordinary host tool floor through the same registry
         # setup used by the parent manager.  No full Agent/workdir lease is
         # constructed in this process.
@@ -87,6 +124,15 @@ class DetachedDaemonExecutionHost:
         expanded = set()
         for name in names:
             expanded.update(_GROUPS.get(name, [name]))
+        if expanded.intersection(_GROUPS.get("file", ())):
+            # File handlers dereference the agent-shaped host's injected
+            # FileIOService at execution time. Mirror ordinary Agent
+            # construction, but only when the detached tool surface needs it;
+            # this remains a small host service, not a second Agent/lease.
+            from lingtai.services.file_io_sidecar import default_file_io_service
+            self._agent._file_io = default_file_io_service(
+                root=self._agent._working_dir,
+            )
         for name in sorted(expanded):
             if name in BUILTIN_TOOLS:
                 setup_capability(collector, name)
@@ -182,7 +228,53 @@ class DetachedDaemonExecutionHost:
         # covers the pre-registration window as well as the steady state.
         return False
 
+    def _publish_process_observation(self, observation: DaemonProcessObservation) -> None:
+        """Publish child identity before a runner performs any blocking I/O."""
+        if not isinstance(observation, DaemonProcessObservation):
+            raise TypeError("daemon process observation must be immutable and typed")
+        pid = observation.pid
+        pgid = observation.pgid
+        identity = observation.start_identity
+        termination_scope = observation.termination_scope
+        if termination_scope is not DaemonProcessTerminationScope.INHERITED_SUPERVISOR_GROUP:
+            raise ValueError(
+                "detached observation must use supervisor-owned inherited-group scope"
+            )
+        state = self._run_dir.read_state_from_disk(self._run_dir.path)
+        history = list(state.get("child_history") or [])
+        identity_row = {
+            "pid": pid, "pgid": pgid, "start_identity": identity,
+            "termination_scope": termination_scope.value,
+            "registered_at": self._run_dir._now_iso(),
+        }
+        history.append(identity_row)
+        self._run_dir.update_state(
+            cli_pid=pid, cli_pgid=pgid,
+            child_pid=pid, child_pgid=pgid,
+            child_start_identity=identity,
+            child_termination_scope=termination_scope.value,
+            child_registered_at=identity_row["registered_at"],
+            child_history=history[-32:],
+        )
+        # Close the cancellation-before-registration race. Identity and group
+        # checks are repeated immediately before signalling so PID reuse cannot
+        # turn a stale callback into ownership of an unrelated process.
+        cancel_event = getattr(self, "_cancel_event", None)
+        if cancel_event is not None and cancel_event.is_set():
+            try:
+                if (
+                    isinstance(pgid, int)
+                    and isinstance(identity, str)
+                    and os.getpgid(pid) == pgid
+                    and process_identity_matches(pid, identity)
+                ):
+                    os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+
     def _register_cli_proc(self, proc, group_id=None):
+        # Legacy direct-Popen callers still use this manager-shaped hook; the
+        # migrated Port runners use _publish_process_observation above.
         # This callback is invoked immediately after every production runner
         # creates a child and before its first blocking stdout/stderr read.
         pid = getattr(proc, "pid", None)
@@ -216,7 +308,7 @@ class DetachedDaemonExecutionHost:
                         and os.getpgid(pid) == pgid
                         and process_identity_matches(pid, identity)
                     ):
-                        os.killpg(pgid, 15)
+                        os.kill(pid, signal.SIGTERM)
                 except OSError:
                     pass
         return self._manager_type._register_cli_proc(self, proc, group_id)

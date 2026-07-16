@@ -21,7 +21,17 @@ def test_daemon_shutdown_for_agent_stop_reclaims_pools_and_cli_processes(tmp_pat
         _working_dir=tmp_path / "agent",
         _log=lambda *args, **kwargs: None,
     )
-    mgr = daemon_module.DaemonManager(agent)
+
+    class RecordingProcessPort:
+        def __init__(self):
+            self.terminate_all_calls = []
+
+        def terminate_all(self, *, reason=None):
+            self.terminate_all_calls.append(reason)
+            return 2
+
+    process_port = RecordingProcessPort()
+    mgr = daemon_module.DaemonManager(agent, process_port=process_port)
 
     pending = Future()
     ask_pending = Future()
@@ -59,7 +69,8 @@ def test_daemon_shutdown_for_agent_stop_reclaims_pools_and_cli_processes(tmp_pat
     assert report["status"] == "shutdown"
     assert report["reason"] == "agent_stop"
     assert report["cancelled"] == 2
-    assert report["cli_processes_killed"] == 1
+    assert report["cli_processes_killed"] == 3
+    assert process_port.terminate_all_calls == ["agent_stop"]
     assert report["pools_shutdown"] == 1
     assert report["ask_futures_shutdown"] == 1
     assert killed == [4242]
@@ -218,7 +229,7 @@ def test_daemon_shutdown_waits_for_cli_ask_future_before_releasing_liveness(tmp_
         _working_dir=tmp_path / "agent",
         _log=lambda *args, **kwargs: None,
     )
-    mgr = daemon_module.DaemonManager(agent)
+    mgr = daemon_module.DaemonManager(agent, process_port=daemon_module.PosixDaemonProcessPort())
 
     primary_done = Future()
     primary_done.set_result("done")

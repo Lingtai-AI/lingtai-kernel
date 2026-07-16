@@ -20,6 +20,7 @@ import json
 import os
 import signal
 import subprocess
+import textwrap
 
 import pytest
 import sys
@@ -875,3 +876,630 @@ def test_fresh_manager_terminal_cli_ask_has_one_detached_resume_owner(
     check = first_manager.handle({"action": "check", "id": run_dir.run_id})
     assert check["followup_status"] == "done"
     assert check["followup_result_path"] == state["followup_result_path"]
+
+
+def test_detached_execution_composes_inherited_process_and_terminal_ports(tmp_path):
+    """Detached initial/resume composition supplies both inherited Ports."""
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
+    from lingtai.adapters.posix.interactive_terminal import PosixInteractiveTerminalAdapter
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="port composition")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="claude-p",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="port composition", tools=[], max_turns=1, timeout_s=30,
+        group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    assert isinstance(host._process_port, PosixDaemonProcessPort)
+    assert isinstance(host._interactive_terminal_port, PosixInteractiveTerminalAdapter)
+    assert host._process_port._start_new_session is False
+    assert host._interactive_terminal_port._start_new_session is False
+
+
+def test_detached_lingtai_file_surface_executes_against_parent_workdir(tmp_path):
+    """Detached LingTai composition can execute its advertised file floor."""
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="detached file execution")
+    parent_working_dir = run_dir.path.parent.parent
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(parent_working_dir), run_dir=str(run_dir.path),
+        task="detached file execution", tools=["file"], max_turns=1, timeout_s=30,
+        group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    schemas, dispatch = host._build_lingtai_surface()
+    assert {schema.name for schema in schemas}.issuperset(
+        {"read", "write", "edit", "glob", "grep"}
+    )
+
+    write_result = dispatch["write"]({
+        "file_path": "detached-file-probe.txt",
+        "content": "detached file handler works\n",
+    })
+    assert write_result["status"] == "ok"
+    target = parent_working_dir / "detached-file-probe.txt"
+    assert target.read_text(encoding="utf-8") == "detached file handler works\n"
+
+    read_result = dispatch["read"]({"file_path": "detached-file-probe.txt"})
+    assert read_result["content"] == "1\tdetached file handler works\n"
+
+
+def test_detached_port_observation_publishes_identity_before_watchdog_and_cancel_race(tmp_path):
+    '''Port observation durably registers identity and cancels exact child only.'''
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
+    from lingtai.tools.daemon.process_port import DaemonProcessCommand
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="identity observation")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="codex",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="identity observation", tools=[], max_turns=1, timeout_s=30,
+        group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+    cancel_event = Event()
+    port = PosixDaemonProcessPort(start_new_session=False)
+    host = DetachedDaemonExecutionHost(
+        run_dir, manifest, cancel_event, Event(), process_port=port,
+    )
+    handle = port.spawn(
+        DaemonProcessCommand((sys.executable, "-c", "import time; time.sleep(1)"),
+                             run_dir.path.parent.parent),
+        group_id=None,
+    )
+    state = _disk_state(run_dir)
+    cli_pid = state["cli_pid"]
+    assert state["child_pid"] == cli_pid
+    assert state["child_pgid"] == state["cli_pgid"]
+    assert state["child_start_identity"]
+    assert state["child_history"][-1]["pid"] == cli_pid
+    assert state["child_pgid"] == os.getpgid(cli_pid)
+    assert state["child_pgid"] == os.getpgrp()
+    assert port.wait(handle, timeout=3).returncode == 0
+    port.release(handle)
+
+    cancel_event.set()
+    raced = port.spawn(
+        DaemonProcessCommand((sys.executable, "-c", "import time; time.sleep(5)"),
+                             run_dir.path.parent.parent),
+        group_id=None,
+    )
+    receipt = port.wait(raced, timeout=3)
+    assert receipt.returncode == -15
+    assert os.getpid() > 0
+    assert port.release(raced)
+
+
+def _run_isolated_port_probe(body: str) -> dict:
+    '''Run a signal probe in its own session, never the pytest process group.'''
+    repo_src = str(Path(__file__).resolve().parent.parent / "src")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [repo_src] + [item for item in env.get("PYTHONPATH", "").split(os.pathsep) if item]
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(body)],
+        env=env, start_new_session=True, capture_output=True, text=True, timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    return json.loads(completed.stdout)
+
+
+
+def _run_legacy_direct_popen_cleanup_probe(cleanup: str) -> dict:
+    '''Exercise one retained direct-Popen cleanup path in an isolated host.'''
+    assert cleanup in {"group", "reclaim-all"}
+    parent_pid = os.getpid()
+    return _run_isolated_port_probe(f'''\
+        import json, os, signal, subprocess, sys, tempfile
+        from concurrent.futures import ThreadPoolExecutor
+        from pathlib import Path
+        from threading import Event
+        from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+        from lingtai.tools.daemon.run_dir import DaemonRunDir
+
+        execution_host_pid = os.getpid()
+        parent_pid = {parent_pid}
+        parent = Path(tempfile.mkdtemp(prefix="legacy-popen-host-"))
+        run_dir = DaemonRunDir(
+            parent_working_dir=parent,
+            handle="legacy-popen",
+            run_id="legacy-popen",
+            task="legacy direct Popen signal regression",
+            tools=[],
+            model="fake-model",
+            max_turns=1,
+            timeout_s=30.0,
+            parent_addr="legacy-parent",
+            parent_pid=parent_pid,
+            system_prompt="legacy direct Popen signal regression",
+            backend="codex",
+        )
+        manifest = {{
+            "parent_working_dir": str(parent),
+            "task": "legacy direct Popen signal regression",
+            "tools": [],
+            "max_turns": 1,
+            "timeout_s": 30.0,
+            "backend": "codex",
+            "llm": {{"model": "fake-model"}},
+        }}
+        host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+        host._max_emanations = 1
+        host._ask_pool = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="legacy-popen-regression"
+        )
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            # The probe itself has a fresh session from _run_isolated_port_probe;
+            # this is the retained direct-Popen inherited-group behavior.
+            start_new_session=False,
+        )
+        child_pid = child.pid
+        child_pgid = os.getpgid(child_pid)
+        host_pgid = os.getpgrp()
+        host._register_cli_proc(child, group_id="legacy-group")
+        scope = child._lingtai_termination_scope.value
+
+        if {cleanup!r} == "group":
+            host._kill_cli_group("legacy-group", reason="timeout")
+            report = {{"path": "group", "status": "group-killed"}}
+        else:
+            report = host._handle_reclaim()
+
+        waited_returncode = child.wait(timeout=5)
+        child_alive_after = True
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            child_alive_after = False
+        except PermissionError:
+            child_alive_after = True
+        host_alive = True
+        try:
+            os.kill(execution_host_pid, 0)
+        except OSError:
+            host_alive = False
+        parent_alive = True
+        try:
+            os.kill(parent_pid, 0)
+        except OSError:
+            parent_alive = False
+        replacement_pool = host._ask_pool
+        if replacement_pool is not None:
+            replacement_pool.shutdown(wait=False, cancel_futures=True)
+        print(json.dumps({{
+            "cleanup": {cleanup!r},
+            "execution_host_pid": execution_host_pid,
+            "parent_pid": parent_pid,
+            "child_pid": child_pid,
+            "child_pgid": child_pgid,
+            "host_pgid": host_pgid,
+            "termination_scope": scope,
+            "returncode": child.returncode,
+            "waited_returncode": waited_returncode,
+            "expected_signal_returncode": -signal.SIGTERM,
+            "child_alive_after": child_alive_after,
+            "reaped": waited_returncode == child.returncode and not child_alive_after,
+            "host_alive": host_alive,
+            "parent_alive": parent_alive,
+            "tracked_after": len(host._cli_procs),
+            "report": report,
+        }}), flush=True)
+    ''')
+
+
+@pytest.mark.skipif(os.name != "posix", reason="legacy process-group regression requires POSIX signals")
+def test_legacy_direct_popen_group_cleanup_signals_exact_child_and_reaps():
+    '''The retained detached direct-Popen group path sends real SIGTERM.'''
+    result = _run_legacy_direct_popen_cleanup_probe("group")
+    assert result["termination_scope"] == "inherited_supervisor_group"
+    assert result["child_pgid"] == result["host_pgid"]
+    assert result["returncode"] == result["expected_signal_returncode"] == -signal.SIGTERM
+    assert result["waited_returncode"] == -signal.SIGTERM
+    assert result["reaped"] is True
+    assert result["child_alive_after"] is False
+    assert result["tracked_after"] == 0
+    assert result["host_alive"] is True
+    assert result["parent_alive"] is True
+    assert result["report"]["path"] == "group"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="legacy process-group regression requires POSIX signals")
+def test_legacy_direct_popen_reclaim_all_signals_exact_child_and_reaps():
+    '''Reclaim-all drains the retained direct-Popen registry and SIGTERMs it.'''
+    result = _run_legacy_direct_popen_cleanup_probe("reclaim-all")
+    assert result["termination_scope"] == "inherited_supervisor_group"
+    assert result["child_pgid"] == result["host_pgid"]
+    assert result["returncode"] == result["expected_signal_returncode"] == -signal.SIGTERM
+    assert result["waited_returncode"] == -signal.SIGTERM
+    assert result["reaped"] is True
+    assert result["child_alive_after"] is False
+    assert result["tracked_after"] == 0
+    assert result["host_alive"] is True
+    assert result["parent_alive"] is True
+    assert result["report"]["status"] == "reclaimed"
+
+
+@pytest.mark.parametrize("reason", ["timeout", "error"])
+def test_detached_headless_termination_survives_execution_host(reason):
+    result = _run_isolated_port_probe(f'''\
+        import json, os, signal, sys, time
+        from pathlib import Path
+        from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
+        from lingtai.tools.daemon.process_port import DaemonProcessCommand
+        host_pid = os.getpid()
+        observed = {{}}
+        port = PosixDaemonProcessPort(
+            term_timeout=0.1, kill_timeout=0.2, start_new_session=False,
+            observation_callback=lambda receipt: observed.update(pid=receipt.pid),
+        )
+        command = DaemonProcessCommand((sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"), Path.cwd())
+        handle = port.spawn(command)
+        child_pid = observed["pid"]
+        receipt = port.terminate(handle, reason={reason!r})
+        host_alive = True
+        try:
+            os.kill(host_pid, 0)
+        except OSError:
+            host_alive = False
+        released = port.release(handle)
+        print(json.dumps({{"host_alive": host_alive, "receipt": receipt.returncode, "released": released, "child_pid": child_pid}}), flush=True)
+    ''')
+    assert result["host_alive"] is True
+    assert result["receipt"] in {-15, -9}
+    assert result["released"] is True
+
+
+
+def _write_detached_fake_interactive_claude(bin_dir: Path) -> Path:
+    # Create a local Claude-shaped PTY executable for detached production tests.
+    fake = bin_dir / "claude"
+    fake.write_text(textwrap.dedent(r'''
+        #!/usr/bin/env python3
+        from __future__ import annotations
+        import json
+        import os
+        from pathlib import Path
+        import signal
+        import subprocess
+        import sys
+        import time
+
+        args = sys.argv[1:]
+        settings = None
+        resume_session = None
+        i = 0
+        while i < len(args):
+            if args[i] == "--settings":
+                settings = json.loads(args[i + 1])
+                i += 2
+            elif args[i] == "--resume":
+                resume_session = args[i + 1]
+                i += 2
+            else:
+                i += 1
+        if settings is None:
+            raise SystemExit("missing --settings")
+
+        def hook_command(event):
+            for group in settings["hooks"][event]:
+                for hook in group["hooks"]:
+                    return hook["command"]
+            raise SystemExit(f"missing hook {event}")
+
+        session_id = resume_session or "detached-production-session"
+        answer = (
+            "detached production resume answer"
+            if resume_session
+            else "detached production initial answer"
+        )
+        transcript = Path.cwd() / "detached-fake-claude-transcript.jsonl"
+        signal_record = Path(os.environ["LINGTAI_TEST_FAKE_CLAUDE_SIGNAL_RECORD"])
+
+        # Exercise the bridge's real terminal-probe path; production Claude/Ink
+        # emits these probes before SessionStart.
+        sys.stdout.buffer.write(b"\x1b[c\x1b[>c\x1b[6n\x1b[>q\x1b[18t")
+        sys.stdout.buffer.flush()
+        subprocess.run(
+            hook_command("SessionStart"),
+            input=json.dumps({"session_id": session_id}),
+            text=True,
+            shell=True,
+            check=True,
+        )
+
+        # The bridge sends a bracketed paste followed by CR through the PTY.
+        # Consume it as a real interactive client would, without relying on a
+        # direct adapter call from the test process.
+        got = bytearray()
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            ch = sys.stdin.buffer.read(1)
+            if not ch:
+                time.sleep(0.01)
+                continue
+            got += ch
+            if ch in (b"\r", b"\n"):
+                break
+        if not got:
+            raise SystemExit("prompt not received")
+
+        with transcript.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps({
+                "type": "custom-title",
+                "customTitle": "detached-production",
+                "sessionId": session_id,
+            }) + "\n")
+            stream.write(json.dumps({
+                "type": "assistant",
+                "session_id": session_id,
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": answer}],
+                },
+            }) + "\n")
+
+        subprocess.run(
+            hook_command("Stop"),
+            input=json.dumps({
+                "session_id": session_id,
+                "transcript_path": str(transcript),
+                "last_assistant_message": answer,
+            }),
+            text=True,
+            shell=True,
+            check=True,
+        )
+
+        if resume_session:
+            # Keep the interactive child alive after Stop.  The production
+            # bridge must invoke the injected inherited Posix Port's exact-PID
+            # terminate path, survive that child termination, parse the
+            # transcript, and publish followup_status=done.  A group signal
+            # would also kill the execution host before it could publish done.
+            def record_exact_child_signal(signum, frame):
+                signal_record.write_text(json.dumps({
+                    "pid": os.getpid(),
+                    "pgid": os.getpgrp(),
+                    "parent_pid": os.getppid(),
+                    "signal": signum,
+                }), encoding="utf-8")
+                raise SystemExit(0)
+            signal.signal(signal.SIGTERM, record_exact_child_signal)
+            time.sleep(30)
+    ''').lstrip(), encoding="utf-8")
+    fake.chmod(0o755)
+    return fake
+
+
+def _wait_exact_process_gone(pid: int, identity: str | None):
+    from lingtai.adapters.posix.process_identity import process_identity_matches
+
+    assert isinstance(pid, int) and pid > 0
+    assert isinstance(identity, str) and identity
+    return _poll_until(
+        lambda: not process_identity_matches(pid, identity),
+        timeout=15.0,
+        interval=0.05,
+    )
+
+
+def _assert_detached_interactive_identity(state: dict) -> None:
+    # Check the durable execution/child identity chain from outside the host.
+    assert state["owner"] == "supervisor"
+    assert isinstance(state["supervisor_pid"], int)
+    assert state["supervisor_start_identity"]
+    assert state["execution_registration"] == "registered"
+    assert isinstance(state["execution_pid"], int)
+    assert state["execution_start_identity"]
+    assert state["child_pid"] == state["cli_pid"]
+    assert state["child_pgid"] == state["cli_pgid"] == state["execution_pgid"]
+    assert state["child_start_identity"]
+    assert state["child_termination_scope"] == "inherited_supervisor_group"
+    assert state["child_history"][-1]["pid"] == state["child_pid"]
+
+
+def _dispatch_detached_interactive(tmp_path: Path, monkeypatch):
+    from tests._daemon_helpers import make_daemon_agent
+
+    bin_dir = tmp_path / "fake-claude-bin"
+    bin_dir.mkdir()
+    _write_detached_fake_interactive_claude(bin_dir)
+    signal_record = tmp_path / "fake-claude-signal.json"
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("LINGTAI_CLAUDE_MANAGED_ROOT", str(tmp_path / "managed-claude"))
+    monkeypatch.setenv("LINGTAI_TEST_FAKE_CLAUDE_SIGNAL_RECORD", str(signal_record))
+
+    agent = make_daemon_agent(tmp_path)
+    manager = agent.get_capability("daemon")
+    dispatched = manager.handle({
+        "action": "emanate",
+        "backend": "claude",
+        "tasks": [{"task": "detached production interactive task", "tools": []}],
+        "timeout": 30,
+    })
+    assert dispatched["status"] == "dispatched"
+    run_dir = manager._emanations[dispatched["ids"][0]]["run_dir"]
+    return agent, manager, dispatched["ids"][0], run_dir, signal_record
+
+
+def test_detached_interactive_initial_production_host_publishes_durable_result(tmp_path, monkeypatch):
+    # Real detached initial host -> manager runner -> interactive bridge completes.
+    _agent, _manager, em_id, run_dir, _signal_record = _dispatch_detached_interactive(
+        tmp_path, monkeypatch,
+    )
+    state = _poll_until(
+        lambda: (
+            current
+            if (current := _disk_state(run_dir)).get("state") == "done"
+            else None
+        ),
+        timeout=30,
+    )
+    assert state["handle"] == em_id
+    _poll_until(lambda: _disk_state(run_dir).get("terminal_notified") is True, timeout=10)
+    assert run_dir.result_path.read_text(encoding="utf-8") == "detached production initial answer"
+    assert state["result_preview"] == "detached production initial answer"
+    assert state["claude_session_id"] == "detached-production-session"
+    assert state["claude_interactive_prompt_sent"] is True
+    _assert_detached_interactive_identity(state)
+
+    # The backend child was waited/reaped by the real Port.  The execution
+    # host survived its full production bridge/terminal publication path, so
+    # its inherited host group was not signalled as a unit.
+    _wait_exact_process_gone(state["child_pid"], state["child_start_identity"])
+    _wait_exact_process_gone(state["execution_pid"], state["execution_start_identity"])
+    assert not (tmp_path / "fake-claude-signal.json").exists()
+
+
+def test_detached_interactive_resume_production_host_publishes_followup_done_after_exact_child_stop(
+    tmp_path, monkeypatch,
+):
+    # Real detached resume host -> manager runner -> bridge survives exact child Stop.
+    agent, manager, em_id, run_dir, signal_record = _dispatch_detached_interactive(
+        tmp_path, monkeypatch,
+    )
+    _poll_until(lambda: _disk_state(run_dir).get("state") == "done", timeout=30)
+
+    # A fresh production manager reads durable state, claims one generation,
+    # and launches the detached resume owner; no parent future or adapter is
+    # substituted in this path.
+    from lingtai.tools.daemon import DaemonManager
+    fresh_manager = DaemonManager(agent)
+    ask = fresh_manager.handle({
+        "action": "ask",
+        "id": em_id,
+        "message": "detached production follow-up message",
+    })
+    assert ask["status"] == "sent"
+    generation = ask["generation"]
+
+    state = _poll_until(
+        lambda: (
+            current
+            if (
+                (current := _disk_state(run_dir)).get("followup_generation") == generation
+                and current.get("followup_status") == "done"
+                and current.get("resume_pid") is None
+                and isinstance(current.get("resume_claim"), dict)
+                and current["resume_claim"].get("status") == "released"
+            )
+            else None
+        ),
+        timeout=30,
+    )
+    assert state["followup_result_preview"] == "detached production resume answer"
+    assert state["resume_state"] == "done"
+    assert state["resume_pid"] is None
+    claim = state["resume_claim"]
+    assert claim["generation"] == generation
+    assert claim["status"] == "released"
+    assert claim["result_status"] == "done"
+    assert state["claude_session_id"] == "detached-production-session"
+    _assert_detached_interactive_identity(state)
+
+    # The fake resume child records the exact PID/PGID that received SIGTERM.
+    # Its parent execution host then remained alive long enough to parse Stop,
+    # record followup_status=done, and release the generation.  This is the
+    # external evidence that Port termination did not signal the host group.
+    signal_seen = _poll_until(
+        lambda: json.loads(signal_record.read_text(encoding="utf-8"))
+        if signal_record.exists() else None,
+        timeout=10,
+    )
+    assert signal_seen["pid"] == state["child_pid"]
+    assert signal_seen["pgid"] == state["child_pgid"] == state["execution_pgid"]
+    assert signal_seen["parent_pid"] == state["execution_pid"]
+    assert signal_seen["signal"] == signal.SIGTERM
+    _wait_exact_process_gone(state["child_pid"], state["child_start_identity"])
+    _wait_exact_process_gone(state["execution_pid"], state["execution_start_identity"])
+
+def test_headless_observation_failure_reaps_child_and_clears_registry():
+    result = _run_isolated_port_probe(r'''
+        import errno, json, os, signal, sys, time
+        from pathlib import Path
+        from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
+        from lingtai.tools.daemon.process_port import DaemonProcessCommand
+        observed = {}
+        def callback(receipt):
+            observed["pid"] = receipt.pid
+            raise RuntimeError("state publication failed")
+        port = PosixDaemonProcessPort(term_timeout=0.1, kill_timeout=0.2, start_new_session=False, observation_callback=callback)
+        command = DaemonProcessCommand((sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"), Path.cwd())
+        try:
+            port.spawn(command)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("callback failure must propagate")
+        pid = observed["pid"]
+        try:
+            os.kill(pid, 0)
+        except OSError as exc:
+            dead = exc.errno == errno.ESRCH
+        else:
+            dead = False
+        print(json.dumps({"dead": dead, "registry_empty": port.terminate_all() == 0}), flush=True)
+    ''')
+    assert result == {"dead": True, "registry_empty": True}
+
+
+def test_pty_observation_failure_reaps_child_closes_master_and_clears_registry():
+    result = _run_isolated_port_probe(r'''
+        import errno, json, os, pty, signal, sys, time
+        from pathlib import Path
+        from lingtai.adapters.posix.interactive_terminal import PosixInteractiveTerminalAdapter
+        from lingtai.tools.daemon.interactive_terminal import InteractiveTerminalCommand
+        observed = {}
+        master = {}
+        real_openpty = pty.openpty
+        def capture_openpty():
+            fds = real_openpty()
+            master["fd"] = fds[0]
+            return fds
+        pty.openpty = capture_openpty
+        def callback(receipt):
+            observed["pid"] = receipt.pid
+            raise RuntimeError("state publication failed")
+        adapter = PosixInteractiveTerminalAdapter(term_timeout=0.1, kill_timeout=0.2, start_new_session=False, observation_callback=callback)
+        command = InteractiveTerminalCommand(argv=(sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"), cwd=Path.cwd(), rows=24, columns=80)
+        try:
+            adapter.spawn(command)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("callback failure must propagate")
+        pid = observed["pid"]
+        try:
+            os.kill(pid, 0)
+        except OSError as exc:
+            dead = exc.errno == errno.ESRCH
+        else:
+            dead = False
+        try:
+            os.fstat(master["fd"])
+        except OSError as exc:
+            fd_closed = exc.errno == errno.EBADF
+        else:
+            fd_closed = False
+        print(json.dumps({"dead": dead, "fd_closed": fd_closed, "registry_empty": adapter.terminate_all() == 0}), flush=True)
+    ''')
+    assert result == {"dead": True, "fd_closed": True, "registry_empty": True}

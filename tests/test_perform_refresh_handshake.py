@@ -81,7 +81,15 @@ def _capture_watcher_script(agent):
 
 
 def _fast_watcher_script(script: str) -> str:
-    return (
+    # Direct policy execution in these focused tests composes the same POSIX
+    # process mechanism that the real -m entrypoint injects. The renderer
+    # intentionally has no concrete process fallback.
+    bootstrap = (
+        "from lingtai.adapters.posix.refresh_watcher_process import "
+        "PosixRefreshWatcherProcessAdapter\n"
+        "PROCESS_MECHANISM = PosixRefreshWatcherProcessAdapter()\n"
+    )
+    return bootstrap + (
         script
         .replace("MAX_ATTEMPTS = 12", "MAX_ATTEMPTS = 2")
         .replace("HEALTH_CHECK_WAIT = 10", "HEALTH_CHECK_WAIT = 0.1")
@@ -773,8 +781,8 @@ def test_refresh_watcher_script_cleans_stale_duplicate_process(tmp_path):
     assert "def match_agent_run" not in script
     assert "match_agent_run(cmdline, wd) is not None" in script
     assert "heartbeat_age" in script
-    assert "signal.SIGTERM" in script
-    assert "signal.SIGKILL" in script
+    assert ".graceful_stop(observation)" in script
+    assert ".force_stop(observation)" in script
     assert "refresh_watcher_stale_duplicate" in script
 
 

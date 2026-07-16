@@ -146,6 +146,9 @@ class FiniteFakeProc:
     def wait(self, timeout: float | None = None) -> int:
         return self.returncode
 
+    def poll(self) -> int | None:
+        return self.returncode
+
 
 def completed_future(result: Any = None) -> Future[Any]:
     future: Future[Any] = Future()

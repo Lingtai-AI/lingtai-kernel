@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -44,13 +45,73 @@ from lingtai.adapters.posix.process_identity import (
 from .run_dir import DaemonRunDir
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
 from .runtime import (
-    kill_process_group as _kill_process_group,
+    kill_process_group as _runtime_kill_process_group,
     iter_stdout_with_deadline as _iter_stdout_with_deadline,
     mark_cancelled_or_timeout as _mark_cancelled_or_timeout,
     spawn_stderr_drainer as _spawn_stderr_drainer,
 )
+from .interactive_terminal import InteractiveTerminalPort
+from .posix_process import PosixDaemonProcessPort
+from .process_port import (
+    DaemonProcessCommand,
+    DaemonProcessExit,
+    DaemonProcessHandle,
+    DaemonProcessObservation,
+    DaemonProcessPort,
+    DaemonProcessTerminationScope,
+)
+from .posix_process import PosixDaemonProcessPort
 
 PROVIDERS = {"providers": [], "default": "builtin"}
+
+
+def _kill_process_group(proc, *, term_timeout: float = 5.0, kill_timeout: float = 3.0) -> None:
+    """Reclaim a legacy Popen using its explicit ownership scope.
+
+    Detached hosts still have a few legacy direct-Popen backend paths. Their
+    children inherit the supervisor session, so route those paths through an
+    exact-PID signal while retaining the runtime process-group helper for
+    ordinary manager-owned private groups. The supervisor's exact-run reclaim
+    remains the only detached operation that signals the inherited PGID.
+    """
+    scope = getattr(proc, "_lingtai_termination_scope", None)
+    if scope is not DaemonProcessTerminationScope.INHERITED_SUPERVISOR_GROUP:
+        return _runtime_kill_process_group(
+            proc, term_timeout=term_timeout, kill_timeout=kill_timeout,
+        )
+    pid = getattr(proc, "pid", None)
+    pgid = getattr(proc, "_lingtai_pgid", None)
+    identity = getattr(proc, "_lingtai_process_identity", None)
+    if (not isinstance(pid, int) or isinstance(pid, bool)
+            or not isinstance(pgid, int) or isinstance(pgid, bool)
+            or not isinstance(identity, str) or not identity):
+        return
+    if proc.poll() is not None:
+        return
+    try:
+        if os.getpgid(pid) != pgid or not process_identity_matches(pid, identity):
+            return
+        os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        return
+    if proc.poll() is not None:
+        return
+    try:
+        proc.wait(timeout=term_timeout)
+    except subprocess.TimeoutExpired:
+        if proc.poll() is not None:
+            return
+        try:
+            if os.getpgid(pid) != pgid or not process_identity_matches(pid, identity):
+                return
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            return
+        try:
+            proc.wait(timeout=kill_timeout)
+        except (subprocess.TimeoutExpired, ProcessLookupError, OSError):
+            pass
+
 
 # Default and author ceiling for per-emanation LLM tool-loop turns.
 # Agents may request a smaller per-batch value via daemon(max_turns=...), but
@@ -1093,13 +1154,37 @@ class DaemonManager:
 
     def __init__(self, agent: "Agent", max_emanations: int = 100,
                  max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
-                 notify_threshold: int = 20):
+                 notify_threshold: int = 20,
+                 *, process_port: DaemonProcessPort | None = None,
+                 interactive_terminal_port: InteractiveTerminalPort | None = None):
         self._agent = agent
         self._max_emanations = max_emanations
         self._max_turns = max_turns
         self._timeout = timeout
         self._default_model = agent.service.model
         self._notify_threshold = notify_threshold
+        # Direct construction is a supported test/in-process composition path
+        # as well as setup(). It remains POSIX-only until a real Windows
+        # process adapter is separately accepted.
+        if process_port is None:
+            if os.name == "posix":
+                from .posix_process import PosixDaemonProcessPort
+                process_port = PosixDaemonProcessPort()
+            else:
+                raise NotImplementedError(
+                    f"daemon process supervision is unsupported on {os.name!r}"
+                )
+        self._process_port = process_port
+        # Interactive Claude is a separate byte-stream capability. On POSIX
+        # setup injects one shared adapter so group/all lifecycle sweeps own
+        # children that the bridge cannot otherwise see. Windows deliberately
+        # receives no fallback adapter until a real ConPTY implementation exists.
+        if interactive_terminal_port is None and os.name == "posix":
+            from lingtai.adapters.posix.interactive_terminal import (
+                PosixInteractiveTerminalAdapter,
+            )
+            interactive_terminal_port = PosixInteractiveTerminalAdapter()
+        self._interactive_terminal_port = interactive_terminal_port
 
         # Emanation registry: compact daemon id → entry dict
         self._emanations: dict[str, dict] = {}
@@ -2657,16 +2742,11 @@ class DaemonManager:
             self._log("daemon_claude_code_env_stripped", em_id=em_id,
                       stripped=[k for k in _CLAUDE_CODE_STRIP_ENV if k in os.environ])
 
+        command = DaemonProcessCommand(
+            tuple(cmd), self._agent._working_dir, tuple(spawn_env.items()),
+        )
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(self._agent._working_dir),
-                env=spawn_env,
-                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
-            )
+            handle = self._process_port.spawn(command, group_id=run_dir.group_id)
         except FileNotFoundError:
             exc = RuntimeError("'claude' CLI not found on PATH")
             run_dir.mark_failed(exc)
@@ -2675,14 +2755,14 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start claude CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        self._register_cli_proc(proc, group_id=run_dir.group_id)
-
         # Drain stderr in a background thread so diagnostic messages reach
         # the run dir even while the main thread is parsing stdout events.
         # iLink-style daemons with a chatty stderr would otherwise block
         # the pipe and stall the process.
-        stderr_thread = _spawn_stderr_drainer(
-            proc, run_dir, thread_name=f"daemon-claude-stderr-{em_id}",
+        stderr_thread = self._process_port.drain_stderr(
+            handle,
+            on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
+            thread_name=f"daemon-claude-stderr-{em_id}",
         )
         stderr_lines = stderr_thread.lines
 
@@ -2753,10 +2833,16 @@ class DaemonManager:
                     pass
 
         try:
-            assert proc.stdout is not None
-            for raw_line in proc.stdout:
+            for raw_line in self._process_port.iter_stdout(handle):
                 if cancel_event.is_set():
-                    _kill_process_group(proc)
+                    exit_receipt = self._process_port.terminate(
+                        handle, reason=("timeout" if timeout_event and timeout_event.is_set()
+                                        else "reclaim"),
+                    )
+                    if exit_receipt is not None:
+                        self._attributed_process_exit(
+                            exit_receipt, "claude", "", run_dir,
+                        )
                     return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
@@ -2791,7 +2877,7 @@ class DaemonManager:
                     # Buffer Claude Code's reported token usage — do not
                     # persist it yet. A watchdog/manual cancel can still
                     # fire after this final line arrives but before
-                    # proc.wait() returns; persisting here would let a
+                    # the process Port wait returns; persisting here would let a
                     # cancelled/timed-out run leave usage and, via
                     # mark_done below, a false "done" state. Retain only
                     # the first valid terminal usage candidate (a
@@ -2815,37 +2901,45 @@ class DaemonManager:
                         except Exception:
                             pass
 
-            proc.wait()
+            exit_receipt = self._process_port.wait(handle)
         except Exception as e:
-            _kill_process_group(proc)
+            exit_receipt = self._process_port.terminate(
+                handle, reason=("timeout" if timeout_event and timeout_event.is_set()
+                                else "reclaim"),
+            )
             run_dir.mark_failed(e)
             raise
         finally:
             # Give the stderr drainer a moment to finish reading any
             # remaining bytes before the pipe closes on us.
             stderr_thread.join(timeout=2.0)
-            # Remove from tracked procs to prevent PID recycling issues
-            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
+            if ('exit_receipt' in locals() and exit_receipt is not None
+                    and exit_receipt.returncode is not None):
+                self._process_port.release(handle)
 
-        # Re-check cancellation after proc.wait() returns. A watchdog or
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+
+        # Re-check cancellation after the process Port wait returns. A watchdog or
         # manual reclaim can set cancel_event while we were blocked in
         # wait() for the process to exit after stdout EOF — a zero exit
         # observed after that point must not overwrite the cancelled/
         # timeout state or persist the buffered usage candidate (mirrors
         # the Cursor backend's post-EOF cancellation fix).
         if cancel_event.is_set():
+            if exit_receipt is not None:
+                self._attributed_process_exit(
+                    exit_receipt, "claude", stderr_tail[-500:], run_dir,
+                )
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
-        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
-
-        if proc.returncode != 0:
+        if exit_receipt.returncode != 0:
             detail = stderr_tail or (final_result_text or "")
-            attributed = self._attributed_cli_exit(
-                proc, "claude", detail[-500:], run_dir,
+            attributed = self._attributed_process_exit(
+                exit_receipt, "claude", detail[-500:], run_dir,
             )
             exc = RuntimeError(
                 attributed
-                or f"claude CLI exited with code {proc.returncode}: "
+                or f"claude CLI exited with code {exit_receipt.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -2930,7 +3024,7 @@ class DaemonManager:
                 backend_argv=backend_argv,
                 env=_claude_code_env(),
                 log_callback=self._log,
-                start_new_session=self._cli_start_new_session(),
+                terminal_port=self._interactive_terminal_port,
             )
         except ClaudeInteractiveError as e:
             run_dir.mark_failed(e)
@@ -3006,13 +3100,9 @@ class DaemonManager:
         self._log("daemon_codex_start", em_id=em_id, cmd=" ".join(cmd))
 
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(self._agent._working_dir),
-                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
+            handle = self._process_port.spawn(
+                DaemonProcessCommand(tuple(cmd), self._agent._working_dir),
+                group_id=run_dir.group_id,
             )
         except FileNotFoundError:
             exc = RuntimeError("'codex' CLI not found on PATH")
@@ -3022,17 +3112,9 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start codex CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        self._register_cli_proc(proc, group_id=run_dir.group_id)
-        run_dir.update_state(
-            cli_pid=proc.pid,
-            cli_pgid=getattr(proc, "_lingtai_pgid", None),
-            child_pid=proc.pid,
-            child_pgid=getattr(proc, "_lingtai_pgid", None),
-            child_start_identity=getattr(proc, "_lingtai_process_identity", None),
-        )
-
-        stderr_thread = _spawn_stderr_drainer(
-            proc, run_dir, thread_name=f"daemon-codex-stderr-{em_id}",
+        stderr_thread = self._process_port.drain_stderr(
+            handle, on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
+            thread_name=f"daemon-codex-stderr-{em_id}",
         )
         stderr_lines = stderr_thread.lines
 
@@ -3047,10 +3129,11 @@ class DaemonManager:
                 self._log("daemon_codex_session", em_id=em_id, session_id=sid)
 
         try:
-            assert proc.stdout is not None
-            for raw_line in proc.stdout:
+            for raw_line in self._process_port.iter_stdout(handle):
                 if cancel_event.is_set():
-                    _kill_process_group(proc)
+                    self._process_port.terminate(
+                        handle, reason="timeout" if timeout_event and timeout_event.is_set() else "reclaim"
+                    )
                     return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
@@ -3106,29 +3189,38 @@ class DaemonManager:
                         except Exception:
                             pass
 
-            proc.wait()
+            exit_receipt = self._process_port.wait(handle)
         except Exception as e:
-            _kill_process_group(proc)
+            self._process_port.terminate(handle)
             run_dir.mark_failed(e)
             raise
         finally:
             stderr_thread.join(timeout=2.0)
-            # Remove from tracked procs to prevent PID recycling issues
-            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
+            self._process_port.release(handle)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
+        # Cancellation is terminal truth even when the child happened to
+        # return zero before the watchdog/reclaim signal was observed. Keep
+        # this post-wait gate outside the non-zero branch so a successful exit
+        # receipt cannot erase a late cancellation.
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
-        if proc.returncode != 0:
+        if exit_receipt.returncode != 0:
             detail = stderr_tail or "\n".join(agent_message_texts[-3:])
-            attributed = self._attributed_cli_exit(
-                proc, "codex", detail[-500:], run_dir,
-            )
+            if cancel_event.is_set():
+                # A watchdog/reclaim may close stdout before the loop reaches
+                # its next policy checkpoint. Preserve terminal truth while
+                # still recording the Port's raw signal/reason attribution.
+                self._attributed_process_exit(
+                    exit_receipt, "codex", detail[-500:], run_dir,
+                )
+                return _mark_cancelled_or_timeout(run_dir, timeout_event)
+            attributed = self._attributed_process_exit(exit_receipt, "codex", detail[-500:], run_dir)
             exc = RuntimeError(
                 attributed
-                or f"codex CLI exited with code {proc.returncode}: "
+                or f"codex CLI exited with code {exit_receipt.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -4719,6 +4811,7 @@ class DaemonManager:
                     resume_session_id=session_id,
                     env=_claude_code_env(),
                     log_callback=self._log,
+                    terminal_port=self._interactive_terminal_port,
                 )
             except Exception as e:
                 err = f"interactive claude ask failed: {e}"
@@ -4791,16 +4884,12 @@ class DaemonManager:
         self._log("daemon_claude_code_ask", em_id=em_id,
                   session_id=session_id, message_length=len(message))
 
+        command = DaemonProcessCommand(
+            tuple(cmd), self._agent._working_dir,
+            tuple(_claude_code_env().items()),
+        )
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(self._agent._working_dir),
-                env=_claude_code_env(),
-                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
-            )
+            handle = self._process_port.spawn(command, group_id=None)
         except FileNotFoundError:
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
@@ -4811,10 +4900,6 @@ class DaemonManager:
                 entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start claude CLI: {e}"}
-        # Ask follow-ups are not part of any batch; track globally only so
-        # reclaim-all still kills them, but no batch watchdog owns them.
-        self._register_cli_proc(proc, group_id=None)
-
         # Surface that an ask just started so `daemon(check)` shows it
         # immediately, even before any stream-json event arrives.
         # record_cli_output already routes its filesystem writes through
@@ -4830,7 +4915,7 @@ class DaemonManager:
             pass
 
         ask_future = self._ask_pool.submit(
-            self._run_ask_claude_code_stream, em_id, entry, proc, run_dir,
+            self._run_ask_claude_code_stream, em_id, entry, handle, run_dir,
         )
         ask_future.add_done_callback(
             lambda f, eid=em_id: self._on_ask_done(eid, f)
@@ -4845,18 +4930,20 @@ class DaemonManager:
         self,
         em_id: str,
         entry: dict,
-        proc: subprocess.Popen,
+        handle: DaemonProcessHandle,
         run_dir: DaemonRunDir,
     ) -> dict:
         """Background worker: stream a Claude Code `--resume` subprocess.
 
         Same stream-json parse as ``_run_claude_code_emanation``. Always
-        clears ``ask_in_flight`` and detaches ``proc`` from ``_cli_procs``.
+        clears ``ask_in_flight`` and releases the opaque Port handle.
         Return value is captured by the future for tests/debugging; the
         agent observes the result through the run_dir + notification.
         """
-        stderr_thread = _spawn_stderr_drainer(
-            proc, run_dir, thread_name=f"daemon-claude-ask-stderr-{em_id}",
+        stderr_thread = self._process_port.drain_stderr(
+            handle,
+            on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
+            thread_name=f"daemon-claude-ask-stderr-{em_id}",
         )
         stderr_lines = stderr_thread.lines
 
@@ -4868,17 +4955,8 @@ class DaemonManager:
         usage_candidate: tuple[dict[str, int], dict] | None = None
 
         try:
-            assert proc.stdout is not None
             deadline = time.monotonic() + self._timeout
-            # _iter_stdout_with_deadline returns on EOF *or* deadline;
-            # we distinguish the two by checking the clock afterwards.
-            # This is the core fix for the silent-subprocess hang — the
-            # old `for raw_line in proc.stdout` blocked the worker thread
-            # indefinitely if the resumed CLI never wrote a newline.
-            for raw_line in _iter_stdout_with_deadline(
-                proc, deadline,
-                thread_name=f"daemon-claude-ask-stdout-{em_id}",
-            ):
+            for raw_line in self._process_port.iter_stdout(handle, deadline=deadline):
                 line = raw_line.rstrip("\n")
                 if not line:
                     continue
@@ -4915,34 +4993,48 @@ class DaemonManager:
 
             if time.monotonic() >= deadline:
                 timed_out = True
-                _kill_process_group(proc)
+                exit_receipt = self._process_port.terminate(handle, reason="timeout")
             else:
                 # Reader hit EOF before the deadline. The CLI usually exits
                 # within milliseconds of closing stdout, but bound the wait
                 # so a misbehaving child can't strand us here.
                 try:
-                    proc.wait(timeout=max(1.0, deadline - time.monotonic()))
-                except subprocess.TimeoutExpired:
+                    exit_receipt = self._process_port.wait(
+                        handle, timeout=max(1.0, deadline - time.monotonic())
+                    )
+                except TimeoutError:
                     timed_out = True
-                    _kill_process_group(proc)
+                    exit_receipt = self._process_port.terminate(handle, reason="timeout")
+        except Exception:
+            exit_receipt = self._process_port.terminate(handle, reason="error")
+            raise
         finally:
             stderr_thread.join(timeout=2.0)
-            self._unregister_cli_proc(proc, group_id=None)
+            if ('exit_receipt' in locals() and exit_receipt is not None
+                    and exit_receipt.returncode is not None):
+                self._process_port.release(handle)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
         if timed_out:
+            if exit_receipt is not None:
+                self._attributed_process_exit(
+                    exit_receipt, "claude", stderr_tail[-500:], run_dir,
+                )
             err = f"claude --resume timed out after {self._timeout}s"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
             return {"status": "error", "id": em_id, "message": err}
 
-        if proc.returncode != 0:
+        if exit_receipt.returncode != 0:
             detail = stderr_tail or (final_result_text or "")
-            err = f"claude CLI exited {proc.returncode}: {detail[-500:]}"
+            attributed = self._attributed_process_exit(
+                exit_receipt, "claude", detail[-500:], run_dir,
+            )
+            err = attributed or f"claude CLI exited {exit_receipt.returncode}: {detail[-500:]}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
@@ -5014,13 +5106,9 @@ class DaemonManager:
                   session_id=session_id, message_length=len(message))
 
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(self._agent._working_dir),
-                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
+            handle = self._process_port.spawn(
+                DaemonProcessCommand(tuple(cmd), self._agent._working_dir),
+                group_id=None,
             )
         except FileNotFoundError:
             with entry["followup_lock"]:
@@ -5033,8 +5121,6 @@ class DaemonManager:
             return {"status": "error",
                     "message": f"Failed to start codex CLI: {e}"}
         # Ask follow-ups are not part of any batch (see claude-code ask).
-        self._register_cli_proc(proc, group_id=None)
-
         # See _handle_ask_cli for the rationale on the narrowed except.
         try:
             run_dir.record_cli_output(
@@ -5044,7 +5130,7 @@ class DaemonManager:
             pass
 
         ask_future = self._ask_pool.submit(
-            self._run_ask_codex_stream, em_id, entry, proc, run_dir,
+            self._run_ask_codex_stream, em_id, entry, handle, run_dir,
         )
         ask_future.add_done_callback(
             lambda f, eid=em_id: self._on_ask_done(eid, f)
@@ -5059,7 +5145,7 @@ class DaemonManager:
         self,
         em_id: str,
         entry: dict,
-        proc: subprocess.Popen,
+        handle: DaemonProcessHandle,
         run_dir: DaemonRunDir,
     ) -> dict:
         """Background worker: stream a ``codex exec resume`` subprocess.
@@ -5067,10 +5153,11 @@ class DaemonManager:
         Same JSONL event vocabulary as ``_run_codex_emanation``:
         ``item.completed/agent_message`` for reply text, ``turn.completed``
         for terminal acknowledgement. Always clears ``ask_in_flight`` and
-        detaches ``proc`` from ``_cli_procs``.
+        releases the opaque Port handle after the stream ends.
         """
-        stderr_thread = _spawn_stderr_drainer(
-            proc, run_dir, thread_name=f"daemon-codex-ask-stderr-{em_id}",
+        stderr_thread = self._process_port.drain_stderr(
+            handle, on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
+            thread_name=f"daemon-codex-ask-stderr-{em_id}",
         )
         stderr_lines = stderr_thread.lines
 
@@ -5079,14 +5166,10 @@ class DaemonManager:
         timed_out = False
 
         try:
-            assert proc.stdout is not None
             deadline = time.monotonic() + self._timeout
-            # See _run_ask_claude_code_stream for the rationale on
-            # _iter_stdout_with_deadline — fixes the silent-CLI hang.
-            for raw_line in _iter_stdout_with_deadline(
-                proc, deadline,
-                thread_name=f"daemon-codex-ask-stdout-{em_id}",
-            ):
+            # The Port owns the queue-backed deadline reader so policy never
+            # receives a concrete pipe or subprocess object.
+            for raw_line in self._process_port.iter_stdout(handle, deadline=deadline):
                 line = raw_line.rstrip("\n")
                 if not line:
                     continue
@@ -5124,16 +5207,18 @@ class DaemonManager:
 
             if time.monotonic() >= deadline:
                 timed_out = True
-                _kill_process_group(proc)
+                exit_receipt = self._process_port.terminate(handle, reason="timeout")
             else:
                 try:
-                    proc.wait(timeout=max(1.0, deadline - time.monotonic()))
-                except subprocess.TimeoutExpired:
+                    exit_receipt = self._process_port.wait(
+                        handle, timeout=max(1.0, deadline - time.monotonic())
+                    )
+                except TimeoutError:
                     timed_out = True
-                    _kill_process_group(proc)
+                    exit_receipt = self._process_port.terminate(handle, reason="timeout")
         finally:
             stderr_thread.join(timeout=2.0)
-            self._unregister_cli_proc(proc, group_id=None)
+            self._process_port.release(handle)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
@@ -5146,9 +5231,12 @@ class DaemonManager:
             )
             return {"status": "error", "id": em_id, "message": err}
 
-        if proc.returncode != 0:
+        if exit_receipt.returncode != 0:
             detail = stderr_tail or "\n".join(agent_message_texts[-3:])
-            err = f"codex CLI exited {proc.returncode}: {detail[-500:]}"
+            attributed = self._attributed_process_exit(
+                exit_receipt, "codex", detail[-500:], run_dir,
+            )
+            err = attributed or f"codex CLI exited {exit_receipt.returncode}: {detail[-500:]}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
@@ -5488,19 +5576,14 @@ class DaemonManager:
         self._log(f"daemon_{backend_name}_start", em_id=em_id,
                   cmd_head=" ".join(cmd[:1 + len(prefix)]))
 
+        env = os.environ.copy()
+        if env_extra:
+            env.update(env_extra)
+        command = DaemonProcessCommand(
+            tuple(cmd), self._agent._working_dir, tuple(env.items()),
+        )
         try:
-            env = os.environ.copy()
-            if env_extra:
-                env.update(env_extra)
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(self._agent._working_dir),
-                env=env,
-                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
-            )
+            handle = self._process_port.spawn(command, group_id=run_dir.group_id)
         except FileNotFoundError:
             exc = RuntimeError(f"'{executable}' CLI not found on PATH")
             run_dir.mark_failed(exc)
@@ -5509,17 +5592,9 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start {backend_name} CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        self._register_cli_proc(proc, group_id=run_dir.group_id)
-        run_dir.update_state(
-            cli_pid=proc.pid,
-            cli_pgid=getattr(proc, "_lingtai_pgid", None),
-            child_pid=proc.pid,
-            child_pgid=getattr(proc, "_lingtai_pgid", None),
-            child_start_identity=getattr(proc, "_lingtai_process_identity", None),
-        )
-
-        stderr_thread = _spawn_stderr_drainer(
-            proc, run_dir, thread_name=f"daemon-{backend_name}-stderr-{em_id}",
+        stderr_thread = self._process_port.drain_stderr(
+            handle, on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
+            thread_name=f"daemon-{backend_name}-stderr-{em_id}",
         )
         stderr_lines = stderr_thread.lines
 
@@ -5540,10 +5615,13 @@ class DaemonManager:
                 self._log(f"daemon_{backend_name}_session", em_id=em_id, session_id=sid)
 
         try:
-            assert proc.stdout is not None
-            for raw_line in proc.stdout:
+            for raw_line in self._process_port.iter_stdout(handle):
                 if cancel_event.is_set():
-                    _kill_process_group(proc)
+                    self._process_port.terminate(
+                        handle,
+                        reason=("timeout" if timeout_event and timeout_event.is_set()
+                                else "reclaim"),
+                    )
                     return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
@@ -5594,14 +5672,14 @@ class DaemonManager:
                         if text:
                             final_text = text
 
-            proc.wait()
+            exit_receipt = self._process_port.wait(handle)
         except Exception as e:
-            _kill_process_group(proc)
+            self._process_port.terminate(handle)
             run_dir.mark_failed(e)
             raise
         finally:
             stderr_thread.join(timeout=2.0)
-            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
+            self._process_port.release(handle)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
@@ -5616,14 +5694,17 @@ class DaemonManager:
             run_dir.mark_failed(exc)
             raise exc
 
-        if proc.returncode != 0:
+        if exit_receipt.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
-            attributed = self._attributed_cli_exit(
-                proc, backend_name, detail[-500:], run_dir,
+            if cancel_event.is_set():
+                self._attributed_process_exit(exit_receipt, backend_name, detail[-500:], run_dir)
+                return _mark_cancelled_or_timeout(run_dir, timeout_event)
+            attributed = self._attributed_process_exit(
+                exit_receipt, backend_name, detail[-500:], run_dir,
             )
             exc = RuntimeError(
                 attributed
-                or f"{backend_name} CLI exited with code {proc.returncode}: "
+                or f"{backend_name} CLI exited with code {exit_receipt.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -5760,14 +5841,11 @@ class DaemonManager:
         try:
             env = os.environ.copy()
             env.update(qwen_env)
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(self._agent._working_dir),
-                env=env,
-                start_new_session=self._cli_start_new_session(),
+            handle = self._process_port.spawn(
+                DaemonProcessCommand(
+                    tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                ),
+                group_id=run_dir.group_id,
             )
         except FileNotFoundError:
             exc = RuntimeError("'qwen' CLI not found on PATH")
@@ -5777,19 +5855,21 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start qwen-code CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        self._register_cli_proc(proc, group_id=run_dir.group_id)
 
         stdout_lines: list[str] = []
-        stderr_thread = _spawn_stderr_drainer(
-            proc, run_dir, thread_name=f"daemon-qwen-code-stderr-{em_id}",
+        stderr_thread = self._process_port.drain_stderr(
+            handle, on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
+            thread_name=f"daemon-qwen-code-stderr-{em_id}",
         )
         stderr_lines = stderr_thread.lines
 
         try:
-            assert proc.stdout is not None
-            for raw_line in proc.stdout:
+            for raw_line in self._process_port.iter_stdout(handle):
                 if cancel_event.is_set():
-                    _kill_process_group(proc)
+                    self._process_port.terminate(
+                        handle, reason=("timeout" if timeout_event and timeout_event.is_set()
+                                        else "reclaim"),
+                    )
                     return _mark_cancelled_or_timeout(run_dir, timeout_event)
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -5799,26 +5879,31 @@ class DaemonManager:
                     run_dir.record_cli_output(line, stream="stdout")
                 except Exception:
                     pass
-            proc.wait()
+            exit_receipt = self._process_port.wait(handle)
         except Exception as e:
-            _kill_process_group(proc)
+            self._process_port.terminate(handle)
             run_dir.mark_failed(e)
             raise
         finally:
             stderr_thread.join(timeout=2.0)
-            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
+            self._process_port.release(handle)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
         output = "\n".join(stdout_lines).strip()
 
-        if proc.returncode != 0:
+        if exit_receipt.returncode != 0:
             detail = stderr_tail or output
-            attributed = self._attributed_cli_exit(
-                proc, "qwen-code", detail[-500:], run_dir,
+            if cancel_event.is_set():
+                self._attributed_process_exit(
+                    exit_receipt, "qwen-code", detail[-500:], run_dir,
+                )
+                return _mark_cancelled_or_timeout(run_dir, timeout_event)
+            attributed = self._attributed_process_exit(
+                exit_receipt, "qwen-code", detail[-500:], run_dir,
             )
             exc = RuntimeError(
                 attributed
-                or f"qwen-code CLI exited with code {proc.returncode}: "
+                or f"qwen-code CLI exited with code {exit_receipt.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -5929,14 +6014,11 @@ class DaemonManager:
         try:
             env = os.environ.copy()
             env.update(kimi_env)
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(self._agent._working_dir),
-                env=env,
-                start_new_session=self._cli_start_new_session(),
+            handle = self._process_port.spawn(
+                DaemonProcessCommand(
+                    tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                ),
+                group_id=run_dir.group_id,
             )
         except FileNotFoundError:
             exc = RuntimeError("'kimi' CLI not found on PATH")
@@ -5946,19 +6028,21 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start kimicode CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        self._register_cli_proc(proc, group_id=run_dir.group_id)
 
         stdout_lines: list[str] = []
-        stderr_thread = _spawn_stderr_drainer(
-            proc, run_dir, thread_name=f"daemon-kimicode-stderr-{em_id}",
+        stderr_thread = self._process_port.drain_stderr(
+            handle, on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
+            thread_name=f"daemon-kimicode-stderr-{em_id}",
         )
         stderr_lines = stderr_thread.lines
 
         try:
-            assert proc.stdout is not None
-            for raw_line in proc.stdout:
+            for raw_line in self._process_port.iter_stdout(handle):
                 if cancel_event.is_set():
-                    _kill_process_group(proc)
+                    self._process_port.terminate(
+                        handle, reason=("timeout" if timeout_event and timeout_event.is_set()
+                                        else "reclaim"),
+                    )
                     return _mark_cancelled_or_timeout(run_dir, timeout_event)
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -5968,26 +6052,31 @@ class DaemonManager:
                     run_dir.record_cli_output(line, stream="stdout")
                 except Exception:
                     pass
-            proc.wait()
+            exit_receipt = self._process_port.wait(handle)
         except Exception as e:
-            _kill_process_group(proc)
+            self._process_port.terminate(handle)
             run_dir.mark_failed(e)
             raise
         finally:
             stderr_thread.join(timeout=2.0)
-            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
+            self._process_port.release(handle)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
         output = "\n".join(stdout_lines).strip()
 
-        if proc.returncode != 0:
+        if exit_receipt.returncode != 0:
             detail = stderr_tail or output
-            attributed = self._attributed_cli_exit(
-                proc, "kimicode", detail[-500:], run_dir,
+            if cancel_event.is_set():
+                self._attributed_process_exit(
+                    exit_receipt, "kimicode", detail[-500:], run_dir,
+                )
+                return _mark_cancelled_or_timeout(run_dir, timeout_event)
+            attributed = self._attributed_process_exit(
+                exit_receipt, "kimicode", detail[-500:], run_dir,
             )
             exc = RuntimeError(
                 attributed
-                or f"kimicode CLI exited with code {proc.returncode}: "
+                or f"kimicode CLI exited with code {exit_receipt.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -6058,15 +6147,9 @@ class DaemonManager:
         self._log(f"daemon_{backend_name}_ask", em_id=em_id,
                   session_id=session_id, message_length=len(message))
 
+        command = DaemonProcessCommand(tuple(cmd), self._agent._working_dir)
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(self._agent._working_dir),
-                start_new_session=self._cli_start_new_session(),  # own process group for reliable cleanup
-            )
+            handle = self._process_port.spawn(command, group_id=None)
         except FileNotFoundError:
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
@@ -6077,9 +6160,6 @@ class DaemonManager:
                 entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start {backend_name} CLI: {e}"}
-        # Ask follow-ups are not part of any batch (see claude-code ask).
-        self._register_cli_proc(proc, group_id=None)
-
         try:
             run_dir.record_cli_output(
                 f"[ask dispatched] {message[:200]}", stream="stdout",
@@ -6088,7 +6168,7 @@ class DaemonManager:
             pass
 
         ask_future = self._ask_pool.submit(
-            self._run_ask_opencode_stream, em_id, entry, proc, run_dir,
+            self._run_ask_opencode_stream, em_id, entry, handle, run_dir,
             backend_name, text_extractor, error_detector, usage_recorder,
         )
         ask_future.add_done_callback(
@@ -6150,7 +6230,7 @@ class DaemonManager:
         self,
         em_id: str,
         entry: dict,
-        proc: subprocess.Popen,
+        handle: DaemonProcessHandle,
         run_dir: DaemonRunDir,
         backend_name: str = "opencode",
         text_extractor: Callable[[dict], str] | None = None,
@@ -6162,15 +6242,15 @@ class DaemonManager:
         Same defensive JSON-line parse as ``_run_opencode_emanation``:
         non-JSON lines are recorded verbatim, text is pulled from any
         plausible field, terminal-shaped events override intermediate
-        text. Always clears ``ask_in_flight`` and detaches ``proc`` from
-        ``_cli_procs`` on exit. ``text_extractor`` / ``error_detector`` mirror
+        text. Always clears ``ask_in_flight`` and releases the opaque process
+        handle on exit. ``text_extractor`` / ``error_detector`` mirror
         the initial-run overrides so a resumed MiMo stream applies the same
         answer/error contract (only ``type:text`` surfaces; ``type:error``
         fails the follow-up even on exit 0).
         """
         extract_text = text_extractor or self._opencode_extract_text
-        stderr_thread = _spawn_stderr_drainer(
-            proc, run_dir,
+        stderr_thread = self._process_port.drain_stderr(
+            handle, on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
             thread_name=f"daemon-{backend_name}-ask-stderr-{em_id}",
         )
         stderr_lines = stderr_thread.lines
@@ -6183,14 +6263,8 @@ class DaemonManager:
         timed_out = False
 
         try:
-            assert proc.stdout is not None
             deadline = time.monotonic() + self._timeout
-            # See _run_ask_claude_code_stream for the rationale on
-            # _iter_stdout_with_deadline — fixes the silent-CLI hang.
-            for raw_line in _iter_stdout_with_deadline(
-                proc, deadline,
-                thread_name=f"daemon-{backend_name}-ask-stdout-{em_id}",
-            ):
+            for raw_line in self._process_port.iter_stdout(handle, deadline=deadline):
                 line = raw_line.rstrip("\n")
                 if not line:
                     continue
@@ -6224,16 +6298,21 @@ class DaemonManager:
 
             if time.monotonic() >= deadline:
                 timed_out = True
-                _kill_process_group(proc)
+                exit_receipt = self._process_port.terminate(handle, reason="timeout")
             else:
                 try:
-                    proc.wait(timeout=max(1.0, deadline - time.monotonic()))
-                except subprocess.TimeoutExpired:
+                    exit_receipt = self._process_port.wait(
+                        handle, timeout=max(1.0, deadline - time.monotonic())
+                    )
+                except TimeoutError:
                     timed_out = True
-                    _kill_process_group(proc)
+                    exit_receipt = self._process_port.terminate(handle, reason="timeout")
+        except TimeoutError:
+            timed_out = True
+            exit_receipt = self._process_port.terminate(handle, reason="timeout")
         finally:
             stderr_thread.join(timeout=2.0)
-            self._unregister_cli_proc(proc, group_id=None)
+            self._process_port.release(handle)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
@@ -6256,9 +6335,12 @@ class DaemonManager:
             )
             return {"status": "error", "id": em_id, "message": err}
 
-        if proc.returncode != 0:
+        if exit_receipt.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
-            err = f"{backend_name} CLI exited {proc.returncode}: {detail[-500:]}"
+            attributed = self._attributed_process_exit(
+                exit_receipt, backend_name, detail[-500:], run_dir,
+            )
+            err = attributed or f"{backend_name} CLI exited {exit_receipt.returncode}: {detail[-500:]}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
@@ -6407,15 +6489,9 @@ class DaemonManager:
         cmd.append(prompt)
         self._log("daemon_cursor_start", em_id=em_id, cmd_head=" ".join(cmd[:5]))
 
+        command = DaemonProcessCommand(tuple(cmd), self._agent._working_dir)
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(self._agent._working_dir),
-                start_new_session=self._cli_start_new_session(),
-            )
+            handle = self._process_port.spawn(command, group_id=run_dir.group_id)
         except FileNotFoundError:
             exc = RuntimeError("'agent' Cursor CLI not found on PATH")
             run_dir.mark_failed(exc)
@@ -6424,17 +6500,9 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start Cursor CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        self._register_cli_proc(proc, group_id=run_dir.group_id)
-        run_dir.update_state(
-            cli_pid=proc.pid,
-            cli_pgid=getattr(proc, "_lingtai_pgid", None),
-            child_pid=proc.pid,
-            child_pgid=getattr(proc, "_lingtai_pgid", None),
-            child_start_identity=getattr(proc, "_lingtai_process_identity", None),
-        )
-
-        stderr_thread = _spawn_stderr_drainer(
-            proc, run_dir, thread_name=f"daemon-cursor-stderr-{em_id}",
+        stderr_thread = self._process_port.drain_stderr(
+            handle, on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
+            thread_name=f"daemon-cursor-stderr-{em_id}",
         )
         stderr_lines = stderr_thread.lines
 
@@ -6453,10 +6521,12 @@ class DaemonManager:
                 self._log("daemon_cursor_session", em_id=em_id, session_id=sid)
 
         try:
-            assert proc.stdout is not None
-            for raw_line in proc.stdout:
+            for raw_line in self._process_port.iter_stdout(handle):
                 if cancel_event.is_set():
-                    _kill_process_group(proc)
+                    exit_receipt = self._process_port.terminate(
+                        handle, reason=("timeout" if timeout_event and timeout_event.is_set()
+                                        else "reclaim"),
+                    )
                     return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
@@ -6498,28 +6568,32 @@ class DaemonManager:
                         if text:
                             final_text = text
 
-            proc.wait()
+            exit_receipt = self._process_port.wait(handle)
         except Exception as e:
-            _kill_process_group(proc)
+            reason = ("timeout" if timeout_event and timeout_event.is_set()
+                      else "reclaim" if cancel_event.is_set() else "error")
+            exit_receipt = self._process_port.terminate(handle, reason=reason)
             run_dir.mark_failed(e)
             raise
         finally:
             stderr_thread.join(timeout=2.0)
-            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
+            if ('exit_receipt' in locals() and exit_receipt is not None
+                    and exit_receipt.returncode is not None):
+                self._process_port.release(handle)
 
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
-        if proc.returncode != 0:
+        if exit_receipt.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
-            attributed = self._attributed_cli_exit(
-                proc, "Cursor", detail[-500:], run_dir,
+            attributed = self._attributed_process_exit(
+                exit_receipt, "Cursor", detail[-500:], run_dir,
             )
             exc = RuntimeError(
                 attributed
-                or f"Cursor CLI exited with code {proc.returncode}: "
+                or f"Cursor CLI exited with code {exit_receipt.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -6590,13 +6664,9 @@ class DaemonManager:
                   session_id=session_id, message_length=len(message))
 
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(self._agent._working_dir),
-                start_new_session=self._cli_start_new_session(),
+            handle = self._process_port.spawn(
+                DaemonProcessCommand(tuple(cmd), self._agent._working_dir),
+                group_id=None,
             )
         except FileNotFoundError:
             with entry["followup_lock"]:
@@ -6609,8 +6679,6 @@ class DaemonManager:
             return {"status": "error",
                     "message": f"Failed to start Cursor CLI: {e}"}
         # Ask follow-ups are not part of any batch (see claude-code ask).
-        self._register_cli_proc(proc, group_id=None)
-
         try:
             run_dir.record_cli_output(
                 f"[ask dispatched] {message[:200]}", stream="stdout",
@@ -6619,7 +6687,7 @@ class DaemonManager:
             pass
 
         ask_future = self._ask_pool.submit(
-            self._run_ask_cursor_stream, em_id, entry, proc, run_dir,
+            self._run_ask_cursor_stream, em_id, entry, handle, run_dir,
         )
         ask_future.add_done_callback(
             lambda f, eid=em_id: self._on_ask_done(eid, f)
@@ -6634,12 +6702,13 @@ class DaemonManager:
         self,
         em_id: str,
         entry: dict,
-        proc: subprocess.Popen,
+        handle: DaemonProcessHandle,
         run_dir: DaemonRunDir,
     ) -> dict:
-        """Background worker: stream an ``agent -p --resume`` subprocess."""
-        stderr_thread = _spawn_stderr_drainer(
-            proc, run_dir, thread_name=f"daemon-cursor-ask-stderr-{em_id}",
+        """Background worker: stream an ``agent -p --resume`` process Port handle."""
+        stderr_thread = self._process_port.drain_stderr(
+            handle, on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
+            thread_name=f"daemon-cursor-ask-stderr-{em_id}",
         )
         stderr_lines = stderr_thread.lines
 
@@ -6652,12 +6721,8 @@ class DaemonManager:
         timed_out = False
 
         try:
-            assert proc.stdout is not None
             deadline = time.monotonic() + self._timeout
-            for raw_line in _iter_stdout_with_deadline(
-                proc, deadline,
-                thread_name=f"daemon-cursor-ask-stdout-{em_id}",
-            ):
+            for raw_line in self._process_port.iter_stdout(handle, deadline=deadline):
                 line = raw_line.rstrip("\n")
                 if not line:
                     continue
@@ -6693,16 +6758,23 @@ class DaemonManager:
 
             if time.monotonic() >= deadline:
                 timed_out = True
-                _kill_process_group(proc)
+                exit_receipt = self._process_port.terminate(handle, reason="timeout")
             else:
                 try:
-                    proc.wait(timeout=max(1.0, deadline - time.monotonic()))
-                except subprocess.TimeoutExpired:
+                    exit_receipt = self._process_port.wait(
+                        handle, timeout=max(1.0, deadline - time.monotonic())
+                    )
+                except TimeoutError:
                     timed_out = True
-                    _kill_process_group(proc)
+                    exit_receipt = self._process_port.terminate(handle, reason="timeout")
+        except Exception:
+            exit_receipt = self._process_port.terminate(handle, reason="error")
+            raise
         finally:
             stderr_thread.join(timeout=2.0)
-            self._unregister_cli_proc(proc, group_id=None)
+            if ('exit_receipt' in locals() and exit_receipt is not None
+                    and exit_receipt.returncode is not None):
+                self._process_port.release(handle)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
@@ -6715,9 +6787,12 @@ class DaemonManager:
             )
             return {"status": "error", "id": em_id, "message": err}
 
-        if proc.returncode != 0:
+        if exit_receipt.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
-            err = f"Cursor CLI exited {proc.returncode}: {detail[-500:]}"
+            attributed = self._attributed_process_exit(
+                exit_receipt, "Cursor", detail[-500:], run_dir,
+            )
+            err = attributed or f"Cursor CLI exited {exit_receipt.returncode}: {detail[-500:]}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
@@ -7058,6 +7133,19 @@ class DaemonManager:
                 _kill_process_group(proc)
             except Exception as e:  # pragma: no cover - defensive teardown
                 errors.append(f"kill pid {getattr(proc, 'pid', '?')}: {e}")
+        port_processes_killed = 0
+        try:
+            port_processes_killed = self._process_port.terminate_all(reason=reason)
+        except Exception as e:  # pragma: no cover - defensive teardown
+            errors.append(f"terminate daemon-owned processes: {e}")
+        interactive_processes_killed = 0
+        if self._interactive_terminal_port is not None:
+            try:
+                interactive_processes_killed = self._interactive_terminal_port.terminate_all(
+                    reason=reason
+                )
+            except Exception as e:  # pragma: no cover - defensive teardown
+                errors.append(f"terminate interactive terminal children: {e}")
 
         pools = list(self._pools)
         self._pools.clear()
@@ -7104,7 +7192,10 @@ class DaemonManager:
             "status": "shutdown",
             "reason": reason,
             "cancelled": cancelled,
-            "cli_processes_killed": len(procs_to_kill),
+            "cli_processes_killed": (
+                len(procs_to_kill) + port_processes_killed + interactive_processes_killed
+            ),
+            "interactive_terminal_processes_killed": interactive_processes_killed,
             "pools_shutdown": len(pools),
             "ask_futures_shutdown": len(ask_futures),
             "futures_remaining": futures_remaining,
@@ -7317,6 +7408,11 @@ class DaemonManager:
             # identity into a PID-only authorization.
             proc._lingtai_pgid = pgid
             proc._lingtai_process_identity = identity
+            proc._lingtai_termination_scope = (
+                DaemonProcessTerminationScope.PRIVATE_PROCESS_GROUP
+                if self._cli_start_new_session()
+                else DaemonProcessTerminationScope.INHERITED_SUPERVISOR_GROUP
+            )
         with self._cli_lock:
             self._cli_procs.append(proc)
             if group_id is not None:
@@ -7386,6 +7482,9 @@ class DaemonManager:
                     pass
         for proc in procs_to_kill:
             _kill_process_group(proc)
+        self._process_port.terminate_group(group_id, reason=reason)
+        if self._interactive_terminal_port is not None:
+            self._interactive_terminal_port.terminate_group(group_id, reason=reason)
 
     def _drain_all_cli_procs(self, reason: str | None = None) -> list[subprocess.Popen]:
         """Clear all CLI tracking and return the procs to kill (reclaim path).
@@ -7403,6 +7502,28 @@ class DaemonManager:
             self._cli_procs.clear()
             self._cli_proc_groups.clear()
         return procs_to_kill
+
+    def _attributed_process_exit(
+        self, receipt: DaemonProcessExit, backend_name: str, detail: str,
+        run_dir: "DaemonRunDir | None" = None,
+    ) -> str | None:
+        """Apply raw-code/local-cause attribution to a Port receipt."""
+        signal_name = self._signal_exit_name(receipt.returncode)
+        if signal_name is None or receipt.reason is None:
+            return None
+        if run_dir is not None:
+            try:
+                run_dir.record_cli_termination(
+                    reason=receipt.reason, signal_name=signal_name,
+                    returncode=receipt.returncode,
+                )
+            except Exception:
+                pass
+        msg = (
+            f"{backend_name} CLI terminated by LingTai ({receipt.reason}, "
+            f"{signal_name}, code {receipt.returncode})"
+        )
+        return f"{msg}: {detail}" if detail else msg
 
     @staticmethod
     def _signal_exit_name(returncode: int | None) -> str | None:
@@ -7551,11 +7672,27 @@ class DaemonManager:
 
 def setup(agent: "Agent", max_emanations: int = 100,
           max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
-          notify_threshold: int = 20) -> DaemonManager:
+          notify_threshold: int = 20,
+          process_port: DaemonProcessPort | None = None,
+          interactive_terminal_port: InteractiveTerminalPort | None = None) -> DaemonManager:
     """Set up the daemon capability on an agent."""
+    if process_port is None:
+        if os.name == "posix":
+            process_port = PosixDaemonProcessPort()
+        else:
+            raise NotImplementedError(
+                f"daemon process supervision is unsupported on {os.name!r}"
+            )
+    if interactive_terminal_port is None and os.name == "posix":
+        from lingtai.adapters.posix.interactive_terminal import (
+            PosixInteractiveTerminalAdapter,
+        )
+        interactive_terminal_port = PosixInteractiveTerminalAdapter()
     mgr = DaemonManager(agent, max_emanations=max_emanations,
                         max_turns=max_turns, timeout=timeout,
-                        notify_threshold=notify_threshold)
+                        notify_threshold=notify_threshold,
+                        process_port=process_port,
+                        interactive_terminal_port=interactive_terminal_port)
     schema = get_schema()
     agent.add_tool("daemon", schema=schema, handler=mgr.handle,
                    description=get_description(), glossary_package=__package__)

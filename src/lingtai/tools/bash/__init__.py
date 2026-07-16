@@ -15,21 +15,25 @@ import math
 import re
 import secrets
 import subprocess
-import sys
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._shell_dialect import ShellDialect, ShellInvocation, extract_posix_commands
+
 from ._async_supervisor import (
     load_state,
-    process_identity,
-    process_identity_matches,
-    process_is_alive,
     publish_reminder_if_claimed,
     update_state,
     write_initial_state,
+)
+from ._async_process import (
+    BashAsyncProcessPort,
+    ProcessObservation,
+    ProcessRef,
+    process_ref_from_state,
 )
 
 
@@ -50,6 +54,19 @@ _RETURN_HANDOFF_RECHECK_SECONDS = 0.05
 _SUPERVISOR_COMMIT_GRACE_SECONDS = 0.25
 _CANCEL_COMMIT_TIMEOUT_SECONDS = 3.0
 _JOB_ID_RE = re.compile(r"job-(?:[0-9a-f]{32}|[0-9a-f]{8})\Z")
+
+
+def _select_bash_shell_dialect() -> ShellDialect:
+    """Load the outer selector lazily to keep adapter → Port imports acyclic."""
+    from lingtai.adapters.bash import select_bash_shell_dialect
+
+    return select_bash_shell_dialect()
+
+
+def _select_bash_async_process() -> BashAsyncProcessPort:
+    """Load the process adapter lazily so the capability remains composition-led."""
+    from lingtai.adapters.bash_process import select_bash_async_process
+    return select_bash_async_process()
 
 # Length of the stderr tail surfaced in the failure warning. Short on purpose:
 # the full stderr is already present in the result; the tail just makes the
@@ -317,22 +334,7 @@ class BashPolicy:
         Handles: |, &&, ||, ;, newlines, $(), backticks, env-var prefixes.
         Returns the first actual command word of each sub-command.
         """
-        flat = command
-        # Expand $(...) subshells into the command chain
-        flat = re.sub(r'\$\([^)]*\)', lambda m: '; ' + m.group()[2:-1] + ' ;', flat)
-        # Expand backtick subshells
-        flat = re.sub(r'`[^`]*`', lambda m: '; ' + m.group()[1:-1] + ' ;', flat)
-        # Split on pipe/chain operators AND newlines
-        parts = re.split(r'\|{1,2}|&&|;|\n', flat)
-        commands = []
-        for part in parts:
-            tokens = part.strip().split()
-            # Skip env-var assignments (FOO=bar cmd ...) to find the real command
-            while tokens and re.fullmatch(r'[A-Za-z_]\w*=\S*', tokens[0]):
-                tokens = tokens[1:]
-            if tokens:
-                commands.append(tokens[0])
-        return commands
+        return list(extract_posix_commands(command))
 
 
 class BashManager:
@@ -344,11 +346,15 @@ class BashManager:
         working_dir: str,
         agent: "BaseAgent",
         max_output: int = 50_000,
+        dialect: ShellDialect | None = None,
+        async_process: BashAsyncProcessPort | None = None,
     ):
         self._policy = policy
         self._working_dir = working_dir
         self._max_output = max_output
         self._agent = agent
+        self._dialect = dialect or _select_bash_shell_dialect()
+        self._async_process = async_process or _select_bash_async_process()
         self._jobs_dir: Path | None = None
         self._reminder_lock = threading.Lock()
         self._reminder_cancel_events: dict[str, threading.Event] = {}
@@ -389,8 +395,9 @@ class BashManager:
         """Validate command is non-empty and allowed by policy. Returns error dict or None."""
         if not command.strip():
             return {"status": "error", "message": "command is required"}
-        if not self._policy.is_allowed(command):
-            denied = BashPolicy._extract_commands(command)
+        commands = self._dialect.extract_commands(command)
+        if not all(self._policy._check_single(cmd) for cmd in commands):
+            denied = commands
             return {
                 "status": "error",
                 "message": f"Command not allowed by policy. "
@@ -447,19 +454,25 @@ class BashManager:
         err = self._validate_working_dir(cwd)
         if err:
             return err
+        invocation = self._dialect.make_invocation(command)
         if args.get("async", False):
             reminder, err = self._validate_reminder(args.get("reminder"))
             if err:
                 return err
-            return self._run_async(command, cwd, reminder)
-        return self._run_sync(command, cwd, args.get("timeout", 30))
+            return self._run_async(command, cwd, reminder, invocation)
+        return self._run_sync(command, cwd, args.get("timeout", 30), invocation)
 
-    def _run_sync(self, command: str, cwd: str, timeout: float) -> dict:
-        """Synchronous execution remains intentionally unchanged."""
+    def _run_sync(self, command: str, cwd: str, timeout: float, invocation: ShellInvocation) -> dict:
+        """Run the selected invocation; timeout/capture/result policy stays here."""
         try:
+            process_args, process_kwargs = invocation.process_args()
+            if invocation.encoding is not None:
+                process_kwargs["encoding"] = invocation.encoding
+            if invocation.errors is not None:
+                process_kwargs["errors"] = invocation.errors
             result = subprocess.run(
-                command, shell=True, capture_output=True, text=True,
-                timeout=timeout, cwd=cwd,
+                process_args, capture_output=True, text=True,
+                timeout=timeout, cwd=cwd, **process_kwargs,
             )
             stdout, stderr = result.stdout, result.stderr
             if len(stdout) > self._max_output:
@@ -521,12 +534,18 @@ class BashManager:
                     self._start_reminder_timer(job_id, job_dir)
                 self._start_completion_watcher(job_id, job_dir)
 
-    def _initial_async_state(self, job_id: str, command: str, cwd: str, reminder: float) -> dict:
+    def _initial_async_state(
+        self, job_id: str, command: str, cwd: str, reminder: float,
+        invocation: ShellInvocation | None = None,
+    ) -> dict:
         now = time.time()
+        invocation = invocation or self._dialect.make_invocation(command)
         return {
             "version": 3,
             "job_id": job_id,
             "command": command,
+            "shell_dialect": self._dialect.state_key(),
+            "invocation": invocation.to_dict(),
             "cwd": cwd,
             "status": "launching",
             "created_at": now,
@@ -536,6 +555,8 @@ class BashManager:
             "pid_identity": None,
             "pid_start_time": None,
             "process_group": None,
+            "supervisor_process": None,
+            "command_process": None,
             "supervisor_start_lease": {
                 "token": secrets.token_hex(16),
                 "deadline_at": now + _SUPERVISOR_START_LEASE_SECONDS,
@@ -559,7 +580,10 @@ class BashManager:
             },
         }
 
-    def _run_async(self, command: str, cwd: str, reminder: float) -> dict:
+    def _run_async(
+        self, command: str, cwd: str, reminder: float,
+        invocation: ShellInvocation | None = None,
+    ) -> dict:
         """Start a detached durable supervisor and return its command PID."""
         jobs_dir = self._ensure_jobs_dir()
         job_dir: Path | None = None
@@ -581,7 +605,7 @@ class BashManager:
             break
         if job_dir is None:
             return {"status": "error", "message": "Failed to allocate a unique async job ID"}
-        initial_state = self._initial_async_state(job_id, command, cwd, reminder)
+        initial_state = self._initial_async_state(job_id, command, cwd, reminder, invocation)
         start_lease = initial_state["supervisor_start_lease"]
         start_token = start_lease["token"]
         try:
@@ -589,18 +613,7 @@ class BashManager:
         except Exception as exc:
             return {"status": "error", "message": f"Failed to initialize async job: {exc}"}
         try:
-            supervisor = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "lingtai.tools.bash._async_supervisor",
-                    str(job_dir),
-                    start_token,
-                ],
-                start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            supervisor_ref, supervisor = self._async_process.launch_supervisor(job_dir, start_token)
         except Exception as exc:
             def mark_failed(state: dict) -> dict:
                 state.update({
@@ -614,7 +627,7 @@ class BashManager:
         # Record the launched supervisor PID from the owning parent even when an
         # OS incarnation identity cannot be observed.  The child must still claim
         # the matching durable lease before it can spawn the command.
-        supervisor_identity = process_identity(supervisor.pid)
+        supervisor_identity = supervisor_ref.incarnation
 
         def record_supervisor(state: dict) -> dict:
             lease = state.get("supervisor_start_lease")
@@ -624,9 +637,10 @@ class BashManager:
                 or lease.get("token") != start_token
             ):
                 return state
-            state["supervisor_pid"] = supervisor.pid
+            state["supervisor_pid"] = supervisor_ref.public_id
             if supervisor_identity is not None:
                 state["supervisor_identity"] = supervisor_identity
+            state["supervisor_process"] = supervisor_ref.to_dict()
             return state
 
         update_state(job_dir, record_supervisor)
@@ -753,9 +767,9 @@ class BashManager:
         self._mark_unrecoverable_if_supervisor_gone(job_dir)
         return {"status": "error", "message": "Failed to start async job supervisor"}
 
-    def _reap_supervisor(self, supervisor: subprocess.Popen, job_dir: Path) -> None:
+    def _reap_supervisor(self, supervisor, job_dir: Path) -> None:
         try:
-            returncode = supervisor.wait()
+            returncode = self._async_process.wait_supervisor(supervisor)
         except Exception:
             return
 
@@ -1171,7 +1185,7 @@ class BashManager:
             pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
             return self._legacy_unknown(job_id, job_dir)
-        if status != "running" or not process_is_alive(pid):
+        if status != "running" or self._async_process.observe(ProcessRef(pid, "legacy")).kind == "gone":
             return self._legacy_unknown(job_id, job_dir)
         # A legacy record cannot prove the PID incarnation, so it is never safe
         # to signal.  But a still-live PID is not evidence that the old command
@@ -1200,21 +1214,40 @@ class BashManager:
         )
 
     @staticmethod
-    def _supervisor_definitively_gone(state: dict) -> bool:
-        """True when a recorded PID is absent, or its saved incarnation mismatches."""
-        pid = state.get("supervisor_pid")
-        if not isinstance(pid, int):
+    def _durable_process_ref(state: dict, prefix: str) -> ProcessRef | None:
+        """Prefer the neutral state contract, retaining v3 PID fields as fallback."""
+        process = process_ref_from_state(state, prefix)
+        if process is not None:
+            return process
+        if prefix == "command":
+            public_id = state.get("pid")
+            incarnation = state.get("pid_identity")
+        elif prefix == "supervisor":
+            public_id = state.get("supervisor_pid")
+            incarnation = state.get("supervisor_identity")
+        else:
+            return None
+        if (
+            not isinstance(public_id, int)
+            or isinstance(public_id, bool)
+            or public_id <= 0
+            or not isinstance(incarnation, str)
+            or not incarnation
+        ):
+            return None
+        return ProcessRef(public_id, incarnation)
+
+    def _supervisor_definitively_gone(self, state: dict) -> bool:
+        """True when an owned supervisor is absent or its incarnation changed."""
+        process = self._durable_process_ref(state, "supervisor")
+        if process is not None:
+            return self._async_process.observe(process).kind in {"gone", "changed"}
+        public_id = state.get("supervisor_pid")
+        if not isinstance(public_id, int) or isinstance(public_id, bool) or public_id <= 0:
             return False
-        # PID absence is proof even when identity capture failed.  Identity remains
-        # necessary only to distinguish a still-live PID from a recycled process.
-        if not process_is_alive(pid):
-            return True
-        saved_identity = state.get("supervisor_identity")
-        if not isinstance(saved_identity, str):
-            return False
-        observed_identity = process_identity(pid)
-        # ``None`` is an observation failure, not proof that the supervisor died.
-        return observed_identity is not None and observed_identity != saved_identity
+        # Absence remains proof for retained states that could not capture an
+        # incarnation; a still-live diagnostic ID alone is never ownership proof.
+        return self._async_process.observe(ProcessRef(public_id, "legacy")).kind == "gone"
 
     def _mark_unrecoverable_if_supervisor_gone(self, job_dir: Path) -> dict | None:
         """Resolve a lost supervisor or expired start lease under the state lock."""
@@ -1263,10 +1296,9 @@ class BashManager:
         return None
 
     def _running_result(self, job_id: str, state: dict) -> dict:
-        pid = state.get("pid")
-        identity = state.get("pid_identity")
-        if isinstance(pid, int) and process_identity_matches(pid, identity) and process_is_alive(pid):
-            return {"status": "running", "job_id": job_id, "pid": pid}
+        process = self._durable_process_ref(state, "command")
+        if process is not None and self._async_process.observe(process).kind == "same":
+            return {"status": "running", "job_id": job_id, "pid": process.public_id}
         return {
             "status": "running",
             "job_id": job_id,
@@ -1290,14 +1322,9 @@ class BashManager:
             result = self._terminal_result(job_id, job_dir)
             return result if result is not None else self._already_finished(load_state(job_dir) or state)
 
-        pid = state.get("pid")
-        identity = state.get("pid_identity")
-        if (
-            isinstance(pid, int)
-            and process_identity_matches(pid, identity)
-            and process_is_alive(pid)
-        ):
-            return {"status": "running", "job_id": job_id, "pid": pid}
+        process = self._durable_process_ref(state, "command")
+        if process is not None and self._async_process.observe(process).kind == "same":
+            return {"status": "running", "job_id": job_id, "pid": process.public_id}
 
         # A dead/mismatched command PID is not terminal evidence: its detached
         # supervisor may have already obtained the exact wait result but not yet
@@ -1323,19 +1350,23 @@ class BashManager:
             return {"status": "error", "message": "Cannot cancel legacy async job without durable supervisor ownership"}
         if self._terminal(state.get("status")) or state.get("terminal_polled"):
             return self._already_finished(state)
-        if not (
-            isinstance(state.get("supervisor_pid"), int)
-            and isinstance(state.get("supervisor_identity"), str)
-        ):
+        supervisor = self._durable_process_ref(state, "supervisor")
+        if supervisor is None:
             return {
                 "status": "error",
                 "message": "Cannot cancel async job: durable supervisor identity is unavailable",
             }
-        if self._supervisor_definitively_gone(state):
+        supervisor_observation = self._async_process.observe(supervisor).kind
+        if supervisor_observation in {"gone", "changed"}:
             self._mark_unrecoverable_if_supervisor_gone(job_dir)
             return {
                 "status": "error",
                 "message": "Cannot cancel async job: recorded supervisor identity is no longer live; poll for the durable terminal result",
+            }
+        if supervisor_observation != "same":
+            return {
+                "status": "error",
+                "message": "Cannot cancel async job: durable supervisor identity cannot be verified",
             }
 
         requested = False
@@ -1440,10 +1471,12 @@ def setup(
         policy = BashPolicy.from_file(str(_DEFAULT_POLICY_FILE))
 
 
+    dialect = _select_bash_shell_dialect()
     mgr = BashManager(
         policy=policy,
         working_dir=str(agent._working_dir),
         agent=agent,
+        dialect=dialect,
     )
     # Build description with policy rules
     desc = get_description()

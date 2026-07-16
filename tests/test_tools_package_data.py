@@ -1,8 +1,9 @@
 """Regression test: built wheels must ship every built-in tool contract.
 
 The consolidated ``lingtai.tools`` package ships one ``CONTRACT.md`` per
-built-in tool plus the daemon's extended ``DAEMON_CONTRACT.md``, alongside its
-manual trees. These reach the wheel only through the ``"lingtai.tools"`` entry
+built-in tool, the daemon's intentional interactive-terminal component contract,
+and the daemon's extended ``DAEMON_CONTRACT.md``, alongside its manual trees.
+These reach the wheel only through the ``"lingtai.tools"`` entry
 in ``[tool.setuptools.package-data]`` in ``pyproject.toml``; a missing glob
 silently drops the contract while the tool code still installs (the
 consolidation blocker this test guards).
@@ -162,17 +163,21 @@ def test_wheel_ships_every_tool_contract(wheel_entries: set[str]):
     assert not missing, "tool contracts missing from wheel: %r" % missing
 
 
-def test_wheel_ships_exactly_eighteen_tool_contracts(wheel_entries: set[str]):
-    # No nested/manual CONTRACT.md should sneak in alongside the 18 top-level
-    # ones — guard against an over-broad glob silently widening the manifest.
+def test_wheel_ships_exact_expected_tool_contracts(wheel_entries: set[str]):
+    # Keep the manifest closed: the 18 top-level tool contracts plus the one
+    # intentional daemon component contract. No other nested/manual contract
+    # may sneak in through an over-broad package-data glob.
+    expected = {
+        f"lingtai/tools/{tool}/CONTRACT.md" for tool in _BUILTIN_TOOLS
+    } | {"lingtai/tools/daemon/interactive_terminal/CONTRACT.md"}
     contracts = {
         e
         for e in wheel_entries
         if e.endswith("/CONTRACT.md") and e.startswith("lingtai/tools/")
     }
-    assert len(contracts) == len(_BUILTIN_TOOLS), (
-        "expected exactly %d tool contracts, wheel has %d: %r"
-        % (len(_BUILTIN_TOOLS), len(contracts), sorted(contracts))
+    assert contracts == expected, (
+        "expected exact tool contract manifest %r, wheel has %r"
+        % (sorted(expected), sorted(contracts))
     )
 
 

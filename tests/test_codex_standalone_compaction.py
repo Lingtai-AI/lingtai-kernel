@@ -328,7 +328,8 @@ def _fake_daemon_manager(tmp_path):
         _working_dir=tmp_path / "agent",
         _log=lambda *args, **kwargs: None,
     )
-    return DaemonManager(agent)
+    from lingtai.tools.daemon import PosixDaemonProcessPort
+    return DaemonManager(agent, process_port=PosixDaemonProcessPort())
 
 
 def test_daemon_schema_rejects_bool_context_token_limit(tmp_path):

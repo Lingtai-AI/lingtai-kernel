@@ -11,8 +11,10 @@ from pathlib import Path
 import pytest
 
 from tests._notification_store_helpers import notification_store_for, snapshot_notifications
+from lingtai.adapters.posix.bash_process import _alive as _posix_process_is_alive
 from lingtai.tools.bash import BashManager, BashPolicy, get_schema
 from lingtai.tools.bash import _async_supervisor
+from lingtai.tools.bash._async_process import ProcessObservation, ProcessRef
 
 
 class TestBashAsync:
@@ -23,6 +25,65 @@ class TestBashAsync:
         return BashManager(
             policy=BashPolicy.yolo(), working_dir=str(tmp_path), agent=agent
         )
+
+    def test_retained_v3_state_without_dialect_fields_executes_posix_script(
+        self, tmp_path
+    ):
+        manager = self._make_manager(tmp_path)
+        job_id = "job-10000000000000000000000000000101"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        state = manager._initial_async_state(job_id, "printf legacy-marker", str(tmp_path), 30)
+        state.pop("shell_dialect")
+        state.pop("invocation")
+        token = state["supervisor_start_lease"]["token"]
+        _async_supervisor.write_initial_state(job_dir, state)
+
+        assert _async_supervisor.supervise(job_dir, token) == 0
+        recovered = json.loads((job_dir / "state.json").read_text())
+        assert recovered["status"] == "completed"
+        assert recovered["exit_code"] == 0
+        assert (job_dir / "stdout.log").read_text() == "legacy-marker"
+
+    @pytest.mark.parametrize(
+        "state_update",
+        [
+            lambda state: state.pop("invocation"),
+            lambda state: state.update({"invocation": {"script": 42}}),
+            lambda state: state.update({
+                "invocation": {**state["invocation"], "argv": ["-Command"]},
+            }),
+            lambda state: state.update({
+                "invocation": {**state["invocation"], "unknown": True},
+            }),
+            lambda state: state.update({"shell_dialect": ""}),
+        ],
+        ids=[
+            "missing-invocation", "malformed-invocation", "argv-without-executable",
+            "unknown-invocation-key", "empty-dialect",
+        ],
+    )
+    def test_malformed_new_state_is_unrecoverable_without_raw_fallback(
+        self, tmp_path, monkeypatch, state_update
+    ):
+        manager = self._make_manager(tmp_path)
+        job_id = "job-10000000000000000000000000000102"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        state = manager._initial_async_state(job_id, "printf should-not-run", str(tmp_path), 30)
+        state_update(state)
+        token = state["supervisor_start_lease"]["token"]
+        _async_supervisor.write_initial_state(job_dir, state)
+        monkeypatch.setattr(
+            "lingtai.adapters.bash_process.select_bash_async_process",
+            lambda: pytest.fail("malformed durable state selected a process adapter"),
+        )
+
+        assert _async_supervisor.supervise(job_dir, token) == 2
+        recovered = json.loads((job_dir / "state.json").read_text())
+        assert recovered["status"] == "unrecoverable"
+        assert recovered["exit_status_known"] is False
+        assert "durable state" in recovered["supervisor_error"]
 
     # 1. async run returns job_id and pid
     def test_async_run_returns_job_id_and_pid(self, tmp_path):
@@ -702,6 +763,60 @@ print(json.dumps(manager.handle({
             proc.terminate()
             proc.wait(timeout=2)
 
+    def test_running_result_prefers_neutral_command_ref_over_legacy_fields(self, tmp_path):
+        observed = []
+
+        class RecordingProcessPort:
+            @staticmethod
+            def observe(process):
+                observed.append(process)
+                return ProcessObservation("same")
+
+        manager = BashManager(
+            policy=BashPolicy.yolo(),
+            working_dir=str(tmp_path),
+            agent=SimpleNamespace(_notification_store=notification_store_for(tmp_path)),
+            async_process=RecordingProcessPort(),
+        )
+        neutral = ProcessRef(77, "adapter-owned-incarnation")
+        result = manager._running_result("job-neutral-ref", {
+            "command_process": neutral.to_dict(),
+            "pid": 88,
+            "pid_identity": "legacy-incarnation",
+        })
+        assert result == {"status": "running", "job_id": "job-neutral-ref", "pid": 77}
+        assert observed == [neutral]
+
+    def test_cancel_refuses_unverifiable_neutral_supervisor_ref(self, tmp_path):
+        class UnknownProcessPort:
+            @staticmethod
+            def observe(process):
+                return ProcessObservation("unknown")
+
+        manager = BashManager(
+            policy=BashPolicy.yolo(),
+            working_dir=str(tmp_path),
+            agent=SimpleNamespace(_notification_store=notification_store_for(tmp_path)),
+            async_process=UnknownProcessPort(),
+        )
+        job_id = "job-11111111111111111111111111111112"
+        job_dir = tmp_path / "system" / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        state = manager._initial_async_state(job_id, "sleep 1", str(tmp_path), 30)
+        state.update({
+            "status": "running",
+            "supervisor_pid": 77,
+            "supervisor_identity": None,
+            "supervisor_process": ProcessRef(77, None).to_dict(),
+        })
+        _async_supervisor.write_initial_state(job_dir, state)
+
+        result = manager.handle({"action": "cancel", "job_id": job_id})
+        assert result["status"] == "error"
+        assert "cannot be verified" in result["message"]
+        recovered = json.loads((job_dir / "state.json").read_text())
+        assert "cancel_requested_at" not in recovered
+
     def test_rehydrated_completion_is_published_to_bash_notification_channel(self, tmp_path):
         job_id = "job-20000000000000000000000000000003"
         self._durable_state(tmp_path, job_id, deadline=time.time() + 30)
@@ -859,9 +974,9 @@ class TestBashAsyncTerminalRaces:
         cancelled = manager.handle({"action": "cancel", "job_id": started["job_id"]})
         assert cancelled == {"status": "cancelled", "job_id": started["job_id"]}
         deadline = time.monotonic() + 2
-        while _async_supervisor.process_is_alive(descendant_pid) and time.monotonic() < deadline:
+        while _posix_process_is_alive(descendant_pid) and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert not _async_supervisor.process_is_alive(descendant_pid)
+        assert not _posix_process_is_alive(descendant_pid)
         state = json.loads(
             (tmp_path / "system" / "jobs" / started["job_id"] / "state.json").read_text()
         )
@@ -877,12 +992,15 @@ class TestBashAsyncTerminalRaces:
             job_dir, manager._initial_async_state(job_id, "sleep 1", str(tmp_path), 30)
         )
 
-        class ExitedSupervisor:
+        class ExitedSupervisorPort:
             @staticmethod
-            def wait():
+            def wait_supervisor(owned):
+                assert owned is owned_supervisor
                 return 17
 
-        manager._reap_supervisor(ExitedSupervisor(), job_dir)
+        owned_supervisor = object()
+        manager._async_process = ExitedSupervisorPort()
+        manager._reap_supervisor(owned_supervisor, job_dir)
         state = json.loads((job_dir / "state.json").read_text())
         assert state["status"] == "unrecoverable"
         assert state["exit_status_known"] is False
@@ -1001,11 +1119,9 @@ class TestBashAsyncTerminalRaces:
         else:
             state["supervisor_start_lease"]["deadline_at"] = time.time() - 1
         _async_supervisor.write_initial_state(job_dir, state)
-        monkeypatch.setattr(_async_supervisor, "process_identity", lambda pid: f"test:{pid}")
         monkeypatch.setattr(
-            _async_supervisor.subprocess,
-            "Popen",
-            lambda *args, **kwargs: pytest.fail("expired/terminal supervisor spawned command"),
+            "lingtai.adapters.bash_process.select_bash_async_process",
+            lambda: pytest.fail("expired/terminal supervisor selected a process adapter"),
         )
 
         assert _async_supervisor.supervise(job_dir, token) == 2

@@ -26,6 +26,7 @@ from lingtai.tools.daemon import (
     _cli_backend_loads_common_mcp as _source_cli_backend_loads_common_mcp,
     _normalize_backend,
 )
+from lingtai.tools.daemon.process_port import DaemonProcessExit
 from lingtai.tools.daemon.run_dir import DaemonRunDir
 from tests._daemon_helpers import (
     FiniteFakeProc,
@@ -36,6 +37,53 @@ from tests._daemon_helpers import (
     register_daemon_entry,
     wait_daemon_terminal,
 )
+
+
+class _OneShotRecordingPort:
+    """Small injected Port double for the two raw one-shot families."""
+
+    def __init__(self, lines=("output\n",), *, exit_receipt=None):
+        self.commands = []
+        self.deadlines = []
+        self.waited = []
+        self.terminated = []
+        self.released = []
+        self._lines = list(lines)
+        self._exit_receipt = exit_receipt or DaemonProcessExit(0)
+        self.handle = object()
+
+    def spawn(self, command, *, group_id=None):
+        self.commands.append((command, group_id))
+        return self.handle
+
+    def iter_stdout(self, handle, *, deadline=None):
+        assert handle is self.handle
+        self.deadlines.append(deadline)
+        return iter(self._lines)
+
+    def drain_stderr(self, handle, *, on_line=None, thread_name="daemon-stderr"):
+        class Drain:
+            lines = []
+
+            def join(self, timeout=2.0):
+                return None
+
+        return Drain()
+
+    def wait(self, handle, *, timeout=None):
+        assert handle is self.handle
+        self.waited.append(handle)
+        return self._exit_receipt
+
+    def terminate(self, handle, *, reason=None):
+        assert handle is self.handle
+        self.terminated.append((handle, reason))
+        return DaemonProcessExit(-15, reason)
+
+    def release(self, handle):
+        assert handle is self.handle
+        self.released.append(handle)
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +669,103 @@ def test_qwen_code_cmd_appends_backend_argv_before_prompt(tmp_path):
     assert cmd[-2] == "-p"
     assert "Refactor with Qwen." in cmd[-1]
     assert run_dir._state["last_output"] == "qwen done"
+
+
+def test_qwen_initial_run_uses_injected_port_without_local_deadline(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    port = _OneShotRecordingPort(lines=("qwen done\n", "\n"))
+    mgr._process_port = port
+    run_dir = make_daemon_run_dir(agent, backend="qwen-code")
+
+    mgr._run_qwen_code_emanation(
+        "em-qwen-port", run_dir, "Refactor with Qwen.",
+        threading.Event(), threading.Event(),
+        backend_argv=["--model", "qwen3-coder-plus"],
+    )
+
+    command, group_id = port.commands[0]
+    assert command.argv[:5] == (
+        "qwen", "--yolo", "--model", "qwen3-coder-plus", "-p",
+    )
+    assert "Refactor with Qwen." in command.argv[-1]
+    assert command.cwd == agent._working_dir
+    assert command.environment is not None
+    assert port.deadlines == [None]
+    assert port.waited == [port.handle]
+    assert group_id == run_dir.group_id
+    assert port.released == [port.handle]
+    assert run_dir._state["last_output"] == "qwen done"
+
+
+def test_kimicode_initial_run_uses_injected_port_and_private_environment(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    port = _OneShotRecordingPort(lines=("kimi done\n",))
+    mgr._process_port = port
+    run_dir = make_daemon_run_dir(agent, backend="kimicode")
+
+    mgr._run_kimicode_emanation(
+        "em-kimi-port", run_dir, "Refactor with Kimi.",
+        threading.Event(), threading.Event(), backend_argv=["--model", "kimi-for-coding"],
+    )
+
+    command, group_id = port.commands[0]
+    env = dict(command.environment or ())
+    assert command.argv[:4] == ("kimi", "--model", "kimi-for-coding", "--prompt")
+    assert "Refactor with Kimi." in command.argv[4]
+    assert command.argv[5:] == ("--output-format", "text")
+    assert command.cwd == agent._working_dir
+    assert env["KIMI_CODE_HOME"].startswith(str(run_dir.path))
+    assert env["KIMI_DISABLE_TELEMETRY"] == "1"
+    assert env["KIMI_CODE_NO_AUTO_UPDATE"] == "1"
+    assert env["KIMI_MODEL_NAME"] == "kimi-for-coding"
+    assert port.deadlines == [None]
+    assert port.waited == [port.handle]
+    assert group_id == run_dir.group_id
+    assert port.released == [port.handle]
+    assert run_dir._state["last_output"] == "kimi done"
+
+
+@pytest.mark.parametrize(
+    ("runner", "backend", "label"),
+    [
+        ("_run_qwen_code_emanation", "qwen-code", "qwen-code"),
+        ("_run_kimicode_emanation", "kimicode", "kimicode"),
+    ],
+)
+def test_one_shot_cancellation_uses_port_termination_attribution(
+    tmp_path, monkeypatch, runner, backend, label,
+):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    cancel_event = threading.Event()
+    timeout_event = threading.Event()
+    port = _OneShotRecordingPort(lines=("partial\n",), exit_receipt=DaemonProcessExit(-15, "timeout"))
+    mgr._process_port = port
+    run_dir = make_daemon_run_dir(agent, backend=backend)
+    # Cancellation arrives after stdout closes; the terminal Port receipt must
+    # still win classification and preserve its local timeout attribution.
+    def iter_stdout(handle, *, deadline=None):
+        port.deadlines.append(deadline)
+        yield "partial\n"
+        timeout_event.set()
+        cancel_event.set()
+
+    port.iter_stdout = iter_stdout
+    monkeypatch.setattr(
+        "lingtai.tools.daemon._kill_process_group",
+        lambda proc: pytest.fail("legacy kill used"),
+    )
+    result = getattr(mgr, runner)(
+        "em-cancel", run_dir, "cancel me", cancel_event, timeout_event,
+    )
+    assert result == "[cancelled]"
+    assert run_dir._state["state"] == "timeout"
+    assert run_dir._state["cli_termination"]["reason"] == "timeout"
+    assert port.deadlines == [None]
+    assert port.waited == [port.handle]
+    assert port.released == [port.handle]
 
 
 def test_qwen_code_rejects_harness_owned_backend_options(tmp_path):

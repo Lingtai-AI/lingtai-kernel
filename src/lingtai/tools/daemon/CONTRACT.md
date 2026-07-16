@@ -4,6 +4,12 @@ tool: daemon
 contract_version: 1
 related_files:
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/process_port.py
+  - src/lingtai/tools/daemon/interactive_terminal/__init__.py
+  - src/lingtai/tools/daemon/interactive_terminal/CONTRACT.md
+  - src/lingtai/tools/daemon/interactive_terminal/ANATOMY.md
+  - src/lingtai/adapters/posix/interactive_terminal.py
+  - src/lingtai/tools/daemon/posix_process.py
   - src/lingtai/tools/daemon/DAEMON_CONTRACT.md
   - src/lingtai/tools/daemon/ANATOMY.md
 maintenance: |
@@ -128,24 +134,69 @@ excludes daemon spend while `scope="all"` includes it. On daemon-manager startup
 stale `running`/`active` `daemon.json` records whose `parent_pid` is dead are
 reaped to `failed`.
 
+## Interactive terminal capability
+
+The retained hidden `claude` / `claude-interactive` route uses the separate
+capability-local `InteractiveTerminalPort` and injected persistent POSIX adapter.
+It carries raw bidirectional bytes with explicit 120x40 dimensions and owns
+PTY/session, process-group termination, reaping, and terminal-only release. The
+Claude bridge never constructs a private adapter: runtime composition must inject
+the Port, and missing injection fails before managed-workspace, harness, or spawn
+work. Its final `release()` is non-killing, so a stubborn live handle remains
+manager-owned for later group/all sweeps. The bridge continues to own probes,
+hooks, prompt framing, auth/trust, transcript/result projection, and
+notification/state policy. No interactive name is re-advertised, ordinary pipes
+are not relabeled as terminals, and no Windows ConPTY adapter is claimed by this
+slice. See the reciprocal `interactive_terminal/CONTRACT.md` and
+`interactive_terminal/ANATOMY.md`.
+
 ## Cross-platform invariants
 
 DOCUMENT ONLY — do not change these assumptions and do not propose Windows work.
 
-- Reclaim/timeout of CLI-backend runs kills the child **process group**
-  (start_new_session leader), tracked per-batch by `group_id` so a batch's
-  watchdog kills only its own subprocesses and never a newer batch's; the
-  LingTai-initiated termination reason is stamped before SIGTERM so the
-  resulting `-15`/`143` return code is attributed locally.
-- The interactive Claude backend uses a **PTY** (see `claude_interactive.py`);
-  its process-group and terminal-state assumptions are POSIX and load-bearing.
-- Backends launch external CLIs via `subprocess`; the lingtai backend spawns no
-  CLI procs (its watchdog only flips cancel/timeout events for in-thread run
-  loops).
+- On POSIX, ordinary in-process `DaemonManager` composition keeps
+  `start_new_session=True`: its Port owns the private child process group,
+  tracked per batch by `group_id`, and stamps the first local reason before
+  TERM/KILL so signal return codes are attributed. Detached execution is
+  different: the execution child already owns the session/group, so its
+  headless and interactive Ports use `start_new_session=False` and carry the
+  explicit `INHERITED_SUPERVISOR_GROUP` termination scope. A detached Port
+  `terminate`, `terminate_group`, or `terminate_all` signals/reaps only each
+  exact `Popen` child; it never sends a group signal to the execution host or
+  caller. Only supervisor exact-run reclaim may signal the inherited run PGID.
+  The POSIX adapters may synchronously publish an immutable
+  `DaemonProcessObservation` (PID, PGID, start identity, and termination scope)
+  to the detached owner immediately after registration and before stream I/O;
+  the owner records `cli_pid`/`child_pid`, inherited PGID, identity, and bounded
+  history, and closes the cancel-before-registration race without exposing
+  `Popen` to Core. If that observation/state-publication callback raises, the
+  adapter first TERM/KILLs and reaps the exact new child under its explicit
+  scope, removes its registry entry, closes any PTY master, and then re-raises;
+  no inaccessible child or descriptor is left behind.
+- The hidden interactive Claude backend uses a POSIX PTY. Native interactive
+  support remains explicitly deferred until a ConPTY adapter exists and is
+  accepted.
+- The LingTai backend spawns no CLI process; its watchdog only flips
+  cancel/timeout events for in-thread run loops.
 
 These POSIX process-group, signal, and PTY assumptions are load-bearing for
 correct cancellation and attribution. Deeper backend-launch details are in
 `DAEMON_CONTRACT.md`.
+
+The daemon-local process Port (`process_port.py`) is the mechanism boundary for
+Codex, Claude print-mode initial plus ask/resume, the shared OpenCode/MiMo/Oh-My-Pi
+family, and the Qwen/Kimi initial one-shot runners: commands are immutable direct argv values,
+handles are opaque, and exits preserve the raw return code plus an optional
+LingTai reason. The POSIX adapter owns spawn/session creation, stdout deadline
+iteration, stderr draining, bounded TERM/KILL escalation, group ownership, and
+reaping. Backend parsing, run-dir writes, completion sentinels, notifications,
+and timeout-versus-cancel classification remain manager policy. Release is
+non-blocking and removes only a terminal/reaped child; a live child remains
+owned for later group/all shutdown retries. The first local termination cause
+wins across concurrent wait/watchdog/lifecycle paths, and group/all sweeps
+return targeted-process counts so shutdown telemetry covers both Port-owned and
+transitional legacy children. A terminal handle released after a sweep snapshot
+is skipped without aborting termination of later live siblings.
 
 ## Anchored claims
 

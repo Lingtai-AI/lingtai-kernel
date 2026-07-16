@@ -7,6 +7,7 @@ import pytest
 
 from lingtai.tools.bash import BashManager
 from lingtai.tools.avatar import AvatarManager, setup as setup_avatar
+from lingtai.tools.avatar._launcher import AvatarLaunchReceipt
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
@@ -21,12 +22,13 @@ def fake_avatar_launch():
     init.json written to its working_dir on construction — required by
     AvatarManager._spawn's ``parent has no init.json`` gate.
 
-    The new _launch contract returns (Popen, stderr_path); _wait_for_boot
-    returns (status, error). We synthesize a fake-but-shape-correct
-    response that lets the manager's success branch run."""
-    proc = MagicMock()
-    proc.pid = 12345
+    The launcher contract returns (AvatarLaunchReceipt, stderr_path);
+    _wait_for_boot returns (status, error). We synthesize a shape-correct
+    receipt that lets the manager's success branch run and exposes release.
+    """
+    proc = MagicMock(pid=12345)
     proc.poll.return_value = None
+    receipt = AvatarLaunchReceipt(pid=12345, handle=proc)
     fake_stderr = Path("/tmp/avatar_stderr.log")
 
     from lingtai.agent import Agent as _OrigAgent
@@ -54,10 +56,10 @@ def fake_avatar_launch():
                     },
                 }))
 
-    with patch.object(AvatarManager, "_launch", return_value=(proc, fake_stderr)), \
+    with patch.object(AvatarManager, "_launch", return_value=(receipt, fake_stderr)), \
          patch.object(AvatarManager, "_wait_for_boot", return_value=("ok", None)), \
          patch("lingtai.agent.Agent", _AutoInitAgent):
-        yield
+        yield proc
 
 
 class TestAvatarManager:
@@ -66,7 +68,7 @@ class TestAvatarManager:
         """Apply launch patch automatically to every test in this class."""
         yield
 
-    def test_spawn_returns_address(self, tmp_path):
+    def test_spawn_returns_address(self, tmp_path, fake_avatar_launch):
         """Spawn should return a valid address."""
         from lingtai.agent import Agent
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
@@ -77,6 +79,7 @@ class TestAvatarManager:
         assert "address" in result
         assert result["address"]  # filesystem path (non-empty string)
         assert result["agent_name"] == "helper"
+        fake_avatar_launch.poll.assert_called_once_with()
 
     def test_spawn_inherits_capabilities(self, tmp_path):
         """Spawned agent's init.json should carry all of parent's capabilities."""

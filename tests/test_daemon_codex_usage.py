@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from lingtai.tools.daemon import _normalize_codex_usage
+from lingtai.tools.daemon.process_port import DaemonProcessCommand
 from tests._daemon_helpers import FiniteFakeProc, make_daemon_agent, make_daemon_run_dir
 
 
@@ -206,7 +207,13 @@ def test_codex_followup_terminal_usage_uses_same_ui_only_path(tmp_path):
         ]
     )
 
-    result = manager._run_ask_codex_stream("em-followup", entry, proc, run_dir)
+    with patch(
+        "lingtai.tools.daemon.posix_process.subprocess.Popen", return_value=proc,
+    ):
+        handle = manager._process_port.spawn(
+            DaemonProcessCommand(("codex",), agent._working_dir),
+        )
+    result = manager._run_ask_codex_stream("em-followup", entry, handle, run_dir)
 
     state = json.loads(run_dir.daemon_json_path.read_text())
     assert result == {"status": "sent", "id": "em-followup", "output": "followup"}

@@ -27,7 +27,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -35,6 +34,7 @@ from typing import TYPE_CHECKING
 
 from lingtai.kernel.agent_presence import observe_alive as _presence_observe_alive
 from lingtai.kernel.i18n import t
+from ._launcher import AvatarLaunchReceipt, AvatarLaunchRequest, AvatarLauncherPort
 
 
 def _is_alive(working_dir) -> bool:
@@ -159,8 +159,12 @@ class AvatarManager:
     is checked via the filesystem through the agent-presence store.
     """
 
-    def __init__(self, agent: "Agent"):
+    def __init__(self, agent: "Agent", launcher: AvatarLauncherPort | None = None):
         self._agent = agent
+        if launcher is None:
+            from lingtai.adapters.avatar_launcher import select_avatar_launcher
+            launcher = select_avatar_launcher()
+        self._launcher = launcher
 
     # ------------------------------------------------------------------
     # Handler
@@ -393,15 +397,18 @@ class AvatarManager:
         # write its handshake (.agent.heartbeat) or exit. If the child exits
         # before handshaking, the spawn failed — capture stderr, ledger the
         # failure, and return an error to the caller. Without this check the
-        # avatar capability returns "ok" the instant Popen forks, even if the
+        # avatar capability returns "ok" the instant a child forks, even if the
         # child crashes 50ms later (e.g. invalid init.json), and the parent's
         # LLM has no idea anything went wrong.
         proc, stderr_path = self._launch(avatar_working_dir)
         pid = proc.pid
 
-        boot_status, boot_error = self._wait_for_boot(
-            avatar_working_dir, proc, stderr_path,
-        )
+        try:
+            boot_status, boot_error = self._wait_for_boot(
+                avatar_working_dir, proc, stderr_path,
+            )
+        finally:
+            self._launcher.release(proc.handle)
 
         # Record in ledger — include boot status so post-mortem can distinguish
         # successful spawns from failed ones without re-checking the filesystem.
@@ -454,9 +461,8 @@ class AvatarManager:
             )
         return result
 
-    @classmethod
     def _wait_for_boot(
-        cls, working_dir: Path, proc: subprocess.Popen, stderr_path: Path,
+        self, working_dir: Path, proc: AvatarLaunchReceipt, stderr_path: Path,
     ) -> tuple[str, str | None]:
         """Wait for the avatar to write .agent.heartbeat or exit.
 
@@ -467,11 +473,11 @@ class AvatarManager:
                                  is still alive, caller should monitor
         """
         heartbeat = working_dir / ".agent.heartbeat"
-        deadline = time.monotonic() + cls._BOOT_WAIT_SECS
+        deadline = time.monotonic() + self._BOOT_WAIT_SECS
         while time.monotonic() < deadline:
             if heartbeat.is_file():
                 return ("ok", None)
-            rc = proc.poll()
+            rc = self._launcher.poll(proc.handle)
             if rc is not None:
                 # Child exited before writing heartbeat. Tail stderr (capped)
                 # so the parent's LLM gets a useful, bounded error string.
@@ -487,7 +493,7 @@ class AvatarManager:
                 if stderr_tail:
                     msg = f"{msg}: {stderr_tail}"
                 return ("failed", msg)
-            time.sleep(cls._BOOT_POLL_INTERVAL)
+            time.sleep(self._BOOT_POLL_INTERVAL)
         return ("slow", None)
 
     # ------------------------------------------------------------------
@@ -644,13 +650,13 @@ class AvatarManager:
     _BOOT_WAIT_SECS = 5.0
     _BOOT_POLL_INTERVAL = 0.1
 
-    @staticmethod
-    def _launch(working_dir: Path) -> tuple[subprocess.Popen, Path]:
+    def _launch(self, working_dir: Path) -> tuple[AvatarLaunchReceipt, Path]:
         """Launch `lingtai-agent run <dir>` as a fully detached process.
 
         Captures stderr to ``logs/spawn.stderr`` so a child that exits before
         writing its handshake leaves a usable diagnostic behind. Returns the
-        Popen handle (so callers can poll for early exit) plus the stderr path.
+        opaque launch receipt (so callers can poll for early exit) plus the
+        stderr path.
         """
         from lingtai.venv_resolve import resolve_venv, venv_python
 
@@ -664,27 +670,17 @@ class AvatarManager:
                 pass
         venv_dir = resolve_venv(init_data)
         python = venv_python(venv_dir)
-        cmd = [python, "-m", "lingtai", "run", str(working_dir)]
+        cmd = (python, "-m", "lingtai", "run", str(working_dir))
 
         # Ensure logs/ exists for stderr capture; the kernel also creates this
         # on boot, but we need it before the child has run.
         logs_dir = working_dir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         stderr_path = logs_dir / "spawn.stderr"
-        stderr_fh = stderr_path.open("wb")
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=stderr_fh,
-                start_new_session=True,
-            )
-        finally:
-            # Popen dups the fd; we can close ours immediately. The child
-            # keeps writing through its inherited copy.
-            stderr_fh.close()
-        return proc, stderr_path
+        receipt = self._launcher.launch(
+            AvatarLaunchRequest(argv=cmd, stderr_path=stderr_path)
+        )
+        return receipt, stderr_path
 
     # ------------------------------------------------------------------
     # Ledger reading

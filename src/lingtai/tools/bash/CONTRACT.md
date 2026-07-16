@@ -5,6 +5,15 @@ contract_version: 3
 related_files:
   - src/lingtai/tools/bash/__init__.py
   - src/lingtai/tools/bash/_async_supervisor.py
+  - src/lingtai/tools/bash/_async_process.py
+  - src/lingtai/tools/bash/_state_lock.py
+  - src/lingtai/tools/bash/_shell_dialect.py
+  - src/lingtai/adapters/bash.py
+  - src/lingtai/adapters/bash_process.py
+  - src/lingtai/adapters/bash_state_lock.py
+  - src/lingtai/adapters/posix/bash.py
+  - src/lingtai/adapters/posix/bash_process.py
+  - src/lingtai/adapters/posix/bash_state_lock.py
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/manual/SKILL.md
 maintenance: |
@@ -111,12 +120,14 @@ legacy records remain addressable; all other names are rejected before path use.
 Async run uses collision-safe directory creation and first atomically records
 `state.json`, including a tokenized finite supervisor-start lease and a bounded
 `return_handoff` guard, before starting a detached private supervisor
-(`_async_supervisor.py`). The launching manager immediately records the observed
-supervisor PID/identity; the supervisor must claim the matching unexpired lease,
-recheck it under the state lock immediately before `Popen`, then records its own
-incarnation and the command PID. An expired/terminal lease cannot spawn a command.
-The supervisor owns the unreaped `Popen` and `wait()` and atomically records the
-exact wait status. If it exits before terminal commit, the owning parent reaper
+(`_async_supervisor.py`). The launching manager immediately records a neutral
+supervisor ref plus retained v3 PID/identity compatibility fields; the supervisor
+must claim the matching unexpired lease, upgrades that ref with its child-observed
+incarnation when available, and rechecks the lease under the selected state-lock
+Port immediately before adapter spawn. It then records a neutral command ref plus
+legacy fields. An expired/terminal lease cannot spawn a command. The selected
+process adapter owns the detached supervisor handle, command handle/spawn, and
+exact waits; the supervisor policy atomically records the exact owned wait status. If it exits before terminal commit, the owning parent reaper
 marks the state unrecoverable; after parent loss, an expired launch lease or a
 definitively absent recorded supervisor gives a fresh manager equivalent proof.
 
@@ -169,24 +180,57 @@ completion before a crash retry. Completion/ref IDs are correlation aids, not
 durable delivery acknowledgements across bounded/latest-only sinks. This is Bash
 job state, not a `.notification/cron.json` workflow reminder.
 
+## Shell dialect boundary
+
+`ShellDialect` owns only shell-language policy-command extraction and
+serialization of a `ShellInvocation` (script or argv form, plus optional
+dialect-specific decoding settings). Setup selects the POSIX adapter and the
+same selected invocation is used by sync execution and the async supervisor.
+The manager retains cwd validation, timeout, output capture/truncation, and
+result shaping; the supervisor retains leases, durable cancellation policy, and
+terminal truth, while the selected process adapter owns concrete handles, spawn,
+exact waits, identity observation, and tree-cancellation mechanism. New async state retains the raw
+`command` for display and adds optional `shell_dialect` and `invocation` fields.
+If both fields are absent, the retained v3 record is resolved as the legacy
+POSIX script-form job. If either field is present, both must be valid; malformed
+or incomplete new state becomes an explicit unrecoverable launch failure and
+never falls back to the raw display command.
+
+`ShellInvocation` has exactly five serialized keys: `script`, `executable`,
+`argv`, `encoding`, and `errors`. Script form uses `argv: null` and
+`shell=True`; direct argv form requires a non-empty executable and runs
+`[executable, *argv, script]` with `shell=False`. All fields and argv elements
+are validated before launch, and unknown or missing serialized keys are
+unrecoverable. `shell_dialect` is non-empty provenance selected and validated
+by outer composition; the detached supervisor executes this self-contained
+invocation and does not use the key for adapter dispatch. This is fail-loud
+schema/semantic validation, not cryptographic integrity for user-rewritable
+durable state.
+
 ## Cross-platform invariants
 
-DOCUMENT ONLY — do not change these assumptions and do not propose Windows work.
+The current production adapters are POSIX. New adapters must preserve the policy
+invariants below without copying POSIX mechanisms into the Bash-local Ports.
 
-- Sync execution uses `subprocess.run(command, shell=True, ...)` — POSIX shell
-  string semantics.
-- The detached private supervisor uses `subprocess.Popen(command, shell=True,
-  start_new_session=True, ...)`, making the command PID its own process-group
-  leader (pgid == pid), while its durable `wait()` result survives a manager
-  relaunch.
+- POSIX sync execution consumes a script-form `ShellInvocation`, equivalent to
+  `subprocess.run(command, shell=True, ...)` — POSIX shell string semantics.
+- The Bash-local process Port exposes neutral refs and opaque owned handles. The
+  POSIX process adapter implements detached launch, `ShellInvocation` spawn,
+  identity observation, exact waits, process-group cancellation, and quiescence;
+  the supervisor selects the same Port in its own process. The lock Port owns
+  only cross-process state serialization; atomic state persistence remains policy.
+- Durable state prefers neutral supervisor/command refs and retains v3 PID/identity
+  fields only as a compatibility fallback. A null incarnation explicitly means the
+  adapter could not observe identity; it remains `unknown` even if identity becomes
+  observable later, is never promoted to `same`, and cannot authorize cancellation.
 - Before reporting a command PID as running, Bash compares its persisted OS
   process-start identity with the live PID (Linux boot-id/start ticks; POSIX
   `ps lstart` fallback). A mismatch/unavailable observation is never terminal
   evidence while the recorded supervisor may still commit.
-- `cancel` is a durable request, not a manager-side signal. The supervisor holds
-  the direct child `Popen` unreaped through the full group `SIGTERM` grace, then
-  targets the original group with `SIGKILL` even if the outer shell already
-  exited. It reports `group_cancelled` only after proving no live non-zombie group
+- `cancel` is a durable request, not a manager-side signal. The selected POSIX
+  process adapter holds the direct child unreaped through the full group `SIGTERM`
+  grace, then targets the original group with `SIGKILL` even if the outer shell
+  already exited. It reports `group_cancelled` only after proving no live non-zombie group
   member remains and preserves the direct child's exact wait status otherwise.
   Keeping the group leader unreaped prevents its PID/pgid from being recycled
   during that signal sequence. POSIX still cannot promise control of processes
@@ -212,8 +256,10 @@ for cancellation correctness.
 | Warning-tail redaction fails open when the redactor is unavailable | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_fail_open_returns_input_when_redactor_unavailable` |
 | Allowlist mode permits only listed commands; denylist blocks listed ones | `src/lingtai/tools/bash/__init__.py` | `tests/test_layers_bash.py::test_allow_only`, `::test_deny_only`, `::test_pipe_awareness` |
 | Policy is enforced on async runs too | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_policy_applies_to_async` |
+| Neutral process refs are strict/JSON-safe, unknown identity is never same, and the POSIX adapter owns spawn plus exact wait | `src/lingtai/tools/bash/_async_process.py`, `src/lingtai/adapters/posix/bash_process.py` | `tests/test_bash_async_process_contract.py` |
+| Manager policy consumes neutral refs before v3 compatibility fields and refuses unverifiable cancellation | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_running_result_prefers_neutral_command_ref_over_legacy_fields`, `::test_cancel_refuses_unverifiable_neutral_supervisor_ref` |
 | Async `reminder` defaults to 1800 for omitted direct calls while schema marks it required | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_schema_requires_reminder_with_runtime_default` |
-| Last-resort deadlines are measured from successful async return, and a bounded durable handoff blocks both pre-`Popen` and durable-`running` pre-return publication windows while retaining crash fallback | `src/lingtai/tools/bash/__init__.py`, `_async_supervisor.py` | `tests/test_bash_async.py::test_reminder_deadline_starts_at_successful_async_return`, `::test_return_handoff_blocks_fallback_while_parent_popen_is_delayed`, `::test_return_handoff_blocks_fallback_after_running_before_return_arm`, `::test_owner_resuming_after_handoff_expiry_cannot_report_start_success`, `::test_stale_pre_return_reminder_timer_defers_to_latest_deadline` |
+| Last-resort deadlines are measured from successful async return, and a bounded durable handoff blocks both pre-adapter-spawn and durable-`running` pre-return publication windows while retaining crash fallback | `src/lingtai/tools/bash/__init__.py`, `_async_supervisor.py` | `tests/test_bash_async.py::test_reminder_deadline_starts_at_successful_async_return`, `::test_return_handoff_blocks_fallback_while_parent_popen_is_delayed`, `::test_return_handoff_blocks_fallback_after_running_before_return_arm`, `::test_owner_resuming_after_handoff_expiry_cannot_report_start_success`, `::test_stale_pre_return_reminder_timer_defers_to_latest_deadline` |
 | Supervisor terminal truth, bounded start-lease recovery, parent-reaper/fresh-manager handling of an actual preclaim supervisor exit, PID identity refusal, and sink-idempotent completion wake survive manager loss | `src/lingtai/tools/bash/_async_supervisor.py`, `__init__.py` | `tests/test_bash_async.py::TestBashAsyncRelaunchDurability`, `::test_owned_parent_reaps_actual_supervisor_exit_before_start_claim`, `::test_fresh_manager_recovers_actual_preclaim_exit_after_owner_loss`, `::test_legacy_live_pid_remains_running_and_uncancellable` |
 | Reminder validation rejects non-finite and backend-unsafe delays | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_async_reminder_rejects_invalid_values` |
 | Deadline claim, bounded cancellation suppression/recovery, and terminal handling have deterministic lock-owned ordering | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_terminal_pop_before_deadline_claim_suppresses_reminder`, `::test_deadline_claim_before_terminal_pop_publishes_once`, `::test_expired_suppressing_reminder_recovers_after_manager_crash` |
@@ -234,7 +280,7 @@ for cancellation correctness.
 Run before merging bash changes:
 
 ```bash
-python -m pytest tests/test_bash_async.py tests/test_layers_bash.py -q
+python -m pytest tests/test_bash_async.py tests/test_bash_async_process_contract.py tests/test_bash_shell_dialect.py tests/test_layers_bash.py -q
 ```
 
 ## Schema and glossary ownership

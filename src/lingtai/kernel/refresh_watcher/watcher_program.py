@@ -1,59 +1,17 @@
-"""Core-owned renderer for the detached relaunch-watcher program source.
+"""Core renderer for the generated refresh-watcher policy.
 
-This module owns the exact watcher program text that used to be built
-inline inside ``base_agent.lifecycle._perform_refresh``: the
-``.refresh``/``.refresh.taken`` handshake poll, ACK/lock deadlines, relaunch
-retry with health check, stale same-agent duplicate-process cleanup, event
-redaction, and terminal-failure artifact/notification publication. Moving the
-text-assembly logic here makes *rendering* it importable, directly callable
-production code instead of a string literal buried in lifecycle control
-flow — it does not turn the watcher's own policy into independently
-executable/importable code: the returned value is still generated Python
-program *source text*, executed later by the detached
-``refresh_watcher_entrypoint`` process, not a function this process calls. For
-Core-produced requests, the generated program preserves the previously shipped
-runtime behavior; this slice does not claim
-textual byte identity, redesign retry/heartbeat/duplicate policy, or
-introduce a process-supervision Port; that remains a later slice.
+The renderer preserves the existing handshake, heartbeat, retry, duplicate,
+redaction, artifact, notification, and event behavior while keeping process
+ownership behind the watcher-local ``RefreshWatcherProcessPort``. The returned
+value is generated Python source executed by the owned entrypoint; this module
+only assembles policy source and never constructs a concrete process adapter.
+The entrypoint injects that adapter as the ``PROCESS_MECHANISM`` global.
 
-The rendered program's stale same-agent duplicate-process guard
-(``_is_same_agent_run``) imports the canonical Core process-command matcher,
-``lingtai.kernel.process_match.match_agent_run``, at runtime via
-``from lingtai.kernel.process_match import match_agent_run`` in the generated
-source, rather than embedding a second local ``match_agent_run`` definition —
-the same matcher ``lingtai.cli._check_duplicate_process`` already uses.
-
-Identity fields cross the request boundary as
-``RefreshWatcherRequest.identity_fields_json`` — a JSON object snapshot, not
-a live dict or a shallow tuple-of-pairs — because the producer
-(``runtime_identity_event_fields()``) returns a dict with a *nested* mutable
-``kernel_runtime`` sub-dict (the same object as the module-level identity
-cache, not a copy); no shallow container shape prevents that nested value
-from staying mutable and aliased. ``_decode_identity_fields`` decodes and
-validates the snapshot back to a dict, failing loudly on invalid JSON or a
-non-object top-level value, before ``render_watcher_script`` embeds it as the
-rendered program's ``identity_fields = {...!r}`` literal.
-
-The one deliberate behavior change: ``_failure_metadata()`` previously bounded
-and redacted only ``last_stderr_tail``; ``last_cleanup_error`` and
-``last_relaunch_error`` (raw ``str(exception)`` values) passed through
-unbounded and unredacted. Both are now bounded and redacted the same way as
-``last_stderr_tail`` before the terminal-failure artifact/notification/event
-are published.
-
-``render_watcher_script`` is a pure function of a ``RefreshWatcherRequest``
-(see ``lingtai.kernel.refresh_watcher``) to program-source text; it names no
-``subprocess``, ``os``, ``os.environ``, POSIX, interpreter-path, or
-environment-variable-name vocabulary and performs no OS calls itself.
-Building the launched process's actual environment — capturing
-``os.environ``, and applying the ``env_overwrite`` policy bit under whatever
-concrete environment-variable name the transport uses — is entirely adapter
-mechanism: see ``lingtai.adapters.posix.refresh_watcher.build_watcher_env``
-and its ``ENV_OVERWRITE_VAR``. This module does not define or reference that
-variable name; Core knows only the boolean ``request.env_overwrite`` policy
-bit, never the concrete env-var transport. The POSIX entrypoint executes the
-rendered text inside the detached process launched by
-``lingtai.adapters.posix.refresh_watcher``.
+The stale same-agent guard imports the canonical Core matcher at runtime rather
+than embedding another matcher. Request identity fields are serialized JSON
+snapshots and are validated before source generation. The renderer itself
+performs no operating-system process operation; file, time, heartbeat, retry,
+redaction, and alert policy remain in the generated Core policy.
 """
 from __future__ import annotations
 
@@ -112,7 +70,12 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
     identity_fields = _decode_identity_fields(request.identity_fields_json)
 
     return (
-        "import time, subprocess, os, sys, json, signal\n"
+        "import time, os, sys, json\n"
+        "def _process_mechanism():\n"
+        "    try:\n"
+        "        return PROCESS_MECHANISM\n"
+        "    except NameError as exc:\n"
+        "        raise RuntimeError('refresh watcher process mechanism was not injected') from exc\n"
         "from datetime import datetime, timezone\n"
         f"taken = {taken_path!r}\n"
         f"lock = {lock_path!r}\n"
@@ -330,12 +293,6 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "def is_alive():\n"
         "    age = heartbeat_age()\n"
         "    return age is not None and age < 30\n"
-        "def _pid_cmd(pid):\n"
-        "    try:\n"
-        "        return subprocess.check_output(['ps', '-p', str(pid), '-o', 'command='],\n"
-        "            stderr=subprocess.DEVNULL, text=True).strip()\n"
-        "    except Exception:\n"
-        "        return ''\n"
         "def _extract_duplicate_pid(stderr_tail):\n"
         "    for line in stderr_tail.splitlines():\n"
         "        line = line.strip()\n"
@@ -346,21 +303,24 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "            return int(parts[1].rstrip(':'))\n"
         "    return None\n"
         "from lingtai.kernel.process_match import match_agent_run\n"
-        "def _is_same_agent_run(pid):\n"
+        "def _process_observation(pid):\n"
+        "    return _process_mechanism().observe(pid)\n"
+        "def _is_same_agent_run(pid, observation=None):\n"
         "    if not pid or pid == os.getpid():\n"
         "        return False\n"
-        "    try:\n"
-        "        os.kill(pid, 0)\n"
-        "    except OSError:\n"
+        "    if observation is None:\n"
+        "        observation = _process_observation(pid)\n"
+        "    if observation is None or not _process_mechanism().is_alive(observation):\n"
         "        return False\n"
-        "    cmdline = _pid_cmd(pid)\n"
+        "    cmdline = observation.command_line\n"
         "    return match_agent_run(cmdline, wd) is not None\n"
         "def _cleanup_stale_duplicate(stderr_tail, attempt):\n"
         "    pid = _extract_duplicate_pid(stderr_tail)\n"
         "    failure_state['last_pid'] = pid\n"
         "    failure_state['last_duplicate_pid'] = pid\n"
         "    failure_state['last_cleanup_action'] = 'inspect_duplicate_guard'\n"
-        "    if not _is_same_agent_run(pid):\n"
+        "    observation = _process_observation(pid) if pid and pid != os.getpid() else None\n"
+        "    if not _is_same_agent_run(pid, observation):\n"
         "        failure_state['last_cleanup_result'] = 'skipped_not_same_agent'\n"
         "        return False\n"
         "    age = heartbeat_age()\n"
@@ -370,12 +330,13 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "        log('refresh_watcher_duplicate_alive', attempt=attempt, pid=pid, heartbeat_age=age)\n"
         "        failure_state['last_cleanup_result'] = 'skipped_fresh_heartbeat'\n"
         "        return False\n"
+        "    cmdline = observation.command_line\n"
         "    log('refresh_watcher_stale_duplicate_terminate', attempt=attempt, pid=pid,\n"
-        "        heartbeat_age=age, cmdline=_pid_cmd(pid)[-300:])\n"
+        "        heartbeat_age=age, cmdline=cmdline[-300:])\n"
         "    failure_state['last_cleanup_action'] = 'terminate_stale_duplicate'\n"
         "    try:\n"
-        "        os.kill(pid, signal.SIGTERM)\n"
-        "    except OSError as e:\n"
+        "        _process_mechanism().graceful_stop(observation)\n"
+        "    except Exception as e:\n"
         "        log('refresh_watcher_stale_duplicate_term_error', attempt=attempt,\n"
         "            pid=pid, error=str(e))\n"
         "        failure_state['last_cleanup_result'] = 'sigterm_error'\n"
@@ -383,19 +344,17 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "        return False\n"
         "    deadline = time.time() + 5\n"
         "    while time.time() < deadline:\n"
-        "        try:\n"
-        "            os.kill(pid, 0)\n"
-        "        except OSError:\n"
+        "        if not _process_mechanism().is_alive(observation):\n"
         "            log('refresh_watcher_stale_duplicate_gone', attempt=attempt, pid=pid)\n"
         "            failure_state['last_cleanup_result'] = 'terminated'\n"
         "            return True\n"
         "        time.sleep(0.2)\n"
         "    try:\n"
-        "        os.kill(pid, signal.SIGKILL)\n"
+        "        _process_mechanism().force_stop(observation)\n"
         "        log('refresh_watcher_stale_duplicate_killed', attempt=attempt, pid=pid)\n"
         "        failure_state['last_cleanup_result'] = 'sigkill_sent'\n"
         "        return True\n"
-        "    except OSError as e:\n"
+        "    except Exception as e:\n"
         "        log('refresh_watcher_stale_duplicate_kill_error', attempt=attempt,\n"
         "            pid=pid, error=str(e))\n"
         "        failure_state['last_cleanup_result'] = 'sigkill_error'\n"
@@ -417,9 +376,7 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "        with open(stderr_log, 'a') as serr:\n"
         "            serr.write(f'--- relaunch attempt {attempt} ---\\n')\n"
         "            serr.flush()\n"
-        "            proc = subprocess.Popen(cmd,\n"
-        "                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,\n"
-        "                stderr=serr, start_new_session=True)\n"
+        "        proc = _process_mechanism().start_agent(cmd, stderr_log)\n"
         "    except Exception as e:\n"
         "        log('refresh_watcher_relaunch_error', attempt=attempt, error=str(e))\n"
         "        hb_age, hb_status = _heartbeat_snapshot()\n"

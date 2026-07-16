@@ -12,7 +12,18 @@ related_files:
   - src/lingtai/adapters/posix/mail.py
   - src/lingtai/adapters/posix/workdir_lease.py
   - src/lingtai/adapters/posix/refresh_watcher.py
+  - src/lingtai/adapters/posix/refresh_watcher_process.py
   - src/lingtai/adapters/posix/refresh_watcher_entrypoint.py
+  - src/lingtai/adapters/posix/bash.py
+  - src/lingtai/adapters/posix/bash_process.py
+  - src/lingtai/adapters/posix/bash_state_lock.py
+  - src/lingtai/adapters/posix/interactive_terminal.py
+  - src/lingtai/tools/daemon/interactive_terminal/CONTRACT.md
+  - src/lingtai/tools/daemon/interactive_terminal/ANATOMY.md
+  - src/lingtai/adapters/posix/avatar_launcher.py
+  - src/lingtai/tools/avatar/ANATOMY.md
+  - src/lingtai/tools/avatar/CONTRACT.md
+  - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/adapters/posix/notification_store.py
   - src/lingtai/adapters/posix/agent_presence.py
   - src/lingtai/adapters/posix/migration_workspace.py
@@ -37,20 +48,29 @@ maintenance: |
 This narrow package contains production filesystem and process adapters for
 Core-owned Ports: the structured event journal, mail transport, notification
 store, workdir lease, refresh watcher, agent presence, the fixed-command
-snapshot/source-revision Git capability, and the migration workspace. It is an
+snapshot/source-revision Git capability, and the migration workspace. It also
+houses the capability-owned POSIX avatar launcher adapter. It is an
 implementation-only Anatomy with no independent local Contract; for the
-Anatomy/Contract pairing rule its unique owning component Contract is
+Anatomy/Contract pairing rule its unique owning Core component Contract is
 `src/lingtai/kernel/event_journal/CONTRACT.md` (this Anatomy is listed only in
-that Contract's `related_files`). Each adapter implements a Core Port rather than
-defining a separate behavioral promise; the mail adapter's promises are owned by
-`src/lingtai/kernel/mail_transport/CONTRACT.md`, the workdir-lease adapter's by
-`src/lingtai/kernel/workdir_lease/CONTRACT.md`, the refresh-watcher adapter's by
-`src/lingtai/kernel/refresh_watcher/CONTRACT.md`, and the notification-store
-adapter's by `src/lingtai/kernel/notification_store/CONTRACT.md`, each of which
-links its adapter code file directly. Port structure is navigated via the
-co-located ANATOMY.md files for each component.
+that Contract's `related_files`). Each Core adapter implements its owning Port
+rather than defining a separate behavioral promise; the mail adapter's promises
+are owned by `src/lingtai/kernel/mail_transport/CONTRACT.md`, the workdir-lease
+adapter's by `src/lingtai/kernel/workdir_lease/CONTRACT.md`, the refresh-watcher
+adapter's by `src/lingtai/kernel/refresh_watcher/CONTRACT.md`, and the
+notification-store adapter's by
+`src/lingtai/kernel/notification_store/CONTRACT.md`, each of which links its
+adapter code file directly. The avatar launcher promise is owned by
+`src/lingtai/tools/avatar/CONTRACT.md`; Port structure is navigated through the
+co-located owning ANATOMY.md files.
 
 ## Components
+
+- `PosixInteractiveTerminalAdapter` implements the daemon-local
+  `InteractiveTerminalPort` for the hidden interactive Claude route. It owns
+  only `pty.openpty`, 120x40 terminal sizing, slave stdio, raw master byte
+  reads/writes, `start_new_session`, bounded process-group TERM/KILL, reaping,
+  and terminal-only release (`src/lingtai/adapters/posix/interactive_terminal.py`).
 
 - `PosixJsonlEventJournalAdapter` constructs the existing JSONL primary and
   SQLite sidecar primitives under `<working_dir>/logs/`
@@ -86,6 +106,16 @@ co-located ANATOMY.md files for each component.
   `start_new_session=True` (`src/lingtai/adapters/posix/refresh_watcher.py:80-90`);
   the call returns once the process has been started and does not wait for or
   track it.
+- `PosixRefreshWatcherProcessAdapter` implements the watcher-local
+  `RefreshWatcherProcessPort`: it owns `ps` command-line observation, liveness,
+  replacement launch, graceful stop, and forced stop
+  (`src/lingtai/adapters/posix/refresh_watcher_process.py:26-87`).
+- `PosixBashAsyncProcessAdapter` implements the Bash-local async process Port:
+  detached supervisor launch, `ShellInvocation` command spawn, neutral
+  identity observation, exact owned waits, and bounded process-tree cancellation
+  (`src/lingtai/adapters/posix/bash_process.py:111-185`).
+- `PosixBashStateLockAdapter` implements the Bash-local state-lock Port with an
+  exclusive per-job lock file (`src/lingtai/adapters/posix/bash_state_lock.py:9-18`).
 - `refresh_watcher_entrypoint.main(argv)` is the owned ordinary
   importable/executable module the launched process runs
   (`src/lingtai/adapters/posix/refresh_watcher_entrypoint.py`). It decodes the
@@ -117,6 +147,10 @@ co-located ANATOMY.md files for each component.
   entry→path mapping, raw reads, preset enumeration, PID-suffixed atomic replace
   (every replacement, incl. preset m001/m002), version files, `system/migrations/`
   archive + SHA-256 evidence, and best-effort `logs/events.jsonl` audit.
+- `PosixAvatarLauncherAdapter` implements the avatar-local launcher Port with
+  inherited cwd/environment, disconnected stdio, binary-write stderr,
+  `start_new_session`, exact `poll()` truth, one-process TERM/KILL, and
+  non-killing release (`src/lingtai/adapters/posix/avatar_launcher.py`).
 
 ## Connections
 
@@ -138,7 +172,10 @@ explicit composition modules, not exported from the package facade. Agent, CLI,
 and Telegram-server roots construct these adapters; the CLI `load_init`, the
 wrapper `load_preset` / `_run_preset_library_migrations`, and `Agent._read_init`
 build a domain/root-bound `PosixMigrationWorkspaceAdapter` for the Core runners.
-Core never imports this package.
+The refresh-watcher selector in `src/lingtai/adapters/refresh_watcher.py` is an
+outer composition module and imports this package only after confirming POSIX;
+Core never imports this package. The refresh entrypoint composes
+`PosixRefreshWatcherProcessAdapter` and passes it into the generated Core policy.
 
 ## Composition
 
