@@ -695,7 +695,7 @@ def test_unrelated_providers_never_receive_mimo_compact_token_limit():
 # ---------------------------------------------------------------------------
 # Doc consistency: the first-level daemon manual (SKILL.md) and the daemon
 # tool-surface CONTRACT.md must accurately describe native `mimo` and its
-# hard-failure divergence from Codex — not just DAEMON_CONTRACT.md/ANATOMY.md
+# hard-failure divergence from Codex — not just CONTRACT.md/ANATOMY.md
 # (which already had dedicated coverage). These are plain text-content
 # assertions, no imports of daemon internals, so they fail loudly the moment
 # either doc regresses to Codex-only wording regardless of what the code does.

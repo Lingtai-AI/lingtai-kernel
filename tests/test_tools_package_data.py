@@ -1,8 +1,8 @@
 """Regression test: built wheels must ship every built-in tool contract.
 
 The consolidated ``lingtai.tools`` package ships one ``CONTRACT.md`` per
-built-in tool, the daemon's intentional interactive-terminal component contract,
-and the daemon's extended ``DAEMON_CONTRACT.md``, alongside its manual trees.
+built-in tool and the daemon's intentional interactive-terminal component
+contract, alongside its manual trees.
 These reach the wheel only through the ``"lingtai.tools"`` entry
 in ``[tool.setuptools.package-data]`` in ``pyproject.toml``; a missing glob
 silently drops the contract while the tool code still installs (the
@@ -179,10 +179,6 @@ def test_wheel_ships_exact_expected_tool_contracts(wheel_entries: set[str]):
         "expected exact tool contract manifest %r, wheel has %r"
         % (sorted(expected), sorted(contracts))
     )
-
-
-def test_wheel_ships_daemon_contract(wheel_entries: set[str]):
-    assert "lingtai/tools/daemon/DAEMON_CONTRACT.md" in wheel_entries
 
 
 def test_wheel_keeps_daemon_backend_manuals(wheel_entries: set[str]):

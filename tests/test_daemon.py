@@ -603,15 +603,15 @@ def test_build_emanation_prompt_includes_oneshot_system_prompt(tmp_path):
 
 
 
-def test_task_prompt_defaults_and_trims(tmp_path):
-    """Blank prompt is accepted as the exact default first user message."""
+def test_task_prompt_defaults_and_preserves_nonblank_whitespace(tmp_path):
+    """Blank prompt defaults; nonblank prompt is preserved byte-for-byte."""
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
 
     assert mgr._task_first_prompt({"task": "x", "tools": []}) == "Begin the assigned daemon task."
     assert mgr._task_first_prompt({"task": "x", "tools": [], "prompt": ""}) == "Begin the assigned daemon task."
     assert mgr._task_first_prompt({"task": "x", "tools": [], "prompt": "   "}) == "Begin the assigned daemon task."
-    assert mgr._task_first_prompt({"task": "x", "tools": [], "prompt": "  start here  "}) == "start here"
+    assert mgr._task_first_prompt({"task": "x", "tools": [], "prompt": "  start here  "}) == "  start here  "
 
 
 def test_obsolete_system_prompt_fails_before_run_dir(tmp_path):
@@ -644,7 +644,7 @@ def test_external_cli_prompt_fails_before_run_dir(tmp_path):
     assert not (agent._working_dir / "daemons").exists()
 
 
-def test_handle_emanate_maps_prompt_default_and_trimmed_before_detach(tmp_path, monkeypatch):
+def test_handle_emanate_maps_prompt_default_and_preserves_whitespace_before_detach(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
     captured = []
@@ -664,12 +664,12 @@ def test_handle_emanate_maps_prompt_default_and_trimmed_before_detach(tmp_path, 
 
     assert result["status"] == "dispatched"
     assert [row[1]["prompt"] for row in captured] == [
-        "first user",
+        "  first user  ",
         "Begin the assigned daemon task.",
     ]
     prompts = [row[0].prompt_path.read_text(encoding="utf-8") for row in captured]
     assert "system task one" in prompts[0]
-    assert "first user" not in prompts[0]
+    assert "  first user  " not in prompts[0]
     assert "system task two" in prompts[1]
 
 
@@ -1188,14 +1188,14 @@ def test_run_emanation_uses_prompt_as_first_user_without_task_duplication(tmp_pa
 
     result = mgr._run_emanation(
         em_id, run_dir, *mgr._build_tool_surface([]),
-        "system objective", threading.Event(), prompt="custom first user",
+        "system objective", threading.Event(), prompt="  custom first user  ",
     )
 
     assert result == "done"
-    assert service.sessions[0].sent_messages[0] == "custom first user"
+    assert service.sessions[0].sent_messages[0] == "  custom first user  "
     first_request = service.sessions[0].request_snapshots[0]
     user_entries = [e for e in first_request if e["role"] == "user"]
-    assert [e["content"][0]["text"] for e in user_entries] == ["custom first user"]
+    assert [e["content"][0]["text"] for e in user_entries] == ["  custom first user  "]
     assert all("system objective" not in e["content"][0]["text"] for e in user_entries)
 
 

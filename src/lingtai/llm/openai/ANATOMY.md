@@ -14,7 +14,7 @@ related_files:
   - src/lingtai/llm/mimo/ANATOMY.md
   - src/lingtai/llm/service.py
   - src/lingtai/tools/daemon/ANATOMY.md
-  - src/lingtai/tools/daemon/DAEMON_CONTRACT.md
+  - src/lingtai/tools/daemon/CONTRACT.md
   - tests/test_codex_prompt_cache_key.py
   - tests/test_codex_standalone_compaction.py
   - tests/test_mimo_responses_compaction.py

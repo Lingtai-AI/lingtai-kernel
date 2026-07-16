@@ -1879,7 +1879,7 @@ class DaemonManager:
             return "Begin the assigned daemon task."
         if not isinstance(value, str):
             raise ValueError("prompt must be a string")
-        return value.strip()
+        return value
 
     @staticmethod
     def _compose_cli_task(

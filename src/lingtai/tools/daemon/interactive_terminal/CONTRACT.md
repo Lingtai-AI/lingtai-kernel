@@ -11,7 +11,6 @@ related_files:
   - src/lingtai/tools/daemon/claude_interactive.py
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/CONTRACT.md
-  - src/lingtai/tools/daemon/DAEMON_CONTRACT.md
   - src/lingtai/tools/daemon/ANATOMY.md
   - tests/test_interactive_terminal_port.py
   - tests/test_daemon_claude_interactive_backend.py

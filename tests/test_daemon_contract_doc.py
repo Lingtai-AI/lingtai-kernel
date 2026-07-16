@@ -4,8 +4,8 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DOC = ROOT / "src/lingtai/tools/daemon/DAEMON_CONTRACT.md"
-DOC_REL = "src/lingtai/tools/daemon/DAEMON_CONTRACT.md"
+DOC = ROOT / "src/lingtai/tools/daemon/CONTRACT.md"
+DOC_REL = "src/lingtai/tools/daemon/CONTRACT.md"
 REQUIRED_RELATED = [
     "src/lingtai/tools/daemon/ANATOMY.md",
     "src/lingtai/tools/daemon/__init__.py",
@@ -41,9 +41,9 @@ def _frontmatter(path: Path) -> dict:
 
 def test_daemon_contract_frontmatter_lists_related_files_and_triggers():
     meta = _frontmatter(DOC)
-    assert meta["name"] == "daemon-architecture-capability-contract"
+    assert meta["name"] == "daemon-contract"
     assert meta["status"] == "active"
-    assert meta["contract_version"] == 3
+    assert meta["contract_version"] == 4
     related = set(meta["related_files"])
     triggers = set(meta["review_triggers"])
     for rel in REQUIRED_RELATED:
@@ -59,12 +59,12 @@ def test_daemon_contract_is_linked_from_anatomy_and_manual():
     meta = _frontmatter(anatomy)
     assert DOC_REL in meta.get("related_files", [])
     anatomy_text = anatomy.read_text(encoding="utf-8")
-    assert "DAEMON_CONTRACT.md" in anatomy_text
+    assert "daemon/CONTRACT.md" in anatomy_text
 
     manual = ROOT / "src/lingtai/tools/daemon/manual/SKILL.md"
     manual_text = manual.read_text(encoding="utf-8")
     assert DOC_REL in manual_text
-    assert "cross-backend daemon architecture capability contract" in manual_text
+    assert "unified daemon contract" in manual_text
 
 
 def test_daemon_contract_locks_architecture_capability_terms():

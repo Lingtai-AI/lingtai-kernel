@@ -9,7 +9,6 @@ description: >
 version: 0.7.0
 last_changed_at: "2026-07-14T00:00:00-07:00"
 related_files:
-- src/lingtai/tools/daemon/DAEMON_CONTRACT.md
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
@@ -28,8 +27,8 @@ it does not document cross-process recovery/orphan-detection internals. For the
 broader runtime turn loop that daemon emanations mirror, use `lingtai-kernel-anatomy`
 and its runtime-loop reference.
 
-Maintainer note: the cross-backend daemon architecture capability contract is
-`src/lingtai/tools/daemon/DAEMON_CONTRACT.md`. Update or explicitly re-check that
+Maintainer note: the unified daemon contract is
+`src/lingtai/tools/daemon/CONTRACT.md`. Update or explicitly re-check that
 contract when changing backend routing, selected `skills`, one-run `mcp`, native
 MCP mounting, `daemon_common`, backend support status, or run artifacts.
 
@@ -101,7 +100,7 @@ files, not standalone top-level skills.
     tool-use policy. The removed `system_prompt` field has no alias; migrate its
     complete contents into `task`.
   - `prompt` is optional and LingTai-only. It is the first ordinary user message,
-    trimmed, or exactly `Begin the assigned daemon task.` when omitted/blank.
+    sent exactly when nonblank, or exactly `Begin the assigned daemon task.` when omitted/blank.
     External CLI backends reject it and keep `task` as their CLI prompt.
   - `tools` answers **what the daemon can technically use** for this run. The
     parent puts the complete operating contract in `task`: when and how those

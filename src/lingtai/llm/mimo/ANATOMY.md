@@ -5,7 +5,7 @@ related_files:
   - src/lingtai/llm/mimo/adapter.py
   - src/lingtai/llm/openai/adapter.py
   - src/lingtai/llm/openai/ANATOMY.md
-  - src/lingtai/tools/daemon/DAEMON_CONTRACT.md
+  - src/lingtai/tools/daemon/CONTRACT.md
   - tests/test_mimo_adapter.py
   - tests/test_mimo_responses_compaction.py
 maintenance: |
@@ -99,5 +99,5 @@ Responses default while an explicit manifest override is honored verbatim.
 
 ## Notes
 
-- **Git history**: pre-existing Chat-Completions-only adapter (issue #9 DeepSeek-analogous `reasoning_content` fix); this Responses-default + standalone-compaction extension is a later addition — see `src/lingtai/tools/daemon/DAEMON_CONTRACT.md` §7 for the daemon-facing `context_token_limit` capability boundary and failure-policy contrast.
-- **Not to be confused with the `mimocode` CLI backend** — an entirely separate daemon `backend=` option that drives the `mimo` CLI as an external process (see `src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md` and `src/lingtai/tools/daemon/DAEMON_CONTRACT.md`'s Backend Support Matrix). This ANATOMY covers the native LLM provider `mimo` (`LLMService.register_adapter("mimo", ...)`), which a LingTai-backend agent/daemon task selects via `manifest.llm.provider`.
+- **Git history**: pre-existing Chat-Completions-only adapter (issue #9 DeepSeek-analogous `reasoning_content` fix); this Responses-default + standalone-compaction extension is a later addition — see `src/lingtai/tools/daemon/CONTRACT.md` §7 for the daemon-facing `context_token_limit` capability boundary and failure-policy contrast.
+- **Not to be confused with the `mimocode` CLI backend** — an entirely separate daemon `backend=` option that drives the `mimo` CLI as an external process (see `src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md` and `src/lingtai/tools/daemon/CONTRACT.md`'s Backend Support Matrix). This ANATOMY covers the native LLM provider `mimo` (`LLMService.register_adapter("mimo", ...)`), which a LingTai-backend agent/daemon task selects via `manifest.llm.provider`.

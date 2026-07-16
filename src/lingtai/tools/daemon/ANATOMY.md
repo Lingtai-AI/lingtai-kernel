@@ -1,7 +1,7 @@
 ---
 related_files:
   - src/lingtai/ANATOMY.md
-  - src/lingtai/tools/daemon/DAEMON_CONTRACT.md
+  - src/lingtai/tools/daemon/CONTRACT.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/process_port.py
   - src/lingtai/tools/daemon/interactive_terminal/__init__.py
@@ -54,8 +54,8 @@ registrations serialized as YAML for all backends, loaded as task-scoped MCP
 tools by the LingTai backend, mounted through native stdio MCP config for
 the Claude print/Codex/OpenCode/Qwen CLI backends, and mounted through native
 stdio/HTTP MCP config for Kimi Code via a run-private `$KIMI_CODE_HOME/mcp.json`.
-The maintained cross-backend
-architecture capability contract lives in `DAEMON_CONTRACT.md`. MCP-capable backends also get the built-in
+The maintained unified daemon
+contract lives in `CONTRACT.md`. MCP-capable backends also get the built-in
 `daemon_common` MCP (`src/lingtai/mcp_servers/daemon_common/server.py:1-151`);
 its `finish` tool writes `daemon_completion.json`, and only a validated
 `finish(status="done")` allows terminal `done`. Parent MCP tools are not
@@ -101,7 +101,7 @@ remains deferred until ConPTY has its own accepted adapter. `ClaudeInteractiveBr
 - `adapters/posix/daemon_execution_child_entrypoint.py` — fresh-interpreter execution boundary launched by the supervisor before its watcher. It registers exact execution PID/PGID/start identity and composes the existing production host; it does not duplicate backend parsers. `daemon_resume_owner_entrypoint.py` provides the bounded detached owner for one terminal supported-CLI resume generation. Durable `resume-claims/` records enforce one writer, and `followups/` plus `daemon.json` expose follow-up truth to `daemon(check)`.
 - `adapters/posix/process_identity.py` — shared POSIX process-incarnation helper. Linux identities combine boot ID and `/proc/<pid>/stat` start ticks; Darwin/BSD identities use bounded `ps` start time plus PPID. It returns `None` when observation is unavailable, and all ownership-sensitive signal paths refuse unknown or mismatched identities.
 - `daemon/runtime.py` — stateless daemon backend runtime primitives shared by the LingTai in-process loop and transitional CLI runners. Port-owned Codex, Cursor, OpenCode-family, Qwen, and Kimi runners use the daemon-local process Port for stderr draining and stdout iteration; only ask workers use a local deadline, while initial streams remain watchdog-owned. The historical private names remain for unmigrated paths and compatibility tests.
-- `daemon/DAEMON_CONTRACT.md` — maintained daemon architecture capability contract for selected skills catalog/path semantics, MCP registration redaction/native mounting, `daemon_common` completion enforcement, backend implementation status, run artifacts, review triggers, and the acceptance gate for new backend or contract-impacting changes.
+- `daemon/CONTRACT.md` — maintained daemon contract for the public tool surface, selected skills catalog/path semantics, MCP registration redaction/native mounting, `daemon_common` completion enforcement, backend implementation status, run artifacts, review triggers, and the acceptance gate for new backend or contract-impacting changes.
 
 - `daemon/interactive_terminal/` — capability-local immutable command/exit values and the
   raw byte-stream `InteractiveTerminalPort`; its separate Contract/Anatomy
@@ -257,5 +257,5 @@ results without requiring handler wrappers.
 - **Parent:** `src/lingtai/tools/` (tool package).
 - **Siblings:** `avatar/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), canonical `shell` (retained `bash/` implementation).
 - **Manual:** `daemon/manual/SKILL.md` — skill documentation for the LLM.
-- **Contract:** `daemon/DAEMON_CONTRACT.md` — cross-backend architecture capability contract for selected skills, one-run MCP registrations, completion, artifacts, backend support status, review triggers, and acceptance gates.
+- **Contract:** `daemon/CONTRACT.md` — unified daemon contract for tool-surface behavior, selected skills, one-run MCP registrations, completion, artifacts, backend support status, review triggers, and acceptance gates.
 - **Kernel hooks:** `setup()` is called during capability initialization; `DaemonManager.handle()` is registered as the `daemon` tool handler.

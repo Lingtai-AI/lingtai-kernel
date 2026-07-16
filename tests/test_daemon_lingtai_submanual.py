@@ -6,7 +6,7 @@ entrypoint. Unlike CLI backend pages it discloses *knowledge routing*, not
 flags — `backend="lingtai"` is the in-process ChatSession default with no
 external CLI and no `backend_options` surface, so the page must route agents
 to the live authorities (daemon-manual router, `system(action="presets")`
-preset inspection, tools/skills/MCP inheritance rules, DAEMON_CONTRACT.md)
+preset inspection, tools/skills/MCP inheritance rules, CONTRACT.md)
 and must never grow into a duplicated rules catalog or invent a flag
 surface. Runtime behavior itself is covered by ``tests/test_daemon.py`` and
 ``tests/test_daemon_backend_options.py`` and is not re-tested here.
@@ -85,7 +85,7 @@ def test_lingtai_child_routes_to_live_authorities():
         "daemon-manual",
         'system(action="presets")',
         "reference/substrate-manual/SKILL.md",
-        "DAEMON_CONTRACT.md",
+        "CONTRACT.md",
         "auto-inherited",
         "one-run `mcp` registrations",
         "daemon_common",
