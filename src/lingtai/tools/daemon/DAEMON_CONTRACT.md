@@ -287,6 +287,15 @@ invariants above:
   `src/lingtai/llm/mimo/ANATOMY.md` for that mechanism and the MiMo failure-
   policy divergence. This contract states only the daemon-task-object
   capability boundary above; it does not restate adapter internals.
+- A LingTai daemon task may explicitly request the no-argument `compact` tool
+  in its `tools` list. The tool is exposed only when the resolved provider is
+  native Codex (`codex`/`codex-pool`) or native MiMo; it invokes the same live
+  session's standalone compaction immediately, without restarting the daemon
+  or mutating parent state. It returns `success` when a new replay basis was
+  installed and `unsupported` when no safe/new turn boundary exists. Codex
+  provider failures return `failure` (matching its non-fatal automatic policy);
+  native MiMo preserves its hard-failure behavior. Other providers and all
+  external CLI backends do not receive this tool.
 
 ## Backend Support Matrix
 

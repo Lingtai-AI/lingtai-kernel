@@ -2733,6 +2733,17 @@ class _StandaloneCompactionMixin:
             return
         self._compact_now()
 
+    def request_standalone_compaction(self) -> str:
+        """Request one immediate standalone compaction for this session.
+
+        ``success`` means a new opaque replay basis was installed.  ``unsupported``
+        means there is no safe, new turn boundary to compact.  Provider-specific
+        failures retain the provider's existing policy: Codex reports ``failure``
+        while MiMo raises its hard-failure exception.
+        """
+        result = self._compact_now()
+        return result or "unsupported"
+
     def _prepare_compact_request(self) -> tuple[int, list[dict[str, Any]]] | None:
         """Resolve the compaction boundary and build the compact request's input.
 
@@ -3644,7 +3655,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         prefix_interface.entries.extend(entries)
         return self._frozen_responses_input(prefix_interface)
 
-    def _compact_now(self) -> None:
+    def _compact_now(self) -> str:
         """Call standalone Codex compaction and store the opaque replay basis.
 
         Builds the request via ``_prepare_compact_request`` (the shared
@@ -3660,7 +3671,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         """
         prepared = self._prepare_compact_request()
         if prepared is None:
-            return
+            return "unsupported"
         boundary_index, full_input = prepared
         already_compacted = self._compacted_items is not None
         try:
@@ -3688,10 +3699,10 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                     "rearm": already_compacted,
                 },
             )
-            return
+            return "failure"
         output_items = list(getattr(compacted, "output", None) or [])
         if not output_items:
-            return
+            return "failure"
         normalized: list[dict[str, Any]] = []
         for item in output_items:
             if hasattr(item, "model_dump"):
@@ -3699,7 +3710,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             elif isinstance(item, dict):
                 normalized.append(dict(item))
         if not normalized:
-            return
+            return "failure"
         self._compacted_items = normalized
         self._compacted_at_entry_count = boundary_index
         logger.info(
@@ -3711,6 +3722,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                 "rearm": already_compacted,
             },
         )
+        return "success"
 
     def _fire_boundary_forced_rebuild(self) -> bool:
         """Fire the once-per-episode automatic forced rebuild, honoring the latch.

@@ -335,6 +335,7 @@ class DetachedDaemonExecutionHost:
 
     def _build_lingtai_surface(self) -> tuple[list[FunctionSchema], dict]:
         manager = self._manager_type
+        from lingtai.tools.daemon import _self_compact_supported
         requested = list(self._manifest.get("tools") or [])
         preset_surface = None
         caps = self._manifest.get("preset_capabilities")
@@ -368,6 +369,11 @@ class DetachedDaemonExecutionHost:
         return manager._build_tool_surface(
             self, requested, preset_surface=preset_surface,
             mcp_surface=(mcp_schemas, mcp_handlers),
+            self_compact_supported=(
+                _self_compact_supported(
+                    preset_llm.get("provider"), preset_llm,
+                )
+            ),
         )
 
     def _rehydrate_native_mcp_files(self) -> None:

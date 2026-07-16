@@ -586,6 +586,38 @@ def test_compact_request_shape():
     assert "context_management" not in call
 
 
+def test_explicit_compact_tool_seam_compacts_without_threshold_trigger():
+    """The running session can compact immediately on an explicit tool call."""
+    session = _make_session(
+        context_window=1_000_000,
+        compact_token_limit=None,
+        turns=[text_turn(50), text_turn(80), text_turn(110), text_turn(200), text_turn(60)],
+    )
+    _send_text_turns(session, 4)
+
+    assert session.request_standalone_compaction() == "success"
+    assert len(session._client.responses.compact_calls) == 1
+
+
+def test_daemon_self_compact_surface_is_provider_gated():
+    from types import SimpleNamespace
+
+    from lingtai.tools.daemon import DaemonManager
+    from lingtai.tools.daemon import _self_compact_supported
+
+    mgr = DaemonManager.__new__(DaemonManager)
+    mgr._agent = SimpleNamespace(_intrinsics={}, _intrinsic_modules={})
+    supported, _ = mgr._daemon_intrinsic_surface(self_compact_supported=True)
+    unsupported, _ = mgr._daemon_intrinsic_surface(self_compact_supported=False)
+
+    assert supported["compact"].parameters["additionalProperties"] is False
+    assert "compact" not in unsupported
+    assert _self_compact_supported("codex", {})
+    assert _self_compact_supported("mimo", {})
+    assert not _self_compact_supported("mimo", {"wire_api": "chat_completions"})
+    assert not _self_compact_supported("anthropic", {})
+
+
 def test_compact_request_kwargs_bind_against_real_sdk_signature():
     """Assert the exact kwargs _compact_now sends bind against the real SDK.
 

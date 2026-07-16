@@ -218,7 +218,7 @@ class MimoResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         temp_interface.entries.extend(entries)
         return to_responses_input(temp_interface)
 
-    def _compact_now(self) -> None:
+    def _compact_now(self) -> str:
         """Call standalone MiMo compaction and store the opaque replay basis.
 
         Unlike ``CodexResponsesSession._compact_now``, EVERY failure here —
@@ -234,7 +234,7 @@ class MimoResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         if prepared is None:
             # No safe boundary yet (e.g. not enough history) — not a failure,
             # exactly like Codex: there is nothing to compact.
-            return
+            return "unsupported"
         boundary_index, full_input = prepared
         try:
             compacted = self._client.responses.compact(
@@ -266,6 +266,7 @@ class MimoResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             )
         self._compacted_items = normalized
         self._compacted_at_entry_count = boundary_index
+        return "success"
 
 
 class MimoAdapter(OpenAIAdapter):

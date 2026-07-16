@@ -123,6 +123,26 @@ _DAEMON_COMPLETION_FILE = "daemon_completion.json"
 _DAEMON_CLAUDE_MCP_CONFIG_FILE = "claude-mcp-config.json"
 _DAEMON_COMPLETION_STATUSES = {"done", "failed", "incomplete"}
 _SOURCE_ROOT = Path(__file__).resolve().parents[3]
+_SELF_COMPACT_PROVIDERS = frozenset({"codex", "codex-pool", "mimo"})
+
+
+def _self_compact_supported(provider: str | None, llm: dict | None) -> bool:
+    """Whether the resolved LingTai session has the standalone seam."""
+    provider = str(provider or "").lower()
+    if provider not in _SELF_COMPACT_PROVIDERS:
+        return False
+    if provider != "mimo":
+        return True
+    llm = llm or {}
+    wire_api = llm.get("wire_api")
+    defaults = llm.get("_provider_defaults") or llm.get("provider_defaults") or {}
+    if isinstance(defaults, dict):
+        nested = defaults.get("mimo")
+        if isinstance(nested, dict):
+            wire_api = nested.get("wire_api", wire_api)
+        else:
+            wire_api = defaults.get("wire_api", wire_api)
+    return str(wire_api or "responses").lower() != "chat_completions"
 
 
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
@@ -1407,7 +1427,9 @@ class DaemonManager:
         else:
             return {"status": "error", "message": f"Unknown action: {action}"}
 
-    def _daemon_intrinsic_surface(self) -> tuple[dict[str, FunctionSchema], dict]:
+    def _daemon_intrinsic_surface(
+        self, *, self_compact_supported: bool = False,
+    ) -> tuple[dict[str, FunctionSchema], dict]:
         """Return daemon-eligible intrinsic schemas/handlers.
 
         Daemons do not inherit the whole intrinsic layer: identity/lifecycle and
@@ -1431,6 +1453,19 @@ class DaemonManager:
                 glossary_package=getattr(module, "__package__", None),
             )
             handlers[name] = self._agent._intrinsics[name]
+        if self_compact_supported:
+            schemas["compact"] = FunctionSchema(
+                name="compact",
+                description=(
+                    "Immediately compact this daemon's current provider context "
+                    "before its next model request. Takes no arguments."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            )
         return schemas, handlers
 
     @staticmethod
@@ -2016,6 +2051,7 @@ class DaemonManager:
         requested: list[str],
         preset_surface: tuple[dict, dict] | None = None,
         mcp_surface: tuple[dict[str, FunctionSchema], dict] | None = None,
+        self_compact_supported: bool = False,
     ) -> tuple[list[FunctionSchema], dict]:
         """Build filtered tool schemas and dispatch map for an emanation.
 
@@ -2039,7 +2075,9 @@ class DaemonManager:
         """
         tool_names = self._expand_requested_tools(requested)
 
-        intrinsic_schemas, intrinsic_handlers = self._daemon_intrinsic_surface()
+        intrinsic_schemas, intrinsic_handlers = self._daemon_intrinsic_surface(
+            self_compact_supported=self_compact_supported,
+        )
         mcp_schemas, mcp_handlers = mcp_surface or ({}, {})
         parent_mcp_names = self._parent_mcp_tool_names()
         reserved_names = ({s.name for s in self._agent._tool_schemas} - parent_mcp_names) | set(intrinsic_schemas)
@@ -2515,6 +2553,20 @@ class DaemonManager:
         )
 
         endpoint = getattr(service, "_base_url", None)
+
+        if "compact" in {schema.name for schema in schemas}:
+            dispatch = dict(dispatch)
+
+            def _compact_daemon_context(_args: dict) -> dict:
+                request = getattr(session, "request_standalone_compaction", None)
+                if not callable(request):
+                    return {
+                        "status": "unsupported",
+                        "reason": "the active session has no standalone compaction",
+                    }
+                return {"status": request()}
+
+            dispatch["compact"] = _compact_daemon_context
 
         intrinsic_tool_names = set(self._daemon_intrinsic_surface()[1])
 
@@ -3692,6 +3744,14 @@ class DaemonManager:
                     spec["tools"],
                     preset_surface=preset_surface,
                     mcp_surface=({}, {}),
+                    self_compact_supported=(
+                        _self_compact_supported(
+                            (resolved["llm"]["provider"] if resolved else
+                             self._implicit_parent_preset_llm()["provider"]),
+                            (resolved["llm"] if resolved else
+                             self._implicit_parent_preset_llm()),
+                        )
+                    ),
                 )
                 system_prompt = self._build_emanation_prompt(
                     spec["task"], schemas, system_prompt=task_context

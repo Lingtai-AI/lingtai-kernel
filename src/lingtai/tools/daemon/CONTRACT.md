@@ -96,6 +96,14 @@ lingtai-backend-only capability boundary and `src/lingtai/llm/openai/ANATOMY.md`
 Codex vs. native-MiMo Responses session mechanics and failure-policy
 divergence this threshold triggers.
 
+For a running LingTai daemon whose resolved provider is native Codex
+(`codex`/`codex-pool`) or native MiMo, `tools: ["compact"]` additionally grants
+a no-argument self-compact tool. It calls that daemon session's existing
+standalone compaction seam immediately and reports `success` or
+`unsupported`; Codex call failures report `failure`, while MiMo retains its
+hard-failure behavior. The tool is absent for other providers and external
+CLI backends.
+
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
 | `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `skills`/`mcp`/`preset`/`backend_options`/`system_prompt`/`context_token_limit` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — `No tasks provided`, bad `max_turns`/`timeout`/`context_token_limit`, tool-surface/preset build failure |
