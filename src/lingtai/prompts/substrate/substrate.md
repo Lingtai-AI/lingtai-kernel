@@ -56,10 +56,14 @@ example `~/.lingtai-tui/runtime/venv` on macOS/Linux) and should confirm the
 module files it imports (`lingtai.__file__`, `lingtai.kernel.__file__`). Do not
 infer freshness from a convenient shell `python`, conda env, or checkout;
 `refresh` reloads the current on-disk/runtime surface but does not fetch or
-switch code by itself. For a `kernel_version` or `source_drift` nudge, route to
-the system-manual nested `runtime-update-checks` reference for the lifecycle,
-human-confirmation gate, and read-only diagnosis; normal installation/update
-commands remain TUI-managed.
+switch code by itself. For a `kernel_version` nudge, begin at
+`https://lingtai.ai/skill.md` to identify the authoritative release source and
+determine applicable migrations. Obtain explicit human/config-owner authorization
+for every migration/config write and refresh, apply only authorized writes,
+validate, and refresh last. The bundled `runtime-update-checks` manual is only
+for local read-only diagnosis and refresh mechanics. A `source_drift` nudge
+stays local to those mechanics and does not enter release-migration routing;
+normal installation/update commands remain TUI-managed.
 
 ## II · Life states
 

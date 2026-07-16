@@ -56,7 +56,7 @@ def test_installed_runtime_refresh_nudge_does_not_hit_remote(tmp_path, monkeypat
     assert entry["running"] == "0.14.1"
     assert entry["installed"] == "0.14.2"
     assert entry["suggested_action"] == "read-runtime-update-skill-then-refresh-if-safe"
-    assert "runtime-update-checks" in entry["skill"]
+    assert entry["skill"] == "https://lingtai.ai/skill.md"
     assert "system(action='refresh')" in entry["detail"]
 
 

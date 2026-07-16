@@ -6,6 +6,8 @@ related_files:
   - src/lingtai/kernel/nudge/goal.py
   - src/lingtai/kernel/nudge/kernel_version.py
   - src/lingtai/kernel/nudge/source_drift.py
+  - src/lingtai/kernel/nudge/prompts.py
+  - tests/test_nudge_prompts.py
   - src/lingtai/kernel/snapshot/ANATOMY.md
   - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
 maintenance: |
@@ -18,8 +20,9 @@ maintenance: |
 # Nudge
 
 Per-agent periodic checks that emit notification nudges or reminders when
-something needs the agent's attention. Runtime/kernel update nudges share
-`.notification/nudge.json` and keep throttle state in
+something needs the agent's attention. Producers collect runtime facts while
+`prompts.py` renders the typed situation into stable agent-facing wording and
+payloads. Runtime/kernel update nudges share `.notification/nudge.json` and keep throttle state in
 `.notification/.nudge_state.json`; goal reminders read protected
 `.notification/goal.json` and publish short dismissible events into
 `.notification/system.json`. Designed so additional mechanical checks land as
@@ -46,17 +49,22 @@ bad check never breaks the loop). It dispatches to each check's
   the installed version comes from distribution metadata. If the wrapper module is
   not loaded, running falls back to installed metadata. For packaged,
   non-editable/non-dev runtimes, it also performs an at-most-once-per-UTC-day
-  package-index check for a newer kernel version and nudges the agent to read
-  `system-manual -> reference/runtime-update-checks/SKILL.md` before asking the
-  human whether to update. It stores daily throttle state in the hidden
+  package-index check for a newer kernel version and routes the agent through
+  the stable `https://lingtai.ai/skill.md` path before asking the human whether
+  to update. It stores daily throttle state in the hidden
   `.notification/.nudge_state.json` helper file, which is not a channel.
 - `source_drift.py` — read-only process/source freshness check. It compares the
   startup runtime fingerprint with the current on-disk fingerprint and emits a
   low-priority refresh nudge only for non-dev/non-editable/non-source runtimes;
   development checkouts are skipped so agents are not nudged into arbitrary
-  in-flight source changes. Revision capture uses the agent's injected
-  `SourceRevisionPort`; curated source hashing, timestamps, comparison, throttle,
-  and nudge policy remain here in Core.
+  in-flight source changes. Source-drift handling stays local to read-only
+  diagnosis and refresh mechanics; it never enters release-migration routing.
+  Revision capture uses the agent's injected `SourceRevisionPort`; curated source
+  hashing, timestamps, comparison, throttle, and nudge policy remain here in Core.
+- `prompts.py` — kernel-owned typed situation renderer. `NudgeSituation`,
+  `NudgeFacts`, and `render_nudge_payload` centralize agent-facing payload
+  wording for installed/runtime mismatch, package update, and source drift
+  without changing producer cadence or state.
 - `goal.py` — IDLE-only goal reminder check. It reads the allowlisted protected
   `.notification/goal.json`; if and only if that file exists, is active, and the
   idle delay has elapsed, it publishes one short `goal.reminder` event into
@@ -118,11 +126,15 @@ abstraction shape will be obvious by then.
 
 ## Manual route
 
-The detailed agent-facing update lifecycle, nudge interpretation, TUI ownership,
-and troubleshooting route is
-`src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md`.
-This anatomy remains the structural map; the nested manual is the one source of
-truth for operational guidance.
+Kernel version/update cases begin at the stable route
+`https://lingtai.ai/skill.md`, which identifies the authoritative repository and
+release migration chain. Determine applicable migrations there and obtain explicit
+human/config-owner authorization for every migration/config write and refresh;
+apply only authorized writes, validate, and refresh last. The bundled
+`runtime-update-checks` manual remains local guidance for read-only diagnosis and
+refresh mechanics, not the release-migration source or authorization. Source-drift
+cases stay local to those diagnosis/mechanics and never enter release-migration
+routing.
 
 ## Wire surface
 

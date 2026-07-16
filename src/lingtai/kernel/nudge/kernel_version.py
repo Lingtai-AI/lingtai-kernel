@@ -8,11 +8,16 @@ Two related cases share one nudge ``kind``:
 
 * local refresh available: the installed ``lingtai`` distribution on disk is
   newer than the currently running process, so a safe ``system.refresh`` may
-  load code that is already present;
+  load code that is already present. The agent starts at
+  ``https://lingtai.ai/skill.md`` to determine applicable release migrations
+  before any authorized configuration write or refresh;
 * package update available: a packaged, non-editable runtime is behind the
   latest published ``lingtai`` kernel package. This is checked at most once per
-  UTC day per agent and asks the agent to read the system runtime-update skill
-  and ask the human before downloading/updating.
+  UTC day per agent and starts at ``https://lingtai.ai/skill.md`` so the agent
+  can determine applicable release migrations, obtain explicit
+  human/config-owner authorization for every migration/config write and refresh,
+  apply only authorized writes, validate, and refresh last. The nudge itself
+  grants no authority.
 
 Editable/source/dev installs are skipped for the package-update check: their
 source of truth is the checkout, not the package index.
@@ -29,12 +34,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .prompts import NudgeFacts, NudgeSituation, SKILL_ROUTE, render_nudge_payload
+
 _FAST_INTERVAL_SECONDS = 60.0
 _REMOTE_TIMEOUT_SECONDS = 3.0
 _PYPI_JSON_URL = "https://pypi.org/pypi/lingtai/json"
 _STATE_FILE = Path(".notification") / ".nudge_state.json"
 _KIND = "kernel_version"
-_SKILL_HINT = "system-manual -> reference/runtime-update-checks/SKILL.md"
+# Backward-compatible module constant for callers that inspected the old hint.
+_SKILL_HINT = SKILL_ROUTE
 
 
 @dataclass(frozen=True)
@@ -103,27 +111,14 @@ def check(agent) -> None:
         upsert(
             agent,
             _KIND,
-            {
-                "title": (
-                    "LingTai kernel refresh available: "
-                    f"{info.running_version} -> {info.installed_version}"
+            render_nudge_payload(
+                NudgeSituation.INSTALLED_RUNTIME_MISMATCH,
+                NudgeFacts(
+                    running=info.running_version,
+                    installed=info.installed_version,
+                    checked_at_date=today,
                 ),
-                "detail": (
-                    "The LingTai package on disk differs from the currently "
-                    "running kernel. Read "
-                    f"`{_SKILL_HINT}` first; if the current work can be "
-                    "safely reloaded, use `system(action='refresh')` to load "
-                    "the installed runtime."
-                ),
-                "running": info.running_version,
-                "installed": info.installed_version,
-                "latest": None,
-                "source": "installed-distribution",
-                "cadence": "at-most-once-per-utc-day",
-                "checked_at_date": today,
-                "suggested_action": "read-runtime-update-skill-then-refresh-if-safe",
-                "skill": _SKILL_HINT,
-            },
+            ),
         )
         _log(
             agent,
@@ -180,27 +175,15 @@ def check(agent) -> None:
         upsert(
             agent,
             _KIND,
-            {
-                "title": (
-                    "LingTai kernel update available: "
-                    f"{info.installed_version} -> {latest}"
+            render_nudge_payload(
+                NudgeSituation.PACKAGE_UPDATE_AVAILABLE,
+                NudgeFacts(
+                    running=info.running_version,
+                    installed=info.installed_version,
+                    latest=latest,
+                    checked_at_date=today,
                 ),
-                "detail": (
-                    "A newer LingTai kernel package is available. Read "
-                    f"`{_SKILL_HINT}`, tell the human what changed, and ask "
-                    "whether they want to update through their normal LingTai "
-                    "runtime/TUI upgrade path. Do not download or refresh "
-                    "without human confirmation."
-                ),
-                "running": info.running_version,
-                "installed": info.installed_version,
-                "latest": latest,
-                "source": "pypi-json",
-                "cadence": "at-most-once-per-utc-day",
-                "checked_at_date": today,
-                "suggested_action": "read-runtime-update-skill-and-ask-human",
-                "skill": _SKILL_HINT,
-            },
+            ),
         )
         _log(
             agent,

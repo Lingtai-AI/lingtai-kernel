@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import time
 
+from .prompts import NudgeFacts, NudgeSituation, render_nudge_payload
+
 _INTERVAL_SECONDS = 60.0
 _KIND = "source_drift"
 
@@ -85,18 +87,14 @@ def check(agent) -> None:
     if state.get("emitted_for") == drift_key:
         return
 
-    body = {
-        "title": "Source drift detected — running code is stale",
-        "detail": (
-            f"On-disk source has changed since this process started. "
-            f"Drift: {'; '.join(drift_signals)}. "
-            f"Call system(action='refresh') when convenient to relaunch "
-            f"with the latest code. No urgency — finish the current task first."
+    body = render_nudge_payload(
+        NudgeSituation.SOURCE_DRIFT,
+        NudgeFacts(
+            startup_fingerprint=startup_fp,
+            disk_fingerprint=disk_fp,
+            drift_signals=tuple(drift_signals),
         ),
-        "suggested_action": "system(action='refresh')",
-        "startup_fingerprint": startup_fp,
-        "disk_fingerprint": disk_fp,
-    }
+    )
     try:
         upsert(agent, _KIND, body)
         state["emitted"] = True
