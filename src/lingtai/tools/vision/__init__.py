@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 PROVIDERS = {
     "providers": [
-        "minimax", "zhipu", "mimo", "gemini", "anthropic", "openai",
+        "minimax", "zhipu", "glm", "mimo", "gemini", "anthropic", "openai",
         "codex", "codex-pool", "codex_pool",
     ],
     "default": None,
@@ -108,7 +108,8 @@ def setup(
         if api_key_env:
             from lingtai.kernel.config_resolve import resolve_env
             api_key = resolve_env(api_key, api_key_env)
-        if provider not in PROVIDERS["providers"]:
+        provider_key = provider.lower()
+        if provider_key not in PROVIDERS["providers"]:
             # No dedicated VisionService for this provider (custom relay,
             # OpenRouter, an anthropic-compat local proxy, ...). Route vision
             # through the OpenAI- or Anthropic-compatible service, picking the
@@ -170,7 +171,6 @@ def setup(
                 )
                 return CAPABILITY_UNAVAILABLE
         else:
-            provider_key = provider.lower()
             if provider_key in {"codex", "codex-pool", "codex_pool"}:
                 # Codex vision is a standalone Responses request. It may share
                 # the active Codex family's model and endpoint, but never
@@ -206,21 +206,39 @@ def setup(
                 from lingtai.services.vision import create_vision_service
                 vision_service = create_vision_service("codex", api_key=None, **kwargs)
             else:
+                service_provider = "zhipu" if provider_key == "glm" else provider_key
+                main_provider = getattr(getattr(agent, "service", None), "provider", "")
+                active_provider_key = main_provider.lower() if isinstance(main_provider, str) else ""
+                active_model = getattr(agent.service, "_model", None)
+                active_base_url = getattr(agent.service, "_base_url", None)
+
                 # Provider-specific kwarg injection. Each branch is opt-in because
                 # vision services have heterogeneous constructor signatures.
-                if provider == "minimax" and "api_host" not in kwargs:
+                if service_provider in {"openai", "anthropic", "gemini"}:
+                    if active_provider_key == provider_key and active_model:
+                        kwargs.setdefault("model", active_model)
+                    if (
+                        service_provider in {"openai", "anthropic"}
+                        and active_provider_key == provider_key
+                        and active_base_url
+                    ):
+                        kwargs.setdefault("base_url", active_base_url)
+                if service_provider == "mimo" and active_provider_key == provider_key and active_base_url:
+                    kwargs.setdefault("base_url", active_base_url)
+                if service_provider == "minimax" and "api_host" not in kwargs:
                     from .._media_host import resolve_media_host
                     kwargs["api_host"] = resolve_media_host(agent)
-                if provider == "zhipu" and "z_ai_mode" not in kwargs:
+                if service_provider == "zhipu" and "z_ai_mode" not in kwargs:
                     from .._zhipu_mode import resolve_z_ai_mode
                     kwargs["z_ai_mode"] = resolve_z_ai_mode(agent)
                 # Dedicated vision services do not consume the LLM adapter's
                 # transport selector.
                 kwargs.pop("api_compat", None)
-                kwargs.pop("base_url", None)
+                if service_provider not in {"openai", "anthropic", "mimo"}:
+                    kwargs.pop("base_url", None)
                 # Lazy import: the provider service lives in ``lingtai.services``.
                 from lingtai.services.vision import create_vision_service
-                vision_service = create_vision_service(provider, api_key=api_key, **kwargs)
+                vision_service = create_vision_service(service_provider, api_key=api_key, **kwargs)
     elif vision_service is None:
         raise ValueError(
             "vision capability requires 'vision_service' or 'provider' + 'api_key'. "

@@ -39,9 +39,10 @@ lazy-import DAG rule -> §Cross-platform invariants.
 
 - Canonical tool name: `vision`.
 - One tool, one call — no actions, no persistent state.
-- Advertised providers (`PROVIDERS["providers"]`): `minimax`, `zhipu`, `mimo`,
-  `gemini`, `anthropic`, `openai`, `codex`, `codex-pool`, `codex_pool`. Default provider is `None` and there
-  is no agnostic inherit fallback (`fallback_on_inherit: None`).
+- Advertised providers (`PROVIDERS["providers"]`): `minimax`, `zhipu`, `glm`,
+  `mimo`, `gemini`, `anthropic`, `openai`, `codex`, `codex-pool`,
+  `codex_pool`. Default provider is `None` and there is no agnostic inherit
+  fallback (`fallback_on_inherit: None`).
 - A local `mlx-vlm` provider (`provider="local"`) exists but is intentionally
   **not** advertised in `PROVIDERS`; users opt in explicitly.
 
@@ -53,6 +54,18 @@ lazy-import DAG rule -> §Cross-platform invariants.
   endpoint are forwarded to standalone vision. A non-Codex main provider does
   not supply those values to an explicitly configured Codex vision provider.
   Direct Codex uses the selected provider bucket's `codex_auth_path`.
+- When the active main provider is the same direct-native provider, `openai`,
+  `anthropic`, and `gemini` standalone vision use the active model unless the
+  capability explicitly set `model`. `openai` and `anthropic` also use the
+  active base URL unless the capability explicitly set `base_url`; Gemini has
+  no base-url constructor and does not receive one here.
+- MiMo is a deliberate exception: explicit capability `model` wins, but without
+  one setup leaves the vision service on its known vision-capable default
+  (`mimo-v2.5`) instead of forwarding text-only active MiMo chat models. When
+  the active main provider is MiMo, setup may still forward the active base URL
+  unless the capability explicitly set `base_url`.
+- `glm` is a first-class vision alias for the existing Zhipu MCP vision service.
+  It is not a new direct-native provider.
 
 **Non-goals:** the capability does not pre-validate that the resolved
 model/relay can actually do vision — an incapable relay fails at runtime, not at
@@ -86,10 +99,13 @@ DOCUMENT ONLY — do not change these assumptions and do not propose Windows wor
   module import.
 - Provider-specific kwargs are injected per branch (e.g. MiniMax `api_host`,
   Zhipu `z_ai_mode`) because vision services have heterogeneous constructor
-  signatures. Non-Codex dedicated services receive neither `api_compat` nor the
-  inherited LLM `base_url`. Codex-family vision strips `api_compat` but may
-  forward `base_url` intentionally when it came from an explicit capability
-  override or the active main provider is Codex-family.
+  signatures. Dedicated services never receive `api_compat`. Direct-native
+  `openai`, `anthropic`, `gemini`, and Codex-family services may receive the
+  active model only from the same active provider family unless capability
+  `model` was explicit. `openai`, `anthropic`, MiMo, and Codex-family services
+  may receive `base_url` when it came from an explicit capability override or
+  from the same active provider family; Gemini, MiniMax, and Zhipu/`glm` do not
+  receive inherited `base_url` through the service constructor.
 - `CodexVisionService` refreshes the selected OAuth token and account id for
   each image call. It sends `ChatGPT-Account-ID` only when a non-secret account
   id is available, and uses Responses `input_text` plus `input_image` blocks.
@@ -110,6 +126,10 @@ There are no subprocess/shell/PTY/binary-spawn assumptions in this tool.
 | Unsupported provider with an api_compat routes to the compat service | `src/lingtai/tools/vision/__init__.py` | `tests/test_vision_capability.py::test_vision_fallback_anthropic_compat_routes_to_anthropic_service`, `::test_vision_fallback_reads_api_compat_from_provider_bucket` |
 | Unknown api_compat skips the capability with a diagnostic | `src/lingtai/tools/vision/__init__.py` | `tests/test_vision_capability.py::test_vision_fallback_unknown_api_compat_skips_with_diagnostic`, `::test_vision_setup_unsupported_provider_skips` |
 | `api_key_env` overrides the raw key at setup | `src/lingtai/tools/vision/__init__.py` | `tests/test_vision_capability.py::test_vision_setup_resolves_api_key_env` |
+| Direct-native vision preserves same-provider model/endpoint identity without cross-provider fallback | `src/lingtai/tools/vision/__init__.py` | `tests/test_vision_capability.py::test_direct_native_vision_inherits_same_provider_model_and_endpoint`, `::test_direct_native_vision_honors_explicit_model_and_endpoint_over_active_provider`, `::test_direct_native_vision_does_not_inherit_from_mismatched_provider` |
+| MiMo preserves explicit/default vision-capable model behavior while preserving same-provider endpoint | `src/lingtai/tools/vision/__init__.py` | `tests/test_vision_capability.py::test_mimo_vision_keeps_default_model_but_preserves_same_provider_endpoint`, `::test_mimo_vision_honors_explicit_model_and_endpoint` |
+| MiniMax/Zhipu MCP vision do not forward active chat models; `glm` aliases Zhipu MCP | `src/lingtai/tools/vision/__init__.py` | `tests/test_vision_capability.py::test_minimax_vision_does_not_forward_active_chat_model`, `::test_zhipu_vision_does_not_forward_active_chat_model_or_base_url`, `::test_glm_vision_alias_uses_zhipu_mcp_service` |
+| Text-only/provider-relay aliases remain unavailable by default | `src/lingtai/tools/vision/__init__.py` | `tests/test_vision_capability.py::test_unsupported_text_providers_remain_unavailable_by_default` |
 | Dedicated provider services parse valid/invalid responses correctly | `src/lingtai/services/vision/` | `tests/test_vision_services.py::test_mimo_vision_returns_content_on_valid_response`, `::test_openai_vision_returns_content_on_valid_response`, `::test_create_vision_service_unknown_provider` |
 
 ## Verification matrix

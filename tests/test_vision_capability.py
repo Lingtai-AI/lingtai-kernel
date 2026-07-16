@@ -29,6 +29,23 @@ def make_mock_agent(tmp_path, svc=None):
     return agent
 
 
+def make_provider_agent(
+    tmp_path,
+    *,
+    provider: str,
+    model: str | None,
+    base_url: str | None,
+    defaults: dict | None = None,
+):
+    svc = MagicMock()
+    svc.provider = provider
+    svc._model = model
+    svc._base_url = base_url
+    svc._provider_defaults = defaults if defaults is not None else {provider: {}}
+    svc._key_resolver = MagicMock(return_value="fake-key")
+    return make_mock_agent(tmp_path, svc=svc)
+
+
 def test_vision_added_by_setup(tmp_path):
     """setup() should register the vision tool on the agent."""
     mock_svc = MagicMock(spec=VisionService)
@@ -221,6 +238,191 @@ def test_codex_pool_vision_selects_exact_model_and_passes_result(tmp_path):
         assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-terra"
         assert mock_factory.call_args.kwargs["base_url"] == "https://codex-pool.example/backend-api/codex"
         assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-b.json"
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "base_url", "expects_base_url"),
+    [
+        ("openai", "gpt-4.1", "https://openai.example/v1", True),
+        ("anthropic", "claude-sonnet-4-20250514", "https://anthropic.example", True),
+        ("gemini", "gemini-3-flash-preview", "https://gemini.example", False),
+    ],
+)
+def test_direct_native_vision_inherits_same_provider_model_and_endpoint(
+    tmp_path, provider, model, base_url, expects_base_url
+):
+    """Direct-native vision keeps the active provider identity when providers match."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_provider_agent(
+            tmp_path,
+            provider=provider,
+            model=model,
+            base_url=base_url,
+        )
+        setup(agent, provider=provider, api_key="sk-test")
+
+        mock_factory.assert_called_once()
+        assert mock_factory.call_args.args == (provider,)
+        kwargs = mock_factory.call_args.kwargs
+        assert kwargs["api_key"] == "sk-test"
+        assert kwargs["model"] == model
+        if expects_base_url:
+            assert kwargs["base_url"] == base_url
+        else:
+            assert "base_url" not in kwargs
+
+
+def test_direct_native_vision_honors_explicit_model_and_endpoint_over_active_provider(tmp_path):
+    """Capability kwargs remain authoritative for direct-native services."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_provider_agent(
+            tmp_path,
+            provider="openai",
+            model="gpt-4.1",
+            base_url="https://active-openai.example/v1",
+        )
+        setup(
+            agent,
+            provider="openai",
+            api_key="sk-test",
+            model="gpt-4o",
+            base_url="https://vision-openai.example/v1",
+        )
+
+        kwargs = mock_factory.call_args.kwargs
+        assert kwargs["model"] == "gpt-4o"
+        assert kwargs["base_url"] == "https://vision-openai.example/v1"
+
+
+def test_direct_native_vision_does_not_inherit_from_mismatched_provider(tmp_path):
+    """An explicit OpenAI vision provider must not inherit Anthropic model/endpoint."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_provider_agent(
+            tmp_path,
+            provider="anthropic",
+            model="claude-opus-4.1",
+            base_url="https://anthropic.example",
+        )
+        setup(agent, provider="openai", api_key="sk-test")
+
+        kwargs = mock_factory.call_args.kwargs
+        assert kwargs["api_key"] == "sk-test"
+        assert "model" not in kwargs
+        assert "base_url" not in kwargs
+
+
+def test_mimo_vision_keeps_default_model_but_preserves_same_provider_endpoint(tmp_path):
+    """MiMo does not forward text-only active models into standalone vision."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_provider_agent(
+            tmp_path,
+            provider="mimo",
+            model="mimo-v2.5-pro",
+            base_url="https://mimo-proxy.example/v1",
+        )
+        setup(agent, provider="mimo", api_key="sk-test")
+
+        kwargs = mock_factory.call_args.kwargs
+        assert kwargs["api_key"] == "sk-test"
+        assert "model" not in kwargs
+        assert kwargs["base_url"] == "https://mimo-proxy.example/v1"
+
+
+def test_mimo_vision_honors_explicit_model_and_endpoint(tmp_path):
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_provider_agent(
+            tmp_path,
+            provider="mimo",
+            model="mimo-v2.5-pro",
+            base_url="https://active-mimo.example/v1",
+        )
+        setup(
+            agent,
+            provider="mimo",
+            api_key="sk-test",
+            model="mimo-v2-omni",
+            base_url="https://vision-mimo.example/v1",
+        )
+
+        kwargs = mock_factory.call_args.kwargs
+        assert kwargs["model"] == "mimo-v2-omni"
+        assert kwargs["base_url"] == "https://vision-mimo.example/v1"
+
+
+def test_minimax_vision_does_not_forward_active_chat_model(tmp_path):
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_provider_agent(
+            tmp_path,
+            provider="minimax",
+            model="MiniMax-M3",
+            base_url="https://api.minimax.io/anthropic",
+        )
+        setup(agent, provider="minimax", api_key="sk-test")
+
+        mock_factory.assert_called_once_with(
+            "minimax",
+            api_key="sk-test",
+            api_host="https://api.minimax.io",
+        )
+
+
+def test_zhipu_vision_does_not_forward_active_chat_model_or_base_url(tmp_path):
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_provider_agent(
+            tmp_path,
+            provider="zhipu",
+            model="GLM-5.2",
+            base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        )
+        setup(agent, provider="zhipu", api_key="sk-test")
+
+        mock_factory.assert_called_once_with(
+            "zhipu",
+            api_key="sk-test",
+            z_ai_mode="ZHIPU",
+        )
+
+
+def test_glm_vision_alias_uses_zhipu_mcp_service(tmp_path):
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_provider_agent(
+            tmp_path,
+            provider="glm",
+            model="GLM-5.2",
+            base_url="https://api.z.ai/api/coding/paas/v4",
+        )
+        setup(agent, provider="glm", api_key="sk-test")
+
+        mock_factory.assert_called_once_with(
+            "zhipu",
+            api_key="sk-test",
+            z_ai_mode="ZAI",
+        )
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ["openrouter", "deepseek", "kimi", "grok", "qwen", "claude-code", "claude_code", "custom"],
+)
+def test_unsupported_text_providers_remain_unavailable_by_default(tmp_path, provider):
+    agent = make_provider_agent(
+        tmp_path,
+        provider=provider,
+        model="text-only",
+        base_url="https://relay.example/v1",
+        defaults={provider: {}},
+    )
+    result = setup(agent, provider=provider, api_key="sk-test")
+    assert result is CAPABILITY_UNAVAILABLE
+    agent.add_tool.assert_not_called()
 
 
 def test_vision_setup_unsupported_provider_skips(tmp_path):
