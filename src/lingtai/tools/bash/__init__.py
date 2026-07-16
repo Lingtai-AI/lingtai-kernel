@@ -745,6 +745,7 @@ class BashManager:
                 return {
                     "status": "ok", "job_id": job_id, "pid": pid,
                     "message": f'Job started. Use bash(action="poll", job_id="{job_id}") to check.',
+                    "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read bash-manual and notification-manual for details.",
                 }
             if state and self._terminal(state.get("status")):
                 break
