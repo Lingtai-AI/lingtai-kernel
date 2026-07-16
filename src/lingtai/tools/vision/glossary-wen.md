@@ -17,3 +17,5 @@ maintenance: |
 - `vision`：观象之器——以 LLM 之视觉能力析图。支 JPEG、PNG 与 WebP。可对图发任何问——述其内容、识其文字、解其图表、辨其物象、评其风格与气韵。结合绘相可先生图再析之。
 - `image_path`：图像之路径
 - `question`：关于图像之问
+- `action`：`analyze` 直析，`manual` 惟返只读指引
+- `manual`：使 agent 察当前 preset 身份，于自身 skill catalog 寻相应手册；不自动召 MCP

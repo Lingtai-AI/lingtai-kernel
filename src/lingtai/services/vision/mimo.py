@@ -16,7 +16,7 @@ identical. This service wraps that with a sane MiMo-specific default.
 """
 from __future__ import annotations
 
-from . import VisionService, _image_url_messages
+from . import VisionService, _image_url_messages, _require_api_key
 
 
 _MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
@@ -38,6 +38,7 @@ class MiMoVisionService(VisionService):
         base_url: str | None = None,
         max_tokens: int = 1024,
     ) -> None:
+        api_key = _require_api_key(api_key, "mimo")
         import openai as _openai
 
         self._client = _openai.OpenAI(

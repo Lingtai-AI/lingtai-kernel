@@ -1,7 +1,7 @@
 """VisionService — abstract image understanding backing the vision capability.
 
-Provides standalone vision implementations for each provider that take their
-own API key and handle file reading, base64 encoding, and SDK calls directly.
+Provides standalone vision implementations for supported direct providers.
+The local implementation is an explicit pseudo-provider and needs no API key.
 
 Usage:
     from lingtai.services.vision import VisionService, create_vision_service
@@ -79,11 +79,21 @@ def _image_url_messages(image_path: str, prompt: str | None = None) -> list[dict
     ]
 
 
+def _require_api_key(api_key: object, provider: str) -> str:
+    """Require a nonblank explicit API key without changing its value."""
+    if not isinstance(api_key, str) or not api_key.strip():
+        raise ValueError(
+            f"api_key is required for provider {provider!r}. "
+            f"Use provider='local' for on-device vision without an API key."
+        )
+    return api_key
+
+
 def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs) -> VisionService:
     """Factory — create a VisionService for the given provider.
 
     Args:
-        provider: Provider name ("anthropic", "openai", "gemini", "minimax", "codex", "local").
+        provider: Provider name ("anthropic", "openai", "gemini", "mimo", "codex", "local").
         api_key: API key for the provider (not required for "codex" or "local").
         **kwargs: Additional provider-specific kwargs (e.g., model, base_url).
 
@@ -97,14 +107,13 @@ def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs
         from .local import LocalVisionService
         return LocalVisionService(**kwargs)
     elif provider == "codex":
+        token_path = kwargs.get("token_path")
+        if not isinstance(token_path, str) or not token_path.strip():
+            raise ValueError("token_path is required for Codex vision.")
         from .codex import CodexVisionService
         return CodexVisionService(**kwargs)
 
-    if api_key is None:
-        raise ValueError(
-            f"api_key is required for provider {provider!r}. "
-            f"Use provider='local' for on-device vision without an API key."
-        )
+    api_key = _require_api_key(api_key, provider)
 
     if provider == "anthropic":
         from .anthropic import AnthropicVisionService
@@ -115,17 +124,11 @@ def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs
     elif provider == "gemini":
         from .gemini import GeminiVisionService
         return GeminiVisionService(api_key=api_key, **kwargs)
-    elif provider == "minimax":
-        from .minimax import MiniMaxVisionService
-        return MiniMaxVisionService(api_key=api_key, **kwargs)
-    elif provider == "zhipu":
-        from .zhipu import ZhipuVisionService
-        return ZhipuVisionService(api_key=api_key, **kwargs)
     elif provider == "mimo":
         from .mimo import MiMoVisionService
         return MiMoVisionService(api_key=api_key, **kwargs)
     else:
         raise ValueError(
             f"Unsupported vision provider: {provider!r}. "
-            f"Supported: anthropic, openai, gemini, minimax, zhipu, mimo, codex, local."
+            f"Supported: anthropic, openai, gemini, mimo, codex, local."
         )

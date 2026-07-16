@@ -4,7 +4,6 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from ...auth.codex import CodexTokenManager
 from . import VisionService, _read_image
 
 
@@ -30,6 +29,10 @@ class CodexVisionService(VisionService):
         token_path: str | None = None,
         **_ignored: Any,
     ) -> None:
+        if not isinstance(token_path, str) or not token_path.strip():
+            raise ValueError("token_path is required for Codex vision.")
+
+        from ...auth.codex import CodexTokenManager
         import openai as _openai
 
         self._openai = _openai

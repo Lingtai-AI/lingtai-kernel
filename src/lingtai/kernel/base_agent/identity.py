@@ -8,6 +8,22 @@ from __future__ import annotations
 import os
 import platform
 import sys
+from urllib.parse import SplitResult, urlsplit, urlunsplit
+
+
+def sanitize_endpoint(value: str) -> str:
+    """Remove endpoint credentials, query parameters, and fragments for display."""
+    try:
+        parsed = urlsplit(value)
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        hostname = parsed.hostname or ""
+        host = f"[{hostname}]" if ":" in hostname and not hostname.startswith("[") else hostname
+        if parsed.port is not None:
+            host = f"{host}:{parsed.port}"
+        return urlunsplit(SplitResult(parsed.scheme, host, parsed.path, "", ""))
+    except (TypeError, ValueError):
+        return ""
 
 
 def _set_name(agent, name: str) -> None:
@@ -125,7 +141,7 @@ def _safe_llm_from_service(agent) -> dict:
 
     base_url = _effective_base_url_from_service(service)
     if isinstance(base_url, str) and base_url:
-        llm["base_url"] = base_url
+        llm["base_url"] = sanitize_endpoint(base_url)
 
     context_limit = _safe_int_attr(service, "_context_window")
     if context_limit is not None:
