@@ -56,22 +56,44 @@ def _normalize_runtime_envelope(raw: Any) -> dict | None:
         return {"tool_meta": tool_meta}
     agent["agent_state"] = agent_state
     agent.setdefault("instruction", "Only the latest agent_meta in conversation is current; older ones are historical traces.")
-    notifications = agent.get("notifications")
-    if not isinstance(notifications, dict):
-        notifications = {}
-    if "notifications" in raw:
-        notifications.setdefault("attention", copy.deepcopy(raw["notifications"]))
-    if "notification_persistent" in raw:
-        notifications.setdefault("persistent", copy.deepcopy(raw["notification_persistent"]))
-    agent["notifications"] = notifications
-    guidance = agent.get("guidance")
-    if not isinstance(guidance, dict):
-        guidance = {}
-    if "guidance" in raw:
-        guidance.setdefault("persistent", copy.deepcopy(raw["guidance"]))
-    if "notification_guidance" in raw:
-        guidance.setdefault("transient", copy.deepcopy(raw["notification_guidance"]))
-    agent["guidance"] = guidance
+    daemon_local_state = isinstance(agent_state.get("daemon"), dict)
+    has_notification_axis = (
+        "notifications" in agent
+        or "notifications" in raw
+        or "notification_persistent" in raw
+    )
+    if daemon_local_state and not has_notification_axis:
+        # Daemon agent_meta deliberately carries no parent-only notification or
+        # communication axis. Preserve that omission through provider projection
+        # instead of manufacturing the main-agent's empty compatibility object.
+        agent.pop("notifications", None)
+    else:
+        notifications = agent.get("notifications")
+        if not isinstance(notifications, dict):
+            notifications = {}
+        if "notifications" in raw:
+            notifications.setdefault("attention", copy.deepcopy(raw["notifications"]))
+        if "notification_persistent" in raw:
+            notifications.setdefault("persistent", copy.deepcopy(raw["notification_persistent"]))
+        agent["notifications"] = notifications
+    has_guidance_axis = (
+        "guidance" in agent
+        or "guidance" in raw
+        or "notification_guidance" in raw
+    )
+    if daemon_local_state and not has_guidance_axis:
+        # A daemon does not carry the main agent's resident meta_guidance section,
+        # so an absent guidance axis must stay absent rather than point nowhere.
+        agent.pop("guidance", None)
+    else:
+        guidance = agent.get("guidance")
+        if not isinstance(guidance, dict):
+            guidance = {}
+        if "guidance" in raw:
+            guidance.setdefault("persistent", copy.deepcopy(raw["guidance"]))
+        if "notification_guidance" in raw:
+            guidance.setdefault("transient", copy.deepcopy(raw["notification_guidance"]))
+        agent["guidance"] = guidance
     return {"tool_meta": tool_meta, "agent_meta": agent}
 
 

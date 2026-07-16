@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from lingtai.kernel.config import AgentConfig
-from lingtai.kernel.llm.base import FunctionSchema, LLMResponse, ToolCall
+from lingtai.kernel.llm.base import ChatSession, FunctionSchema, LLMResponse, ToolCall, UsageMetadata
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock, ToolResultBlock
 from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
 
@@ -69,14 +69,18 @@ def _enable_detached_fake_llm(agent, monkeypatch, *, scenario: str | None = None
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(dict.fromkeys(parts)))
 
 
-class _CanonicalFakeSession:
+class _CanonicalFakeSession(ChatSession):
     def __init__(self, responses, *, system_prompt: str, interface: ChatInterface | None = None):
-        self.interface = interface or ChatInterface()
+        self._interface = interface or ChatInterface()
         if interface is None:
-            self.interface.add_system(system_prompt)
+            self._interface.add_system(system_prompt)
         self._responses = list(responses)
         self.sent_messages = []
         self.request_snapshots = []
+
+    @property
+    def interface(self) -> ChatInterface:
+        return self._interface
 
     def send(self, message):
         self.sent_messages.append(message)
@@ -538,6 +542,110 @@ def test_compact_is_auto_present_on_lingtai_surfaces(tmp_path):
     assert [s.name for s in default_schemas].count("compact") == 1
     assert [s.name for s in explicit_schemas].count("compact") == 1
     assert [s.name for s in preset_schemas].count("compact") == 1
+
+
+def test_compact_schema_requires_explicit_run_or_manual_action(tmp_path):
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    schema = next(s for s in mgr._build_tool_surface([])[0] if s.name == "compact")
+
+    assert schema.parameters["properties"]["action"]["enum"] == ["run", "manual"]
+    assert schema.parameters["required"] == ["action"]
+    run_branch, manual_branch = schema.parameters["anyOf"]
+    assert run_branch["properties"]["action"]["const"] == "run"
+    assert run_branch["required"] == ["_reason"]
+    assert manual_branch["properties"]["action"]["const"] == "manual"
+    assert "read-only" in schema.description
+    assert "Action is required" in schema.description
+    assert "default" not in schema.parameters["properties"]["action"]["description"]
+
+
+def test_daemon_agent_meta_is_local_and_warning_tracks_current_usage(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["daemon"])
+    responses = [
+        LLMResponse(
+            tool_calls=[ToolCall(name="compact", args={"action": "manual"}, id="manual-1")],
+            usage=UsageMetadata(input_tokens=89, output_tokens=1),
+        ),
+        LLMResponse(
+            tool_calls=[ToolCall(name="compact", args={"action": "manual"}, id="manual-2")],
+            usage=UsageMetadata(input_tokens=90, output_tokens=1),
+        ),
+        LLMResponse(
+            tool_calls=[ToolCall(name="compact", args={"action": "manual"}, id="manual-3")],
+            usage=UsageMetadata(input_tokens=95, output_tokens=1),
+        ),
+        LLMResponse(
+            tool_calls=[ToolCall(name="compact", args={"action": "manual"}, id="manual-4")],
+        ),
+        LLMResponse(text="done", usage=UsageMetadata(input_tokens=21, output_tokens=1)),
+    ]
+    service = _CanonicalFakeService([responses])
+    original_create_session = service.create_session
+
+    def create_session_with_window(**kwargs):
+        session = original_create_session(**kwargs)
+        session.context_window = lambda: 100
+        session.interface.estimate_context_tokens = lambda: 20
+        return session
+
+    service.create_session = create_session_with_window
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    mgr = agent.get_capability("daemon")
+    em_id = "em-meta"
+    run_dir = _make_run_dir(agent, em_id=em_id, task="task")
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    assert mgr._run_emanation(
+        em_id, run_dir, *mgr._build_tool_surface([]), "task", threading.Event()
+    ) == "done"
+    assert len(service.sessions) == 1, "manual action must not compact/reset the session"
+
+    snapshots = service.sessions[0].request_snapshots
+    first_meta = snapshots[1][-1]["content"][0]["metadata"]["agent_meta"]
+    second_result = snapshots[2][-1]["content"][0]
+    second_meta = second_result["metadata"]["agent_meta"]
+    third_meta = snapshots[3][-1]["content"][0]["metadata"]["agent_meta"]
+    fourth_meta = snapshots[4][-1]["content"][0]["metadata"]["agent_meta"]
+    assert "notifications" not in first_meta
+    assert "guidance" not in first_meta
+    assert "warning" not in first_meta["agent_state"]["context"]
+    assert second_meta["agent_state"]["context"]["context_usage"] == 0.9
+    assert second_meta["agent_state"]["context"]["warning"] == (
+        "context warning, consider compact! see compact.manual for procedures"
+    )
+    assert third_meta["agent_state"]["context"]["warning"] == second_meta["agent_state"]["context"]["warning"]
+    assert fourth_meta["agent_state"]["context"]["context_usage"] == 0.2
+    assert fourth_meta["agent_state"]["token_usage"]["current_call"]["input"] == 0
+    assert "warning" not in fourth_meta["agent_state"]["context"]
+    assert second_meta["agent_state"]["token_usage"]["current_call"]["input"] == 90
+    assert second_result["content"]["action"] == "manual"
+    assert second_result["content"]["read_only"] is True
+
+    # Exercise canonical finalization and provider projection against real
+    # ToolResultBlocks, not only the ChatInterface snapshots.
+    from lingtai.kernel.meta_block import finalize_two_axis_sidecars
+    from lingtai.llm.interface_converters import _project_tool_result
+    blocks = [
+        block
+        for entry in service.sessions[0].interface.entries
+        for block in entry.content
+        if isinstance(block, ToolResultBlock)
+    ]
+    finalize_two_axis_sidecars([blocks[-1]])
+    projected_high = _project_tool_result(blocks[-2])
+    projected_low = _project_tool_result(blocks[-1])
+    assert projected_high["_meta"]["agent_meta"]["agent_state"]["context"]["warning"] == (
+        "context warning, consider compact! see compact.manual for procedures"
+    )
+    assert "warning" not in projected_low["_meta"]["agent_meta"]["agent_state"]["context"]
+    assert "notifications" not in projected_low["_meta"]["agent_meta"]
+    assert "guidance" not in projected_low["_meta"]["agent_meta"]
 
 
 def test_build_tool_surface_preset_requires_explicit_email_tool(tmp_path):
@@ -1196,7 +1304,7 @@ def test_run_emanation_uses_prompt_as_first_user_without_task_duplication(tmp_pa
 
 def test_compact_blank_reason_does_not_reset_context(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["daemon"])
-    compact_call = ToolCall(name="compact", args={"_reason": "   "}, id="compact-blank")
+    compact_call = ToolCall(name="compact", args={"action": "run", "_reason": "   "}, id="compact-blank")
     service = _CanonicalFakeService([[
         _resp(tool_calls=[compact_call]),
         _resp("done after blank"),
@@ -1228,13 +1336,64 @@ def test_compact_blank_reason_does_not_reset_context(tmp_path, monkeypatch):
     assert "context was not reset" in result_content["message"]
 
 
+def test_compact_missing_action_is_refused_without_reset(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["daemon"])
+    compact_call = ToolCall(
+        name="compact",
+        args={"_reason": "handoff must not imply run"},
+        id="compact-missing-action",
+    )
+    service = _CanonicalFakeService([[
+        _resp(tool_calls=[compact_call]),
+        _resp("done after refusal"),
+    ]])
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    mgr = agent.get_capability("daemon")
+    em_id = "em-test"
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(
+        em_id, run_dir, *mgr._build_tool_surface([]),
+        "task", threading.Event(),
+    )
+
+    assert result == "done after refusal"
+    assert len(service.sessions) == 1
+    result_content = service.sessions[0].request_snapshots[1][-1]["content"][0]["content"]
+    assert result_content["status"] == "error"
+    assert "action is required" in result_content["message"]
+    assert "context was not reset" in result_content["message"]
+
+
 def test_compact_success_prunes_to_system_call_and_result(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["daemon"])
-    compact_call = ToolCall(name="compact", args={"_reason": "handoff: continue"}, id="compact-1")
+    compact_call = ToolCall(
+        name="compact",
+        args={"action": "run", "_reason": "handoff: continue"},
+        id="compact-1",
+    )
     service = _CanonicalFakeService([
-        [_resp(tool_calls=[compact_call])],
+        [LLMResponse(
+            tool_calls=[compact_call],
+            usage=UsageMetadata(input_tokens=90, output_tokens=1),
+        )],
         [_resp("done after compact")],
     ])
+    original_create_session = service.create_session
+
+    def create_session_with_window(**kwargs):
+        session = original_create_session(**kwargs)
+        session.context_window = lambda: 100
+        session.interface.estimate_context_tokens = lambda: 20
+        return session
+
+    service.create_session = create_session_with_window
     import lingtai.llm.service as service_mod
     monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
     mgr = agent.get_capability("daemon")
@@ -1259,12 +1418,17 @@ def test_compact_success_prunes_to_system_call_and_result(tmp_path, monkeypatch)
         "type": "tool_call",
         "id": "compact-1",
         "name": "compact",
-        "args": {"_reason": "handoff: continue"},
+        "args": {"action": "run", "_reason": "handoff: continue"},
     }
     result_block = retained_request[2]["content"][0]
     assert result_block["type"] == "tool_result"
     assert result_block["id"] == "compact-1"
     assert result_block["name"] == "compact"
+    result_meta = result_block["metadata"]["agent_meta"]
+    assert result_meta["agent_state"]["context"]["context_usage"] == 0.2
+    assert "warning" not in result_meta["agent_state"]["context"]
+    assert result_meta["agent_state"]["token_usage"]["current_call"]["input"] == 0
+    assert result_meta["agent_state"]["token_usage"]["session"]["input_tokens"] == 90
     payload = result_block["content"]
     assert payload["status"] == "success"
     assert "surviving compact call _reason" in payload["instruction"]
@@ -1287,8 +1451,8 @@ def test_compact_success_prunes_to_system_call_and_result(tmp_path, monkeypatch)
 
 def test_compact_is_repeatable_same_run(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["daemon"])
-    first = ToolCall(name="compact", args={"_reason": "first handoff"}, id="compact-1")
-    second = ToolCall(name="compact", args={"_reason": "second handoff"}, id="compact-2")
+    first = ToolCall(name="compact", args={"action": "run", "_reason": "first handoff"}, id="compact-1")
+    second = ToolCall(name="compact", args={"action": "run", "_reason": "second handoff"}, id="compact-2")
     service = _CanonicalFakeService([
         [_resp(tool_calls=[first])],
         [_resp(tool_calls=[second])],
@@ -1323,7 +1487,7 @@ def test_compact_mixed_batch_does_not_dispatch_siblings_and_pairs_all_calls(tmp_
     sibling_handler = MagicMock(return_value={"content": "should not run"})
     agent._tool_handlers["read"] = sibling_handler
     calls = [
-        ToolCall(name="compact", args={"_reason": "handoff"}, id="compact-mixed"),
+        ToolCall(name="compact", args={"action": "run", "_reason": "handoff"}, id="compact-mixed"),
         ToolCall(name="read", args={"file_path": "/tmp/x"}, id="read-mixed"),
     ]
     service = _CanonicalFakeService([[

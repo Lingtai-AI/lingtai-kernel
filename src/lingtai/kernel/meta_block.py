@@ -35,6 +35,10 @@ Channel encoding:
   prefix line. Inbox content is NOT rendered here — it lives in the
   user-turn body, drained by ``_concat_queued_messages`` upstream.
 
+Daemon sessions use ``attach_daemon_agent_meta`` for the same canonical envelope
+and latest-snapshot rule, but supply only daemon-local runtime/token/context state;
+parent notification and communication state is never projected into a daemon.
+
 As of 2026-05-02, the meta block no longer carries inbox-drained
 notifications. System-source notifications (mail arrival, bounce, future
 MCP events) are now delivered as synthetic notification(action="check")
@@ -3201,6 +3205,48 @@ def attach_active_runtime(
     return target_block
 
 
+def attach_daemon_agent_meta(
+    tool_results: list,
+    *,
+    agent_state: Mapping[str, Any] | None = None,
+) -> object | None:
+    """Attach a daemon's current ``agent_meta`` snapshot to its final result.
+
+    Daemon sessions deliberately do not have the parent ``BaseAgent``'s
+    notification/communication state, so they cannot use
+    :func:`attach_active_runtime` directly.  This small projector nevertheless
+    keeps the canonical envelope, instruction, and final-carrier/latest-snapshot
+    semantics in one place.  It does not manufacture a guidance reference because
+    daemon prompts do not contain the main agent's resident ``meta_guidance``
+    section.  The supplied ``agent_state`` is daemon-local runtime/token/context
+    state; if omitted, the
+    private ``_agent_pending`` capture staged by ``ToolExecutor`` is promoted.
+    Older result blocks remain historical and the newest final result is the
+    only current ``agent_meta`` carrier.
+    """
+    target = _final_tool_result_block(tool_results)
+    pending_state = None
+    for block in tool_results:
+        if not _is_tool_result_block(block):
+            continue
+        candidate = getattr(block, "_agent_pending", None)
+        if block is target and isinstance(candidate, dict):
+            raw_state = candidate.get("agent_state")
+            if isinstance(raw_state, dict):
+                pending_state = raw_state
+        block._agent_pending = None
+    if target is None:
+        return None
+    state = agent_state if isinstance(agent_state, Mapping) else pending_state
+    if not isinstance(state, Mapping):
+        return target
+    target.metadata[AGENT_META_KEY] = {
+        "instruction": AGENT_META_INSTRUCTION,
+        "agent_state": _copy.deepcopy(dict(state)),
+    }
+    return target
+
+
 def finalize_two_axis_sidecars(tool_results: list) -> None:
     """Move boundary metadata into the canonical two-axis ToolResultBlock sidecar.
 
@@ -3219,12 +3265,20 @@ def finalize_two_axis_sidecars(tool_results: list) -> None:
         agent = metadata.get(AGENT_META_KEY)
         if isinstance(agent, dict):
             agent["instruction"] = AGENT_META_INSTRUCTION
-            metadata[AGENT_META_KEY] = {
+            agent_state = agent.get("agent_state", {})
+            normalized_agent = {
                 "instruction": agent["instruction"],
-                "agent_state": agent.get("agent_state", {}),
-                "notifications": agent.get("notifications", {}),
-                "guidance": agent.get("guidance", {}),
+                "agent_state": agent_state,
             }
+            daemon_local_state = (
+                isinstance(agent_state, dict)
+                and isinstance(agent_state.get("daemon"), dict)
+            )
+            if not daemon_local_state or "notifications" in agent:
+                normalized_agent["notifications"] = agent.get("notifications", {})
+            if not daemon_local_state or "guidance" in agent:
+                normalized_agent["guidance"] = agent.get("guidance", {})
+            metadata[AGENT_META_KEY] = normalized_agent
         # No private transport or obsolete root siblings can reach adapters.
         for key in list(metadata):
             if key not in {TOOL_META_KEY, AGENT_META_KEY}:

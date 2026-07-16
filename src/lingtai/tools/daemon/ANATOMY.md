@@ -3,6 +3,8 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/daemon/CONTRACT.md
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/kernel/meta_block.py
+  - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/process_port.py
   - src/lingtai/tools/daemon/interactive_terminal/__init__.py
   - src/lingtai/tools/daemon/interactive_terminal/CONTRACT.md
@@ -93,8 +95,9 @@ polling.
 
 ## Components
 
-- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; the core class is `DaemonManager`, which manages the full emanation lifecycle and parent-stop cleanup. Key internals: `_ToolCollector` (`daemon/__init__.py:743`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:65`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and `knowledge`; `_parent_host_tool_floor()` (`daemon/__init__.py:76`) derives the NARROW set of always-on host tools a preset emanation may borrow from the parent — exactly `shell` + the file group (read/write/edit/glob/grep), derived from `CORE_DEFAULTS − EMANATION_BLACKLIST − {mcp}`; optional/provider parent tools (`vision`, `web_search`) are deliberately excluded so a preset that omits/fails a provider cap does not silently fall back to the parent; `_reconcile_terminal_notifications()` (`daemon/__init__.py:1116-1151`) retries terminal run dirs whose published receipt is missing, after stale-parent reaping; `_write_kimicode_mcp_config()` (`daemon/__init__.py:309-337`) writes the run-private Kimi `mcp.json` for stdio and HTTP registrations; `_daemon_intrinsic_surface()` (`daemon/__init__.py:1207`) is the narrow daemon intrinsic bridge for explicitly requested `email` plus the automatic LingTai `compact` schema; `_task_mcp_registrations()` (`daemon/__init__.py:1296`) validates full per-task MCP registrations and renders prompt-safe YAML; `_daemon_common_mcp_registration()` / `_read_daemon_completion()` (`daemon/__init__.py:1390` / `daemon/__init__.py:1460`) add and validate the built-in completion MCP; `_connect_task_mcp_registrations()` (`daemon/__init__.py:1550`) starts task-scoped MCP clients for the LingTai backend; `_daemon_provider_defaults()` (`daemon/__init__.py:1695`) preserves the parent/preset provider defaults for every provider and adds the per-run `daemon.json` cache anchor only for Codex; `_build_tool_surface()` (`daemon/__init__.py:1786`) automatically includes `compact`, includes only task-scoped MCP tools rather than auto-inheriting parent MCP tools, and — for preset-driven emanations — preserves the parent's narrow host tool floor (`_parent_host_tool_floor()`: shell + file primitives) that saved presets omit from `manifest.capabilities`, so requested host tools valid in the parent set are not rejected as unknown (resolution is preset-first, then intrinsics/MCP, then parent host fill-in); `_run_emanation()` (`daemon/__init__.py:2074`) is the LingTai-backend worker loop that builds a fresh daemon-scoped service for every no-preset run instead of reusing the parent service, sends LingTai `prompt` (or its exact default) as the first ordinary user message, performs sole-call provider-independent `compact` resets while retaining the exact call/result pair, and enforces `finish(done)` before `mark_done`.
+- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; the core class is `DaemonManager`, which manages the full emanation lifecycle and parent-stop cleanup. Key internals: `_ToolCollector` (`daemon/__init__.py:743`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:65`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and `knowledge`; `_parent_host_tool_floor()` (`daemon/__init__.py:76`) derives the NARROW set of always-on host tools a preset emanation may borrow from the parent — exactly `shell` + the file group (read/write/edit/glob/grep), derived from `CORE_DEFAULTS − EMANATION_BLACKLIST − {mcp}`; optional/provider parent tools (`vision`, `web_search`) are deliberately excluded so a preset that omits/fails a provider cap does not silently fall back to the parent; `_reconcile_terminal_notifications()` (`daemon/__init__.py:1116-1151`) retries terminal run dirs whose published receipt is missing, after stale-parent reaping; `_write_kimicode_mcp_config()` (`daemon/__init__.py:309-337`) writes the run-private Kimi `mcp.json` for stdio and HTTP registrations; `_daemon_intrinsic_surface()` (`daemon/__init__.py:1207`) is the narrow daemon intrinsic bridge for explicitly requested `email` plus the automatic LingTai `compact` schema; `_task_mcp_registrations()` (`daemon/__init__.py:1296`) validates full per-task MCP registrations and renders prompt-safe YAML; `_daemon_common_mcp_registration()` / `_read_daemon_completion()` (`daemon/__init__.py:1390` / `daemon/__init__.py:1460`) add and validate the built-in completion MCP; `_connect_task_mcp_registrations()` (`daemon/__init__.py:1550`) starts task-scoped MCP clients for the LingTai backend; `_daemon_provider_defaults()` (`daemon/__init__.py:1695`) preserves the parent/preset provider defaults for every provider and adds the per-run `daemon.json` cache anchor only for Codex; `_build_tool_surface()` (`daemon/__init__.py:1786`) automatically includes `compact`, includes only task-scoped MCP tools rather than auto-inheriting parent MCP tools, and — for preset-driven emanations — preserves the parent's narrow host tool floor (`_parent_host_tool_floor()`: shell + file primitives) that saved presets omit from `manifest.capabilities`, so requested host tools valid in the parent set are not rejected as unknown (resolution is preset-first, then intrinsics/MCP, then parent host fill-in); `_run_emanation()` (`daemon/__init__.py:2074`) is the LingTai-backend worker loop that builds a fresh daemon-scoped service for every no-preset run instead of reusing the parent service, sends LingTai `prompt` (or its exact default) as the first ordinary user message, projects daemon-local runtime/token/context state through `meta_block.attach_daemon_agent_meta` without parent notifications, emits the exact compact warning on every round whose current context usage is at or above 90%, performs sole-call provider-independent `compact` resets while retaining the exact call/result pair, and enforces `finish(done)` before `mark_done`.
 
+- `kernel/meta_block.py` — canonical `_meta` envelope/projector. `attach_daemon_agent_meta` carries only the instruction plus daemon-local `agent_state` onto the newest final `ToolResultBlock`; parent notification/communication state is not projected, and no main-agent resident-guidance reference is invented.
 - `daemon/claude_interactive.py` — interactive Claude Code daemon backend. **Hidden / not user-selectable:** `claude` / `claude-interactive` were removed from the `get_schema()` `backend` enum and description (`daemon/__init__.py:889-904`); the code path stays only so older callers and stored daemon entries with `backend="claude"` still resolve through `_normalize_backend`/dispatch. New work uses print-mode `claude-p`. This retained PTY bridge is POSIX-only;
 Windows headless composition never selects it, and native interactive support
 remains deferred until ConPTY has its own accepted adapter. `ClaudeInteractiveBridge` (`daemon/claude_interactive.py:103`) accepts only the persistent Port injected by runtime composition; it never constructs a private adapter and rejects missing injection before managed-workspace, harness, or spawn work. It runs normal interactive `claude` under a PTY from a LingTai-managed workspace, writes the managed system prompt (`daemon/claude_interactive.py:80-96`), prepares empty or explicit-source detached worktrees (`daemon/claude_interactive.py:250-309`), answers terminal probes, injects `SessionStart`/`Stop` hooks via inline `--settings`, relays hook payloads through a FIFO, auto-selects workspace trust only inside the verified managed root (`daemon/claude_interactive.py:535-559`), and parses Claude transcript JSONL into daemon progress/result state.
@@ -143,6 +146,14 @@ The `daemon` tool exposes five actions:
 | `check`    | Read-only progress tail: `daemon.json` state + last N events from `events.jsonl` + a compact `artifacts` block (the run's artifact manifest — relative path/size/mtime/role per important file, plus run-level state/result_path/error_path). On in-memory registry miss (e.g. after refresh/molt) falls back to the durable `daemons/*/` run dirs, resolving by full `run_id` (exact) or short `handle` (most-recent, with ambiguity flagged) |
 | `list`     | Progressive-disclosure index: active registry + historical run dirs; lazily rebuilds missing/invalid/stale-version `daemon.json` and returns prompt/result previews with search filters |
 | `reclaim`  | Cancel all running emanations, shut down CLI process groups/thread pools through the same runtime-shutdown helper used by agent stop, reset ID counter |
+
+Every LingTai worker also receives the intrinsic `compact` tool. Its `action`
+is required: explicit `action="manual"` is read-only, explicit `action="run"`
+with `_reason` is a repeatable non-terminal sole-call reset, and omission is
+refused. The surviving successful reset result is stamped from the fresh retained
+context. The final ToolResultBlock of each daemon tool batch carries daemon-local
+`_meta.agent_meta`; the parent notification/communication
+axis is not inherited.
 
 ## Internal Module Layout
 
@@ -235,10 +246,14 @@ daemon/runtime.py
 ## Two-axis `_meta` boundary
 
 Daemon handlers are unchanged and their results use the canonical
-`ToolResultBlock.metadata` sidecar. Daemon execution receives universal
-per-execution `tool_meta` only; parent agent/session/token/context state is not
-shared. Provider converters project the sidecar for both dictionary and string
-results without requiring handler wrappers.
+`ToolResultBlock.metadata` sidecar. The daemon loop projects a daemon-local
+`agent_meta.agent_state` (runtime identity, token counters, context usage, and
+post-90% warning) onto the newest final result through
+`kernel/meta_block.attach_daemon_agent_meta`; older snapshots remain historical.
+Parent agent/session and notification/communication state is not shared or
+injected. `llm/interface_converters.py` projects the sidecar for both dictionary
+and string results without requiring handler wrappers and preserves the daemon's
+intentional omission of the parent notification axis.
 
 ## Dependencies
 
