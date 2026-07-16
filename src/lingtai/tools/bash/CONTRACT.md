@@ -214,9 +214,12 @@ schema/semantic validation, not cryptographic integrity for user-rewritable
 durable state.
 
 The registered description is setup-time metadata and always includes
-`Active shell dialect: posix` or `Active shell dialect: powershell`. The call
-schema has no writable dialect argument, so a call cannot claim a different
-language from the injected adapter. On Windows the selector requires PowerShell
+`Active shell dialect: posix` or `Active shell dialect: powershell`, plus a
+human-readable `Host OS: <name and version>` derived from the host platform
+(macOS product version, Linux `os-release`, Windows release/version, or an
+explicit system/kernel fallback). The call schema has no writable dialect or
+host-OS argument, so a call cannot claim a different environment from the
+injected adapter and host. On Windows the selector requires PowerShell
 7 `pwsh`, uses argv form with `-NoProfile` and `-NonInteractive`, and selects
 native Job Object and cross-process state-lock adapters. A legacy durable record
 with neither dialect nor invocation remains readable evidence but is explicitly

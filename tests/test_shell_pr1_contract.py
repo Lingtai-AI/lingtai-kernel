@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import lingtai.adapters.shell as shell_adapter
 from lingtai.adapters.windows.powershell import PowerShellDialect
 from lingtai.adapters.windows.powershell_process import _Owned, WindowsShellAsyncProcessAdapter
 from lingtai.tools.bash import ShellManager, ShellPolicy, setup
@@ -46,7 +47,29 @@ def test_setup_registers_shell_and_advertises_selected_dialect(tmp_path):
     description = agent.add_tool.call_args.kwargs["description"]
     expected_dialect = "powershell" if os.name == "nt" else "posix"
     assert f"Active shell dialect: {expected_dialect}" in description
-    assert "dialect" not in agent.add_tool.call_args.kwargs["schema"]["properties"]
+    assert f"Host OS: {shell_adapter.describe_host_os()}" in description
+    properties = agent.add_tool.call_args.kwargs["schema"]["properties"]
+    assert "dialect" not in properties
+    assert "host_os" not in properties
+
+
+def test_host_os_description_uses_human_readable_versions(monkeypatch):
+    monkeypatch.setattr(shell_adapter.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(shell_adapter.platform, "mac_ver", lambda: ("15.5", ("", "", ""), ""))
+    assert shell_adapter.describe_host_os() == "macOS 15.5"
+
+    monkeypatch.setattr(shell_adapter.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(
+        shell_adapter.platform,
+        "freedesktop_os_release",
+        lambda: {"PRETTY_NAME": "Ubuntu 24.04 LTS"},
+    )
+    assert shell_adapter.describe_host_os() == "Ubuntu 24.04 LTS"
+
+    monkeypatch.setattr(shell_adapter.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(shell_adapter.platform, "release", lambda: "11")
+    monkeypatch.setattr(shell_adapter.platform, "version", lambda: "10.0.26100")
+    assert shell_adapter.describe_host_os() == "Windows 11 (10.0.26100)"
 
 
 def test_powershell_invocation_and_extractor_are_not_posix():

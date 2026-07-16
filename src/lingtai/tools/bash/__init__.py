@@ -64,6 +64,13 @@ def _select_shell_dialect() -> ShellDialect:
     return select_shell_dialect()
 
 
+def _describe_host_os() -> str:
+    """Load setup-time host metadata from the outer composition layer."""
+    from lingtai.adapters.shell import describe_host_os
+
+    return describe_host_os()
+
+
 def _select_shell_async_process() -> BashAsyncProcessPort:
     """Load the canonical process selector lazily."""
     from lingtai.adapters.shell_process import select_shell_async_process
@@ -216,9 +223,14 @@ def _augment_command_result(result: dict) -> dict:
     result["warning"] = "; ".join(parts)
     return result
 
-def get_description(lang: str = "en", dialect: str = "posix") -> str:
-    return (f"Execute a shell command and return stdout/stderr. Active shell dialect: {dialect}. "
-            "The dialect is selected at setup time; calls cannot choose it. Any system program — scripts, git, curl, pip, data pipelines. "
+def get_description(
+    lang: str = "en",
+    dialect: str = "posix",
+    host_os: str | None = None,
+) -> str:
+    host = f" Host OS: {host_os}." if host_os else ""
+    return (f"Execute a shell command and return stdout/stderr. Active shell dialect: {dialect}.{host} "
+            "The dialect and host OS are detected at setup time; calls cannot choose them. Any system program — scripts, git, curl, pip, data pipelines. "
             "Returns exit_code, stdout, stderr, plus ok (bool) and command_status ('success'/'failed'). IMPORTANT: top-level status stays 'ok' even when the command FAILS — it only means the shell ran. "
             "Always check exit_code/ok and read the warning field (it names nonzero exits, Python tracebacks, and missing modules); never assume success from status alone. "
             "Avoid broad recursive scans (find … -name, rglob, os.walk, glob('**')) — they time out; prefer `rg --files`. Parse JSONL line-by-line, not as one JSON blob. "
@@ -1514,8 +1526,8 @@ def setup(
         agent=agent,
         dialect=dialect,
     )
-    # Description is setup-time metadata derived from the injected adapter.
-    desc = get_description(dialect=dialect.state_key())
+    # Description is setup-time metadata derived from the injected adapter and host.
+    desc = get_description(dialect=dialect.state_key(), host_os=_describe_host_os())
     policy_summary = policy.describe()
     if policy_summary:
         desc = f"{desc}\n\n{policy_summary}"
