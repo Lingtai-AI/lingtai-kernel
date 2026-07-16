@@ -335,7 +335,6 @@ class DetachedDaemonExecutionHost:
 
     def _build_lingtai_surface(self) -> tuple[list[FunctionSchema], dict]:
         manager = self._manager_type
-        from lingtai.tools.daemon import _self_compact_supported
         requested = list(self._manifest.get("tools") or [])
         preset_surface = None
         caps = self._manifest.get("preset_capabilities")
@@ -369,11 +368,6 @@ class DetachedDaemonExecutionHost:
         return manager._build_tool_surface(
             self, requested, preset_surface=preset_surface,
             mcp_surface=(mcp_schemas, mcp_handlers),
-            self_compact_supported=(
-                _self_compact_supported(
-                    preset_llm.get("provider"), preset_llm,
-                )
-            ),
         )
 
     def _rehydrate_native_mcp_files(self) -> None:
@@ -424,6 +418,9 @@ class DetachedDaemonExecutionHost:
         runtime_task = self._capsule.get("task")
         if isinstance(runtime_task, str):
             self._manifest = dict(self._manifest, task=runtime_task)
+        runtime_prompt = self._capsule.get("prompt")
+        if runtime_prompt is None or isinstance(runtime_prompt, str):
+            self._manifest = dict(self._manifest, prompt=runtime_prompt)
         runtime_mcp = self._capsule.get("mcp")
         if isinstance(runtime_mcp, list):
             # The public manifest intentionally contains redacted env/header
@@ -472,6 +469,7 @@ class DetachedDaemonExecutionHost:
                     self._max_turns,
                     self._task_mcp_clients,
                     self._manifest.get("context_token_limit"),
+                    prompt=self._manifest.get("prompt"),
                 )
             finally:
                 self._task_mcp_clients = []

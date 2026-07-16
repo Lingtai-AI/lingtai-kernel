@@ -96,18 +96,17 @@ files, not standalone top-level skills.
   stretching daemon.
 - Think of each task item as **task objective + behavior guidance + tool
   surface**:
-  - `task` answers **what to do**: concrete objective, inputs, expected output,
-    destination path, and verification checklist. Keep it task-shaped.
-  - `system_prompt` answers **how this daemon should behave while doing it**:
-    the parent's one-run role, constraints, safety posture, interpretation
-    rules, collaboration boundaries, and tool-use policy. Omit it or leave it
-    blank for the default daemon persona. It can guide or narrow behavior, but
-    cannot override lifecycle limits, available tool schema, selected skills,
-    or the ToolExecutor/ToolCallGuard execution gates.
+  - `task` is the complete parent-controlled daemon system instruction:
+    objective, role, constraints, safety posture, collaboration boundaries, and
+    tool-use policy. The removed `system_prompt` field has no alias; migrate its
+    complete contents into `task`.
+  - `prompt` is optional and LingTai-only. It is the first ordinary user message,
+    trimmed, or exactly `Begin the assigned daemon task.` when omitted/blank.
+    External CLI backends reject it and keep `task` as their CLI prompt.
   - `tools` answers **what the daemon can technically use** for this run. The
-    parent still uses `system_prompt` to say when and how those tools should be
-    used (for example: read-only file access, no network, write only to one
-    report path, or ask a named peer before guessing). `email` is
+    parent puts the complete operating contract in `task`: when and how those
+    tools should be used, for example read-only file access, no network, write
+    only to one report path, or ask a named peer before guessing. `email` is
     daemon-eligible communication, but it is not granted by default; include
     `tools: ["email"]` only when the daemon should be able to use internal mail.
     Other tool names still matter for file/shell/web/etc. access.
@@ -116,7 +115,7 @@ files, not standalone top-level skills.
     containing `SKILL.md` or a direct `SKILL.md` path; relative paths resolve
     against the parent agent working directory. The runtime parses each skill's
     frontmatter and injects a compact YAML skill list into the daemon prompt.
-    Use `system_prompt` to say when/how those selected skills should be applied.
+    Use `task` to say when/how those selected skills should be applied.
   - `mcp` answers **which one-run MCP registrations belong to this daemon**. It
     is optional and is an array of full MCP registration objects: `name` plus
     `transport`/`type` (`stdio` or `http`), then `command`/`args`/`env` for
@@ -154,16 +153,13 @@ files, not standalone top-level skills.
   - `backend_options`: raw CLI flags for CLI backends only.
 - `context_token_limit`: optional context-token compaction threshold (rendered/provider-context tokens, not cumulative spend). Effective only for `backend="lingtai"` tasks whose resolved provider is Codex (`codex`/`codex-pool`) or the native `mimo` LLM provider (`manifest.llm.provider="mimo"` — NOT the `backend` enum's `mimo`/`mimocode` alias, which drives the external `mimo` CLI as a subprocess and never consults this field at all); every other provider and every external CLI backend ignores it. When the session's provider-visible input-token count reaches the limit, the runtime compacts provider context via that provider's standalone compaction (`POST /responses/compact`) and continues the same tool loop — the daemon keeps running; nothing restarts or drops history. Native `mimo` defaults to the stateless OpenAI Responses wire (full-history/raw-output-item replay; never `store`/`previous_response_id`/`conversation`/generic `context_management` — MiMo's Responses API marks those incompatible); an explicit `wire_api="chat_completions"` on the preset still selects the Chat Completions escape hatch instead. **Failure policy differs by provider:** a standalone-compaction failure is non-fatal for Codex (that turn's compaction is skipped; the loop continues on full history) but a HARD failure for native `mimo` (it propagates to the caller — never silently continuing on full history and never falling back to a different wire), because MiMo has no generic `context_management` fallback and no server-side state to lean on. Omit to inherit the parent service's resolved context window as the threshold. Must be a positive integer; a boolean is rejected.
 
-- `compact`: optional no-argument daemon self-tool. Add `"compact"` to a
-  LingTai task's `tools` only when its resolved provider is native Codex
-  (`codex`/`codex-pool`) or native MiMo. It immediately asks that same running
-  session to install a standalone compacted replay basis before the next
-  provider request; it does not restart the daemon or change parent history.
-  The result is `success` when applied and `unsupported` when there is no safe
-  new boundary. Codex provider failures return `failure`; MiMo provider
-  failures remain hard failures. The tool is not available to other providers
-  or external CLI backends.
-- Treat `system_prompt` as the parent's behavioral contract for **all** tools
+- `compact`: automatic for every LingTai daemon and absent from external CLI
+  backends. Call it as the sole tool call in a batch with only `_reason`, a
+  non-empty complete self-contained handoff. All previous provider-visible
+  history is removed; only the compact assistant call/result pair and rebuilt
+  system prompt survive. The result includes exact run/state/history/event
+  paths. It is repeatable and non-terminal.
+- Treat `task` as the parent's behavioral contract for **all** tools
   and selected skills/MCP context, not only for communication. If a daemon receives `shell`,
   say whether it may run mutating commands; if it receives file access, say what
   it may read/write; if it receives web/MCP tools, say what external calls are
@@ -173,7 +169,7 @@ files, not standalone top-level skills.
   when a daemon truly needs to communicate in the local agent network: reporting
   to peers, asking a sibling for context, or handing off a result. Availability
   is not authorization to broadcast. The parent should specify communication
-  rules in `system_prompt`: allowed recipients, purpose, tone, thread/reply
+  rules in `task`: allowed recipients, purpose, tone, thread/reply
   discipline, information boundaries, whether the daemon may ask questions or
   only report, how to report back to the parent, and when not to send mail.
 - LingTai-backend daemon tool calls go through the kernel `ToolExecutor` /
@@ -251,13 +247,13 @@ files, not standalone top-level skills.
 
 ### Example: separate task from behavior guidance
 
-Use `task` for the deliverable and `system_prompt` for the daemon's operating
-contract:
+Put the deliverable and the daemon's operating contract together in `task`.
+Use `prompt` only when LingTai needs a custom first ordinary user message:
 
 ```json
 {
-  "task": "Audit the daemon manual changes and write a concise review to reports/daemon-manual-review.md.",
-  "system_prompt": "Act as a documentation reviewer. Stay read-only except for the requested report file. Use the selected daemon-manual skills only when you need exact daemon semantics. Use the local-docs MCP only for daemon documentation lookup, not for unrelated search. You may use email only to ask dev-2 for missing daemon context; do not contact the human. If you email dev-2, state the exact question, include only the relevant snippet, and summarize the exchange in your final report. Do not use web tools unless the local docs are insufficient.",
+  "task": "Act as a documentation reviewer. Stay read-only except for the requested report file. Use the selected daemon-manual skills only when you need exact daemon semantics. Use the local-docs MCP only for daemon documentation lookup, not for unrelated search. You may use email only to ask dev-2 for missing daemon context; do not contact the human. If you email dev-2, state the exact question, include only the relevant snippet, and summarize the exchange in your final report. Do not use web tools unless the local docs are insufficient. Deliverable: audit the daemon manual changes and write a concise review to reports/daemon-manual-review.md.",
+  "prompt": "Begin the documentation review.",
   "tools": ["file", "shell"],
   "mcp": [
     {"name": "local-docs", "transport": "stdio", "command": "python", "args": ["-m", "local_docs_mcp"]}
@@ -270,7 +266,7 @@ contract:
 ```
 
 The same pattern applies to non-email tools: `tools` grants a capability surface;
-`skills` grants a selected workflow catalog; `mcp` grants one-run MCP registrations (serialized for all backends and mounted only where the backend has a native MCP path); `system_prompt` tells the daemon how to
+`skills` grants a selected workflow catalog; `mcp` grants one-run MCP registrations (serialized for all backends and mounted only where the backend has a native MCP path); `task` tells the daemon how to
 exercise all of them in this one run.
 
 ## Maintenance

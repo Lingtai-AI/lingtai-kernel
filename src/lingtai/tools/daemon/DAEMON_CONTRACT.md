@@ -72,7 +72,7 @@ same selected-skill discovery semantics, one-run MCP registration semantics,
 completion signaling, backend support honesty, and reviewable artifact boundary.
 
 The public daemon task object is still the carrier for `skills`, `mcp`,
-`system_prompt`, `tools`, `backend_options`, and backend routing
+`prompt` (LingTai only), `tools`, `backend_options`, and backend routing
 (`src/lingtai/tools/daemon/__init__.py:672-713`). This contract governs what
 each backend must do with those capabilities after routing.
 
@@ -237,7 +237,23 @@ window. If that event is dismissed or evicted before recovery records the
 receipt, startup may safely republish: the contract is at-least-once delivery
 without false durable success.
 
-### 7. Per-task `context_token_limit` is a Codex/native-mimo-only, lingtai-backend-only capability
+### 7. LingTai task mapping and self-compact are separate from provider compaction
+
+`task` is the complete parent-controlled daemon system instruction. Optional
+`prompt` is only LingTai's first ordinary user message, defaulting exactly to
+`Begin the assigned daemon task.`; it is never appended to the system task or
+sent to external CLI backends. `system_prompt` is removed with no alias: callers
+must migrate the complete instruction into `task`, and preflight rejects the
+obsolete field before a run directory is created.
+
+Every LingTai daemon receives `compact` automatically, independent of provider.
+Its only argument is the canonical `_reason`, which must be a non-empty string
+and is the complete self-contained handoff. The sole compact call/result pair
+survives a same-run provider-context reset beside the rebuilt system prompt;
+the result contains status, resume instruction, and exact run/state/history/event
+paths. It is repeatable and non-terminal. External CLI backends never receive it.
+
+### 8. Per-task `context_token_limit` is a Codex/native-mimo-only, lingtai-backend-only capability
 
 The daemon task object also carries an optional per-task `context_token_limit`
 (positive integer; bool rejected) — a context-token compaction threshold,
@@ -287,15 +303,6 @@ invariants above:
   `src/lingtai/llm/mimo/ANATOMY.md` for that mechanism and the MiMo failure-
   policy divergence. This contract states only the daemon-task-object
   capability boundary above; it does not restate adapter internals.
-- A LingTai daemon task may explicitly request the no-argument `compact` tool
-  in its `tools` list. The tool is exposed only when the resolved provider is
-  native Codex (`codex`/`codex-pool`) or native MiMo; it invokes the same live
-  session's standalone compaction immediately, without restarting the daemon
-  or mutating parent state. It returns `success` when a new replay basis was
-  installed and `unsupported` when no safe/new turn boundary exists. Codex
-  provider failures return `failure` (matching its non-fatal automatic policy);
-  native MiMo preserves its hard-failure behavior. Other providers and all
-  external CLI backends do not receive this tool.
 
 ## Backend Support Matrix
 

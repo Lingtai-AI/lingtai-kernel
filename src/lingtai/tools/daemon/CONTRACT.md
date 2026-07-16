@@ -69,7 +69,7 @@ its process, materializes lingtai/tools/skills, or signals completion — that i
 
 Schema `required: ["action"]`. Relevant properties: `tasks[]` (each requires
 `task` + `tools`; optional `skills`, `mcp`, `preset`, `backend_options`,
-`system_prompt`, `context_token_limit`), `id`, `message`, `last`, `truncate`,
+`prompt`, `context_token_limit`), `id`, `message`, `last`, `truncate`,
 `contains`, `status`, `include_done`, `max_turns`, `timeout`, `backend`,
 `summary`.
 
@@ -96,17 +96,9 @@ lingtai-backend-only capability boundary and `src/lingtai/llm/openai/ANATOMY.md`
 Codex vs. native-MiMo Responses session mechanics and failure-policy
 divergence this threshold triggers.
 
-For a running LingTai daemon whose resolved provider is native Codex
-(`codex`/`codex-pool`) or native MiMo, `tools: ["compact"]` additionally grants
-a no-argument self-compact tool. It calls that daemon session's existing
-standalone compaction seam immediately and reports `success` or
-`unsupported`; Codex call failures report `failure`, while MiMo retains its
-hard-failure behavior. The tool is absent for other providers and external
-CLI backends.
-
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `skills`/`mcp`/`preset`/`backend_options`/`system_prompt`/`context_token_limit` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — `No tasks provided`, bad `max_turns`/`timeout`/`context_token_limit`, tool-surface/preset build failure |
+| `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `prompt` (LingTai only), `skills`/`mcp`/`preset`/`backend_options`/`context_token_limit` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — obsolete `system_prompt` migration, CLI `prompt`, bad limits, or tool-surface/preset failure |
 | `list` | — | `contains`, `status`, `include_done` (default true), `last` | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
 | `ask` | `id`, `message` | — | `{status: "sent", id, output}` (CLI ask returns immediately; `{status: "sent", id, async: true, ...}`) | `{status: "error", id, message}` — unknown/absent id, backend `ask` unsupported, or busy |
 | `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, events: [...]}` | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |

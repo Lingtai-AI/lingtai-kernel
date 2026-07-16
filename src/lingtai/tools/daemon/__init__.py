@@ -123,28 +123,6 @@ _DAEMON_COMPLETION_FILE = "daemon_completion.json"
 _DAEMON_CLAUDE_MCP_CONFIG_FILE = "claude-mcp-config.json"
 _DAEMON_COMPLETION_STATUSES = {"done", "failed", "incomplete"}
 _SOURCE_ROOT = Path(__file__).resolve().parents[3]
-_SELF_COMPACT_PROVIDERS = frozenset({"codex", "codex-pool", "mimo"})
-
-
-def _self_compact_supported(provider: str | None, llm: dict | None) -> bool:
-    """Whether the resolved LingTai session has the standalone seam."""
-    provider = str(provider or "").lower()
-    if provider not in _SELF_COMPACT_PROVIDERS:
-        return False
-    if provider != "mimo":
-        return True
-    llm = llm or {}
-    wire_api = llm.get("wire_api")
-    defaults = llm.get("_provider_defaults") or llm.get("provider_defaults") or {}
-    if isinstance(defaults, dict):
-        nested = defaults.get("mimo")
-        if isinstance(nested, dict):
-            wire_api = nested.get("wire_api", wire_api)
-        else:
-            wire_api = defaults.get("wire_api", wire_api)
-    return str(wire_api or "responses").lower() != "chat_completions"
-
-
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
 EMANATION_BLACKLIST = {
     "daemon",
@@ -899,7 +877,7 @@ def get_schema(lang: str = "en") -> dict:
                         "skills": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Optional skill context for this daemon task. Array of paths; each item may be a skill directory (containing SKILL.md) or a direct SKILL.md file path. Relative paths resolve against the parent agent working directory. The daemon runtime parses each skill frontmatter and injects a compact YAML skill list into this run's prompt; use system_prompt to say when/how to apply those skills.",
+                            "description": "Optional skill context for this daemon task. Array of paths; each item may be a skill directory (containing SKILL.md) or a direct SKILL.md file path. Relative paths resolve against the parent agent working directory. The daemon runtime parses each skill frontmatter and injects a compact YAML skill list into this run's system prompt.",
                         },
                         "mcp": {
                             "type": "array",
@@ -933,9 +911,9 @@ def get_schema(lang: str = "en") -> dict:
                             },
                             "description": 'Optional free-form CLI options for \'claude-code\' / \'codex\' / \'opencode\' / \'mimocode\' / \'qwen-code\' / \'oh-my-pi\' / \'kimicode\' / \'cursor\' backends ONLY (ignored by lingtai). JSON object mapping flag names to values: true → flag only (e.g. {"search": true} → --search); string/int/float → \'--flag <value>\'; list of scalars → \'--flag <v1> --flag <v2>\'; false/null omits the flag. Underscores in keys become dashes; nested objects and unsafe keys are rejected. Applies only when starting the emanation (not to `ask`). Discover supported flags by running \'claude --help\', \'codex exec --help\', \'opencode run --help\', \'mimo run --help\', \'qwen --help\', \'omp --help\', \'kimi --help\', or \'agent --help\' in bash — the CLI\'s flag list changes between versions; this field is intentionally a passthrough rather than a fixed list. See daemon-manual.',
                         },
-                        "system_prompt": {
+                        "prompt": {
                             "type": "string",
-                            "description": 'Optional oneshot behavior contract appended to this daemon task: role, constraints, tool-use policy, collaboration boundaries, and safety posture. Leave blank or omit it for the default daemon persona. It can guide how the daemon works, but cannot override tool availability, cancellation/timeout limits, or tool execution/approval guards.',
+                            "description": 'Optional first ordinary user message for a LingTai daemon. Blank or omitted uses exactly "Begin the assigned daemon task.". Unsupported by external CLI backends.',
                         },
                         "context_token_limit": {
                             "type": "integer",
@@ -1427,9 +1405,7 @@ class DaemonManager:
         else:
             return {"status": "error", "message": f"Unknown action: {action}"}
 
-    def _daemon_intrinsic_surface(
-        self, *, self_compact_supported: bool = False,
-    ) -> tuple[dict[str, FunctionSchema], dict]:
+    def _daemon_intrinsic_surface(self) -> tuple[dict[str, FunctionSchema], dict]:
         """Return daemon-eligible intrinsic schemas/handlers.
 
         Daemons do not inherit the whole intrinsic layer: identity/lifecycle and
@@ -1453,19 +1429,27 @@ class DaemonManager:
                 glossary_package=getattr(module, "__package__", None),
             )
             handlers[name] = self._agent._intrinsics[name]
-        if self_compact_supported:
-            schemas["compact"] = FunctionSchema(
-                name="compact",
-                description=(
-                    "Immediately compact this daemon's current provider context "
-                    "before its next model request. Takes no arguments."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
+        schemas["compact"] = FunctionSchema(
+            name="compact",
+            description=(
+                "Reset this LingTai daemon into a fresh provider context in the "
+                "same run. All previous conversation and tool history will be "
+                "removed; only this compact call/result pair survives. Call "
+                "this as the sole tool call in its assistant batch, and make "
+                "_reason the complete, self-contained handoff document."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "_reason": {
+                        "type": "string",
+                        "description": "Complete self-contained handoff and resume instruction; do not provide a path or rely on prior context.",
+                    },
                 },
-            )
+                "required": ["_reason"],
+                "additionalProperties": False,
+            },
+        )
         return schemas, handlers
 
     @staticmethod
@@ -1889,21 +1873,13 @@ class DaemonManager:
         return "\n\n".join(parts) or None
 
     @staticmethod
-    def _task_system_prompt(spec: dict) -> str | None:
-        """Return the task-level oneshot daemon prompt.
-
-        ``system_prompt`` is an optional one-run behavior contract from the
-        parent: role, constraints, tool-use policy, collaboration boundaries,
-        and safety posture. If present, it must be a string, but it may be
-        blank; a blank prompt means "no extra oneshot prompt" rather than a
-        validation error.
-        """
-        if "system_prompt" not in spec:
-            return None
-        value = spec.get("system_prompt")
+    def _task_first_prompt(spec: dict) -> str:
+        value = spec.get("prompt")
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "Begin the assigned daemon task."
         if not isinstance(value, str):
-            raise ValueError("system_prompt must be a string")
-        return value.strip() or None
+            raise ValueError("prompt must be a string")
+        return value.strip()
 
     @staticmethod
     def _compose_cli_task(
@@ -2051,7 +2027,6 @@ class DaemonManager:
         requested: list[str],
         preset_surface: tuple[dict, dict] | None = None,
         mcp_surface: tuple[dict[str, FunctionSchema], dict] | None = None,
-        self_compact_supported: bool = False,
     ) -> tuple[list[FunctionSchema], dict]:
         """Build filtered tool schemas and dispatch map for an emanation.
 
@@ -2074,10 +2049,13 @@ class DaemonManager:
         capability surface is used, again plus only task-scoped MCP tools.
         """
         tool_names = self._expand_requested_tools(requested)
+        # LingTai daemon self-compact is an always-available daemon runtime
+        # tool. It is not a parent capability, preset capability, MCP tool, or
+        # provider-native compaction feature, so make it automatic at this one
+        # LingTai surface owner instead of requiring public tools:["compact"].
+        tool_names.add("compact")
 
-        intrinsic_schemas, intrinsic_handlers = self._daemon_intrinsic_surface(
-            self_compact_supported=self_compact_supported,
-        )
+        intrinsic_schemas, intrinsic_handlers = self._daemon_intrinsic_surface()
         mcp_schemas, mcp_handlers = mcp_surface or ({}, {})
         parent_mcp_names = self._parent_mcp_tool_names()
         reserved_names = ({s.name for s in self._agent._tool_schemas} - parent_mcp_names) | set(intrinsic_schemas)
@@ -2345,6 +2323,7 @@ class DaemonManager:
         group_id: str | None,
         effective_llm: dict,
         context_token_limit: int | None,
+        prompt: str,
         mcp: list[dict] | None = None,
         preset_name: str | None = None,
         preset_llm: dict | None = None,
@@ -2375,6 +2354,7 @@ class DaemonManager:
             parent_working_dir=str(self._agent._working_dir),
             run_dir=str(run_dir.path),
             task=task,
+            prompt=prompt,
             tools=list(tools),
             max_turns=max_turns,
             timeout_s=timeout_s,
@@ -2399,6 +2379,7 @@ class DaemonManager:
         )
         capsule = dict(secret_capsule or {})
         capsule.setdefault("task", task)
+        capsule.setdefault("prompt", prompt)
         capsule.setdefault("mcp", list(mcp or []))
         runtime_llm = {}
         # Resolve an explicit api_key_env reference in the parent while its
@@ -2469,7 +2450,8 @@ class DaemonManager:
                        preset_llm: dict | None = None,
                        max_turns: int | None = None,
                        mcp_clients: list[object] | None = None,
-                       context_token_limit: int | None = None) -> str:
+                       context_token_limit: int | None = None,
+                       prompt: str | None = None) -> str:
         """Run a single emanation's tool loop. Called in a worker thread.
 
         run_dir is the DaemonRunDir constructed in _handle_emanate. All
@@ -2552,19 +2534,33 @@ class DaemonManager:
             tracked=False,
         )
 
+        system_prompt = run_dir.prompt_path.read_text(encoding="utf-8")
+        compact_batch_allowed = False
+        compact_reset_accepted = False
+
         endpoint = getattr(service, "_base_url", None)
 
         if "compact" in {schema.name for schema in schemas}:
             dispatch = dict(dispatch)
 
             def _compact_daemon_context(_args: dict) -> dict:
-                request = getattr(session, "request_standalone_compaction", None)
-                if not callable(request):
-                    return {
-                        "status": "unsupported",
-                        "reason": "the active session has no standalone compaction",
-                    }
-                return {"status": request()}
+                nonlocal compact_reset_accepted
+                if not compact_batch_allowed:
+                    return {"status": "error", "message": "compact must be the only tool call in its batch"}
+                reason = _args.get("_reason")
+                if not isinstance(reason, str) or not reason.strip():
+                    return {"status": "error", "message": "_reason must be a non-empty string; context was not reset"}
+                compact_reset_accepted = True
+                return {
+                    "status": "success",
+                    "instruction": "The surviving compact call _reason is the complete handoff; resume execution from it after this context reset.",
+                    "recovery": {
+                        "run_directory": str(run_dir.path),
+                        "state": str(run_dir.daemon_json_path),
+                        "chat_history": str(run_dir.chat_path),
+                        "event_log": str(run_dir.events_path),
+                    },
+                }
 
             dispatch["compact"] = _compact_daemon_context
 
@@ -2626,8 +2622,9 @@ class DaemonManager:
             )
 
         try:
-            run_dir.record_user_send(task, kind="task")
-            response = session.send(task)
+            kickoff = prompt or "Begin the assigned daemon task."
+            run_dir.record_user_send(kickoff, kind="kickoff")
+            response = session.send(kickoff)
             _accum(response)
             # A detached watchdog may fire while a provider call is in flight.
             # Re-check before accepting the response so late provider return
@@ -2645,12 +2642,38 @@ class DaemonManager:
                 # Intermediate text is already persisted in chat_history via
                 # bump_turn(); do not inject daemon progress as parent requests.
 
-                executor.guard.record_calls(len(response.tool_calls))
-                tool_results, intercepted, intercept_text = executor.execute(
-                    response.tool_calls,
-                    api_call_id=getattr(response, "api_call_id", None),
+                has_compact_call = any(tc.name == "compact" for tc in response.tool_calls)
+                compact_batch_allowed = (
+                    len(response.tool_calls) == 1
+                    and response.tool_calls[0].name == "compact"
                 )
-                executor.guard.clear_progress_notice()
+                executor.guard.record_calls(len(response.tool_calls))
+                compact_reset_accepted = False
+                if has_compact_call and not compact_batch_allowed:
+                    result_payload = {
+                        "status": "error",
+                        "message": (
+                            "compact must be the only tool call in its assistant "
+                            "batch; no tools in this batch were executed"
+                        ),
+                    }
+                    tool_results = [
+                        service.make_tool_result(
+                            tc.name,
+                            dict(result_payload),
+                            tool_call_id=getattr(tc, "id", None),
+                        )
+                        for tc in response.tool_calls
+                    ]
+                    intercepted = False
+                    intercept_text = ""
+                    executor.guard.clear_progress_notice()
+                else:
+                    tool_results, intercepted, intercept_text = executor.execute(
+                        response.tool_calls,
+                        api_call_id=getattr(response, "api_call_id", None),
+                    )
+                    executor.guard.clear_progress_notice()
 
                 if intercepted:
                     # Preserve provider pairing by recording the synthesized tool
@@ -2669,7 +2692,33 @@ class DaemonManager:
                     json.dumps([str(r) for r in tool_results], ensure_ascii=False),
                     kind="tool_results",
                 )
-                response = session.send(tool_results)
+                if compact_batch_allowed and compact_reset_accepted:
+                    if cancel_event.is_set():
+                        return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                    from lingtai.kernel.llm.interface import ChatInterface
+                    history = session.interface.to_dict()
+                    compact_assistant = history[-1] if history else None
+                    if not (
+                        isinstance(compact_assistant, dict)
+                        and compact_assistant.get("role") == "assistant"
+                    ):
+                        raise RuntimeError("compact context reset requires an intact assistant compact call")
+                    system_entries = [e for e in history if e.get("role") == "system"]
+                    retained = ChatInterface.from_dict(
+                        ([system_entries[-1]] if system_entries else [])
+                        + [compact_assistant]
+                    )
+                    session = service.create_session(
+                        system_prompt=system_prompt,
+                        tools=schemas or None,
+                        model=effective_model,
+                        thinking="default",
+                        tracked=False,
+                        interface=retained,
+                    )
+                    response = session.send(tool_results)
+                else:
+                    response = session.send(tool_results)
                 _accum(response)
                 turns += 1
                 run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
@@ -3465,6 +3514,31 @@ class DaemonManager:
         if not tasks:
             return {"status": "error", "message": "No tasks provided"}
 
+        # Public task mapping is intentionally strict and happens before any
+        # preset work, run-dir creation, or scheduling.
+        for i, spec in enumerate(tasks):
+            if not isinstance(spec, dict):
+                return {"status": "error", "message": f"tasks[{i}] must be an object"}
+            if "system_prompt" in spec:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"tasks[{i}].system_prompt is obsolete; put the complete "
+                        "daemon system instruction (role, constraints, tool policy, "
+                        "collaboration boundaries, and safety posture) in task"
+                    ),
+                }
+            if backend != "lingtai" and "prompt" in spec:
+                return {
+                    "status": "error",
+                    "message": f"tasks[{i}].prompt is supported only for backend='lingtai'; external CLI tasks use task as their CLI prompt",
+                }
+            if "prompt" in spec:
+                try:
+                    self._task_first_prompt(spec)
+                except ValueError as exc:
+                    return {"status": "error", "message": f"tasks[{i}].prompt: {exc}"}
+
         # Per-batch limit overrides — capped at the manager's ceilings.
         # Author-set ceilings (self._max_turns, self._timeout) are the upper
         # bounds; the agent picks within them. None means "use ceiling".
@@ -3673,13 +3747,12 @@ class DaemonManager:
             task_mcp_clients: list[object] = []
             try:
                 task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
-                task_system_prompt = self._task_system_prompt(spec)
                 task_skill_catalog = self._task_skill_catalog(spec)
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
                 return {"status": "error", "message": str(e)}
             task_context = self._combine_oneshot_context(
-                task_system_prompt, task_skill_catalog, task_mcp_catalog
+                None, task_skill_catalog, task_mcp_catalog
             )
             task_context = self._append_daemon_common_context(task_context)
 
@@ -3710,7 +3783,7 @@ class DaemonManager:
                         "tools": spec.get("tools", []),
                         "skills": spec.get("skills", []),
                         "mcp": [],
-                        "system_prompt": task_system_prompt,
+                        "prompt": self._task_first_prompt(spec),
                         "context_token_limit": spec.get("context_token_limit"),
                     },
                     log_callback=self._log,
@@ -3732,7 +3805,7 @@ class DaemonManager:
                 task_mcp_regs = self._with_daemon_common_mcp(task_mcp_regs, run_dir)
                 task_mcp_catalog = self._render_task_mcp_catalog(task_mcp_regs)
                 task_context = self._combine_oneshot_context(
-                    task_system_prompt, task_skill_catalog, task_mcp_catalog
+                    None, task_skill_catalog, task_mcp_catalog
                 )
                 task_context = self._append_daemon_common_context(task_context)
                 # Detached ownership starts task MCP only in the supervisor.
@@ -3744,14 +3817,6 @@ class DaemonManager:
                     spec["tools"],
                     preset_surface=preset_surface,
                     mcp_surface=({}, {}),
-                    self_compact_supported=(
-                        _self_compact_supported(
-                            (resolved["llm"]["provider"] if resolved else
-                             self._implicit_parent_preset_llm()["provider"]),
-                            (resolved["llm"] if resolved else
-                             self._implicit_parent_preset_llm()),
-                        )
-                    ),
                 )
                 system_prompt = self._build_emanation_prompt(
                     spec["task"], schemas, system_prompt=task_context
@@ -3781,6 +3846,7 @@ class DaemonManager:
                         group_id=group_id,
                         effective_llm=effective_llm,
                         context_token_limit=spec.get("context_token_limit"),
+                        prompt=self._task_first_prompt(spec),
                         mcp=task_mcp_regs,
                         preset_name=resolved["name"] if resolved else None,
                         preset_llm=resolved["llm"] if resolved else None,
@@ -3887,7 +3953,6 @@ class DaemonManager:
         contexts: list[_CliTaskContext] = []
         for i, spec in enumerate(tasks):
             try:
-                task_system_prompt = self._task_system_prompt(spec)
                 task_skill_catalog = self._task_skill_catalog(spec)
                 task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
                 if any(r.get("name") == _DAEMON_COMMON_MCP_NAME for r in task_mcp_regs):
@@ -3909,7 +3974,7 @@ class DaemonManager:
                             "message": f"tasks[{i}].backend_options: {e}"}
             contexts.append(_CliTaskContext(
                 backend_argv=backend_argv,
-                system_prompt=task_system_prompt,
+                system_prompt=None,
                 skill_catalog=task_skill_catalog,
                 mcp_catalog=task_mcp_catalog,
                 mcp_regs=task_mcp_regs,
@@ -3971,7 +4036,6 @@ class DaemonManager:
                         "tools": spec.get("tools", []),
                         "skills": spec.get("skills", []),
                         "mcp": [],
-                        "system_prompt": context.system_prompt,
                         "backend_options": public_backend_options,
                     },
                     log_callback=self._log,
@@ -3989,7 +4053,7 @@ class DaemonManager:
                 )
                 mcp_catalog = self._render_task_mcp_catalog(mcp_regs)
                 task_context = self._combine_oneshot_context(
-                    context.system_prompt, context.skill_catalog, mcp_catalog
+                    None, context.skill_catalog, mcp_catalog
                 )
                 if _cli_backend_loads_common_mcp(backend):
                     task_context = self._append_daemon_common_context(task_context)
