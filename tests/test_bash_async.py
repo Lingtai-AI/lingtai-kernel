@@ -273,7 +273,10 @@ class TestBashAsync:
         assert result["handoff"] == (
             "While waiting, go idle or call system(action='sleep'); the terminal result "
             "will arrive and wake you as a notification; read shell-manual and "
-            "notification-manual for details."
+            "notification-manual for details. If Telegram is connected and a Task Card "
+            "is available for the current turn, use it to report progress; call "
+            "`telegram(action='manual')` and follow its `Programmable Task Card` "
+            "section for details."
         )
         mgr.handle({"action": "cancel", "command": "", "job_id": result["job_id"]})
 

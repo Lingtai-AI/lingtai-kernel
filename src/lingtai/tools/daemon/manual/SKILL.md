@@ -202,6 +202,14 @@ files, not standalone top-level skills.
   notification arrives on the system channel carrying the daemon id, terminal
   status, task summary, and the result/error path. React to it with
   `daemon(action="check", id=...)` (and read `result.txt` for the full output).
+- **Use a Task Card for progress when one is available for this turn.**
+  The dispatch success `handoff` is conditional: if Telegram is connected and a
+  Task Card is available for the current turn, use it to report progress; call
+  `telegram(action='manual')` and follow its `Programmable Task Card` section
+  for details. The daemon tool does not create a Task Card automatically or
+  require a watcher; the calling agent follows the Task Card manual. This keeps
+  daemon lifecycle and terminal-notification behavior unchanged while giving
+  Telegram-originated turns a better progress surface.
 - **`check` still resolves a daemon after refresh/molt.** A refresh/molt gives
   you a fresh daemon registry with no in-memory entries, but the run folders
   and their notifications survive on disk. New daemon ids are compact run ids

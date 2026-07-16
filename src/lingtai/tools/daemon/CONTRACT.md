@@ -98,7 +98,7 @@ divergence this threshold triggers.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `skills`/`mcp`/`preset`/`backend_options`/`system_prompt`/`context_token_limit` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — `No tasks provided`, bad `max_turns`/`timeout`/`context_token_limit`, tool-surface/preset build failure |
+| `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `skills`/`mcp`/`preset`/`backend_options`/`system_prompt`/`context_token_limit` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — `No tasks provided`, bad `max_turns`/`timeout`/`context_token_limit`, tool-surface/preset build failure |
 | `list` | — | `contains`, `status`, `include_done` (default true), `last` | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
 | `ask` | `id`, `message` | — | `{status: "sent", id, output}` (CLI ask returns immediately; `{status: "sent", id, async: true, ...}`) | `{status: "error", id, message}` — unknown/absent id, backend `ask` unsupported, or busy |
 | `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, events: [...]}` | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
@@ -108,6 +108,12 @@ divergence this threshold triggers.
 `timeout` / `cancelled` / `failed`) reaches the parent via a `source="daemon"`
 system notification per emanation. `check` classifies terminal state from the
 recorded run-dir snapshot first (see `_classify_terminal_state`).
+
+Agents following an `emanate` success `handoff` MUST treat Task Card guidance as
+conditional: use the Task Card only when Telegram is connected and a Task Card
+is available for the current turn, and read `telegram(action='manual')` for the
+`Programmable Task Card` details. Daemon does not create or require a watcher
+and does not import or call Telegram/Task Card runtime code.
 
 ## State & storage
 
