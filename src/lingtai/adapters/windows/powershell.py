@@ -228,6 +228,14 @@ def _commands(script: str) -> tuple[str, ...]:
                     result.extend(nested)
                     continue
                 first = tokens[index].strip("'\"")
+            if "`" in first:
+                # PowerShell accepts backticks inside unquoted command names as
+                # lexical escapes (for example ``Rem`ove-Item``).  Decoding every
+                # valid form requires a real PowerShell lexer; configured policy
+                # must instead reject the ambiguous identity conservatively.
+                result.append(_UNSUPPORTED)
+                result.extend(nested)
+                continue
             if first.casefold() in _CONTROL_WORDS:
                 result.extend(nested)
                 continue

@@ -97,6 +97,37 @@ def test_powershell_parenthesized_policy_rejects_before_invocation(tmp_path, pol
     dialect.make_invocation.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "policy",
+    [ShellPolicy(deny=["Remove-Item"]), ShellPolicy(allow=["Write-Output"])],
+)
+@pytest.mark.parametrize(
+    "command",
+    [
+        r"Rem`ove-Item -LiteralPath .\victim",
+        r"Write-Output (Rem`ove-Item -LiteralPath .\victim)",
+        r"& Rem`ove-Item -LiteralPath .\victim",
+    ],
+)
+def test_powershell_backtick_escaped_command_fails_closed_before_invocation(
+    tmp_path, policy, command
+):
+    dialect = PowerShellDialect(executable="pwsh")
+    assert "__powershell_unsupported__" in dialect.extract_commands(command)
+    dialect.make_invocation = MagicMock(side_effect=AssertionError("pwsh must not run"))
+    manager = ShellManager(
+        policy=policy,
+        working_dir=str(tmp_path),
+        agent=SimpleNamespace(),
+        dialect=dialect,
+    )
+    denied = manager.handle({"command": command})
+    assert denied["status"] == "error"
+    assert "does not support this syntax" in denied["message"]
+    assert "refusing to run" in denied["message"]
+    dialect.make_invocation.assert_not_called()
+
+
 def test_powershell_policy_is_case_insensitive_and_dynamic_syntax_fails_closed(tmp_path):
     policy = ShellPolicy(deny=["Remove-Item"])
     manager = ShellManager(
