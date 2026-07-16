@@ -3,7 +3,7 @@
 This module is imported only by the Windows composition selector.  It does not
 use ``killpg``, ``/proc`` or ``ps``.  A command process is assigned to a native
 Job Object immediately after spawn; cancellation terminates that job and waits
-for the job signal before reporting ``group_cancelled``.
+for its active-process count to reach zero before reporting ``group_cancelled``.
 """
 from __future__ import annotations
 
@@ -29,8 +29,7 @@ _CREATE_NO_WINDOW = 0x08000000
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _PROCESS_SET_QUOTA = 0x0100
 _PROCESS_TERMINATE = 0x0001
-_WAIT_OBJECT_0 = 0
-_WAIT_TIMEOUT = 0x102
+_JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 
@@ -66,8 +65,14 @@ def _kernel32():
     kernel.AssignProcessToJobObject.restype = wintypes.BOOL
     kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
     kernel.TerminateJobObject.restype = wintypes.BOOL
-    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel.QueryInformationJobObject.restype = wintypes.BOOL
     return kernel
 
 
@@ -241,10 +246,49 @@ def _resume_suspended_process(process: subprocess.Popen) -> None:
         )
 
 
+def _active_job_processes(job_handle) -> int:
+    """Return the Job's exact active-process count.
+
+    Natural Job completion does not reliably signal the Job handle on every
+    supported Windows runtime.  Basic accounting is the documented ownership
+    source of truth for both ordinary completion and cancellation.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class _BasicAccountingInformation(ctypes.Structure):
+        _fields_ = [
+            ("TotalUserTime", ctypes.c_longlong),
+            ("TotalKernelTime", ctypes.c_longlong),
+            ("ThisPeriodTotalUserTime", ctypes.c_longlong),
+            ("ThisPeriodTotalKernelTime", ctypes.c_longlong),
+            ("TotalPageFaultCount", wintypes.DWORD),
+            ("TotalProcesses", wintypes.DWORD),
+            ("ActiveProcesses", wintypes.DWORD),
+            ("TotalTerminatedProcesses", wintypes.DWORD),
+        ]
+
+    info = _BasicAccountingInformation()
+    if not _kernel32().QueryInformationJobObject(
+        job_handle,
+        _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+        None,
+    ):
+        raise _last_win_error("QueryInformationJobObject(accounting) failed")
+    return int(info.ActiveProcesses)
+
+
 def _wait_job(job_handle, timeout_seconds: float) -> bool:
-    milliseconds = max(0, int(timeout_seconds * 1000))
-    result = _kernel32().WaitForSingleObject(job_handle, milliseconds)
-    return result == _WAIT_OBJECT_0
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    while True:
+        if _active_job_processes(job_handle) == 0:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.05, remaining))
 
 
 class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
@@ -328,7 +372,7 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
             terminated = bool(_kernel32().TerminateJobObject(owned.job_handle, 1))
             if not terminated:
                 return ProcessCompletion(process.wait(), "unconfirmed")
-            # The Job Object is signaled only after every assigned child exits,
+            # ActiveProcesses reaches zero only after every assigned child exits,
             # which is the full-tree ownership proof.
             if not _wait_job(owned.job_handle, 5.0):
                 return ProcessCompletion(process.wait(), "unconfirmed")
@@ -346,7 +390,9 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
                 # The root Popen may have exited while a descendant is still in
                 # the Job.  Keep the Job handle owned and poll it in short
                 # intervals so a later durable cancel request still gets the
-                # confirmed TerminateJobObject/group_cancelled path.
+                # confirmed TerminateJobObject/group_cancelled path.  Basic Job
+                # accounting is used because natural completion did not reliably
+                # signal the Job handle in native CI.
                 code = process.wait()
                 while not _wait_job(owned.job_handle, 0.05):
                     cancellation = cancel_owned_tree()
