@@ -801,7 +801,7 @@ class ShellManager:
                 return {
                     "status": "ok", "job_id": job_id, "pid": pid,
                     "message": f'Job started. Use shell(action="poll", job_id="{job_id}") to check.',
-                    "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read shell-manual and notification-manual for details.",
+                    "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read shell-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details.",
                 }
             if state and self._terminal(state.get("status")):
                 break

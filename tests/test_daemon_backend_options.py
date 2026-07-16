@@ -256,7 +256,10 @@ def test_emanate_cli_no_options_omits_fields(tmp_path, monkeypatch):
     assert result["handoff"] == (
         "While waiting, go idle or call system(action='sleep'); the terminal result "
         "will arrive and wake you as a notification; read daemon-manual and "
-        "notification-manual for details."
+        "notification-manual for details. If Telegram is connected and a Task Card "
+        "is available for the current turn, use it to report progress; call "
+        "`telegram(action='manual')` and follow its `Programmable Task Card` "
+        "section for details."
     )
     state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
 

@@ -229,6 +229,15 @@ reading the whole file when you only need recent events.
   shell(action="cancel", job_id="job-a1b2c3d4e5f678901234567890abcdef", reminder=1800)
   ```
 
+- **Use a Task Card for progress when one is available for this turn.**
+  The async success `handoff` is conditional: if Telegram is connected and a
+  Task Card is available for the current turn, use it to report progress; call
+  `telegram(action='manual')` and follow its `Programmable Task Card` section
+  for details. The shell tool does not create a Task Card automatically or
+  require a watcher; the calling agent follows the Task Card manual. This keeps
+  background command lifecycle and notification behavior unchanged while giving
+  Telegram-originated turns a better progress surface.
+
 - **If repeated-call `_advisory` appears on `shell(action="poll")`, stop
   tight polling.** The poll already executed; the advisory is not a block. If
   the job is still running and nothing meaningful changed, handle any human
