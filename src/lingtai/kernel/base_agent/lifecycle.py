@@ -540,6 +540,19 @@ def _heartbeat_loop(agent) -> None:
                 f"[{agent.agent_name}] nudge dispatch failed: {nudge_err}"
             )
 
+        # Protected goal reminders are ordinary system notifications, not
+        # declared Nudge kinds, and therefore have no Nudge-channel policy
+        # bypass. Keep their dispatch visibly separate from run_checks.
+        try:
+            from ..nudge import run_system_notifications as _run_system_notifications
+            _run_system_notifications(agent)
+        except Exception as system_notification_err:
+            from ..logging import get_logger
+            get_logger().warning(
+                f"[{agent.agent_name}] system notification dispatch failed: "
+                f"{system_notification_err}"
+            )
+
         try:
             _maybe_sleep_after_idle_timeout(agent)
         except Exception as idle_sleep_err:

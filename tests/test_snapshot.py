@@ -315,6 +315,8 @@ def test_heartbeat_snapshot_and_gc_share_first_eligible_tick(tmp_path):
         lifecycle, "_check_rules_file"
     ), patch.object(lifecycle, "_maybe_sleep_after_idle_timeout"), patch(
         "lingtai.kernel.nudge.run_checks"
+    ), patch(
+        "lingtai.kernel.nudge.run_system_notifications"
     ):
         lifecycle._heartbeat_loop(agent)
     assert agent._lifecycle_clock.monotonic_seconds.call_count == 1
@@ -341,6 +343,8 @@ def test_heartbeat_gc_runs_at_daily_boundaries(tmp_path):
         lifecycle, "_check_rules_file"
     ), patch.object(lifecycle, "_maybe_sleep_after_idle_timeout"), patch(
         "lingtai.kernel.nudge.run_checks"
+    ), patch(
+        "lingtai.kernel.nudge.run_system_notifications"
     ):
         lifecycle._heartbeat_loop(agent)
     assert sleep_calls == [1.0] * 5

@@ -23,15 +23,13 @@ from lingtai.kernel.prompt import build_system_prompt
 
 
 def _run_preset_library_migrations(directory: Path) -> None:
-    """Composition glue: build the preset-library POSIX adapter and run Core (bound Port, never a path)."""
-    from lingtai.adapters.posix.migration_workspace import (
-        PosixMigrationWorkspaceAdapter,
-    )
-    from lingtai.kernel.migrate import MigrationDomain, run_migrations
+    """Retained callback slot; production preset reads are migration-free.
 
-    run_migrations(
-        PosixMigrationWorkspaceAdapter(MigrationDomain.PRESET_LIBRARY, Path(directory))
-    )
+    Preset data is read as authored. The old migration registry remains only for
+    explicit historical/test callers and is not a runtime dependency of boot,
+    refresh, or preset selection.
+    """
+    return
 
 
 def load_preset(name: str, working_dir: "Path | None" = None) -> dict:
@@ -1200,86 +1198,37 @@ class Agent(BaseAgent):
         to ``system/manifest.resolved.json`` via
         ``lingtai.kernel.workdir.write_resolved_manifest`` (issue #259).
         """
-        import json
-        from .init_schema import strip_deprecated, validate_init
-        from lingtai.kernel.config_resolve import resolve_paths
-        from lingtai.kernel.migrate import MigrationDomain, run_agent_migrations
-        from lingtai.adapters.posix.migration_workspace import (
-            PosixMigrationWorkspaceAdapter,
+        from .init_reader import InitReadStatus, read_init, reader_callbacks
+
+        materialize, prepare = reader_callbacks(
+            self._working_dir,
+            load_preset=load_preset,
         )
-        from .presets import expand_inherit, materialize_active_preset
-        from lingtai.tools.registry import CORE_DEFAULTS
-
-        run_agent_migrations(
-            PosixMigrationWorkspaceAdapter(
-                MigrationDomain.AGENT_WORKDIR, self._working_dir
-            )
+        outcome = read_init(
+            self._working_dir,
+            materialize=materialize,
+            prepare=prepare,
+            failure_behavior="KEEP_PREVIOUS_EFFECTIVE",
         )
-
-        init_path = self._working_dir / "init.json"
-        if not init_path.is_file():
-            return None
-
-        try:
-            data = json.loads(init_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError, ValueError):
-            self._log("refresh_init_error", error="failed to read init.json")
-            return None
-
-        # Strip deprecated/hidden runtime fields from the raw user-owned init
-        # before preset materialization. The cleanup may write init.json back,
-        # but must not persist resolved preset contents such as skills.paths.
-        stripped = strip_deprecated(data)
-        hidden_runtime_stripped = self._strip_hidden_runtime_manifest_settings(data)
-        if stripped or hidden_runtime_stripped:
-            try:
-                init_path.write_text(
-                    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8",
-                )
-            except OSError:
-                pass  # best-effort disk cleanup
-
-        # Materialize active preset, if any, BEFORE validation so the manifest
-        # the schema validates is the fully-resolved one the agent will run on.
-        try:
-            materialize_active_preset(data, self._working_dir,
-                                      core_defaults=CORE_DEFAULTS,
-                                      load_preset=load_preset)
-        except (KeyError, ValueError) as e:
-            self._log("refresh_init_error",
-                      error=f"preset materialization failed: {e}")
-            return None
-
-        # Resolve "provider": "inherit" in capabilities against the main LLM.
-        manifest = data.get("manifest")
-        if isinstance(manifest, dict):
-            llm = manifest.get("llm") or {}
-            caps = manifest.get("capabilities") or {}
-            if isinstance(caps, dict):
-                expand_inherit(caps, llm)
-
-        try:
-            warnings = validate_init(data)
-        except ValueError as e:
-            self._log("refresh_init_error", error=str(e))
-            return None
-        for w in warnings:
-            self._log("refresh_init_warning", warning=w)
-
-        resolve_paths(data, self._working_dir)
-
-        # Publish the fully-resolved manifest as a derived runtime artifact
-        # (issue #259). Boot, live refresh, and post-molt reload all pass
-        # through here, so system/manifest.resolved.json always reflects the
-        # config the agent actually runs on — consumers read it instead of
-        # re-implementing preset materialization over the raw init.json
-        # snapshot. init.json itself stays user-owned input.
+        self._last_init_read_outcome = outcome
         from lingtai.kernel.workdir import write_resolved_manifest
-        if write_resolved_manifest(self._working_dir, data) is None:
-            self._log("resolved_manifest_write_failed")
+        if outcome.status is not InitReadStatus.READ_FAILED:
+            data = outcome.data
+            assert data is not None
+            effective_path = write_resolved_manifest(self._working_dir, data)
+            if effective_path is not None:
+                outcome.effective_config_source = str(effective_path)
+            else:
+                self._log("resolved_manifest_write_failed")
+            self._log("init_read_result", **outcome.log_fields())
+            return data
 
-        return data
+        outcome.fallback_effective = (
+            "previous runtime effective config preserved; "
+            f"source={outcome.effective_config_source}; freshness=PREVIOUS"
+        )
+        self._log("init_read_result", **outcome.log_fields())
+        return None
 
     def _activate_preset(self, name: str) -> None:
         """Substitute a preset's llm + capabilities into init.json on disk.
@@ -1305,7 +1254,8 @@ class Agent(BaseAgent):
         data = json.loads(init_path.read_text(encoding="utf-8"))
         manifest = data.setdefault("manifest", {})
 
-        # Use the wrapper preset-loader so migrations run through the POSIX adapter.
+        # Use the wrapper preset-loader; this explicit activation may write the
+        # selected preset, while production preset reads remain migration-free.
         preset = load_preset(name, working_dir=self._working_dir)
         preset_manifest = preset.get("manifest", {})
 
@@ -1391,8 +1341,9 @@ class Agent(BaseAgent):
         # `prompt` with no legacy alias. Retired prompt-override `_file` fields
         # (principle_file / procedures_file / substrate_file / brief_file) are
         # legacy-known and intentionally not resolved here.
-        # Note: "soul" / "soul_file" were retired in v0.7.6 and are now
-        # stripped by strip_deprecated() before we get here.
+        # Note: "soul" / "soul_file" were retired in v0.7.6 and remain
+        # compatibility-known; they are intentionally not resolved here;
+        # the shared reader reports them without rewriting init.json.
         for key in ("covenant", "base_prompt",
                     "pad", "lingtai", "comment"):
             file_key = f"{key}_file"
@@ -1708,8 +1659,8 @@ class Agent(BaseAgent):
         #
         # Substrate is kernel-owned: under the init-prompt contract it is NOT an
         # external override. Legacy init.json `substrate` / `substrate_file`
-        # values are migrated by _read_init() (archived) and ignored here; the
-        # packaged default wins on every boot/refresh.
+        # values remain compatibility-known, are reported by the shared reader,
+        # and are ignored here; the packaged default wins on every boot/refresh.
         #
         # Resolution order:
         #   1. packaged prompts/substrate/substrate.md — kernel default, refreshed on boot
@@ -1792,8 +1743,9 @@ class Agent(BaseAgent):
 
         # --- Procedures ---
         # Kernel-owned resident procedures. Legacy init.json procedures values
-        # are migrated by _read_init() and ignored here; the packaged default
-        # wins on every boot/refresh. system/procedures.md is only a packaged
+        # remain compatibility-known, are reported by the shared reader, and
+        # are ignored here; the packaged default wins on every boot/refresh.
+        # system/procedures.md is only a packaged
         # mirror/debug artifact, and is read as fallback if the package
         # resource is unavailable.
         # Packaged source carries developer-facing YAML frontmatter; the mirror
@@ -1837,8 +1789,9 @@ class Agent(BaseAgent):
         # Under the init-prompt contract `brief` is no longer an external
         # init.json prompt override (the external prompt surface is exactly
         # base_prompt / covenant / comment). Legacy init.json `brief` /
-        # `brief_file` values are migrated by _read_init() (archived) and ignored
-        # here. The `brief` section is now sourced solely from system/brief.md,
+        # `brief_file` values remain compatibility-known, are reported by the
+        # shared reader, and are ignored here. The `brief` section is now sourced
+        # solely from system/brief.md,
         # which the secretary agent writes directly.
         brief_file = system_dir / "brief.md"
         if brief_file.is_file():

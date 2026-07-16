@@ -52,7 +52,6 @@ def test_installed_runtime_refresh_nudge_does_not_hit_remote(tmp_path, monkeypat
     entry = entries[0]
     assert entry["kind"] == "kernel_version"
     assert entry["source"] == "installed-distribution"
-    assert entry["cadence"] == "at-most-once-per-utc-day"
     assert entry["running"] == "0.14.1"
     assert entry["installed"] == "0.14.2"
     assert entry["suggested_action"] == "read-runtime-update-skill-then-refresh-if-safe"
@@ -82,10 +81,11 @@ def test_local_refresh_mismatch_does_not_re_emit_same_utc_day(tmp_path, monkeypa
     remove(agent, "kernel_version")
     assert _entries(tmp_path) == []
 
-    # Same UTC day, same mismatch still present -> must NOT re-emit.
+    # A raw remove is only transport cleanup; without a policy dismissal the
+    # unresolved finding is eligible to be observed again immediately.
     _reset_fast_gate(agent)
     kv.check(agent)
-    assert _entries(tmp_path) == []
+    assert len(_entries(tmp_path)) == 1
 
 
 def test_local_refresh_mismatch_re_emits_next_utc_day(tmp_path, monkeypatch):
@@ -116,11 +116,12 @@ def test_local_refresh_mismatch_re_emits_next_utc_day(tmp_path, monkeypatch):
     assert len(_entries(tmp_path)) == 1
     assert _entries(tmp_path)[0]["source"] == "installed-distribution"
 
-    # Still the same day after another dismissal -> no re-emit.
+    # Raw channel removal is not the Nudge dismissal action; the unresolved
+    # finding remains eligible without a recorded policy mute.
     remove(agent, "kernel_version")
     _reset_fast_gate(agent)
     kv.check(agent)
-    assert _entries(tmp_path) == []
+    assert len(_entries(tmp_path)) == 1
 
 
 def test_local_refresh_match_clears_mismatch_tracking_and_stale_nudge(tmp_path, monkeypatch):
@@ -175,7 +176,7 @@ def test_local_refresh_match_clears_mismatch_tracking_and_stale_nudge(tmp_path, 
     assert _entries(tmp_path)[0]["installed"] == "0.14.3"
 
 
-def test_remote_update_check_is_daily_and_persistent(tmp_path, monkeypatch):
+def test_remote_update_check_uses_bounded_probe_not_daily_product_cadence(tmp_path, monkeypatch):
     agent = _Agent(tmp_path)
     calls = {"n": 0}
     monkeypatch.setattr(
@@ -201,7 +202,6 @@ def test_remote_update_check_is_daily_and_persistent(tmp_path, monkeypatch):
     assert len(entries) == 1
     entry = entries[0]
     assert entry["source"] == "pypi-json"
-    assert entry["cadence"] == "at-most-once-per-utc-day"
     assert entry["latest"] == "0.14.2"
     assert entry["suggested_action"] == "read-runtime-update-skill-and-ask-human"
     assert "human" in entry["detail"].lower()
@@ -213,13 +213,9 @@ def test_remote_update_check_is_daily_and_persistent(tmp_path, monkeypatch):
     assert state["kernel_version"]["latest_seen"] == "0.14.2"
 
     _reset_fast_gate(agent)
-    monkeypatch.setattr(
-        kv,
-        "_fetch_latest_version",
-        lambda: (_ for _ in ()).throw(AssertionError("daily throttle failed")),
-    )
+    monkeypatch.setattr(kv, "_fetch_latest_version", latest)
     kv.check(agent)
-    assert calls["n"] == 1
+    assert calls["n"] == 2
     assert _entries(tmp_path)[0]["latest"] == "0.14.2"
 
 

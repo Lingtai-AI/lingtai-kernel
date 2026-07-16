@@ -10,6 +10,7 @@ tags: [lingtai, runtime, kernel, nudge, updates, refresh, editable, source, diag
 last_changed_at: "2026-07-15T12:00:00-07:00"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
 - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
 - src/lingtai/kernel/nudge/ANATOMY.md
@@ -59,9 +60,9 @@ The end-to-end path is:
 2. **Check `kernel_version` — `kernel_version.py`.** If running and installed
    versions differ, it emits a local refresh nudge and does not query PyPI. For
    packaged, non-editable, non-dev runtimes whose versions match, it checks
-   `https://pypi.org/pypi/lingtai/json` at most once per UTC day. A newer
-   `info.version` produces a package-availability nudge; network or response
-   errors are recorded in durable throttle state and do not become an update.
+   `https://pypi.org/pypi/lingtai/json` through the bounded producer probe gate.
+   A newer `info.version` produces a package-availability nudge; network or
+   response errors are recorded diagnostically and do not become an update.
 3. **Check `source_drift` — `source_drift.py`.** For non-dev runtimes it
    compares the startup runtime fingerprint (git revision and curated source
    digest when available) with a fresh on-disk fingerprint. Drift means the
@@ -76,12 +77,12 @@ The end-to-end path is:
    idle-reminder delay. One failing producer is logged and does not block the
    others.
 5. **Persist and publish — `nudge/__init__.py` and the Notification Store.**
-   Kernel-version daily state lives in
-   `.notification/.nudge_state.json`. The user-facing mirror is
-   `.notification/nudge.json`; it is not the throttle state or a canonical
-   package state. Each entry has a unique `kind`; `upsert` replaces that kind,
-   `remove` deletes it, and clearing the last entry clears the channel file.
-   Updates use the store's atomic compare/update operation.
+   Shared Nudge policy state lives in `.notification/.nudge_state.json` only for
+   dismissal mute expiries. The user-facing mirror is `.notification/nudge.json`;
+   it is not a package state or migration registry. Each entry has a unique
+   `kind`; `upsert` replaces that kind, `remove` deletes it, and clearing the
+   last entry clears the channel file. Updates use the store's atomic
+   compare/update operation.
 6. **Sync and wake — `BaseAgent._sync_notifications`.** The heartbeat polls
    allowlisted `.notification` files by fingerprint. A changed nudge file is
    injected as a synthesized `notification(action="check")` pair when IDLE;
@@ -140,20 +141,20 @@ checkout changes could amplify a broken development edit.
 
 `kernel_version` and `source_drift` are producers of the shared low-priority
 `.notification/nudge.json` envelope. The envelope carries `data.nudges`, a
-`published_at` timestamp, and channel-level instructions to clear all nudges.
-`kind: kernel_version` has `running`, `installed`, `latest` (or `null` for a
-local refresh), `source`, `cadence`, `checked_at_date`, and a suggested action.
-`source_drift` carries startup and disk fingerprints instead.
+`published_at` timestamp, channel-level instructions, and a self-describing
+policy block. `kind: kernel_version` has `running`, `installed`, `latest` (or
+`null` for a local refresh), `source`, and a suggested action. `source_drift`
+carries startup and disk fingerprints instead.
 
-The kernel-version producer records mismatch and remote-check dedupe in
-`.notification/.nudge_state.json`, surviving refreshes and process restarts.
-The one-day rule is per UTC date and version pair/latest observation; the
-60-second gate is only a cheap heartbeat probe throttle. Dismissing the nudge
-channel clears the mirror. It does not install anything, alter producer state,
-or guarantee the producer will never publish again: the durable daily dedupe
-prevents a same-day nudge storm, and a new UTC day or new mismatch can surface
-one again. A producer can also remove an entry when versions match, a remote
-version is no longer newer, or dev/source mode is detected.
+The shared Nudge policy records finding identity and dismissal mute expiry in
+`.notification/.nudge_state.json`. `LINGTAI_NUDGE_ENABLED` defaults to `on` and
+suppresses all kinds when `off`; `LINGTAI_NUDGE_REPEAT_INTERVAL` defaults to
+`24h` and controls when the same unresolved finding may reappear after
+ dismissal. Values are reread at each Nudge operation; invalid values fail safe
+and are diagnosed. Producer probe gates are only bounded observation costs, not
+product cadence. A producer removes an entry when its real fact resolves or the
+runtime is intentionally skipped. Read the complete env catalogue for exact
+accepted values and reload behavior.
 
 After interpreting a nudge, use the narrowest safe action:
 
@@ -222,10 +223,10 @@ blindly downgrade or install.
 which checkout/environment is actually active. A checkout's version alone does
 not prove what the running process imported.
 
-**PyPI/network failure.** A failed remote request records `last_error` and the
-date in `.nudge_state.json`; it is not evidence that an update exists. Check
-connectivity or package-index policy with the human, then allow the next daily
-check. Do not turn a transient failure into a manual install recommendation.
+**PyPI/network failure.** A failed remote request records bounded diagnostic
+`last_error` state in `.nudge_state.json`; it is not evidence that an update
+exists. Check connectivity or package-index policy with the human. Do not turn a
+transient failure into a manual install recommendation.
 
 **Nudge is missing or stale.** Check both files above. Missing `nudge.json` can
 mean no producer currently has an entry, a matching version cleared it, a dev

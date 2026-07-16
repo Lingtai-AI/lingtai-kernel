@@ -28,12 +28,13 @@ def test_registry_has_one_canonical_public_shell_identity():
     assert normalize_capabilities({"bash": {"yolo": False}}) == {
         "shell": {"yolo": False}
     }
-    assert normalize_capabilities({"bash": {"yolo": True}, "shell": {"yolo": False}}) == {
-        "shell": {"yolo": False}
+    assert normalize_capabilities({"bash": {"yolo": True}, "shell": {"yolo": True}}) == {
+        "shell": {"yolo": True}
     }
-    assert normalize_capabilities({"shell": None, "bash": {"yolo": True}}) == {
-        "shell": None
-    }
+    with pytest.raises(ValueError, match="conflicting"):
+        normalize_capabilities({"bash": {"yolo": True}, "shell": {"yolo": False}})
+    with pytest.raises(ValueError, match="conflicting"):
+        normalize_capabilities({"shell": None, "bash": {"yolo": True}})
     assert "shell" not in apply_core_defaults(None, disable=["bash"])
     assert "shell" not in apply_core_defaults({"bash": None})
 

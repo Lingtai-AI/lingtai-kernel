@@ -14,6 +14,7 @@ related_files:
   - "src/lingtai/prompts/principle/principle.md"
   - "src/lingtai/prompts/substrate/substrate.md"
   - "reference/procedures-manual/SKILL.md"
+  - "reference/environment-variables/SKILL.md"
   - "knowledge/session-journal/<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md"
   - "reference/substrate-manual/SKILL.md"
   - "reference/sqlite-log-query/SKILL.md"
@@ -102,6 +103,19 @@ merely to prepare; read `psyche-manual`, tend the stores, and molt deliberately.
 If rediscovering a workflow would be painful, make or update a skill immediately.
 Use `skills-manual` before authoring/publishing. Keep private project facts in
 knowledge and reusable procedures in skills.
+
+### Inspecting Nudge controls
+
+When a Nudge is emitted, inspect its self-describing policy message before
+adjusting the process environment. The two controls are global: change
+`LINGTAI_NUDGE_ENABLED` to stop or resume publication, or change
+`LINGTAI_NUDGE_REPEAT_INTERVAL` to set the post-dismiss interval for unresolved
+findings. Values are read at each heartbeat/Nudge operation; a restart is not
+required, and an invalid value falls back to the documented default while being
+reported as a diagnostic. Read the complete accepted-values, security, and
+reload catalogue at `system-manual` →
+`reference/environment-variables/SKILL.md`; do not infer behavior from one
+producer's old cadence.
 
 ### Preset Swap and Daemon Task Preset
 

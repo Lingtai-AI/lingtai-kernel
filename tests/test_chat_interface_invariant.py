@@ -304,10 +304,10 @@ class TestRestoreDanglingToolCalls:
         assert "Reason recorded by the kernel: heal:idle_inject_blocked" in content
         assert "Recovery metadata:" in content
         assert "Tool call id: call_bash_1" in content
-        assert "bash action: run" in content
-        assert "bash working_dir: /agent" in content
-        assert "bash timeout: 30" in content
-        assert "bash command preview: cd /repo && git status --short" in content
+        assert "shell action: run" in content
+        assert "shell working_dir: /agent" in content
+        assert "shell timeout: 30" in content
+        assert "shell command preview: cd /repo && git status --short" in content
 
 
 # ---------------------------------------------------------------------------

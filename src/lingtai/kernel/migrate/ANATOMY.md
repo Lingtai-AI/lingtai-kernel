@@ -28,7 +28,7 @@ maintenance: |
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.
 
-Versioned, append-only, forward-only migrations for kernel-managed on-disk state. This folder is the kernel's migration Core: when changing an on-disk shape owned by the kernel, look here first and extend the appropriate registry instead of adding an ad-hoc boot-time helper. The Core owns the domain policy — registries, current-version derivation, forward-only sequence, success-by-success durability — while one outbound `MigrationWorkspacePort` expresses every read, write, enumeration, version file, archive, and audit append. Normative promises (the seven families, composition rules, conformance, non-goals) live in the paired [`CONTRACT.md`](CONTRACT.md). Two domains share the Core: **preset library** migrations over preset `.json`/`.jsonc` directories, and **agent workdir** migrations over one agent directory (including `init.json`).
+Retained historical/test-only migration machinery for older kernel-managed on-disk states. The current boot/refresh init reader does not invoke this registry, version chain, workspace, archive, or write-back path: `init.json` remains user-owned input and compatibility is diagnosed read-only by `lingtai.init_reader.read_init`. The files remain present because deletion/cleanup is not authorized; any future retirement must name exact paths and obtain approval. The paired [`CONTRACT.md`](CONTRACT.md) documents the retained Port for historical tests and explicit future maintenance, not current runtime semantics.
 
 ## Components
 
@@ -45,8 +45,8 @@ Versioned, append-only, forward-only migrations for kernel-managed on-disk state
 - **Port implementation:** `src/lingtai/adapters/posix/migration_workspace.py` `PosixMigrationWorkspaceAdapter` implements all seven families for the local filesystem, bound to a `MigrationDomain`/root. It owns availability, entry→path mapping, raw reads, top-level preset candidate enumeration, PID-suffixed atomic replace (including preset m001/m002), `_kernel_meta.json` version files, the `system/migrations/` archive layout + SHA-256 evidence, and the best-effort `logs/events.jsonl` audit append.
 - **JSONC:** preset transforms call `config_resolve.parse_jsonc(text)` (the pure parse extracted from `load_jsonc`) on adapter-provided text, never a path.
 - **Inbound — preset domain:** `lingtai.presets.discover_presets_in_dirs` and `load_preset` receive a preset-library migration runner from their caller and invoke it (per directory / on the file's parent) before listing/reading; the caller builds the adapter.
-- **Inbound — agent domain:** `lingtai.cli.load_init` and `lingtai.Agent._read_init` construct an `AGENT_WORKDIR` workspace and call `run_agent_migrations` before reading/validating `init.json`, keeping boot and refresh on one path.
-- **Boundary contract:** public imports come from `lingtai.kernel.migrate`; use `run_migrations` for preset-library workspaces and `run_agent_migrations` for agent workspaces. Do not add one-off init cleanup in `Agent._read_init()` unless it is merely invoking this versioned runner.
+- **Historical agent domain:** older tests and explicit maintenance callers may construct an `AGENT_WORKDIR` workspace and call `run_agent_migrations`; current `lingtai.cli.load_init` and `lingtai.Agent._read_init` deliberately do not.
+- **Boundary contract:** public imports remain available for the retained historical/test surface. The production init boundary is `lingtai.init_reader.read_init`; do not add a runtime migration call, cleanup helper, or second reader path.
 
 ## Composition
 

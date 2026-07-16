@@ -342,25 +342,14 @@ def test_init_procedures_override_is_migrated_not_prompted(tmp_path):
     assert legacy not in prompt
     assert packaged in prompt
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
-    assert "procedures" not in data
-
-    digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
-    archive = tmp_path / "system" / "migrations" / f"init-procedures-{digest}.md"
-    assert archive.read_text(encoding="utf-8") == legacy
-
-    events = _events(tmp_path, "init_procedures_override_migrated")
-    assert len(events) == 1
-    event = events[0]
-    assert event["archive_path"] == f"system/migrations/init-procedures-{digest}.md"
-    assert event["content_hash"] == digest
-    assert event["byte_length"] == len(legacy.encode("utf-8"))
-    assert event["char_length"] == len(legacy)
-    assert event["field_removed"] is True
+    # Compatibility is diagnosed/read-only; the reader never rewrites input or
+    # creates migration archives/progress.
+    assert data["procedures"] == legacy
+    assert not (tmp_path / "system" / "migrations").exists()
+    assert not _events(tmp_path, "init_procedures_override_migrated")
 
     agent._setup_from_init()
-    archives = list((tmp_path / "system" / "migrations").glob("init-procedures-*.md"))
-    assert archives == [archive]
-    assert len(_events(tmp_path, "init_procedures_override_migrated")) == 1
+    assert json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))["procedures"] == legacy
 
 
 def test_single_space_procedures_no_longer_opts_out(tmp_path):
@@ -375,11 +364,8 @@ def test_single_space_procedures_no_longer_opts_out(tmp_path):
     procedures = agent._prompt_manager.read_section("procedures") or ""
     assert procedures == packaged
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
-    assert "procedures" not in data
-
-    digest = hashlib.sha256(b" ").hexdigest()
-    archive = tmp_path / "system" / "migrations" / f"init-procedures-{digest}.md"
-    assert archive.read_text(encoding="utf-8") == " "
+    assert data["procedures"] == " "
+    assert not (tmp_path / "system" / "migrations").exists()
 
 
 
@@ -398,7 +384,8 @@ def test_custom_procedures_file_is_removed_not_prompted(tmp_path):
     assert "CUSTOM-PROCEDURES-FILE" not in prompt
     assert agent._prompt_manager.read_section("procedures") == packaged
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
-    assert "procedures_file" not in data
+    assert data["procedures_file"] == str(custom)
+    assert not (tmp_path / "system" / "migrations").exists()
 
 
 def test_system_procedures_is_overwritten_by_packaged_default(tmp_path):
@@ -514,21 +501,13 @@ def test_init_substrate_override_is_migrated_not_prompted(tmp_path):
     assert legacy not in prompt
     assert _packaged_substrate() in prompt
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
-    assert "substrate" not in data
+    assert data["substrate"] == legacy
+    assert not (tmp_path / "system" / "migrations").exists()
+    assert not _events(tmp_path, "init_prompt_contract_migrated")
 
-    digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
-    archive = tmp_path / "system" / "migrations" / f"init-substrate-{digest}.md"
-    assert archive.read_text(encoding="utf-8") == legacy
-
-    events = _events(tmp_path, "init_prompt_contract_migrated")
-    assert len(events) == 1
-    assert events[0]["touched"]["substrate"]["inline_removed"] is True
-
-    # Idempotent: a second setup does not re-archive or re-log.
+    # A second setup reads the same compatibility input without changing it.
     agent._setup_from_init()
-    archives = list((tmp_path / "system" / "migrations").glob("init-substrate-*.md"))
-    assert archives == [archive]
-    assert len(_events(tmp_path, "init_prompt_contract_migrated")) == 1
+    assert json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))["substrate"] == legacy
 
 
 def test_init_brief_override_is_ignored_as_deprecated(tmp_path):
@@ -540,7 +519,7 @@ def test_init_brief_override_is_ignored_as_deprecated(tmp_path):
     agent._setup_from_init()
 
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
-    assert "brief" not in data
+    assert data["brief"] == legacy
     assert not (tmp_path / "system" / "brief.md").exists()
     assert legacy not in agent._prompt_manager.render()
 
@@ -562,7 +541,7 @@ def test_init_brief_file_override_is_ignored_as_deprecated(tmp_path):
     agent._setup_from_init()
 
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
-    assert "brief_file" not in data
+    assert data["brief_file"] == "custom-brief.md"
     assert not (tmp_path / "system" / "brief.md").exists()
     assert legacy not in agent._prompt_manager.render()
 

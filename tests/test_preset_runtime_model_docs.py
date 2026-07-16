@@ -263,24 +263,24 @@ def test_kernel_prompt_does_not_claim_substrate_mirror_is_freely_editable():
 
 
 # ---------------------------------------------------------------------------
-# 8. The raw-init writer list is scoped, not falsely exhaustive: CLI boot's
-#    managed `venv_path` writeback is pinned as an explicit writer (matching
-#    the actual write in cli.py's run()), and the list explicitly disclaims
-#    being a repository-wide inventory, anchoring the soul(action="config")/
-#    soul(action="voice") counter-example to the real persist functions.
+# 8. The raw-init writer list is scoped, not falsely exhaustive: boot/refresh
+#    reader paths are read-only, explicit preset activation remains a writer,
+#    and the list explicitly disclaims being a repository-wide inventory,
+#    anchoring the soul(action="config")/soul(action="voice") counter-example
+#    to the real persist functions.
 # ---------------------------------------------------------------------------
 
 
-def test_substrate_reference_pins_cli_boot_venv_path_writeback_as_a_writer():
+def test_substrate_reference_pins_read_only_boot_venv_resolution():
     text = _read(SUBSTRATE_REFERENCE)
-    assert "CLI boot's managed `venv_path`" in text
-    assert "`cli.run` resolves the venv and writes `data[\"venv_path\"]` back" in text
+    assert "CLI venv write-back" in text
+    assert "raw input is unchanged" in text
 
 
-def test_cli_actually_writes_venv_path_back_to_init_json():
+def test_cli_keeps_resolved_venv_in_memory_without_init_writeback():
     text = _read(ROOT / "src/lingtai/cli.py")
     assert 'data["venv_path"] = str(venv_dir)' in text
-    assert "init_path.write_text(json.dumps(data" in text
+    assert "init_path.write_text(json.dumps(data" not in text
 
 
 def test_substrate_reference_writer_list_disclaims_repo_wide_exhaustivity():

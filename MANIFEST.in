@@ -24,6 +24,7 @@ include MANIFEST.in
 include LICENSE
 include NOTICE
 include README.md
+include src/lingtai/init.jsonc
 
 # Include packaged prompt resources and the runtime guidance Markdown catalog in
 # sdists. pyproject.toml owns wheel package-data globs; keep this connected so

@@ -84,6 +84,7 @@ exclude = [
 ]
 lingtai = [
     "mcp_catalog.json",
+    "init.jsonc",
     "intrinsic_skills/*/**/*",
     # Prompt-source anatomy at the prompts/ root.
     "prompts/*.md",

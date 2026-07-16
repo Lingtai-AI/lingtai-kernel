@@ -82,10 +82,9 @@ def check(agent) -> None:
             state["emitted"] = False
         return
 
-    # Drift detected — avoid duplicate nudge if signals unchanged
+    # Drift detected. The central Nudge policy handles duplicate/dismissed
+    # findings; this producer does not assign its own repeat cadence.
     drift_key = "; ".join(drift_signals)
-    if state.get("emitted_for") == drift_key:
-        return
 
     body = render_nudge_payload(
         NudgeSituation.SOURCE_DRIFT,

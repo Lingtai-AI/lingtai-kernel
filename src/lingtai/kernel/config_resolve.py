@@ -20,19 +20,45 @@ def parse_jsonc(text: str) -> dict:
     migration transforms) use it directly. Comment stripping is string-aware: //
     inside a quoted string is never a comment (URLs like "https://host/..." survive).
     """
-    # Tokenise into string / non-string spans; strip //...EOL only in non-string spans.
+    # Strip comments with a small state machine rather than splitting around
+    # string literals. JSONC comments may themselves contain quoted examples
+    # (for example `// copy as "init.json"`); those quotes must not become JSON
+    # data or hide the real delimiters on the following lines.
     parts: list[str] = []
-    pos = 0
-    for m in _JSONC_STRING_RE.finditer(text):
-        # Non-string chunk before this string: strip comments
-        chunk = re.sub(r'//[^\n]*', '', text[pos:m.start()])
-        parts.append(chunk)
-        # String literal: preserve verbatim
-        parts.append(m.group())
-        pos = m.end()
-    # Trailing non-string chunk after last string
-    parts.append(re.sub(r'//[^\n]*', '', text[pos:]))
-    text = ''.join(parts)
+    in_string = False
+    escaped = False
+    in_comment = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if in_comment:
+            if ch == "\n":
+                in_comment = False
+                parts.append(ch)
+            i += 1
+            continue
+        if in_string:
+            parts.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            parts.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < len(text) and text[i + 1] == "/":
+            in_comment = True
+            i += 2
+            continue
+        parts.append(ch)
+        i += 1
+    text = "".join(parts)
     text = re.sub(r',\s*([}\]])', r'\1', text)
     return json.loads(text)
 

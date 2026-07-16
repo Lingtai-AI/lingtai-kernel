@@ -21,8 +21,11 @@ they are mandatory and cheap; they live under ``lingtai.tools`` and import only
 """
 from __future__ import annotations
 
+import copy
 import importlib
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Mapping
 
 # Register the tool string catalogs into the kernel i18n cache. Importing the
 # registry is the canonical "tools are in play" signal, so this is where the
@@ -76,9 +79,9 @@ CAPABILITY_UNAVAILABLE = _CapabilityUnavailable()
 BUILTIN_TOOLS: dict[str, str] = {
     "knowledge": "lingtai.tools.knowledge",
     "skills": "lingtai.tools.skills",
-    # ``bash`` remains a one-way input alias only; the public capability is
-    # canonically named ``shell`` while its PR1 implementation stays in the
-    # retained internal package.
+    # ``bash`` remains a one-way read-only input alias only; the public
+    # capability is canonically named ``shell`` while its implementation stays
+    # in the retained internal package.
     "shell": "lingtai.tools.bash",
     "avatar": "lingtai.tools.avatar",
     "daemon": "lingtai.tools.daemon",
@@ -160,62 +163,109 @@ def apply_core_defaults(
 _LEGACY_CAPABILITY_ALIASES: dict[str, str] = {"bash": "shell"}
 
 
+class CapabilityShapeDecision(str, Enum):
+    """Typed result of the one canonical/legacy capability-shape evaluator."""
+
+    PASS = "PASS"
+    NUDGE = "NUDGE"
+    BLOCKED = "BLOCKED"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityShapeEvidence:
+    """Redaction-safe raw/effective evidence for capability compatibility."""
+
+    decision: CapabilityShapeDecision
+    compatibility_paths: tuple[dict[str, str], ...] = ()
+    conflict_paths: tuple[str, ...] = ()
+
+
+class CapabilityShapeConflict(ValueError):
+    """Raised when canonical and legacy capability values disagree."""
+
+
 def canonical_capability_name(name: str) -> str:
     """Return the public capability name for a retained legacy input key."""
     return _LEGACY_CAPABILITY_ALIASES.get(name, name)
 
 
-def normalize_capabilities(capabilities: dict[str, dict]) -> dict[str, dict]:
-    """Normalize capability configuration to canonical public names.
+def classify_capabilities(
+    capabilities: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], CapabilityShapeEvidence]:
+    """Evaluate and materialize the sole ``bash`` -> ``shell`` compatibility rule.
 
-    PR1 accepts the old ``bash`` key as a one-way input migration, but stores
-    and resolves only ``shell``.  If both keys are present, the explicit
-    canonical key wins regardless of input order.
+    The input is never mutated. A legacy-only or equal dual spelling is copied to
+    one effective ``shell`` entry and produces ``NUDGE`` evidence. Differing dual
+    values fail closed rather than allowing canonical-wins normalization. The
+    returned mapping is the exact in-memory input for downstream capability setup.
     """
-    out: dict[str, dict] = {}
+    if capabilities is None:
+        return {}, CapabilityShapeEvidence(CapabilityShapeDecision.UNKNOWN)
+    if not isinstance(capabilities, Mapping):
+        return {}, CapabilityShapeEvidence(CapabilityShapeDecision.UNKNOWN)
 
-    def merge_dict(dst: str, value: object) -> None:
-        if dst not in out:
-            out[dst] = value if isinstance(value, dict) else value  # type: ignore[assignment]
-            return
-        # A canonical value already present wins over a legacy alias, including
-        # an explicit null/disable sentinel.
-        if value is None:
-            return
-        if out[dst] is None:
-            out[dst] = value if isinstance(value, dict) else value  # type: ignore[assignment]
-            return
-        if isinstance(out[dst], dict) and isinstance(value, dict):
-            merged = dict(value)
-            merged.update(out[dst])
-            if dst == "skills":
-                paths = []
-                seen = set()
-                for source in (value.get("paths", []), out[dst].get("paths", [])):
-                    if not isinstance(source, list):
-                        continue
-                    for p in source:
-                        if isinstance(p, str) and p not in seen:
-                            paths.append(p)
-                            seen.add(p)
-                if paths:
-                    merged["paths"] = paths
-            out[dst] = merged
+    out = copy.deepcopy(dict(capabilities))
+    has_bash = "bash" in out
+    has_shell = "shell" in out
+    if not has_bash:
+        return out, CapabilityShapeEvidence(CapabilityShapeDecision.PASS)
 
-    # Process canonical keys first so a legacy alias can never overwrite one,
-    # including an explicit canonical null/disable sentinel.
-    items = list(capabilities.items())
-    canonical_destinations = {
-        canonical_capability_name(name)
-        for name, _ in items
-        if name not in _LEGACY_CAPABILITY_ALIASES
+    mapping = {
+        "raw_path": "manifest.capabilities.bash",
+        "effective_path": "manifest.capabilities.shell",
     }
-    items.sort(key=lambda item: item[0] in _LEGACY_CAPABILITY_ALIASES)
-    for name, kwargs in items:
+    if not has_shell:
+        out["shell"] = out.pop("bash")
+        return out, CapabilityShapeEvidence(
+            CapabilityShapeDecision.NUDGE,
+            compatibility_paths=(mapping,),
+        )
+
+    if out["bash"] != out["shell"]:
+        return out, CapabilityShapeEvidence(
+            CapabilityShapeDecision.BLOCKED,
+            compatibility_paths=(mapping,),
+            conflict_paths=("manifest.capabilities.bash", "manifest.capabilities.shell"),
+        )
+
+    out.pop("bash")
+    return out, CapabilityShapeEvidence(
+        CapabilityShapeDecision.NUDGE,
+        compatibility_paths=(mapping,),
+    )
+
+
+def normalize_capabilities(capabilities: dict[str, dict]) -> dict[str, dict]:
+    """Normalize capability configuration using the reader's shape decision.
+
+    Legacy ``bash`` is accepted only as read-only input. Equal dual values and
+    legacy-only input materialize one canonical ``shell`` mapping; a differing
+    dual pair raises :class:`CapabilityShapeConflict` instead of silently
+    choosing one side.
+    """
+    normalized, evidence = classify_capabilities(capabilities)
+    if evidence.decision is CapabilityShapeDecision.BLOCKED:
+        raise CapabilityShapeConflict(
+            "conflicting manifest.capabilities.bash and "
+            "manifest.capabilities.shell values"
+        )
+    if evidence.decision is CapabilityShapeDecision.UNKNOWN:
+        raise CapabilityShapeConflict("unclassifiable manifest.capabilities shape")
+
+    out: dict[str, dict] = {}
+    for name, kwargs in normalized.items():
         destination = canonical_capability_name(name)
-        if name in _LEGACY_CAPABILITY_ALIASES and destination in canonical_destinations:
+        if destination in out:
+            # This is defensive for future aliases. The current evaluator has
+            # already collapsed bash/shell and therefore cannot reach here.
+            existing = out[destination]
+            if isinstance(existing, dict) and isinstance(kwargs, dict):
+                merged = dict(existing)
+                merged.update(kwargs)
+                out[destination] = merged
             continue
-        merge_dict(destination, kwargs)
+        out[destination] = kwargs
     return out
 
 

@@ -19,6 +19,8 @@ related_files:
   - scripts/sync_gitee_mirror.py
   - scripts/lib/release_manifest.py
   - src/lingtai/ANATOMY.md
+  - src/lingtai/CONTRACT.md
+  - src/lingtai/init.jsonc
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/snapshot/ANATOMY.md

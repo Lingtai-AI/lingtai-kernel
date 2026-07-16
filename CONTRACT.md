@@ -16,6 +16,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
   - src/lingtai/kernel/migrate/CONTRACT.md
   - src/lingtai/kernel/daemon_supervisor/CONTRACT.md
+  - src/lingtai/CONTRACT.md
   - CONTRIBUTING.md
   - README.md
   - dev-guide-skill/SKILL.md

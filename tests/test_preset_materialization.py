@@ -246,7 +246,10 @@ def test_materialize_unknown_preset_returns_none_and_logs(tmp_path):
     data = a._read_init()
     assert data is None
     events = [e for e, _ in a._log_events]
-    assert "refresh_init_error" in events
+    assert "init_read_result" in events
+    result = next(fields for event, fields in a._log_events if event == "init_read_result")
+    assert result["reader_status"] == "READ_FAILED"
+    assert result["failure_stage"] == "PRESET"
 
 
 def test_materialize_default_presets_path(tmp_path, monkeypatch):
@@ -383,12 +386,10 @@ def test_materialize_omitted_path_falls_back_to_default(tmp_path, monkeypatch):
 
 
 def test_materialize_picks_up_context_limit_from_legacy_layout(tmp_path, monkeypatch):
-    """A legacy preset (context_limit at manifest root) still works end-to-end.
+    """A legacy preset layout works in memory without rewriting the preset.
 
-    The kernel migration system (m001) runs from inside load_preset and
-    relocates the field to the canonical location before the materializer
-    reads the preset. The materializer then writes it into init.json's
-    manifest root (init.json's schema is unchanged).
+    Production preset reads are migration-free. The materializer interprets the
+    legacy root field in memory and leaves the authored preset bytes untouched.
     """
     from lingtai.kernel.migrate.migrate import reset_process_cache
     reset_process_cache()
@@ -412,10 +413,10 @@ def test_materialize_picks_up_context_limit_from_legacy_layout(tmp_path, monkeyp
     data = a._read_init()
     assert data is not None
     assert data["manifest"]["context_limit"] == 16384
-    # The migration rewrote the on-disk preset to the canonical layout.
+    # The real reader/materializer is read-only over the authored preset.
     on_disk = json.loads((plib / "narrow.json").read_text())
-    assert "context_limit" not in on_disk["manifest"]
-    assert on_disk["manifest"]["llm"]["context_limit"] == 16384
+    assert on_disk["manifest"]["context_limit"] == 16384
+    assert "context_limit" not in on_disk["manifest"]["llm"]
 
 
 def test_materialize_picks_up_context_limit_from_llm_block(tmp_path, monkeypatch):

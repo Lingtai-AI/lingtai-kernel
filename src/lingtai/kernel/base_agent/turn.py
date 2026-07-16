@@ -847,25 +847,21 @@ def _run_loop(agent) -> None:
                             agent._log("preset_auto_fallback",
                                       reason=err_desc,
                                       failed_attempts=aed_attempts)
-                            try:
-                                agent._activate_default_preset()
-                            except Exception as e:
-                                agent._log("preset_auto_fallback_failed", error=str(e))
-                                # Fallback itself failed and no recovery remains —
-                                # only now is this a truthful terminal failure, so
-                                # freeze the same row as error before ASLEEP.  Use
-                                # the original provider error (the exhaustion
-                                # cause), not the activation exception.
-                                _report_api_error_to_task_card(
-                                    agent, _original_provider_exc,
-                                    attempt=aed_attempts,
-                                    max_attempts=agent._config.max_aed_attempts,
-                                    terminal=True,
-                                )
-                                # fall through to ASLEEP
-                            else:
-                                agent._perform_refresh()
-                                return
+                            # Automatic preset fallback would rewrite the
+                            # user-owned init.json. Final v4.2 keeps recovery
+                            # truthful and read-only: an agent/human must edit
+                            # the config explicitly, then rerun the same reader.
+                            agent._log(
+                                "preset_auto_fallback_disabled",
+                                reason="init_json_is_read_only_to_boot_refresh_reader",
+                            )
+                            _report_api_error_to_task_card(
+                                agent,
+                                _original_provider_exc,
+                                attempt=aed_attempts,
+                                max_attempts=agent._config.max_aed_attempts,
+                                terminal=True,
+                            )
 
                         agent._log("aed_exhausted", attempts=aed_attempts, error=err_desc)
                         sleep_state = AgentState.ASLEEP

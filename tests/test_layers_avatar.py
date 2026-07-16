@@ -94,7 +94,8 @@ class TestAvatarManager:
         assert child_init_path.is_file()
         child_init = json.loads(child_init_path.read_text())
         child_caps = child_init.get("manifest", {}).get("capabilities", {})
-        assert "bash" in child_caps
+        assert "shell" in child_caps
+        assert "bash" not in child_caps
         assert "avatar" in child_caps
 
     def test_spawn_inherits_covenant(self, tmp_path):
@@ -386,6 +387,8 @@ class TestAddCapability:
         agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
                            capabilities={"bash": {"yolo": True}, "avatar": {}})
         caps_by_name = {name: kwargs for name, kwargs in agent._capabilities}
-        # `bash` default is {"yolo": True}; explicit override merges → still yolo
-        assert caps_by_name.get("bash") == {"yolo": True}
+        # Legacy caller input is normalized to the canonical public `shell`
+        # capability before recording/inheritance.
+        assert caps_by_name.get("shell") == {"yolo": True}
+        assert "bash" not in caps_by_name
         assert caps_by_name.get("avatar") == {}

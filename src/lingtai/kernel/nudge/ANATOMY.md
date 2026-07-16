@@ -1,15 +1,17 @@
 ---
 related_files:
-  - CLAUDE.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/nudge/__init__.py
+  - src/lingtai/kernel/nudge/init_config.py
   - src/lingtai/kernel/nudge/goal.py
   - src/lingtai/kernel/nudge/kernel_version.py
   - src/lingtai/kernel/nudge/source_drift.py
   - src/lingtai/kernel/nudge/prompts.py
+  - src/lingtai/kernel/notifications.py
+  - src/lingtai/CONTRACT.md
   - tests/test_nudge_prompts.py
-  - src/lingtai/kernel/snapshot/ANATOMY.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
+  - tests/test_kernel_version_nudge.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -19,134 +21,61 @@ maintenance: |
 ---
 # Nudge
 
-Per-agent periodic checks that emit notification nudges or reminders when
-something needs the agent's attention. Producers collect runtime facts while
-`prompts.py` renders the typed situation into stable agent-facing wording and
-payloads. Runtime/kernel update nudges share `.notification/nudge.json` and keep throttle state in
-`.notification/.nudge_state.json`; goal reminders read protected
-`.notification/goal.json` and publish short dismissible events into
-`.notification/system.json`. Designed so additional mechanical checks land as
-small additions (e.g. MCP version drift, addon updates).
+Nudge is the kernel policy layer for periodic, read-only findings. It renders
+producer facts, applies two global environment controls, and publishes through
+the ordinary Notification Store channel; it does not create a second transport.
 
-## Entry point
+## Components
 
-`run_checks(agent)` is called once per heartbeat tick from
-`base_agent/lifecycle.py:_heartbeat_loop` (wrapped in try/except so a
-bad check never breaks the loop). It dispatches to each check's
-`check(agent) -> None` in order.
+- `__init__.py` — `run_checks`, `upsert`, `remove`, `effective_policy`, and
+  `record_dismissal` provide the shared policy, finding identity, dismissal mute,
+  and `.notification/nudge.json` mutation (`src/lingtai/kernel/nudge/__init__.py:1-360`).
+- `init_config.py` — consumes the last structured real-reader outcome and
+  publishes/clears the typed configuration-shape finding; it never reads
+  `init.json` independently (`src/lingtai/kernel/nudge/init_config.py:1-80`).
+- `kernel_version.py` — read-only installed/running/package observation; it does
+  not own a product repeat cadence (`src/lingtai/kernel/nudge/kernel_version.py:59-201`).
+- `source_drift.py` — read-only runtime/source comparison, skipped for editable
+  or source runtimes (`src/lingtai/kernel/nudge/source_drift.py:21-111`).
+- `goal.py` — IDLE-only protected-goal reminder projected into the ordinary
+  `system` notification channel (`src/lingtai/kernel/nudge/goal.py:20-75`).
+- `prompts.py` — typed producer-fact to agent-facing payload renderer
+  (`src/lingtai/kernel/nudge/prompts.py:17-125`).
+- `notifications.py` — ordinary Notification transport invokes Nudge's dismissal
+  policy hook before clearing the nudge channel (`src/lingtai/kernel/notifications.py:469-880`).
 
-## File layout
+## Connections
 
-- `__init__.py` — dispatcher (`run_checks`), shared upsert/remove
-  helpers (`upsert`, `remove`) that operate on the `nudge.json`
-  multi-entry payload under a lazy per-agent lock. Runs `kernel_version.check`,
-  `source_drift.check`, and then `goal.check` once per heartbeat tick.
-- `kernel_version.py` — read-only runtime/update check. It probes the installed
-  `lingtai` distribution through ``importlib.metadata`` and reads the already-loaded
-  wrapper module from ``sys.modules.get("lingtai")`` without importing it
-  (`kernel_version.py:220-252`). The running version comes from the wrapper's
-  in-memory ``__version__`` so an in-place upgrade after process start is detected;
-  the installed version comes from distribution metadata. If the wrapper module is
-  not loaded, running falls back to installed metadata. For packaged,
-  non-editable/non-dev runtimes, it also performs an at-most-once-per-UTC-day
-  package-index check for a newer kernel version and routes the agent through
-  the stable `https://lingtai.ai/skill.md` path before asking the human whether
-  to update. It stores daily throttle state in the hidden
-  `.notification/.nudge_state.json` helper file, which is not a channel.
-- `source_drift.py` — read-only process/source freshness check. It compares the
-  startup runtime fingerprint with the current on-disk fingerprint and emits a
-  low-priority refresh nudge only for non-dev/non-editable/non-source runtimes;
-  development checkouts are skipped so agents are not nudged into arbitrary
-  in-flight source changes. Source-drift handling stays local to read-only
-  diagnosis and refresh mechanics; it never enters release-migration routing.
-  Revision capture uses the agent's injected `SourceRevisionPort`; curated source
-  hashing, timestamps, comparison, throttle, and nudge policy remain here in Core.
-- `prompts.py` — kernel-owned typed situation renderer. `NudgeSituation`,
-  `NudgeFacts`, and `render_nudge_payload` centralize agent-facing payload
-  wording for installed/runtime mismatch, package update, and source drift
-  without changing producer cadence or state.
-- `goal.py` — IDLE-only goal reminder check. It reads the allowlisted protected
-  `.notification/goal.json`; if and only if that file exists, is active, and the
-  idle delay has elapsed, it publishes one short `goal.reminder` event into
-  `.notification/system.json` saying to read `goal.json` and the goal manual.
-  It dedupes an existing reminder with the same `ref_id` and waits another delay
-  after that reminder is dismissed.
-- `ANATOMY.md` — this file.
+`base_agent/lifecycle.py:_heartbeat_loop` calls `run_checks` once per heartbeat;
+protected goal reminders are dispatched separately by
+`run_system_notifications`. Producer checks call `upsert`/`remove`; the shared
+`NotificationStorePort` persists `nudge.json`. `notification(action="dismiss_channel", channel="nudge")` remains
+the only transport-facing dismissal path and calls `record_dismissal` so dismiss
+means mute, not resolved. Effective config is reread on every Nudge operation;
+invalid values fail safe to defaults and are diagnostic-only.
 
-## The shared channel
+## Composition
 
-All nudges share `.notification/nudge.json` with this shape:
+Parent: `src/lingtai/kernel/ANATOMY.md`. The Nudge policy composes with the
+ordinary notification Core; it does not own or duplicate Notification wire
+injection. Detailed environment semantics route to
+`src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md`.
 
-```json
-{
-  "header": "1 nudge",
-  "icon": "🔔",
-  "priority": "low",
-  "instructions": "Call notification(action='dismiss_channel', channel='nudge') ...",
-  "data": {
-    "nudges": [
-      {"kind": "kernel_version", "title": "...", "detail": "...", ...}
-    ]
-  }
-}
-```
+## State
 
-Each entry's `kind` is its slot key — `upsert(agent, kind, body)`
-replaces by `kind`, `remove(agent, kind)` drops by `kind`. When the
-list empties, the channel file is deleted entirely so the wire surface
-drops the notification cleanly. The agent dismisses everything at once
-with `notification(action='dismiss_channel', channel='nudge')`.
+Persistent state is the shared `.notification/nudge.json` transport payload and
+an internal `.notification/.nudge_state.json` dismissal map keyed by a stable
+finding hash with an expiry. The latter stores no migration version, progress
+chain, per-kind UTC date, or process cadence. Producer observation throttles are
+bounded implementation cost only; global enabled/repeat values are product
+semantics. Goal source state remains protected `.notification/goal.json` and its
+reminder remains in `system.json`.
 
-## Adding a new nudge
+## Notes
 
-1. Drop `nudge/<name>.py` with a top-level `check(agent) -> None`
-   function. Inside:
-   - Throttle. In-memory state on `agent._nudge_<name>_state` is fine for
-     short cadence checks; use a small non-channel state file (for example
-     `.notification/.nudge_state.json`) when the cadence must survive refreshes.
-   - Probe whatever you need to check.
-   - On hit: call `upsert(agent, "<unique_kind>", body)` where `body`
-     is the per-kind payload dict you want the agent to read.
-   - On clear: call `remove(agent, "<unique_kind>")` and reset your
-     dedupe state.
-2. Add `from . import <name>` and `<name>.check(agent)` to
-   `__init__.py:run_checks`.
-
-Keep checks small, side-effect-free except for the upsert/remove call,
-and well-throttled. They run inside the heartbeat loop on a 1-second
-tick.
-
-## Why not a Check protocol / registry?
-
-Three similar lines is better than a premature abstraction
-(CLAUDE.md). At this small scale, the per-check throttle boilerplate is still cheaper
-than maintaining a `Check` protocol and a registry. If the duplication starts
-to hurt, lift a `_throttled_probe` helper into `__init__.py` — but the right
-abstraction shape will be obvious by then.
-
-## Manual route
-
-Kernel version/update cases begin at the stable route
-`https://lingtai.ai/skill.md`, which identifies the authoritative repository and
-release migration chain. Determine applicable migrations there and obtain explicit
-human/config-owner authorization for every migration/config write and refresh;
-apply only authorized writes, validate, and refresh last. The bundled
-`runtime-update-checks` manual remains local guidance for read-only diagnosis and
-refresh mechanics, not the release-migration source or authorization. Source-drift
-cases stay local to those diagnosis/mechanics and never enter release-migration
-routing.
-
-## Wire surface
-
-The nudge channel flows through the standard `.notification/` sync
-machinery (`base_agent/__init__.py:_sync_notifications` →
-`meta_block.py` → wire). No special wire path. The agent sees it in
-the meta-block alongside any other active notifications.
-
-## Failure isolation
-
-The heartbeat-loop call site wraps `run_checks` in try/except and logs
-to the kernel logger on failure. `run_checks` also dispatches each check through
-`_run_one`, so a bug in one individual check is logged as `nudge_check_error`
-and does not block subsequent checks. Add local try/except inside a check only
-when it needs more specific cleanup or telemetry.
+Every emitted entry includes the effective `LINGTAI_NUDGE_ENABLED` and
+`LINGTAI_NUDGE_REPEAT_INTERVAL` values, both names, and the environment catalogue
+route. `FULLY_EFFECTIVE`, ignored-field, and failed init-reader outcomes are a
+separate axis from Nudge action; a dismissed finding is not resolved until the
+same real reader reports no finding. The old per-kind daily/fingerprint state is
+not consulted for repeat behavior.

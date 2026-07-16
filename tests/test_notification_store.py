@@ -495,9 +495,12 @@ class TestAtomicCoreRedCounterexamples:
         assert dismiss["cleared"] is True
         upsert_nudge(agent, "after-dismiss", {"body": "current"})
         remove_nudge(agent, "missing")
-        assert store.snapshot(_allow_all)["nudge"]["data"]["nudges"] == [
-            {"body": "current", "kind": "after-dismiss"}
-        ]
+        nudges = store.snapshot(_allow_all)["nudge"]["data"]["nudges"]
+        assert len(nudges) == 1
+        assert nudges[0]["body"] == "current"
+        assert nudges[0]["kind"] == "after-dismiss"
+        assert nudges[0]["policy"]["enabled"] == "on"
+        assert nudges[0]["policy"]["repeat_after_dismiss"] == "24h"
 
 
 class TestCompositionAndProvenance:
