@@ -69,6 +69,7 @@ def _split_statements(script: str) -> tuple[list[str], bool]:
     i = 0
     quote: str | None = None
     escaped = False
+    paren_depth = 0
     while i < len(script):
         char = script[i]
         if quote == "'":
@@ -92,20 +93,56 @@ def _split_statements(script: str) -> tuple[list[str], bool]:
             quote = char
             i += 1
             continue
-        if char in "|;\r\n":
+        if char == "(":
+            paren_depth += 1
+        elif char == ")":
+            if paren_depth == 0:
+                return pieces, False
+            paren_depth -= 1
+        if char in "|;\r\n" and paren_depth == 0:
             pieces.append(script[begin:i])
             if char == "|" and i + 1 < len(script) and script[i + 1] in "|&":
                 i += 1
             elif char == "&" and i + 1 < len(script) and script[i + 1] == "&":
                 i += 1
             begin = i + 1
-        elif char == "&" and i + 1 < len(script) and script[i + 1] == "&":
+        elif char == "&" and i + 1 < len(script) and script[i + 1] == "&" and paren_depth == 0:
             pieces.append(script[begin:i])
             i += 1
             begin = i + 1
         i += 1
     pieces.append(script[begin:])
-    return pieces, quote is None
+    return pieces, quote is None and paren_depth == 0
+
+
+def _is_quoted_at(script: str, index: int) -> bool:
+    """Return whether ``index`` is inside a PowerShell quoted string."""
+    quote: str | None = None
+    escaped = False
+    i = 0
+    while i < index:
+        char = script[i]
+        if quote == "'":
+            if char == "'":
+                if i + 1 < index and script[i + 1] == "'":
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+        if quote == '"':
+            if escaped:
+                escaped = False
+            elif char == "`":
+                escaped = True
+            elif char == '"':
+                quote = None
+            i += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+        i += 1
+    return quote is not None
 
 
 def _commands(script: str) -> tuple[str, ...]:
@@ -140,6 +177,17 @@ def _commands(script: str) -> tuple[str, ...]:
                 nested.extend(_commands(region[0]))
                 i = region[1]
                 continue
+            if text[i] == "(" and not _is_quoted_at(text, i):
+                region = _balanced_inner(text, i, "(", ")")
+                if region is None or not region[0].strip():
+                    result.append(_UNSUPPORTED)
+                    break
+                nested.extend(_commands(region[0]))
+                i = region[1]
+                continue
+            if text[i] == ")" and not _is_quoted_at(text, i):
+                result.append(_UNSUPPORTED)
+                break
             remainder.append(text[i])
             i += 1
         else:

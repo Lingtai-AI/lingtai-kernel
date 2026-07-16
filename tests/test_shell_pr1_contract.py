@@ -65,6 +65,38 @@ def test_powershell_invocation_and_extractor_are_not_posix():
     assert invocation.encoding == "utf-8"
 
 
+def test_powershell_parentheses_are_recursive_and_malformed_syntax_fails_closed():
+    dialect = PowerShellDialect(executable="pwsh")
+    assert dialect.extract_commands(r"(Remove-Item -LiteralPath .\victim)") == ("Remove-Item",)
+    assert dialect.extract_commands(
+        r"Write-Output (Remove-Item -LiteralPath .\victim)"
+    ) == ("Write-Output", "Remove-Item")
+    assert dialect.extract_commands(r"(Remove-Item -LiteralPath .\victim") == (
+        "__powershell_unsupported__",
+    )
+    assert dialect.extract_commands(r"Write-Output ()") == ("__powershell_unsupported__",)
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [ShellPolicy(deny=["Remove-Item"]), ShellPolicy(allow=["Write-Output"])],
+)
+def test_powershell_parenthesized_policy_rejects_before_invocation(tmp_path, policy):
+    dialect = PowerShellDialect(executable="pwsh")
+    dialect.make_invocation = MagicMock(side_effect=AssertionError("pwsh must not run"))
+    manager = ShellManager(
+        policy=policy,
+        working_dir=str(tmp_path),
+        agent=SimpleNamespace(),
+        dialect=dialect,
+    )
+    denied = manager.handle({"command": r"Write-Output (Remove-Item -LiteralPath .\victim)"})
+    assert denied["status"] == "error"
+    assert "not allowed" in denied["message"]
+    assert "Remove-Item" in denied["message"]
+    dialect.make_invocation.assert_not_called()
+
+
 def test_powershell_policy_is_case_insensitive_and_dynamic_syntax_fails_closed(tmp_path):
     policy = ShellPolicy(deny=["Remove-Item"])
     manager = ShellManager(
