@@ -4,6 +4,7 @@ related_files:
   - CODE_OF_CONDUCT.md
   - CONTRACT.md
   - CONTRIBUTING.md
+  - GLOSSARY.md
   - MANIFEST.in
   - README.md
   - RELEASING.md
@@ -54,6 +55,10 @@ maintenance contract for the distributed navigation system.
 - **CONTRACT is the distributed code interface definition system.** It defines
   **how a layer may be used and what it promises**. The contract is normative
   when implementation behavior disagrees.
+
+[`GLOSSARY.md`](GLOSSARY.md) is the separate glossary-of-glossaries for
+distributed tool-glossary resources. It governs model-facing alias/localized
+name help; it does not define code structure or interface behavior.
 
 ## Navigation model
 

@@ -150,7 +150,7 @@ daemon/__init__.py
   ├── DaemonManager.__init__        — stores agent ref, config ceilings, emanation registry
   ├── handle()                      — top-level dispatcher (emanate/list/ask/check/reclaim)
   ├── _daemon_intrinsic_surface()   — exposes explicitly requested `email` plus the automatic LingTai `compact` schema
-  ├── _build_tool_surface()         — auto-includes `compact`, filters other requested tools against blacklist, expands groups, and merges preset/MCP/email surfaces; preset emanations also keep the NARROW parent host floor (`_parent_host_tool_floor()`: bash + file primitives only) so saved presets that omit core caps don't make requested host tools unknown — optional/provider parent tools (vision/web_search) are NOT borrowed and stay unknown unless the preset supplies them
+  ├── _build_tool_surface()         — auto-includes `compact`, filters other requested tools against blacklist, expands groups, and merges preset/MCP/email surfaces; preset emanations also keep the NARROW parent host floor (`_parent_host_tool_floor()`: shell + file primitives only) so saved presets that omit core caps don't make requested host tools unknown — optional/provider parent tools (vision/web_search) are NOT borrowed and stay unknown unless the preset supplies them
   ├── _instantiate_preset_capabilities() — sets up preset tool surface in a sandbox
   ├── _build_emanation_prompt()     — composes the kernel prompt, complete task system instruction, selected guidance, and compact schema
   ├── _run_emanation()              — LingTai worker loop: sends `prompt`/default first, runs ToolExecutor/ToolCallGuard, and performs same-run sole-call compact resets while retaining the exact call/result pair

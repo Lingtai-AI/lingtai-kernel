@@ -11,4 +11,5 @@ related_files:
 - src/lingtai/tools/grep/glossary-wen.md
 maintenance: |
   English glossary for the `grep` tool package (lingtai.tools.grep); the English body must stay empty per tool_glossary.py's language contract — update only the identity/schema fields here, and update the zh/wen bodies in lockstep when grep's public tool schema changes.
+  Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---

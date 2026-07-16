@@ -3,6 +3,7 @@ name: component-contract-convention
 contract_version: 4
 related_files:
   - ANATOMY.md
+  - GLOSSARY.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
   - src/lingtai/kernel/mail_transport/CONTRACT.md
   - src/lingtai/kernel/workdir_lease/CONTRACT.md
@@ -100,6 +101,10 @@ contracts are governed only when this file lists them as children.
 describes where code is and how it is composed; this contract defines how a
 layer may be used and what it promises. They cross-link instead of duplicating
 each other's content.
+
+[`GLOSSARY.md`](GLOSSARY.md) is a sibling root governance document for
+distributed tool glossaries. It owns model-facing alias/localized-name guidance
+only; Contracts continue to own behavior, obligations, state, and tests.
 
 ## Architecture foundation
 

@@ -11,6 +11,7 @@ related_files:
 - src/lingtai/tools/avatar/glossary-zh.md
 maintenance: |
   Classical-Chinese (wen) glossary for the `avatar` tool package (lingtai.tools.avatar); body must stay non-empty and distinct from glossary-zh.md (tool_glossary.py enforces both). Update in lockstep with glossary-en.md/glossary-zh.md whenever avatar's public tool schema changes.
+  Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---
 **名相对照**
 

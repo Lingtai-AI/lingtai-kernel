@@ -71,7 +71,7 @@ def test_opencode_child_routes_to_live_help_and_generic_backend_options():
     body = _body(CHILD)
     # Live installed help is the authority — the child must send agents there.
     for phrase in (
-        "bash-manual",
+        "shell-manual",
         "opencode --version",
         "opencode --help",
         "opencode run --help",

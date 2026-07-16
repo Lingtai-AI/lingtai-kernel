@@ -11,6 +11,7 @@ related_files:
 - src/lingtai/tools/read/glossary-zh.md
 maintenance: |
   Classical-Chinese (wen) glossary for the `read` tool package (lingtai.tools.read); body must stay non-empty and distinct from glossary-zh.md — tests/test_tool_glossary.py::test_wen_uses_classical_chinese_not_zh exercises exactly this file. Update in lockstep with glossary-en.md/glossary-zh.md whenever read's public tool schema changes.
+  Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---
 **名相对照**
 

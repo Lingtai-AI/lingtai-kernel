@@ -74,7 +74,7 @@ def test_codex_child_routes_to_live_help_and_generic_backend_options():
     body = _body(CHILD)
     # Live installed help is the authority — the child must send agents there.
     for phrase in (
-        "bash-manual",
+        "shell-manual",
         "codex --version",
         "codex --help",
         "codex exec --help",

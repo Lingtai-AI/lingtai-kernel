@@ -8,6 +8,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_ANATOMY = ROOT / "ANATOMY.md"
 ROOT_CONTRACT = ROOT / "CONTRACT.md"
+ROOT_GLOSSARY = ROOT / "GLOSSARY.md"
 
 
 def _read_document(path: Path) -> tuple[dict, str]:
@@ -55,10 +56,16 @@ def _root_governed_contracts() -> set[str]:
 def test_root_architecture_documents_are_reciprocal_and_well_formed() -> None:
     anatomy_meta, _ = _read_document(ROOT_ANATOMY)
     contract_meta, _ = _read_document(ROOT_CONTRACT)
+    glossary_meta, _ = _read_document(ROOT_GLOSSARY)
     _assert_related_files(anatomy_meta)
     _assert_related_files(contract_meta)
+    _assert_related_files(glossary_meta)
     assert "CONTRACT.md" in anatomy_meta["related_files"]
+    assert "GLOSSARY.md" in anatomy_meta["related_files"]
     assert "ANATOMY.md" in contract_meta["related_files"]
+    assert "GLOSSARY.md" in contract_meta["related_files"]
+    assert "ANATOMY.md" in glossary_meta["related_files"]
+    assert "CONTRACT.md" in glossary_meta["related_files"]
 
 
 def test_governed_child_contracts_have_reciprocal_anatomy_pairs() -> None:

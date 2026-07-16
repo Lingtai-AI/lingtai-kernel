@@ -43,6 +43,7 @@ import yaml
 
 __all__ = [
     "SUPPORTED_TOOL_GLOSSARY_LANGUAGES",
+    "TOOL_GLOSSARY_BODY_POLICY",
     "GlossaryValidationError",
     "parse_glossary",
     "normalize_tool_glossary_language",
@@ -58,6 +59,12 @@ __all__ = [
 SUPPORTED_TOOL_GLOSSARY_LANGUAGES: tuple[str, ...] = ("en", "zh", "wen")
 
 _KNOWN: frozenset[str] = frozenset(SUPPORTED_TOOL_GLOSSARY_LANGUAGES)
+
+TOOL_GLOSSARY_BODY_POLICY = (
+    "Body policy: maintain only a minimal term mapping plus at most one or two "
+    "sentences of naming rationale; do not translate or duplicate the tool "
+    "schema, parameters, action behavior, manual, contract, or anatomy."
+)
 
 
 def normalize_tool_glossary_language(language: object) -> str:
@@ -208,7 +215,7 @@ def parse_glossary(
     if not isinstance(doc, dict):
         raise GlossaryValidationError("frontmatter is not a YAML mapping")
 
-    # Exactly four fields; no unknown keys.
+    # Exactly six fields; no unknown keys.
     actual_keys = set(doc.keys())
     if actual_keys != _EXPECTED_FRONTMATTER_KEYS:
         extra = actual_keys - _EXPECTED_FRONTMATTER_KEYS
@@ -252,6 +259,11 @@ def parse_glossary(
     if not isinstance(maint, str) or not maint.strip():
         raise GlossaryValidationError(
             f"maintenance must be a non-empty string, got {maint!r}"
+        )
+    if TOOL_GLOSSARY_BODY_POLICY not in maint:
+        raise GlossaryValidationError(
+            "maintenance must include the root GLOSSARY.md body policy: "
+            f"{TOOL_GLOSSARY_BODY_POLICY}"
         )
 
     return body

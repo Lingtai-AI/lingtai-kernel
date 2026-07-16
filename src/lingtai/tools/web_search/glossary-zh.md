@@ -11,6 +11,7 @@ related_files:
 - src/lingtai/tools/web_search/glossary-wen.md
 maintenance: |
   Simplified-Chinese (zh) glossary for the `web_search` tool package (lingtai.tools.web_search); body must stay non-empty. Update in lockstep with glossary-en.md/glossary-wen.md whenever web_search's public tool schema changes.
+  Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---
 **术语对照**
 

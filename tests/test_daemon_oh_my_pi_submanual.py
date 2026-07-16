@@ -80,7 +80,7 @@ def test_oh_my_pi_child_routes_to_live_help_and_generic_backend_options():
     # Live installed help is the authority — the child must send agents there,
     # and only to source-proven subcommand help on demand.
     for phrase in (
-        "bash-manual",
+        "shell-manual",
         "omp --version",
         "omp --help",
         "omp <command> --help",

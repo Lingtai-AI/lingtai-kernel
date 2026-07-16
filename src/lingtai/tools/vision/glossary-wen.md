@@ -11,6 +11,7 @@ related_files:
 - src/lingtai/tools/vision/glossary-zh.md
 maintenance: |
   Classical-Chinese (wen) glossary for the `vision` tool package (lingtai.tools.vision); body must stay non-empty and distinct from glossary-zh.md. Update in lockstep with glossary-en.md/glossary-zh.md whenever vision's public tool schema changes.
+  Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---
 **名相对照**
 

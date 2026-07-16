@@ -76,7 +76,7 @@ def test_qwen_code_child_routes_to_live_help_and_generic_backend_options():
     # The daemon wraps the top-level `qwen` binary (no subcommand), so only
     # top-level help is cited.
     for phrase in (
-        "bash-manual",
+        "shell-manual",
         "qwen --version",
         "qwen --help",
         "no subcommand",
