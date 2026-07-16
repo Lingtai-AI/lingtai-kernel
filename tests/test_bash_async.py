@@ -209,6 +209,11 @@ class TestBashAsync:
         mgr = self._make_manager(tmp_path)
         result = mgr.handle({"command": "echo compat", "async": True})
         assert result["status"] == "ok"
+        assert result["handoff"] == (
+            "While waiting, go idle or call system(action='sleep'); the terminal result "
+            "will arrive and wake you as a notification; read bash-manual and "
+            "notification-manual for details."
+        )
         mgr.handle({"action": "cancel", "command": "", "job_id": result["job_id"]})
 
     def test_reminder_deadline_starts_at_successful_async_return(self, tmp_path, monkeypatch):

@@ -3703,7 +3703,8 @@ class DaemonManager:
                   tasks=[{"task": s["task"][:80], "tools": s["tools"]} for s in tasks])
 
         return {"status": "dispatched", "count": len(tasks), "ids": ids,
-                "group_id": group_id}
+                "group_id": group_id,
+                "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read daemon-manual and notification-manual for details."}
 
     def _handle_emanate_cli(
         self,
@@ -3969,7 +3970,8 @@ class DaemonManager:
             self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks), backend=backend,
                       tasks=[{"task": s["task"][:80], "tools": s.get("tools", [])} for s in tasks])
             return {"status": "dispatched", "count": len(tasks), "ids": ids,
-                    "group_id": group_id, "backend": backend}
+                    "group_id": group_id, "backend": backend,
+                    "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read daemon-manual and notification-manual for details."}
 
         # Start watchdog — scoped to this batch's CLI procs (group_id) so an
         # earlier batch's timeout can never kill this one's subprocesses.

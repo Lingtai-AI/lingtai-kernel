@@ -1121,6 +1121,11 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
         {"task": "task B", "tools": ["file"]},
     ]})
     assert result["status"] == "dispatched"
+    assert result["handoff"] == (
+        "While waiting, go idle or call system(action='sleep'); the terminal result "
+        "will arrive and wake you as a notification; read daemon-manual and "
+        "notification-manual for details."
+    )
     assert result["count"] == 2
     ids = result["ids"]
     assert len(ids) == 2
