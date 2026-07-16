@@ -337,7 +337,7 @@ def test_metadata_is_two_lines_bounded_and_between_footer_and_timestamp():
     )
     lines = text.splitlines()
     footer_idx = next(i for i, line in enumerate(lines) if _TASK_CARD_FOOTER in line)
-    time_idx = next(i for i, line in enumerate(lines) if line.startswith("Current Time: "))
+    time_idx = next(i for i, line in enumerate(lines) if line.startswith("Last Updated: "))
     metadata_lines = lines[footer_idx + 1:time_idx]
     assert metadata_lines == [
         "session · cache 87.8% · miss 170.6k/1.0M · calls 13",

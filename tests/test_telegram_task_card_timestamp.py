@@ -4,7 +4,7 @@ Presentation contract (manager render, Jason's row-timestamp/current-time/footer
 request): every normal automatic row carries its OWN inline stamp (from that
 row's own ``started_at`` field, not the first row's), and the card's final
 standalone line reports the RENDER instant (not any row's start instant) as
-``Current Time: HH:MM:SS UTC±HH``, always present. An injected ``now`` keeps
+``Last Updated: HH:MM:SS UTC±HH``, always present. An injected ``now`` keeps
 these assertions deterministic.
 
 Retired: this file used to also test BaseAgent's per-row local-timestamp
@@ -19,7 +19,7 @@ omitting it only when ``ts`` is missing or malformed. The manager's
 ``_format_task_card_text`` rendering behavior tested below is unaffected — it
 still accepts an optional ``started_at`` per row (rendered inline when
 present, omitted safely when not) and always renders the render-instant
-``Current Time`` line.
+``Last Updated`` line.
 """
 
 from __future__ import annotations
@@ -31,14 +31,14 @@ from lingtai.mcp_servers.telegram.manager import TelegramManager, _TASK_CARD_FOO
 
 # ---------------------------------------------------------------------------
 # Rendering: every normal row carries its OWN inline stamp, and the card's
-# final standalone line is the render-time ``Current Time: ...`` label.
+# final standalone line is the render-time ``Last Updated: ...`` label.
 # ---------------------------------------------------------------------------
 
 _NOW = datetime(2026, 7, 12, 17, 18, 36, tzinfo=timezone(timedelta(hours=-7)))
 
 
 def _current_time_line(text):
-    return next(ln for ln in text.splitlines() if ln.startswith("Current Time: "))
+    return next(ln for ln in text.splitlines() if ln.startswith("Last Updated: "))
 
 
 def test_manager_renders_each_row_with_its_own_started_at():
@@ -57,7 +57,7 @@ def test_manager_renders_current_time_line_from_render_instant_not_row_start():
     ], now=_NOW)
     lines = text.splitlines()
     # The bottom line is the labelled render-time stamp, not the row's own start.
-    assert lines[-1] == "Current Time: 17:18:36 UTC-07"
+    assert lines[-1] == "Last Updated: 17:18:36 UTC-07"
     assert "04:08:08 UTC-07" != "17:18:36 UTC-07"
 
 
@@ -68,9 +68,9 @@ def test_current_time_line_follows_the_footer():
     ], now=_NOW)
     lines = text.splitlines()
     footer_idx = next(i for i, ln in enumerate(lines) if _TASK_CARD_FOOTER in ln)
-    time_idx = next(i for i, ln in enumerate(lines) if ln.startswith("Current Time: "))
+    time_idx = next(i for i, ln in enumerate(lines) if ln.startswith("Last Updated: "))
     assert time_idx > footer_idx
-    assert lines[time_idx] == "Current Time: 17:18:36 UTC-07"
+    assert lines[time_idx] == "Last Updated: 17:18:36 UTC-07"
 
 
 def test_parallel_rows_each_keep_their_own_started_at_not_the_first_rows():
@@ -90,7 +90,7 @@ def test_parallel_rows_each_keep_their_own_started_at_not_the_first_rows():
     assert "04:08:09 UTC-07" in read_line
     assert "04:08:11 UTC-07" in grep_line
     # The bottom line is still the single render-time stamp, distinct from any row.
-    assert _current_time_line(text) == "Current Time: 17:18:36 UTC-07"
+    assert _current_time_line(text) == "Last Updated: 17:18:36 UTC-07"
 
 
 def test_current_time_line_present_even_when_no_row_has_a_stamp():
@@ -100,9 +100,9 @@ def test_current_time_line_present_even_when_no_row_has_a_stamp():
         {"tool": "read", "tool_action": "", "reasoning": "y",
          "elapsed_s": 2, "done": False},
     ], now=_NOW)
-    # Current Time never depends on any row carrying a stamp — it always
+    # Last Updated never depends on any row carrying a stamp — it always
     # reflects the render instant.
-    assert text.splitlines()[-1] == "Current Time: 17:18:36 UTC-07"
+    assert text.splitlines()[-1] == "Last Updated: 17:18:36 UTC-07"
     # Rows without a stamp render with no inline suffix (malformed/missing
     # timestamp tolerance), never crashing and never fabricating one.
     for ln in text.splitlines():
@@ -124,7 +124,7 @@ def test_api_error_row_never_carries_a_stamp_alongside_a_stamped_tool_row():
     assert "04:08:08 UTC-07" in bash_line
     api_line = next(ln for ln in text.splitlines() if "API error" in ln)
     assert "UTC" not in api_line
-    assert text.splitlines()[-1] == "Current Time: 17:18:36 UTC-07"
+    assert text.splitlines()[-1] == "Last Updated: 17:18:36 UTC-07"
 
 
 def test_render_tool_row_without_started_at_is_safe():
@@ -140,7 +140,7 @@ def test_render_tool_row_without_started_at_is_safe():
     assert "(1s)" in text
     row_line = next(ln for ln in text.splitlines() if ln.startswith(("•", "✓")))
     assert "UTC" not in row_line
-    assert text.splitlines()[-1] == "Current Time: 17:18:36 UTC-07"
+    assert text.splitlines()[-1] == "Last Updated: 17:18:36 UTC-07"
 
 
 def test_footer_shows_actual_current_normal_row_setting():

@@ -12,10 +12,6 @@ class TaskCardResident:
     CHANNELS = ("automatic", "programmable")
     API_CALL_DIVIDER = "──────────"
 
-    # Sentinel distinguishing "no automatic override proposed" from "propose
-    # clearing the automatic slot" (``None`` is a legitimate override value).
-    NO_AUTOMATIC_OVERRIDE = object()
-
     def __init__(
         self,
         *,
@@ -30,14 +26,6 @@ class TaskCardResident:
         self._locks: dict[str, threading.RLock] = {}
         self._guard = threading.Lock()
         self._state_lock = threading.Lock()
-        # Routes whose stored "automatic" frame was produced by the
-        # tail-driven rows/metadata render, as opposed to the legacy scalar
-        # single-tool form (which carries no footer/metadata to refresh).
-        # Only a tail-driven frame is safe for a pre-edit refresh to
-        # regenerate; refreshing a scalar-form frame would silently discard
-        # its actual content. Owned here, alongside ``_frames``, so the
-        # marker can never drift out of sync with the frame it describes.
-        self._automatic_tail_driven: set[str] = set()
 
     @property
     def frames(self) -> dict[str, dict[str, str]]:
@@ -72,17 +60,8 @@ class TaskCardResident:
             self._enabled = enabled
             return changed
 
-    def set_frame(
-        self, account: str, chat_id: int, channel: str, frame: str | None,
-        *, tail_driven: bool = False,
-    ) -> None:
-        """Store one channel's last frame; ``None`` clears that channel only.
-
-        ``tail_driven`` marks (or, when clearing, unmarks) whether the stored
-        "automatic" frame was produced by the tail-driven rows/metadata
-        render — the only shape a pre-edit refresh may safely regenerate. It
-        is ignored for the "programmable" channel.
-        """
+    def set_frame(self, account: str, chat_id: int, channel: str, frame: str | None) -> None:
+        """Store one channel's last frame; ``None`` clears that channel only."""
         if channel not in self.CHANNELS:
             raise ValueError(f"unknown Task Card channel: {channel}")
         key = self.key(account, chat_id)
@@ -91,19 +70,8 @@ class TaskCardResident:
             slots.pop(channel, None)
             if not slots:
                 self._frames.pop(key, None)
-            if channel == "automatic":
-                self._automatic_tail_driven.discard(key)
         else:
             slots[channel] = frame
-            if channel == "automatic":
-                if tail_driven:
-                    self._automatic_tail_driven.add(key)
-                else:
-                    self._automatic_tail_driven.discard(key)
-
-    def is_automatic_tail_driven(self, account: str, chat_id: int) -> bool:
-        """Whether the committed "automatic" frame for this route was tail-driven."""
-        return self.key(account, chat_id) in self._automatic_tail_driven
 
     def compose(
         self,
@@ -112,7 +80,6 @@ class TaskCardResident:
         *,
         channel: str | None = None,
         frame: str | None = None,
-        automatic_override: object = NO_AUTOMATIC_OVERRIDE,
     ) -> str:
         """Compose the resident message from the two channel frames.
 
@@ -121,14 +88,6 @@ class TaskCardResident:
         stored frame, WITHOUT mutating ``_frames``. Callers commit the frame
         via ``set_frame`` only after the transport succeeds, so a failed edit
         never poisons the stored state.
-
-        ``automatic_override`` independently proposes replacement text for the
-        "automatic" slot (``None`` proposes clearing it), for the one case
-        where a programmable edit's pre-transport telemetry refresh needs to
-        compose with a *not-yet-committed* fresher automatic frame while
-        ``channel``/``frame`` simultaneously propose the programmable edit. It
-        never mutates ``_frames`` either — the caller commits it (or not)
-        exactly like the primary ``channel``/``frame`` override.
         """
         slots = dict(self._frames.get(self.key(account, chat_id), {}))
         if channel is not None:
@@ -138,11 +97,6 @@ class TaskCardResident:
                 slots.pop(channel, None)
             else:
                 slots[channel] = frame
-        if automatic_override is not self.NO_AUTOMATIC_OVERRIDE:
-            if automatic_override is None:
-                slots.pop("automatic", None)
-            else:
-                slots["automatic"] = automatic_override
         automatic = slots.get("automatic", "")
         programmable = slots.get("programmable", "")
         if not programmable:
@@ -165,7 +119,6 @@ class TaskCardResident:
         error: str,
         resident_id: str | None = None,
         empty_fallback: str | None = None,
-        tail_driven: bool = False,
     ) -> dict[str, Any]:
         if channel not in self.CHANNELS:
             return {"status": "error", "error": f"Unknown channel: {channel}"}
@@ -182,7 +135,6 @@ class TaskCardResident:
                 error=error,
                 resident_id=resident_id,
                 empty_fallback=empty_fallback,
-                tail_driven=tail_driven,
             )
 
     def rehydrate(self) -> dict[str, dict[str, str]]:

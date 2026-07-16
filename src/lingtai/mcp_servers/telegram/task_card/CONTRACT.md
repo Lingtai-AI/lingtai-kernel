@@ -382,53 +382,29 @@ one source of truth for each projection axis:
    `test_row_started_at_is_...` cases. Update this contract and its paired
    anatomy/tests together if the event schema, final-carrier path, supported
    fields, formatter budget, or timestamp provenance changes.
-5. **Freshness at every edit, including a programmable-only edit, committed
-   only atomically with transport success (Telegram 8482/8485/8487).** Every
-   real Task Card edit — automatic or programmable — re-reads and renders
-   fresh footer metadata immediately before composing and delivering; an edit
-   MUST NOT reuse a stale stored automatic-channel snapshot. A programmable
-   edit does not itself carry rows/telemetry, so `_deliver_channel_frame_locked`
-   syncs the event tail's bounded incremental read (`_sync_event_tail_state`,
-   never a full rescan) and renders a fresh automatic frame from the current
-   snapshot (`_current_automatic_frame`), whenever the Telegram-owned
-   `TaskCardResident` (rule 10) already has a *tail-driven* automatic frame
-   committed for that route (`TaskCardResident.is_automatic_tail_driven`).
-   That refreshed frame is a **transaction-local proposal only**, composed via
-   `_compose_channels`'s `automatic_override` — which `TaskCardResident.compose`
-   implements alongside the programmable edit's own proposed frame — and it
-   MUST NOT be written to the resident's frames before transport. Both
-   proposals commit together, atomically, through `TaskCardResident.set_frame`
-   **only after** the transport outcome is accepted as success (including the
-   established accepted-partial semantics in rule 7/8 above, where the card
-   content itself reached Telegram). On any transport failure — an
-   unknown/transient edit failure, a rejected rotation/recovery, or a
-   failed/indeterminate send — neither proposal commits: the previously
-   committed automatic frame and its tail-driven provenance MUST remain
-   byte-for-byte unchanged, so a failed programmable edit can never poison or
-   resurrect an automatic frame Telegram never received. A route whose
-   automatic frame was never tail-driven (the legacy scalar single-tool form,
-   which carries no footer to refresh) or that has no automatic frame at all
-   proposes no automatic override and is left untouched — this refresh never
-   fabricates an automatic footer that was never there, never changes row
-   content, and never touches the programmable slot's own content.
-
-   The pre-edit `_sync_event_tail_state` call is shared, manager-owned tail
-   state: it can advance the tail offset/metadata/groups past bytes this
-   transaction's own automatic-frame proposal then never commits (a failed
-   transport). To ensure that consumed telemetry is not silently lost,
-   `_sync_event_tail_state` latches `_task_card_event_pending_broadcast`
-   whenever it observes a change, regardless of caller. `_poll_event_tail`
-   clears the latch on its own next run and broadcasts whenever either its
-   own sync observed a change OR the latch was already set — so the automatic
-   broadcaster still gets exactly one delivery attempt per change even when a
-   failed programmable edit was the one to consume it from the tail. Regression
-   coverage:
-   `tests/test_telegram_task_card_event_tail.py:test_programmable_edit_re_reads_telemetry_appended_since_last_broadcast`,
-   `test_second_programmable_edit_picks_up_telemetry_changed_between_edits`,
-   `test_programmable_edit_does_not_fabricate_automatic_footer`,
-   `test_failed_programmable_edit_does_not_commit_refreshed_automatic_frame`,
-   `test_retry_after_failed_programmable_edit_commits_fresh_telemetry`, and
-   `test_failed_programmable_edit_does_not_starve_the_automatic_broadcast`.
+5. **Two fully independent channels, each with its own `Last Updated` line.**
+   The automatic channel is updated ONLY from the event-tail poll/broadcast
+   path (`_poll_event_tail` → `_broadcast_task_card_event_window`); its footer
+   line is labeled `Last Updated: HH:MM:SS UTC±HH` (`_TASK_CARD_TIME_PREFIX`)
+   and means when that automatic event-tail snapshot was last rendered — it is
+   not a wall clock that changes on an unrelated programmable edit. The
+   programmable channel is updated ONLY from its own renderer/watch/update
+   path (`_task_card_programmable` → `_format_programmable_card_text`); every
+   non-empty programmable frame carries its own `Last Updated: HH:MM:SS UTC±HH`
+   line meaning when that programmable frame itself was accepted/rendered for
+   delivery. Neither channel's update path reads, polls, advances, overrides,
+   proposes, or commits the other channel's state: `_deliver_channel_frame_locked`
+   composes and commits exactly the one channel (`channel` argument) it was
+   called for, and a programmable edit never touches
+   `_task_card_event_offset`/`_task_card_event_metadata`/`_task_card_event_groups`
+   or the automatic frame. An automatic update therefore always leaves the
+   committed programmable frame byte-for-byte unchanged, and a programmable
+   update always leaves the committed automatic frame and session footer
+   byte-for-byte unchanged. Regression coverage:
+   `tests/test_telegram_task_card_event_tail.py:test_automatic_footer_label_is_last_updated`,
+   `test_programmable_frame_includes_its_own_last_updated_line`,
+   `test_programmable_update_leaves_automatic_frame_unchanged`, and
+   `test_automatic_update_leaves_programmable_frame_unchanged`.
 
 ## Resident and API-call-group conformance
 
