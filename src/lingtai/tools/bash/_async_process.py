@@ -98,6 +98,11 @@ class BashAsyncProcessPort(Protocol):
     ) -> ProcessCompletion: ...
 
 
+# Canonical Port name; the Bash spelling remains an internal compatibility name
+# for retained PR1 imports and durable supervisor code.
+ShellAsyncProcessPort = BashAsyncProcessPort
+
+
 def process_ref_from_state(state: dict[str, object], prefix: str = "command") -> ProcessRef | None:
     value = state.get(f"{prefix}_process")
     return ProcessRef.from_dict(value)

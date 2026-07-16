@@ -25,7 +25,7 @@ flag list LingTai could ship.
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-opencode/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-opencode/SKILL.md` has
    broader OpenCode CLI context: providers, agents, config files).
 2. Run, in bash: `opencode --version`, `opencode --help`, and
    `opencode run --help`. The daemon backend wraps `opencode run`, so

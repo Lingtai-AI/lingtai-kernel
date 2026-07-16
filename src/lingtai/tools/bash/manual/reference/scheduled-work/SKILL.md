@@ -1,7 +1,7 @@
 ---
 name: bash-scheduled-work
 description: >
-  Nested bash-manual reference for cron-driven scheduled work: when to use host
+  Nested shell-manual reference for cron-driven scheduled work: when to use host
   schedulers, the LingTai wake-by-mailbox-drop contract, prompt boundaries,
   script hygiene, macOS launchd, Linux systemd timers, crontab fallback, and the
   launchd process-tree reaping gotcha.
@@ -16,7 +16,7 @@ maintenance: |
 
 # Scheduled Work Reference
 
-Nested bash-manual reference. Open this when the top-level `bash-manual` router
+Nested shell-manual reference. Open this when the top-level `shell-manual` router
 selects host-scheduler setup for recurring or time-driven work.
 
 ## Scheduled / cron-driven work

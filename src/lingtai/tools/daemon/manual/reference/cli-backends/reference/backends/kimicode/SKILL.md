@@ -25,7 +25,7 @@ daemon entries use the canonical backend name `kimicode`.
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-kimicode/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-kimicode/SKILL.md` has
    broader Kimi Code CLI context: per-run environment contract, MCP config
    evidence, validation checklist).
 2. Run, in bash: `kimi --version` and `kimi --help`. The daemon backend wraps

@@ -281,7 +281,7 @@ class LoopGuard:
             "message": verdict.warning,
             "skill_refs": [
                 "system-manual",
-                "bash-manual",
+                "shell-manual",
                 "daemon-manual",
                 "email-manual",
             ],

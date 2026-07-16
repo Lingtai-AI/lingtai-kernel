@@ -110,7 +110,7 @@ files, not standalone top-level skills.
     report path, or ask a named peer before guessing). `email` is
     daemon-eligible communication, but it is not granted by default; include
     `tools: ["email"]` only when the daemon should be able to use internal mail.
-    Other tool names still matter for file/bash/web/etc. access.
+    Other tool names still matter for file/shell/web/etc. access.
   - `skills` answers **which workflows the daemon should know about**. It is an
     optional list of strings. Each string may be either a skill directory
     containing `SKILL.md` or a direct `SKILL.md` path; relative paths resolve
@@ -154,7 +154,7 @@ files, not standalone top-level skills.
   - `backend_options`: raw CLI flags for CLI backends only.
   - `context_token_limit`: optional context-token compaction threshold (rendered/provider-context tokens, not cumulative spend). Effective only for `backend="lingtai"` tasks whose resolved provider is Codex (`codex`/`codex-pool`) or the native `mimo` LLM provider (`manifest.llm.provider="mimo"` — NOT the `backend` enum's `mimo`/`mimocode` alias, which drives the external `mimo` CLI as a subprocess and never consults this field at all); every other provider and every external CLI backend ignores it. When the session's provider-visible input-token count reaches the limit, the runtime compacts provider context via that provider's standalone compaction (`POST /responses/compact`) and continues the same tool loop — the daemon keeps running; nothing restarts or drops history. Native `mimo` defaults to the stateless OpenAI Responses wire (full-history/raw-output-item replay; never `store`/`previous_response_id`/`conversation`/generic `context_management` — MiMo's Responses API marks those incompatible); an explicit `wire_api="chat_completions"` on the preset still selects the Chat Completions escape hatch instead. **Failure policy differs by provider:** a standalone-compaction failure is non-fatal for Codex (that turn's compaction is skipped; the loop continues on full history) but a HARD failure for native `mimo` (it propagates to the caller — never silently continuing on full history and never falling back to a different wire), because MiMo has no generic `context_management` fallback and no server-side state to lean on. Omit to inherit the parent service's resolved context window as the threshold. Must be a positive integer; a boolean is rejected.
 - Treat `system_prompt` as the parent's behavioral contract for **all** tools
-  and selected skills/MCP context, not only for communication. If a daemon receives `bash`,
+  and selected skills/MCP context, not only for communication. If a daemon receives `shell`,
   say whether it may run mutating commands; if it receives file access, say what
   it may read/write; if it receives web/MCP tools, say what external calls are
   allowed; if it can communicate, say who it may contact and what context it may
@@ -240,7 +240,7 @@ contract:
 {
   "task": "Audit the daemon manual changes and write a concise review to reports/daemon-manual-review.md.",
   "system_prompt": "Act as a documentation reviewer. Stay read-only except for the requested report file. Use the selected daemon-manual skills only when you need exact daemon semantics. Use the local-docs MCP only for daemon documentation lookup, not for unrelated search. You may use email only to ask dev-2 for missing daemon context; do not contact the human. If you email dev-2, state the exact question, include only the relevant snippet, and summarize the exchange in your final report. Do not use web tools unless the local docs are insufficient.",
-  "tools": ["file", "bash"],
+  "tools": ["file", "shell"],
   "mcp": [
     {"name": "local-docs", "transport": "stdio", "command": "python", "args": ["-m", "local_docs_mcp"]}
   ],

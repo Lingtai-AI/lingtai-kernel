@@ -113,10 +113,11 @@ class DetachedDaemonExecutionHost:
         # setup used by the parent manager.  No full Agent/workdir lease is
         # constructed in this process.
         from lingtai.tools.daemon import EMANATION_BLACKLIST, _ToolCollector
-        from lingtai.tools.registry import BUILTIN_TOOLS, setup_capability
+        from lingtai.tools.registry import BUILTIN_TOOLS, canonical_capability_name, setup_capability
         collector = _ToolCollector(self._agent)
         names = set()
         for name in manifest.get("tools", []):
+            name = canonical_capability_name(name)
             if name in EMANATION_BLACKLIST:
                 continue
             names.add(name)

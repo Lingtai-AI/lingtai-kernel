@@ -1,6 +1,6 @@
 ---
 name: bash-contract
-tool: bash
+tool: shell
 contract_version: 3
 related_files:
   - src/lingtai/tools/bash/__init__.py
@@ -11,6 +11,12 @@ related_files:
   - src/lingtai/adapters/bash.py
   - src/lingtai/adapters/bash_process.py
   - src/lingtai/adapters/bash_state_lock.py
+  - src/lingtai/adapters/shell.py
+  - src/lingtai/adapters/shell_process.py
+  - src/lingtai/adapters/shell_state_lock.py
+  - src/lingtai/adapters/windows/powershell.py
+  - src/lingtai/adapters/windows/powershell_process.py
+  - src/lingtai/adapters/windows/powershell_state_lock.py
   - src/lingtai/adapters/posix/bash.py
   - src/lingtai/adapters/posix/bash_process.py
   - src/lingtai/adapters/posix/bash_state_lock.py
@@ -22,9 +28,9 @@ maintenance: |
   same change and bump contract_version on breaking contract edits.
 ---
 
-# Bash capability contract
+# Shell capability contract
 
-`bash` runs shell commands for an agent that has explicitly opted into shell
+The canonical `shell` tool runs shell commands for an agent that has explicitly opted into shell
 access. It is a capability, not an intrinsic, because shell access is powerful
 and should be granted deliberately. The implementation lives in
 `src/lingtai/tools/bash/`; the code is the source of truth.
@@ -41,7 +47,7 @@ and should be granted deliberately. The implementation lives in
 
 **Do not use this for:**
 - Long-running peer/subagent work: use `daemon` (see
-  `src/lingtai/tools/daemon/CONTRACT.md`) — `bash` async jobs are plain background
+  `src/lingtai/tools/daemon/CONTRACT.md`) — `shell` async jobs are plain background
   processes, not reasoning agents.
 - Code navigation only: read `src/lingtai/tools/bash/ANATOMY.md`.
 
@@ -51,15 +57,15 @@ invariants.
 
 ## Scope
 
-- Canonical tool name: `bash`.
-- One tool exposes three actions: `run` (default), `poll`, `cancel`.
-- Policy is file-based (`bash_policy.json` is the default). `yolo=True` at setup
+- Canonical tool name: `shell` (the retained implementation package is `lingtai.tools.bash`).
+- One public tool exposes three actions: `run` (default), `poll`, `cancel`.
+- Policy is file-based (`bash_policy.json` is the POSIX default; Windows selects the reviewed `powershell_policy.json`). `yolo=True` at setup
   installs an allow-everything policy (unsandboxed command set) and is the
   documented default for trusted agents. Two policy modes exist: **allowlist**
   (only listed commands, active whenever an `allow` key is present) and
   **denylist** (everything except listed commands). The mode is implicit.
 
-**Non-goals:** `bash` does not sandbox the command's own filesystem writes
+**Non-goals:** `shell` does not sandbox the command's own filesystem writes
 beyond the `working_dir` scope check; it does not manage agent lifecycle; it
 does not stream output incrementally (async jobs are polled, not streamed).
 
@@ -76,7 +82,7 @@ for `command` and `job_id`. `action` defaults to `run`.
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
 | `run` (sync) | Provider schema: `command`, `reminder`; runtime consumes `command` only | `working_dir`, `timeout` (default 30), `summary` | `{status: "ok", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — empty command, policy-denied, cwd outside sandbox, timeout (with broad-scan hint), or spawn failure |
-| `run` (async) | Provider/runtime: `command`, `async: true`, `reminder` | `working_dir`, `summary` | `{status: "ok", job_id, pid, message, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification; read `bash-manual` and `notification-manual` for details | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
+| `run` (async) | Provider/runtime: `command`, `async: true`, `reminder` | `working_dir`, `summary` | `{status: "ok", job_id, pid, message, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification; read `shell-manual` and `notification-manual` for details | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
 | `poll` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | running: `{status: "running", job_id, pid?}` while the recorded supervisor may still commit; known finished: `{status: "done", exit_status_known: true, exit_code, stdout, stderr, ok, command_status, warning?}`; unrecoverable/legacy terminal: `{status: "done", exit_status_known: false, exit_code: null, stdout, stderr}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or an already terminal-consumed job |
 | `cancel` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | `{status: "cancelled", job_id}` only after the supervisor has committed the held child's exact terminal status and cancellation atomically consumes/suppresses the job | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, terminal job, legacy job, or a durable cancellation request still awaiting a terminal commit (which remains pollable/remindable) |
 
@@ -207,10 +213,21 @@ invocation and does not use the key for adapter dispatch. This is fail-loud
 schema/semantic validation, not cryptographic integrity for user-rewritable
 durable state.
 
+The registered description is setup-time metadata and always includes
+`Active shell dialect: posix` or `Active shell dialect: powershell`. The call
+schema has no writable dialect argument, so a call cannot claim a different
+language from the injected adapter. On Windows the selector requires PowerShell
+7 `pwsh`, uses argv form with `-NoProfile` and `-NonInteractive`, and selects
+native Job Object and cross-process state-lock adapters. A legacy durable record
+with neither dialect nor invocation remains readable evidence but is explicitly
+unrecoverable on a non-POSIX host rather than being reinterpreted as PowerShell.
+
 ## Cross-platform invariants
 
-The current production adapters are POSIX. New adapters must preserve the policy
-invariants below without copying POSIX mechanisms into the Bash-local Ports.
+POSIX and PowerShell 7 are the production dialect adapters. Platform-specific
+process and lock mechanisms stay outside the retained Bash-local Ports; adapters
+must preserve the policy invariants below without copying POSIX mechanisms into
+those Ports.
 
 - POSIX sync execution consumes a script-form `ShellInvocation`, equivalent to
   `subprocess.run(command, shell=True, ...)` — POSIX shell string semantics.
@@ -264,7 +281,8 @@ for cancellation correctness.
 | Reminder validation rejects non-finite and backend-unsafe delays | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_async_reminder_rejects_invalid_values` |
 | Deadline claim, bounded cancellation suppression/recovery, and terminal handling have deterministic lock-owned ordering | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_terminal_pop_before_deadline_claim_suppresses_reminder`, `::test_deadline_claim_before_terminal_pop_publishes_once`, `::test_expired_suppressing_reminder_recovers_after_manager_crash` |
 | Direct-manager fallback appends remain multi-event safe across managers | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_direct_manager_fallback_is_serialized_by_shared_store` |
-| `yolo=True` allows all commands | `src/lingtai/tools/bash/__init__.py` | `tests/test_layers_bash.py::test_add_capability_bash_yolo` |
+| `yolo=True` allows all commands and the registered public identity is `shell` | `src/lingtai/tools/bash/__init__.py` | `tests/test_layers_bash.py::test_add_capability_bash_yolo`, `tests/test_shell_pr1_contract.py::test_setup_registers_shell_and_advertises_selected_dialect` |
+| PowerShell argv/dialect policy and Windows selector composition stay behind shared Ports | `src/lingtai/adapters/windows/` and `src/lingtai/adapters/shell*.py` | `tests/test_shell_pr1_contract.py` (native Windows execution remains a separate acceptance gate) |
 
 ## Verification matrix
 

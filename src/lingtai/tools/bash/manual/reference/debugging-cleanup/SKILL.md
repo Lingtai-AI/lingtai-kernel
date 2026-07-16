@@ -1,7 +1,7 @@
 ---
 name: bash-debugging-cleanup
 description: >
-  Nested bash-manual reference for debugging silent scheduled jobs and retiring
+  Nested shell-manual reference for debugging silent scheduled jobs and retiring
   cron jobs safely: scheduler fired, script ran, work landed, agent saw mail,
   worked launchd diagnosis, cleanup, and bash work footprint hygiene.
 version: 1.0.0
@@ -15,7 +15,7 @@ maintenance: |
 
 # Debugging and Cleanup Reference
 
-Nested bash-manual reference. Open this when a scheduled job goes silent, fires
+Nested shell-manual reference. Open this when a scheduled job goes silent, fires
 incorrectly, or needs to be retired or cleaned up.
 
 ## Debugging cron — when things go silent

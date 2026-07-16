@@ -1,13 +1,9 @@
-"""Fail-loud Bash asynchronous process composition selector."""
+"""Compatibility selector for the retained internal Bash package."""
 from __future__ import annotations
 
-import os
-
 from lingtai.tools.bash._async_process import BashAsyncProcessPort
-from .posix.bash_process import PosixBashAsyncProcessAdapter
+from .shell_process import select_shell_async_process
 
 
 def select_bash_async_process() -> BashAsyncProcessPort:
-    if os.name == "posix":
-        return PosixBashAsyncProcessAdapter()
-    raise NotImplementedError(f"Bash async process supervision is unsupported on {os.name!r}")
+    return select_shell_async_process()

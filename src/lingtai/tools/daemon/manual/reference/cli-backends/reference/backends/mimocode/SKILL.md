@@ -31,7 +31,7 @@ between the harness flags and the trailing prompt positional.
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-mimocode/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-mimocode/SKILL.md` has
    broader MiMo Code CLI context).
 2. Run, in bash: `mimo --version`, `mimo --help`, and `mimo run --help`.
    The daemon backend wraps `mimo run`, so `mimo run --help` is the relevant

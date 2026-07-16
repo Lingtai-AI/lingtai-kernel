@@ -423,7 +423,7 @@ def materialize_active_preset(
       with a different ceiling.
     - **Core-default carry-forward** (capabilities the preset *omits*): for
       capability names in ``core_defaults`` — the always-on floor
-      (``knowledge``/``skills``/``bash``/``avatar``/``daemon``/``mcp``/
+      (``knowledge``/``skills``/``shell``/``avatar``/``daemon``/``mcp``/
       ``read``/``write``/``edit``/``glob``/``grep``) — init.json's kwargs are
       carried into the materialized manifest even when the preset never
       mentions the capability. Without this, a preset that omits ``daemon``

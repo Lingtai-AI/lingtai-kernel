@@ -25,7 +25,7 @@ compatibility alias with the same runner and reserved-flag set.
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-claude-code/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-claude-code/SKILL.md` has
    broader Claude Code CLI context).
 2. Run, in bash: `claude --version` and `claude --help`. The daemon backend
    wraps `claude --print`, so the print-mode flags in `claude --help` are the

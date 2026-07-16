@@ -89,8 +89,8 @@ def test_agent_capabilities_dict_kwarg_overrides_default(tmp_path):
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities={"bash": {"yolo": False}},
     )
-    bash_entry = [(n, k) for n, k in agent._capabilities if n == "bash"]
-    assert bash_entry and bash_entry[0][1].get("yolo") is False
+    shell_entry = [(n, k) for n, k in agent._capabilities if n == "shell"]
+    assert shell_entry and shell_entry[0][1].get("yolo") is False
     agent.stop(timeout=1.0)
 
 

@@ -27,7 +27,7 @@ could ship. `omp` is an accepted backend alias that canonicalizes to
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-oh-my-pi/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-oh-my-pi/SKILL.md` has
    broader Oh-My-Pi CLI context).
 2. Run, in bash: `omp --version` and `omp --help`. The daemon backend wraps
    the root `omp` invocation (no subcommand), so the root help is the

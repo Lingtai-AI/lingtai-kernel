@@ -23,7 +23,7 @@ is the authority — not this page, and not any flag list LingTai could ship.
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-cursor-agent/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-cursor-agent/SKILL.md` has
    broader Cursor Agent CLI context).
 2. Run `agent --version` and `agent --help` in bash. The daemon spawns root
    `agent` directly — `agent -p --force --output-format stream-json <prompt>` —

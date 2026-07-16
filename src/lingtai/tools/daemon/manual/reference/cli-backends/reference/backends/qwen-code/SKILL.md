@@ -26,7 +26,7 @@ ship. The alias `qwen` canonicalizes to the `qwen-code` backend id.
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-qwen-code/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-qwen-code/SKILL.md` has
    broader Qwen Code CLI context).
 2. Run, in bash: `qwen --version` and `qwen --help`. The daemon backend wraps
    the top-level `qwen` binary directly — it spawns

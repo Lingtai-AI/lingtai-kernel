@@ -1,0 +1,12 @@
+{
+  "deny": [
+    "Remove-Item", "ri", "rm", "rmdir", "del", "erase", "rd",
+    "Format-Volume", "Clear-Disk", "Initialize-Disk",
+    "Stop-Computer", "Restart-Computer", "Stop-Process", "kill",
+    "Invoke-Expression", "iex", "Start-Process",
+    "Set-Acl", "icacls", "takeown",
+    "Invoke-WebRequest", "iwr", "curl", "wget",
+    "Set-ExecutionPolicy", "Unregister-ScheduledTask",
+    "reg", "sc", "diskpart"
+  ]
+}

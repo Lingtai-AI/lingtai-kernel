@@ -1,7 +1,7 @@
 ---
 name: bash-claude-code
 description: >
-  Nested bash-manual reference for Claude Code CLI. Delegate code implementation, patch writing, documentation, and refactoring to
+  Nested shell-manual reference for Claude Code CLI. Delegate code implementation, patch writing, documentation, and refactoring to
   Claude Code CLI (Anthropic's coding agent). Runs non-interactively from bash,
   uses the human's Claude Max subscription (no additional API costs), and supports
   quality/effort/budget controls. Use this when you need to write code, generate
@@ -19,7 +19,7 @@ maintenance: |
 
 # Claude Code CLI — Code Delegation
 
-> Ownership: this CLI-agent reference now lives under `bash-manual`
+> Ownership: this CLI-agent reference now lives under `shell-manual`
 > because the workflow is executed as a long-running shell subprocess.
 > It was moved from `swiss-knife` during the bash harness migration.
 

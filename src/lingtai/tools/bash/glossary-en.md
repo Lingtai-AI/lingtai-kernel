@@ -10,5 +10,5 @@ related_files:
 - src/lingtai/tools/bash/glossary-zh.md
 - src/lingtai/tools/bash/glossary-wen.md
 maintenance: |
-  English glossary for the `bash` tool package (lingtai.tools.bash); the English body must stay empty per tool_glossary.py's language contract — update only the identity/schema fields here, and update the zh/wen bodies in lockstep when bash's public tool schema changes.
+  English glossary for the canonical `shell` tool (retained implementation package lingtai.tools.bash); the English body must stay empty per tool_glossary.py's language contract — update only the identity/schema fields here, and update the zh/wen bodies in lockstep when shell's public tool schema changes.
 ---

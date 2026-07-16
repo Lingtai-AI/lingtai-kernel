@@ -5,7 +5,9 @@ related_files:
   - src/lingtai/__main__.py
   - src/lingtai/agent.py
   - src/lingtai/adapters/posix/ANATOMY.md
-  - src/lingtai/adapters/bash.py
+  - src/lingtai/adapters/shell.py
+  - src/lingtai/adapters/shell_process.py
+  - src/lingtai/adapters/shell_state_lock.py
   - src/lingtai/adapters/refresh_watcher.py
   - src/lingtai/adapters/lifecycle_clock.py
   - src/lingtai/auth/ANATOMY.md

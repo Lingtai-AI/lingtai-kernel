@@ -24,7 +24,7 @@ flag list LingTai could ship.
 
 ## Discover flags from the installed CLI
 
-1. Load `bash-manual` (its nested `reference/bash-openai-codex/SKILL.md` has
+1. Load `shell-manual` (its nested `reference/bash-openai-codex/SKILL.md` has
    broader Codex CLI context).
 2. Run, in bash: `codex --version`, `codex --help`, and `codex exec --help`.
    The daemon backend wraps `codex exec`, so `codex exec --help` is the

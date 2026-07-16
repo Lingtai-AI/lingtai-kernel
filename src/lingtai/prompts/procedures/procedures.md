@@ -190,7 +190,7 @@ discipline keeps multiple same-day molts chronologically stable.
 | Daemon inspection/debugging | `daemon-manual` |
 | Skill authoring/publishing | `skills-manual` |
 | Knowledge entries | `knowledge-manual` |
-| Shell commands, cron, host scheduling | `bash-manual` |
+| Shell commands, cron, host scheduling | `shell-manual` |
 | SQLite / log.sqlite / LingTai runtime logs / `lingtai-agent log doctor|query|rebuild` / trace inspection | `system-manual` → `reference/sqlite-log-query/SKILL.md` |
 | Kernel architecture / breaking changes | `lingtai-kernel-anatomy` |
 | TUI / portal code navigation | `lingtai-tui-anatomy` |

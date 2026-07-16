@@ -1,7 +1,7 @@
 ---
 name: bash-opencode
 description: >
-  Nested bash-manual reference for OpenCode CLI. Manual (not a tool) for OpenCode CLI — an open-source terminal coding agent
+  Nested shell-manual reference for OpenCode CLI. Manual (not a tool) for OpenCode CLI — an open-source terminal coding agent
   that runs locally, supports 75+ LLM providers through Models.dev, and can be
   scripted with `opencode run` or served through a reusable headless backend.
   Read this when the human asks to use OpenCode as a CLI tool, compare it with
@@ -19,7 +19,7 @@ maintenance: |
 
 # OpenCode CLI — Local Coding Agent
 
-> Ownership: this CLI-agent reference now lives under `bash-manual`
+> Ownership: this CLI-agent reference now lives under `shell-manual`
 > because the workflow is executed as a long-running shell subprocess.
 > It was moved from `swiss-knife` during the bash harness migration.
 

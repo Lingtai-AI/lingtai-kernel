@@ -152,21 +152,21 @@ ownership:
 - This page owns the daemon API contract: backend names, `daemon(...)` behavior,
   `backend_options`, result/session capture, `ask`/resume, and backend-specific
   parser caveats.
-- `bash-manual` owns the shell subprocess recipes for the underlying CLIs. Before
+- `shell-manual` owns the shell subprocess recipes for the underlying CLIs. Before
   launching or troubleshooting a long-running coding CLI directly from bash,
   read the matching nested bash reference:
-  - Claude Code: `bash-manual` → `reference/bash-claude-code/SKILL.md`
-  - OpenAI Codex: `bash-manual` → `reference/bash-openai-codex/SKILL.md`
-  - OpenCode: `bash-manual` → `reference/bash-opencode/SKILL.md`
-  - Cursor Agent: `bash-manual` → `reference/bash-cursor-agent/SKILL.md`
-  - MiMo Code: `bash-manual` → `reference/bash-mimocode/SKILL.md`
-  - Qwen Code: `bash-manual` → `reference/bash-qwen-code/SKILL.md`
-  - Oh-My-Pi / Pi Coding Agent: `bash-manual` →
+  - Claude Code: `shell-manual` → `reference/bash-claude-code/SKILL.md`
+  - OpenAI Codex: `shell-manual` → `reference/bash-openai-codex/SKILL.md`
+  - OpenCode: `shell-manual` → `reference/bash-opencode/SKILL.md`
+  - Cursor Agent: `shell-manual` → `reference/bash-cursor-agent/SKILL.md`
+  - MiMo Code: `shell-manual` → `reference/bash-mimocode/SKILL.md`
+  - Qwen Code: `shell-manual` → `reference/bash-qwen-code/SKILL.md`
+  - Oh-My-Pi / Pi Coding Agent: `shell-manual` →
     `reference/bash-oh-my-pi/SKILL.md`
-  - Kimi Code: `bash-manual` → `reference/bash-kimicode/SKILL.md`
+  - Kimi Code: `shell-manual` → `reference/bash-kimicode/SKILL.md`
 
 Candidate harnesses that are not daemon backends yet (Gemini CLI, Aider, Goose,
-OpenHands, Crush, and Zed/ACP bridges) are tracked under `bash-manual` as
+OpenHands, Crush, and Zed/ACP bridges) are tracked under `shell-manual` as
 `reference/bash-*/SKILL.md` pages until their command/session contracts are
 stable enough for backend promotion.
 
@@ -243,7 +243,7 @@ intrinsic is available only
 when explicitly requested in the task `tools` list, so result-only/no-tool
 emanations cannot communicate in the local agent network unless the parent opted
 in. Other intrinsics remain unavailable to keep daemon lightweight and
-non-recursive. As with file/bash/web/MCP tools, technical availability is not a
+non-recursive. As with file/shell/web/MCP tools, technical availability is not a
 policy by itself: the parent should use `system_prompt` to say when and how the
 daemon may use any available tool, including who it may contact and what context
 it may share if email is involved.
@@ -308,7 +308,7 @@ loader), read `reference/backends/kimicode/SKILL.md`. For Cursor (binary `agent`
 This is intentionally a passthrough, not a fixed table. Claude Code, Codex,
 OpenCode, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, and Cursor rev their flag
 lists between releases. Before adding new options, run the installed CLI's
-`--help` in `bash` to discover what it supports today (`claude --help`,
+`--help` in `shell` to discover what it supports today (`claude --help`,
 `codex exec --help`, `opencode run --help`, `mimo run --help`, `qwen --help`,
 `omp --help`, `kimi --help`, or `agent --help`). Anything here is illustrative,
 not authoritative. Note that each backend reserves its own harness-owned flags

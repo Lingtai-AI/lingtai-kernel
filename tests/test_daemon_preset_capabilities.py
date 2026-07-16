@@ -579,7 +579,7 @@ def test_emanate_preset_broken_requested_vision_fails(tmp_path, monkeypatch):
 #
 # A preset selects the child LLM + provider-specific capabilities
 # (e.g. zhipu vision / web_search). It does NOT re-declare the always-on
-# CORE_DEFAULTS floor (bash / read / write / edit / glob / grep), because the
+# CORE_DEFAULTS floor (shell / read / write / edit / glob / grep), because the
 # TUI preset wizard only writes overrides/opt-ins into manifest.capabilities.
 # So requested host tools that are valid in the *parent* capability set must
 # stay valid even when a preset is provided — they must not become "Unknown
@@ -587,10 +587,10 @@ def test_emanate_preset_broken_requested_vision_fails(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_build_tool_surface_preset_keeps_parent_host_tools(tmp_path):
-    """Parent has the core floor (bash + file). Preset declares only a
-    provider capability (web_search). Requesting host tools like 'bash' must
+    """Parent has the core floor (shell + file). Preset declares only a
+    provider capability (web_search). Requesting host tools like 'shell' must
     resolve from the parent surface, not be rejected as unknown."""
-    agent = _make_agent(tmp_path, ["file", "bash", "daemon"])
+    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
     mgr = agent.get_capability("daemon")
 
     # Preset sandbox declares only a provider capability — NOT the host floor.
@@ -598,22 +598,22 @@ def test_build_tool_surface_preset_keeps_parent_host_tools(tmp_path):
         {},  # provider caps would go here; empty is the minimal repro
         {"provider": "mock", "model": "mock"},
     )
-    assert "bash" not in preset_schemas  # preset does not supply the floor
+    assert "shell" not in preset_schemas  # preset does not supply the floor
 
     schemas, dispatch = mgr._build_tool_surface(
-        ["bash"],
+        ["shell"],
         preset_surface=(preset_schemas, preset_handlers),
     )
     names = {s.name for s in schemas}
-    assert "bash" in names, "host tool 'bash' must survive a preset"
-    # Dispatch wires to the parent's real bash handler (preset didn't supply one)
-    assert dispatch["bash"] is agent._tool_handlers["bash"]
+    assert "shell" in names, "host tool 'shell' must survive a preset"
+    # Dispatch wires to the parent's real shell handler (preset didn't supply one)
+    assert dispatch["shell"] is agent._tool_handlers["shell"]
 
 
 def test_build_tool_surface_preset_keeps_full_host_tool_set(tmp_path):
-    """The exact failing request from the bug report: file group + bash with a
+    """The exact failing request from the bug report: file group + shell with a
     preset must all be accepted when valid in the parent surface."""
-    agent = _make_agent(tmp_path, ["file", "bash", "daemon"])
+    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
     mgr = agent.get_capability("daemon")
 
     preset_schemas, preset_handlers = mgr._instantiate_preset_capabilities(
@@ -621,11 +621,11 @@ def test_build_tool_surface_preset_keeps_full_host_tool_set(tmp_path):
         {"provider": "mock", "model": "mock"},
     )
     schemas, dispatch = mgr._build_tool_surface(
-        ["read", "write", "edit", "bash", "grep", "glob"],
+        ["read", "write", "edit", "shell", "grep", "glob"],
         preset_surface=(preset_schemas, preset_handlers),
     )
     names = {s.name for s in schemas}
-    for n in ("read", "write", "edit", "bash", "grep", "glob"):
+    for n in ("read", "write", "edit", "shell", "grep", "glob"):
         assert n in names, f"host tool {n!r} must survive a preset"
         assert n in dispatch
 
@@ -633,7 +633,7 @@ def test_build_tool_surface_preset_keeps_full_host_tool_set(tmp_path):
 def test_build_tool_surface_preset_unknown_tool_still_rejected(tmp_path):
     """Carrying parent host tools forward must NOT weaken rejection of truly
     unknown tools — names absent from both preset and parent still raise."""
-    agent = _make_agent(tmp_path, ["file", "bash", "daemon"])
+    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
     mgr = agent.get_capability("daemon")
 
     preset_schemas, preset_handlers = mgr._instantiate_preset_capabilities(
@@ -642,12 +642,12 @@ def test_build_tool_surface_preset_unknown_tool_still_rejected(tmp_path):
     )
     try:
         mgr._build_tool_surface(
-            ["bash", "totally_made_up_tool"],
+            ["shell", "totally_made_up_tool"],
             preset_surface=(preset_schemas, preset_handlers),
         )
     except ValueError as e:
         assert "totally_made_up_tool" in str(e)
-        assert "bash" not in str(e)  # bash is valid; only the bogus one is named
+        assert "shell" not in str(e)  # shell is valid; only the bogus one is named
     else:
         raise AssertionError("expected ValueError for unknown tool")
 
@@ -656,30 +656,30 @@ def test_build_tool_surface_preset_capability_overrides_parent_handler(tmp_path)
     """When a preset re-instantiates a tool the parent also has, the preset's
     sandbox handler wins (it may be configured against the child LLM); the
     parent handler only fills in for floor tools the preset omitted."""
-    agent = _make_agent(tmp_path, ["file", "bash", "daemon"])
+    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
     mgr = agent.get_capability("daemon")
 
-    # Preset re-declares 'read' (gets its own sandbox handler) but omits 'bash'.
+    # Preset re-declares 'read' (gets its own sandbox handler) but omits 'shell'.
     preset_schemas, preset_handlers = mgr._instantiate_preset_capabilities(
         {"read": {}},
         {"provider": "mock", "model": "mock"},
     )
     schemas, dispatch = mgr._build_tool_surface(
-        ["read", "bash"],
+        ["read", "shell"],
         preset_surface=(preset_schemas, preset_handlers),
     )
     # read resolves from the preset sandbox, not the parent
     assert dispatch["read"] is preset_handlers["read"]
     assert dispatch["read"] is not agent._tool_handlers["read"]
-    # bash falls back to the parent (preset didn't supply it)
-    assert dispatch["bash"] is agent._tool_handlers["bash"]
+    # shell falls back to the parent (preset didn't supply it)
+    assert dispatch["shell"] is agent._tool_handlers["shell"]
 
 
 def test_build_tool_surface_preset_does_not_inherit_parent_mcp(tmp_path):
     """Preserving the parent host floor must NOT smuggle parent MCP tools into a
     preset emanation. Parent MCP names are excluded from the host floor and a
     request for one still raises the task-mcp-registration guard."""
-    agent = _make_agent(tmp_path, ["file", "bash", "daemon"])
+    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
     agent._sealed = False
     agent.add_tool("parent_mcp_tool", schema={"type": "object", "properties": {}},
                    handler=lambda args: {"ok": True}, description="Parent MCP tool")
@@ -694,10 +694,10 @@ def test_build_tool_surface_preset_does_not_inherit_parent_mcp(tmp_path):
 
     # Host floor present, parent MCP absent.
     schemas, dispatch = mgr._build_tool_surface(
-        ["bash"], preset_surface=(preset_schemas, preset_handlers),
+        ["shell"], preset_surface=(preset_schemas, preset_handlers),
     )
     names = {s.name for s in schemas}
-    assert "bash" in names
+    assert "shell" in names
     assert "parent_mcp_tool" not in names
     assert "parent_mcp_tool" not in dispatch
 
@@ -714,13 +714,13 @@ def test_build_tool_surface_preset_does_not_inherit_parent_mcp(tmp_path):
 
 def test_build_tool_surface_preset_floor_excludes_extra_parent_tool(tmp_path):
     """dev-1 blocker: the parent host floor a preset may borrow is NARROW —
-    exactly {bash, read, write, edit, glob, grep}. An extra regular (non-MCP)
+    exactly {shell, read, write, edit, glob, grep}. An extra regular (non-MCP)
     parent tool that is NOT in that floor and NOT in the preset must stay
     unknown under a preset: not available, not dispatchable, and rejected when
     requested. This guards against optional/provider parent tools (vision,
     web_search, …) silently falling back to the parent when a preset omits or
     fails the provider capability."""
-    agent = _make_agent(tmp_path, ["file", "bash", "daemon"])
+    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
     # A regular (non-MCP) parent tool outside the core host floor. This stands
     # in for an optional/provider tool like vision/web_search.
     agent._sealed = False
@@ -741,35 +741,35 @@ def test_build_tool_surface_preset_floor_excludes_extra_parent_tool(tmp_path):
 
     # Floor tools survive; the extra parent tool does not leak into the surface.
     schemas, dispatch = mgr._build_tool_surface(
-        ["bash"], preset_surface=(preset_schemas, preset_handlers),
+        ["shell"], preset_surface=(preset_schemas, preset_handlers),
     )
     names = {s.name for s in schemas}
-    assert "bash" in names
+    assert "shell" in names
     assert "parent_extra_tool" not in names
     assert "parent_extra_tool" not in dispatch
 
     # Requesting it by name under a preset is rejected as unknown.
     try:
         mgr._build_tool_surface(
-            ["bash", "parent_extra_tool"],
+            ["shell", "parent_extra_tool"],
             preset_surface=(preset_schemas, preset_handlers),
         )
     except ValueError as e:
         assert "parent_extra_tool" in str(e)
-        assert "bash" not in str(e)  # bash is a valid floor tool
+        assert "shell" not in str(e)  # shell is a valid floor tool
     else:
         raise AssertionError(
             "extra non-floor parent tool must be rejected under a preset")
 
 
-def test_parent_host_tool_floor_is_exactly_bash_and_file(tmp_path):
+def test_parent_host_tool_floor_is_exactly_shell_and_file(tmp_path):
     """Lock the borrowable floor to the intended set. Derived from
     CORE_DEFAULTS minus EMANATION_BLACKLIST minus mcp, it must equal exactly
-    {bash, read, write, edit, glob, grep} — no intrinsics, no mcp, no optional
+    {shell, read, write, edit, glob, grep} — no intrinsics, no mcp, no optional
     provider caps."""
     from lingtai.tools.daemon import _parent_host_tool_floor
     assert _parent_host_tool_floor() == frozenset(
-        {"bash", "read", "write", "edit", "glob", "grep"}
+        {"shell", "read", "write", "edit", "glob", "grep"}
     )
 
 
@@ -803,14 +803,14 @@ def test_emanate_preset_skipped_provider_cap_still_runs_host_tools(
     )
 
     # Parent agent HAS the host floor.
-    agent = _make_agent(tmp_path, ["file", "bash", "daemon"], presets_dir=presets_dir)
+    agent = _make_agent(tmp_path, ["file", "shell", "daemon"], presets_dir=presets_dir)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
     preset_path = str(presets_dir / "glm_like.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "run a command", "tools": ["bash"], "preset": preset_path},
+            {"task": "run a command", "tools": ["shell"], "preset": preset_path},
         ]})
 
     assert result["status"] == "dispatched", result.get("message")

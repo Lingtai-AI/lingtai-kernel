@@ -8,3 +8,7 @@ from typing import Protocol
 
 class BashStateLockPort(Protocol):
     def exclusive(self, job_dir: Path) -> AbstractContextManager[None]: ...
+
+
+# Canonical Port name; retained for the PR1 internal package compatibility seam.
+ShellStateLockPort = BashStateLockPort

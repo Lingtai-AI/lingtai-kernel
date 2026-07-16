@@ -175,11 +175,11 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "validate.py reference/topic-a/" in body
 
         bash_md = (
-            workdir / ".library" / "intrinsic" / "capabilities" / "bash" / "SKILL.md"
+            workdir / ".library" / "intrinsic" / "capabilities" / "shell" / "SKILL.md"
         )
         assert bash_md.is_file()
         bash_body = bash_md.read_text(encoding="utf-8")
-        assert "name: bash-manual" in bash_body
+        assert "name: shell-manual" in bash_body
         assert "Nested reference catalog" in bash_body
         assert "reference/scheduled-work/SKILL.md" in bash_body
         assert "reference/notification-reminders/SKILL.md" in bash_body
@@ -222,7 +222,7 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         ):
             bash_reference = bash_reference_dir / reference_name / "SKILL.md"
             assert bash_reference.is_file()
-        assert "Nested bash-manual reference" in (
+        assert "Nested shell-manual reference" in (
             bash_reference_dir / "scheduled-work" / "SKILL.md"
         ).read_text(encoding="utf-8")
 
