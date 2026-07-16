@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
+from typing import Sequence
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,76 @@ class RefreshWatcherRequest:
     address: str
     identity_fields_json: str = "{}"
     env_overwrite: bool = True
+
+
+@dataclass(frozen=True)
+class RefreshWatcherProcessHandle:
+    """Opaque handle returned for one replacement-agent launch.
+
+    ``pid`` is retained only as a stable, redaction-safe identity for the
+    existing refresh events. Core never derives process behavior from it; all
+    observation and termination go back through ``RefreshWatcherProcessPort``.
+    """
+
+    pid: int
+
+
+@dataclass(frozen=True)
+class RefreshWatcherProcessObservation:
+    """One adapter-owned observation of an existing candidate process."""
+
+    pid: int
+    command_line: str
+
+
+class RefreshWatcherProcessPort(ABC):
+    """Watcher-local process-mechanism boundary used by generated policy.
+
+    This Port is intentionally narrower than a general process supervisor. It
+    supplies only the five operations the existing refresh policy already uses:
+    observe a candidate identity, test that observed process liveness, launch
+    the requested agent, and attempt graceful then forced termination. The
+    policy decides *when* each operation is appropriate; an adapter owns the
+    operating-system mechanism behind each operation.
+    """
+
+    @abstractmethod
+    def observe(self, pid: int) -> RefreshWatcherProcessObservation | None:
+        """Return a command-line observation for ``pid``, or ``None``."""
+        ...
+
+    @abstractmethod
+    def is_alive(
+        self,
+        process: RefreshWatcherProcessHandle | RefreshWatcherProcessObservation,
+    ) -> bool:
+        """Report whether an observed or launched process is still alive."""
+        ...
+
+    @abstractmethod
+    def start_agent(
+        self,
+        cmd: Sequence[str],
+        stderr_log: str,
+    ) -> RefreshWatcherProcessHandle:
+        """Launch the replacement agent and return its opaque handle."""
+        ...
+
+    @abstractmethod
+    def graceful_stop(
+        self,
+        process: RefreshWatcherProcessHandle | RefreshWatcherProcessObservation,
+    ) -> None:
+        """Request graceful termination of ``process``."""
+        ...
+
+    @abstractmethod
+    def force_stop(
+        self,
+        process: RefreshWatcherProcessHandle | RefreshWatcherProcessObservation,
+    ) -> None:
+        """Force termination of ``process`` after graceful termination failed."""
+        ...
 
 
 _REQUEST_FIELDS = (
@@ -193,4 +264,12 @@ class RefreshWatcherPort(ABC):
         ...
 
 
-__all__ = ["RefreshWatcherPort", "RefreshWatcherRequest", "encode_request", "decode_request"]
+__all__ = [
+    "RefreshWatcherPort",
+    "RefreshWatcherRequest",
+    "RefreshWatcherProcessHandle",
+    "RefreshWatcherProcessObservation",
+    "RefreshWatcherProcessPort",
+    "encode_request",
+    "decode_request",
+]

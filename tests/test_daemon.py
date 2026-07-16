@@ -16,6 +16,7 @@ from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
 from tests._daemon_helpers import make_daemon_agent as _make_agent
 from tests._daemon_helpers import make_daemon_run_dir as _make_run_dir
 from tests._notification_store_helpers import store_agent_for
+from lingtai.tools.daemon.process_port import DaemonProcessCommand
 from lingtai.tools.daemon.run_dir import DaemonRunDir
 
 
@@ -1101,20 +1102,12 @@ def test_run_emanation_respects_cancel_before_first_send(tmp_path):
     mock_session.send.assert_not_called()
 
 
-def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
+def test_handle_emanate_dispatches_and_returns_ids(tmp_path, monkeypatch):
     """emanate dispatches tasks and returns compact unique IDs."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
+    _enable_detached_fake_llm(agent, monkeypatch)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
-
-    mock_session = MagicMock()
-    mock_resp = MagicMock()
-    mock_resp.text = "task done — finished successfully"
-    mock_resp.tool_calls = []
-    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
-                                thinking_tokens=0, cached_tokens=0)
-    mock_session.send = MagicMock(return_value=mock_resp)
-    agent.service.create_session = MagicMock(return_value=mock_session)
 
     result = mgr.handle({"action": "emanate", "tasks": [
         {"task": "task A", "tools": ["file"]},
@@ -1145,12 +1138,20 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
     listed_groups = {item["id"]: item.get("group_id") for item in list_result["emanations"]}
     assert listed_groups == {em_id: result["group_id"] for em_id in ids}
 
-    time.sleep(1)
+    for em_id in ids:
+        _poll_daemon_terminal(mgr._emanations[em_id]["run_dir"])
 
     from tests._notification_store_helpers import snapshot_notifications
 
     assert agent.inbox.empty()
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
+    notification_deadline = time.monotonic() + 5.0
+    events = []
+    while time.monotonic() < notification_deadline:
+        system = snapshot_notifications(agent._working_dir).get("system", {})
+        events = system.get("data", {}).get("events", [])
+        if {e.get("ref_id") for e in events} == set(ids):
+            break
+        time.sleep(0.05)
     assert len(events) == 2
     assert {e["source"] for e in events} == {"daemon"}
     assert {e["ref_id"] for e in events} == set(ids)
@@ -2821,6 +2822,9 @@ class _FakeProc:
             raise _sp.TimeoutExpired(cmd=["fake"], timeout=timeout)
         return self.returncode
 
+    def poll(self):
+        return self.returncode
+
 
 def _install_fake_popen(monkeypatch, proc: _FakeProc):
     """Replace subprocess.Popen inside the daemon module with one that
@@ -2836,6 +2840,12 @@ def _install_fake_popen(monkeypatch, proc: _FakeProc):
     # Don't actually os.killpg(0) — just mark the proc finished as if killed.
     monkeypatch.setattr(daemon_mod, "_kill_process_group",
                         lambda p: p.finish(returncode=-15))
+    # Codex now uses the daemon-local POSIX Port, whose adapter owns the
+    # concrete kill operation rather than the legacy daemon helper.
+    monkeypatch.setattr(
+        "lingtai.tools.daemon.posix_process.PosixDaemonProcessPort._terminate",
+        lambda _adapter, p, reason, pgid=None, **_kwargs: p.finish(returncode=-15),
+    )
 
 
 def _cli_entry(mgr, agent, em_id: str, backend: str, session_id: str) -> dict:
@@ -3220,6 +3230,13 @@ def test_ask_stream_workers_reuse_shared_stderr_drainer(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon_mod, "_spawn_stderr_drainer", fake_spawn_stderr_drainer,
     )
+    # Codex's process Port owns its stderr mechanism; keep this shared
+    # behavior test's synthetic drain observable at the new patch point too.
+    monkeypatch.setattr(
+        mgr._process_port, "drain_stderr",
+        lambda handle, *, on_line=None, thread_name="daemon-stderr":
+            fake_spawn_stderr_drainer(handle, None, thread_name=thread_name),
+    )
 
     cases = [
         (
@@ -3275,7 +3292,17 @@ def test_ask_stream_workers_reuse_shared_stderr_drainer(tmp_path, monkeypatch):
         }
         mgr._emanations[em_id] = entry
 
-        result = run_worker(entry, proc, run_dir)
+        worker_handle = proc
+        if backend in {"claude-code", "codex", "opencode", "cursor"}:
+            # All headless ask workers receive opaque Port handles.
+            monkeypatch.setattr(
+                "lingtai.tools.daemon.posix_process.subprocess.Popen",
+                lambda *args, **kwargs: proc,
+            )
+            worker_handle = mgr._process_port.spawn(
+                DaemonProcessCommand((backend,), agent._working_dir),
+            )
+        result = run_worker(entry, worker_handle, run_dir)
 
         assert result["status"] == "error"
         assert expected_thread_name in result["message"]
@@ -3302,8 +3329,7 @@ def test_ask_worker_exception_is_logged(tmp_path, monkeypatch):
     # Replace the worker with one that raises immediately. _on_ask_done
     # runs as the future's done-callback so the exception is surfaced
     # rather than swallowed.
-    def boom(em_id, entry, proc, run_dir):
-        proc.finish(returncode=0)  # drain so any background reader doesn't hang
+    def boom(em_id, entry, handle, run_dir):
         raise RuntimeError("simulated worker crash")
     monkeypatch.setattr(mgr, "_run_ask_claude_code_stream", boom)
 

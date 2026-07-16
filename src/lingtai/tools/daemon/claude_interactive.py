@@ -23,7 +23,6 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
-import pty
 import queue
 import re
 import select
@@ -34,7 +33,7 @@ import time
 from typing import Callable
 
 from .run_dir import DaemonRunDir
-from .runtime import kill_process_group
+from .interactive_terminal import InteractiveTerminalCommand, InteractiveTerminalPort
 
 
 @dataclass(slots=True)
@@ -123,7 +122,7 @@ class ClaudeInteractiveBridge:
         resume_session_id: str | None = None,
         env: dict[str, str] | None = None,
         log_callback: Callable[..., None] | None = None,
-        start_new_session: bool = True,
+        terminal_port: InteractiveTerminalPort | None = None,
     ) -> None:
         self.em_id = em_id
         self.run_dir = run_dir
@@ -137,7 +136,7 @@ class ClaudeInteractiveBridge:
         self.resume_session_id = resume_session_id
         self.env = dict(env or os.environ)
         self.log_callback = log_callback or (lambda *args, **kwargs: None)
-        self.start_new_session = start_new_session
+        self.terminal_port = terminal_port
 
         managed_root = Path(
             self.env.get("LINGTAI_CLAUDE_MANAGED_ROOT")
@@ -390,7 +389,7 @@ class ClaudeInteractiveBridge:
         if isinstance(last_msg, str) and last_msg.strip():
             self._last_assistant_message = last_msg.strip()
 
-    def _handle_hook_events(self, master_fd: int) -> None:
+    def _handle_hook_events(self, terminal_handle) -> None:
         while True:
             try:
                 item = self._hook_events.get_nowait()
@@ -401,7 +400,7 @@ class ClaudeInteractiveBridge:
                 self.run_dir.record_cli_output(
                     "[claude interactive SessionStart]", stream="stdout",
                 )
-                self._send_prompt(master_fd)
+                self._send_prompt(terminal_handle)
             elif item.event == "Stop":
                 self.run_dir.record_cli_output(
                     "[claude interactive Stop]", stream="stdout",
@@ -508,12 +507,12 @@ class ClaudeInteractiveBridge:
     # PTY driving
     # ------------------------------------------------------------------
 
-    def _respond_to_terminal_probes(self, master_fd: int, data: bytes) -> None:
+    def _respond_to_terminal_probes(self, terminal_handle, data: bytes) -> None:
         self._pty_tail = (self._pty_tail + data)[-512:]
         for probe, response in _TERMINAL_RESPONSES:
             if probe in self._pty_tail:
                 try:
-                    os.write(master_fd, response)
+                    self.terminal_port.write(terminal_handle, response)
                 except OSError:
                     return
                 self._pty_tail = self._pty_tail.replace(probe, b"")
@@ -532,7 +531,7 @@ class ClaudeInteractiveBridge:
             marker in normalized for marker in markers
         )
 
-    def _handle_auth_or_trust_prompt(self, master_fd: int, data: bytes) -> None:
+    def _handle_auth_or_trust_prompt(self, terminal_handle, data: bytes) -> None:
         if self._prompt_warning:
             return
         text, normalized = self._normalized_prompt_text(data)
@@ -546,7 +545,7 @@ class ClaudeInteractiveBridge:
                     # out normally.
                     return
                 try:
-                    os.write(master_fd, b"1\r")
+                    self.terminal_port.write(terminal_handle, b"1\r")
                 except OSError:
                     return
                 self._trust_prompt_answered = True
@@ -574,13 +573,13 @@ class ClaudeInteractiveBridge:
             )
             self.run_dir.record_cli_output(self._prompt_warning, stream="stderr")
 
-    def _send_prompt(self, master_fd: int) -> None:
+    def _send_prompt(self, terminal_handle) -> None:
         payload = self.task.encode("utf-8")
         # Bracketed paste avoids treating prompt content as terminal control
         # input in most readline/Ink text areas.  Fall back naturally if Claude
         # ignores bracketed paste markers.
         framed = b"\x1b[200~" + payload + b"\x1b[201~\r"
-        os.write(master_fd, framed)
+        self.terminal_port.write(terminal_handle, framed)
         self._prompt_sent = True
         self._write_state(claude_interactive_prompt_sent=True)
 
@@ -595,6 +594,18 @@ class ClaudeInteractiveBridge:
         return cmd
 
     def run(self) -> ClaudeInteractiveResult:
+        # Terminal ownership must be established by manager composition before
+        # any managed workspace, harness, or child-spawn work begins. A bridge
+        # must never create a private adapter whose live handles a later sweep
+        # cannot reach.
+        terminal_port = self.terminal_port
+        if terminal_port is None:
+            raise ClaudeInteractiveError(
+                "ClaudeInteractiveBridge requires an injected "
+                "InteractiveTerminalPort; bridge-local terminal adapters are "
+                "not supported"
+            )
+
         self._prepare_managed_workspace()
         settings_json = self._prepare_harness()
         hook_thread = threading.Thread(
@@ -613,75 +624,94 @@ class ClaudeInteractiveBridge:
             cmd=" ".join(cmd),
             cwd=str(self.claude_cwd),
         )
-        self._write_state(claude_interactive_command=cmd, claude_interactive_cwd=str(self.claude_cwd))
+        self._write_state(
+            claude_interactive_command=cmd,
+            claude_interactive_cwd=str(self.claude_cwd),
+        )
 
-        master_fd: int | None = None
-        proc: subprocess.Popen | None = None
+        terminal_handle = None
+        exit_receipt = None
         try:
-            master_fd, slave_fd = pty.openpty()
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdin=slave_fd,
-                    stdout=slave_fd,
-                    stderr=slave_fd,
-                    cwd=str(self.claude_cwd),
-                    env=env,
-                    start_new_session=self.start_new_session,
-                    close_fds=True,
-                )
-            finally:
-                os.close(slave_fd)
+            command = InteractiveTerminalCommand(
+                tuple(cmd),
+                self.claude_cwd,
+                tuple(env.items()),
+                columns=120,
+                rows=40,
+            )
+            terminal_handle = terminal_port.spawn(command, group_id=self.run_dir.group_id)
         except FileNotFoundError as exc:
             raise ClaudeInteractiveError("'claude' CLI not found on PATH") from exc
         except OSError as exc:
-            raise ClaudeInteractiveError(f"Failed to start interactive claude CLI: {exc}") from exc
+            raise ClaudeInteractiveError(
+                f"Failed to start interactive claude CLI: {exc}"
+            ) from exc
 
         stop_seen_at: float | None = None
         exited_seen_at: float | None = None
         try:
-            assert master_fd is not None
             with self.raw_pty_log_path.open("ab") as raw_log:
                 while True:
                     if self.cancel_event.is_set():
-                        kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
+                        reason = (
+                            "timeout"
+                            if self.timeout_event is not None
+                            and self.timeout_event.is_set()
+                            else "cancel"
+                        )
+                        exit_receipt = terminal_port.terminate(
+                            terminal_handle, reason=reason
+                        )
                         break
 
-                    self._handle_hook_events(master_fd)
+                    self._handle_hook_events(terminal_handle)
                     if self._stop_payload is not None and stop_seen_at is None:
                         stop_seen_at = time.monotonic()
 
-                    ready, _, _ = select.select([master_fd], [], [], 0.05)
-                    if ready:
-                        try:
-                            data = os.read(master_fd, 8192)
-                        except OSError:
-                            data = b""
-                        if data:
-                            raw_log.write(data)
-                            raw_log.flush()
-                            self._respond_to_terminal_probes(master_fd, data)
-                            self._handle_auth_or_trust_prompt(master_fd, data)
-                            if self._prompt_warning:
-                                kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
-                                break
+                    saw_eof = False
+                    for data in terminal_port.read(
+                        terminal_handle, deadline=time.monotonic() + 0.05
+                    ):
+                        if not data:
+                            saw_eof = True
+                            break
+                        raw_log.write(data)
+                        raw_log.flush()
+                        self._respond_to_terminal_probes(terminal_handle, data)
+                        self._handle_auth_or_trust_prompt(terminal_handle, data)
+                        if self._prompt_warning:
+                            exit_receipt = terminal_port.terminate(
+                                terminal_handle,
+                                reason=(
+                                    "timeout"
+                                    if self.timeout_event is not None
+                                    and self.timeout_event.is_set()
+                                    else "prompt"
+                                ),
+                            )
+                            break
+                    if self._prompt_warning:
+                        break
 
-                    # After Stop, Claude's turn is complete.  Give the process a
-                    # small grace period to exit naturally, then terminate the
+                    self._handle_hook_events(terminal_handle)
+                    if self._stop_payload is not None and stop_seen_at is None:
+                        stop_seen_at = time.monotonic()
+
+                    # After Stop, Claude's turn is complete. Give the process a
+                    # short grace period to exit naturally, then terminate the
                     # TUI so the daemon can finish deterministically.
                     if stop_seen_at is not None:
-                        if proc.poll() is not None:
+                        if saw_eof:
                             break
                         if time.monotonic() - stop_seen_at > 0.25:
-                            kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
+                            exit_receipt = terminal_port.terminate(
+                                terminal_handle, reason="stop"
+                            )
                             break
 
                     # A fast fake (and occasionally a fast real failure) can
                     # exit before the hook-reader thread has drained the FIFO.
-                    # Keep the loop alive briefly after process exit so queued
-                    # SessionStart/Stop lines can be processed before we decide
-                    # that no Stop hook was observed.
-                    if proc.poll() is not None:
+                    if saw_eof:
                         if exited_seen_at is None:
                             exited_seen_at = time.monotonic()
                         if self._stop_payload is not None:
@@ -689,11 +719,18 @@ class ClaudeInteractiveBridge:
                         if time.monotonic() - exited_seen_at > 1.0:
                             break
 
-            if proc.poll() is None:
+            if exit_receipt is None:
                 try:
-                    proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
+                    exit_receipt = terminal_port.wait(terminal_handle, timeout=1)
+                except TimeoutError:
+                    reason = (
+                        "timeout"
+                        if self.timeout_event is not None and self.timeout_event.is_set()
+                        else "wait"
+                    )
+                    exit_receipt = terminal_port.terminate(
+                        terminal_handle, reason=reason
+                    )
         finally:
             self._hook_done.set()
             # Wake the nonblocking FIFO reader if it is sitting in select/read.
@@ -703,10 +740,13 @@ class ClaudeInteractiveBridge:
             except OSError:
                 pass
             hook_thread.join(timeout=1.0)
-            if master_fd is not None:
+            if terminal_handle is not None:
+                # release() is deliberately non-killing and terminal-only. A
+                # stubborn child stays registered on the manager-owned Port for
+                # later group/all sweeps.
                 try:
-                    os.close(master_fd)
-                except OSError:
+                    terminal_port.release(terminal_handle)
+                except (KeyError, OSError):
                     pass
 
         if self.cancel_event.is_set():
@@ -717,10 +757,9 @@ class ClaudeInteractiveBridge:
                 raw_pty_log_path=str(self.raw_pty_log_path),
             )
 
-        rc = proc.returncode if proc is not None else None
+        rc = exit_receipt.returncode if exit_receipt is not None else None
         # When Stop fired we may have intentionally terminated the still-open
-        # interactive TUI.  Treat that as successful; the transcript is the
-        # source of truth for the turn result.
+        # interactive TUI. The transcript is the source of truth for the result.
         if self._stop_payload is None and self._prompt_warning:
             raise ClaudeInteractiveError(self._prompt_warning)
         if self._stop_payload is None and rc not in (0, None):
@@ -729,10 +768,9 @@ class ClaudeInteractiveBridge:
                 f"see {self.raw_pty_log_path}"
             )
         if self._stop_payload is None:
-            detail = f"see {self.raw_pty_log_path}"
             raise ClaudeInteractiveError(
                 "interactive claude CLI exited before a Stop hook was observed; "
-                f"{detail}"
+                f"see {self.raw_pty_log_path}"
             )
 
         final_text, transcript_session = self._parse_transcript_with_retry()
@@ -761,7 +799,7 @@ def run_claude_interactive(
     resume_session_id: str | None = None,
     env: dict[str, str] | None = None,
     log_callback: Callable[..., None] | None = None,
-    start_new_session: bool = True,
+    terminal_port: InteractiveTerminalPort | None = None,
 ) -> ClaudeInteractiveResult:
     """Convenience wrapper used by ``DaemonManager`` and tests."""
 
@@ -776,5 +814,5 @@ def run_claude_interactive(
         resume_session_id=resume_session_id,
         env=env,
         log_callback=log_callback,
-        start_new_session=start_new_session,
+        terminal_port=terminal_port,
     ).run()

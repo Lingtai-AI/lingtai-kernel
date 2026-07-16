@@ -5,7 +5,8 @@ backend uses print mode with stream-json output so it behaves like the other
 external CLI backends: command construction is deterministic, JSONL progress is
 persisted to the daemon run dir, and ``daemon(ask)`` resumes by session id.
 
-The tests monkey-patch ``subprocess.Popen``; Cursor itself is not required.
+The tests exercise the injected Port with a patched POSIX adapter; Cursor
+itself is not required.
 """
 from __future__ import annotations
 
@@ -190,12 +191,12 @@ def test_cursor_emanate_appends_backend_argv_before_prompt(tmp_path):
 
     run_dir = _make_run_dir(agent, handle="em-cur-opts")
     cancel = threading.Event()
-    timeout = threading.Event()
+    timeout_event = threading.Event()
 
     with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_cursor_emanation(
             "em-cur-opts", run_dir, "Find the bug.",
-            cancel, timeout,
+            cancel, timeout_event,
             backend_argv=["--model", "gpt-5", "--stream-partial-output"],
         )
 
@@ -461,13 +462,13 @@ def test_cursor_initial_wait_signal_cannot_persist_usage_candidate(tmp_path):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     cancel = threading.Event()
-    timeout = threading.Event()
+    timeout_event = threading.Event()
 
     class WaitSignalsCancel(FiniteFakeProc):
-        def wait(self, timeout_value=None):
-            timeout.set()
+        def wait(self, timeout=None):
+            timeout_event.set()
             cancel.set()
-            return super().wait(timeout_value)
+            return super().wait(timeout)
 
     run_dir = _make_run_dir(agent, handle="em-cur-post-eof-cancel")
     proc = WaitSignalsCancel(
@@ -479,7 +480,7 @@ def test_cursor_initial_wait_signal_cannot_persist_usage_candidate(tmp_path):
     with patch("lingtai.tools.daemon.subprocess.Popen", return_value=proc):
         result = mgr._run_cursor_emanation(
             "em-cur-post-eof-cancel", run_dir, "Cancel after EOF.",
-            cancel, timeout,
+            cancel, timeout_event,
         )
 
     state = json.loads(run_dir.daemon_json_path.read_text())

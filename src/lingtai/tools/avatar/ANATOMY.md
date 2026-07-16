@@ -2,6 +2,11 @@
 related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/avatar/_launcher.py
+  - src/lingtai/tools/avatar/CONTRACT.md
+  - src/lingtai/adapters/avatar_launcher.py
+  - src/lingtai/adapters/posix/ANATOMY.md
+  - src/lingtai/adapters/posix/avatar_launcher.py
   - src/lingtai/tools/avatar/manual/SKILL.md
   - tests/test_avatar_rules.py
   - src/lingtai/tools/avatar/glossary-en.md
@@ -30,7 +35,10 @@ independent life — its existence does not depend on yours.
 
 ## Components
 
-- `avatar/__init__.py` — the entire capability in a single file. `_mission_looks_unsafe` (mission-quality heuristic, near top of module), `get_description`, `get_schema`, `get_rules_schema`, `setup`. The core class is `AvatarManager`.
+- `avatar/__init__.py` — validation, preparation, boot policy, ledger, rules,
+  schemas, and setup. The core class is `AvatarManager`.
+- `avatar/_launcher.py` — immutable launch request/receipt and the avatar-local
+  opaque-handle Port.
 
 ## Public API
 
@@ -59,8 +67,8 @@ avatar/__init__.py
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
   ├── _make_avatar_init()           — builds avatar's init.json from parent's (strips identity, reroots paths)
   ├── _prepare_deep()               — copies system/ + knowledge/ + exports/ + combo.json for deep mode
-  ├── _launch()                     — runs `lingtai-agent run <dir>` as a detached subprocess
-  ├── _wait_for_boot()              — polls .agent.heartbeat or process exit for boot verification
+  ├── _launch()                     — resolves argv and delegates to the launcher Port
+  ├── _wait_for_boot()              — polls .agent.heartbeat or Port exit truth
   │
   │  Ledger:
   ├── _append_ledger()              — appends spawn event to delegates/ledger.jsonl
@@ -80,7 +88,7 @@ avatar/__init__.py
 - **Preset stability:** Avatars always spawn on the parent's DEFAULT preset, not its currently-active one. Materialized `llm` + `capabilities` are stripped so the avatar re-materializes from the preset on first boot.
 - **Relative path re-rooting:** Preset paths (`default`, `active`, `allowed`) that are relative are re-rooted against the parent's working dir so they remain valid from the avatar's different directory.
 - **Liveness check:** Before spawning, existing ledger entries are observed through a target-bound `PosixAgentPresenceStoreAdapter` and Core `observe_alive()` policy. If a live avatar with the same name exists, the spawn is refused with `already_active`.
-- **Boot verification:** After launching, `_wait_for_boot()` polls for `.agent.heartbeat` or process exit within 5 seconds. If the process exits before handshaking, stderr is captured and the failure is reported.
+- **Boot verification:** After launching, `_wait_for_boot()` polls for `.agent.heartbeat` or Port exit truth within 5 seconds. If the process exits before handshaking, stderr is captured and the failure is reported. Port release after observation never kills a live slow avatar.
 - **Deep copy scope guard:** `_prepare_deep()` asserts `dst.parent == src.parent` to prevent rmtree from reaching outside the network root.
 - **Mission-quality gate (issue #33):** Before any filesystem mutation, `_spawn` runs `_mission_looks_unsafe(reasoning)` — empty / sub-20-char / debug-placeholder missions return `{"status": "confirmation_needed", ...}` unless `confirm=true`. The dry-run path is exempt (its purpose is preview without commitment).
 - **Dry-run (issue #33):** `dry_run=true` short-circuits after parent `init.json` is loaded and before any working dir is created or process launched, returning `{"status": "dry_run", "preview": {...}}`. The preview includes whether the mission would have tripped the quality gate.
@@ -98,3 +106,7 @@ avatar/__init__.py
 - **Parent:** `src/lingtai/tools/` (tool package).
 - **Siblings:** `daemon/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
 - **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle_spawn()` is registered as the `avatar_spawn` tool handler and `AvatarManager.handle_rules()` as `avatar_rules`. The daemon capability blacklists both tools to prevent avatar-in-daemon recursion and rules mutation from emanations.
+
+Platform process mechanics are in `adapters/avatar_launcher.py` and the
+POSIX reference adapter. Unsupported Windows selection fails loudly; a future
+Windows adapter and native acceptance remain outside this re-cut.

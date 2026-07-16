@@ -419,10 +419,21 @@ def _mark_cancelled_or_timeout(run_dir, timeout_event: threading.Event | None) -
 
 def _run_shared_backend(run_dir, manifest: dict, cancel_event, timeout_event) -> None:
     """Compatibility seam: compose the production host for direct callers."""
+    if os.name != "posix":
+        raise RuntimeError(
+            "detached POSIX execution composition is unsupported on this platform"
+        )
     from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
-    DetachedDaemonExecutionHost(run_dir, manifest, cancel_event, timeout_event).run_with_events(
-        cancel_event, timeout_event,
+    from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
+    from lingtai.adapters.posix.interactive_terminal import PosixInteractiveTerminalAdapter
+    host = DetachedDaemonExecutionHost(
+        run_dir, manifest, cancel_event, timeout_event,
+        process_port=PosixDaemonProcessPort(start_new_session=False),
+        interactive_terminal_port=PosixInteractiveTerminalAdapter(
+            start_new_session=False,
+        ),
     )
+    host.run_with_events(cancel_event, timeout_event)
 
 
 # ---------------------------------------------------------------------

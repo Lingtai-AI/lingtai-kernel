@@ -23,6 +23,7 @@ from unittest.mock import patch
 import pytest
 
 from lingtai.tools.daemon import _normalize_claude_usage
+from lingtai.tools.daemon.process_port import DaemonProcessCommand
 from tests._daemon_helpers import (
     FiniteFakeProc,
     make_daemon_agent,
@@ -276,13 +277,13 @@ def test_claude_initial_post_eof_cancel_cannot_persist_usage_or_mark_done(tmp_pa
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     cancel = threading.Event()
-    timeout = threading.Event()
+    timeout_event = threading.Event()
 
     class WaitSignalsCancel(FiniteFakeProc):
-        def wait(self, timeout_value=None):
-            timeout.set()
+        def wait(self, timeout=None):
+            timeout_event.set()
             cancel.set()
-            return super().wait(timeout_value)
+            return super().wait(timeout)
 
     run_dir = _make_run_dir(agent, handle="em-claude-post-eof-cancel")
     proc = WaitSignalsCancel(
@@ -294,7 +295,7 @@ def test_claude_initial_post_eof_cancel_cannot_persist_usage_or_mark_done(tmp_pa
     with patch("lingtai.tools.daemon.subprocess.Popen", return_value=proc):
         result = mgr._run_claude_code_emanation(
             "em-claude-post-eof-cancel", run_dir, "Cancel after EOF.",
-            cancel, timeout,
+            cancel, timeout_event,
         )
 
     state = json.loads(run_dir.daemon_json_path.read_text())
@@ -310,12 +311,12 @@ def test_claude_initial_manual_cancel_after_eof_marks_cancelled_not_timeout(tmp_
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     cancel = threading.Event()
-    timeout = threading.Event()
+    timeout_event = threading.Event()
 
     class WaitSignalsCancel(FiniteFakeProc):
-        def wait(self, timeout_value=None):
+        def wait(self, timeout=None):
             cancel.set()
-            return super().wait(timeout_value)
+            return super().wait(timeout)
 
     run_dir = _make_run_dir(agent, handle="em-claude-post-eof-manual-cancel")
     proc = WaitSignalsCancel(
@@ -327,7 +328,7 @@ def test_claude_initial_manual_cancel_after_eof_marks_cancelled_not_timeout(tmp_
     with patch("lingtai.tools.daemon.subprocess.Popen", return_value=proc):
         result = mgr._run_claude_code_emanation(
             "em-claude-post-eof-manual-cancel", run_dir, "Cancel after EOF.",
-            cancel, timeout,
+            cancel, timeout_event,
         )
 
     state = json.loads(run_dir.daemon_json_path.read_text())
@@ -506,11 +507,23 @@ class _FakeAskProc:
         self.stderr.close()
         self._wait_evt.set()
 
+    def poll(self):
+        return self.returncode
+
     def wait(self, timeout=None):
         import subprocess as _sp
         if not self._wait_evt.wait(timeout=timeout):
             raise _sp.TimeoutExpired(cmd=["fake"], timeout=timeout)
         return self.returncode
+
+
+def _port_handle(mgr, proc):
+    with patch("lingtai.tools.daemon.posix_process.subprocess.Popen",
+               return_value=proc):
+        return mgr._process_port.spawn(
+            DaemonProcessCommand(("claude",), mgr._agent._working_dir),
+            group_id=None,
+        )
 
 
 def _ask_entry(run_dir, backend="claude-code"):
@@ -540,7 +553,7 @@ def test_claude_resume_valid_usage_persists_on_success(tmp_path):
     proc.finish(returncode=0)
 
     result = mgr._run_ask_claude_code_stream(
-        "em-claude-resume-success", entry, proc, run_dir,
+        "em-claude-resume-success", entry, _port_handle(mgr, proc), run_dir,
     )
 
     state = json.loads(run_dir.daemon_json_path.read_text())
@@ -578,7 +591,7 @@ def test_claude_resume_valid_usage_is_buffered_until_failure_classified(
     proc.finish(returncode=returncode)
 
     result = mgr._run_ask_claude_code_stream(
-        "em-claude-resume-failed-usage", entry, proc, run_dir,
+        "em-claude-resume-failed-usage", entry, _port_handle(mgr, proc), run_dir,
     )
 
     assert result["status"] == expected_status
@@ -604,16 +617,17 @@ def test_claude_resume_result_read_at_deadline_does_not_persist_usage(tmp_path):
     # timed_out branch even though a valid result already streamed.
     proc.stdout.feed(json.dumps(_claude_result(result="raced with deadline")) + "\n")
 
-    import lingtai.tools.daemon as daemon_mod
+    import lingtai.tools.daemon.posix_process as posix_process
     killed = threading.Event()
 
     def fake_kill(p):
         killed.set()
         p.finish(returncode=-15)
 
-    with patch.object(daemon_mod, "_kill_process_group", side_effect=fake_kill):
+    with patch.object(posix_process.os, "killpg",
+                      side_effect=lambda pid, sig: fake_kill(proc)):
         result = mgr._run_ask_claude_code_stream(
-            "em-claude-resume-deadline", entry, proc, run_dir,
+            "em-claude-resume-deadline", entry, _port_handle(mgr, proc), run_dir,
         )
 
     assert killed.is_set()
@@ -636,7 +650,7 @@ def test_claude_resume_duplicate_terminal_events_account_once(tmp_path):
     proc.finish(returncode=0)
 
     result = mgr._run_ask_claude_code_stream(
-        "em-claude-resume-duplicate", entry, proc, run_dir,
+        "em-claude-resume-duplicate", entry, _port_handle(mgr, proc), run_dir,
     )
 
     assert result["status"] == "sent"
@@ -684,7 +698,7 @@ def test_claude_initial_and_resume_accumulate_ui_usage_without_ledgers(tmp_path)
     proc.finish(returncode=0)
 
     mgr._run_ask_claude_code_stream(
-        "em-claude-initial-resume", entry, proc, run_dir,
+        "em-claude-initial-resume", entry, _port_handle(mgr, proc), run_dir,
     )
 
     state = json.loads(run_dir.daemon_json_path.read_text())

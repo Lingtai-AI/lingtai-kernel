@@ -31,6 +31,9 @@ import sys
 
 from lingtai.kernel.refresh_watcher import decode_request
 from lingtai.kernel.refresh_watcher.watcher_program import render_watcher_script
+from lingtai.adapters.posix.refresh_watcher_process import (
+    PosixRefreshWatcherProcessAdapter,
+)
 
 
 def main(argv: list[str]) -> int:
@@ -49,7 +52,13 @@ def main(argv: list[str]) -> int:
         )
     request = decode_request(argv[0])
     script = render_watcher_script(request)
-    exec(compile(script, "<refresh_watcher>", "exec"), {"__name__": "__main__"})
+    exec(
+        compile(script, "<refresh_watcher>", "exec"),
+        {
+            "__name__": "__main__",
+            "PROCESS_MECHANISM": PosixRefreshWatcherProcessAdapter(),
+        },
+    )
     return 0
 
 

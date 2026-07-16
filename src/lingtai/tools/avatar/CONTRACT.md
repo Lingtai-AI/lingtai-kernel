@@ -4,7 +4,10 @@ tool: avatar_spawn, avatar_rules
 contract_version: 1
 related_files:
   - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/ANATOMY.md
+  - src/lingtai/adapters/avatar_launcher.py
+  - src/lingtai/adapters/posix/avatar_launcher.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -105,14 +108,23 @@ Each spawn appends a ledger record (`event: "avatar"`, `name`, `working_dir`,
 distribution walks the ledger tree (cycle-guarded) and writes `.rules` to each
 live descendant.
 
-## Cross-platform invariants
+## Cross-platform launcher contract
 
-DOCUMENT ONLY — do not change these assumptions and do not propose Windows work.
-
-- The avatar is launched via `subprocess.Popen([python, "-m", "lingtai", "run",
-  <dir>], stdin=DEVNULL, stdout=DEVNULL, stderr=<logs/spawn.stderr>,
-  start_new_session=True)` — a fully detached POSIX session so the avatar
-  survives the parent and is not in the parent's process group.
+- `AvatarManager` resolves the existing interpreter policy and submits the
+  exact argv `[python, "-m", "lingtai", "run", <dir>]` plus
+  `logs/spawn.stderr` to the avatar-local Port. Cwd and environment are
+  inherited; the Port does not add a cwd or environment override.
+- The Port returns a positive PID and an opaque adapter handle. `poll()` is
+  nonblocking and returns the exact integer child return code or `None`.
+- Production adapters disconnect stdin/stdout and own a binary-write stderr
+  file, closing the parent descriptor after launch. `release()` performs a
+  best-effort, non-raising final observation and never terminates a live avatar.
+- POSIX uses `start_new_session=True`; `terminate()` is one-process TERM and
+  `force_terminate()` is one-process KILL. Neither operation claims tree
+  management.
+- Unsupported platforms, including Windows, fail loudly at the selector;
+  this re-cut adds no Windows launch implementation, selector wiring, or
+  native acceptance claim.
 - `python` is resolved lazily via `lingtai.venv_resolve.resolve_venv` /
   `venv_python` from the avatar's `init.json` → global runtime. The
   `lingtai.tools → lingtai` import edge is allowed only inside setup/handlers.
@@ -125,6 +137,8 @@ DOCUMENT ONLY — do not change these assumptions and do not propose Windows wor
 
 | Claim | Source | Test |
 |---|---|---|
+| The POSIX launcher preserves exact detached launch, PID/exit truth, one-process termination, and non-killing release contracts; unsupported platforms fail loudly | `src/lingtai/adapters/posix/avatar_launcher.py`, `src/lingtai/adapters/avatar_launcher.py` | `tests/test_avatar_launcher.py::test_posix_launch_contract_and_release`, `::test_selector_selects_posix_and_fails_loud_for_unsupported` |
+| Boot policy keeps heartbeat-first precedence, exact early-exit truth, and a live-process slow path without termination | `src/lingtai/tools/avatar/__init__.py` | `tests/test_avatar_launcher.py::test_manager_boot_policy_uses_opaque_port_and_preserves_precedence`, `::test_manager_slow_observation_does_not_terminate_child` |
 | `setup` registers both `avatar_spawn` and `avatar_rules` | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::test_setup_avatar`, `::test_add_capability_avatar` |
 | Each spawn appends a ledger record | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::test_ledger_records_spawn` |
 | `dry_run` previews without spawning and does not require `confirm` | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::test_dry_run_returns_preview_without_spawning`, `::test_dry_run_does_not_require_confirm` |
@@ -144,13 +158,13 @@ DOCUMENT ONLY — do not change these assumptions and do not propose Windows wor
 | Spawn is ledgered with boot status | `tests/test_layers_avatar.py::test_ledger_records_spawn` | Spawn an avatar, inspect `delegates/ledger.jsonl` | No audit trail; duplicate/liveness checks break |
 | Mission gate stops accidental spawns | `tests/test_layers_avatar.py::test_helper_rejects_short` | `avatar_spawn(name="x")` with a 5-char mission, confirm gate | Stray detached processes from batched calls |
 | Name validation / path-scope guard holds | `tests/test_layers_avatar.py::test_spawn_rejects_unsafe_name` | Spawn with `name="../x"`, confirm refusal | Avatar dir escapes the network root |
-| Boot verification catches early child exit | boot-status path in `tests/test_layers_avatar.py` | Corrupt an avatar `init.json`, spawn, confirm `failed` + stderr | Parent thinks a crashed avatar is alive |
+| Boot verification catches early child exit | `tests/test_avatar_launcher.py::test_manager_boot_policy_uses_opaque_port_and_preserves_precedence` | Corrupt an avatar `init.json`, spawn, confirm `failed` + stderr | Parent thinks a crashed avatar is alive |
 | Rules propagate to the whole subtree | `tests/test_avatar_rules.py::test_rules_distributes_recursively` | Set rules on a root, confirm `.rules` on each descendant | Descendants run stale/ungoverned rules |
 
 Run before merging avatar changes:
 
 ```bash
-python -m pytest tests/test_layers_avatar.py tests/test_avatar_rules.py -q
+python -m pytest tests/test_avatar_launcher.py tests/test_layers_avatar.py tests/test_avatar_rules.py tests/test_avatar_preset_inheritance.py tests/test_avatar_timezone_inheritance.py -q
 ```
 
 ## Schema and glossary ownership

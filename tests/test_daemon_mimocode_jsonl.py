@@ -19,8 +19,8 @@ Verified against official MiMo Code 0.1.5 (tag commit
    ``mimo run --session <mimocode_session_id> --format json <message>`` and
    the same answer/error contract applies to the resume stream.
 
-These are unit tests over the runner with monkey-patched ``subprocess.Popen``
-— the MiMo CLI is not required to be installed.
+These are unit tests over the Port-backed runner with monkey-patched underlying
+process creation — the MiMo CLI is not required to be installed.
 """
 from __future__ import annotations
 
@@ -686,6 +686,9 @@ def test_mimocode_concurrent_initial_and_resume_usage_persistence_is_atomic(tmp_
             self.pid = 0
 
         def wait(self, timeout=None):
+            return self.returncode
+
+        def poll(self):
             return self.returncode
 
     processes = iter([

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 import textwrap
 import threading
@@ -12,13 +13,43 @@ from unittest.mock import patch
 import pytest
 
 from lingtai.tools.daemon import get_schema
-from lingtai.tools.daemon.claude_interactive import ClaudeInteractiveError, run_claude_interactive
+from lingtai.tools.daemon.claude_interactive import (
+    ClaudeInteractiveBridge,
+    ClaudeInteractiveError,
+    run_claude_interactive,
+)
 from tests._daemon_helpers import (
     install_fake_detached_owner,
     make_daemon_agent,
     make_daemon_run_dir,
     wait_daemon_terminal,
 )
+
+
+def test_claude_interactive_bridge_import_does_not_require_posix_pty():
+    script = """
+import builtins
+original_import = builtins.__import__
+def import_without_pty(name, *args, **kwargs):
+    if name == 'pty':
+        raise ModuleNotFoundError('pty deliberately unavailable')
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = import_without_pty
+import lingtai.tools.daemon.claude_interactive
+"""
+    env = os.environ.copy()
+    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = os.pathsep.join(
+        path for path in (source_root, env.get("PYTHONPATH")) if path
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def _make_run_dir(tmp_path: Path, *, backend: str = "claude"):
@@ -36,6 +67,27 @@ def _make_run_dir(tmp_path: Path, *, backend: str = "claude"):
         system_prompt="[claude interactive backend]",
         backend=backend,
     )
+
+
+class _NoSpawnTerminalPort:
+    """Explicit injected Port used by tests whose boundary forbids spawn."""
+
+    def __init__(self):
+        self.spawn_calls = 0
+
+    def spawn(self, command, *, group_id=None):
+        self.spawn_calls += 1
+        raise AssertionError("terminal spawn must not be reached")
+
+
+def _make_test_terminal_port():
+    """Use a real explicit POSIX Port without importing ``pty`` on Windows."""
+    if os.name != "posix":
+        pytest.skip("POSIX interactive terminal adapter tests")
+    from lingtai.adapters.posix.interactive_terminal import (
+        PosixInteractiveTerminalAdapter,
+    )
+    return PosixInteractiveTerminalAdapter()
 
 
 def _write_fake_claude(bin_dir: Path, transcript_text: str = "fake interactive answer") -> Path:
@@ -293,6 +345,7 @@ def test_run_claude_interactive_fake_cli_hooks_and_transcript(tmp_path, monkeypa
         task="interactive task",
         cancel_event=threading.Event(),
         env=os.environ.copy(),
+        terminal_port=_make_test_terminal_port(),
     )
 
     assert result.final_text == "fake interactive answer"
@@ -312,6 +365,50 @@ def test_run_claude_interactive_fake_cli_hooks_and_transcript(tmp_path, monkeypa
     assert "claude interactive Stop" in events
 
 
+def test_missing_terminal_port_fails_before_workspace_or_spawn(tmp_path, monkeypatch):
+    managed_root = tmp_path / "managed-claude"
+    env = os.environ.copy()
+    env["LINGTAI_CLAUDE_MANAGED_ROOT"] = str(managed_root)
+    prep_calls = []
+    port = _NoSpawnTerminalPort()
+
+    def record_workspace(self):
+        prep_calls.append("workspace")
+
+    def record_harness(self):
+        prep_calls.append("harness")
+        return "{}"
+
+    monkeypatch.setattr(
+        ClaudeInteractiveBridge, "_prepare_managed_workspace", record_workspace
+    )
+    monkeypatch.setattr(ClaudeInteractiveBridge, "_prepare_harness", record_harness)
+    if os.name == "posix":
+        from lingtai.adapters.posix import interactive_terminal as posix_terminal
+        monkeypatch.setattr(
+            posix_terminal,
+            "PosixInteractiveTerminalAdapter",
+            lambda: port,
+        )
+
+    run_dir = _make_run_dir(tmp_path)
+    with pytest.raises(
+        ClaudeInteractiveError,
+        match="requires an injected InteractiveTerminalPort",
+    ):
+        run_claude_interactive(
+            em_id="em-1",
+            run_dir=run_dir,
+            working_dir=tmp_path / "daemon-agent",
+            task="interactive task",
+            cancel_event=threading.Event(),
+            env=env,
+            terminal_port=None,
+        )
+
+    assert prep_calls == []
+    assert not managed_root.exists()
+    assert port.spawn_calls == 0
 
 
 def test_run_claude_interactive_rejects_invalid_managed_worktree_source(tmp_path, monkeypatch):
@@ -333,6 +430,7 @@ def test_run_claude_interactive_rejects_invalid_managed_worktree_source(tmp_path
             cancel_event=threading.Event(),
             backend_argv=["--managed-worktree-from", str(tmp_path / "not-a-repo")],
             env=os.environ.copy(),
+            terminal_port=_NoSpawnTerminalPort(),
         )
 
 
@@ -361,6 +459,7 @@ def test_run_claude_interactive_checks_out_explicit_managed_worktree_source(tmp_
         cancel_event=threading.Event(),
         backend_argv=["--managed-worktree-from", str(source)],
         env=os.environ.copy(),
+        terminal_port=_make_test_terminal_port(),
     )
 
     assert result.final_text == "explicit managed source answer"
@@ -486,6 +585,7 @@ subprocess.run(
         task="interactive task",
         cancel_event=threading.Event(),
         env=os.environ.copy(),
+        terminal_port=_make_test_terminal_port(),
     )
 
     assert result.final_text == "managed trust answer"

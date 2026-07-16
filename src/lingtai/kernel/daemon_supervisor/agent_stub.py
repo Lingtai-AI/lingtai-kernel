@@ -42,6 +42,10 @@ class DaemonSupervisorAgentStub:
         self._intrinsic_modules = {}
         self._tool_schemas = []
         self._tool_handlers = {}
+        # Detached composition injects a correctly rooted service only when a
+        # requested file capability needs it; unlike a full Agent, this stub
+        # does not own any other host-service construction.
+        self._file_io = None
         self._mcp_tool_names = set()
         self._tool_call_guard = None
         self._log_fn = log_fn

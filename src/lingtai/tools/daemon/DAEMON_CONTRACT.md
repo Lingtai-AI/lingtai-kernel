@@ -11,6 +11,12 @@ last_changed_at: "2026-07-10"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/process_port.py
+  - src/lingtai/tools/daemon/interactive_terminal/__init__.py
+  - src/lingtai/tools/daemon/interactive_terminal/CONTRACT.md
+  - src/lingtai/tools/daemon/interactive_terminal/ANATOMY.md
+  - src/lingtai/adapters/posix/interactive_terminal.py
+  - src/lingtai/tools/daemon/posix_process.py
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/manual/SKILL.md
   - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
@@ -88,6 +94,46 @@ Scope:
 Non-scope: claiming new backend MCP support before implementation, changing
 third-party MCP protocols, or broad daemon scheduling/timeout behavior except
 where those changes affect the capability invariants here.
+
+## External CLI process boundary
+
+The Stage 4 production slice routes Codex, Cursor, the shared OpenCode/MiMo/Oh-My-Pi
+family, and the Qwen/Kimi raw one-shot initial `emanate` runners through the
+daemon-local process Port. Qwen and Kimi remain Manager-owned text-capture
+backends and do not gain `ask` support from this boundary.
+`DaemonProcessCommand` is
+an immutable argv/cwd/environment value; policy receives only an opaque handle
+and a `DaemonProcessExit` containing the raw return code and optional local
+termination reason. `PosixDaemonProcessPort` owns POSIX session creation,
+stdout iteration (including ask deadlines), stderr draining, bounded
+TERM-then-KILL escalation, group/all ownership, and idempotent release.
+
+Release is non-blocking: it unregisters only a terminal/reaped child. A live
+child remains owned after failed quiescence so later group/all sweeps can retry;
+release never performs an unbounded wait. A concurrently blocked waiter reads
+the final first-writer-wins local termination cause, and group/all sweeps return
+the number of targeted children for truthful lifecycle reporting. If a terminal
+owner releases one handle after a sweep snapshot, the adapter skips that stale
+handle and still terminates every later live sibling in the snapshot.
+
+The Port does not construct backend argv, parse Codex JSONL, write
+`DaemonRunDir`, publish notifications, choose timeout versus cancellation, or
+classify success/failure. Watchdog group timeout and lifecycle reclaim/agent
+stop sweep Port-owned Codex, Cursor, OpenCode-family, Qwen, and Kimi processes as well
+as the transitional legacy CLI registry used by other backends. Windows
+adapters and interactive Claude PTY/ConPTY remain pending.
+
+## Interactive Claude transport status
+
+The hidden interactive Claude compatibility route now has a bounded POSIX-first
+transport slice: `InteractiveTerminalPort` and
+`PosixInteractiveTerminalAdapter` own only PTY allocation, 120x40 sizing, raw
+master byte I/O, child session/process-group termination, reaping, and terminal
+resource release. `DaemonManager` injects one adapter and sweeps its group/all
+ownership during watchdog timeout, reclaim, and parent stop. The bridge retains
+all terminal and result policy. This does not add ConPTY, a pipe-only Windows
+substitute, or a public backend name; native Windows interactive support remains
+deferred until a genuine ConPTY adapter and native acceptance lane exist.
 
 ## Capability Invariants
 
