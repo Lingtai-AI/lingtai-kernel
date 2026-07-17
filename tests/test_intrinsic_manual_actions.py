@@ -156,3 +156,76 @@ def test_missing_installed_manual_degrades_without_side_effects(tmp_path: Path) 
         ),
     }
     assert not (tmp_path / ".library").exists()
+
+
+class _ActionFileIO:
+    def __init__(self, root: Path):
+        self.root = root
+        self.last_traversal = None
+
+    def read(self, path):
+        return Path(path).read_text(encoding="utf-8")
+
+    def write(self, path, content):
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    def glob(self, pattern, *, root):
+        return sorted(str(path) for path in Path(root).glob(pattern))
+
+    def grep(self, pattern, *, path, max_results, glob_filter):
+        import re
+        result = []
+        target = Path(path)
+        paths = [target] if target.is_file() else sorted(target.rglob(glob_filter or "*"))
+        for current in paths:
+            if not current.is_file():
+                continue
+            for number, line in enumerate(current.read_text(encoding="utf-8").splitlines(), 1):
+                if re.search(pattern, line):
+                    result.append(type("Match", (), {"path": str(current), "line_number": number, "line": line})())
+                    if len(result) >= max_results:
+                        return result
+        return result
+
+
+def test_file_action_modes_keep_omission_and_fail_loudly(tmp_path: Path) -> None:
+    agent = _StubAgent(tmp_path)
+    agent._file_io = _ActionFileIO(tmp_path)
+    modules = (read_tool, write_tool, edit_tool, glob_tool, grep_tool)
+    for module in modules:
+        schema = module.get_schema()
+        tool_name = module.__name__.rsplit(".", 1)[-1]
+        assert schema["properties"]["action"]["enum"] == [tool_name, "manual"]
+        description = module.get_description()
+        assert "omit action" in description
+        assert f"action='{tool_name}'" in description
+        assert "after the manual result" in description
+        assert "error loop" in description
+        module.setup(agent)
+
+    source = tmp_path / "source.txt"
+    source.write_text("alpha\n", encoding="utf-8")
+    assert agent.handlers["read"]({"file_path": str(source)})["total_lines"] == 1
+    assert agent.handlers["read"]({"action": "read", "file_path": str(source)})["total_lines"] == 1
+    assert agent.handlers["write"]({"action": "write", "file_path": str(tmp_path / "written.txt"), "content": "beta"})["status"] == "ok"
+    assert agent.handlers["edit"]({"action": "edit", "file_path": str(source), "old_string": "alpha", "new_string": "gamma"})["status"] == "ok"
+    assert agent.handlers["glob"]({"action": "glob", "pattern": "*.txt", "path": str(tmp_path)})["count"] >= 2
+    assert agent.handlers["grep"]({"action": "grep", "pattern": "gamma", "path": str(source)})["count"] == 1
+
+    for name in ("read", "write", "edit", "glob", "grep"):
+        result = agent.handlers[name]({"action": "unsupported"})
+        assert result["status"] == "error"
+        assert "Unsupported action" in result["message"]
+
+
+def test_file_manual_bodies_explain_one_time_dual_mode_guidance() -> None:
+    file_body = Path("src/lingtai/intrinsic_skills/file-manual/SKILL.md").read_text(encoding="utf-8")
+    read_body = Path("src/lingtai/intrinsic_skills/read-manual/SKILL.md").read_text(encoding="utf-8")
+    for body in (file_body, read_body):
+        assert "backward compatibility" in body
+        assert "ordinary" in body
+        assert "one-time" in body
+        assert "After" in body
+        assert "error loop" in body

@@ -1,11 +1,12 @@
 ---
 name: glob-contract
 tool: glob
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/glob/__init__.py
   - src/lingtai/tools/_file_paths.py
   - src/lingtai/services/file_io_sidecar.py
+  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -43,7 +44,17 @@ fields -> §Tool surface; path handling -> §Cross-platform invariants.
 
 ## Tool surface
 
-Single action; the handler is `handle_glob`. The schema requires `pattern`.
+`handle_glob` has two modes:
+
+- **Ordinary:** omit `action` (backward compatible) or set
+  `action="glob"`; both forms run the same glob operation.
+- **Manual:** `action="manual"` returns the installed `file-manual` without
+  attempting to search for paths.
+
+The schema lists `glob` before `manual`. Any other explicit action
+returns a plain error before file I/O. After a manual response, the caller
+continues the original task with an ordinary call rather than repeating the
+manual.
 
 | Call | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|

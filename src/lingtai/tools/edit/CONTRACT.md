@@ -1,11 +1,12 @@
 ---
 name: edit-contract
 tool: edit
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/edit/__init__.py
   - src/lingtai/tools/_file_paths.py
   - src/lingtai/services/file_io_sidecar.py
+  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -44,8 +45,17 @@ lives in `src/lingtai/tools/edit/__init__.py`; the code is the source of truth.
 
 ## Tool surface
 
-Single action; the handler is `handle_edit`. The schema requires `file_path`,
-`old_string`, and `new_string`.
+`handle_edit` has two modes:
+
+- **Ordinary:** omit `action` (backward compatible) or set
+  `action="edit"`; both forms run the same edit operation.
+- **Manual:** `action="manual"` returns the installed `file-manual` without
+  attempting to edit a file.
+
+The schema lists `edit` before `manual`. Any other explicit action
+returns a plain error before file I/O. After a manual response, the caller
+continues the original task with an ordinary call rather than repeating the
+manual.
 
 | Call | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|

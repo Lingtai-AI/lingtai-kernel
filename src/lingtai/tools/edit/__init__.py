@@ -14,14 +14,14 @@ if TYPE_CHECKING:
 
 
 def get_description(lang: str = "en") -> str:
-    return "Replace an exact string in a file. Fails if old_string is not found or is ambiguous. Call edit(action='manual') to return the installed file-manual skill."
+    return "Replace an exact string in a file. Normal edits are the primary operation: omit action for the legacy ordinary call or use action='edit' explicitly. Fails if old_string is not found or is ambiguous. Use action='manual' once to return the installed file-manual skill; after the manual result, continue the original ordinary edit instead of repeating manual, because repeated identical manual calls are an error loop."
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["manual"], "description": "Use action='manual' to return the installed file-manual skill without editing a file."},
+            "action": {"type": "string", "enum": ["edit", "manual"], "description": "Omit action for the legacy ordinary edit, use action='edit' for an explicit ordinary edit, or use action='manual' once for the installed file-manual skill."},
             "file_path": {"type": "string", "description": "Absolute path to the file to edit. Required for ordinary edits; omit for action='manual'."},
             "old_string": {"type": "string", "description": "The exact text to find and replace. Required for ordinary edits; omit for action='manual'."},
             "new_string": {"type": "string", "description": "The replacement text. Required for ordinary edits; omit for action='manual'."},
@@ -36,8 +36,11 @@ def setup(agent: "BaseAgent") -> None:
     """Set up the edit capability on an agent."""
 
     def handle_edit(args: dict) -> dict:
-        if args.get("action") == "manual":
+        action = args.get("action")
+        if action == "manual":
             return load_installed_manual(agent, "file-manual")
+        if action is not None and action != "edit":
+            return {"status": "error", "message": f"Unsupported action for edit: {action!r}"}
         path = args.get("file_path", "")
         if not path:
             return {"status": "error", "message": "file_path is required"}

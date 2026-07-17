@@ -13,6 +13,7 @@ from lingtai.kernel.config import AgentConfig
 from lingtai.kernel.llm.base import ChatSession, FunctionSchema, LLMResponse, ToolCall, UsageMetadata
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock, ToolResultBlock
 from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
+from lingtai.tools import daemon as daemon_tool
 
 from tests._daemon_helpers import make_daemon_agent as _make_agent
 from tests._daemon_helpers import make_daemon_run_dir as _make_run_dir
@@ -4177,3 +4178,105 @@ def test_implicit_parent_preset_llm_does_not_resolve_primary_key(tmp_path):
     assert preset["context_window"] == 200000
     assert preset["key_resolver"] is exploding_resolver
     assert preset["_provider_defaults"] == {"max_rpm": 5}
+
+
+class _SummaryRunDir:
+    def __init__(self):
+        self.calls = []
+
+    def append_tokens(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+class _SummarySession:
+    def __init__(self, response):
+        self.response = response
+        self.messages = []
+
+    def send(self, message):
+        self.messages.append(message)
+        return self.response
+
+
+class _SummaryService:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+        self.session = _SummarySession(response)
+
+    def create_session(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.session
+
+
+def test_daemon_summary_closure_uses_effective_session_and_accounts_usage(tmp_path):
+    usage = UsageMetadata(input_tokens=17, output_tokens=5, thinking_tokens=2, cached_tokens=3)
+    response = LLMResponse(text="LOCAL SUMMARY", tool_calls=[], usage=usage)
+    service = _SummaryService(response)
+    run_dir = _SummaryRunDir()
+    fn = daemon_tool._build_daemon_apriori_summarizer_fn(
+        service, run_dir, provider="mock", model="daemon-model", endpoint="endpoint",
+    )
+
+    assert fn("SUMMARY SYSTEM", "SUMMARY USER", "read", "tc-summary") == "LOCAL SUMMARY"
+    assert service.calls == [{
+        "system_prompt": "SUMMARY SYSTEM",
+        "tools": None,
+        "model": "daemon-model",
+        "tracked": False,
+        "provider": "mock",
+    }]
+    assert service.session.messages == ["SUMMARY USER"]
+    assert run_dir.calls == [{
+        "input": 17, "output": 5, "thinking": 2, "cached": 3,
+        "model": "daemon-model", "endpoint": "endpoint",
+        "usage_extra": {},
+    }]
+
+
+def test_daemon_tool_executor_wires_summary_gateway_and_preserves_raw_log(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    raw = {"content": "DAEMON-RAW-MARKER"}
+    agent._tool_handlers["read"] = MagicMock(return_value=raw)
+    first = LLMResponse(
+        text="",
+        tool_calls=[ToolCall(name="read", args={"file_path": "/tmp/x", "summary": True, "reasoning": "retain marker"}, id="tc-daemon-summary")],
+        usage=None,
+    )
+    final = LLMResponse(text="daemon finished", tool_calls=[], usage=None)
+    summary = LLMResponse(
+        text="DAEMON-SUMMARY-MARKER", tool_calls=[],
+        usage=UsageMetadata(input_tokens=11, output_tokens=7, thinking_tokens=1, cached_tokens=2),
+    )
+    service = _CanonicalFakeService([[first, final], [summary]])
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    run_dir = _make_run_dir(agent, em_id="em-summary")
+    mgr._emanations["em-summary"] = {
+        "followup_buffer": "", "followup_lock": threading.Lock(), "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(
+        "em-summary", run_dir, *mgr._build_tool_surface(["file"]),
+        "summarize the read result", threading.Event(),
+    )
+
+    assert result == "daemon finished"
+    assert len(service.sessions) == 2
+    summary_call = service.sessions[1]
+    assert summary_call.sent_messages
+    assert "DAEMON-RAW-MARKER" in summary_call.sent_messages[0]
+    worker_tool_batch = service.sessions[0].request_snapshots[1]
+    worker_visible = str(worker_tool_batch[-1])
+    assert "DAEMON-SUMMARY-MARKER" in worker_visible
+    assert "DAEMON-RAW-MARKER" not in worker_visible
+    assert "logs/events.jsonl" in worker_visible
+    assert run_dir.events_path.relative_to(agent._working_dir).as_posix() not in worker_visible
+    parent_events = [json.loads(line) for line in (agent._working_dir / "logs" / "events.jsonl").read_text().splitlines()]
+    raw_events = [event for event in parent_events if event.get("type") == "daemon_tool_result"]
+    assert any("DAEMON-RAW-MARKER" in str(event.get("result")) for event in raw_events)
+    daemon_rows = [json.loads(line) for line in run_dir.token_ledger_path.read_text().splitlines()]
+    assert any(row["input"] == 11 and row["output"] == 7 and row["source"] == "daemon" for row in daemon_rows)
+    parent_rows = [json.loads(line) for line in (agent._working_dir / "logs" / "token_ledger.jsonl").read_text().splitlines()]
+    assert any(row["input"] == 11 and row["output"] == 7 and row["source"] == "daemon" for row in parent_rows)

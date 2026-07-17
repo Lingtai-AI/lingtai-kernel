@@ -14,6 +14,9 @@ related_files:
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/kernel/meta_block.py
+  - src/lingtai/kernel/tool_executor.py
+  - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/llm/service.py
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/process_port.py
   - src/lingtai/tools/daemon/interactive_terminal/__init__.py
@@ -29,6 +32,7 @@ related_files:
   - src/lingtai/llm/mimo/ANATOMY.md
   - tests/test_daemon_contract_doc.py
   - tests/test_daemon.py
+  - tests/test_apriori_summary_executor.py
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_claude_p_background_guard.py
   - tests/test_daemon_opencode_backend.py
@@ -347,6 +351,23 @@ general skills/MCP/completion/backend-support invariants above:
 - Trigger/boundary/invalidation mechanics are shared Responses adapter/session
   internals (`_StandaloneCompactionMixin`), not daemon-owned. This contract
   states only the daemon-task-object capability boundary.
+
+## A-priori summary composition
+
+The LingTai backend builds one daemon-local summary closure and passes it to the
+kernel `ToolExecutor`. The closure:
+
+- uses the effective daemon `LLMService`, provider, and model;
+- creates a `tracked=False` session with no tools;
+- forwards the existing kernel summary prompt contract; and
+- accounts usage through `DaemonRunDir.append_tokens`, keeping daemon and parent
+  ledgers consistent.
+
+`ToolExecutor` remains responsible for the explicit `summary=true` gate, raw
+logging before replacement, fail-closed error/refusal behavior, and the 500,000
+character cap. The daemon logger preserves the raw result in the parent
+`logs/events.jsonl`, which remains the recovery locator exposed to the worker.
+The closure is inert unless a tool explicitly requests `summary=true`.
 
 ## Backend Support Matrix
 

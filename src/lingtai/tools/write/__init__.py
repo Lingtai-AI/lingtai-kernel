@@ -14,14 +14,14 @@ if TYPE_CHECKING:
 
 
 def get_description(lang: str = "en") -> str:
-    return "Create or overwrite a file with the given content. Parent directories are created automatically. Use this for creating new files or complete rewrites. For small changes to existing files, prefer edit. Call write(action='manual') to return the installed file-manual skill."
+    return "Create or overwrite a file with the given content. Normal writes are the primary operation: omit action for the legacy ordinary call or use action='write' explicitly. Parent directories are created automatically. Use this for creating new files or complete rewrites. For small changes to existing files, prefer edit. Use action='manual' once to return the installed file-manual skill; after the manual result, continue the original ordinary write instead of repeating manual, because repeated identical manual calls are an error loop."
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["manual"], "description": "Use action='manual' to return the installed file-manual skill without writing a file."},
+            "action": {"type": "string", "enum": ["write", "manual"], "description": "Omit action for the legacy ordinary write, use action='write' for an explicit ordinary write, or use action='manual' once for the installed file-manual skill."},
             "file_path": {"type": "string", "description": "Absolute path to the file to write. Required for ordinary writes; omit for action='manual'."},
             "content": {"type": "string", "description": "Content to write. Required for ordinary writes; omit for action='manual'."},
         },
@@ -34,8 +34,11 @@ def setup(agent: "BaseAgent") -> None:
     """Set up the write capability on an agent."""
 
     def handle_write(args: dict) -> dict:
-        if args.get("action") == "manual":
+        action = args.get("action")
+        if action == "manual":
             return load_installed_manual(agent, "file-manual")
+        if action is not None and action != "write":
+            return {"status": "error", "message": f"Unsupported action for write: {action!r}"}
         path = args.get("file_path", "")
         if not path:
             return {"status": "error", "message": "file_path is required"}

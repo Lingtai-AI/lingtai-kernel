@@ -1,11 +1,12 @@
 ---
 name: write-contract
 tool: write
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/write/__init__.py
   - src/lingtai/tools/_file_paths.py
   - src/lingtai/services/file_io_sidecar.py
+  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -44,8 +45,17 @@ truth.
 
 ## Tool surface
 
-Single action; the handler is `handle_write`. The schema requires `file_path`
-and `content`.
+`handle_write` has two modes:
+
+- **Ordinary:** omit `action` (backward compatible) or set
+  `action="write"`; both forms run the same write operation.
+- **Manual:** `action="manual"` returns the installed `file-manual` without
+  attempting to write a file.
+
+The schema lists `write` before `manual`. Any other explicit action
+returns a plain error before file I/O. After a manual response, the caller
+continues the original task with an ordinary call rather than repeating the
+manual.
 
 | Call | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
