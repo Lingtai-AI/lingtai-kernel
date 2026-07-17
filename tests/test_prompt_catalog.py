@@ -73,7 +73,7 @@ def _mentioned_file_paths(body: str) -> list[str]:
         value = match.group(1).strip()
         if value.startswith("tests/"):
             continue
-        if value.startswith(("~/", "~", "/")):
+        if value.startswith(("~/", "~", "/", "http://", "https://")):
             continue
         if "/" in value or any(
             suffix in value
@@ -362,7 +362,12 @@ def test_guidance_ids_referenced_by_runtime_code_exist():
     # `_meta` guidance pointer.
     referenced.discard("ref")
     referenced.discard("catalog")
-    assert {"token_efficiency", "notification_handling"} <= referenced
+    # ``token_efficiency`` is emitted through a composed f-string constant, so
+    # assert its runtime value directly rather than relying on source text.
+    from lingtai.kernel.meta_block import TOKEN_USAGE_GUIDANCE_REF
+
+    assert "meta_guidance.token_efficiency" in TOKEN_USAGE_GUIDANCE_REF
+    assert "notification_handling" in referenced
     missing = referenced - catalog_ids
     assert not missing, f"dangling meta_guidance.<id> refs: {sorted(missing)}"
 

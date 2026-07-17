@@ -2874,7 +2874,7 @@ def _write_preset_file(presets_dir, name, provider="deepseek", model="deepseek-v
     import json
     preset = {
         "name": name,
-        "description": f"{name} preset",
+        "description": {"summary": f"{name} preset"},
         "manifest": {
             "llm": {
                 "provider": provider,

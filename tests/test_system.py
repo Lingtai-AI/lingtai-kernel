@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.kernel.base_agent import BaseAgent
+from lingtai.kernel.presets import home_shortened
 from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
@@ -511,7 +512,7 @@ def test_refresh_whitespace_preset_is_no_swap(tmp_path, monkeypatch):
 
 
 def test_presets_action_lists_full_library(tmp_path):
-    """system(action='presets') returns full library with descriptions and capabilities."""
+    """system(action='presets') returns all explicitly allowed presets."""
     import json
     plib = tmp_path / "presets"
     plib.mkdir()
@@ -533,19 +534,21 @@ def test_presets_action_lists_full_library(tmp_path):
     result = agent._intrinsics["system"]({"action": "presets"})
 
     assert result["status"] == "ok"
-    # In the path-as-name model, `active` and entry names are full paths.
+    # `active` preserves manifest spelling; available names are display-shortened.
     alpha_path = str(plib / "alpha.json")
     beta_path = str(plib / "beta.json")
+    alpha_name = home_shortened(alpha_path)
+    beta_name = home_shortened(beta_path)
     assert result["active"] == alpha_path
     names = [p["name"] for p in result["available"]]
-    assert sorted(names) == sorted([alpha_path, beta_path])
+    assert sorted(names) == sorted([alpha_name, beta_name])
 
-    alpha = next(p for p in result["available"] if p["name"] == alpha_path)
+    alpha = next(p for p in result["available"] if p["name"] == alpha_name)
     assert alpha["description"] == {"summary": "alpha desc"}
     assert alpha["llm"] == {"provider": "p1", "model": "m1"}
     assert "vision" in alpha["capabilities"]
 
-    beta = next(p for p in result["available"] if p["name"] == beta_path)
+    beta = next(p for p in result["available"] if p["name"] == beta_name)
     assert beta["description"] == {"summary": "structured", "gains": ["a"]}
 
     for entry in result["available"]:
@@ -854,14 +857,16 @@ def test_presets_action_includes_connectivity(tmp_path, monkeypatch):
     by_name = {p["name"]: p for p in result["available"]}
     alpha_path = str(plib / "alpha.json")
     beta_path = str(plib / "beta.json")
+    alpha_name = home_shortened(alpha_path)
+    beta_name = home_shortened(beta_path)
 
     # alpha — has credentials, mocked probe succeeds → ok
-    assert by_name[alpha_path]["connectivity"]["status"] == "ok"
-    assert by_name[alpha_path]["connectivity"]["latency_ms"] == 42
+    assert by_name[alpha_name]["connectivity"]["status"] == "ok"
+    assert by_name[alpha_name]["connectivity"]["latency_ms"] == 42
 
     # beta — no credentials → no_credentials, no network call
-    assert by_name[beta_path]["connectivity"]["status"] == "no_credentials"
-    assert by_name[beta_path]["connectivity"]["latency_ms"] is None
+    assert by_name[beta_name]["connectivity"]["status"] == "no_credentials"
+    assert by_name[beta_name]["connectivity"]["latency_ms"] is None
 
 
 def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch):
@@ -888,9 +893,9 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
     result = agent._intrinsics["system"]({"action": "presets"})
 
     by_name = {p["name"]: p for p in result["available"]}
-    broken_path = str(plib / "broken.json")
-    assert by_name[broken_path]["connectivity"]["status"] == "unreachable"
-    assert "DNS fail" in by_name[broken_path]["connectivity"]["error"]
+    broken_name = home_shortened(str(plib / "broken.json"))
+    assert by_name[broken_name]["connectivity"]["status"] == "unreachable"
+    assert "DNS fail" in by_name[broken_name]["connectivity"]["error"]
 
 
 # ---------------------------------------------------------------------------

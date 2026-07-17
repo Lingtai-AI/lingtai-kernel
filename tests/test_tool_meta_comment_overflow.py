@@ -20,6 +20,7 @@ import json
 from unittest.mock import MagicMock
 
 from lingtai.kernel.llm.base import ToolCall
+from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.meta_block import build_tool_meta_overflow_comment
 from lingtai.kernel.tool_executor import (
@@ -32,7 +33,13 @@ def _make_executor(
     *, dispatch_fn, working_dir, max_result_chars=_DEFAULT_MAX_RESULT_CHARS,
     summarize_notification_threshold=None,
 ):
-    captured = MagicMock(side_effect=lambda name, result, **kw: result)
+    captured = MagicMock(
+        side_effect=lambda name, result, **kw: ToolResultBlock(
+            kw.get("tool_call_id", ""),
+            name,
+            result,
+        )
+    )
     executor = ToolExecutor(
         dispatch_fn=dispatch_fn,
         make_tool_result_fn=captured,
@@ -44,9 +51,9 @@ def _make_executor(
     return executor, captured
 
 
-def _tool_meta(wire_payload):
-    assert isinstance(wire_payload, dict), wire_payload
-    return wire_payload.get("_meta", {}).get("tool_meta", {})
+def _tool_meta(block):
+    assert isinstance(block, ToolResultBlock), block
+    return block.metadata.get("tool_meta", {})
 
 
 # -- builder unit tests -----------------------------------------------------
@@ -92,11 +99,10 @@ def test_spilled_result_carries_overflow_comment(tmp_path):
     executor, captured = _make_executor(
         dispatch_fn=dispatch, working_dir=tmp_path, max_result_chars=500,
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-spill")])
-    _, wire = captured.call_args.args
-    assert wire["status"] == "spilled"
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-spill")])[0][0]
+    assert block.content["status"] == "spilled"
 
-    tool_meta = _tool_meta(wire)
+    tool_meta = _tool_meta(block)
     overflow = tool_meta.get("comment", {}).get("overflow")
     assert overflow is not None, tool_meta
     # references events.jsonl + this call id, not saved_path
@@ -129,11 +135,10 @@ def test_large_inline_result_carries_overflow_comment(tmp_path):
         max_result_chars=_DEFAULT_MAX_RESULT_CHARS,
         summarize_notification_threshold=100,
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-large")])
-    _, wire = captured.call_args.args
-    assert wire.get("status") != "spilled"
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-large")])[0][0]
+    assert block.content.get("status") != "spilled"
 
-    tool_meta = _tool_meta(wire)
+    tool_meta = _tool_meta(block)
     assert tool_meta["char_count"] > 100
     overflow = tool_meta.get("comment", {}).get("overflow")
     assert overflow is not None, tool_meta
@@ -153,10 +158,9 @@ def test_small_result_has_no_overflow_comment(tmp_path):
         working_dir=tmp_path,
         summarize_notification_threshold=100,
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-small")])
-    _, wire = captured.call_args.args
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-small")])[0][0]
 
-    tool_meta = _tool_meta(wire)
+    tool_meta = _tool_meta(block)
     assert "comment" not in tool_meta, tool_meta
     # Identity fields still present and intact.
     assert tool_meta["id"] == "tc-small"
@@ -175,8 +179,7 @@ def test_large_result_no_comment_when_hint_disabled(tmp_path):
         max_result_chars=_DEFAULT_MAX_RESULT_CHARS,  # no spill
         summarize_notification_threshold=0,  # disabled
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-nohint")])
-    _, wire = captured.call_args.args
-    assert wire.get("status") != "spilled"
-    tool_meta = _tool_meta(wire)
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-nohint")])[0][0]
+    assert block.content.get("status") != "spilled"
+    tool_meta = _tool_meta(block)
     assert "comment" not in tool_meta, tool_meta

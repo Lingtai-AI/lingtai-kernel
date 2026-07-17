@@ -122,14 +122,15 @@ class TestTraversalBudgets:
         svc.write("dist/bundle.js", "x")
 
         results = svc.glob("**/*")
-        for r in results:
-            assert ".git" not in r
-            assert "node_modules" not in r
-            assert ".venv" not in r
-            assert "__pycache__" not in r
-            assert "/history/" not in r and not r.endswith("/history")
-            assert "/tmp/" not in r and not r.endswith("/tmp")
-            assert "/dist/" not in r and not r.endswith("/dist")
+        for result in results:
+            parts = Path(result).relative_to(tmp_dir).parts
+            assert ".git" not in parts
+            assert "node_modules" not in parts
+            assert ".venv" not in parts
+            assert "__pycache__" not in parts
+            assert "history" not in parts
+            assert "tmp" not in parts
+            assert "dist" not in parts
         # Real source files survive
         assert any(r.endswith("/src/main.py") for r in results)
         assert any(r.endswith("/tests/test_main.py") for r in results)

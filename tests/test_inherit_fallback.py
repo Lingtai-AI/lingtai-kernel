@@ -42,16 +42,16 @@ def test_web_search_unknown_provider_falls_back_to_duckduckgo():
     assert "web_search" in a._tool_handlers
 
 
-def test_vision_unknown_provider_silently_skips():
-    """vision with provider='deepseek' (no vision, no fallback) skips registration."""
-    from lingtai.tools.registry import CAPABILITY_UNAVAILABLE
-    from lingtai.tools.vision import setup as vision_setup
+def test_vision_unknown_provider_registers_manual_only_route():
+    """Current preset routing keeps vision discoverable when direct setup is unavailable."""
+    from lingtai.tools.vision import VisionManager, setup as vision_setup
+
     a = _stub_agent()
     result = vision_setup(a, provider="deepseek", api_key=None, api_key_env="X")
-    assert result is CAPABILITY_UNAVAILABLE
-    assert "vision" not in a._tool_handlers
-    events = [e for e, _ in a._log_events]
-    assert "capability_skipped" in events
+    assert isinstance(result, VisionManager)
+    assert "vision" in a._tool_handlers
+    assert "manual" in result._manual_reason
+    assert not any(event == "capability_skipped" for event, _ in a._log_events)
 
 
 def test_web_search_supported_provider_uses_it(monkeypatch):

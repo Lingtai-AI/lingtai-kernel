@@ -4,6 +4,7 @@ description: >
   Use this manual when the vision capability has no usable provider route or
   reports a direct setup/request failure and needs safe, provider-neutral
   troubleshooting guidance.
+last_changed_at: "2026-07-16T21:00:00-07:00"
 related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/ANATOMY.md

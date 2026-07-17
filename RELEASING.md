@@ -1,3 +1,12 @@
+---
+related_files:
+  - .github/workflows/wheels.yml
+  - scripts/generate_release_manifest.py
+  - scripts/publish_release_assets.py
+  - tests/test_wheel_sidecar_smoke.py
+maintenance: |
+  Keep this release runbook synchronized with the CI wheel/sdist workflows, manifest tooling, sidecar verification, and publication gates.
+---
 # Releasing the `lingtai` Python kernel
 
 ## Build + verify (existing, unchanged)

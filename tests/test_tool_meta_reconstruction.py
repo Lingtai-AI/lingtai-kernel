@@ -38,7 +38,16 @@ def _make_executor(
     meta_fn=None,
     result_factory_fn=None,
 ):
-    captured = MagicMock(side_effect=result_factory_fn or (lambda name, result, **kw: result))
+    captured = MagicMock(
+        side_effect=result_factory_fn
+        or (
+            lambda name, result, **kw: ToolResultBlock(
+                kw.get("tool_call_id", ""),
+                name,
+                result,
+            )
+        )
+    )
     executor = ToolExecutor(
         dispatch_fn=dispatch_fn,
         make_tool_result_fn=captured,
@@ -52,14 +61,15 @@ def _make_executor(
     return executor, captured
 
 
-def _tool_meta(wire):
-    assert isinstance(wire, dict), wire
-    return wire.get("_meta", {}).get("tool_meta", {})
+def _tool_meta(block):
+    assert isinstance(block, ToolResultBlock), block
+    return block.metadata.get("tool_meta", {})
 
 
-def _agent_state(wire):
-    assert isinstance(wire, dict), wire
-    return wire.get("_meta", {}).get("agent_meta", {}).get("agent_state", {})
+def _agent_state(block):
+    assert isinstance(block, ToolResultBlock), block
+    pending = block._agent_pending or {}
+    return pending.get("agent_state", {})
 
 
 # A 1.0 forced-rebuild event as build_reconstruction_tool_meta emits it: one
@@ -116,12 +126,11 @@ def test_reconstruction_event_attaches_to_tool_meta(tmp_path):
         working_dir=tmp_path,
         reconstruction_event_fn=fn,
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-1")])
-    _, wire = captured.call_args.args
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-1")])[0][0]
 
-    tm = _tool_meta(wire)
+    tm = _tool_meta(block)
     assert tm["id"] == "tc-1"
-    event = _agent_state(wire)["events"]["reconstruction"]
+    event = _agent_state(block)["events"]["reconstruction"]
     assert event["type"] == "delayed_summarize_reconstruction"
     assert event["before"]["usage"] == 1.0
     assert event["after"]["usage"] == 0.70
@@ -148,14 +157,16 @@ def test_reconstruction_event_is_one_shot_across_batch(tmp_path):
         working_dir=tmp_path,
         reconstruction_event_fn=fn,
     )
-    executor.execute(
+    blocks, _, _ = executor.execute(
         [
             ToolCall(name="read", args={}, id="tc-a"),
             ToolCall(name="read", args={}, id="tc-b"),
         ]
     )
-    wires = [c.args[1] for c in captured.call_args_list]
-    with_event = [w for w in wires if "reconstruction" in _agent_state(w).get("events", {})]
+    with_event = [
+        block for block in blocks
+        if "reconstruction" in _agent_state(block).get("events", {})
+    ]
     assert len(with_event) == 1
 
 
@@ -205,9 +216,8 @@ def test_no_event_when_none_pending(tmp_path):
         working_dir=tmp_path,
         reconstruction_event_fn=lambda: None,
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-x")])
-    _, wire = captured.call_args.args
-    assert "reconstruction" not in _agent_state(wire).get("events", {})
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-x")])[0][0]
+    assert "reconstruction" not in _agent_state(block).get("events", {})
 
 
 def test_no_fn_configured_is_safe(tmp_path):
@@ -216,11 +226,10 @@ def test_no_fn_configured_is_safe(tmp_path):
         working_dir=tmp_path,
         reconstruction_event_fn=None,
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-y")])
-    _, wire = captured.call_args.args
-    tm = _tool_meta(wire)
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-y")])[0][0]
+    tm = _tool_meta(block)
     assert tm["id"] == "tc-y"
-    assert "reconstruction" not in _agent_state(wire).get("events", {})
+    assert "reconstruction" not in _agent_state(block).get("events", {})
 
 
 # ---------------------------------------------------------------------------
@@ -249,10 +258,9 @@ def test_reconstruction_event_emits_reminder_event_when_molt_attached(tmp_path):
         reconstruction_event_fn=fn,
         logger_fn=logger,
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-1")])
-    _, wire = captured.call_args.args
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-1")])[0][0]
     # The reminder text stays at agent_meta.agent_state.events.reconstruction.molt.
-    assert isinstance(_agent_state(wire)["events"]["reconstruction"]["molt"], str)
+    assert isinstance(_agent_state(block)["events"]["reconstruction"]["molt"], str)
 
     emitted = [e for e in events if e[0] == "context_pressure_reconstruction_molt_reminder_emitted"]
     assert len(emitted) == 1
@@ -281,9 +289,8 @@ def test_forced_rebuild_warning_does_not_emit_molt_reminder_event(tmp_path):
         reconstruction_event_fn=lambda: dict(_EVENT),
         logger_fn=logger,
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-1")])
-    _, wire = captured.call_args.args
-    event = _agent_state(wire)["events"]["reconstruction"]
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-1")])[0][0]
+    event = _agent_state(block)["events"]["reconstruction"]
     assert "warning" in event
     assert "molt" not in event
     emitted = [e for e in events if e[0] == "context_pressure_reconstruction_molt_reminder_emitted"]
@@ -333,11 +340,10 @@ def test_current_molt_promoted_to_tool_meta_context_and_emits_event(tmp_path):
         logger_fn=logger,
         meta_fn=lambda: _current_molt_meta(with_event=True),
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-1")])
-    _, wire = captured.call_args.args
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-1")])[0][0]
 
     # Reminder text landed on current agent_meta.agent_state.context.molt.
-    assert _agent_state(wire)["context"]["molt"] == _CURRENT_MOLT_TEXT
+    assert _agent_state(block)["context"]["molt"] == _CURRENT_MOLT_TEXT
 
     emitted = [e for e in events if e[0] == CURRENT_MOLT_EVENT]
     assert len(emitted) == 1
@@ -356,10 +362,9 @@ def test_current_molt_attached_without_event_payload_does_not_emit(tmp_path):
         logger_fn=logger,
         meta_fn=lambda: _current_molt_meta(with_event=False),
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-1")])
-    _, wire = captured.call_args.args
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-1")])[0][0]
 
-    assert _agent_state(wire)["context"]["molt"] == _CURRENT_MOLT_TEXT
+    assert _agent_state(block)["context"]["molt"] == _CURRENT_MOLT_TEXT
     assert not any(e[0] == CURRENT_MOLT_EVENT for e in events)
 
 
@@ -371,10 +376,9 @@ def test_no_current_molt_means_no_context_block_and_no_event(tmp_path):
         logger_fn=logger,
         meta_fn=lambda: {},
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-1")])
-    _, wire = captured.call_args.args
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-1")])[0][0]
 
-    assert "context" not in _tool_meta(wire)
+    assert "context" not in _tool_meta(block)
     assert not any(e[0] == CURRENT_MOLT_EVENT for e in events)
 
 
@@ -397,12 +401,12 @@ def test_current_molt_event_deduped_across_results_in_same_round(tmp_path):
         meta_fn=meta_fn,
     )
     # Two results in the same round (rid=7).
-    executor.execute(
+    blocks, _, _ = executor.execute(
         [ToolCall(name="read", args={}, id="tc-a"), ToolCall(name="read", args={}, id="tc-b")]
     )
     # Every result still carries the permanent reminder text.
-    for call in captured.call_args_list:
-        assert call.args[1]["_meta"]["agent_meta"]["agent_state"]["context"]["molt"] == _CURRENT_MOLT_TEXT
+    for block in blocks:
+        assert _agent_state(block)["context"]["molt"] == _CURRENT_MOLT_TEXT
     # ...but the event was logged only ONCE for round 7.
     assert sum(1 for e in events if e[0] == CURRENT_MOLT_EVENT) == 1
 
@@ -453,17 +457,16 @@ def test_forced_rebuild_failed_overflow_line_persists_on_every_result_no_event(t
         logger_fn=logger,
         meta_fn=lambda: {TOOL_META_CONTEXT_PENDING_KEY: {"molt": overflow}},
     )
-    executor.execute(
+    blocks, _, _ = executor.execute(
         [
             ToolCall(name="read", args={}, id="tc-a"),
             ToolCall(name="read", args={}, id="tc-b"),
             ToolCall(name="read", args={}, id="tc-c"),
         ]
     )
-    wires = [c.args[1] for c in captured.call_args_list]
-    assert len(wires) == 3
-    for wire in wires:
-        assert _agent_state(wire)["context"]["molt"] == overflow
+    assert len(blocks) == 3
+    for block in blocks:
+        assert _agent_state(block)["context"]["molt"] == overflow
     # Current-state warning, not an event route.
     assert not any(e[0] == CURRENT_MOLT_EVENT for e in events)
 
@@ -480,18 +483,16 @@ def test_budget_context_promoted_to_agent_state_context_through_pipeline(tmp_pat
             cache_miss=1_200_000,
         ),
     )
-    executor.execute([ToolCall(name="read", args={}, id="tc-1")])
-    _, wire = captured.call_args.args
+    block = executor.execute([ToolCall(name="read", args={}, id="tc-1")])[0][0]
 
-    ctx = _agent_state(wire)["context"]
+    ctx = _agent_state(block)["context"]
     assert ctx["molt"] == "cache miss budget 1000000 reached, molt now"
     assert ctx["cache_miss_budget"] == 1_000_000
     assert ctx["cache_miss_tokens"] == 1_200_000
     # The budget transit key is consumed by _attach_tool_block: it must not leak
-    # onto the wire (neither at the top level, nor left inside private pending,
-    # nor into the promoted agent_state beyond molt + budget fields).
-    assert TOOL_META_CONTEXT_PENDING_KEY not in wire
-    assert TOOL_META_CONTEXT_PENDING_KEY not in wire.get("_agent_pending", {})
-    assert TOOL_META_CONTEXT_PENDING_KEY not in _tool_meta(wire)
+    # into content, private pending, or the promoted agent-state sidecar.
+    assert TOOL_META_CONTEXT_PENDING_KEY not in block.content
+    assert TOOL_META_CONTEXT_PENDING_KEY not in (block._agent_pending or {})
+    assert TOOL_META_CONTEXT_PENDING_KEY not in _tool_meta(block)
     # Budget guard is not a new event route.
     assert not any(e[0] == CURRENT_MOLT_EVENT for e in events)

@@ -211,7 +211,9 @@ def test_eigen_schema_has_context_molt(tmp_path):
     s = get_schema("en")
     assert "context" in s["properties"]["object"]["enum"]
     assert "summary" in s["properties"]
-    assert {"object", "action"}.issubset(set(s["required"]))
+    # ``manual`` is a valid object-less action, so only action is required.
+    assert "action" in s["required"]
+    assert "object" not in s["required"]
     for keyword in ("allOf", "oneOf", "anyOf", "not"):
         assert keyword not in s
 

@@ -647,13 +647,40 @@ def build_meta_readme() -> dict:
         TOOL_META_KEY: (
             "Immutable facts for one tool execution only: correlation id, tool "
             "name when needed, completion time, elapsed time, status/error phase, "
-            "character counts, spill and a-priori-summary effects. It has no "
-            "agent/session/current-state semantics and remains valid historically."
+            "character counts, spill, and a-priori-summary effects. It has no "
+            "agent/session/current-state semantics and remains valid historically. "
+            "Token diagnostics live in the nested "
+            "`agent_meta.agent_state.token_usage` block: "
+            "`token_usage.current_call` contains this result's own "
+            "token/cache/output facts; `token_usage.session` contains the "
+            "since-last-molt `session_cache_rate`, `api_calls`, cumulative token "
+            "fields, context fields, and the ALWAYS-ON "
+            "`cache_miss_tokens`; `cache_miss_budget` and "
+            "`cache_miss_remaining_tokens` appear when a positive budget is "
+            "configured. When the budget is reached, "
+            "`context.molt` says `molt now`; molt proactively rather than "
+            "summarize/reconstruct."
         ),
         AGENT_META_KEY: {
             "instruction": AGENT_META_INSTRUCTION,
-            "agent_state": "Current main-agent/runtime state, token/session/context diagnostics, and one-shot events such as reconstruction.",
-            "notifications": "Current attention notifications plus persistent communication context.",
+            "agent_state": (
+                "Timely current main-agent/runtime state and diagnostics, including "
+                "`agent_meta.agent_state.token_usage` with nested "
+                "`current_call` and `session` halves. only the NEWEST emission "
+                "is current; older payloads remain historical traces. Replay "
+                "preserves those historical holders and does not strip them. "
+                "`current_tool_result_chars` reports total/threshold/count and "
+                "`top_results` entries with id, tool_name, and chars; entries "
+                "have no preview and are proactive summarization candidates. "
+                "`adapter_comment` carries dynamic adapter state."
+            ),
+            "notifications": (
+                "Timely current notifications and persistent communication "
+                "context. only the NEWEST emission is current; older payloads "
+                "remain historical traces. Replay preserves those historical "
+                "holders and does not strip them. Older payloads are not current "
+                "instructions; the producer channel is the source of truth."
+            ),
             "guidance": {
                 "persistent": "Stable references and rules.",
                 "transient": "Current warnings and hooks.",

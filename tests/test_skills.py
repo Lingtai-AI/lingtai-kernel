@@ -392,9 +392,9 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "# Runtime Update Checks" in runtime_update_body
         assert "kind: kernel_version" in runtime_update_body
         assert ".notification/nudge.json" in runtime_update_body
-        assert "once per UTC day" in runtime_update_body
+        assert "roughly 60-second in-memory probe gate" in runtime_update_body
         assert "editable/source/dev" in runtime_update_body
-        assert "ask the human" in runtime_update_body
+        assert "receiving explicit confirmation" in runtime_update_body
 
         psyche_md = (
             workdir

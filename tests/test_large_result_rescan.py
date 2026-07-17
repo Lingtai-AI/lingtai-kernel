@@ -104,7 +104,10 @@ def _run_executor_metadata(
     )
     tc = _TC(name=tool_name, args={}, id=tool_call_id)
     results, _, _ = executor.execute([tc])
-    return results[0].content
+    # Runtime metadata is a canonical ToolResultBlock sidecar; project it into
+    # the provider-shaped envelope the assertions exercise.
+    block = results[0]
+    return {"result": block.content, "_meta": block.metadata}
 
 
 # ---------------------------------------------------------------------------

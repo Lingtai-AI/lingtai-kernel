@@ -509,7 +509,7 @@ class TestSchemaInvariance:
         assert "file_path" in props
         assert "offset" in props
         assert "limit" in props
-        assert base["required"] == ["file_path"]
+        assert base["required"] == []
 
     def test_normal_and_daemon_resident_tools_render_selected_glossary(self):
         zh_body = load_tool_glossary("lingtai.tools.read", "zh")
@@ -549,8 +549,9 @@ class TestSchemaInvariance:
         daemon_prompt = DaemonManager._build_emanation_prompt(
             SimpleNamespace(_agent=agent), "Inspect one file", [schema]
         )
-        assert "Read text files." in daemon_prompt
-        assert zh_body in daemon_prompt
+        assert f"`{schema.name}`" in daemon_prompt
+        assert "Read text files." not in daemon_prompt
+        assert zh_body not in daemon_prompt
         assert WIRE_TOOL_DESCRIPTION not in daemon_prompt
 
     def test_daemon_intrinsic_collector_preserves_glossary_owner(self):

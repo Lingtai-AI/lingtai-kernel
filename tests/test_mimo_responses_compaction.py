@@ -784,7 +784,7 @@ def test_daemon_tool_contract_verification_matrix_covers_native_mimo():
     # Anchored-claims row: locate the row mentioning _daemon_provider_defaults
     # and context_token_limit validation.
     claims_row_match = _re.search(
-        r"\|[^\n]*context_token_limit[^\n]*_daemon_provider_defaults[^\n]*\|",
+        r"\| `context_token_limit` is validated[^\n]*\|",
         text,
     )
     assert claims_row_match is not None, "anchored-claims row for context_token_limit not found"

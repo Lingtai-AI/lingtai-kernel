@@ -164,8 +164,8 @@ def test_deep_refresh_loads_new_capability(tmp_path):
     assert agent._sealed is True
 
 
-def test_deep_refresh_skipped_vision_is_not_registered(tmp_path):
-    """Refresh honors CAPABILITY_UNAVAILABLE like initial setup."""
+def test_deep_refresh_unavailable_vision_is_manual_only(tmp_path):
+    """Unavailable vision remains registered with manual-only guidance."""
     init = _make_init(capabilities={"vision": {"provider": "not-real"}})
     agent = _make_agent(tmp_path, init)
 
@@ -174,9 +174,10 @@ def test_deep_refresh_skipped_vision_is_not_registered(tmp_path):
     manifest_registered = {
         name for name, _ in agent._build_manifest().get("capabilities", [])
     }
-    assert agent.has_capability("vision") is False
-    assert "vision" not in agent._tool_handlers
-    assert "vision" not in manifest_registered
+    assert agent.has_capability("vision") is True
+    assert "vision" in agent._tool_handlers
+    assert "vision" in manifest_registered
+    assert "manual" in agent.get_capability("vision")._manual_reason
 
 
 def test_deep_refresh_no_init_json_is_noop(tmp_path):
@@ -1127,7 +1128,8 @@ def test_deep_refresh_drops_removed_telegram_route_before_unrelated_mcp_load(
         # The retained watch fails closed against the absent route. It must not
         # select the closed Telegram client or the unrelated MCP client.
         assert old_controller._project(watch, "update", {"title": "no route"}) == {
-            "status": "error"
+            "status": "error",
+            "backend_error": "Telegram client is unavailable",
         }
         assert len(old_telegram.calls) == calls_before_refresh
         assert unrelated.calls == []
