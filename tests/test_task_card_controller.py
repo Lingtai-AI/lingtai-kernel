@@ -581,6 +581,31 @@ def test_retry_action_reruns_now(agent, controller):
     controller.handle({"action": "stop", "watch_id": wid})
 
 
+def test_backend_reason_reaches_retry_inspect_and_notification(agent, controller):
+    renderer = agent._working_dir / "backend.py"
+    renderer.write_text(_OK_BODY)
+    wid = controller.handle(
+        {"action": "start", "renderer_path": str(renderer), "interval_s": 3600}
+    )["watch_id"]
+
+    reason = "Forbidden: bot was blocked by the user"
+    agent._client.result = {"status": "error", "error": reason}
+    retry = controller.handle({"action": "retry", "watch_id": wid})
+    assert retry["state"] == "error"
+    assert retry["error"]["code"] == "backend_edit_failed"
+    assert retry["error"]["backend_error"] == reason
+    assert reason in retry["error"]["message"]
+
+    inspect = controller.handle({"action": "inspect", "watch_id": wid})
+    assert inspect["error"]["backend_error"] == reason
+    wake = [w for w in agent.wakes if w["extra"]["state"] == "error"][-1]
+    assert wake["extra"]["backend_error"] == reason
+    assert reason in wake["body"]
+
+    agent._client.result = None
+    controller.handle({"action": "stop", "watch_id": wid})
+
+
 # -- stop finalizes only the programmable slot ----------------------------
 
 
@@ -622,6 +647,8 @@ def test_failed_stop_is_truthful_retryable_and_retains_watch(agent, controller):
     assert result["state"] == "stop_failed"
     assert result["error"]["code"] == "stop_finalize_failed"
     assert result["error"]["retryable"] is True
+    assert result["error"]["backend_error"] == "backend down"
+    assert "backend down" in result["error"]["message"]
     # The watch is retained so stop can be retried...
     assert wid in controller._watches
     # ...but the renderer thread is already stopped (not "watching" with a live thread).
@@ -629,6 +656,7 @@ def test_failed_stop_is_truthful_retryable_and_retains_watch(agent, controller):
     inspect = controller.handle({"action": "inspect", "watch_id": wid})
     assert inspect["state"] == "stop_failed"
     assert inspect["error"]["code"] == "stop_finalize_failed"
+    assert inspect["error"]["backend_error"] == "backend down"
 
     # Retry only re-attempts finalization; on an accepted clear the watch is
     # removed and ``stopped`` is returned.

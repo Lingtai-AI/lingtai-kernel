@@ -113,6 +113,23 @@ def test_programmable_first_frame_sends_and_persists_resident(tmp_path):
     assert acct.calls[-1][0] == "edit"
 
 
+def test_programmable_edit_failure_surfaces_safe_provider_reason(tmp_path):
+    manager, acct = _manager(tmp_path)
+    _prog(manager, "create", {"title": "Watch", "lines": ["x"]})
+
+    def rejected_edit(*_args, **_kwargs):
+        raise RuntimeError(
+            "Telegram API error: Forbidden: bot was blocked by the user"
+        )
+
+    acct.edit_message = rejected_edit
+    result = _prog(manager, "update", {"lines": ["y"]})
+    assert result == {
+        "status": "error",
+        "error": "Forbidden: bot was blocked by the user",
+    }
+
+
 # -- two-slot composition + update isolation -------------------------------
 
 
