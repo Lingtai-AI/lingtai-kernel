@@ -35,6 +35,7 @@ related_files:
   - src/lingtai/kernel/migrate/ANATOMY.md
   - src/lingtai/kernel/migrate/CONTRACT.md
   - src/lingtai/kernel/services/logging.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep parent/child anatomy links bidirectional. Code is the structural source of

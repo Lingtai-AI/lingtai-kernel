@@ -58,4 +58,6 @@ def test_run_exports_live_runtime_python_env(monkeypatch, tmp_path):
     assert agent._asleep.was_set
     assert agent.started
     assert agent.stopped
-    assert (tmp_path / "init.json").is_file()
+    # Runtime resolution is in memory only; cli.run never creates or rewrites
+    # the user-owned init.json as a side effect.
+    assert not (tmp_path / "init.json").exists()

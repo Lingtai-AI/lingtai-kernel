@@ -103,9 +103,8 @@ def _drive(agent, monkeypatch, exc):
     _turnmod._run_loop(agent)
 
 
-def test_final_attempt_with_successful_fallback_never_renders_terminal(tmp_path, monkeypatch):
-    """A viable, successful preset fallback must NOT freeze the row as terminal
-    error before the refresh."""
+def test_final_attempt_disables_automatic_preset_write_and_renders_terminal(tmp_path, monkeypatch):
+    """AED exhaustion never rewrites init.json through automatic preset fallback."""
     agent = _run_loop_spy(tmp_path, max_aed_attempts=1, can_fallback=True)
 
     class Exc(Exception):
@@ -114,11 +113,11 @@ def test_final_attempt_with_successful_fallback_never_renders_terminal(tmp_path,
 
     _drive(agent, monkeypatch, Exc("x"))
 
-    # Fallback ran and refresh was triggered.
-    assert agent.refreshes == [True]
-    # No report marked the row terminal — the card stays truthful pre-refresh.
+    # The read-only reader contract forbids automatic fallback writes/refresh.
+    assert agent.refreshes == []
+    # The exhausted row is truthfully terminal; an Agent/human must edit config.
     assert agent.reports, "the error should still be surfaced"
-    assert all(r["terminal"] is False for r in agent.reports)
+    assert agent.reports[-1]["terminal"] is True
 
 
 def test_preset_activation_failure_renders_terminal(tmp_path, monkeypatch):

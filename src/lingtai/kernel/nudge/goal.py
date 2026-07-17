@@ -1,10 +1,12 @@
-"""Goal reminder nudge.
+"""Goal reminder system notification (not a Nudge finding).
 
 A protected ``.notification/goal.json`` file is the goal source of truth.
 When an active goal remains while the agent has been IDLE for the configured
 reminder delay, this check publishes one short ``goal.reminder`` event into
-``.notification/system.json``.  The reminder only says to inspect the goal;
-the actual objective and instructions stay in ``goal.json``.
+``.notification/system.json``. It is deliberately classified outside the
+Nudge catalogue: it has its own protected goal semantics and is not a
+``.notification/nudge.json`` producer. The reminder only says to inspect the
+goal; the actual objective and instructions stay in ``goal.json``.
 """
 from __future__ import annotations
 

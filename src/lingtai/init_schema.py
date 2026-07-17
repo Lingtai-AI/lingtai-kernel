@@ -33,11 +33,11 @@ TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "base_prompt_file": str,
 }
 
-# Top-level fields that were retired in past versions and still have simple
-# shape-only cleanup semantics. strip_deprecated() removes them from the data
-# dict (and optionally from disk) so they never reach validate_init(). Fields
-# that need archive/event/version tracking belong in lingtai.kernel.migrate
-# agent-domain migrations instead.
+# Top-level fields retired in past versions. The current production reader keeps
+# them in the raw in-memory mapping long enough to report ignored paths and never
+# calls strip_deprecated(); this helper remains only for explicit legacy callers
+# and focused historical tests. Fields that need archive/event/version tracking
+# belong to the retained test/maintenance migration surface.
 DEPRECATED_TOP_FIELDS: set[str] = {
     # "soul" / "soul_file" — retired in v0.7.6. The soul-flow voice is
     # now owned by the agent via soul(action='voice') and stored under
@@ -286,14 +286,14 @@ def validate_init(data: dict) -> list[str]:
         allowed = preset.get("allowed")
         if allowed is None:
             # The legacy `path` field was retired in the path→allowed
-            # redesign. If we see it, this init.json predates m029; point
-            # the operator at the migration so they don't have to guess.
+            # redesign. The reader is intentionally read-only: point the
+            # Agent at the exact canonical edit instead of a TUI migration.
             hint = ""
             if "path" in preset:
                 hint = (
-                    " — this init.json predates the path→allowed schema; "
-                    "run `lingtai-tui` once on the project so migration m029 "
-                    "rewrites manifest.preset.path into manifest.preset.allowed"
+                    " — legacy manifest.preset.path is not rewritten automatically; "
+                    "have the Agent explicitly replace it with the canonical "
+                    "manifest.preset.allowed list, then rerun the same reader"
                 )
             raise ValueError(
                 "manifest.preset.allowed is required when manifest.preset is set "

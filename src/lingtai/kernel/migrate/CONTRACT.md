@@ -37,20 +37,21 @@ maintenance: |
 
 ## Purpose
 
-Core owns the versioned, append-only, forward-only migration of kernel-managed
-on-disk shapes (registries, current-version derivation, transform order,
-success-by-success durability), while one outbound `MigrationWorkspacePort`
-expresses every read, write, enumeration, version file, archive, and audit
-append. Two domains share the Core: the preset library and the agent workdir.
+This retained Port describes historical/test-only versioned migration machinery.
+It is not part of the current boot/refresh init reader: production reads use
+`lingtai.init_reader.read_init`, compatibility is diagnosed without write-back,
+and no runtime registry/version/chain/stored progress is consulted. The files
+remain until an explicitly authorized path-scoped retirement. For the retained
+maintenance surface, Core owns version policy while `MigrationWorkspacePort`
+expresses workspace operations for historical tests and explicit callers.
 
 ## Behavior
 
-Each domain has a contiguous append-only registry; the current version is the
-registry head, never a hand-maintained constant. Movement is forward-only: a
-persisted version above the head is honored, never rolled back, with no downgrade
-path. An unavailable workspace runs and persists nothing — a missing preset
-directory is a cached no-op, a workdir with no `init.json` an uncached no-op so a
-half-created workdir never gets version meta; idempotence is once-per-process, keyed by the opaque `cache_key`.
+Historical callers that explicitly invoke this component observe a contiguous
+append-only registry and forward-only movement. The current production boot and
+refresh paths do not invoke it: a legacy workdir is read as-is by the shared
+reader, which reports compatibility paths and never stores migration progress.
+No migration state is required for a current agent to start.
 
 The version counter advances only after a transform succeeds: migration N
 persists exactly N, so a failure at N+1 leaves the persisted version at N and

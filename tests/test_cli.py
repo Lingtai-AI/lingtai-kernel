@@ -479,9 +479,8 @@ def test_maintenance_cleanup_rejects_invalid_days(tmp_path):
     assert exc.value.code == 2
 
 
-def test_load_init_runs_agent_migrations_before_validation(tmp_path):
-    """CLI boot must normalize legacy procedures fields before validating init.json."""
-    import hashlib
+def test_load_init_reports_legacy_fields_without_mutating_input(tmp_path):
+    """CLI boot uses the real reader and leaves compatibility input untouched."""
 
     from lingtai.cli import load_init
 
@@ -503,14 +502,12 @@ def test_load_init_runs_agent_migrations_before_validation(tmp_path):
 
     data = load_init(tmp_path)
 
-    assert "procedures" not in data
-    assert "procedures_file" not in data
+    assert data["procedures"] == legacy
+    assert data["procedures_file"] == "old/procedures.md"
     on_disk = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
-    assert "procedures" not in on_disk
-    assert "procedures_file" not in on_disk
-    digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
-    archive = tmp_path / "system" / "migrations" / f"init-procedures-{digest}.md"
-    assert archive.read_text(encoding="utf-8") == legacy
+    assert on_disk["procedures"] == legacy
+    assert on_disk["procedures_file"] == "old/procedures.md"
+    assert not (tmp_path / "system" / "migrations").exists()
 
 
 # ---------------------------------------------------------------------------

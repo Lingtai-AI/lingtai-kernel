@@ -237,9 +237,10 @@ def discover_presets_in_dirs(
 
     Nonexistent directories are silently skipped — they're not an error.
 
-    ``run_migrations`` is the required caller-supplied preset-library runner: it
-    builds the adapter and runs pending migrations before listing (idempotent,
-    process-cached). See `lingtai.kernel.migrate`.
+    ``run_migrations`` is a retained explicit caller hook for historical or
+    maintenance callers. Production boot/refresh passes a no-op read-only
+    callback; this helper never makes preset migration implicit. See
+    `lingtai.kernel.migrate` for the retained historical surface.
     """
     from lingtai.kernel.migrate.migrate import meta_filename
 
@@ -288,8 +289,9 @@ def load_preset(
             include the extension — there is no implicit extension probing.
         working_dir: directory to resolve relative names against. Required
             iff `name` is relative. Pass `Path.cwd()` for one-off scripts.
-        run_migrations: the required caller-supplied preset-library runner — it
-            builds the adapter for the preset's directory and runs pending migrations.
+        run_migrations: explicit retained caller hook. Production readers inject
+            a no-op callback so preset loading remains read-only; historical or
+            maintenance callers may opt into the migration surface explicitly.
 
     Returns:
         The parsed preset dict with shape {name, description, manifest: {...}}.
@@ -320,7 +322,8 @@ def load_preset(
     if not p.is_file():
         raise KeyError(f"preset not found: {name!r} (resolved to {p})")
 
-    # Run kernel migrations on the containing directory (idempotent, process-cached).
+    # Invoke only the explicit caller hook. Production boot/refresh supplies a
+    # no-op here; retained migration callers must opt in deliberately.
     if p.parent.is_dir():
         run_migrations(p.parent)
 
@@ -606,10 +609,10 @@ def preset_context_limit(preset_manifest: dict) -> int | None:
     context_limit is a property of the model, so it's stored next to
     provider/model. Returns None when unset.
 
-    For presets read via `load_preset`, the kernel migration system has
-    already relocated any legacy root-level placements before validation —
-    so by the time this helper is called, only the canonical location is
-    populated.
+    Preset loading may apply an explicit in-memory compatibility interpretation;
+    production boot/refresh does not persist a relocation or run an implicit
+    migration registry. The canonical location is the only location new writers
+    should produce.
     """
     if not isinstance(preset_manifest, dict):
         return None

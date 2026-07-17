@@ -20,74 +20,42 @@ from lingtai.kernel.config_resolve import (
     resolve_env,
     load_env_file,
 )
-from lingtai.init_schema import validate_init
+from lingtai.init_reader import InitReadStatus, read_init, reader_callbacks
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai.agent import Agent
 from lingtai.kernel.process_match import match_agent_run
 
 
 def load_init(working_dir: Path) -> dict:
-    """Read and validate init.json from working_dir. Exits on error.
+    """Read ``init.json`` through the shared real-reader path.
 
-    If ``manifest.preset.active`` is set, the active preset's ``llm`` and
-    ``capabilities`` are materialized into the manifest before validation,
-    so downstream code (and the schema check) sees a fully-resolved manifest.
-    This mirrors ``Agent._read_init`` so boot and live-refresh agree.
+    Boot reports the same structured outcome as live refresh.  This function is
+    intentionally read-only with respect to the user's file: compatibility and
+    deprecated fields are diagnosed, never stripped or written back.
     """
-    from lingtai.kernel.config_resolve import resolve_paths
-    from lingtai.presets import materialize_active_preset
-    from lingtai.tools.registry import CORE_DEFAULTS
-
-    from lingtai.kernel.migrate import MigrationDomain, run_agent_migrations
-    from lingtai.adapters.posix.migration_workspace import (
-        PosixMigrationWorkspaceAdapter,
-    )
     from lingtai.agent import load_preset
 
-    # CLI is a composition root: build the agent-workdir adapter and inject it.
-    run_agent_migrations(
-        PosixMigrationWorkspaceAdapter(MigrationDomain.AGENT_WORKDIR, working_dir)
+    materialize, prepare = reader_callbacks(working_dir, load_preset=load_preset)
+    outcome = read_init(
+        working_dir,
+        materialize=materialize,
+        prepare=prepare,
+        failure_behavior="STOP",
     )
-
-    init_path = working_dir / "init.json"
-    if not init_path.is_file():
-        print(f"error: {init_path} not found", file=sys.stderr)
+    if outcome.status is InitReadStatus.READ_FAILED:
+        print(f"error: {json.dumps(outcome.to_payload(), ensure_ascii=False, default=str)}", file=sys.stderr)
         sys.exit(1)
 
-    try:
-        data = json.loads(init_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, ValueError) as e:
-        print(f"error: failed to read {init_path}: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        materialize_active_preset(data, working_dir, core_defaults=CORE_DEFAULTS,
-                                  load_preset=load_preset)
-    except (KeyError, ValueError) as e:
-        print(f"error: failed to materialize active preset: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Strip deprecated fields before validation so they don't trigger
-    # warnings or interfere with the refresh path.
-    from lingtai.init_schema import strip_deprecated
-    stripped = strip_deprecated(data)
-    if stripped:
-        # Persist cleanup to disk so the fields don't come back.
-        init_path.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-
-    try:
-        warnings = validate_init(data)
-    except ValueError as e:
-        print(f"error: invalid init.json: {e}", file=sys.stderr)
-        sys.exit(1)
-    for w in warnings:
-        print(f"warning: init.json: {w}", file=sys.stderr)
-
-    resolve_paths(data, working_dir)
-    return data
+    from lingtai.kernel.workdir import write_resolved_manifest
+    effective_path = write_resolved_manifest(working_dir, outcome.data or {})
+    if effective_path is not None:
+        outcome.effective_config_source = str(effective_path)
+    print(
+        f"init.json reader: {json.dumps(outcome.to_payload(), ensure_ascii=False, default=str)}",
+        file=sys.stderr,
+    )
+    assert outcome.data is not None
+    return outcome.data
 
 
 def build_agent(data: dict, working_dir: Path) -> Agent:
@@ -249,11 +217,10 @@ def run(working_dir: Path) -> None:
     # Expose the live runtime interpreter to bash/tools in a platform-neutral way.
     os.environ["LINGTAI_RUNTIME_PYTHON"] = sys.executable
     os.environ["LINGTAI_RUNTIME_VENV"] = str(venv_dir)
-    # Write back to init.json if not already set (self-sufficient)
-    if not data.get("venv_path") or data["venv_path"] != str(venv_dir):
-        data["venv_path"] = str(venv_dir)
-        init_path = working_dir / "init.json"
-        init_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    # Keep the resolved venv in the in-memory effective mapping only.  The
+    # reader contract never rewrites user-owned init.json; an agent/human may
+    # explicitly edit it if they want to persist this choice.
+    data["venv_path"] = str(venv_dir)
 
     agent = build_agent(data, working_dir)
     agent._venv_path = str(venv_dir)

@@ -375,6 +375,8 @@ def _run_one_tick(agent):
         lifecycle_mod, "_check_rules_file"
     ), patch.object(lifecycle_mod, "_maybe_sleep_after_idle_timeout"), patch(
         "lingtai.kernel.nudge.run_checks"
+    ), patch(
+        "lingtai.kernel.nudge.run_system_notifications"
     ):
         lifecycle_mod._heartbeat_loop(agent)
 

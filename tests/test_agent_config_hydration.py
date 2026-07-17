@@ -267,7 +267,11 @@ def test_refresh_omitted_defaults_converge_after_explicit_values(tmp_path):
     assert agent._config.stamina == 86400.0
     assert agent._config.max_aed_attempts == 5
     refreshed_init = json.loads((tmp_path / "init.json").read_text())
-    assert "stamina" not in refreshed_init["manifest"]
+    # Reader compatibility is factual/read-only: the retired raw field remains
+    # on disk, while AgentConfig ignores it and the outcome tells the Agent what
+    # must be edited explicitly.
+    assert refreshed_init["manifest"]["stamina"] == 7200.0
+    assert "manifest.stamina" in agent._last_init_read_outcome.ignored_paths
 
     _write_init(
         tmp_path,

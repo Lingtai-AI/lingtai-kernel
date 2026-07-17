@@ -397,30 +397,28 @@ every boot and refresh it is composed:
 
 ```text
 raw operator-owned init.json
-  → migration / deprecated-field cleanup
-  → active-preset materialization
+  → read-only compatibility diagnosis
+  → active-preset materialization in memory
   → schema validation + path resolution
   → derived system/manifest.resolved.json
   → boot or refresh composition (LLM/config, prompts, capabilities/MCP, identity)
 ```
 
-- **Raw `init.json`** is the durable source an operator or the preset-swap path
-  writes. Within the boot/refresh/preset-composition lifecycle this section
-  describes, reads (boot, refresh, prompt-only reload) never write it back
-  except the explicit exceptions below.
+- **Raw `init.json`** is the durable source an operator or an explicit
+  preset-swap action writes. Within the boot/refresh/preset-composition
+  lifecycle, the shared real reader only parses/materializes/validates/resolves
+  in memory and never writes raw input back.
 - **`system/manifest.resolved.json`** is a **derived** runtime artifact: the
   fully materialized, validated, path-resolved manifest with secret-bearing
   keys removed, regenerated on every boot/refresh/molt-reload. It exists so
   consumers can read the actual running configuration without reimplementing
   preset resolution. It is never a write-back source and must not be described
   as one.
-- Within this boot/refresh/preset-composition lifecycle, the raw-`init.json`
-  writers are explicit: preset activation/swap (atomic write of the new
-  active/default/allowed and materialized llm/capabilities), default-preset
-  update on a named swap, CLI/agent migration or deprecated-field cleanup, and
-  CLI boot's managed `venv_path` writeback (`cli.run` resolves the venv and writes `data["venv_path"]` back
-  to `init.json` when the boot-selected/resolved venv differs from the raw
-  value or is absent). Everything else
+- Within this boot/refresh/preset-composition lifecycle, the only raw-`init.json`
+  writer is an explicit preset activation/swap action (atomic write of the new
+  active/default/allowed and materialized llm/capabilities). Automatic
+  migration, deprecated-field cleanup, AED fallback, and CLI venv write-back
+  are intentionally absent. Everything else
   covered by *this lifecycle* (LLM service state, prompt mirrors under
   `system/*.md`, `.agent.json` identity projection, MCP clients) is derived,
   in-memory-or-mirrored runtime state, not a second source of truth for
@@ -441,7 +439,7 @@ Top-level prompt/env/venv/addons/MCP/manifest field groups follow the same raw
 | Field group | Real owner | Materialization / derived state | Refresh / restart |
 |---|---|---|---|
 | Prompt pairs (`covenant`, `pad`, `lingtai`, `base_prompt`, `comment`) | Prompt reload (`agent.py` `_reload_prompt_sections`); kernel-owned `principle`/`substrate`/`procedures` ignore init overrides | `system/<section>.md` mirrors, prompt-manager sections | Reloaded on boot/refresh/molt |
-| `env_file`, `venv_path` | CLI boot / `venv_resolve.py` | Resolved process environment, venv marker state | Boot resolves; refresh/restart reuse |
+| `env_file`, `venv_path` | `init_reader.py`, CLI boot / `venv_resolve.py` | Resolved process environment, venv marker state (in memory; raw input is unchanged) | Boot resolves; refresh/restart reuse |
 | `addons`, `mcp` | MCP registry/addon decompression, capability setup | MCP clients, `_mcp_init_specs`, registry records | Boot loads; refresh retries failed then reloads |
 | `manifest` (LLM, capabilities, agent identity, limits) | Schema + composition roots + capability registry | LLM service, `AgentConfig`, `.agent.json` sanitized projection | Boot/refresh reconstruct; some fields need full refresh, not summarize |
 

@@ -31,6 +31,7 @@ related_files:
 - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
 - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
 - src/lingtai/kernel/nudge/ANATOMY.md
+- src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -99,6 +100,12 @@ selects that topic.
     throttle state, `.notification/nudge.json` envelopes, sync/wake/dismiss
     behavior, packaged versus editable/source paths, human confirmation, TUI
     update ownership, refresh boundaries, verification, and read-only diagnosis.
+- name: environment-variables
+  location: reference/environment-variables/SKILL.md
+  description: |
+    Complete catalogue of LingTai environment variables: purpose, defaults,
+    accepted values, scope, read point, reload/restart behavior, invalid-value
+    handling, implementation anchors, examples, and security cautions.
 - name: goal-manual
   location: reference/goal-manual/SKILL.md
   description: |
@@ -118,6 +125,7 @@ selects that topic.
 | SQLite; `log.sqlite`; LingTai runtime logs; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes; trajectory/anomaly mining; improvement digests; cheap-model strategy | `reference/sqlite-log-query/SKILL.md` |
 | Notifications; direct `notification(action='manual')`; check/dismiss_channel/dismiss_event/dismiss_ref/manual; `.notification/<channel>.json`; channel allowlist; top-level `instructions`; protected channels; generic vs producer dismiss; stale-version/force; legacy `large_tool_result` dismiss | `notification-manual` |
 | Kernel update lifecycle; runtime/source discovery; `kernel_version` and `source_drift`; heartbeat nudge dispatch; `.notification/nudge.json`; durable state; sync/wake/dismiss mechanics; packaged vs editable/source installs; refresh vs TUI-managed update; verification/troubleshooting | `reference/runtime-update-checks/SKILL.md` |
+| Environment variables; Nudge controls; accepted values; read/reload behavior; invalid-value fallback; security cautions | `reference/environment-variables/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `psyche-manual` |
 | Soul tool; soul flow opt-in (`LINGTAI_SOUL_FLOW_ENABLED`); disabled-flow behavior; `delay_seconds` as cadence-not-off-switch; inquiry/config/voice/dismiss; privacy/cost rationale | `soul-manual` |

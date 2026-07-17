@@ -842,6 +842,16 @@ def dismiss_channel(
             result["note"] = _LARGE_RESULT_DISMISS_NOTE
         return result
 
+    # Nudge owns dismissal semantics while Notification remains the transport.
+    # Capture the current finding identities before the channel is cleared so
+    # unresolved findings can reappear only after the shared repeat interval.
+    if channel == "nudge" and not event_id and not ref_id:
+        try:
+            from .nudge import record_dismissal
+            record_dismissal(agent)
+        except Exception:
+            pass
+
     # Store compare-update owns system-channel serialization.
     if channel == "system":
         result = _dismiss_system_event()
