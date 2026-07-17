@@ -922,6 +922,40 @@ def test_build_emanation_prompt_includes_task(tmp_path):
     assert "daemon emanation" in prompt.lower() or "分神" in prompt
 
 
+def test_build_emanation_prompt_teaches_bounded_tool_use(tmp_path):
+    """Daemon prompt teaches manuals, summarized results, compact, and finish."""
+    from lingtai.tools.daemon.system_prompt import DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
+
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    schemas, _ = mgr._build_tool_surface(["file"])
+    schemas[0].description = "FULL TOOL DESCRIPTION MUST NOT BE DUPLICATED"
+
+    prompt = mgr._build_emanation_prompt("Inspect one file", schemas)
+
+    assert len(prompt) <= DAEMON_SYSTEM_PROMPT_BUDGET_CHARS == 20_000
+    assert "Before first using a tool or workflow that has a manual" in prompt
+    assert "summary=true" in prompt
+    assert "You do not have the parent agent's `system.summarize`" in prompt
+    assert 'compact(action="run", _reason="...")' in prompt
+    assert "call `finish` exactly once" in prompt
+    assert "FULL TOOL DESCRIPTION MUST NOT BE DUPLICATED" not in prompt
+    assert f"`{schemas[0].name}`" in prompt
+
+
+def test_build_emanation_prompt_rejects_over_budget_without_truncation(tmp_path):
+    """Oversized task/context fails loud instead of losing parent constraints."""
+    import pytest
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    schemas, _ = mgr._build_tool_surface([])
+    task = "x" * 20_000
+
+    with pytest.raises(ValueError, match="20,000-character budget"):
+        mgr._build_emanation_prompt(task, schemas)
+
+
 def test_run_emanation_returns_text(tmp_path, monkeypatch):
     """Emanation runs a tool loop and returns final text."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
@@ -3216,7 +3250,7 @@ def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
     assert manifest["llm"]["model"] == "claude-opus-4-8"
     assert manifest["llm"]["base_url"] == "https://api.anthropic.com"
     assert manifest.get("preset_name") is None
-    assert "## tools" in records[0][1].prompt_path.read_text(encoding="utf-8")
+    assert "## Available host tools" in records[0][1].prompt_path.read_text(encoding="utf-8")
     assert state["preset_name"] is None
 
     # daemon.json has no preset_name (None)
