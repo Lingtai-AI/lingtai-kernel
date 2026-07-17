@@ -17,10 +17,12 @@ using the GITEE_ACCESS_TOKEN environment variable. The token is never echoed,
 logged, or included in any printed command.
 
 Idempotency: for each asset, an existing same-name attachment is downloaded
-and hashed before it is accepted as an idempotent skip. A different digest,
-missing/ambiguous metadata, or download failure is fail-loud. Comparison files
-are retained under unique runner temp paths. There is no delete-and-replace
-cleanup path by design.
+and hashed before it is accepted as an idempotent skip. Gitee release metadata
+accepts the exact `assets` list or legacy `attach_files` list; duplicate names
+are grouped only when every resolved download URL agrees, with a warning. A
+different digest, missing/ambiguous metadata, or download failure is fail-loud.
+Comparison files are retained under unique runner temp paths. There is no
+delete-and-replace cleanup path by design.
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ import sys
 import tempfile
 import uuid
 import urllib.error
+import warnings
 import urllib.request
 from pathlib import Path
 
@@ -302,11 +305,38 @@ def gitee_verify_tag_synchronized(owner: str, repo: str, tag: str, expected_comm
         )
 
 
+_GITEE_ATTACHMENT_URL_KEYS = (
+    "browserDownloadUrl",
+    "browser_download_url",
+    "download_url",
+    "url",
+)
+
+
+def _gitee_download_url(attachment: dict, filename: str) -> str:
+    present_urls = [attachment[key] for key in _GITEE_ATTACHMENT_URL_KEYS if key in attachment]
+    if not present_urls or any(
+        not isinstance(url, str) or not url.startswith("https://") for url in present_urls
+    ):
+        raise PublishError(f"Gitee attachment {filename!r} has no usable download URL")
+    if len(set(present_urls)) != 1:
+        raise PublishError(f"Gitee attachment {filename!r} has ambiguous download URLs")
+    return present_urls[0]
+
+
 def gitee_existing_attachments(owner: str, repo: str, release_id: int, token: str) -> dict[str, dict]:
     release = _gitee_request("GET", f"/repos/{owner}/{repo}/releases/{release_id}", token)
-    attachments = release.get("attach_files", [])
+    if not isinstance(release, dict):
+        raise PublishError("Gitee attachment metadata is ambiguous: release is not an object")
+    list_keys = [key for key in ("assets", "attach_files") if key in release]
+    if not list_keys:
+        raise PublishError("Gitee attachment metadata is missing assets/attach_files")
+    if len(list_keys) > 1:
+        raise PublishError("Gitee attachment metadata is ambiguous: both assets and attach_files are present")
+    list_key = list_keys[0]
+    attachments = release[list_key]
     if not isinstance(attachments, list):
-        raise PublishError("Gitee attachment metadata is ambiguous: attach_files is not a list")
+        raise PublishError(f"Gitee attachment metadata is ambiguous: {list_key} is not a list")
     result = {}
     for attachment in attachments:
         if not isinstance(attachment, dict):
@@ -315,20 +345,24 @@ def gitee_existing_attachments(owner: str, repo: str, release_id: int, token: st
         if not isinstance(name, str) or not name:
             raise PublishError("Gitee attachment metadata is ambiguous: attachment has no name")
         if name in result:
-            raise PublishError(f"Gitee release has ambiguous duplicate attachment name {name!r}")
+            canonical_url = _gitee_download_url(result[name], name)
+            duplicate_url = _gitee_download_url(attachment, name)
+            if duplicate_url != canonical_url:
+                raise PublishError(
+                    f"Gitee release has duplicate attachment {name!r} with divergent download URLs"
+                )
+            warnings.warn(
+                f"Gitee release has duplicate attachment {name!r}; using one canonical remote URL",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
         result[name] = attachment
     return result
 
 
 def _gitee_download_sha256(attachment: dict, filename: str, token: str) -> str:
-    url = (
-        attachment.get("browserDownloadUrl")
-        or attachment.get("browser_download_url")
-        or attachment.get("download_url")
-        or attachment.get("url")
-    )
-    if not isinstance(url, str) or not url:
-        raise PublishError(f"Gitee attachment {filename!r} has no usable download URL")
+    url = _gitee_download_url(attachment, filename)
     destination = _comparison_path("gitee", filename)
     separator = "&" if "?" in url else "?"
     request = urllib.request.Request(url + f"{separator}access_token={token}")

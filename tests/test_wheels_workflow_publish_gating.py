@@ -230,10 +230,18 @@ def test_gitee_only_recovery_job_is_ubuntu_bounded_and_read_only():
 
 def test_gitee_only_recovery_checks_out_exact_tag_with_no_persisted_credentials():
     job = _recovery_job(_load_workflow())
-    checkout = _step(job, "Check out exact release tag")
+    main_checkout = _step(job, "Check out reviewed publisher/tools")
+    assert main_checkout["uses"] == "actions/checkout@v4"
+    assert main_checkout["with"] == {
+        "ref": "${{ github.sha }}",
+        "persist-credentials": False,
+        "fetch-depth": 0,
+    }
+    checkout = _step(job, "Check out exact release tag as target source")
     assert checkout["uses"] == "actions/checkout@v4"
     assert checkout["with"] == {
         "ref": "refs/tags/${{ inputs.release_tag }}",
+        "path": "release-source",
         "persist-credentials": False,
         "fetch-depth": 0,
     }
@@ -243,6 +251,7 @@ def test_gitee_only_recovery_checks_out_exact_tag_with_no_persisted_credentials(
         "RECOVERY_REQUESTED": "${{ inputs.gitee_only_recovery }}",
         "PUBLISH_REQUESTED": "${{ inputs.publish }}",
         "RELEASE_TAG": "${{ inputs.release_tag }}",
+        "WORKFLOW_SHA": "${{ github.sha }}",
     }
     script = validation["run"]
     assert '"$RECOVERY_REQUESTED" != "true"' in script
@@ -250,7 +259,9 @@ def test_gitee_only_recovery_checks_out_exact_tag_with_no_persisted_credentials(
     assert "^v[0-9]+\\.[0-9]+\\.[0-9]+$" in script
     assert 'refs/tags/${RELEASE_TAG}^{commit}' in script
     assert "git rev-parse HEAD" in script
-    assert '"$tag_commit" != "$head_commit"' in script
+    assert "git -C release-source rev-parse HEAD" in script
+    assert '"$main_head" != "$WORKFLOW_SHA"' in script
+    assert '"$tag_commit" != "$target_head"' in script
 
 
 def test_gitee_only_download_scopes_gh_token_and_uses_exact_release_tag():
@@ -327,7 +338,7 @@ def test_gitee_only_downloaded_manifest_is_bound_to_requested_tag_and_checkout(t
     steps = job["steps"]
     names = [step.get("name", "") for step in steps]
     download_index = names.index("Download exact GitHub release assets")
-    verify_index = names.index("Verify downloaded manifest matches requested release")
+    verify_index = names.index("Verify downloaded manifest and SHA256SUMS")
     publish_index = names.index("Resume Gitee publication (idempotent bounded retry)")
     assert download_index < verify_index < publish_index
 
@@ -335,9 +346,10 @@ def test_gitee_only_downloaded_manifest_is_bound_to_requested_tag_and_checkout(t
     assert verifier["shell"] == "bash"
     assert verifier["env"] == {"RELEASE_TAG": "${{ inputs.release_tag }}"}
     shell_script = verifier["run"]
-    assert 'export EXPECTED_COMMIT="$(git rev-parse HEAD)"' in shell_script
+    assert 'export EXPECTED_COMMIT="$(git -C release-source rev-parse HEAD)"' in shell_script
     assert "data.get(\"kernel_tag\")" in shell_script
     assert "data.get(\"commit\")" in shell_script
+    assert "sha256sum --check --strict SHA256SUMS" in shell_script
     marker = "python - <<'PY'\n"
     assert marker in shell_script and "\nPY" in shell_script
     verifier_code = shell_script.split(marker, 1)[1].rsplit("\nPY", 1)[0]
@@ -364,9 +376,13 @@ def test_gitee_only_downloaded_manifest_is_bound_to_requested_tag_and_checkout(t
             check=False,
         )
 
-    matching = run_verifier({"kernel_tag": expected_tag, "commit": expected_commit.upper()})
+    matching = run_verifier({"kernel_tag": expected_tag, "commit": expected_commit})
     assert matching.returncode == 0, matching.stderr
     assert "target verified" in matching.stdout
+
+    wrong_case_commit = run_verifier({"kernel_tag": expected_tag, "commit": expected_commit.upper()})
+    assert wrong_case_commit.returncode != 0
+    assert "manifest commit" in wrong_case_commit.stderr and "release-source commit" in wrong_case_commit.stderr
 
     wrong_tag = run_verifier({"kernel_tag": "v0.17.0", "commit": expected_commit})
     assert wrong_tag.returncode != 0
@@ -374,4 +390,4 @@ def test_gitee_only_downloaded_manifest_is_bound_to_requested_tag_and_checkout(t
 
     wrong_commit = run_verifier({"kernel_tag": expected_tag, "commit": "b" * 40})
     assert wrong_commit.returncode != 0
-    assert "manifest commit" in wrong_commit.stderr and "checked-out commit" in wrong_commit.stderr
+    assert "manifest commit" in wrong_commit.stderr and "release-source commit" in wrong_commit.stderr
