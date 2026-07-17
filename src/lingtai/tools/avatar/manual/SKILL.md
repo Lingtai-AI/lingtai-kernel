@@ -52,7 +52,7 @@ The avatar's display name (nickname) can be set separately via `psyche(name, nic
 
 ## 4. The `reasoning` Field — Mission Briefing
 
-The `reasoning` parameter you write on the `avatar_spawn` call **automatically becomes the avatar's first prompt**. Write it as a thorough mission briefing, not just a one-liner rationale. Include:
+The `reasoning` parameter you write on the `avatar(action="spawn")` call **automatically becomes the avatar's first prompt**. Write it as a thorough mission briefing, not just a one-liner rationale. Include:
 
 - What the task is
 - Why it matters
@@ -65,9 +65,9 @@ This is the most important part of the spawn. A vague briefing produces a confus
 
 ## 5. Spawn Discipline
 
-Every `avatar_spawn` call creates an independent process that consumes resources until `system(sleep)` or `system(suspend)`. Treat spawns as expensive:
+Every `avatar(action="spawn")` call creates an independent process that consumes resources until `system(sleep)` or `system(suspend)`. Treat spawns as expensive:
 
-1. **Never include `avatar_spawn` in a parallel batch** with unrelated tool calls.
+1. **Never include `avatar(action="spawn")` in a parallel batch** with unrelated tool calls.
 2. **Re-read your `reasoning` field before invoking** — that text becomes the avatar's first prompt.
 3. **For inspection or one-off commands, use `bash` or `system`** — not `avatar`.
 4. **Use `dry_run=true` to preview** a spawn without creating a process. Sanity-check the name, type, working directory, and mission before committing.
@@ -122,9 +122,9 @@ The `comment` parameter is a persistent system-level note injected into the avat
 
 Leave empty unless you have something the avatar should never forget.
 
-## 9. Network Rules (`avatar_rules`)
+## 9. Network Rules (`avatar(action="rules")`)
 
-The `avatar_rules` tool writes a `.rules` file to your directory and distributes it to **all descendants** in the avatar tree. Properties:
+The `rules` action writes a `.rules` file to your directory and distributes it to **all descendants** in the avatar tree. Properties:
 
 - Requires **karma** privilege (admin)
 - Rules are injected into the system prompt (after covenant, before tools)

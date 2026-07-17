@@ -274,17 +274,12 @@ def test_build_tool_surface_blacklist(tmp_path):
     schemas, dispatch = mgr._build_tool_surface([
         "file",
         "avatar",
-        "avatar_spawn",
-        "avatar_rules",
         "daemon",
     ])
     names = {s.name for s in schemas}
     assert "daemon" not in names
     assert "avatar" not in names
-    assert "avatar_spawn" not in names
-    assert "avatar_rules" not in names
-    assert "avatar_spawn" not in dispatch
-    assert "avatar_rules" not in dispatch
+    assert "avatar" not in dispatch
     assert "read" in names
 
 

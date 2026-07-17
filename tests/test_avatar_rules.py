@@ -310,11 +310,19 @@ class TestAvatarRulesAction:
         result = mgr.handle({"action": "rules"})
         assert "error" in result
 
-    def test_spawn_default_action(self, tmp_path):
-        """Omitting action should default to spawn (backward compatible).
+    def test_explicit_spawn_action_required(self, tmp_path):
+        """action='spawn' must be explicit; omitting action must NOT spawn.
 
         NOTE: Real spawning launches a subprocess. We patch _launch to avoid
         that, and pre-create init.json so _spawn reaches the launch path.
+
+        Historical intent: this test formerly proved that an omitted
+        'action' defaulted to spawn (a back-compat shorthand from the
+        avatar_spawn/avatar_rules two-tool era). That shorthand was removed
+        so the unified 'avatar' tool matches the schema-and-runtime-required
+        'action' contract every other canonical action tool (knowledge, mcp,
+        skills, notification, system, soul, daemon) already follows — see
+        avatar CONTRACT.md contract_version 3.
         """
         from lingtai.agent import Agent
 
@@ -332,8 +340,16 @@ class TestAvatarRulesAction:
         )
 
         mgr = agent.get_capability("avatar")
-        with _patch_avatar_launch():
-            result = mgr.handle({"name": "child", "confirm": True})
+        with _patch_avatar_launch() as launch:
+            # Omitted action must fail deterministically and spawn nothing.
+            omitted = mgr.handle({"name": "child", "confirm": True})
+            assert "error" in omitted
+            assert omitted["error"] == "unknown action: '', only 'spawn', 'rules', or 'manual' is supported"
+            launch.assert_not_called()
+            assert not (parent_dir.parent / "child").exists()
+
+            # Explicit action='spawn' behaves exactly as before.
+            result = mgr.handle({"action": "spawn", "name": "child", "confirm": True})
         assert result["status"] == "ok"
         assert result["agent_name"] == "child"
         assert result["address"] == "child"  # relative name (current convention)
@@ -419,7 +435,7 @@ class TestAutoDistributeAfterSpawn:
 
         mgr = parent.get_capability("avatar")
         with _patch_avatar_launch():
-            result = mgr.handle({"name": "child", "confirm": True})
+            result = mgr.handle({"action": "spawn", "name": "child", "confirm": True})
         assert result["status"] == "ok"
 
         # Child dir is a sibling of parent_dir (avatar_working_dir = parent.parent / name)
@@ -433,7 +449,7 @@ class TestAutoDistributeAfterSpawn:
 
         mgr = parent.get_capability("avatar")
         with _patch_avatar_launch():
-            result = mgr.handle({"name": "child", "confirm": True})
+            result = mgr.handle({"action": "spawn", "name": "child", "confirm": True})
         assert result["status"] == "ok"
 
         child_dir = parent_dir.parent / "child"
@@ -447,7 +463,7 @@ class TestAutoDistributeAfterSpawn:
 
         mgr = parent.get_capability("avatar")
         with _patch_avatar_launch():
-            result = mgr.handle({"name": "clone", "type": "deep", "confirm": True})
+            result = mgr.handle({"action": "spawn", "name": "clone", "type": "deep", "confirm": True})
         assert result["status"] == "ok"
 
         clone_dir = parent_dir.parent / "clone"
@@ -499,7 +515,7 @@ class TestSpawnNameValidation:
         mgr = parent.get_capability("avatar")
 
         with _patch_avatar_launch() as launch:
-            result = mgr.handle({"name": bad_name})
+            result = mgr.handle({"action": "spawn", "name": bad_name})
 
         assert "error" in result, f"name={bad_name!r} should have been rejected but got {result}"
         # No subprocess launched
@@ -524,7 +540,7 @@ class TestSpawnNameValidation:
         mgr = parent.get_capability("avatar")
 
         with _patch_avatar_launch():
-            result = mgr.handle({"name": good_name, "confirm": True})
+            result = mgr.handle({"action": "spawn", "name": good_name, "confirm": True})
 
         assert result.get("status") == "ok", f"name={good_name!r} should have been accepted but got {result}"
         assert (parent_dir.parent / good_name).is_dir()
@@ -538,7 +554,7 @@ class TestSpawnNameValidation:
 
         with _patch_avatar_launch():
             # Pass both a safe name and a malicious legacy dir; name wins.
-            result = mgr.handle({"name": "safe", "dir": "avatars/evil", "confirm": True})
+            result = mgr.handle({"action": "spawn", "name": "safe", "dir": "avatars/evil", "confirm": True})
 
         assert result.get("status") == "ok"
         assert (parent_dir.parent / "safe").is_dir()

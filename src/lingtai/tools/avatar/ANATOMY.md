@@ -42,26 +42,37 @@ independent life — its existence does not depend on yours.
 
 ## Public API
 
-The capability exposes two public tools:
+The capability exposes one public tool, `avatar`, dispatched by an `action`
+enum:
 
-| Tool | Description |
+| Action | Description |
 |------|-------------|
-| `avatar_spawn` | Spawn a new avatar agent (shallow or deep) with a given name, optional type, and optional comment. Accepts `dry_run` (preview-only) and `confirm` (acknowledge mission-quality gate). |
-| `avatar_rules` | Set rules content and distribute via `.rules` signal files to self + all descendants. |
+| `spawn` | Spawn a new avatar agent (shallow or deep) with a given name, optional type, and optional comment. Accepts `dry_run` (preview-only) and `confirm` (acknowledge mission-quality gate). |
+| `rules` | Set rules content and distribute via `.rules` signal files to self + all descendants. |
+| `manual` | Read-only: returns the exact `manual/SKILL.md` body. No mutation. |
 
-`avatar_spawn` and `avatar_rules` are separate tools so both schemas can stay
-as simple top-level `type: object` declarations with ordinary `required`
-fields. Some OpenAI-compatible strict tool validators reject top-level JSON
-Schema combinators such as `allOf`.
+`action` has no default — it is required both by the schema
+(`"required": ["action"]`) and at runtime, matching the established action-tool
+convention already used by `knowledge`, `mcp`, `skills`, `notification`,
+`system`, `soul`, and `daemon`. Omitting `action` fails deterministically via
+the same `dispatch_action` unknown-action envelope as an unrecognized value;
+it never falls through to `spawn`.
+
+`avatar` uses a single plain top-level `type: object` schema with an explicit
+`action` enum, not a top-level `allOf`/`oneOf` combinator — some
+OpenAI-compatible strict tool validators reject top-level JSON Schema
+combinators. Action-specific required inputs beyond `action` itself (`name`
+for spawn, `rules_content` for rules) are validated in the handler, not the
+schema.
 
 ## Internal Module Layout
 
 ```
 avatar/__init__.py
   ├── AvatarManager.__init__        — stores parent agent ref
-  ├── handle()                      — legacy action dispatcher used internally
-  ├── handle_spawn()                — spawn handler for the avatar_spawn tool
-  ├── handle_rules()                — rules handler for the avatar_rules tool
+  ├── handle()                      — public dispatcher for the avatar tool
+  │                                    (action: spawn | rules | manual)
+  ├── _manual()                     — reads the packaged manual/SKILL.md body
   │
   │  Spawn pipeline:
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
@@ -105,7 +116,7 @@ avatar/__init__.py
 
 - **Parent:** `src/lingtai/tools/` (tool package).
 - **Siblings:** `daemon/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
-- **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle_spawn()` is registered as the `avatar_spawn` tool handler and `AvatarManager.handle_rules()` as `avatar_rules`. The daemon capability blacklists both tools to prevent avatar-in-daemon recursion and rules mutation from emanations.
+- **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle()` is registered as the single `avatar` tool handler, internally dispatching `spawn`/`rules`/`manual` via `lingtai.kernel.tool_dispatch.dispatch_action`. The daemon capability blacklists `avatar` to prevent avatar-in-daemon recursion and rules mutation from emanations.
 
 Platform process mechanics are in `adapters/avatar_launcher.py` and the
 POSIX reference adapter. Unsupported Windows selection fails loudly; a future

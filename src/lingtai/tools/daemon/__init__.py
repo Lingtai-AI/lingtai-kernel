@@ -127,8 +127,6 @@ _SOURCE_ROOT = Path(__file__).resolve().parents[3]
 EMANATION_BLACKLIST = {
     "daemon",
     "avatar",
-    "avatar_spawn",
-    "avatar_rules",
     "psyche",
     "skills",
     "knowledge",

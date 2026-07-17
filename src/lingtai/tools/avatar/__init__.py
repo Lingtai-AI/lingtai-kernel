@@ -17,9 +17,10 @@ every spawn event.
 
 Usage:
     Agent(capabilities=["avatar"])
-    # avatar_spawn(name="researcher")              — shallow (初生)
-    # avatar_spawn(name="clone", type="deep")      — deep (二重身)
-    # avatar_rules(rules_content="...")            — distribute rules
+    # avatar(action="spawn", name="researcher")              — shallow (初生)
+    # avatar(action="spawn", name="clone", type="deep")      — deep (二重身)
+    # avatar(action="rules", rules_content="...")            — distribute rules
+    # avatar(action="manual")                                — read the avatar manual
 """
 from __future__ import annotations
 
@@ -29,11 +30,13 @@ import re
 import shutil
 import sys
 import time
+from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lingtai.kernel.agent_presence import observe_alive as _presence_observe_alive
 from lingtai.kernel.i18n import t
+from lingtai.kernel.tool_dispatch import dispatch_action
 from ._launcher import AvatarLaunchReceipt, AvatarLaunchRequest, AvatarLauncherPort
 
 
@@ -93,23 +96,42 @@ if TYPE_CHECKING:
 PROVIDERS = {"providers": [], "default": "builtin"}
 
 def get_description(lang: str = "en") -> str:
-    return 'Spawn an independent agent (他我). Inherits init.json; boots on default preset. See avatar-manual skill for full guidance.'
+    return (
+        "Spawn an independent agent (他我), set network rules for descendants, "
+        "or read the avatar manual. Requires an explicit action — no default. "
+        "action='spawn': inherits init.json, boots on default preset — requires "
+        "'name'. action='rules': distribute rules_content to self + all "
+        "descendants (requires karma). action='manual': return the "
+        "avatar-manual skill body. See avatar-manual skill for full guidance."
+    )
 
 
 def get_schema(lang: str = "en") -> dict:
-    """Schema for the public ``avatar_spawn`` tool.
+    """Schema for the single public ``avatar`` tool.
 
-    Rules distribution is exposed as a separate ``avatar_rules`` tool so both
-    tools can use simple top-level object schemas with ordinary ``required``
-    fields. Some OpenAI-compatible strict validators reject top-level JSON
-    Schema combinators such as ``allOf``.
+    A plain top-level ``type: object`` with an explicit ``action`` enum —
+    deliberately no top-level ``allOf``/``oneOf`` combinator, which some
+    OpenAI-compatible strict tool validators reject. Action-specific required
+    inputs (``name`` for spawn, ``rules_content`` for rules) are validated in
+    the handler, not the schema, so all three actions share one flat property
+    bag.
     """
     return {
         "type": "object",
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["spawn", "rules", "manual"],
+                "description": (
+                    "spawn: create a new avatar — requires 'name'. "
+                    "rules: distribute network rules to self + descendants — "
+                    "requires 'rules_content'. manual: return the avatar-manual "
+                    "skill body; no other inputs used. Required — no default."
+                ),
+            },
             "name": {
                 "type": "string",
-                "description": 'True name for the avatar (required). Also the working-directory basename under .lingtai/. Single segment: letters/digits/underscore/hyphen, max 64 chars.',
+                "description": 'True name for the avatar (required for action=spawn). Also the working-directory basename under .lingtai/. Single segment: letters/digits/underscore/hyphen, max 64 chars.',
             },
             "type": {
                 "type": "string",
@@ -128,25 +150,12 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "boolean",
                 "description": 'Confirm you have reviewed the mission and intend to spawn. Required when the mission looks empty/short/test-like.',
             },
-        },
-        "required": ["name"],
-    }
-
-
-def get_rules_description(lang: str = "en") -> str:
-    return 'Set network rules for all descendants (requires karma). See avatar-manual skill for full guidance.'
-
-
-def get_rules_schema(lang: str = "en") -> dict:
-    return {
-        "type": "object",
-        "properties": {
             "rules_content": {
                 "type": "string",
-                "description": 'Rules content for avatar_rules. Plain text, one rule per line. Non-negotiable constraints distributed to all descendants.',
+                "description": 'Rules content for action=rules. Plain text, one rule per line. Non-negotiable constraints distributed to all descendants.',
             },
         },
-        "required": ["rules_content"],
+        "required": ["action"],
     }
 
 
@@ -171,16 +180,25 @@ class AvatarManager:
     # ------------------------------------------------------------------
 
     def handle(self, args: dict) -> dict:
-        action = args.get("action", "spawn")
-        if action == "rules":
-            return self._rules(args)
-        return self._spawn(args)
+        return dispatch_action(
+            args,
+            {
+                "spawn": self._spawn,
+                "rules": self._rules,
+                "manual": lambda _args: self._manual(),
+            },
+            unknown=lambda action: {
+                "error": f"unknown action: {action!r}, only 'spawn', 'rules', or 'manual' is supported",
+            },
+        )
 
-    def handle_spawn(self, args: dict) -> dict:
-        return self._spawn(args)
-
-    def handle_rules(self, args: dict) -> dict:
-        return self._rules(args)
+    def _manual(self) -> dict:
+        """Return the exact packaged avatar-manual body; performs no mutation."""
+        try:
+            body = resources.files(__package__).joinpath("manual/SKILL.md").read_text(encoding="utf-8")
+        except (FileNotFoundError, ModuleNotFoundError, AttributeError):
+            return {"status": "degraded", "action": "manual", "manual": "", "error": "avatar manual missing"}
+        return {"status": "ok", "action": "manual", "manual": body}
 
     # ------------------------------------------------------------------
     # Ledger (append-only JSONL log of avatar spawn events)
@@ -251,7 +269,7 @@ class AvatarManager:
                     "warning": (
                         f"Mission appears short/test-like ({reason}). "
                         f"Pass confirm=true to proceed, or dry_run=true to preview. "
-                        f"Each avatar_spawn call creates an independent process — "
+                        f"Each avatar(action='spawn') call creates an independent process — "
                         f"double-check your reasoning field before retrying."
                     ),
                     "reason": reason,
@@ -810,17 +828,10 @@ def setup(agent: "Agent", **kwargs) -> AvatarManager:
     """Set up the avatar capability on an agent."""
     mgr = AvatarManager(agent)
     agent.add_tool(
-        "avatar_spawn",
+        "avatar",
         schema=get_schema(),
-        handler=mgr.handle_spawn,
+        handler=mgr.handle,
         description=get_description(),
-        glossary_package=__package__,
-    )
-    agent.add_tool(
-        "avatar_rules",
-        schema=get_rules_schema(),
-        handler=mgr.handle_rules,
-        description=get_rules_description(),
         glossary_package=__package__,
     )
     return mgr
