@@ -205,6 +205,29 @@ def test_main_never_echoes_token(local_checkout, monkeypatch, capsys):
     assert secret not in out
 
 
+def test_askpass_helper_returns_username_and_token_for_their_own_prompts():
+    username = "huangzesen1997"
+    token = "token-with-$-and-single-quote-'"
+    helper = sync_mod._write_askpass_helper(username, token)
+    try:
+        username_result = subprocess.run(
+            [str(helper), "Username for 'https://gitee.com':"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        password_result = subprocess.run(
+            [str(helper), "Password for 'https://gitee.com':"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert username_result.stdout.rstrip("\n") == username
+        assert password_result.stdout.rstrip("\n") == token
+    finally:
+        helper.unlink(missing_ok=True)
+
+
 def test_askpass_helper_is_owner_only_and_deleted_after_use(local_checkout, monkeypatch):
     import os
     import stat as stat_mod
@@ -215,9 +238,11 @@ def test_askpass_helper_is_owner_only_and_deleted_after_use(local_checkout, monk
     captured_path = {}
     original = sync_mod._write_askpass_helper
 
-    def spy(token):
-        path = original(token)
+    def spy(username, token):
+        path = original(username, token)
         captured_path["path"] = path
+        captured_path["username"] = username
+        captured_path["token"] = token
         mode = path.stat().st_mode
         assert mode & stat_mod.S_IRWXG == 0, "askpass helper must not be group-accessible"
         assert mode & stat_mod.S_IRWXO == 0, "askpass helper must not be world-accessible"
@@ -230,4 +255,6 @@ def test_askpass_helper_is_owner_only_and_deleted_after_use(local_checkout, monk
         token="fake-token", execute=False,
     )
     assert "path" in captured_path
+    assert captured_path["username"] == "o", "Gitee owner must be the default HTTPS username"
+    assert captured_path["token"] == "fake-token"
     assert not captured_path["path"].exists(), "askpass helper must be deleted after use"
