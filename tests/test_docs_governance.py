@@ -603,8 +603,8 @@ def test_all_four_notification_managers_preserve_exact_runtime_body():
             "8065f55c16561adedf8b71d788efa29d80ff1b9a1196ffab38f239bf06302364",
         ),
         m2.__name__: (
-            2154,
-            "992e88cb55d8c54598883a47c895a278b1a1797f1725720a583923f6a921199c",
+            2166,
+            "17c7e5086686354379cc6bf22d8cedf7d97863a04702af9928d187180877fff5",
         ),
         m3.__name__: (
             987,

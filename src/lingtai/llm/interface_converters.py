@@ -98,7 +98,12 @@ def _normalize_runtime_envelope(raw: Any) -> dict | None:
 
 
 def _project_tool_result(block: ToolResultBlock) -> Any:
-    """Project runtime metadata without merging handler-owned ``_meta``."""
+    """Project canonical sidecar metadata without rewriting block.content."""
+    if not isinstance(block.metadata, dict) or not block.metadata:
+        # Historical/legacy content, including content["_meta"], is already
+        # the holder that full-history replay must preserve verbatim.
+        return block.content
+
     if isinstance(block.content, dict):
         projected = dict(block.content)
         has_business_meta = "_meta" in projected

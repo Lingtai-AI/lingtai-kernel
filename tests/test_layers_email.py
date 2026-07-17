@@ -1026,7 +1026,7 @@ def test_email_dismiss_carries_instructions_in_envelope(tmp_path):
     text = payload["instructions"]
     assert "dismiss" in text
     assert "read" in text
-    assert "notification_persistent.email" in text
+    assert "_meta.agent_meta.notifications.persistent.email" in text
     assert "50,000" in text
     assert "secondary" not in text
     assert "email(action='dismiss'" in text

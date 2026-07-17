@@ -1731,7 +1731,7 @@ class ToolExecutor:
             elif i in errors_map:
                 err_result = errors_map[i]
                 err_msg = str(err_result.get("message", "unknown error"))
-                _elapsed = elapsed_map.get(i, _elapsed_ms_from_result(err_result))
+                _elapsed = elapsed_map.get(i, 0)
                 tool_results.append((i, self._build_result_message(
                     tc.name, err_result, tool_call_id=tc_id, tool_trace_id=trace_id,
                     status="error", elapsed_ms=_elapsed,

@@ -302,10 +302,11 @@ def test_build_meta_readme_documents_cache_miss_budget_guard():
     assert "molt now" in tool_meta_doc
     # agent_meta no longer carries a token_efficiency block of its own.
     assert "token_efficiency block" not in readme["agent_meta"]
-    assert "current_tool_result_chars" in readme["agent_meta"]
-    assert "top" in readme["agent_meta"]
-    assert "proactive summarization candidates" in readme["agent_meta"]
-    assert "adapter_comment" in readme["agent_meta"]
+    agent_state_doc = readme["agent_meta"]["agent_state"]
+    assert "current_tool_result_chars" in agent_state_doc
+    assert "top_results" in agent_state_doc
+    assert "proactive summarization candidates" in agent_state_doc
+    assert "adapter_comment" in agent_state_doc
 
 
 def test_build_meta_readme_documents_always_on_session_cache_miss_telemetry():
@@ -332,18 +333,19 @@ def test_build_meta_readme_documents_timely_latest_only_semantics():
     old payloads are not current instructions/state, and full-history replay
     does not strip them out."""
     readme = build_meta_readme()
-    for key in ("agent_meta", "notifications"):
-        doc = readme[key]
-        assert "timely" in doc.lower(), key
-        assert "only the NEWEST" in doc or "Only the LATEST" in doc, key
-        assert "historical trace" in doc, key
-        # Replay preserves historical holders rather than stripping their keys.
-        assert "preserv" in doc.lower(), key
-        assert "does not strip" in doc.lower(), key
-    # Old notification payloads must never read as new/unhandled instructions,
-    # and the producer channel remains authoritative for actionable content.
-    assert "not current instructions" in readme["notifications"]
-    assert "source of truth" in readme["notifications"]
+    for doc in (
+        readme["agent_meta"]["agent_state"],
+        readme["agent_meta"]["notifications"],
+    ):
+        assert "timely" in doc.lower()
+        assert "only the NEWEST" in doc
+        assert "historical trace" in doc
+        assert "preserv" in doc.lower()
+        assert "does not strip" in doc.lower()
+
+    notification_doc = readme["agent_meta"]["notifications"]
+    assert "not current instructions" in notification_doc
+    assert "source of truth" in notification_doc
 
 
 def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_guidance():
@@ -423,8 +425,8 @@ def test_build_meta_guidance_renders_guidance_meta_readme_and_adapter():
     assert "Delayed summarization reconstruction threshold" in section
     assert "0.85" in section
     assert "1.0" in section
-    assert "Do not call `refresh` just to apply a summarize" in section
-    assert "does not mean the active provider-side context" in section
+    assert "provider-context reconstruction happens later at the threshold" in section
+    assert "Runtime token/context state" in section
     # meta_readme content (the _meta envelope explanation) is present.
     assert "_meta envelope" in section or "_meta` envelope" in section
     assert "tool_meta" in section
@@ -1893,6 +1895,10 @@ def _notif_agent(working_dir):
         _notification_store=notification_store_for(working_dir),
         _notification_fp=(),
         _notification_payload_signature=None,
+        _notification_persistent_telegram_message_ids=[],
+        _notification_persistent_telegram_last_tool_id=None,
+        _notification_persistent_wechat_message_ids=[],
+        _notification_persistent_wechat_last_tool_id=None,
     )
 
 
@@ -2219,7 +2225,8 @@ def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path)
     block = ToolResultBlock(
         id="t1",
         name="x",
-        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+        content={"ok": True},
+        metadata={"tool_meta": {"id": "call-first"}},
     )
     holder = attach_active_notifications(agent, [block], prior_holder=None)
 
@@ -2314,7 +2321,8 @@ def test_attach_active_notifications_adds_telegram_persistent_delta_with_comment
     first = ToolResultBlock(
         id="t1",
         name="x",
-        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+        content={"ok": True},
+        metadata={"tool_meta": {"id": "call-first"}},
     )
     holder = attach_active_notifications(agent, [first], prior_holder=None)
     first_tg = first.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["telegram"]
@@ -2328,7 +2336,8 @@ def test_attach_active_notifications_adds_telegram_persistent_delta_with_comment
     second = ToolResultBlock(
         id="t2",
         name="x",
-        content={"ok": True, "_meta": {"tool_meta": {"id": "call-second"}}},
+        content={"ok": True},
+        metadata={"tool_meta": {"id": "call-second"}},
     )
     new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
 
@@ -2363,7 +2372,8 @@ def test_attach_active_notifications_sanitizes_telegram_without_new_persistent_b
     first = ToolResultBlock(
         id="t1",
         name="x",
-        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+        content={"ok": True},
+        metadata={"tool_meta": {"id": "call-first"}},
     )
     holder = attach_active_notifications(agent, [first], prior_holder=None)
     assert "persistent" in first.metadata["agent_meta"]["notifications"]
@@ -2379,7 +2389,7 @@ def test_attach_active_notifications_sanitizes_telegram_without_new_persistent_b
     meta = check_result.metadata["agent_meta"]
     # No new message ids, but the routing event hook is Telegram content too, so
     # it is emitted in persistent while the transient lane stays generic.
-    telegram = meta["notification_persistent"]["mcp"]["telegram"]
+    telegram = meta["notifications"]["persistent"]["mcp"]["telegram"]
     assert telegram["messages"] == []
     assert telegram["events"] == [
         {
@@ -2391,7 +2401,7 @@ def test_attach_active_notifications_sanitizes_telegram_without_new_persistent_b
         }
     ]
     assert telegram["previous_block"]["tool_result_id"] == "call-first"
-    ephemeral = meta["notifications"]["mcp.telegram"]
+    ephemeral = meta["notifications"]["attention"]["mcp.telegram"]
     assert ephemeral["data"] == {"message_ids": ["main:123:20"]}
     assert "previews" not in ephemeral["data"]
     assert "count" not in ephemeral["data"]
@@ -2858,7 +2868,8 @@ def test_attach_active_notifications_adds_wechat_persistent_snapshot(tmp_path):
     block = ToolResultBlock(
         id="t1",
         name="x",
-        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+        content={"ok": True},
+        metadata={"tool_meta": {"id": "call-first"}},
     )
     holder = attach_active_notifications(agent, [block], prior_holder=None)
 
@@ -2919,7 +2930,8 @@ def test_attach_active_notifications_adds_wechat_persistent_delta_with_comment(t
     first = ToolResultBlock(
         id="t1",
         name="x",
-        content={"ok": True, "_meta": {"tool_meta": {"id": "call-first"}}},
+        content={"ok": True},
+        metadata={"tool_meta": {"id": "call-first"}},
     )
     holder = attach_active_notifications(agent, [first], prior_holder=None)
     first_wc = first.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["wechat"]
@@ -2931,7 +2943,8 @@ def test_attach_active_notifications_adds_wechat_persistent_delta_with_comment(t
     second = ToolResultBlock(
         id="t2",
         name="x",
-        content={"ok": True, "_meta": {"tool_meta": {"id": "call-second"}}},
+        content={"ok": True},
+        metadata={"tool_meta": {"id": "call-second"}},
     )
     new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
 
@@ -4019,8 +4032,8 @@ def test_packaged_guidance_resource_is_valid():
     assert "skip pre-molt summarize" in body
     assert "0.85" in body
     assert "1.0" in body
-    assert "Do not call `refresh` just to apply a summarize" in body
-    assert "does not mean the active provider-side context" in body
+    assert "provider-context reconstruction happens later at the threshold" in body
+    assert "Runtime token/context state" in body
     assert "0.75 * context_window" in body
     # Unified contract: token diagnostics live in agent_meta.agent_state.token_usage; the
     # guidance points there and describes the since-last-molt session aggregate
@@ -4488,13 +4501,17 @@ def test_attach_tool_block_promotes_budget_context_and_pops_transit_key():
     # Runtime capture is staged by the executor, not written into handler content.
     executor._pending_meta_by_call_id["tc1"] = dict(meta)
     result = {"ok": True}
-    wire = executor._attach_tool_block(result, tool_call_id="tc1", elapsed_ms=5)
-    context = wire["_meta"]["agent_meta"]["agent_state"]["context"]
+    tool_meta = executor._attach_tool_block(
+        result,
+        tool_call_id="tc1",
+        elapsed_ms=5,
+    )
+    context = tool_meta["_agent_pending"]["agent_state"]["context"]
+
     assert context["molt"] == "cache miss budget 1000000 reached, molt now"
     assert context["cache_miss_budget"] == 1_000_000
     assert context["cache_miss_tokens"] == 1_200_000
-    # The transit key is consumed before agent_meta.agent_state is returned.
-    assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in wire
+    assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in tool_meta
 
 
 def test_build_context_rebuild_hint_stamps_after_high_ratio():

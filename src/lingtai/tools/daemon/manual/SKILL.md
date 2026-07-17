@@ -7,7 +7,7 @@ description: >
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
 version: 0.9.0
-last_changed_at: "2026-07-16"
+last_changed_at: "2026-07-16T21:00:00-07:00"
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md

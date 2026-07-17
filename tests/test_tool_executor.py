@@ -29,10 +29,19 @@ def make_executor(
     max_result_chars=50_000,
     guard=None,
     tool_call_guard=None,
+    canonical_result=False,
 ):
     if dispatch_fn is None:
         dispatch_fn = lambda tc: {"status": "ok", "result": f"ran {tc.name}"}
-    make_result = MagicMock(side_effect=lambda name, result, **kw: {"name": name, "result": result})
+    if canonical_result:
+        result_factory = lambda name, result, **kw: ToolResultBlock(
+            kw.get("tool_call_id", ""),
+            name,
+            result,
+        )
+    else:
+        result_factory = lambda name, result, **kw: {"name": name, "result": result}
+    make_result = MagicMock(side_effect=result_factory)
     guard = guard or LoopGuard(max_total_calls=50)
     return ToolExecutor(
         dispatch_fn=dispatch_fn,
@@ -542,6 +551,7 @@ def test_lifecycle_trace_events_cover_spilled_result(tmp_path):
         working_dir=tmp_path,
         max_result_chars=80,
         logger_fn=lambda event_type, **fields: logs.append((event_type, fields)),
+        canonical_result=True,
     )
 
     results, intercepted, _ = executor.execute([
@@ -549,9 +559,10 @@ def test_lifecycle_trace_events_cover_spilled_result(tmp_path):
     ])
 
     assert not intercepted
-    manifest = results[0]["result"]
+    block = results[0]
+    manifest = block.content
     assert manifest["artifact"] == "lingtai_tool_result_spill"
-    tool_block = manifest["_meta"]["tool_meta"]
+    tool_block = block.metadata["tool_meta"]
     assert "spilled" not in tool_block
     assert isinstance(tool_block["char_count"], int) and tool_block["char_count"] > 0
     assert tool_block["spilled_char_count"] == manifest["original_char_count"]
@@ -671,6 +682,7 @@ def test_execute_parallel():
     executor = make_executor(
         dispatch_fn=dispatch,
         parallel_safe={"a", "b"},
+        canonical_result=True,
     )
     calls = [
         ToolCall(name="a", args={}, id="1"),
@@ -681,9 +693,9 @@ def test_execute_parallel():
     elapsed = time.monotonic() - t0
     assert len(results) == 2
     assert elapsed < 0.15
-    for result in results:
-        payload = result["result"]
-        assert payload["_meta"]["tool_meta"]["elapsed_ms"] > 0
+    for block in results:
+        payload = block.content
+        assert block.metadata["tool_meta"]["elapsed_ms"] > 0
         # Negative invariant: the deprecated private transit key is absent.
         assert "_runtime_pending" not in payload
         assert "elapsed_ms" not in payload
@@ -901,7 +913,8 @@ def test_tool_executor_uses_meta_fn_for_stamping():
     block = results[0]
     assert block._agent_pending["agent_state"]["current_time"] == "FAKE-TS"
     assert block._agent_pending["agent_state"]["future_field"] == 1
-    assert "elapsed_ms" in block._agent_pending["agent_state"]
+    assert "elapsed_ms" not in block._agent_pending["agent_state"]
+    assert block.metadata["tool_meta"]["elapsed_ms"] >= 0
     assert "agent_meta" not in block.metadata
     assert "current_time" not in block.content
 
@@ -997,7 +1010,8 @@ def test_tool_executor_meta_fn_covers_parallel_path():
     assert meta_calls["n"] == 2
     for r in results:
         assert r._agent_pending["agent_state"]["current_time"] == "FAKE-TS"
-        assert "elapsed_ms" in r._agent_pending["agent_state"]
+        assert "elapsed_ms" not in r._agent_pending["agent_state"]
+        assert r.metadata["tool_meta"]["elapsed_ms"] >= 0
         assert "agent_meta" not in r.metadata
         assert "current_time" not in r.content
 

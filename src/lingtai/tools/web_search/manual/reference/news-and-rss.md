@@ -1,3 +1,9 @@
+---
+related_files:
+  - src/lingtai/tools/web_search/manual/SKILL.md
+maintenance: |
+  Keep this bundled web-search reference synchronized with its parent manual and implementation when behavior or routing changes.
+---
 # News and RSS Feeds
 
 > Part of the [web-browsing](../SKILL.md) skill.

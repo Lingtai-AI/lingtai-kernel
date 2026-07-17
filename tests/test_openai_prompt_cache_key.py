@@ -236,8 +236,9 @@ def test_zhipu_chat_sends_provider_scoped_key():
     assert sent["prompt_cache_key"] == "lingtai-zhipu:glm-4.6:v1"
 
 
-def test_mimo_chat_sends_provider_scoped_key():
-    adapter = MimoAdapter(api_key="fake", base_url="https://api.mimo.example/v1")
+def test_mimo_chat_escape_hatch_sends_provider_scoped_key():
+    # MiMo defaults to Responses; Chat Completions remains an explicit escape hatch.
+    adapter = MimoAdapter(api_key="fake", base_url="https://api.mimo.example/v1", wire_api="chat_completions")
     adapter._client = _chat_client()
     session = adapter.create_chat("mimo-7b", "system prompt")
 

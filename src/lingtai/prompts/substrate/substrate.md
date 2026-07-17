@@ -16,7 +16,6 @@ related_files:
   - "reference/substrate-manual/SKILL.md"
   - "reference/environment-variables/SKILL.md"
   - "src/lingtai/intrinsic_skills/notification-manual/SKILL.md"
-  - "https://lingtai.ai/skill.md"
 maintenance: >
   When editing this file, treat related_files as maintained inner links for the prompt/guidance
   source graph. Before changing behavior or prose, crawl the listed files, update any affected

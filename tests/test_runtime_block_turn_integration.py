@@ -165,7 +165,7 @@ def test_runtime_block_lands_on_latest_result_at_turn_boundary(tmp_path):
 
     holder = agent._runtime_live_holder
     assert holder is not None, "attach_active_runtime was not invoked at the boundary"
-    assert "current_time" not in holder.metadata["agent_meta"]["agent_state"]
+    assert holder.metadata["agent_meta"]["agent_state"]["current_time"] == "T1"
     assert holder.content["echo"] == "T1"
     # The turn records the batch's calls on the guard (2 seeded + 1 this batch),
     # and the boundary stamps the live total under _meta.agent_meta.
