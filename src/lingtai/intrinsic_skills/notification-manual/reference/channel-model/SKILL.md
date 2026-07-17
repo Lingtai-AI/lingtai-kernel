@@ -37,13 +37,15 @@ the allowlist. This prevents arbitrary workdir files from entering the
 model-visible notification lane.
 
 `nudge` is the formal channel for mechanical, throttled checks. Runtime update
-checks publish `data.nudges[]` entries with `kind: kernel_version`; version/update
-handling begins at the stable route `https://lingtai.ai/skill.md` for the
-authoritative release source and applicable migrations. The bundled
-`runtime-update-checks` reference is limited to local read-only diagnosis and
-refresh mechanics. Source-freshness checks may publish `kind: source_drift`, but
-that handling stays local and never enters release-migration routing. This
-manual owns only the generic channel protocol.
+checks publish `data.nudges[]` entries with `kind: kernel_version`; the sole
+normal install/update route is `https://lingtai.ai/install.sh`. Let Shell execute
+its concise `--help`, then `update --help`, without reading or pasting the script
+source. The installer owns exact-tag migration navigation; real update, mutation,
+configuration writes, and refresh require explicit human/config-owner authority.
+The bundled `runtime-update-checks` reference is limited to local read-only
+diagnosis and refresh mechanics. Source-freshness checks may publish
+`kind: source_drift`, but that handling stays local and never enters
+release-migration routing. This manual owns only the generic channel protocol.
 
 ## Envelope and producer instructions
 

@@ -142,6 +142,59 @@ def test_validate_manifest_dict_accepts_valid():
     validate_manifest_dict(_valid_manifest_dict())  # no raise
 
 
+def test_validate_manifest_dict_rejects_invalid_pep440_version():
+    data = _valid_manifest_dict()
+    data["kernel_version"] = "999-not-a-release"
+    with pytest.raises(ManifestError, match="PEP 440"):
+        validate_manifest_dict(data)
+
+
+def test_validate_manifest_dict_requires_version_tag_relation():
+    data = _valid_manifest_dict()
+    data["kernel_tag"] = "v0.16.5"
+    with pytest.raises(ManifestError, match="kernel_tag"):
+        validate_manifest_dict(data)
+
+
+def test_validate_manifest_dict_rejects_bad_commit_and_timestamp():
+    data = _valid_manifest_dict()
+    data["commit"] = "not-a-sha"
+    with pytest.raises(ManifestError, match="commit"):
+        validate_manifest_dict(data)
+    data = _valid_manifest_dict()
+    data["generated_at"] = "2026-07-15T00:00:00"
+    with pytest.raises(ManifestError, match="generated_at"):
+        validate_manifest_dict(data)
+
+
+def test_validate_manifest_dict_rejects_wrong_version_or_mislabeled_artifact():
+    data = _valid_manifest_dict()
+    data["artifacts"][0]["filename"] = "lingtai-0.16.5-cp312-cp312-macosx_11_0_arm64.whl"
+    with pytest.raises(ManifestError, match="version"):
+        validate_manifest_dict(data)
+    data = _valid_manifest_dict()
+    data["artifacts"][1]["kind"] = "wheel"
+    data["artifacts"][1]["python_tag"] = "cp312"
+    data["artifacts"][1]["abi_tag"] = "cp312"
+    data["artifacts"][1]["platform_tag"] = "any"
+    with pytest.raises(ManifestError, match="valid lingtai wheel"):
+        validate_manifest_dict(data)
+
+
+def test_validate_manifest_dict_requires_sdist_fallback_to_name_sdist():
+    data = _valid_manifest_dict()
+    data["sdist_fallback"] = data["artifacts"][0]["filename"]
+    with pytest.raises(ManifestError, match="sdist_fallback"):
+        validate_manifest_dict(data)
+
+
+def test_validate_manifest_dict_rejects_unknown_keys():
+    data = _valid_manifest_dict()
+    data["unexpected"] = True
+    with pytest.raises(ManifestError, match="unknown"):
+        validate_manifest_dict(data)
+
+
 @pytest.mark.parametrize("missing_key", sorted({
     "schema", "kernel_version", "kernel_tag", "commit", "generated_at", "artifacts", "sdist_fallback",
 }))

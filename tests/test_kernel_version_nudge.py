@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from tests._notification_store_helpers import notification_store_for, snapshot_notifications
 from lingtai.kernel.nudge import upsert
 from lingtai.kernel.nudge import kernel_version as kv
@@ -54,9 +56,55 @@ def test_installed_runtime_refresh_nudge_does_not_hit_remote(tmp_path, monkeypat
     assert entry["source"] == "installed-distribution"
     assert entry["running"] == "0.14.1"
     assert entry["installed"] == "0.14.2"
-    assert entry["suggested_action"] == "read-runtime-update-skill-then-refresh-if-safe"
-    assert entry["skill"] == "https://lingtai.ai/skill.md"
+    assert entry["suggested_action"] == "refresh-installed-runtime-if-authorized-and-safe"
+    assert "skill" not in entry
+    assert "install_url" not in entry
+    assert "already on disk" in entry["detail"]
     assert "system(action='refresh')" in entry["detail"]
+    assert "skill.md" not in entry["detail"]
+
+
+@pytest.mark.parametrize(
+    ("running", "installed", "source", "action"),
+    [
+        ("0.16.5", "0.17.0", "installed-distribution", "refresh-installed-runtime-if-authorized-and-safe"),
+        ("0.17.0", "0.16.5", "installed-distribution-diagnostic", "inspect-runtime-interpreter-and-import-paths"),
+        ("0.17.0", "0.17.0", None, None),
+        ("not-a-version", "0.17.0", "installed-distribution-diagnostic", "inspect-runtime-interpreter-and-import-paths"),
+    ],
+)
+def test_runtime_version_direction_is_fail_safe_and_equal_pairs_probe_remote(
+    tmp_path, monkeypatch, running, installed, source, action
+):
+    agent = _Agent(tmp_path)
+    monkeypatch.setattr(
+        kv,
+        "_runtime_info",
+        lambda: kv._RuntimeInfo(running_version=running, installed_version=installed, dev_reason=None),
+    )
+    calls = []
+
+    def latest():
+        calls.append(True)
+        return installed
+
+    if source is None:
+        monkeypatch.setattr(kv, "_fetch_latest_version", latest)
+    else:
+        monkeypatch.setattr(
+            kv,
+            "_fetch_latest_version",
+            lambda: (_ for _ in ()).throw(AssertionError("remote should not be queried")),
+        )
+    kv.check(agent)
+    if source is None:
+        assert calls == [True]
+        assert _entries(tmp_path) == []
+    else:
+        entry = _entries(tmp_path)[0]
+        assert entry["source"] == source
+        assert entry["suggested_action"] == action
+        assert "Do not refresh" in entry["detail"] if source.endswith("diagnostic") else "already on disk" in entry["detail"]
 
 
 def test_local_refresh_mismatch_does_not_re_emit_same_utc_day(tmp_path, monkeypatch):
@@ -176,6 +224,63 @@ def test_local_refresh_match_clears_mismatch_tracking_and_stale_nudge(tmp_path, 
     assert _entries(tmp_path)[0]["installed"] == "0.14.3"
 
 
+def test_match_after_refresh_clears_local_nudge_during_remote_outage(tmp_path, monkeypatch):
+    agent = _Agent(tmp_path)
+    monkeypatch.setattr(kv, "_today_utc", lambda: "2026-07-17")
+    monkeypatch.setattr(
+        kv,
+        "_runtime_info",
+        lambda: kv._RuntimeInfo("0.17.0", "0.17.0", None),
+    )
+    upsert(
+        agent,
+        "kernel_version",
+        {
+            "title": "LingTai kernel refresh available: 0.16.5 -> 0.17.0",
+            "source": "installed-distribution",
+            "running": "0.16.5",
+            "installed": "0.17.0",
+        },
+    )
+    assert _entries(tmp_path)
+    monkeypatch.setattr(
+        kv,
+        "_fetch_latest_version",
+        lambda: (_ for _ in ()).throw(RuntimeError("both official mirrors unavailable")),
+    )
+
+    kv.check(agent)
+
+    assert _entries(tmp_path) == []
+    state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
+    assert "unavailable" in state["kernel_version"]["last_error"]
+
+
+def test_match_after_refresh_keeps_independent_remote_finding_during_outage(tmp_path, monkeypatch):
+    agent = _Agent(tmp_path)
+    monkeypatch.setattr(kv, "_runtime_info", lambda: kv._RuntimeInfo("0.17.0", "0.17.0", None))
+    upsert(
+        agent,
+        "kernel_version",
+        {
+            "title": "LingTai kernel update available: 0.17.0 -> 0.18.0",
+            "source": kv._GITHUB_SOURCE,
+            "running": "0.17.0",
+            "installed": "0.17.0",
+            "latest": "0.18.0",
+        },
+    )
+    monkeypatch.setattr(
+        kv,
+        "_fetch_latest_version",
+        lambda: (_ for _ in ()).throw(RuntimeError("both official mirrors unavailable")),
+    )
+
+    kv.check(agent)
+
+    assert _entries(tmp_path)[0]["source"] == kv._GITHUB_SOURCE
+
+
 def test_remote_update_check_uses_bounded_probe_not_daily_product_cadence(tmp_path, monkeypatch):
     agent = _Agent(tmp_path)
     calls = {"n": 0}
@@ -201,10 +306,12 @@ def test_remote_update_check_uses_bounded_probe_not_daily_product_cadence(tmp_pa
     entries = _entries(tmp_path)
     assert len(entries) == 1
     entry = entries[0]
-    assert entry["source"] == "pypi-json"
+    assert entry["source"] == "release-manifest"
     assert entry["latest"] == "0.14.2"
-    assert entry["suggested_action"] == "read-runtime-update-skill-and-ask-human"
+    assert entry["suggested_action"] == "execute-installer-help-then-ask-human"
+    assert entry["install_url"] == "https://lingtai.ai/install.sh"
     assert "human" in entry["detail"].lower()
+    assert "skill.md" not in entry["detail"]
     assert calls["n"] == 1
 
     state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
@@ -219,9 +326,21 @@ def test_remote_update_check_uses_bounded_probe_not_daily_product_cadence(tmp_pa
     assert _entries(tmp_path)[0]["latest"] == "0.14.2"
 
 
+@pytest.mark.parametrize("candidate", ["999-not-a-release", "release-999", "not-a-version"])
+def test_malformed_remote_version_cannot_be_promoted_by_numeric_substrings(tmp_path, monkeypatch, candidate):
+    agent = _Agent(tmp_path)
+    monkeypatch.setattr(kv, "_runtime_info", lambda: kv._RuntimeInfo("0.16.5", "0.16.5", None))
+    monkeypatch.setattr(kv, "_fetch_latest_version", lambda: candidate)
+
+    kv.check(agent)
+
+    assert _entries(tmp_path) == []
+    assert kv._is_newer(candidate, "0.16.5") is False
+
+
 def test_dev_or_editable_runtime_skips_and_clears_kernel_nudge(tmp_path, monkeypatch):
     agent = _Agent(tmp_path)
-    upsert(agent, "kernel_version", {"title": "old", "source": "pypi-json"})
+    upsert(agent, "kernel_version", {"title": "old", "source": "release-manifest"})
     assert _entries(tmp_path)
     monkeypatch.setattr(
         kv,
@@ -249,7 +368,7 @@ def test_dev_or_editable_runtime_skips_and_clears_kernel_nudge(tmp_path, monkeyp
 
 def test_current_remote_version_clears_existing_kernel_nudge(tmp_path, monkeypatch):
     agent = _Agent(tmp_path)
-    upsert(agent, "kernel_version", {"title": "old", "source": "pypi-json"})
+    upsert(agent, "kernel_version", {"title": "old", "source": "release-manifest"})
     monkeypatch.setattr(
         kv,
         "_runtime_info",
@@ -427,3 +546,298 @@ def test_runtime_info_loaded_wrapper_triggers_local_refresh_nudge(tmp_path, monk
     assert entry["source"] == "installed-distribution"
     assert entry["running"] == "0.14.1"
     assert entry["installed"] == "0.14.2"
+
+
+def _release_manifest(source, version="0.14.2", manifest_sha256="a" * 64, artifact_hashes_sha256="b" * 64):
+    return kv._ReleaseManifest(
+        source=source,
+        kernel_version=version,
+        manifest_sha256=manifest_sha256,
+        artifact_hashes_sha256=artifact_hashes_sha256,
+    )
+
+
+def test_release_manifest_mirrors_must_agree_before_version_selection(monkeypatch):
+    monkeypatch.setattr(
+        kv,
+        "_fetch_github_manifest",
+        lambda: _release_manifest(kv._GITHUB_SOURCE, version="0.14.3"),
+    )
+    monkeypatch.setattr(
+        kv,
+        "_fetch_gitee_manifest",
+        lambda: _release_manifest(kv._GITEE_SOURCE, version="0.14.2"),
+    )
+
+    with pytest.raises(kv._MirrorMismatchError) as exc_info:
+        kv._fetch_latest_version()
+
+    assert set(exc_info.value.manifests) == {kv._GITHUB_SOURCE, kv._GITEE_SOURCE}
+    assert exc_info.value.manifests[kv._GITHUB_SOURCE].kernel_version == "0.14.3"
+
+
+def test_release_manifest_uses_one_available_mirror(monkeypatch):
+    monkeypatch.setattr(
+        kv,
+        "_fetch_github_manifest",
+        lambda: (_ for _ in ()).throw(RuntimeError("GitHub unavailable")),
+    )
+    monkeypatch.setattr(
+        kv,
+        "_fetch_gitee_manifest",
+        lambda: _release_manifest(kv._GITEE_SOURCE),
+    )
+
+    observation = kv._fetch_latest_version()
+
+    assert observation.version == "0.14.2"
+    assert observation.source == kv._GITEE_SOURCE
+
+
+def test_mirror_mismatch_is_reported_without_selecting_a_version(tmp_path, monkeypatch):
+    agent = _Agent(tmp_path)
+    monkeypatch.setattr(
+        kv,
+        "_runtime_info",
+        lambda: kv._RuntimeInfo(
+            running_version="0.14.1",
+            installed_version="0.14.1",
+            dev_reason=None,
+        ),
+    )
+    monkeypatch.setattr(kv, "_today_utc", lambda: "2026-07-17")
+    monkeypatch.setattr(
+        kv,
+        "_fetch_latest_version",
+        lambda: (_ for _ in ()).throw(
+            kv._MirrorMismatchError(
+                {
+                    kv._GITHUB_SOURCE: _release_manifest(kv._GITHUB_SOURCE, "0.14.3"),
+                    kv._GITEE_SOURCE: _release_manifest(kv._GITEE_SOURCE, "0.14.2"),
+                }
+            )
+        ),
+    )
+
+    kv.check(agent)
+
+    entry = _entries(tmp_path)[0]
+    assert entry["source"] == "release-manifest-mirror-mismatch"
+    assert entry["latest"] is None
+    assert "do not choose the higher version" in entry["detail"]
+    state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
+    assert state["kernel_version"]["mirror_mismatch"][kv._GITHUB_SOURCE]["version"] == "0.14.3"
+
+
+def test_github_manifest_uses_exact_release_asset_endpoint(monkeypatch):
+    manifest = {
+        "schema": "lingtai.kernel.release/v1",
+        "kernel_version": "0.16.4",
+        "kernel_tag": "v0.16.4",
+        "commit": "a" * 40,
+        "generated_at": "2026-07-17T00:00:00Z",
+        "sdist_fallback": "lingtai-0.16.4.tar.gz",
+        "artifacts": [
+            {
+                "filename": "lingtai-0.16.4.tar.gz",
+                "sha256": "b" * 64,
+                "kind": "sdist",
+                "python_tag": None,
+                "abi_tag": None,
+                "platform_tag": None,
+            }
+        ],
+    }
+    manifest_url = (
+        "https://github.com/Lingtai-AI/lingtai-kernel/releases/download/v0.16.4/"
+        "lingtai-kernel-release-manifest.json"
+    )
+    responses = {
+        kv._GITHUB_LATEST_RELEASE_URL: json.dumps(
+            {"assets": [{"name": kv._MANIFEST_ASSET_NAME, "browser_download_url": manifest_url}]}
+        ).encode(),
+        manifest_url: json.dumps(manifest).encode(),
+    }
+    calls = []
+
+    class Response:
+        status = 200
+        headers = {}
+
+        def __init__(self, body):
+            self.body = body
+
+        def read(self, _limit):
+            return self.body
+
+        def getcode(self):
+            return self.status
+
+        def close(self):
+            pass
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, timeout))
+        return Response(responses[request.full_url])
+
+    monkeypatch.setattr(kv.urllib.request, "urlopen", fake_urlopen)
+
+    result = kv._fetch_github_manifest()
+
+    assert result.source == kv._GITHUB_SOURCE
+    assert result.kernel_version == "0.16.4"
+    assert [url for url, _ in calls] == [kv._GITHUB_LATEST_RELEASE_URL, manifest_url]
+    assert all(timeout == kv._REMOTE_TIMEOUT_SECONDS for _, timeout in calls)
+
+
+def _transport_response(body):
+    class Response:
+        status = 200
+        headers = {}
+
+        def read(self, _limit):
+            return body
+
+        def getcode(self):
+            return self.status
+
+        def close(self):
+            pass
+
+    return Response()
+
+
+def _transport_manifest(version="0.16.4"):
+    return {
+        "schema": "lingtai.kernel.release/v1",
+        "kernel_version": version,
+        "kernel_tag": f"v{version}",
+        "commit": "a" * 40,
+        "generated_at": "2026-07-17T00:00:00Z",
+        "sdist_fallback": f"lingtai-{version}.tar.gz",
+        "artifacts": [
+            {
+                "filename": f"lingtai-{version}.tar.gz",
+                "sha256": "b" * 64,
+                "kind": "sdist",
+                "python_tag": None,
+                "abi_tag": None,
+                "platform_tag": None,
+            }
+        ],
+    }
+
+
+def test_gitee_manifest_uses_real_attach_files_download_shape(monkeypatch):
+    manifest = _transport_manifest()
+    manifest_url = "https://gitee.com/huangzesen1997/lingtai-kernel/attach_files/1"
+    responses = {
+        kv._GITEE_LATEST_RELEASE_URL: json.dumps(
+            {"attach_files": [{"name": kv._MANIFEST_ASSET_NAME, "browser_download_url": manifest_url}]}
+        ).encode(),
+        manifest_url: json.dumps(manifest).encode(),
+    }
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        return _transport_response(responses[request.full_url])
+
+    monkeypatch.setattr(kv.urllib.request, "urlopen", fake_urlopen)
+    result = kv._fetch_gitee_manifest()
+    assert result.source == kv._GITEE_SOURCE
+    assert result.kernel_version == "0.16.4"
+    assert calls == [kv._GITEE_LATEST_RELEASE_URL, manifest_url]
+
+
+def test_gitee_manifest_asset_extraction_rejects_duplicate_or_ambiguous_entries():
+    with pytest.raises(RuntimeError, match="ambiguous duplicate"):
+        kv._gitee_manifest_asset_url(
+            {
+                "attach_files": [
+                    {"name": kv._MANIFEST_ASSET_NAME, "download_url": "https://gitee.test/1"},
+                    {"name": kv._MANIFEST_ASSET_NAME, "download_url": "https://gitee.test/2"},
+                ]
+            },
+            kv._GITEE_SOURCE,
+        )
+    with pytest.raises(RuntimeError, match="ambiguous download"):
+        kv._gitee_manifest_asset_url(
+            {
+                "attach_files": [
+                    {
+                        "name": kv._MANIFEST_ASSET_NAME,
+                        "browser_download_url": "https://gitee.test/1",
+                        "download_url": "https://gitee.test/2",
+                    }
+                ]
+            },
+            kv._GITEE_SOURCE,
+        )
+
+
+def test_gitee_only_transport_fallback_uses_attach_files(monkeypatch):
+    manifest = _transport_manifest()
+    manifest_url = "https://gitee.com/huangzesen1997/lingtai-kernel/attach_files/2"
+    responses = {
+        kv._GITEE_LATEST_RELEASE_URL: json.dumps(
+            {"attach_files": [{"name": kv._MANIFEST_ASSET_NAME, "download_url": manifest_url}]}
+        ).encode(),
+        manifest_url: json.dumps(manifest).encode(),
+    }
+    monkeypatch.setattr(
+        kv,
+        "_fetch_github_manifest",
+        lambda: (_ for _ in ()).throw(RuntimeError("GitHub unavailable")),
+    )
+    monkeypatch.setattr(kv.urllib.request, "urlopen", lambda request, timeout: _transport_response(responses[request.full_url]))
+    observation = kv._fetch_latest_version()
+    assert observation.source == kv._GITEE_SOURCE
+    assert observation.version == "0.16.4"
+
+
+def test_github_and_gitee_transport_mismatch_fails_closed(monkeypatch):
+    github_manifest = _transport_manifest("0.16.4")
+    gitee_manifest = _transport_manifest("0.16.5")
+    github_url = "https://github.com/Lingtai-AI/lingtai-kernel/releases/download/v0.16.4/lingtai-kernel-release-manifest.json"
+    gitee_url = "https://gitee.com/huangzesen1997/lingtai-kernel/attach_files/3"
+    responses = {
+        kv._GITHUB_LATEST_RELEASE_URL: json.dumps(
+            {"assets": [{"name": kv._MANIFEST_ASSET_NAME, "browser_download_url": github_url}]}
+        ).encode(),
+        github_url: json.dumps(github_manifest).encode(),
+        kv._GITEE_LATEST_RELEASE_URL: json.dumps(
+            {"attach_files": [{"name": kv._MANIFEST_ASSET_NAME, "browser_download_url": gitee_url}]}
+        ).encode(),
+        gitee_url: json.dumps(gitee_manifest).encode(),
+    }
+    monkeypatch.setattr(kv.urllib.request, "urlopen", lambda request, timeout: _transport_response(responses[request.full_url]))
+    with pytest.raises(kv._MirrorMismatchError) as exc_info:
+        kv._fetch_latest_version()
+    assert set(exc_info.value.manifests) == {kv._GITHUB_SOURCE, kv._GITEE_SOURCE}
+
+
+def test_release_manifest_same_version_content_or_hash_mismatch_is_not_accepted(monkeypatch):
+    monkeypatch.setattr(
+        kv,
+        "_fetch_github_manifest",
+        lambda: _release_manifest(
+            kv._GITHUB_SOURCE,
+            version="0.14.2",
+            manifest_sha256="a" * 64,
+            artifact_hashes_sha256="b" * 64,
+        ),
+    )
+    monkeypatch.setattr(
+        kv,
+        "_fetch_gitee_manifest",
+        lambda: _release_manifest(
+            kv._GITEE_SOURCE,
+            version="0.14.2",
+            manifest_sha256="c" * 64,
+            artifact_hashes_sha256="d" * 64,
+        ),
+    )
+
+    with pytest.raises(kv._MirrorMismatchError):
+        kv._fetch_latest_version()

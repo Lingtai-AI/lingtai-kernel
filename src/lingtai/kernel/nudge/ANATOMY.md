@@ -5,8 +5,11 @@ related_files:
   - src/lingtai/kernel/nudge/init_config.py
   - src/lingtai/kernel/nudge/goal.py
   - src/lingtai/kernel/nudge/kernel_version.py
+  - src/lingtai/kernel/release_manifest.py
+  - scripts/lib/release_manifest.py
   - src/lingtai/kernel/nudge/source_drift.py
   - src/lingtai/kernel/nudge/prompts.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
   - src/lingtai/kernel/notifications.py
   - src/lingtai/CONTRACT.md
   - tests/test_nudge_prompts.py
@@ -33,14 +36,15 @@ the ordinary Notification Store channel; it does not create a second transport.
 - `init_config.py` — consumes the last structured real-reader outcome and
   publishes/clears the typed configuration-shape finding; it never reads
   `init.json` independently (`src/lingtai/kernel/nudge/init_config.py:1-80`).
-- `kernel_version.py` — read-only installed/running/package observation; it does
-  not own a product repeat cadence (`src/lingtai/kernel/nudge/kernel_version.py:59-201`).
+- `kernel_version.py` — read-only installed/running observation plus bounded
+  GitHub/Gitee release-manifest comparison; it does not own a product repeat
+  cadence (`src/lingtai/kernel/nudge/kernel_version.py:91-229`).
 - `source_drift.py` — read-only runtime/source comparison, skipped for editable
   or source runtimes (`src/lingtai/kernel/nudge/source_drift.py:21-111`).
 - `goal.py` — IDLE-only protected-goal reminder projected into the ordinary
   `system` notification channel (`src/lingtai/kernel/nudge/goal.py:20-75`).
-- `prompts.py` — typed producer-fact to agent-facing payload renderer
-  (`src/lingtai/kernel/nudge/prompts.py:17-125`).
+- `prompts.py` — typed producer-fact to agent-facing payload renderer, including
+  installer and mirror-mismatch guidance (`src/lingtai/kernel/nudge/prompts.py:17-154`).
 - `notifications.py` — ordinary Notification transport invokes Nudge's dismissal
   policy hook before clearing the nudge channel (`src/lingtai/kernel/notifications.py:469-880`).
 
@@ -79,3 +83,12 @@ route. `FULLY_EFFECTIVE`, ignored-field, and failed init-reader outcomes are a
 separate axis from Nudge action; a dismissed finding is not resolved until the
 same real reader reports no finding. The old per-kind daily/fingerprint state is
 not consulted for repeat behavior.
+
+The kernel-version producer reads only the exact
+`lingtai-kernel-release-manifest.json` release asset from the GitHub/Gitee latest
+release endpoints; it does not interpret release prose or package-index JSON.
+When both manifests are usable, their version, manifest bytes, and declared
+artifact-hash digest must agree before an update version is considered. A local
+mismatch recommends refresh only when the installed PEP 440 version is
+semantically newer than the running version; reverse, invalid, and unknown pairs
+remain local diagnostics for interpreter/import-path inspection.

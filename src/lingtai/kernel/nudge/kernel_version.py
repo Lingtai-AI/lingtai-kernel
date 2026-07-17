@@ -1,48 +1,46 @@
 """Kernel runtime/update nudges.
 
-This check is deliberately read-only. It exists to surface mechanical runtime
-facts through the shared ``nudge`` notification channel, not to mutate the
-installation by itself.
-
-Two related cases share one nudge ``kind``:
-
-* local refresh available: the installed ``lingtai`` distribution on disk is
-  newer than the currently running process, so a safe ``system.refresh`` may
-  load code that is already present. The agent starts at
-  ``https://lingtai.ai/skill.md`` to determine applicable release migrations
-  before any authorized configuration write or refresh;
-* package update available: a packaged, non-editable runtime is behind the
-  latest published ``lingtai`` kernel package. The bounded producer probe starts
-  at ``https://lingtai.ai/skill.md`` so the agent
-  can determine applicable release migrations, obtain explicit
-  human/config-owner authorization for every migration/config write and refresh,
-  apply only authorized writes, validate, and refresh last. The nudge itself
-  grants no authority.
-
-Editable/source/dev installs are skipped for the package-update check: their
-source of truth is the checkout, not the package index.
+This check is deliberately read-only. It surfaces the observed running and
+installed versions, plus the latest release-manifest facts published on the
+official GitHub/Gitee mirrors, through the shared ``nudge`` notification
+channel. It never mutates an installation.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
-import re
 import time
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from .prompts import NudgeFacts, NudgeSituation, SKILL_ROUTE, render_nudge_payload
+from ..release_manifest import ManifestError, manifest_from_dict
+from .prompts import (
+    INSTALL_ROUTE,
+    NudgeFacts,
+    NudgeSituation,
+    render_nudge_payload,
+)
 
 _FAST_INTERVAL_SECONDS = 60.0
 _REMOTE_TIMEOUT_SECONDS = 3.0
-_PYPI_JSON_URL = "https://pypi.org/pypi/lingtai/json"
+_MAX_REMOTE_BYTES = 256 * 1024
+_MANIFEST_ASSET_NAME = "lingtai-kernel-release-manifest.json"
+_GITHUB_LATEST_RELEASE_URL = (
+    "https://api.github.com/repos/Lingtai-AI/lingtai-kernel/releases/latest"
+)
+_GITEE_LATEST_RELEASE_URL = (
+    "https://gitee.com/api/v5/repos/huangzesen1997/lingtai-kernel/releases/latest"
+)
+_GITHUB_SOURCE = "github-release-manifest"
+_GITEE_SOURCE = "gitee-release-manifest"
 _STATE_FILE = Path(".notification") / ".nudge_state.json"
 _KIND = "kernel_version"
 # Backward-compatible module constant for callers that inspected the old hint.
-_SKILL_HINT = SKILL_ROUTE
+_SKILL_HINT = INSTALL_ROUTE
 
 
 @dataclass(frozen=True)
@@ -54,6 +52,32 @@ class _RuntimeInfo:
     @property
     def dev_mode(self) -> bool:
         return self.dev_reason is not None
+
+
+@dataclass(frozen=True)
+class _ReleaseManifest:
+    source: str
+    kernel_version: str
+    manifest_sha256: str
+    artifact_hashes_sha256: str
+
+
+@dataclass(frozen=True)
+class _ReleaseObservation:
+    version: str
+    source: str
+    manifest_sha256: str | None = None
+    artifact_hashes_sha256: str | None = None
+
+
+class _MirrorMismatchError(RuntimeError):
+    def __init__(self, manifests: Mapping[str, _ReleaseManifest]):
+        self.manifests = dict(manifests)
+        versions = ", ".join(
+            f"{source}={manifest.kernel_version}"
+            for source, manifest in sorted(self.manifests.items())
+        )
+        super().__init__(f"release-manifest mirrors disagree: {versions}")
 
 
 def check(agent) -> None:
@@ -86,16 +110,23 @@ def check(agent) -> None:
         )
         return
 
-    if info.installed_version != info.running_version:
+    comparison = _compare_versions(info.running_version, info.installed_version)
+    if comparison is None or comparison != 0:
         # Nudge policy owns dismissal/repeat semantics globally. This producer
         # reports only the current runtime fact; it does not add a per-kind day,
-        # fingerprint, or process cadence.
+        # fingerprint, or process cadence. Only an installed version that is
+        # semantically newer may recommend a safe refresh.
         today = _today_utc()
+        situation = (
+            NudgeSituation.INSTALLED_RUNTIME_MISMATCH
+            if comparison is not None and comparison < 0
+            else NudgeSituation.RUNTIME_MISMATCH_DIAGNOSTIC
+        )
         upsert(
             agent,
             _KIND,
             render_nudge_payload(
-                NudgeSituation.INSTALLED_RUNTIME_MISMATCH,
+                situation,
                 NudgeFacts(
                     running=info.running_version,
                     installed=info.installed_version,
@@ -109,10 +140,18 @@ def check(agent) -> None:
             kind=_KIND,
             running=info.running_version,
             installed=info.installed_version,
-            source="installed-distribution",
+            source=(
+                "installed-distribution"
+                if situation is NudgeSituation.INSTALLED_RUNTIME_MISMATCH
+                else "installed-distribution-diagnostic"
+            ),
         )
         return
 
+    # A local refresh finding is resolved by the matching pair itself. Clear
+    # only that local source before probing remote mirrors; an independently
+    # established remote-update finding remains visible during an outage.
+    _clear_resolved_local_refresh_nudge(agent)
     persistent = _load_persistent_state(agent)
     kernel_state = persistent.setdefault(_KIND, {})
     today = _today_utc()
@@ -120,7 +159,40 @@ def check(agent) -> None:
     # behavior belongs to the shared global Nudge policy, not this producer.
 
     try:
-        latest = _fetch_latest_version()
+        observation = _coerce_observation(_fetch_latest_version())
+    except _MirrorMismatchError as e:
+        mismatch = _mirror_mismatch_payload(e.manifests)
+        kernel_state.update(
+            {
+                "last_remote_check_date": today,
+                "checked_installed_version": info.installed_version,
+                "latest_seen": None,
+                "latest_source": None,
+                "mirror_mismatch": mismatch,
+                "last_error": None,
+            }
+        )
+        _save_persistent_state(agent, persistent)
+        upsert(
+            agent,
+            _KIND,
+            render_nudge_payload(
+                NudgeSituation.MIRROR_MISMATCH,
+                NudgeFacts(
+                    running=info.running_version,
+                    installed=info.installed_version,
+                    checked_at_date=today,
+                    mirror_mismatch=mismatch,
+                ),
+            ),
+        )
+        _log(
+            agent,
+            "kernel_version_mirror_mismatch",
+            kind=_KIND,
+            sources=sorted(e.manifests),
+        )
+        return
     except Exception as e:
         kernel_state.update(
             {
@@ -137,13 +209,17 @@ def check(agent) -> None:
         {
             "last_remote_check_date": today,
             "checked_installed_version": info.installed_version,
-            "latest_seen": latest,
+            "latest_seen": observation.version,
+            "latest_source": observation.source,
+            "latest_manifest_sha256": observation.manifest_sha256,
+            "latest_artifact_hashes_sha256": observation.artifact_hashes_sha256,
+            "mirror_mismatch": None,
             "last_error": None,
         }
     )
 
-    if _is_newer(latest, info.installed_version):
-        kernel_state["emitted_for_latest"] = latest
+    if _is_newer(observation.version, info.installed_version):
+        kernel_state["emitted_for_latest"] = observation.version
         _save_persistent_state(agent, persistent)
         upsert(
             agent,
@@ -153,8 +229,9 @@ def check(agent) -> None:
                 NudgeFacts(
                     running=info.running_version,
                     installed=info.installed_version,
-                    latest=latest,
+                    latest=observation.version,
                     checked_at_date=today,
+                    source=observation.source,
                 ),
             ),
         )
@@ -163,8 +240,8 @@ def check(agent) -> None:
             "nudge_emitted",
             kind=_KIND,
             installed=info.installed_version,
-            latest=latest,
-            source="pypi-json",
+            latest=observation.version,
+            source=observation.source,
         )
         return
 
@@ -257,37 +334,268 @@ def _remote_check_due(kernel_state: dict[str, Any], installed_version: str, toda
     return True
 
 
-def _fetch_latest_version() -> str:
-    req = urllib.request.Request(
-        _PYPI_JSON_URL,
+def _fetch_latest_version() -> _ReleaseObservation:
+    """Read the latest manifest asset from both official release mirrors.
+
+    A missing or malformed mirror is unavailable; the other mirror may still
+    establish the observation. When both are usable, their manifest bytes and
+    declared artifact hashes must agree before either can be trusted.
+    """
+    manifests: dict[str, _ReleaseManifest] = {}
+    errors: dict[str, str] = {}
+    for source, fetch in (
+        (_GITHUB_SOURCE, _fetch_github_manifest),
+        (_GITEE_SOURCE, _fetch_gitee_manifest),
+    ):
+        try:
+            manifests[source] = fetch()
+        except Exception as exc:
+            errors[source] = str(exc)[:200]
+
+    if len(manifests) == 2:
+        values = tuple(manifests.values())
+        if not _manifests_agree(values[0], values[1]):
+            raise _MirrorMismatchError(manifests)
+    if not manifests:
+        details = "; ".join(f"{source}: {error}" for source, error in sorted(errors.items()))
+        raise RuntimeError(f"official release manifests unavailable: {details}")
+
+    source, manifest = sorted(manifests.items())[0]
+    return _ReleaseObservation(
+        version=manifest.kernel_version,
+        source=source,
+        manifest_sha256=manifest.manifest_sha256,
+        artifact_hashes_sha256=manifest.artifact_hashes_sha256,
+    )
+
+
+def _fetch_github_manifest() -> _ReleaseManifest:
+    release = _fetch_json(
+        _GITHUB_LATEST_RELEASE_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "lingtai-kernel-nudge/1",
+        },
+    )
+    url = _github_manifest_asset_url(release, _GITHUB_SOURCE)
+    return _fetch_manifest_asset(url, _GITHUB_SOURCE)
+
+
+def _fetch_gitee_manifest() -> _ReleaseManifest:
+    release = _fetch_json(
+        _GITEE_LATEST_RELEASE_URL,
         headers={"User-Agent": "lingtai-kernel-nudge/1"},
     )
-    with urllib.request.urlopen(req, timeout=_REMOTE_TIMEOUT_SECONDS) as resp:
-        raw = resp.read()
-    data = json.loads(raw.decode("utf-8"))
-    latest = str(data.get("info", {}).get("version") or "")
-    if not latest:
-        raise RuntimeError("PyPI response did not include info.version")
-    return latest
+    url = _gitee_manifest_asset_url(release, _GITEE_SOURCE)
+    return _fetch_manifest_asset(url, _GITEE_SOURCE)
+
+
+def _fetch_json(url: str, headers: Mapping[str, str] | None = None) -> Any:
+    raw = _fetch_bytes(url, headers=headers)
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"{url} did not return valid JSON") from exc
+
+
+def _fetch_bytes(url: str, headers: Mapping[str, str] | None = None) -> bytes:
+    request = urllib.request.Request(url, headers=dict(headers or {}))
+    response = urllib.request.urlopen(request, timeout=_REMOTE_TIMEOUT_SECONDS)
+    try:
+        status = getattr(response, "status", None)
+        if status is None:
+            status = response.getcode()
+        if status != 200:
+            raise RuntimeError(f"release source returned HTTP {status}")
+        content_length = None
+        response_headers = getattr(response, "headers", None)
+        if response_headers is not None:
+            try:
+                content_length = int(response_headers.get("Content-Length") or 0)
+            except (TypeError, ValueError):
+                content_length = None
+        if content_length and content_length > _MAX_REMOTE_BYTES:
+            raise RuntimeError("release source response exceeded the bounded size limit")
+        raw = response.read(_MAX_REMOTE_BYTES + 1)
+    finally:
+        response.close()
+    if len(raw) > _MAX_REMOTE_BYTES:
+        raise RuntimeError("release source response exceeded the bounded size limit")
+    return raw
+
+
+def _github_manifest_asset_url(release: Any, source: str) -> str:
+    return _manifest_asset_url(
+        release,
+        source,
+        list_key="assets",
+        url_keys=("browser_download_url", "browserDownloadUrl"),
+    )
+
+
+def _gitee_manifest_asset_url(release: Any, source: str) -> str:
+    return _manifest_asset_url(
+        release,
+        source,
+        list_key="attach_files",
+        url_keys=("browserDownloadUrl", "browser_download_url", "download_url", "url"),
+    )
+
+
+def _manifest_asset_url(
+    release: Any,
+    source: str,
+    *,
+    list_key: str | None = None,
+    url_keys: tuple[str, ...] | None = None,
+) -> str:
+    if list_key is None or url_keys is None:
+        if source == _GITHUB_SOURCE:
+            list_key = "assets"
+            url_keys = ("browser_download_url", "browserDownloadUrl")
+        elif source == _GITEE_SOURCE:
+            list_key = "attach_files"
+            url_keys = ("browserDownloadUrl", "browser_download_url", "download_url", "url")
+        else:
+            raise RuntimeError(f"{source} has no release asset contract")
+    if not isinstance(release, dict):
+        raise RuntimeError(f"{source} latest release response was not an object")
+    assets = release.get(list_key)
+    if not isinstance(assets, list):
+        raise RuntimeError(f"{source} latest release response has no {list_key!r} list")
+    matches = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            raise RuntimeError(f"{source} latest release response has a malformed asset entry")
+        if asset.get("name") == _MANIFEST_ASSET_NAME:
+            matches.append(asset)
+    if not matches:
+        raise RuntimeError(f"{source} latest release has no {_MANIFEST_ASSET_NAME!r} asset")
+    if len(matches) != 1:
+        raise RuntimeError(f"{source} latest release has ambiguous duplicate {_MANIFEST_ASSET_NAME!r} assets")
+
+    asset = matches[0]
+    present_urls = [asset[key] for key in url_keys if key in asset]
+    if not present_urls or any(not isinstance(url, str) or not url.startswith("https://") for url in present_urls):
+        raise RuntimeError(f"{source} release manifest asset has no usable HTTPS URL")
+    if len(set(present_urls)) != 1:
+        raise RuntimeError(f"{source} release manifest asset has ambiguous download URLs")
+    return present_urls[0]
+
+
+def _fetch_manifest_asset(url: str, source: str) -> _ReleaseManifest:
+    raw = _fetch_bytes(
+        url,
+        headers={
+            "Accept": "application/octet-stream",
+            "User-Agent": "lingtai-kernel-nudge/1",
+        },
+    )
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"{source} release manifest was not valid JSON") from exc
+    manifest = _validate_release_manifest(data, source)
+    artifacts = [
+        (artifact.filename, artifact.sha256)
+        for artifact in manifest.artifacts
+    ]
+    artifact_bytes = json.dumps(
+        sorted(artifacts), separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return _ReleaseManifest(
+        source=source,
+        kernel_version=manifest.kernel_version,
+        manifest_sha256=hashlib.sha256(raw).hexdigest(),
+        artifact_hashes_sha256=hashlib.sha256(artifact_bytes).hexdigest(),
+    )
+
+
+def _validate_release_manifest(data: Any, source: str):
+    try:
+        return manifest_from_dict(data)
+    except ManifestError as exc:
+        raise RuntimeError(f"{source} release manifest is invalid: {exc}") from exc
+
+
+def _manifests_agree(left: _ReleaseManifest, right: _ReleaseManifest) -> bool:
+    return (
+        left.kernel_version == right.kernel_version
+        and left.manifest_sha256 == right.manifest_sha256
+        and left.artifact_hashes_sha256 == right.artifact_hashes_sha256
+    )
+
+
+def _coerce_observation(value: Any) -> _ReleaseObservation:
+    """Keep the old string test seam usable while production returns provenance."""
+    if isinstance(value, _ReleaseObservation):
+        return value
+    if isinstance(value, str):
+        return _ReleaseObservation(version=value, source="release-manifest")
+    if isinstance(value, Mapping) and isinstance(value.get("version"), str):
+        return _ReleaseObservation(
+            version=value["version"],
+            source=str(value.get("source") or "release-manifest"),
+            manifest_sha256=value.get("manifest_sha256"),
+            artifact_hashes_sha256=value.get("artifact_hashes_sha256"),
+        )
+    raise RuntimeError("release manifest observation had no kernel_version")
+
+
+def _mirror_mismatch_payload(manifests: Mapping[str, _ReleaseManifest]) -> dict[str, dict[str, str]]:
+    return {
+        source: {
+            "version": manifest.kernel_version,
+            "manifest_sha256": manifest.manifest_sha256,
+            "artifact_hashes_sha256": manifest.artifact_hashes_sha256,
+        }
+        for source, manifest in sorted(manifests.items())
+    }
+
+
+def _parse_version(value: object):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        from packaging.version import InvalidVersion, Version
+
+        return Version(value)
+    except (InvalidVersion, TypeError, ImportError):
+        return None
+
+
+def _compare_versions(running: object, installed: object) -> int | None:
+    running_version = _parse_version(running)
+    installed_version = _parse_version(installed)
+    if running_version is None or installed_version is None:
+        return None
+    return (running_version > installed_version) - (running_version < installed_version)
 
 
 def _is_newer(candidate: str, current: str) -> bool:
-    if not candidate or candidate == current:
-        return False
-    try:
-        from packaging.version import Version
-
-        return Version(candidate) > Version(current)
-    except Exception:
-        return _version_tuple(candidate) > _version_tuple(current)
-
-
-def _version_tuple(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in re.findall(r"\d+", version or ""))
+    candidate_version = _parse_version(candidate)
+    current_version = _parse_version(current)
+    return candidate_version is not None and current_version is not None and candidate_version > current_version
 
 
 def _today_utc() -> str:
     return datetime.now(timezone.utc).date().isoformat()
+
+
+def _clear_resolved_local_refresh_nudge(agent) -> None:
+    try:
+        from . import _current_entries, remove
+
+        if any(
+            entry.get("kind") == _KIND
+            and entry.get("source") in {"installed-distribution", "installed-distribution-diagnostic"}
+            for entry in _current_entries(agent)
+        ):
+            remove(agent, _KIND)
+    except Exception:
+        # Clearing a stale transport mirror is best-effort; remote observation
+        # remains fail-closed if a test double or store cannot be inspected.
+        pass
 
 
 def _persistent_path(agent) -> Path:

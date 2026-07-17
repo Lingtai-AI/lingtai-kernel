@@ -37,6 +37,7 @@ from release_manifest import (  # noqa: E402
     ReleaseManifest,
     classify_artifact,
     sha256_file,
+    validate_manifest_dict,
 )
 
 SIDECAR_SMOKE_SCRIPT = REPO_ROOT / "tests" / "test_wheel_sidecar_smoke.py"
@@ -123,7 +124,7 @@ def build_manifest(
 
     assert sdist_filename is not None  # discover_artifacts guarantees exactly one sdist
 
-    return ReleaseManifest(
+    manifest = ReleaseManifest(
         kernel_version=kernel_version,
         kernel_tag=kernel_tag,
         commit=commit,
@@ -131,6 +132,8 @@ def build_manifest(
         artifacts=tuple(artifacts),
         sdist_fallback=sdist_filename,
     )
+    validate_manifest_dict(manifest.to_dict())
+    return manifest
 
 
 def write_sha256sums(manifest: ReleaseManifest, out_path: Path) -> None:
