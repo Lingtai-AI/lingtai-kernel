@@ -3,6 +3,8 @@ related_files:
   - ANATOMY.md
   - src/lingtai/ANATOMY.md
   - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/tools/daemon/ANATOMY.md
+  - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/agent.py
   - src/lingtai/prompts/principle/principle.yaml
   - src/lingtai/prompts/principle/principle.md
@@ -93,10 +95,15 @@ For the generated `tools` section, `src/lingtai/kernel/base_agent/tools.py`
 collects canonical-English descriptions and parameter schemas, then appends the
 selected `glossary-{en,zh,wen}.md` body through
 `src/lingtai/kernel/tool_glossary.py`; English glossary bodies are deliberately
-empty. Daemon prompt construction follows the same package-owned glossary rule.
-This resident prompt path is intentionally separate from provider tool
-serialization, whose top-level description is always the fixed generic wire
-sentence and whose nested parameter schema remains canonical English.
+empty. The daemon is a sibling system-prompt variant, mapped through
+`src/lingtai/tools/daemon/ANATOMY.md` and implemented by
+`src/lingtai/tools/daemon/system_prompt.py`: it does not render this resident
+section stack or duplicate full tool descriptions. Instead it provides a short
+manual/tool/summary/compact/finish operating contract, compact host-tool names,
+oneshot context, and the task under a 20,000-character final budget. Both prompt
+paths remain separate from provider tool serialization, whose top-level
+description is always the fixed generic wire sentence and whose nested parameter
+schema remains canonical English.
 
 The `injection_contract` block in each YAML is the authority for which of these a
 section is: `defined_by`, `injected_by`, `content_source`, optional

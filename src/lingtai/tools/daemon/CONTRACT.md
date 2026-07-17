@@ -7,11 +7,12 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 4
+contract_version: 5
 last_changed_at: "2026-07-16"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/process_port.py
@@ -38,6 +39,7 @@ related_files:
   - tests/test_codex_standalone_compaction.py
 review_triggers:
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/run_dir.py
@@ -282,6 +284,19 @@ nonblank prompt is preserved byte-for-byte. It is never appended to the system
 task or sent to external CLI backends. `system_prompt` is removed with no alias:
 callers must migrate the complete instruction into `task`, and preflight
 rejects the obsolete field before a run directory is created.
+
+LingTai's final daemon system prompt is composed by the package-owned
+`system_prompt.py` from one concise operating contract, the available host-tool
+names, parent-provided one-run context, and the complete `task`. The provider's
+tool schemas remain authoritative and full tool descriptions are not duplicated
+inside the prompt. The operating contract requires progressive disclosure: read
+the relevant manual before first using a tool or workflow that has one; use a
+visible result tool's `summary=true` only for predictably bulky output whose
+exact raw text is unnecessary; and use daemon `compact`, never the unavailable
+parent `system.summarize`, for same-run context reset. The complete rendered
+string MUST be no more than 20,000 Python string characters. If task or selected
+skill/MCP context would exceed that budget, prompt construction fails before the
+LLM is scheduled and MUST NOT silently truncate any parent constraint.
 
 Every LingTai daemon receives `compact` automatically, independent of provider.
 Its `action` is required and accepts only explicit `run` or `manual`. Execution

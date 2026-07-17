@@ -34,7 +34,6 @@ if TYPE_CHECKING:
 
 from lingtai.kernel._fsutil import atomic_write_json
 from lingtai.kernel.llm.base import FunctionSchema
-from lingtai.kernel.tool_glossary import append_tool_glossary
 from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.tool_executor import ToolExecutor
 from lingtai.kernel.meta_block import attach_daemon_agent_meta
@@ -45,6 +44,7 @@ from lingtai.adapters.posix.process_identity import (
     process_identity_matches,
 )
 from .run_dir import DaemonRunDir
+from .system_prompt import build_daemon_system_prompt
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
 from .runtime import (
     kill_process_group as _runtime_kill_process_group,
@@ -1150,54 +1150,13 @@ def _build_emanation_prompt_standalone(
     schemas: list[FunctionSchema],
     system_prompt: str | None = None,
 ) -> str:
-    """Pure emanation-system-prompt builder — the body of
-    ``DaemonManager._build_emanation_prompt``, factored out so the detached
-    daemon supervisor (``lingtai.tools.daemon.supervisor_runtime``,
-    which has no live parent ``Agent`` to read ``_config.language`` from)
-    can build an identical prompt from just the resolved ``language`` string
-    persisted in its run manifest.
-    """
-    lines = [
-        "You are a daemon emanation (分神) — a focused subagent dispatched by an agent.",
-        "You have one task. Complete it, then provide your final report as text.",
-        "Your intermediate text output will be seen by the main agent — treat it as a progress report.",
-        "When the completion MCP is available, call its finish tool before your final report.",
-        "",
-        "You work in the agent's working directory. Other subagents may be working",
-        "concurrently on different tasks in the same directory. Do not modify files",
-        "outside your assigned scope.",
-    ]
-
-    tool_lines = []
-    for s in schemas:
-        if s.description:
-            rendered = append_tool_glossary(
-                s.description, tool_package=s.glossary_package, language=language
-            )
-            tool_lines.append(f"### {s.name}\n{rendered}")
-    if tool_lines:
-        lines.append("")
-        lines.append("## tools")
-        lines.extend(tool_lines)
-
-    if system_prompt:
-        lines.append("")
-        lines.append("## Parent-provided daemon context (oneshot)")
-        lines.append(
-            "These parent instructions and selected skills/MCP context "
-            "apply only to this daemon run. They may narrow how you complete "
-            "the task, "
-            "but they do not override the daemon lifecycle, cancellation/"
-            "timeout limits, available tool schema, or tool execution/"
-            "approval guard."
-        )
-        lines.append(system_prompt)
-
-    lines.append("")
-    lines.append("Your task:")
-    lines.append(task)
-
-    return "\n".join(lines)
+    """Build the bounded LingTai daemon prompt for parent and supervisor paths."""
+    _ = language  # The dedicated daemon operating contract is canonical English.
+    return build_daemon_system_prompt(
+        task=task,
+        tool_names=(schema.name for schema in schemas),
+        oneshot_context=system_prompt,
+    )
 
 
 _CANCELLED_SENTINEL = "[cancelled]"

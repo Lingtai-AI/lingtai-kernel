@@ -6,11 +6,12 @@ description: >
   hunch, understand `daemon(action="list")`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.8.0
+version: 0.9.0
 last_changed_at: "2026-07-16"
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
+- src/lingtai/tools/daemon/system_prompt.py
 - src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
@@ -93,6 +94,14 @@ files, not standalone top-level skills.
 - Keep daemon lightweight. If the task needs long-lived persona, molt/pad,
   durable knowledge, or ongoing ownership, spawn an avatar/agent instead of
   stretching daemon.
+- Every LingTai daemon receives a short package-owned operating prompt before
+  the parent task. It tells the worker to read a relevant manual before first
+  using a tool/workflow that has one, use a visible result tool's `summary=true`
+  only for predictable bulky output whose exact raw text is unnecessary, use
+  daemon `compact` rather than the unavailable parent `system.summarize`, and
+  finish truthfully. The complete rendered system prompt is capped at 20,000
+  characters and fails instead of truncating task/skill/MCP context. Keep the
+  run-specific objective, authority, safety boundary, and deliverable in `task`.
 - Think of each task item as **task objective + behavior guidance + tool
   surface**:
   - `task` is the complete parent-controlled daemon system instruction:
