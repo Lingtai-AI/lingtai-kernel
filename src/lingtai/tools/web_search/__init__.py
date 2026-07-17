@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .._manual import load_installed_manual
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -23,16 +24,17 @@ PROVIDERS = {
 }
 
 def get_description(lang: str = "en") -> str:
-    return 'Search the web for current information. Use for real-time data, recent events, documentation, or anything beyond your training knowledge. Returns ranked search results with titles, URLs, and snippets. Before using this tool, read the `web-browsing` skill — it covers fetching specific URLs, PDF download, JS-rendered pages, scraping with stealth, and fallback APIs; no exceptions.'
+    return "Search the web for current information. Use for real-time data, recent events, documentation, or anything beyond your training knowledge. Returns ranked search results with titles, URLs, and snippets. Call web_search(action='manual') to return the installed web-search-manual bundle. Before ordinary searches, read that manual — it covers fetching specific URLs, PDF download, JS-rendered pages, scraping with stealth, and fallback APIs; no exceptions."
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": 'Search query'},
+            "action": {"type": "string", "enum": ["manual"], "description": "Use action='manual' to return the installed web-search-manual bundle without performing a search."},
+            "query": {"type": "string", "description": "Search query. Required for ordinary searches; omit for action='manual'."},
         },
-        "required": ["query"],
+        "required": [],
     }
 
 
@@ -49,6 +51,8 @@ class WebSearchManager:
         self._search_service = search_service
 
     def handle(self, args: dict) -> dict:
+        if args.get("action") == "manual":
+            return load_installed_manual(self._agent, "web_search")
         query = args.get("query")
         if not query:
             return {"status": "error", "message": "Missing required parameter: query"}

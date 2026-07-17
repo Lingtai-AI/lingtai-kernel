@@ -39,6 +39,7 @@ from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.tool_executor import ToolExecutor
 from lingtai.kernel.meta_block import attach_daemon_agent_meta
 from lingtai.kernel.trace_redaction import redact_text
+from .._manual import load_installed_manual
 from lingtai.adapters.posix.process_identity import (
     process_identity,
     process_identity_matches,
@@ -1005,7 +1006,7 @@ class _ToolCollector:
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Actions: emanate (dispatch), list (status), ask (follow-up), check (inspect recent events), reclaim (kill all). Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", id=...). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions.'
+    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Actions: emanate (dispatch), list (status), ask (follow-up), check (inspect recent events), reclaim (kill all), manual (return the installed daemon-manual skill). Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", id=...). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -1014,8 +1015,8 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["emanate", "list", "ask", "check", "reclaim"],
-                "description": "Action to perform: 'emanate' (dispatch subagents), 'list' (show status), 'ask' (follow-up message), 'check' (read recent events of one emanation), 'reclaim' (kill all). LingTai emanations additionally receive compact(action='manual') for read-only procedures or explicit compact(action='run', _reason='...') for the non-terminal sole-call reset; action is required.",
+                "enum": ["emanate", "list", "ask", "check", "reclaim", "manual"],
+                "description": "Action to perform: 'emanate' (dispatch subagents), 'list' (show status), 'ask' (follow-up message), 'check' (read recent events of one emanation), 'reclaim' (kill all), 'manual' (return the installed daemon-manual skill). LingTai emanations additionally receive compact(action='manual') for read-only compaction procedures or explicit compact(action='run', _reason='...') for the non-terminal sole-call reset; action is required.",
             },
             "tasks": {
                 "type": "array",
@@ -1527,6 +1528,8 @@ class DaemonManager:
 
     def handle(self, args: dict) -> dict:
         action = args.get("action")
+        if action == "manual":
+            return load_installed_manual(self._agent, "daemon")
         backend = _normalize_backend(args.get("backend", "lingtai"))
         if action == "emanate":
             return self._handle_emanate(

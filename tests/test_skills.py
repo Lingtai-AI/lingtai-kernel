@@ -184,6 +184,13 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "reference/scheduled-work/SKILL.md" in bash_body
         assert "reference/notification-reminders/SKILL.md" in bash_body
         assert "reference/debugging-cleanup/SKILL.md" in bash_body
+
+        web_search_root = (
+            workdir / ".library" / "intrinsic" / "capabilities" / "web_search"
+        )
+        assert "name: web-search-manual" in (web_search_root / "SKILL.md").read_text(encoding="utf-8")
+        assert (web_search_root / "scripts" / "extract_page.py").is_file()
+        assert (web_search_root / "reference" / "tier-quick-refs" / "SKILL.md").is_file()
         for moved_reference in (
             "reference/bash-claude-code/SKILL.md",
             "reference/bash-openai-codex/SKILL.md",

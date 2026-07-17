@@ -5,7 +5,7 @@ from .primitives import mode_field
 
 
 def get_description(lang: str = "en") -> str:
-    return 'LingTai email protocol within your .lingtai/ network — NOT real internet email (for Gmail/Outlook use the imap tool). Addresses are bare paths under .lingtai/ with no @ signs (e.g. human for the operator). Reply discipline: always reply on the channel the message arrived on; prefer reply over send. Never reply via text output — that is your private diary, not a comms channel. Always address people by sender_nickname if set, else sender_name. For detailed usage, see the email-manual skill.'
+    return "LingTai email protocol within your .lingtai/ network — NOT real internet email (for Gmail/Outlook use the imap tool). Addresses are bare paths under .lingtai/ with no @ signs (e.g. human for the operator). Reply discipline: always reply on the channel the message arrived on; prefer reply over send. Never reply via text output — that is your private diary, not a comms channel. Always address people by sender_nickname if set, else sender_name. Call email(action='manual') to return the installed email-manual skill."
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -18,8 +18,9 @@ def get_schema(lang: str = "en") -> dict:
                     "send", "check", "read", "dismiss", "reply", "reply_all",
                     "search", "archive", "delete",
                     "contacts", "add_contact", "remove_contact", "edit_contact",
+                    "manual",
                 ],
-                "description": 'send: send with optional cc/bcc (requires address, message; message body max 50,000 chars because unread bodies are injected in full into persistent notifications). check: list mailbox with preview of each email (up to 500 chars). read: fetch inbox emails by ID list (email_id=[id1, id2, ...]) AND marks each as read; ordinary unread content is already injected in notification_persistent.email, so prefer dismiss when you only need to clear handled mail. dismiss: same read-state effect as read but returns no bodies — preferred after handling content visible in persistent notification. reply: reply to email (requires email_id, message). reply_all: reply to all recipients. search: regex search mailbox. archive/delete: move/remove from inbox or archive. contacts/add_contact/remove_contact/edit_contact manage contacts.',
+                "description": 'send: send with optional cc/bcc (requires address, message; message body max 50,000 chars because unread bodies are injected in full into persistent notifications). check: list mailbox with preview of each email (up to 500 chars). read: fetch inbox emails by ID list (email_id=[id1, id2, ...]) AND marks each as read; ordinary unread content is already injected in notification_persistent.email, so prefer dismiss when you only need to clear handled mail. dismiss: same read-state effect as read but returns no bodies — preferred after handling content visible in persistent notification. reply: reply to email (requires email_id, message). reply_all: reply to all recipients. search: regex search mailbox. archive/delete: move/remove from inbox or archive. contacts/add_contact/remove_contact/edit_contact manage contacts. manual returns the installed email-manual skill without reading or changing mailbox state.',
             },
             "address": {
                 "oneOf": [

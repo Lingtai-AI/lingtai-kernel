@@ -264,7 +264,7 @@ class TestBashAsync:
 
     def test_schema_requires_reminder_with_runtime_default(self, tmp_path):
         schema = get_schema()
-        assert "reminder" in schema["required"]
+        assert "reminder" not in schema["required"]  # manual has no action-specific inputs
         assert schema["properties"]["reminder"]["default"] == 1800.0
 
         mgr = self._make_manager(tmp_path)
