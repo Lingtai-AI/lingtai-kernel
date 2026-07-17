@@ -9,7 +9,11 @@ text.
 """
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import yaml
 
@@ -316,3 +320,58 @@ def test_gitee_only_recovery_does_not_build_sync_or_publish_to_github():
     ):
         assert forbidden not in recovery_text
     assert "gh release download" in recovery_text
+
+
+def test_gitee_only_downloaded_manifest_is_bound_to_requested_tag_and_checkout(tmp_path):
+    job = _recovery_job(_load_workflow())
+    steps = job["steps"]
+    names = [step.get("name", "") for step in steps]
+    download_index = names.index("Download exact GitHub release assets")
+    verify_index = names.index("Verify downloaded manifest matches requested release")
+    publish_index = names.index("Resume Gitee publication (idempotent bounded retry)")
+    assert download_index < verify_index < publish_index
+
+    verifier = steps[verify_index]
+    assert verifier["shell"] == "bash"
+    assert verifier["env"] == {"RELEASE_TAG": "${{ inputs.release_tag }}"}
+    shell_script = verifier["run"]
+    assert 'export EXPECTED_COMMIT="$(git rev-parse HEAD)"' in shell_script
+    assert "data.get(\"kernel_tag\")" in shell_script
+    assert "data.get(\"commit\")" in shell_script
+    marker = "python - <<'PY'\n"
+    assert marker in shell_script and "\nPY" in shell_script
+    verifier_code = shell_script.split(marker, 1)[1].rsplit("\nPY", 1)[0]
+
+    assets = tmp_path / "release-assets"
+    assets.mkdir()
+    manifest_path = assets / "lingtai-kernel-release-manifest.json"
+    expected_tag = "v0.17.1"
+    expected_commit = "a" * 40
+    env = {
+        **os.environ,
+        "RELEASE_TAG": expected_tag,
+        "EXPECTED_COMMIT": expected_commit,
+    }
+
+    def run_verifier(manifest: dict) -> subprocess.CompletedProcess[str]:
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, "-c", verifier_code],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    matching = run_verifier({"kernel_tag": expected_tag, "commit": expected_commit.upper()})
+    assert matching.returncode == 0, matching.stderr
+    assert "target verified" in matching.stdout
+
+    wrong_tag = run_verifier({"kernel_tag": "v0.17.0", "commit": expected_commit})
+    assert wrong_tag.returncode != 0
+    assert "kernel_tag" in wrong_tag.stderr and "requested release tag" in wrong_tag.stderr
+
+    wrong_commit = run_verifier({"kernel_tag": expected_tag, "commit": "b" * 40})
+    assert wrong_commit.returncode != 0
+    assert "manifest commit" in wrong_commit.stderr and "checked-out commit" in wrong_commit.stderr

@@ -475,6 +475,35 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --dir release-assets
 
+      - name: Verify downloaded manifest matches requested release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          export EXPECTED_COMMIT="$(git rev-parse HEAD)"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("release-assets/lingtai-kernel-release-manifest.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          expected_tag = os.environ["RELEASE_TAG"]
+          expected_commit = os.environ["EXPECTED_COMMIT"].lower()
+          actual_tag = data.get("kernel_tag")
+          actual_commit = data.get("commit")
+          if actual_tag != expected_tag:
+              raise SystemExit(
+                  f"downloaded manifest kernel_tag {actual_tag!r} does not match requested release tag {expected_tag!r}"
+              )
+          if not isinstance(actual_commit, str) or actual_commit.lower() != expected_commit:
+              raise SystemExit(
+                  f"downloaded manifest commit {actual_commit!r} does not match checked-out commit {expected_commit!r}"
+              )
+          print(f"Downloaded manifest target verified: {expected_tag} at {expected_commit[:12]}.")
+          PY
+
       - name: Resume Gitee publication (idempotent bounded retry)
         shell: bash
         env:
