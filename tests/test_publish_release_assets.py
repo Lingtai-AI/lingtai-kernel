@@ -298,6 +298,94 @@ def test_plan_gitee_uploads_same_byte_collision_skips_without_upload(tmp_path, m
     assert "existing bytes sha256" in capsys.readouterr().out
 
 
+def test_plan_gitee_uploads_reads_actual_assets_schema(tmp_path, monkeypatch):
+    manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
+    wheel = manifest.artifacts[0].filename
+    monkeypatch.setattr(
+        pub,
+        "_gitee_request",
+        lambda *a, **k: {"assets": [{"name": wheel, "browser_download_url": "https://gitee.test/wheel"}]},
+    )
+    monkeypatch.setattr(pub.urllib.request, "urlopen", lambda *a, **k: _FakeResponse((assets_dir / wheel).read_bytes()))
+    to_upload = pub.plan_gitee_uploads(manifest, assets_dir, manifest_path, "owner", "repo", 1, "tok")
+    assert wheel not in {path.name for path in to_upload}
+
+
+def test_plan_gitee_uploads_groups_same_url_duplicates_warns_and_hash_skips_canonical_url(
+    tmp_path, monkeypatch, recwarn
+):
+    manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
+    wheel = manifest.artifacts[0].filename
+    canonical_url = "https://gitee.test/attachments/42"
+    monkeypatch.setattr(
+        pub,
+        "_gitee_request",
+        lambda *a, **k: {
+            "assets": [
+                {"id": 42, "name": wheel, "browserDownloadUrl": canonical_url},
+                {"id": 43, "name": wheel, "browser_download_url": canonical_url},
+            ]
+        },
+    )
+    downloaded = []
+
+    def fake_urlopen(request, timeout):
+        downloaded.append(request.full_url.split("?", 1)[0])
+        return _FakeResponse((assets_dir / wheel).read_bytes())
+
+    monkeypatch.setattr(pub.urllib.request, "urlopen", fake_urlopen)
+    to_upload = pub.plan_gitee_uploads(manifest, assets_dir, manifest_path, "owner", "repo", 1, "tok")
+    assert wheel not in {path.name for path in to_upload}
+    assert downloaded == [canonical_url]
+    assert len(recwarn) == 1
+    assert "duplicate attachment" in str(recwarn[0].message)
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        (
+            [
+                {"name": "TARGET", "browser_download_url": "https://gitee.test/1"},
+                {"name": "TARGET", "browser_download_url": "https://gitee.test/2"},
+            ],
+            "divergent download URLs",
+        ),
+        (
+            [
+                {"name": "TARGET", "browser_download_url": "https://gitee.test/1"},
+                {"name": "TARGET"},
+            ],
+            "no usable download URL",
+        ),
+        (
+            [
+                {"name": "TARGET", "browser_download_url": "https://gitee.test/1"},
+                {"name": "TARGET", "browser_download_url": "http://gitee.test/1"},
+            ],
+            "no usable download URL",
+        ),
+        (
+            [
+                {
+                    "name": "TARGET",
+                    "browserDownloadUrl": "https://gitee.test/1",
+                    "browser_download_url": "https://gitee.test/2",
+                },
+                {"name": "TARGET", "browser_download_url": "https://gitee.test/1"},
+            ],
+            "ambiguous download URLs",
+        ),
+    ],
+)
+def test_plan_gitee_uploads_duplicate_metadata_fails_closed(tmp_path, monkeypatch, rows, message):
+    manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
+    rows = [{**row, "name": manifest.artifacts[0].filename} for row in rows]
+    monkeypatch.setattr(pub, "_gitee_request", lambda *a, **k: {"assets": rows})
+    with pytest.raises(pub.PublishError, match=message):
+        pub.plan_gitee_uploads(manifest, assets_dir, manifest_path, "owner", "repo", 1, "tok")
+
+
 def test_plan_gitee_uploads_mismatch_fails_before_upload(tmp_path, monkeypatch):
     manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
     conflicting_name = manifest.artifacts[0].filename
@@ -327,11 +415,15 @@ def test_plan_gitee_uploads_download_failure_fails_loud(tmp_path, monkeypatch):
         pub.plan_gitee_uploads(manifest, assets_dir, manifest_path, "owner", "repo", 1, "tok")
 
 
-def test_plan_gitee_uploads_duplicate_name_is_ambiguous(tmp_path, monkeypatch):
+def test_plan_gitee_uploads_duplicate_name_missing_url_fails_loud(tmp_path, monkeypatch):
     manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
     name = manifest.artifacts[0].filename
-    monkeypatch.setattr(pub, "_gitee_request", lambda *a, **k: {"attach_files": [{"name": name}, {"name": name}]})
-    with pytest.raises(pub.PublishError, match="ambiguous duplicate"):
+    monkeypatch.setattr(
+        pub,
+        "_gitee_request",
+        lambda *a, **k: {"attach_files": [{"name": name}, {"name": name, "url": "https://gitee.test/wheel"}]},
+    )
+    with pytest.raises(pub.PublishError, match="no usable download URL"):
         pub.plan_gitee_uploads(manifest, assets_dir, manifest_path, "owner", "repo", 1, "tok")
 
 
@@ -432,3 +524,11 @@ def test_main_rejects_tampered_asset_before_any_upload(tmp_path, monkeypatch):
             "--assets-dir", str(assets_dir),
             "--skip-gitee",
         ])
+
+
+def test_publisher_has_no_delete_replace_or_github_mutation_path():
+    text = Path(pub.__file__).read_text(encoding="utf-8")
+    assert "gh release delete" not in text
+    assert "gh release replace" not in text
+    assert "gitee_delete" not in text
+    assert "gitee_replace" not in text
