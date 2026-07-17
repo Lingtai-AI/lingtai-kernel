@@ -4256,14 +4256,8 @@ def test_daemon_tool_executor_wires_summary_gateway_and_preserves_raw_log(tmp_pa
     mgr._emanations["em-summary"] = {
         "followup_buffer": "", "followup_lock": threading.Lock(), "run_dir": run_dir,
     }
-    # Production detached daemons bind the supervisor Agent stub's log sink to
-    # this run directory. Reproduce that exact composition instead of the
-    # ordinary parent Agent logger used by the unit-test helper.
-    monkeypatch.setattr(
-        agent,
-        "_log",
-        lambda event, **fields: run_dir.append_event(event, **fields),
-    )
+    # Match the detached supervisor's run-local log sink.
+    monkeypatch.setattr(agent, "_log", run_dir.append_event)
 
     result = mgr._run_emanation(
         "em-summary", run_dir, *mgr._build_tool_surface(["file"]),
@@ -4282,22 +4276,18 @@ def test_daemon_tool_executor_wires_summary_gateway_and_preserves_raw_log(tmp_pa
     assert "DAEMON-RAW-MARKER" not in worker_visible
 
     locator = worker_payload["raw_locator"]
-    expected_log = run_dir.events_path.relative_to(agent._working_dir).as_posix()
-    assert locator["log"] == expected_log
+    assert locator["log"] == run_dir.events_path.relative_to(agent._working_dir).as_posix()
     assert locator["event_type"] == "daemon_tool_result"
-    assert locator["tool_call_id"] == "tc-daemon-summary"
-
-    located_path = agent._working_dir / locator["log"]
     located_events = [
-        json.loads(line) for line in located_path.read_text(encoding="utf-8").splitlines()
+        json.loads(line)
+        for line in (agent._working_dir / locator["log"]).read_text(encoding="utf-8").splitlines()
     ]
-    raw_events = [
-        event
-        for event in located_events
-        if event.get("event") == locator["event_type"]
+    assert any(
+        event.get("event") == locator["event_type"]
         and event.get("tool_call_id") == locator["tool_call_id"]
-    ]
-    assert any("DAEMON-RAW-MARKER" in str(event.get("result")) for event in raw_events)
+        and "DAEMON-RAW-MARKER" in str(event.get("result"))
+        for event in located_events
+    )
     daemon_rows = [json.loads(line) for line in run_dir.token_ledger_path.read_text().splitlines()]
     assert any(row["input"] == 11 and row["output"] == 7 and row["source"] == "daemon" for row in daemon_rows)
     parent_rows = [json.loads(line) for line in (agent._working_dir / "logs" / "token_ledger.jsonl").read_text().splitlines()]

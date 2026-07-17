@@ -190,12 +190,6 @@ def _resolve_raw_log_path(raw_log_path: str | None) -> str:
     return normalized or EVENTS_LOG_RELPATH
 
 
-def _resolve_raw_event_type(raw_event_type: str | None) -> str:
-    """Return the durable event name used by locator metadata."""
-    normalized = (raw_event_type or "").strip()
-    return normalized or "tool_result"
-
-
 def _retrieval_hint(
     tool_call_id: str | None,
     *,
@@ -219,21 +213,16 @@ def _retrieval_hint(
 
 def _raw_locator(
     tool_call_id: str | None,
-    *,
     raw_log_path: str | None = None,
     raw_event_type: str | None = None,
 ) -> dict:
     """Structured, machine-readable sibling of ``_retrieval_hint``.
 
-    Both point at the same preserved raw event keyed by ``tool_call_id``.
-    Main-agent callers default to ``logs/events.jsonl`` / ``tool_result``;
-    daemon callers supply their run-local log path / ``daemon_tool_result``.
-    The hint is prose for the model to read, while the locator is fields for
-    tooling to consume without parsing that prose. Stamped on every a-priori
-    payload (success, refusal, error).
+    Main agents use ``logs/events.jsonl`` / ``tool_result``; daemons pass
+    their run-local log and ``daemon_tool_result`` event.
     """
     log_path = _resolve_raw_log_path(raw_log_path)
-    event_type = _resolve_raw_event_type(raw_event_type)
+    event_type = (raw_event_type or "").strip() or "tool_result"
     return {
         "tool_call_id": tool_call_id,
         "log": log_path,
@@ -293,11 +282,7 @@ def build_summary_replacement(
         "summary_reason": (reason or "").strip() or None,
         "canonical": False,
         "raw_preserved": True,
-        "raw_locator": _raw_locator(
-            tool_call_id,
-            raw_log_path=raw_log_path,
-            raw_event_type=raw_event_type,
-        ),
+        "raw_locator": _raw_locator(tool_call_id, raw_log_path, raw_event_type),
         "retrieval_hint": _retrieval_hint(tool_call_id, raw_log_path=raw_log_path),
     }
 
@@ -328,11 +313,7 @@ def build_cap_refusal(
         "summary_input_chars": 0,
         "summary_input_truncated": False,
         "cap_chars": APRIORI_SUMMARY_CAP,
-        "raw_locator": _raw_locator(
-            tool_call_id,
-            raw_log_path=raw_log_path,
-            raw_event_type=raw_event_type,
-        ),
+        "raw_locator": _raw_locator(tool_call_id, raw_log_path, raw_event_type),
         "message": (
             f"summary=true was requested, but the tool result is "
             f"{original_visible_chars} characters, which exceeds the "
@@ -386,11 +367,7 @@ def build_summary_error(
         "original_visible_chars": original_visible_chars,
         "summary_input_chars": summary_input_chars,
         "summary_input_truncated": summary_input_truncated,
-        "raw_locator": _raw_locator(
-            tool_call_id,
-            raw_log_path=raw_log_path,
-            raw_event_type=raw_event_type,
-        ),
+        "raw_locator": _raw_locator(tool_call_id, raw_log_path, raw_event_type),
         "error": sanitize_error_text(error),
         "message": (
             "summary=true was requested, but generating the summary failed. The "
@@ -446,6 +423,7 @@ def maybe_summarize_result(
         return result
 
     original_visible_chars = formal_tool_result_visible_len(result)
+    locator_kwargs = {"raw_log_path": raw_log_path, "raw_event_type": raw_event_type}
 
     def _log(event: str, **fields: Any) -> None:
         if logger_fn is not None:
@@ -472,8 +450,7 @@ def maybe_summarize_result(
                 "a-priori summary requested but no summarizer gateway is "
                 "configured on this agent; raw not placed in context"
             ),
-            raw_log_path=raw_log_path,
-            raw_event_type=raw_event_type,
+            **locator_kwargs,
         )
 
     if original_visible_chars > APRIORI_SUMMARY_CAP:
@@ -486,8 +463,7 @@ def maybe_summarize_result(
             tool_name=tool_name,
             tool_call_id=tool_call_id,
             original_visible_chars=original_visible_chars,
-            raw_log_path=raw_log_path,
-            raw_event_type=raw_event_type,
+            **locator_kwargs,
         )
 
     reason = ""
@@ -519,8 +495,7 @@ def maybe_summarize_result(
             error=f"{type(exc).__name__}: {exc}",
             summary_input_chars=summary_input_chars,
             summary_input_truncated=summary_input_truncated,
-            raw_log_path=raw_log_path,
-            raw_event_type=raw_event_type,
+            **locator_kwargs,
         )
 
     if not isinstance(summary_text, str) or not summary_text.strip():
@@ -535,8 +510,7 @@ def maybe_summarize_result(
             error="summarizer returned an empty or non-text summary",
             summary_input_chars=summary_input_chars,
             summary_input_truncated=summary_input_truncated,
-            raw_log_path=raw_log_path,
-            raw_event_type=raw_event_type,
+            **locator_kwargs,
         )
 
     summary_chars = len(summary_text)
@@ -563,8 +537,7 @@ def maybe_summarize_result(
         original_visible_chars=original_visible_chars,
         summary_input_chars=summary_input_chars,
         summary_input_truncated=summary_input_truncated,
-        raw_log_path=raw_log_path,
-        raw_event_type=raw_event_type,
+        **locator_kwargs,
     )
 
 

@@ -103,11 +103,9 @@ files, not standalone top-level skills.
   characters and fails instead of truncating task/skill/MCP context. Keep the
   run-specific objective, authority, safety boundary, and deliverable in `task`.
 - On the LingTai backend, explicit `summary=true` uses a daemon-local,
-  no-tools session on the same effective service, provider, and model.
-  `ToolExecutor` logs the raw result first through the daemon logger into the
-  run-local `daemons/<run-id>/logs/events.jsonl` as `daemon_tool_result`, then
-  returns only the generated summary or fail-closed refusal/error with that
-  exact recovery locator to the worker.
+  no-tools session on the same effective service, provider, and model. It keeps
+  raw output in the run-local `logs/events.jsonl` and returns the generated
+  summary (or fail-closed error) with the exact recovery locator.
 - Think of each task item as **task objective + behavior guidance + tool
   surface**:
   - `task` is the complete parent-controlled daemon system instruction:

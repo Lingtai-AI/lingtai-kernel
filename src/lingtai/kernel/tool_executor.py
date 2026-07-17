@@ -124,9 +124,7 @@ class ToolExecutor:
         # ``summary=true`` fails closed to a summary-layer error (the raw is
         # never dumped into context); see ``maybe_summarize_result``.
         self._summarizer_fn = summarizer_fn
-        # Relative path beneath the caller's workdir and event name where
-        # the durable raw result can be recovered. Main agents use the summary
-        # layer defaults; daemons supply their run-local path and event type.
+        # Main agents use summary defaults; daemons pass their run-local locator.
         self._raw_log_path = raw_log_path
         self._raw_event_type = raw_event_type
         # Per-call capture stays outside handler payloads.  The entry is

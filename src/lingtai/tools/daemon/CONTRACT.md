@@ -363,12 +363,10 @@ kernel `ToolExecutor`. The closure:
 - accounts usage through `DaemonRunDir.append_tokens`, keeping daemon and parent
   ledgers consistent.
 
-`ToolExecutor` remains responsible for the explicit `summary=true` gate, raw
-logging before replacement, fail-closed error/refusal behavior, and the 500,000
-character cap. The daemon logger preserves the raw result in the run-local
-`daemons/<run-id>/logs/events.jsonl` as `daemon_tool_result`; the worker-visible
-summary exposes that exact path and event type as its recovery locator. The
-closure is inert unless a tool explicitly requests `summary=true`.
+`ToolExecutor` remains responsible for the `summary=true` gate, raw logging,
+fail-closed replacement, and the 500,000-character cap. Daemons expose the
+run-local `logs/events.jsonl` / `daemon_tool_result` recovery locator. The closure
+is inert unless a tool explicitly requests `summary=true`.
 
 ## Backend Support Matrix
 
