@@ -171,10 +171,10 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
 - [`scripts/`](scripts/) — root utility/checker scripts, including the
   docs-governance validator described below and the release-manifest
   generator/publisher/Gitee-mirror-sync scripts described in
-  [`RELEASING.md`](RELEASING.md). `wheels.yml`'s `release-manifest` job
-  actually invokes these with `--execute` on a real `release.published`
-  event (or an explicit `workflow_dispatch` with `publish: true`) — every
-  other trigger shape stays dry-run.
+  [`RELEASING.md`](RELEASING.md). A manual `wheels.yml` prerelease run invokes
+  only the generator and freezes one complete `release-bundle`; the mirror
+  sync and publisher are separate, explicitly authorized mechanical-release
+  commands and never run inside that workflow.
 - [`.github/`](.github/) — GitHub Actions, issue templates, and pull request
   templates.
 - [`crates/lingtai-search-sidecar/`](crates/lingtai-search-sidecar/) — Rust file
