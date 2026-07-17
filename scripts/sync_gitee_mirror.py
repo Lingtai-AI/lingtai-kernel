@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import stat
 import subprocess
 import sys
@@ -48,20 +49,25 @@ def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> su
     return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
 
 
-def _write_askpass_helper(token: str) -> Path:
-    """Write a private (0600) askpass helper script that prints the token.
+def _write_askpass_helper(username: str, token: str) -> Path:
+    """Write a private askpass helper that keeps username/password distinct.
 
-    git invokes this as `<helper> <prompt>`; it must print the credential to
-    stdout and nothing else. Using GIT_ASKPASS instead of embedding the token
-    in the remote URL keeps the token out of `git remote -v`, process argv
-    visible via `ps`, and any URL that might appear in a git error message.
+    Git invokes the helper once for the HTTPS username and again for the
+    password.  Gitee expects the account username for the first prompt and the
+    personal access token for the second; returning the token for both prompts
+    is rejected as ``The token username invalid``.  Shell-quote both values so
+    neither credential is interpreted as helper source.
     """
     fd, path_str = tempfile.mkstemp(prefix="gitee-askpass-", suffix=".sh")
     path = Path(path_str)
     with os.fdopen(fd, "w") as f:
         f.write("#!/bin/sh\n")
-        f.write(f'printf "%s\\n" "{token}"\n')
-    path.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)  # 0600 + exec, owner-only
+        f.write('case "$1" in\n')
+        f.write(f'  *Username*) printf "%s\\n" {shlex.quote(username)} ;;\n')
+        f.write(f'  *Password*) printf "%s\\n" {shlex.quote(token)} ;;\n')
+        f.write('  *) exit 1 ;;\n')
+        f.write('esac\n')
+    path.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)  # 0700, owner-only
     return path
 
 
@@ -73,9 +79,10 @@ def sync_mirror(
     branch: str,
     token: str,
     execute: bool,
+    username: str | None = None,
 ) -> None:
     gitee_url = f"https://gitee.com/{owner}/{repo}.git"
-    askpass_path = _write_askpass_helper(token)
+    askpass_path = _write_askpass_helper(username or owner, token)
     try:
         env = dict(os.environ)
         env["GIT_ASKPASS"] = str(askpass_path)
@@ -126,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", required=True, help="full commit SHA to synchronize")
     parser.add_argument("--tag", required=True, help="release tag to synchronize, e.g. v0.16.4")
     parser.add_argument("--branch", default="main")
+    parser.add_argument("--username", help="Gitee HTTPS username; defaults to --owner")
     parser.add_argument("--token-env", default="GITEE_ACCESS_TOKEN", help="env var holding the Gitee token; never printed")
     parser.add_argument("--execute", action="store_true", help="actually push; default is dry-run/plan-only")
     args = parser.parse_args(argv)
@@ -136,7 +144,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        sync_mirror(args.owner, args.repo, args.commit, args.tag, args.branch, token, args.execute)
+        sync_mirror(
+            args.owner,
+            args.repo,
+            args.commit,
+            args.tag,
+            args.branch,
+            token,
+            args.execute,
+            username=args.username,
+        )
     except SyncError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
