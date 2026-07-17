@@ -166,8 +166,9 @@ files, not standalone top-level skills.
   resets context, requires no `_reason`, and may be called to inspect the
   procedure before deciding whether to compact. When the daemon reports
   `context warning, consider compact! see compact.manual for procedures`, prepare
-  the complete handoff first, then call the default `compact` action alone in its
-  assistant batch. Resume from the surviving call/result pair after the result;
+  the complete handoff first, then call
+  `compact(action="run", _reason="...")` alone in its assistant batch. Resume
+  from the surviving call/result pair after the result;
   do not rely on erased history or treat the reset as terminal.
 - Every LingTai daemon tool batch ends with a canonical `_meta.agent_meta`
   snapshot on its newest final `ToolResultBlock`. Read `agent_state.daemon` for

@@ -284,9 +284,9 @@ callers must migrate the complete instruction into `task`, and preflight
 rejects the obsolete field before a run directory is created.
 
 Every LingTai daemon receives `compact` automatically, independent of provider.
-Its `action` defaults to `run` for backward compatibility. The `run` action takes
-only the canonical `_reason`, which must be a non-empty string and is the complete
-self-contained handoff; it must be the sole tool call in its assistant batch. The
+Its `action` is required and accepts only explicit `run` or `manual`. Execution
+uses `compact(action="run", _reason="...")` as the sole assistant-batch tool call;
+its canonical `_reason` must be a non-empty, complete self-contained handoff. The
 sole compact call/result pair survives a same-run provider-context reset beside
 the rebuilt system prompt; the result contains status, resume instruction, and
 exact run/state/history/event paths. It is repeatable and non-terminal. The
