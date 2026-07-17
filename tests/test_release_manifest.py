@@ -142,6 +142,25 @@ def test_validate_manifest_dict_accepts_valid():
     validate_manifest_dict(_valid_manifest_dict())  # no raise
 
 
+def test_validate_manifest_dict_rejects_unknown_keys():
+    top_level = _valid_manifest_dict()
+    top_level["unexpected"] = True
+    with pytest.raises(ManifestError, match="unknown top-level keys"):
+        validate_manifest_dict(top_level)
+
+    artifact = _valid_manifest_dict()
+    artifact["artifacts"][0]["unexpected"] = True
+    with pytest.raises(ManifestError, match="unknown keys"):
+        validate_manifest_dict(artifact)
+
+
+def test_validate_manifest_dict_requires_sdist_fallback_kind():
+    data = _valid_manifest_dict()
+    data["sdist_fallback"] = data["artifacts"][0]["filename"]
+    with pytest.raises(ManifestError, match="kind='sdist'"):
+        validate_manifest_dict(data)
+
+
 @pytest.mark.parametrize("missing_key", sorted({
     "schema", "kernel_version", "kernel_tag", "commit", "generated_at", "artifacts", "sdist_fallback",
 }))
@@ -350,3 +369,33 @@ def test_generate_release_manifest_rejects_multiple_sdists(tmp_path: Path):
     )
     assert result.returncode != 0
     assert "exactly one sdist" in result.stderr
+
+
+@pytest.mark.parametrize("existing_output", ["manifest.json", "SHA256SUMS"])
+def test_generate_release_manifest_refuses_existing_outputs(tmp_path: Path, existing_output: str):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    _write_fixture_wheel(assets / "lingtai-0.16.4-cp312-cp312-macosx_11_0_arm64.whl", sidecar=True)
+    (assets / "lingtai-0.16.4.tar.gz").write_bytes(b"fake-sdist-bytes")
+    existing = tmp_path / existing_output
+    existing.write_text("immutable receipt", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable, str(GENERATE_SCRIPT),
+            "--assets-dir", str(assets),
+            "--kernel-version", "0.16.4",
+            "--kernel-tag", "v0.16.4",
+            "--commit", "a" * 40,
+            "--generated-at", "2026-07-15T00:00:00Z",
+            "--out-manifest", str(tmp_path / "manifest.json"),
+            "--out-sha256sums", str(tmp_path / "SHA256SUMS"),
+            "--skip-sidecar-check",
+        ],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "refusing to replace existing release output" in result.stderr
+    assert existing.read_text(encoding="utf-8") == "immutable receipt"
+    other = tmp_path / ("SHA256SUMS" if existing_output == "manifest.json" else "manifest.json")
+    assert not other.exists()

@@ -135,7 +135,8 @@ def build_manifest(
 
 def write_sha256sums(manifest: ReleaseManifest, out_path: Path) -> None:
     lines = [f"{a.sha256}  {a.filename}" for a in manifest.artifacts]
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with out_path.open("x", encoding="utf-8") as output:
+        output.write("\n".join(lines) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -153,6 +154,12 @@ def main(argv: list[str] | None = None) -> int:
         help="skip the sidecar validation contract (manifest-shape testing only, never for a real release)",
     )
     args = parser.parse_args(argv)
+
+    for output_path in (args.out_manifest, args.out_sha256sums):
+        if output_path.exists():
+            raise SystemExit(
+                f"error: refusing to replace existing release output: {output_path}"
+            )
 
     if not args.assets_dir.is_dir():
         raise SystemExit(f"error: --assets-dir is not a directory: {args.assets_dir}")

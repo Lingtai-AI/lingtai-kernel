@@ -2,17 +2,6 @@ name: Build Python wheels
 
 on:
   workflow_dispatch:
-    inputs:
-      publish:
-        description: >-
-          Actually publish the manifest/wheels/sdist to the GitHub release and
-          (when GITEE_ACCESS_TOKEN is configured) Gitee. Default false keeps
-          manual dispatch a safe dry-run/shape-check; the automatic
-          release.published trigger always publishes.
-        type: boolean
-        default: false
-  release:
-    types: [published]
 
 permissions:
   contents: read
@@ -178,19 +167,11 @@ jobs:
     # rather than silently shipping an incomplete manifest.
     timeout-minutes: 15
     permissions:
-      # write is required only for the actual publish path (gh release
-      # upload / create); the dry-run path never mutates anything regardless
-      # of this permission grant.
-      contents: write
+      contents: read
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          # sync_gitee_mirror.py needs the full history reachable from
-          # ${{ github.sha }} to `git cat-file -e`/push it; a shallow
-          # checkout (the actions/checkout@v4 default) would make that fail.
-          fetch-depth: 0
 
       - name: Set up Python for the manifest/publish scripts
         uses: actions/setup-python@v5
@@ -211,92 +192,22 @@ jobs:
           path: release-assets
 
       - name: Generate release manifest + SHA256SUMS
-        env:
-          # release.published fires with a real tag; workflow_dispatch has no
-          # tag, so fall back to the pyproject version prefixed with "v" and
-          # the checked-out commit — this keeps manual-dispatch runs usable
-          # for manifest-shape testing without pretending a release exists.
-          KERNEL_TAG: ${{ github.event.release.tag_name || '' }}
         run: |
           set -euo pipefail
           version="$(python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
-          tag="${KERNEL_TAG:-v${version}}"
           generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           python scripts/generate_release_manifest.py \
             --assets-dir release-assets \
             --kernel-version "$version" \
-            --kernel-tag "$tag" \
+            --kernel-tag "v${version}" \
             --commit "${{ github.sha }}" \
             --generated-at "$generated_at" \
             --out-manifest release-assets/lingtai-kernel-release-manifest.json \
             --out-sha256sums release-assets/SHA256SUMS
 
-      - name: Determine publish mode
-        id: publish_mode
-        run: |
-          set -euo pipefail
-          # Publish for real only on the automatic release.published trigger,
-          # or on an explicit workflow_dispatch with publish=true. Every other
-          # run (default workflow_dispatch, or any run without the input)
-          # stays dry-run — this is the fix for the prior version of this job,
-          # which unconditionally omitted --execute and so could never
-          # publish anything even on a real release.
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            echo "execute=1" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish }}" == "true" ]]; then
-            echo "execute=1" >> "$GITHUB_OUTPUT"
-          else
-            echo "execute=0" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Non-force synchronize the exact commit/tag to Gitee
-        if: steps.publish_mode.outputs.execute == '1'
-        env:
-          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
-        run: |
-          set -euo pipefail
-          version="$(python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
-          tag="${{ github.event.release.tag_name || '' }}"
-          tag="${tag:-v${version}}"
-          # Skips cleanly (exit 0, prints why) when GITEE_ACCESS_TOKEN is
-          # unset — see sync_gitee_mirror.py. Every push is non-force; a
-          # divergence/existing-tag conflict fails this step loud rather than
-          # silently overwriting the mirror.
-          python scripts/sync_gitee_mirror.py \
-            --commit "${{ github.sha }}" \
-            --tag "$tag" \
-            --branch main \
-            --execute
-
-      - name: Publish manifest/wheels/sdist
-        env:
-          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
-        run: |
-          set -euo pipefail
-          version="$(python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
-          tag="${{ github.event.release.tag_name || '' }}"
-          tag="${tag:-v${version}}"
-          execute_flag=""
-          if [[ "${{ steps.publish_mode.outputs.execute }}" == "1" ]]; then
-            execute_flag="--execute"
-            echo "Publishing $tag for real (event=${{ github.event_name }})."
-          else
-            echo "Manifest ready for $tag. Dry run only (event=${{ github.event_name }}, publish input=${{ inputs.publish }})."
-          fi
-          # publish_release_assets.py is idempotent (skips already-attached
-          # same-name assets) and never force-syncs/deletes — safe to run
-          # repeatedly. Gitee leg is skipped internally when
-          # GITEE_ACCESS_TOKEN is unset, regardless of execute_flag.
-          python scripts/publish_release_assets.py \
-            --manifest release-assets/lingtai-kernel-release-manifest.json \
-            --assets-dir release-assets \
-            $execute_flag
-
-      - name: Upload release manifest artifact
+      - name: Upload immutable release bundle
         uses: actions/upload-artifact@v4
         with:
-          name: release-manifest
-          path: |
-            release-assets/lingtai-kernel-release-manifest.json
-            release-assets/SHA256SUMS
+          name: release-bundle
+          path: release-assets
           if-no-files-found: error

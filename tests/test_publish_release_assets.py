@@ -432,3 +432,34 @@ def test_main_rejects_tampered_asset_before_any_upload(tmp_path, monkeypatch):
             "--assets-dir", str(assets_dir),
             "--skip-gitee",
         ])
+
+
+def test_main_late_gitee_plan_failure_prevents_github_execute(tmp_path, monkeypatch):
+    manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
+    monkeypatch.setenv("GITEE_ACCESS_TOKEN", "token")
+    github_executes = []
+
+    monkeypatch.setattr(
+        pub,
+        "plan_github_release",
+        lambda *args: pub.GithubPlan(create_release=False, files=()),
+    )
+    monkeypatch.setattr(
+        pub,
+        "execute_github_upload",
+        lambda *args: github_executes.append(args),
+    )
+    monkeypatch.setattr(
+        pub,
+        "plan_gitee_release",
+        lambda *args: (_ for _ in ()).throw(pub.PublishError("late Gitee planning failure")),
+    )
+
+    with pytest.raises(pub.PublishError, match="late Gitee planning failure"):
+        pub.main([
+            "--manifest", str(manifest_path),
+            "--assets-dir", str(assets_dir),
+            "--github-repo", "o/r",
+            "--execute",
+        ])
+    assert github_executes == []

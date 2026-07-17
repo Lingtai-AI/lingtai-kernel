@@ -162,6 +162,9 @@ def validate_manifest_dict(data: dict) -> None:
     missing = REQUIRED_TOP_LEVEL_KEYS - data.keys()
     if missing:
         raise ManifestError(f"manifest missing required keys: {sorted(missing)}")
+    unknown = data.keys() - REQUIRED_TOP_LEVEL_KEYS
+    if unknown:
+        raise ManifestError(f"manifest has unknown top-level keys: {sorted(unknown)}")
 
     if data["schema"] != SCHEMA:
         raise ManifestError(f"unexpected schema {data['schema']!r}, expected {SCHEMA!r}")
@@ -182,6 +185,9 @@ def validate_manifest_dict(data: dict) -> None:
         art_missing = REQUIRED_ARTIFACT_KEYS - art.keys()
         if art_missing:
             raise ManifestError(f"artifacts[{i}] missing keys: {sorted(art_missing)}")
+        art_unknown = art.keys() - REQUIRED_ARTIFACT_KEYS
+        if art_unknown:
+            raise ManifestError(f"artifacts[{i}] has unknown keys: {sorted(art_unknown)}")
         if not isinstance(art["filename"], str) or not art["filename"]:
             raise ManifestError(f"artifacts[{i}].filename must be a non-empty string")
         if art["filename"] in seen_filenames:
@@ -206,6 +212,11 @@ def validate_manifest_dict(data: dict) -> None:
         )
     if not has_sdist:
         raise ManifestError("manifest has no artifact with kind='sdist'; sdist_fallback is unsatisfiable")
+    fallback = next(art for art in artifacts if art["filename"] == data["sdist_fallback"])
+    if fallback["kind"] != "sdist":
+        raise ManifestError(
+            f"sdist_fallback {data['sdist_fallback']!r} must name an artifact with kind='sdist'"
+        )
 
 
 def manifest_from_dict(data: dict) -> ReleaseManifest:

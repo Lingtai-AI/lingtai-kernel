@@ -28,6 +28,7 @@ import argparse
 import json
 import os
 import subprocess
+from dataclasses import dataclass
 import sys
 import tempfile
 import uuid
@@ -51,6 +52,19 @@ class PublishError(RuntimeError):
 
 class AssetConflict(PublishError):
     """An existing remote attachment has the same name but a different sha256."""
+
+
+@dataclass(frozen=True)
+class GithubPlan:
+    create_release: bool
+    files: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class GiteePlan:
+    create_release: bool
+    release_id: int | None
+    files: tuple[Path, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +208,16 @@ def plan_github_uploads(manifest, assets_dir: Path, manifest_path: Path, repo_sl
             continue
         to_upload.append(path)
     return to_upload
+
+
+def plan_github_release(manifest, assets_dir: Path, manifest_path: Path, repo_slug: str, tag: str) -> GithubPlan:
+    """Plan all GitHub reads and the later create/upload mutations."""
+    exists = gh_release_exists(tag, repo_slug)
+    if exists:
+        files = plan_github_uploads(manifest, assets_dir, manifest_path, repo_slug, tag)
+    else:
+        files = release_files(manifest, assets_dir, manifest_path)
+    return GithubPlan(create_release=not exists, files=tuple(files))
 
 
 def execute_github_upload(tag: str, repo_slug: str, files: list[Path]) -> None:
@@ -363,6 +387,33 @@ def plan_gitee_uploads(manifest, assets_dir: Path, manifest_path: Path, owner: s
     return to_upload
 
 
+def plan_gitee_release(
+    manifest,
+    assets_dir: Path,
+    manifest_path: Path,
+    owner: str,
+    repo: str,
+    token: str,
+) -> GiteePlan:
+    """Plan all Gitee reads and the later create/upload mutations."""
+    gitee_verify_tag_synchronized(owner, repo, manifest.kernel_tag, manifest.commit, token)
+    release = gitee_find_release_by_tag(owner, repo, manifest.kernel_tag, token)
+    if release is None:
+        return GiteePlan(
+            create_release=True,
+            release_id=None,
+            files=tuple(release_files(manifest, assets_dir, manifest_path)),
+        )
+
+    release_id = release.get("id")
+    if not isinstance(release_id, int) or isinstance(release_id, bool):
+        raise PublishError("Gitee release metadata is missing a valid numeric id")
+    files = plan_gitee_uploads(
+        manifest, assets_dir, manifest_path, owner, repo, release_id, token
+    )
+    return GiteePlan(create_release=False, release_id=release_id, files=tuple(files))
+
+
 def execute_gitee_upload(owner: str, repo: str, release_id: int, files: list[Path], token: str) -> None:
     import mimetypes
     import uuid
@@ -411,41 +462,73 @@ def main(argv: list[str] | None = None) -> int:
     verify_local_assets(manifest, args.assets_dir)
     print(f"Manifest OK: {manifest.kernel_tag} ({manifest.commit[:12]}), {len(manifest.artifacts)} artifact(s)")
 
+    # Phase one: finish every selected provider's read-only plan before any
+    # create/upload call. The plan records both idempotent skips and mutations.
+    github_plan = None
     if not args.skip_github:
         print(f"\n[github] target: {args.github_repo} tag {manifest.kernel_tag}")
-        if not gh_release_exists(manifest.kernel_tag, args.github_repo):
+        github_plan = plan_github_release(
+            manifest, args.assets_dir, args.manifest, args.github_repo, manifest.kernel_tag
+        )
+        if github_plan.create_release:
             print(f"  [github] release {manifest.kernel_tag} does not exist yet")
-            if args.execute:
-                subprocess.run(
-                    ["gh", "release", "create", manifest.kernel_tag, "--repo", args.github_repo,
-                     "--title", manifest.kernel_tag, "--notes", f"Kernel release {manifest.kernel_tag}"],
-                    check=True,
-                )
-            else:
+        if not args.execute:
+            if github_plan.create_release:
                 print(f"  [github] DRY RUN: would create release {manifest.kernel_tag}")
-        github_files = plan_github_uploads(manifest, args.assets_dir, args.manifest, args.github_repo, manifest.kernel_tag)
-        if args.execute:
-            execute_github_upload(manifest.kernel_tag, args.github_repo, github_files)
-        else:
-            for f in github_files:
-                print(f"  [github] DRY RUN: would upload {f.name}")
+            for path in github_plan.files:
+                print(f"  [github] DRY RUN: would upload {path.name}")
 
-    import os
-
+    gitee_plan = None
     gitee_token = os.environ.get(args.gitee_token_env, "")
     if args.skip_gitee or not gitee_token:
         reason = "--skip-gitee" if args.skip_gitee else f"{args.gitee_token_env} is not set"
         print(f"\n[gitee] skipped ({reason})")
+    else:
+        print(f"\n[gitee] target: {args.gitee_owner}/{args.gitee_repo} tag {manifest.kernel_tag}")
+        gitee_plan = plan_gitee_release(
+            manifest,
+            args.assets_dir,
+            args.manifest,
+            args.gitee_owner,
+            args.gitee_repo,
+            gitee_token,
+        )
+        print(f"  [gitee] tag {manifest.kernel_tag} is synchronized to {manifest.commit[:12]}")
+        if gitee_plan.create_release:
+            print(f"  [gitee] release {manifest.kernel_tag} does not exist yet")
+        if not args.execute:
+            if gitee_plan.create_release:
+                print(f"  [gitee] DRY RUN: would create release {manifest.kernel_tag}")
+            for path in gitee_plan.files:
+                print(f"  [gitee] DRY RUN: would upload {path.name}")
+
+    if not args.execute:
         return 0
 
-    print(f"\n[gitee] target: {args.gitee_owner}/{args.gitee_repo} tag {manifest.kernel_tag}")
-    gitee_verify_tag_synchronized(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, manifest.commit, gitee_token)
-    print(f"  [gitee] tag {manifest.kernel_tag} is synchronized to {manifest.commit[:12]}")
+    # Phase two: execute only the already-recorded mutations. No provider
+    # discovery/preflight occurs after this point.
+    if github_plan is not None:
+        if github_plan.create_release:
+            subprocess.run(
+                [
+                    "gh",
+                    "release",
+                    "create",
+                    manifest.kernel_tag,
+                    "--repo",
+                    args.github_repo,
+                    "--title",
+                    manifest.kernel_tag,
+                    "--notes",
+                    f"Kernel release {manifest.kernel_tag}",
+                ],
+                check=True,
+            )
+        execute_github_upload(manifest.kernel_tag, args.github_repo, list(github_plan.files))
 
-    release = gitee_find_release_by_tag(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, gitee_token)
-    if release is None:
-        print(f"  [gitee] release {manifest.kernel_tag} does not exist yet")
-        if args.execute:
+    if gitee_plan is not None:
+        release_id = gitee_plan.release_id
+        if gitee_plan.create_release:
             release = gitee_create_release(
                 args.gitee_owner,
                 args.gitee_repo,
@@ -454,18 +537,17 @@ def main(argv: list[str] | None = None) -> int:
                 manifest.commit,
                 gitee_token,
             )
-        else:
-            print(f"  [gitee] DRY RUN: would create release {manifest.kernel_tag}")
-            print("  [gitee] DRY RUN: cannot plan attachment uploads without a release id (would create first)")
-            return 0
-
-    release_id = release["id"]
-    gitee_files = plan_gitee_uploads(manifest, args.assets_dir, args.manifest, args.gitee_owner, args.gitee_repo, release_id, gitee_token)
-    if args.execute:
-        execute_gitee_upload(args.gitee_owner, args.gitee_repo, release_id, gitee_files, gitee_token)
-    else:
-        for f in gitee_files:
-            print(f"  [gitee] DRY RUN: would upload {f.name}")
+            release_id = release.get("id")
+            if not isinstance(release_id, int) or isinstance(release_id, bool):
+                raise PublishError("Gitee create-release response is missing a valid numeric id")
+        assert release_id is not None
+        execute_gitee_upload(
+            args.gitee_owner,
+            args.gitee_repo,
+            release_id,
+            list(gitee_plan.files),
+            gitee_token,
+        )
 
     return 0
 
