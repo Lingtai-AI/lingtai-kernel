@@ -76,6 +76,36 @@ _NOTIFICATION_MANUAL_FILES = (
 )
 
 # The three per-tool glossary languages that each package must ship.
+_WEB_SEARCH_MANUAL_FILES = (
+    "lingtai/tools/web_search/manual/SKILL.md",
+    "lingtai/tools/web_search/manual/assets/api-endpoints.json",
+    "lingtai/tools/web_search/manual/assets/css-selectors.json",
+    "lingtai/tools/web_search/manual/assets/extraction-pipeline.json",
+    "lingtai/tools/web_search/manual/assets/regex-patterns.json",
+    "lingtai/tools/web_search/manual/assets/search-providers.json",
+    "lingtai/tools/web_search/manual/assets/site-templates.json",
+    "lingtai/tools/web_search/manual/reference/academic-pipeline.md",
+    "lingtai/tools/web_search/manual/reference/maintenance-bundles/SKILL.md",
+    "lingtai/tools/web_search/manual/reference/migration-from-v2.md",
+    "lingtai/tools/web_search/manual/reference/news-and-rss.md",
+    "lingtai/tools/web_search/manual/reference/realtime-data.md",
+    "lingtai/tools/web_search/manual/reference/routing-and-sites/SKILL.md",
+    "lingtai/tools/web_search/manual/reference/search-strategies.md",
+    "lingtai/tools/web_search/manual/reference/social-media.md",
+    "lingtai/tools/web_search/manual/reference/stealth.md",
+    "lingtai/tools/web_search/manual/reference/tier-0-pdf.md",
+    "lingtai/tools/web_search/manual/reference/tier-1-5-trafilatura.md",
+    "lingtai/tools/web_search/manual/reference/tier-1-apis.md",
+    "lingtai/tools/web_search/manual/reference/tier-2-beautifulsoup.md",
+    "lingtai/tools/web_search/manual/reference/tier-3-playwright.md",
+    "lingtai/tools/web_search/manual/reference/tier-4-jina-firecrawl.md",
+    "lingtai/tools/web_search/manual/reference/tier-5-ai-search.md",
+    "lingtai/tools/web_search/manual/reference/tier-quick-refs/SKILL.md",
+    "lingtai/tools/web_search/manual/scripts/cached_get.py",
+    "lingtai/tools/web_search/manual/scripts/extract_page.py",
+)
+
+# The three per-tool glossary languages that each package must ship.
 _GLOSSARY_LANGS = ("en", "zh", "wen")
 
 
@@ -165,6 +195,11 @@ def test_wheel_ships_every_tool_contract(wheel_entries: set[str]):
 
 def test_wheel_ships_vision_manual(wheel_entries: set[str]):
     assert "lingtai/tools/vision/manual/SKILL.md" in wheel_entries
+
+
+def test_wheel_ships_complete_web_search_manual_bundle(wheel_entries: set[str]):
+    missing = [path for path in _WEB_SEARCH_MANUAL_FILES if path not in wheel_entries]
+    assert not missing, "web_search manual files missing from wheel: %r" % missing
 
 
 def test_wheel_ships_exact_expected_tool_contracts(wheel_entries: set[str]):
@@ -310,6 +345,11 @@ def test_sdist_ships_every_glossary_resource(sdist_entries: set[str]):
             if path not in sdist_entries:
                 missing.append(path)
     assert not missing, "glossary resources missing from sdist: %r" % missing
+
+
+def test_sdist_ships_complete_web_search_manual_bundle(sdist_entries: set[str]):
+    missing = [path for path in _WEB_SEARCH_MANUAL_FILES if path not in sdist_entries]
+    assert not missing, "web_search manual files missing from sdist: %r" % missing
 
 
 def test_sdist_ships_exactly_54_glossary_resources(sdist_entries: set[str]):
