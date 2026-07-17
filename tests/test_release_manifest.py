@@ -4,6 +4,8 @@ CLI). No network, no subprocess against a real wheel build — fixtures only.
 """
 from __future__ import annotations
 
+import builtins
+
 import hashlib
 import json
 import subprocess
@@ -147,6 +149,19 @@ def test_validate_manifest_dict_rejects_invalid_pep440_version():
     data["kernel_version"] = "999-not-a-release"
     with pytest.raises(ManifestError, match="PEP 440"):
         validate_manifest_dict(data)
+
+
+def test_validate_manifest_dict_reports_missing_packaging_without_scope_error(monkeypatch):
+    original_import = builtins.__import__
+
+    def import_without_packaging(name, *args, **kwargs):
+        if name == "packaging.version":
+            raise ModuleNotFoundError("No module named 'packaging'")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_packaging)
+    with pytest.raises(ManifestError, match="packaging is required"):
+        validate_manifest_dict(_valid_manifest_dict())
 
 
 def test_validate_manifest_dict_requires_version_tag_relation():

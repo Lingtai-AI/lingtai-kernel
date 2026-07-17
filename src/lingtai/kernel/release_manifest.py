@@ -155,12 +155,12 @@ def _pep440_version(value: object, *, field: str) -> str:
         raise ManifestError(f"manifest field {field!r} must be a non-empty PEP 440 version")
     try:
         from packaging.version import InvalidVersion, Version
-
+    except ImportError as exc:
+        raise ManifestError("packaging is required to validate release versions") from exc
+    try:
         Version(value)
     except (InvalidVersion, TypeError) as exc:
         raise ManifestError(f"manifest field {field!r} is not a valid PEP 440 version: {value!r}") from exc
-    except ImportError as exc:  # pragma: no cover - release environments provide packaging
-        raise ManifestError("packaging is required to validate release versions") from exc
     return value
 
 

@@ -123,3 +123,11 @@ def test_checkout_step_has_full_history_for_gitee_push():
         "sync_gitee_mirror.py needs the release commit's full history reachable "
         "to push it; a shallow checkout would break the non-force push"
     )
+
+
+def test_release_manifest_job_installs_declared_packaging_dependency():
+    job = _release_manifest_job(_load_workflow())
+    step = _step(job, "Install manifest runtime dependencies")
+    script = step["run"]
+    assert "python -m pip install" in script
+    assert "packaging>=24.0" in script
