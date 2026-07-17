@@ -1,7 +1,8 @@
 """Static assertions over .github/workflows/wheels.yml's release-manifest job:
 proves the publish step is actually reachable with --execute on the real
-release trigger (Blocker 3 repair), that manual dispatch defaults to dry-run, that exact-tag recovery checks out
-the selected tag, that GitHub publication is authenticated, and that the
+release trigger (Blocker 3 repair), that manual dispatch defaults to dry-run,
+that exact-tag recovery checks out and validates the selected tag, that GitHub
+publication is authenticated without persisted checkout credentials, and that the
 Gitee sync step never force-pushes. This is a workflow-shape
 test, not a live GitHub Actions run — it parses the committed YAML/shell
 text.
@@ -145,10 +146,11 @@ def test_workflow_dispatch_exact_tag_recovery_input_defaults_empty():
 
 def test_all_release_jobs_checkout_the_optional_exact_recovery_tag():
     data = _load_workflow()
-    expected = "${{ inputs.release_tag || github.ref }}"
+    expected = "${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}"
     for job_name in ("build-wheels", "build-sdist", "release-manifest"):
         step = _step(data["jobs"][job_name], "Check out repository")
         assert step.get("with", {}).get("ref") == expected, job_name
+        assert step.get("with", {}).get("persist-credentials") is False, job_name
 
 
 def test_manifest_and_gitee_sync_use_the_checked_out_commit_and_recovery_tag():
@@ -169,3 +171,23 @@ def test_publish_step_receives_github_cli_token_without_printing_it():
     step = _step(job, "Publish manifest")
     assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert "$GH_TOKEN" not in step["run"]
+
+
+def test_manual_publish_requires_and_validates_an_exact_semver_tag():
+    data = _load_workflow()
+    for job_name in ("build-wheels", "build-sdist", "release-manifest"):
+        step = _step(data["jobs"][job_name], "Validate manual recovery tag")
+        assert step.get("if") == "github.event_name == 'workflow_dispatch'"
+        assert step.get("shell") == "bash"
+        assert "inputs.publish" in step["env"]["PUBLISH_REQUESTED"]
+        assert "inputs.release_tag" in step["env"]["RELEASE_TAG"]
+        script = step["run"]
+        assert '"$PUBLISH_REQUESTED" == "true" && -z "$RELEASE_TAG"' in script
+        assert "^v[0-9]+\\.[0-9]+\\.[0-9]+$" in script
+        assert 'refs/tags/${RELEASE_TAG}^{commit}' in script
+        assert "git rev-parse HEAD" in script
+        assert '"$tag_commit" != "$head_commit"' in script
+
+    publish_mode = _step(_release_manifest_job(data), "Determine publish mode")["run"]
+    assert "inputs.release_tag" in publish_mode
+    assert "Manual publishing requires release_tag" in publish_mode

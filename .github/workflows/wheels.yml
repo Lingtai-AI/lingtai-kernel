@@ -57,7 +57,34 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_tag || github.ref }}
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+          persist-credentials: false
+
+      - name: Validate manual recovery tag
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          PUBLISH_REQUESTED: ${{ inputs.publish }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISH_REQUESTED" == "true" && -z "$RELEASE_TAG" ]]; then
+            echo "::error::Manual publishing requires an explicit existing vX.Y.Z release_tag."
+            exit 1
+          fi
+          if [[ -z "$RELEASE_TAG" ]]; then
+            exit 0
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release_tag must be a simple semantic-version tag such as v0.17.1."
+            exit 1
+          fi
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "$tag_commit" != "$head_commit" ]]; then
+            echo "::error::Checked-out HEAD does not match refs/tags/${RELEASE_TAG}."
+            exit 1
+          fi
 
       - name: Set up QEMU for Linux aarch64 wheels
         if: runner.os == 'Linux'
@@ -161,7 +188,34 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_tag || github.ref }}
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+          persist-credentials: false
+
+      - name: Validate manual recovery tag
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          PUBLISH_REQUESTED: ${{ inputs.publish }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISH_REQUESTED" == "true" && -z "$RELEASE_TAG" ]]; then
+            echo "::error::Manual publishing requires an explicit existing vX.Y.Z release_tag."
+            exit 1
+          fi
+          if [[ -z "$RELEASE_TAG" ]]; then
+            exit 0
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release_tag must be a simple semantic-version tag such as v0.17.1."
+            exit 1
+          fi
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "$tag_commit" != "$head_commit" ]]; then
+            echo "::error::Checked-out HEAD does not match refs/tags/${RELEASE_TAG}."
+            exit 1
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -197,11 +251,38 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_tag || github.ref }}
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+          persist-credentials: false
           # sync_gitee_mirror.py needs the full history reachable from
           # the checked-out commit to `git cat-file -e`/push it; a shallow
           # checkout (the actions/checkout@v4 default) would make that fail.
           fetch-depth: 0
+
+      - name: Validate manual recovery tag
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          PUBLISH_REQUESTED: ${{ inputs.publish }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISH_REQUESTED" == "true" && -z "$RELEASE_TAG" ]]; then
+            echo "::error::Manual publishing requires an explicit existing vX.Y.Z release_tag."
+            exit 1
+          fi
+          if [[ -z "$RELEASE_TAG" ]]; then
+            exit 0
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release_tag must be a simple semantic-version tag such as v0.17.1."
+            exit 1
+          fi
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "$tag_commit" != "$head_commit" ]]; then
+            echo "::error::Checked-out HEAD does not match refs/tags/${RELEASE_TAG}."
+            exit 1
+          fi
 
       - name: Set up Python for the manifest/publish scripts
         uses: actions/setup-python@v5
@@ -258,6 +339,10 @@ jobs:
           if [[ "${{ github.event_name }}" == "release" ]]; then
             echo "execute=1" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish }}" == "true" ]]; then
+            if [[ -z "${{ inputs.release_tag }}" ]]; then
+              echo "::error::Manual publishing requires release_tag."
+              exit 1
+            fi
             echo "execute=1" >> "$GITHUB_OUTPUT"
           else
             echo "execute=0" >> "$GITHUB_OUTPUT"
