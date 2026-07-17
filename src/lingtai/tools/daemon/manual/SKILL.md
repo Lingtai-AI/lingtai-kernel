@@ -105,8 +105,9 @@ files, not standalone top-level skills.
 - On the LingTai backend, explicit `summary=true` uses a daemon-local,
   no-tools session on the same effective service, provider, and model.
   `ToolExecutor` logs the raw result first through the daemon logger into the
-  parent `logs/events.jsonl`, then returns only the generated summary or
-  fail-closed refusal/error to the worker.
+  run-local `daemons/<run-id>/logs/events.jsonl` as `daemon_tool_result`, then
+  returns only the generated summary or fail-closed refusal/error with that
+  exact recovery locator to the worker.
 - Think of each task item as **task objective + behavior guidance + tool
   surface**:
   - `task` is the complete parent-controlled daemon system instruction:

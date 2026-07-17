@@ -169,6 +169,86 @@ def test_summary_error_has_structured_raw_locator():
     assert "toolu_err" in loc["query"]
 
 
+def test_custom_raw_locator_fields_apply_to_all_payload_kinds():
+    log_path = "daemons/em-test/logs/events.jsonl"
+    event_type = "daemon_tool_result"
+    payloads = [
+        build_summary_replacement(
+            tool_name="read",
+            tool_call_id="tc-custom",
+            summary_text="ok",
+            reason="retain marker",
+            original_visible_chars=10,
+            summary_input_chars=10,
+            summary_input_truncated=False,
+            raw_log_path=log_path,
+            raw_event_type=event_type,
+        ),
+        build_cap_refusal(
+            tool_name="read",
+            tool_call_id="tc-custom",
+            original_visible_chars=600_000,
+            raw_log_path=log_path,
+            raw_event_type=event_type,
+        ),
+        build_summary_error(
+            tool_name="read",
+            tool_call_id="tc-custom",
+            original_visible_chars=10,
+            error="boom",
+            raw_log_path=log_path,
+            raw_event_type=event_type,
+        ),
+    ]
+
+    for payload in payloads:
+        assert payload["raw_locator"] == {
+            "tool_call_id": "tc-custom",
+            "log": log_path,
+            "event_type": event_type,
+            "query": f"grep 'tc-custom' <workdir>/{log_path}",
+        }
+        assert f"<workdir>/{log_path}" in payload["retrieval_hint"]
+
+
+def test_orchestrator_threads_custom_raw_locator_for_all_summary_outcomes():
+    log_path = "daemons/em-test/logs/events.jsonl"
+    event_type = "daemon_tool_result"
+    common = {
+        "args": {"summary": True, "_reasoning": "retain marker"},
+        "tool_name": "read",
+        "tool_call_id": "tc-custom",
+        "raw_log_path": log_path,
+        "raw_event_type": event_type,
+    }
+    payloads = [
+        maybe_summarize_result(
+            {"content": "small"},
+            summarizer_fn=lambda *_args: "summary",
+            **common,
+        ),
+        maybe_summarize_result(
+            {"content": "x" * (APRIORI_SUMMARY_CAP + 1)},
+            summarizer_fn=lambda *_args: "not called",
+            **common,
+        ),
+        maybe_summarize_result(
+            {"content": "small"},
+            summarizer_fn=None,
+            **common,
+        ),
+    ]
+
+    assert [payload["summary_kind"] for payload in payloads] == [
+        "apriori_generated",
+        "apriori_cap_refused",
+        "apriori_error",
+    ]
+    for payload in payloads:
+        assert payload["raw_locator"]["log"] == log_path
+        assert payload["raw_locator"]["event_type"] == event_type
+
+
 def test_raw_locator_handles_missing_tool_call_id():
     repl = build_summary_replacement(
         tool_name="bash",

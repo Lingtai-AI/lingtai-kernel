@@ -184,14 +184,31 @@ def _build_summarizer_prompt(reason: str, raw_text: str) -> str:
     )
 
 
-def _retrieval_hint(tool_call_id: str | None) -> str:
+def _resolve_raw_log_path(raw_log_path: str | None) -> str:
+    """Return the preserved-raw log path used by locator metadata."""
+    normalized = (raw_log_path or "").strip()
+    return normalized or EVENTS_LOG_RELPATH
+
+
+def _resolve_raw_event_type(raw_event_type: str | None) -> str:
+    """Return the durable event name used by locator metadata."""
+    normalized = (raw_event_type or "").strip()
+    return normalized or "tool_result"
+
+
+def _retrieval_hint(
+    tool_call_id: str | None,
+    *,
+    raw_log_path: str | None = None,
+) -> str:
     cid = tool_call_id or "<unknown>"
+    log_path = _resolve_raw_log_path(raw_log_path)
     return (
         f"This is a runtime-GENERATED summary of the original tool result — it is "
         f"NOT canonical and may be incomplete or inaccurate. The full original "
         f"result was preserved before summarization and is NOT in your context.\n"
         f"To retrieve the full original, grep events.jsonl by tool_call_id:\n"
-        f"  grep '{cid}' <workdir>/logs/events.jsonl\n"
+        f"  grep '{cid}' <workdir>/{log_path}\n"
         f"  # or use: lingtai-agent log query (see sqlite-log-query manual)\n"
         f"If you need a different slice of the original, narrow the tool call "
         f"(e.g. tighter grep/read range) and rerun with summary=false, or "
@@ -200,19 +217,28 @@ def _retrieval_hint(tool_call_id: str | None) -> str:
     )
 
 
-def _raw_locator(tool_call_id: str | None) -> dict:
+def _raw_locator(
+    tool_call_id: str | None,
+    *,
+    raw_log_path: str | None = None,
+    raw_event_type: str | None = None,
+) -> dict:
     """Structured, machine-readable sibling of ``_retrieval_hint``.
 
-    Both point at the same preserved raw (the ``tool_result`` event in
-    ``logs/events.jsonl`` keyed by ``tool_call_id``); the hint is prose for the
-    model to read, the locator is fields for tooling to consume without parsing
-    that prose. Stamped on every a-priori payload (success, refusal, error).
+    Both point at the same preserved raw event keyed by ``tool_call_id``.
+    Main-agent callers default to ``logs/events.jsonl`` / ``tool_result``;
+    daemon callers supply their run-local log path / ``daemon_tool_result``.
+    The hint is prose for the model to read, while the locator is fields for
+    tooling to consume without parsing that prose. Stamped on every a-priori
+    payload (success, refusal, error).
     """
+    log_path = _resolve_raw_log_path(raw_log_path)
+    event_type = _resolve_raw_event_type(raw_event_type)
     return {
         "tool_call_id": tool_call_id,
-        "log": EVENTS_LOG_RELPATH,
-        "event_type": "tool_result",
-        "query": f"grep '{tool_call_id or '<unknown>'}' <workdir>/{EVENTS_LOG_RELPATH}",
+        "log": log_path,
+        "event_type": event_type,
+        "query": f"grep '{tool_call_id or '<unknown>'}' <workdir>/{log_path}",
     }
 
 
@@ -234,6 +260,8 @@ def build_summary_replacement(
     original_visible_chars: int,
     summary_input_chars: int,
     summary_input_truncated: bool,
+    raw_log_path: str | None = None,
+    raw_event_type: str | None = None,
 ) -> dict:
     """Build the visible replacement dict for a successful a-priori summary.
 
@@ -265,8 +293,12 @@ def build_summary_replacement(
         "summary_reason": (reason or "").strip() or None,
         "canonical": False,
         "raw_preserved": True,
-        "raw_locator": _raw_locator(tool_call_id),
-        "retrieval_hint": _retrieval_hint(tool_call_id),
+        "raw_locator": _raw_locator(
+            tool_call_id,
+            raw_log_path=raw_log_path,
+            raw_event_type=raw_event_type,
+        ),
+        "retrieval_hint": _retrieval_hint(tool_call_id, raw_log_path=raw_log_path),
     }
 
 
@@ -275,6 +307,8 @@ def build_cap_refusal(
     tool_name: str,
     tool_call_id: str | None,
     original_visible_chars: int,
+    raw_log_path: str | None = None,
+    raw_event_type: str | None = None,
 ) -> dict:
     """Build the refusal dict when the raw payload exceeds the hard cap.
 
@@ -294,7 +328,11 @@ def build_cap_refusal(
         "summary_input_chars": 0,
         "summary_input_truncated": False,
         "cap_chars": APRIORI_SUMMARY_CAP,
-        "raw_locator": _raw_locator(tool_call_id),
+        "raw_locator": _raw_locator(
+            tool_call_id,
+            raw_log_path=raw_log_path,
+            raw_event_type=raw_event_type,
+        ),
         "message": (
             f"summary=true was requested, but the tool result is "
             f"{original_visible_chars} characters, which exceeds the "
@@ -302,7 +340,7 @@ def build_cap_refusal(
             f"was NOT generated and the raw result was deliberately NOT placed "
             f"into your context. The full original is preserved."
         ),
-        "retrieval_hint": _retrieval_hint(tool_call_id),
+        "retrieval_hint": _retrieval_hint(tool_call_id, raw_log_path=raw_log_path),
         "how_to_narrow": (
             "Re-run with a narrower request (tighter grep pattern / smaller read "
             "range / more specific command) so the raw result is under the cap, "
@@ -321,6 +359,8 @@ def build_summary_error(
     error: str,
     summary_input_chars: int = 0,
     summary_input_truncated: bool = False,
+    raw_log_path: str | None = None,
+    raw_event_type: str | None = None,
 ) -> dict:
     """Build the error dict when the summarizer call fails.
 
@@ -346,14 +386,18 @@ def build_summary_error(
         "original_visible_chars": original_visible_chars,
         "summary_input_chars": summary_input_chars,
         "summary_input_truncated": summary_input_truncated,
-        "raw_locator": _raw_locator(tool_call_id),
+        "raw_locator": _raw_locator(
+            tool_call_id,
+            raw_log_path=raw_log_path,
+            raw_event_type=raw_event_type,
+        ),
         "error": sanitize_error_text(error),
         "message": (
             "summary=true was requested, but generating the summary failed. The "
             "raw result was deliberately NOT placed into your context to honor "
             "summary=true. The full original is preserved."
         ),
-        "retrieval_hint": _retrieval_hint(tool_call_id),
+        "retrieval_hint": _retrieval_hint(tool_call_id, raw_log_path=raw_log_path),
     }
 
 
@@ -365,6 +409,8 @@ def maybe_summarize_result(
     tool_call_id: str | None,
     summarizer_fn: Callable[[str, str, str, str | None], str] | None,
     logger_fn: Callable[..., None] | None = None,
+    raw_log_path: str | None = None,
+    raw_event_type: str | None = None,
 ) -> Any:
     """Return a summary replacement for *result* when ``summary=true``, else *result*.
 
@@ -426,6 +472,8 @@ def maybe_summarize_result(
                 "a-priori summary requested but no summarizer gateway is "
                 "configured on this agent; raw not placed in context"
             ),
+            raw_log_path=raw_log_path,
+            raw_event_type=raw_event_type,
         )
 
     if original_visible_chars > APRIORI_SUMMARY_CAP:
@@ -438,6 +486,8 @@ def maybe_summarize_result(
             tool_name=tool_name,
             tool_call_id=tool_call_id,
             original_visible_chars=original_visible_chars,
+            raw_log_path=raw_log_path,
+            raw_event_type=raw_event_type,
         )
 
     reason = ""
@@ -469,6 +519,8 @@ def maybe_summarize_result(
             error=f"{type(exc).__name__}: {exc}",
             summary_input_chars=summary_input_chars,
             summary_input_truncated=summary_input_truncated,
+            raw_log_path=raw_log_path,
+            raw_event_type=raw_event_type,
         )
 
     if not isinstance(summary_text, str) or not summary_text.strip():
@@ -483,6 +535,8 @@ def maybe_summarize_result(
             error="summarizer returned an empty or non-text summary",
             summary_input_chars=summary_input_chars,
             summary_input_truncated=summary_input_truncated,
+            raw_log_path=raw_log_path,
+            raw_event_type=raw_event_type,
         )
 
     summary_chars = len(summary_text)
@@ -509,6 +563,8 @@ def maybe_summarize_result(
         original_visible_chars=original_visible_chars,
         summary_input_chars=summary_input_chars,
         summary_input_truncated=summary_input_truncated,
+        raw_log_path=raw_log_path,
+        raw_event_type=raw_event_type,
     )
 
 

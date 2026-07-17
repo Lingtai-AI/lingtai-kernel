@@ -872,6 +872,39 @@ def test_reasoning_stripped_from_args():
     assert dispatched_args[0].get("_reasoning") == "because"
 
 
+def test_tool_executor_threads_raw_locator_path_and_event_type():
+    executor = ToolExecutor(
+        dispatch_fn=lambda _tc: {"content": "DAEMON-RAW-MARKER"},
+        make_tool_result_fn=lambda _name, result, **_kwargs: result,
+        guard=LoopGuard(max_total_calls=10),
+        known_tools={"read"},
+        summarizer_fn=lambda *_args: "DAEMON-SUMMARY-MARKER",
+        raw_log_path="daemons/em-test/logs/events.jsonl",
+        raw_event_type="daemon_tool_result",
+    )
+
+    results, intercepted, _ = executor.execute([
+        ToolCall(
+            id="tc-daemon-summary",
+            name="read",
+            args={"summary": True, "reasoning": "retain marker"},
+        )
+    ])
+
+    assert not intercepted
+    assert len(results) == 1
+    assert results[0]["generated_summary"] == "DAEMON-SUMMARY-MARKER"
+    assert results[0]["raw_locator"] == {
+        "tool_call_id": "tc-daemon-summary",
+        "log": "daemons/em-test/logs/events.jsonl",
+        "event_type": "daemon_tool_result",
+        "query": (
+            "grep 'tc-daemon-summary' "
+            "<workdir>/daemons/em-test/logs/events.jsonl"
+        ),
+    }
+
+
 def test_tool_executor_uses_meta_fn_for_stamping():
     """ToolExecutor captures runtime state on the result sidecar."""
     meta_calls = {"n": 0}

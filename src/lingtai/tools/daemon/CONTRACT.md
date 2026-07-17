@@ -365,9 +365,10 @@ kernel `ToolExecutor`. The closure:
 
 `ToolExecutor` remains responsible for the explicit `summary=true` gate, raw
 logging before replacement, fail-closed error/refusal behavior, and the 500,000
-character cap. The daemon logger preserves the raw result in the parent
-`logs/events.jsonl`, which remains the recovery locator exposed to the worker.
-The closure is inert unless a tool explicitly requests `summary=true`.
+character cap. The daemon logger preserves the raw result in the run-local
+`daemons/<run-id>/logs/events.jsonl` as `daemon_tool_result`; the worker-visible
+summary exposes that exact path and event type as its recovery locator. The
+closure is inert unless a tool explicitly requests `summary=true`.
 
 ## Backend Support Matrix
 
