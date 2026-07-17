@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/soul/glossary-en.md
   - src/lingtai/tools/soul/glossary-zh.md
   - src/lingtai/tools/soul/glossary-wen.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

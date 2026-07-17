@@ -25,6 +25,7 @@ related_files:
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/snapshot/ANATOMY.md
   - tests/test_architecture_documents.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 maintenance: |
   This file is both the repository-root anatomy and the normative
   anatomy-of-anatomy for the distributed code navigation system. Keep

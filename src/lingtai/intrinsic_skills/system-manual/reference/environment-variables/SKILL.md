@@ -6,6 +6,7 @@ description: >
 version: 1.0.0
 last_changed_at: "2026-07-16T00:00:00-07:00"
 related_files:
+- ANATOMY.md
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -13,6 +14,16 @@ related_files:
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/kernel/config_resolve.py
 - src/lingtai/kernel/refresh_watcher/MANUAL.md
+- src/lingtai/ANATOMY.md
+- src/lingtai/adapters/posix/ANATOMY.md
+- src/lingtai/auth/ANATOMY.md
+- src/lingtai/kernel/ANATOMY.md
+- src/lingtai/kernel/base_agent/ANATOMY.md
+- src/lingtai/llm/openai/ANATOMY.md
+- src/lingtai/mcp_servers/ANATOMY.md
+- src/lingtai/services/ANATOMY.md
+- src/lingtai/tools/daemon/ANATOMY.md
+- src/lingtai/tools/soul/ANATOMY.md
 maintenance: |
   Keep this catalogue complete for every LINGTAI_* variable read by production
   source or intentionally exposed test/daemon composition. For each new read,

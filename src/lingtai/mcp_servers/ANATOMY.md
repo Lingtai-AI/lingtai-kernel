@@ -28,6 +28,7 @@ related_files:
   - tests/test_telegram_rich_formatting.py
   - tests/test_telegram_task_card_in_place.py
   - tests/test_telegram_task_card_last_message.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

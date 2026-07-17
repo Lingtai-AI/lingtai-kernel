@@ -17,6 +17,7 @@ related_files:
   - src/lingtai/kernel/tool_glossary.py
   - src/lingtai/kernel/base_agent/turn.py
   - src/lingtai/kernel/base_agent/worker_recovery.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
