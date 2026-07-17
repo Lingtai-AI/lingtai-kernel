@@ -12,11 +12,13 @@ Two layers are tested:
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
 
 from lingtai.agent import Agent
+from lingtai.kernel.services.logging import query_sqlite_event_index
 from lingtai.tools.psyche._session_journal import (
     validate_session_journal_path,
 )
@@ -407,6 +409,47 @@ def test_molt_accepts_valid_journal_and_records_path(tmp_path):
         content = summary_file.read_text()
         assert "session_journal_path:" in content
         assert path in content
+    finally:
+        agent.stop()
+
+
+def test_molt_absolute_journal_path_records_normalized_path_in_event_stores(tmp_path):
+    agent, ToolCallBlock = _molt_setup(tmp_path)
+    try:
+        wd = _agent_workdir(agent)
+        relative_path = "knowledge/session-journal/2026-06-19-molt-3-x/KNOWLEDGE.md"
+        journal_path = _write_journal(wd, relative_path).resolve()
+        absolute_path = str(journal_path)
+        wire = "toolu_gate_absolute_001"
+        _emit_molt_call(agent, ToolCallBlock, wire, "summary text", absolute_path)
+        result = _call(agent, {
+            "object": "context", "action": "molt",
+            "summary": "summary text", "_tc_id": wire,
+            "session_journal_path": absolute_path,
+        })
+
+        assert result.get("status") == "ok", result
+        assert result["session_journal_path"] == relative_path
+        assert result["session_journal_path"] != absolute_path
+
+        events = [
+            json.loads(line)
+            for line in (wd / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        molt_events = [event for event in events if event.get("type") == "psyche_molt"]
+        assert molt_events
+        assert molt_events[-1]["session_journal_path"] == relative_path
+        assert absolute_path not in json.dumps(molt_events[-1])
+
+        sqlite_rows = query_sqlite_event_index(
+            wd,
+            "SELECT fields_json FROM events WHERE type = 'psyche_molt' ORDER BY id",
+        )
+        assert sqlite_rows
+        sqlite_fields = json.loads(sqlite_rows[-1]["fields_json"])
+        assert sqlite_fields["session_journal_path"] == relative_path
+        assert absolute_path not in sqlite_rows[-1]["fields_json"]
     finally:
         agent.stop()
 

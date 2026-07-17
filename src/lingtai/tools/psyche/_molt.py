@@ -450,6 +450,7 @@ def _context_molt(agent, args: dict) -> dict:
         molt_count=agent._molt_count,
         kept_tool_calls=len(keep_pairs),
         kept_last=len(keep_last_entries),
+        session_journal_path=session_journal_path,
     )
 
     # Persist the agent's retrospective to system/summaries/. Best-effort —
