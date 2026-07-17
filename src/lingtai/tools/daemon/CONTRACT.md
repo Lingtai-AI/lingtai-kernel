@@ -12,6 +12,8 @@ last_changed_at: "2026-07-16"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/kernel/meta_block.py
+  - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/process_port.py
   - src/lingtai/tools/daemon/interactive_terminal/__init__.py
   - src/lingtai/tools/daemon/interactive_terminal/CONTRACT.md
@@ -36,6 +38,8 @@ related_files:
   - tests/test_codex_standalone_compaction.py
 review_triggers:
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/kernel/meta_block.py
+  - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/manual/
@@ -94,8 +98,10 @@ ownership -> §Process and Terminal Boundaries.
 ## Scope
 
 - Canonical tool name: `daemon`.
-- One tool exposes five actions: `emanate`, `list`, `ask`, `check`, `reclaim`.
-  `action` is required.
+- The parent `daemon` tool exposes five actions: `emanate`, `list`, `ask`, `check`,
+  `reclaim`; `action` is required. Every LingTai emanation additionally receives
+  the intrinsic `compact` tool, whose required `action` is explicit `run`
+  (non-terminal reset) or `manual` (read-only procedures); omission is refused.
 - Backends (`backend`, default `lingtai`): schema enum is `lingtai`, `claude-p`,
   `claude-code`, `codex`, `opencode`, `mimocode`, `mimo`, `qwen-code`, `qwen`,
   `oh-my-pi`, `omp`, `kimicode`, `kimi`, `cursor`. Aliases collapse via
@@ -278,13 +284,31 @@ callers must migrate the complete instruction into `task`, and preflight
 rejects the obsolete field before a run directory is created.
 
 Every LingTai daemon receives `compact` automatically, independent of provider.
-Its only argument is the canonical `_reason`, which must be a non-empty string
-and is the complete self-contained handoff. The sole compact call/result pair
-survives a same-run provider-context reset beside the rebuilt system prompt;
-the result contains status, resume instruction, and exact run/state/history/event
-paths. It is repeatable and non-terminal. External CLI backends never receive it.
+Its `action` is required and accepts only explicit `run` or `manual`. Execution
+uses `compact(action="run", _reason="...")` as the sole assistant-batch tool call;
+its canonical `_reason` must be a non-empty, complete self-contained handoff. The
+sole compact call/result pair survives a same-run provider-context reset beside
+the rebuilt system prompt; the result contains status, resume instruction, and
+exact run/state/history/event paths. It is repeatable and non-terminal. The
+explicit `manual` action returns read-only procedures, does not compact, and may
+be used without `_reason`. External CLI backends never receive `compact`.
 
-### 8. Per-task `context_token_limit` is Codex/native-mimo-only and lingtai-backend-only
+### 8. Daemon agent metadata and context warning
+
+The LingTai daemon's final model-visible `ToolResultBlock` in each tool batch
+carries the canonical `_meta.agent_meta` sidecar. Its `agent_state` contains only
+that daemon's runtime identity/round counters, current-call and session token
+counters, and provider-context token/window/ratio state. It deliberately omits
+the parent agent's notification and communication state; only the latest
+`agent_meta` snapshot is current and older snapshots are historical traces.
+Once daemon context usage reaches or exceeds 90%, every subsequent daemon round
+carries the exact sentence `context warning, consider compact! see compact.manual for procedures`
+in `agent_state.context.warning`. Use `compact(action="manual")` for the
+read-only procedures and explicit `compact(action="run", _reason="...")` as the
+sole-call reset. The surviving successful reset result is stamped from the fresh
+retained context, so the pre-reset warning is absent when usage falls below 90%.
+
+### 9. Per-task `context_token_limit` is Codex/native-mimo-only and lingtai-backend-only
 
 The daemon task object also carries an optional per-task `context_token_limit`
 (positive integer; bool rejected) — a context-token compaction threshold, never
@@ -434,20 +458,28 @@ change must prove all applicable items:
 
 1. Selected skills catalog/path context is visible in the final prompt/context
    without pasting SKILL.md bodies.
-2. Parent MCP registrations appear in prompt context and durable call
+2. LingTai ToolResultBlocks carry daemon-local `_meta.agent_meta` runtime,
+   token, and context state; parent notification/communication state is absent,
+   the latest snapshot is current, and the exact warning is present on every
+   round whose current context usage is >=90% and absent below that threshold.
+3. `compact(action="manual")` is read-only; `action` is required, omission is
+   refused without state change, and explicit `compact(action="run", _reason="...")`
+   remains a repeatable non-terminal sole-call reset whose surviving result
+   reflects the fresh retained context.
+4. Parent MCP registrations appear in prompt context and durable call
    parameters with `env` and `headers` values redacted.
-3. Native MCP config includes parent registrations only for transports and
+5. Native MCP config includes parent registrations only for transports and
    backends with a verified run-scoped loader; unsupported transports are
    omitted or reported honestly.
-4. `daemon_common` is available for MCP-capable daemon backends, and terminal
+6. `daemon_common` is available for MCP-capable daemon backends, and terminal
    success is gated by valid `finish(status="done")`.
-5. Unsupported backends remain documented as prompt-catalog-only or fail
+7. Unsupported backends remain documented as prompt-catalog-only or fail
    explicitly; they must not imply tool availability from prompt text alone.
-6. `.prompt`, `daemon.json`, native config files/env/argv/settings,
+8. `.prompt`, `daemon.json`, native config files/env/argv/settings,
    `result.txt`, `events.jsonl`, heartbeat, and artifact manifests remain
    inspectable within the daemon run boundary while secret-bearing native config
    is not copied into review artifacts.
-7. Terminal notification tests prove failure retry, restart reconciliation,
+9. Terminal notification tests prove failure retry, restart reconciliation,
    concurrent done-callback idempotency, crash-window idempotency, legacy
    `terminal_notified=true` and missing-key compatibility, and absence of a
    caller-facing notification toggle.
@@ -484,6 +516,8 @@ Re-check this contract when touching:
 | CLI-backend `ask` returns immediately and enforces its own timeout | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs`, `::test_ask_codex_silent_subprocess_enforces_timeout` |
 | Token rows are written to both the daemon and parent ledgers, tagged | `src/lingtai/tools/daemon/run_dir.py` | `tests/test_daemon_run_dir.py::test_append_tokens_writes_daemon_ledger`, `::test_append_tokens_writes_parent_ledger_tagged` |
 | `context_token_limit` is validated, reaches Codex and native `mimo`, and is inert for every other provider and every external CLI backend | `src/lingtai/tools/daemon/__init__.py` | `tests/test_codex_standalone_compaction.py`, `tests/test_mimo_responses_compaction.py` |
+| LingTai daemon tool results carry daemon-local `_meta.agent_meta`, omit parent notifications/guidance, and carry the exact warning only while current usage is >=90% | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_agent_meta_is_local_and_warning_tracks_current_usage` |
+| `compact.action` is required; `manual` is read-only, omission is refused, and explicit `run` resets with fresh post-compact metadata | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_compact_schema_requires_explicit_run_or_manual_action`, `::test_compact_missing_action_is_refused_without_reset`, `::test_compact_success_prunes_to_system_call_and_result` |
 | `reclaim` cancels running emanations; agent stop shuts the daemon down first | `src/lingtai/tools/daemon/__init__.py` | `tests/test_lifecycle_daemon_shutdown.py::test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock` |
 
 ## Verification Matrix

@@ -6,8 +6,8 @@ description: >
   hunch, understand `daemon(action="list")`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.7.0
-last_changed_at: "2026-07-14T00:00:00-07:00"
+version: 0.8.0
+last_changed_at: "2026-07-16"
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
@@ -153,11 +153,34 @@ files, not standalone top-level skills.
 - `context_token_limit`: optional context-token compaction threshold (rendered/provider-context tokens, not cumulative spend). Effective only for `backend="lingtai"` tasks whose resolved provider is Codex (`codex`/`codex-pool`) or the native `mimo` LLM provider (`manifest.llm.provider="mimo"` — NOT the `backend` enum's `mimo`/`mimocode` alias, which drives the external `mimo` CLI as a subprocess and never consults this field at all); every other provider and every external CLI backend ignores it. When the session's provider-visible input-token count reaches the limit, the runtime compacts provider context via that provider's standalone compaction (`POST /responses/compact`) and continues the same tool loop — the daemon keeps running; nothing restarts or drops history. Native `mimo` defaults to the stateless OpenAI Responses wire (full-history/raw-output-item replay; never `store`/`previous_response_id`/`conversation`/generic `context_management` — MiMo's Responses API marks those incompatible); an explicit `wire_api="chat_completions"` on the preset still selects the Chat Completions escape hatch instead. **Failure policy differs by provider:** a standalone-compaction failure is non-fatal for Codex (that turn's compaction is skipped; the loop continues on full history) but a HARD failure for native `mimo` (it propagates to the caller — never silently continuing on full history and never falling back to a different wire), because MiMo has no generic `context_management` fallback and no server-side state to lean on. Omit to inherit the parent service's resolved context window as the threshold. Must be a positive integer; a boolean is rejected.
 
 - `compact`: automatic for every LingTai daemon and absent from external CLI
-  backends. Call it as the sole tool call in a batch with only `_reason`, a
-  non-empty complete self-contained handoff. All previous provider-visible
+  backends. `action` is required; omission or any value other than explicit
+  `"run"`/`"manual"` is refused without changing context. For execution, call
+  `compact(action="run", _reason="...")` as the sole tool call in a batch with
+  a non-empty complete self-contained handoff. All previous provider-visible
   history is removed; only the compact assistant call/result pair and rebuilt
-  system prompt survive. The result includes exact run/state/history/event
-  paths. It is repeatable and non-terminal.
+  system prompt survive. The surviving result is stamped from the fresh retained
+  context, so a pre-reset >=90% warning clears when fresh usage is below 90%.
+  The result includes exact run/state/history/event paths. It is repeatable and
+  non-terminal.
+- `compact(action="manual")`: read-only procedures for compaction. It never
+  resets context, requires no `_reason`, and may be called to inspect the
+  procedure before deciding whether to compact. When the daemon reports
+  `context warning, consider compact! see compact.manual for procedures`, prepare
+  the complete handoff first, then call
+  `compact(action="run", _reason="...")` alone in its assistant batch. Resume
+  from the surviving call/result pair after the result;
+  do not rely on erased history or treat the reset as terminal.
+- Every LingTai daemon tool batch ends with a canonical `_meta.agent_meta`
+  snapshot on its newest final `ToolResultBlock`. Read `agent_state.daemon` for
+  run/round identity, `agent_state.token_usage` for current-call and cumulative
+  counters, and `agent_state.context` for provider context tokens/window/ratio.
+  This is daemon-local state: parent notifications and communication context are
+  intentionally absent, and no main-agent resident-guidance reference is invented.
+  Only the latest `agent_meta` is current; older snapshots are historical traces.
+  While current context usage is at or above 90%, every daemon round carries exactly
+  `context warning, consider compact! see compact.manual for procedures`; after a
+  successful compact or any other drop below 90%, the warning disappears.
+
 - Treat `task` as the parent's behavioral contract for **all** tools
   and selected skills/MCP context, not only for communication. If a daemon receives `shell`,
   say whether it may run mutating commands; if it receives file access, say what

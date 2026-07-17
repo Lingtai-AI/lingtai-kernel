@@ -37,6 +37,7 @@ from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.kernel.tool_glossary import append_tool_glossary
 from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.tool_executor import ToolExecutor
+from lingtai.kernel.meta_block import attach_daemon_agent_meta
 from lingtai.kernel.trace_redaction import redact_text
 from lingtai.adapters.posix.process_identity import (
     process_identity,
@@ -117,7 +118,158 @@ def _kill_process_group(proc, *, term_timeout: float = 5.0, kill_timeout: float 
 # Agents may request a smaller per-batch value via daemon(max_turns=...), but
 # larger values are capped here.
 DEFAULT_MAX_TURNS = 1000
+DAEMON_CONTEXT_WARNING = "context warning, consider compact! see compact.manual for procedures"
 _DAEMON_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
+
+
+class _DaemonMetaState:
+    """Daemon-local projector inputs for the canonical ``agent_meta`` envelope.
+
+    This state is intentionally scoped to one emanation and never reads the
+    parent agent's session, notification store, or token ledger.  The output
+    uses the canonical token/context field vocabulary; ``attach_daemon_agent_meta``
+    owns the envelope and latest-carrier semantics.
+    """
+
+    def __init__(self, em_id: str, run_id: str, *, max_turns: int, context_window: int = 0):
+        self.em_id = em_id
+        self.run_id = run_id
+        self.max_turns = max_turns
+        self.context_window = context_window if isinstance(context_window, int) and context_window > 0 else 0
+        self.rounds = 0
+        self.tool_calls_this_round = 0
+        self.tool_calls_total = 0
+        self.last_input_tokens = 0
+        self.last_output_tokens = 0
+        self.last_thinking_tokens = 0
+        self.last_cached_tokens = 0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_thinking_tokens = 0
+        self.total_cached_tokens = 0
+        self.warning_active = False
+
+    @staticmethod
+    def _count(value) -> int:
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+    def note_response(self, response, session) -> None:
+        self.rounds += 1
+        usage = getattr(response, "usage", None)
+        self.last_input_tokens = self._count(getattr(usage, "input_tokens", 0))
+        self.last_output_tokens = self._count(getattr(usage, "output_tokens", 0))
+        self.last_thinking_tokens = self._count(getattr(usage, "thinking_tokens", 0))
+        self.last_cached_tokens = self._count(getattr(usage, "cached_tokens", 0))
+        if usage is not None:
+            self.total_input_tokens += self.last_input_tokens
+            self.total_output_tokens += self.last_output_tokens
+            self.total_thinking_tokens += self.last_thinking_tokens
+            self.total_cached_tokens += self.last_cached_tokens
+        window = self._session_context_window(session)
+        if window > 0:
+            self.context_window = window
+        context_tokens = self._context_tokens(session)
+        self.warning_active = (
+            self.context_window > 0
+            and context_tokens * 10 >= self.context_window * 9
+        )
+
+    def note_compact_reset(self, session) -> None:
+        """Project the surviving compact result from the fresh context."""
+        self.last_input_tokens = 0
+        self.last_output_tokens = 0
+        self.last_thinking_tokens = 0
+        self.last_cached_tokens = 0
+        window = self._session_context_window(session)
+        if window > 0:
+            self.context_window = window
+        self.warning_active = False
+
+    def note_tool_batch(self, tool_calls) -> None:
+        self.tool_calls_this_round = len(tool_calls or [])
+        self.tool_calls_total += self.tool_calls_this_round
+
+    def _session_context_window(self, session) -> int:
+        try:
+            value = session.context_window()
+        except Exception:
+            value = 0
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        return 0
+
+    def _context_tokens(self, session) -> int:
+        if self.last_input_tokens > 0:
+            return self.last_input_tokens
+        interface = getattr(session, "interface", None)
+        estimate = getattr(interface, "estimate_context_tokens", None)
+        if callable(estimate):
+            try:
+                value = estimate()
+            except Exception:
+                value = 0
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+        return 0
+
+    def snapshot(self, session) -> dict:
+        context_tokens = self._context_tokens(session)
+        context = {"context_tokens": context_tokens}
+        if self.context_window > 0:
+            context["context_window"] = self.context_window
+            context["context_usage"] = round(context_tokens / self.context_window, 5)
+        if self.warning_active:
+            context["warning"] = DAEMON_CONTEXT_WARNING
+
+        current_call = {
+            "input": self.last_input_tokens,
+            "cache_miss": max(self.last_input_tokens - self.last_cached_tokens, 0),
+            "cache_rate": round(
+                min(self.last_cached_tokens / self.last_input_tokens, 1.0), 5
+            ) if self.last_input_tokens > 0 else 0.0,
+            "output": self.last_output_tokens,
+            "thinking": self.last_thinking_tokens,
+        }
+        session_usage = {
+            "api_calls": self.rounds,
+            "input_tokens": self.total_input_tokens,
+            "cached_tokens": self.total_cached_tokens,
+            "session_cache_rate": round(
+                min(self.total_cached_tokens / self.total_input_tokens, 1.0), 5
+            ) if self.total_input_tokens > 0 else 0.0,
+            "avg_input_tokens_per_api_call": int(round(self.total_input_tokens / self.rounds))
+            if self.rounds > 0 else 0,
+            "cache_miss_tokens": max(self.total_input_tokens - self.total_cached_tokens, 0),
+        }
+        if context_tokens or self.context_window > 0:
+            session_usage.update(context)
+        return {
+            "daemon": {
+                "id": self.em_id,
+                "run_id": self.run_id,
+                "backend": "lingtai",
+                "round": self.rounds,
+                "max_turns": self.max_turns,
+                "tool_calls_this_round": self.tool_calls_this_round,
+                "tool_calls_total": self.tool_calls_total,
+            },
+            "token_usage": {
+                "current_call": current_call,
+                "session": session_usage,
+            },
+            "context": context,
+        }
+
+
+_DAEMON_COMPACT_MANUAL_PROCEDURES = (
+    "Read-only manual: this action never compacts or changes daemon state.",
+    f"When context usage reaches 90% or more, the daemon receives: {DAEMON_CONTEXT_WARNING}",
+    "Prepare a complete self-contained handoff.",
+    "Call compact with action='run' as the sole tool call in its assistant batch; include only action and _reason, and make _reason the handoff and resume instruction.",
+    "After the successful non-terminal reset, resume from that surviving call/result pair; the run, state, history, and event paths in the result remain available.",
+)
+
+
 _DAEMON_COMMON_MCP_NAME = "daemon_common"
 _DAEMON_COMPLETION_FILE = "daemon_completion.json"
 _DAEMON_CLAUDE_MCP_CONFIG_FILE = "claude-mcp-config.json"
@@ -853,7 +1005,7 @@ class _ToolCollector:
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Actions: emanate (dispatch), list (status), ask (follow-up), check (inspect recent events), reclaim (kill all). Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", id=...). Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, and preset/capability inheritance; no exceptions.'
+    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Actions: emanate (dispatch), list (status), ask (follow-up), check (inspect recent events), reclaim (kill all). Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", id=...). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -863,7 +1015,7 @@ def get_schema(lang: str = "en") -> dict:
             "action": {
                 "type": "string",
                 "enum": ["emanate", "list", "ask", "check", "reclaim"],
-                "description": "Action to perform: 'emanate' (dispatch subagents), 'list' (show status), 'ask' (follow-up message), 'check' (read recent events of one emanation), 'reclaim' (kill all)",
+                "description": "Action to perform: 'emanate' (dispatch subagents), 'list' (show status), 'ask' (follow-up message), 'check' (read recent events of one emanation), 'reclaim' (kill all). LingTai emanations additionally receive compact(action='manual') for read-only procedures or explicit compact(action='run', _reason='...') for the non-terminal sole-call reset; action is required.",
             },
             "tasks": {
                 "type": "array",
@@ -1430,22 +1582,36 @@ class DaemonManager:
         schemas["compact"] = FunctionSchema(
             name="compact",
             description=(
-                "Reset this LingTai daemon into a fresh provider context in the "
-                "same run. All previous conversation and tool history will be "
-                "removed; only this compact call/result pair survives. Call "
-                "this as the sole tool call in its assistant batch, and make "
-                "_reason the complete, self-contained handoff document."
+                "Action is required. Use action='manual' for read-only compaction "
+                "procedures; it never changes context. Use action='run' to reset "
+                "this LingTai daemon into a fresh provider context in the same run. "
+                "All previous conversation and tool history will be removed; only "
+                "this compact call/result pair survives. The run action must be the "
+                "sole tool call in its assistant batch, and _reason must be the "
+                "complete, self-contained handoff document."
             ),
             parameters={
                 "type": "object",
                 "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["run", "manual"],
+                        "description": "Required: 'manual' returns read-only procedures; 'run' performs the non-terminal context reset.",
+                    },
                     "_reason": {
                         "type": "string",
-                        "description": "Complete self-contained handoff and resume instruction; do not provide a path or rely on prior context.",
+                        "description": "For action='run': complete self-contained handoff and resume instruction; do not provide a path or rely on prior context.",
                     },
                 },
-                "required": ["_reason"],
+                "required": ["action"],
                 "additionalProperties": False,
+                "anyOf": [
+                    {
+                        "properties": {"action": {"const": "run"}},
+                        "required": ["_reason"],
+                    },
+                    {"properties": {"action": {"const": "manual"}}},
+                ],
             },
         )
         return schemas, handlers
@@ -2533,6 +2699,28 @@ class DaemonManager:
         )
 
         system_prompt = run_dir.prompt_path.read_text(encoding="utf-8")
+        effective_max_turns = max_turns if max_turns is not None else self._max_turns
+        context_window = 0
+        session_context_window = getattr(session, "context_window", 0)
+        if callable(session_context_window):
+            try:
+                session_context_window = session_context_window()
+            except Exception:
+                session_context_window = 0
+        for candidate in (
+            session_context_window,
+            getattr(service, "_context_window", 0),
+            effective_preset_llm.get("context_window", 0),
+        ):
+            if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0:
+                context_window = candidate
+                break
+        daemon_meta_state = _DaemonMetaState(
+            em_id,
+            getattr(run_dir, "run_id", em_id),
+            max_turns=effective_max_turns,
+            context_window=context_window,
+        )
         compact_batch_allowed = False
         compact_reset_accepted = False
 
@@ -2543,6 +2731,16 @@ class DaemonManager:
 
             def _compact_daemon_context(_args: dict) -> dict:
                 nonlocal compact_reset_accepted
+                action = _args.get("action")
+                if action == "manual":
+                    return {
+                        "status": "success",
+                        "action": "manual",
+                        "read_only": True,
+                        "procedures": list(_DAEMON_COMPACT_MANUAL_PROCEDURES),
+                    }
+                if action != "run":
+                    return {"status": "error", "message": "action is required and must be 'run' or 'manual'; context was not reset"}
                 if not compact_batch_allowed:
                     return {"status": "error", "message": "compact must be the only tool call in its batch"}
                 reason = _args.get("_reason")
@@ -2597,10 +2795,10 @@ class DaemonManager:
             known_tools=set(dispatch),
             parallel_safe_tools=set(),
             logger_fn=_daemon_tool_logger,
-            # Daemons receive only universal per-execution tool_meta.  Parent
-            # agent/session state is intentionally not shared across this
-            # boundary.
-            meta_fn=None,
+            # Daemons receive a daemon-local agent_meta projection plus universal
+            # per-execution tool_meta. Parent agent/session and communication state
+            # are intentionally not shared across this boundary.
+            meta_fn=lambda: {"agent_state": daemon_meta_state.snapshot(session)},
             working_dir=self._agent._working_dir,
             tool_call_guard=getattr(self._agent, "_tool_call_guard", None),
         )
@@ -2623,6 +2821,7 @@ class DaemonManager:
             kickoff = prompt or "Begin the assigned daemon task."
             run_dir.record_user_send(kickoff, kind="kickoff")
             response = session.send(kickoff)
+            daemon_meta_state.note_response(response, session)
             _accum(response)
             # A detached watchdog may fire while a provider call is in flight.
             # Re-check before accepting the response so late provider return
@@ -2632,7 +2831,6 @@ class DaemonManager:
             turns = 0
             run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
 
-            effective_max_turns = max_turns if max_turns is not None else self._max_turns
             while response.tool_calls and turns < effective_max_turns:
                 if cancel_event.is_set():
                     return _mark_cancelled_or_timeout(run_dir, timeout_event)
@@ -2640,10 +2838,15 @@ class DaemonManager:
                 # Intermediate text is already persisted in chat_history via
                 # bump_turn(); do not inject daemon progress as parent requests.
 
-                has_compact_call = any(tc.name == "compact" for tc in response.tool_calls)
+                daemon_meta_state.note_tool_batch(response.tool_calls)
+                compact_execution_calls = [
+                    tc for tc in response.tool_calls
+                    if tc.name == "compact" and (tc.args or {}).get("action") == "run"
+                ]
+                has_compact_call = bool(compact_execution_calls)
                 compact_batch_allowed = (
-                    len(response.tool_calls) == 1
-                    and response.tool_calls[0].name == "compact"
+                    len(compact_execution_calls) == 1
+                    and len(response.tool_calls) == 1
                 )
                 executor.guard.record_calls(len(response.tool_calls))
                 compact_reset_accepted = False
@@ -2673,24 +2876,7 @@ class DaemonManager:
                     )
                     executor.guard.clear_progress_notice()
 
-                if intercepted:
-                    # Preserve provider pairing by recording the synthesized tool
-                    # results, then terminate the daemon with the intercept text.
-                    run_dir.record_user_send(
-                        json.dumps([str(r) for r in tool_results], ensure_ascii=False),
-                        kind="tool_results",
-                    )
-                    text = intercept_text or "[intercepted]"
-                    self._require_done_completion(run_dir, text)
-                    run_dir.mark_done(text)
-                    return text
-
-                # Tool results are written to chat_history before sending
-                run_dir.record_user_send(
-                    json.dumps([str(r) for r in tool_results], ensure_ascii=False),
-                    kind="tool_results",
-                )
-                if compact_batch_allowed and compact_reset_accepted:
+                if not intercepted and compact_batch_allowed and compact_reset_accepted:
                     if cancel_event.is_set():
                         return _mark_cancelled_or_timeout(run_dir, timeout_event)
                     from lingtai.kernel.llm.interface import ChatInterface
@@ -2714,9 +2900,39 @@ class DaemonManager:
                         tracked=False,
                         interface=retained,
                     )
-                    response = session.send(tool_results)
-                else:
-                    response = session.send(tool_results)
+                    # The compact result is the first carrier in the fresh context.
+                    # Clear pre-reset current-call state before stamping that carrier,
+                    # while preserving cumulative daemon totals and round identity.
+                    daemon_meta_state.note_compact_reset(session)
+
+                # Promote the daemon-local snapshot to the canonical final
+                # ToolResultBlock sidecar. The helper deliberately omits the
+                # parent-only notifications/communication axis. For an accepted
+                # compact reset, this now describes the fresh retained context.
+                attach_daemon_agent_meta(
+                    tool_results,
+                    agent_state=daemon_meta_state.snapshot(session),
+                )
+
+                if intercepted:
+                    # Preserve provider pairing by recording the synthesized tool
+                    # results, then terminate the daemon with the intercept text.
+                    run_dir.record_user_send(
+                        json.dumps([str(r) for r in tool_results], ensure_ascii=False),
+                        kind="tool_results",
+                    )
+                    text = intercept_text or "[intercepted]"
+                    self._require_done_completion(run_dir, text)
+                    run_dir.mark_done(text)
+                    return text
+
+                # Tool results are written to chat_history before sending.
+                run_dir.record_user_send(
+                    json.dumps([str(r) for r in tool_results], ensure_ascii=False),
+                    kind="tool_results",
+                )
+                response = session.send(tool_results)
+                daemon_meta_state.note_response(response, session)
                 _accum(response)
                 turns += 1
                 run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
@@ -2730,6 +2946,7 @@ class DaemonManager:
                     if followup:
                         run_dir.record_user_send(followup, kind="followup")
                         response = session.send(followup)
+                        daemon_meta_state.note_response(response, session)
                         _accum(response)
                         turns += 1
                         run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
