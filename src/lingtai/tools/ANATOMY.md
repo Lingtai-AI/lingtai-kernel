@@ -35,6 +35,7 @@ composes them.
 | `i18n/` | `en/zh/wen` string catalogs for every tool; registers into the kernel i18n cache via `register_strings` on import |
 | `_catalog.py` | Shared scan/manifest helpers for `knowledge` + `skills` |
 | `_file_paths.py` | `resolve_workdir_path` — shared by the five file tools |
+| `_manual.py` | `load_installed_manual` — read-only loader for tools exposing an already-installed intrinsic manual skill |
 | `_media_host.py`, `_zhipu_mode.py` | Provider-host / z.ai-mode helpers for `vision` + `web_search` |
 
 **Tool sub-packages:** `email/`, `system/`, `psyche/`, `soul/`, `notification/`
