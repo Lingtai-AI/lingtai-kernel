@@ -36,6 +36,16 @@ of relying on resident memory. The unified runtime/procedure router is
 `system-manual`; it routes expanded procedure guidance to
 `reference/procedures-manual/SKILL.md`.
 
+### Feedback after meaningful use
+
+At a meaningful use-cycle or stage boundary, rather than every turn, ask one
+focused question about what helped, failed, or should change. Use the answer first
+to improve the current instance. Then route reusable lessons to the appropriate
+durable layer: character/lingtai for operating style, knowledge for private facts
+and patterns, a skill for a reusable procedure, or the product implementation for
+code behavior. Do not turn collecting feedback into ritual or user harassment;
+skip it when there has been no meaningful use or the question would add noise.
+
 High-attention tool-result summarization guidance lives in the runtime
 guidance catalog as resident `meta_guidance`; reference/manual
 layers explain the rationale, edge cases, examples, and troubleshooting.

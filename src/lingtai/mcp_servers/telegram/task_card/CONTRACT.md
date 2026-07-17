@@ -9,8 +9,6 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
-  - src/lingtai/mcp_servers/telegram/task_card/assets/render_bash_async.py
-  - src/lingtai/mcp_servers/telegram/task_card/assets/render_daemon.py
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/account.py
   - src/lingtai/mcp_servers/telegram/server.py
@@ -20,7 +18,6 @@ related_files:
   - tests/test_telegram_task_card_programmable.py
   - tests/test_telegram_task_card_event_tail.py
   - tests/test_telegram_task_card_toggle.py
-  - tests/test_telegram_task_card_templates.py
   - tests/test_mcp_skill_manuals.py
   - tests/test_telegram_task_card_singleton.py
   - tests/test_telegram_task_card_last_message.py
@@ -308,19 +305,12 @@ edit/delete-immune, non-persisted last-message high-water.
 Packaging traceability: `tests/test_mcp_skill_manuals.py` checks that
 `pyproject.toml`
 (`[tool.setuptools.package-data]."lingtai.mcp_servers.telegram.task_card"`)
-**declares** `SKILL.md`, `ANATOMY.md`, `CONTRACT.md`, and the `assets/**/*`
-renderer templates. The test asserts the package-data declaration only — it does
-not build or inspect a wheel/sdist — so it guards against the declaration silently
-dropping this governed nested unit's docs/assets on a future ownership move, which
-is why the entry is required rather than relying on the (non-recursing) parent
-`telegram` glob. `tests/test_telegram_task_card_templates.py` locks the two
-renderer template assets themselves: both entry-point manuals, asset shape
-(stdlib-only, documented schema), and executable behavior through the real
-`TaskCardController._run_renderer` — including snapshot truthfulness (no
-`starting`/`running` without a recorded identity plus an allow-listed state) and
-the byte/type/range bounds (oversize file, container-valued fields, giant
-integers, non-finite floats, wrong types, and hostile strings all degrade to an
-explicit awaiting frame or are clipped, never fabricated).
+**declares** `SKILL.md`, `ANATOMY.md`, and `CONTRACT.md`. The test asserts the
+package-data declaration only — it does not build or inspect a wheel/sdist — so it
+guards against the declaration silently dropping this governed nested unit's
+documentation on a future ownership move. Task-specific renderers remain
+agent-owned working-directory files validated through the real
+`TaskCardController._run_renderer`; there is no fixed renderer-template contract.
 
 Verification commands (repo venv):
 
@@ -331,8 +321,7 @@ Verification commands (repo venv):
   tests/test_telegram_task_card_singleton.py \
   tests/test_telegram_task_card_last_message.py \
   tests/test_telegram_account_last_message_id.py \
-  tests/test_telegram_task_card_in_place.py \
-  tests/test_telegram_task_card_templates.py
+  tests/test_telegram_task_card_in_place.py
 .venv/bin/python -m pytest -q tests/test_architecture_documents.py \
   tests/test_mcp_skill_manuals.py
 ```

@@ -8,8 +8,6 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
-  - src/lingtai/mcp_servers/telegram/task_card/assets/render_bash_async.py
-  - src/lingtai/mcp_servers/telegram/task_card/assets/render_daemon.py
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/agent.py
 maintenance: |
@@ -29,8 +27,10 @@ owns channel frames, per-account+chat locks, compose, atomic enablement, and
 the deterministic project/ensure boundary; `TelegramManager` remains the
 Telegram transport adapter for the hard-at-most-one / last-message transaction.
 The model-facing `task_card` tool runs an agent-supplied Python renderer and
-projects only validated data onto that same resident target.
-Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
+projects only validated data onto that same resident target. The co-located manual
+teaches agents to inspect each task and producer, choose truthful evidence, and
+adapt a watcher after meaningful use; it does not prescribe a renderer layout or
+data source. Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 
 ## Components
 
@@ -173,14 +173,11 @@ Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
   capture only the turn-local `{account, chat_id}` route this controller
   reads; render/compose/persistence for both channels stays in
   `src/lingtai/mcp_servers/telegram/manager.py`.
-- **Manual:** [`SKILL.md`](SKILL.md).
-- **Manual assets:** [`assets/render_bash_async.py`](assets/render_bash_async.py)
-  and [`assets/render_daemon.py`](assets/render_daemon.py) — the two co-located,
-  stdlib-only renderer templates the manual routes agents to (shell-async job and
-  daemon task). They read an orchestrator-owned working-dir state snapshot and
-  print one bounded Task Card object; they are packaged skill assets, not runtime
-  code (the controller never imports them — it runs the agent's own working-dir
-  copy as a subprocess).
+- **Manual:** [`SKILL.md`](SKILL.md). It is the task-specific procedure: inspect
+  the producer evidence, design a truthful frame for purpose/time/activity/tokens/
+  state-gate-blocker, use the retained controller lifecycle, and ask for feedback
+  after meaningful use before extracting a reusable skill. It includes a safe
+  runnable custom-renderer example, but does not define a fixed layout or source.
 
 ## State
 
@@ -188,9 +185,9 @@ The resident module holds only in-memory channel frames, route locks, and the
 observed enablement transition. Resident message ids remain in the existing
 TelegramAccount `task_cards` state map; event history remains `events.jsonl`.
 The controller holds only in-memory per-watch state (`_watches`, threads,
-last-valid frames, error epochs). It writes no files and deletes none — the
-renderer files it runs are the agent's own working-dir copies (the shipped
-`assets/` templates are read-only starting points the agent copies and adapts).
+last-valid frames, error epochs). It writes no files and deletes none — renderer
+files are agent-owned working-directory copies selected for the current task and
+are never deleted by the controller.
 Durable Task Card state (resident message id per account+chat, composed slots,
 the `/taskcard` delivery boolean) is owned by the Telegram adapter, not here
 (see `src/lingtai/mcp_servers/ANATOMY.md`).
