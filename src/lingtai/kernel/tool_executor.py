@@ -93,6 +93,8 @@ class ToolExecutor:
         summarize_notification_threshold: int | None = None,
         reconstruction_event_fn: Callable[[], dict | None] | None = None,
         summarizer_fn: Callable[[str, str, str, str | None], str] | None = None,
+        raw_log_path: str | None = None,
+        raw_event_type: str | None = None,
     ) -> None:
         self._dispatch_fn = dispatch_fn
         self._make_tool_result_fn = make_tool_result_fn
@@ -122,6 +124,9 @@ class ToolExecutor:
         # ``summary=true`` fails closed to a summary-layer error (the raw is
         # never dumped into context); see ``maybe_summarize_result``.
         self._summarizer_fn = summarizer_fn
+        # Main agents use summary defaults; daemons pass their run-local locator.
+        self._raw_log_path = raw_log_path
+        self._raw_event_type = raw_event_type
         # Per-call capture stays outside handler payloads.  The entry is
         # consumed exactly once when the canonical ToolResultBlock is built.
         self._pending_meta_by_call_id: dict[str, dict] = {}
@@ -775,6 +780,8 @@ class ToolExecutor:
             tool_call_id=tool_call_id,
             summarizer_fn=self._summarizer_fn,
             logger_fn=self._log,
+            raw_log_path=self._raw_log_path,
+            raw_event_type=self._raw_event_type,
         )
 
     def _build_result_message(

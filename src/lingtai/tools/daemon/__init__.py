@@ -2803,6 +2803,10 @@ class DaemonManager:
             working_dir=self._agent._working_dir,
             tool_call_guard=getattr(self._agent, "_tool_call_guard", None),
             summarizer_fn=daemon_summarizer_fn,
+            raw_log_path=run_dir.events_path.relative_to(
+                self._agent._working_dir
+            ).as_posix(),
+            raw_event_type="daemon_tool_result",
         )
 
         def _accum(resp):

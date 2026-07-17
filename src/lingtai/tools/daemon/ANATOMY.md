@@ -283,9 +283,8 @@ intentional omission of the parent notification axis.
 - **Summary composition edge:** `_build_daemon_apriori_summarizer_fn` in
   `daemon/__init__.py` closes over the effective daemon `LLMService` and
   `DaemonRunDir`; `_run_emanation` injects it into the kernel `ToolExecutor`.
-  The executor retains raw-log, cap, and fail-closed replacement ownership;
-  the daemon logger preserves the raw result in the parent `logs/events.jsonl`
-  before the generated summary reaches the worker.
+  The executor retains raw-log and replacement ownership; the daemon logger
+  exposes its run-local raw-result locator to the worker.
 - **Manual:** `daemon/manual/SKILL.md` — skill documentation for the LLM.
 - **Contract:** `daemon/CONTRACT.md` — unified daemon contract for tool-surface behavior, selected skills, one-run MCP registrations, completion, artifacts, backend support status, review triggers, and acceptance gates.
 - **Kernel hooks:** `setup()` is called during capability initialization; `DaemonManager.handle()` is registered as the `daemon` tool handler.
