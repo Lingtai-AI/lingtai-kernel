@@ -27,6 +27,7 @@ from __future__ import annotations
 
 
 from lingtai.kernel.notifications import register_generic_dismiss_guard
+from .._manual import load_installed_manual
 
 register_generic_dismiss_guard(
     "email",
@@ -83,6 +84,8 @@ def handle(agent, args: dict) -> dict:
     calls handle() before boot() in a test harness), return a clear error.
     """
     action = args.get("action")
+    if action == "manual":
+        return load_installed_manual(agent, "email")
     if action == "unread":
         return {
             "status": "error",

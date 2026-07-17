@@ -7,24 +7,26 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .._file_paths import resolve_workdir_path
+from .._manual import load_installed_manual
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
 
 
 def get_description(lang: str = "en") -> str:
-    return "Find files matching a glob pattern. Use '**/' for recursive search (e.g. '**/*.py' finds all Python files). Returns sorted list of matching file paths."
+    return "Find files matching a glob pattern. Use '**/' for recursive search (e.g. '**/*.py' finds all Python files). Returns sorted list of matching file paths. Call glob(action='manual') to return the installed file-manual skill."
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "pattern": {"type": "string", "description": "Glob pattern (e.g., '**/*.py')"},
+            "action": {"type": "string", "enum": ["manual"], "description": "Use action='manual' to return the installed file-manual skill without searching."},
+            "pattern": {"type": "string", "description": "Glob pattern (e.g., '**/*.py'). Required for ordinary searches; omit for action='manual'."},
             "path": {"type": "string", "description": 'Directory to search in'},
             "summary": {"type": "boolean", "description": 'Optional. Default false. When true, this tool runs normally and the raw result is preserved in the durable log (retrievable by tool_call_id), but before the result enters your context it is replaced by an LLM-generated summary driven by your `reasoning` field — so make `reasoning` specific about what to retain. Set true only when the output is expected to be large (>10k chars) and you do NOT need the exact raw text. Leave false when you need exact line/file/diff/stderr text. The summary is non-canonical; if the raw exceeds 500,000 chars no summary is generated and you get a refusal pointing at the preserved raw.', "default": False},
         },
-        "required": ["pattern"],
+        "required": [],
     }
 
 
@@ -33,6 +35,8 @@ def setup(agent: "BaseAgent") -> None:
     """Set up the glob capability on an agent."""
 
     def handle_glob(args: dict) -> dict:
+        if args.get("action") == "manual":
+            return load_installed_manual(agent, "file-manual")
         pattern = args.get("pattern", "")
         if not pattern:
             return {"status": "error", "message": "pattern is required"}

@@ -31,6 +31,7 @@ from ._lingtai import _lingtai_update, _lingtai_load  # noqa: F401
 
 # Molt (the public surface)
 from ._molt import _context_molt, _name_set, _name_nickname, context_forget  # noqa: F401
+from .._manual import load_installed_manual
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +40,7 @@ from ._molt import _context_molt, _name_set, _name_nickname, context_forget  # n
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Identity, pad, and context management — three objects, all molt-surviving. lingtai: your 灵台 (character) — update after significant work or before molt. pad: system-prompt sketchboard (system/pad.md) — plans, tasks, notes. context: molt (凝蜕) — shed conversation, keep stores. name: set true name (once) or change nickname. See psyche-manual skill for full molt/pad guidance.'
+    return 'Identity, pad, and context management — three objects, all molt-surviving. lingtai: your 灵台 (character) — update after significant work or before molt. pad: system-prompt sketchboard (system/pad.md) — plans, tasks, notes. context: molt (凝蜕) — shed conversation, keep stores. name: set true name (once) or change nickname. Call psyche(action="manual") to return the installed psyche-manual skill.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -53,7 +54,7 @@ def get_schema(lang: str = "en") -> dict:
             },
             "action": {
                 "type": "string",
-                "description": 'lingtai: update | load. update auto-loads.\npad: edit | load | append. edit auto-loads. append pins files as read-only reference.\ncontext: molt. Requires `summary` — tend the four stores BEFORE molting. See psyche-manual.\nname: set (true name, once) | nickname (display name, mutable).',
+                "description": 'lingtai: update | load. update auto-loads.\npad: edit | load | append. edit auto-loads. append pins files as read-only reference.\ncontext: molt. Requires `summary` — tend the four stores BEFORE molting. See psyche-manual.\nname: set (true name, once) | nickname (display name, mutable).\nmanual: return the installed psyche-manual skill; object is omitted.',
             },
             "content": {
                 "type": "string",
@@ -82,7 +83,7 @@ def get_schema(lang: str = "en") -> dict:
                 "description": 'REQUIRED for context molt. The path to the session-journal entry you wrote for the just-finished segment BEFORE molting: knowledge/session-journal/<entry>/KNOWLEDGE.md (a per-segment sub-entry, NOT the parent index). Must be inside your workdir, exist, be non-empty UTF-8, have valid YAML frontmatter with `name` and `description`, and identify itself as session knowledge via `type: session-journal` or `session_journal: true`. The molt is refused before any context is shed if this is missing or invalid. See psyche-manual §4.',
             },
         },
-        "required": ["object", "action"],
+        "required": ["action"],
     }
 
 
@@ -111,6 +112,9 @@ def handle(agent, args: dict) -> dict:
     """Handle psyche tool — dispatch to (object, action) handler."""
     obj = args.get("object", "")
     action = args.get("action", "")
+
+    if action == "manual":
+        return load_installed_manual(agent, "psyche-manual")
 
     valid = _VALID_ACTIONS.get(obj)
     if valid is None:

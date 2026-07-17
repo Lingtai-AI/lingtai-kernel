@@ -10,6 +10,7 @@ Actions (voluntary, agent-callable):
     clear     — force a full molt on another agent (requires karma)
     nirvana   — permanently destroy an agent's working directory (requires nirvana)
     presets   — list available presets in the agent's library
+    manual    — return the installed system-manual skill without mutation
     summarize — record an agent-authored compact replacement for a prior
                 tool-result block in runtime history. Pick targets from
                 ``_meta.agent_meta.agent_state.current_tool_result_chars.top_results``.
@@ -44,6 +45,7 @@ from __future__ import annotations
 
 # Schema (tool registration)
 from .schema import get_description, get_schema  # noqa: F401
+from .._manual import load_installed_manual
 
 # Summarize — agent-authored context summarization
 from .summarize import _summarize, SUMMARIZE_MARKER  # noqa: F401
@@ -86,6 +88,11 @@ from .karma import (  # noqa: F401
 # ---------------------------------------------------------------------------
 
 
+def _manual(agent, args: dict) -> dict:
+    """Return the installed system manual without changing runtime state."""
+    return load_installed_manual(agent, "system-manual")
+
+
 def handle(agent, args: dict) -> dict:
     """Handle system tool — runtime, lifecycle, synchronization.
 
@@ -110,6 +117,7 @@ def handle(agent, args: dict) -> dict:
         "nirvana": _nirvana,
         "presets": _presets,
         "summarize": _summarize,
+        "manual": _manual,
     }.get(action)
     if handler is None:
         return {"status": "error", "message": f"Unknown system action: {action}"}

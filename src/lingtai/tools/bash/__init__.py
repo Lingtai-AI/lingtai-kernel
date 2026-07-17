@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ._shell_dialect import ShellDialect, ShellInvocation, extract_posix_commands
+from .._manual import load_installed_manual
 
 from ._async_supervisor import (
     load_state,
@@ -234,7 +235,7 @@ def get_description(
             "Returns exit_code, stdout, stderr, plus ok (bool) and command_status ('success'/'failed'). IMPORTANT: top-level status stays 'ok' even when the command FAILS — it only means the shell ran. "
             "Always check exit_code/ok and read the warning field (it names nonzero exits, Python tracebacks, and missing modules); never assume success from status alone. "
             "Avoid broad recursive scans (find … -name, rglob, os.walk, glob('**')) — they time out; prefer `rg --files`. Parse JSONL line-by-line, not as one JSON blob. "
-            "Supports async mode (async=true → job_id, then poll/cancel). Before using this tool, read the `shell-manual` skill — it covers async hygiene and advanced usage; no exceptions.")
+            "Supports async mode (async=true → job_id, then poll/cancel). Call shell(action='manual') to return the installed shell-manual skill. Before ordinary shell work, read that manual — it covers async hygiene and advanced usage; no exceptions.")
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -243,8 +244,8 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["run", "poll", "cancel"],
-                "description": "Action to perform: 'run' (default) executes a command, 'poll' checks async job status, 'cancel' kills an async job",
+                "enum": ["run", "poll", "cancel", "manual"],
+                "description": "Action to perform: 'run' (default) executes a command, 'poll' checks async job status, 'cancel' kills an async job, 'manual' returns the installed shell-manual skill",
                 "default": "run",
             },
             "command": {
@@ -280,7 +281,7 @@ def get_schema(lang: str = "en") -> dict:
                 "default": False,
             },
         },
-        "required": ["reminder"],  # command/job_id are enforced per action; handler defaults omitted reminder for runtime compatibility
+        "required": [],  # action-specific inputs are enforced by the handler; manual needs none
     }
 
 
@@ -479,6 +480,8 @@ class ShellManager:
 
     def handle(self, args: dict) -> dict:
         action = args.get("action", "run")
+        if action == "manual":
+            return load_installed_manual(self._agent, "shell")
         if action == "poll":
             return self._handle_poll(args)
         if action == "cancel":

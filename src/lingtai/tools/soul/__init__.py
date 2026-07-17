@@ -22,6 +22,7 @@ from __future__ import annotations
 
 # Re-export constants from config.py
 from lingtai.kernel.config import DEFAULT_SOUL_DELAY_SECONDS
+from .._manual import load_installed_manual
 from .config import (
     SOUL_DELAY_MIN_SECONDS,
     CONSULTATION_PAST_COUNT_MIN,
@@ -79,7 +80,7 @@ from .flow import (
 
 
 def get_description(lang: str = "en") -> str:
-    return "Your inner voice. flow is OPT-IN and DISABLED by default: it runs only when the operator sets env LINGTAI_SOUL_FLOW_ENABLED=1 (then refreshes). While disabled, soul(action='flow') returns status='disabled' (not an error — do not retry); inquiry/config/voice/dismiss still work. When enabled, flow fires periodic past-self consultation every soul_delay seconds while IDLE — M=1+K parallel LLM calls (1 stepped-back read of current chat + K past-snapshot voices) arrive as an involuntary soul(action='flow') pair. delay_seconds is only the cadence after opt-in, NOT an off switch. inquiry: ask a deep copy of yourself a question; answer returns in the tool result. config: tune flow knobs at runtime (delay_seconds, consultation_past_count) — does not enable flow. dismiss: clear the current flow notification. See soul-manual skill."
+    return "Your inner voice. flow is OPT-IN and DISABLED by default: it runs only when the operator sets env LINGTAI_SOUL_FLOW_ENABLED=1 (then refreshes). While disabled, soul(action='flow') returns status='disabled' (not an error — do not retry); inquiry/config/voice/dismiss still work. When enabled, flow fires periodic past-self consultation every soul_delay seconds while IDLE — M=1+K parallel LLM calls (1 stepped-back read of current chat + K past-snapshot voices) arrive as an involuntary soul(action='flow') pair. delay_seconds is only the cadence after opt-in, NOT an off switch. inquiry: ask a deep copy of yourself a question; answer returns in the tool result. config: tune flow knobs at runtime (delay_seconds, consultation_past_count) — does not enable flow. dismiss: clear the current flow notification. manual: return the installed soul-manual skill. See soul-manual for details."
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -88,8 +89,8 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["inquiry", "flow", "config", "voice", "dismiss"],
-                "description": "inquiry: ask yourself a question — the answer returns in the tool result. Requires 'inquiry' parameter. Always available. flow: OPT-IN, DISABLED by default. Only runs when the operator sets env LINGTAI_SOUL_FLOW_ENABLED=1 (case-insensitive true/yes/on) and refreshes/restarts. While DISABLED, invoking flow returns {status:'disabled', enabled:false} with an explanation — this is expected config state, NOT an error, so do NOT retry it; the operator must set the env var first. When ENABLED, flow fires automatically every soul_delay seconds while IDLE — appears in history as a soul(action='flow') call you did not initiate, with voices from past selves and a stepped-back read of your current chat. You may ALSO invoke flow voluntarily while ACTIVE: the call returns immediately with a success acknowledgement, and the actual voices arrive shortly after as a separate involuntary soul(action='flow') pair. If a fire is already running when you invoke, the call is rejected with 'soul flow ongoing, request rejected' — wait for the current fire to land, then try again. config: tune flow knobs — pass any subset of delay_seconds (wall-clock cadence, min 30s), consultation_past_count (K voices per fire, 0–5). At least one field required. Persists to init.json. config does NOT enable flow — delay_seconds is only cadence after the env opt-in, never an off switch. voice: choose how your own soul-flow voice sounds. Bare (no 'set') reads the current voice + the resolved prompt. Pass set='inner' or set='observer' to switch presets. Pass set='custom' with a 'prompt' field to write your own — speak to yourself as the soul, describe how you want to be framed when reading your own diary. Persists to init.json. This is yours; the operator does not choose it for you. dismiss: clear the current soul flow notification from the notification panel. Use when you've read the voices and want to dismiss them before the next fire replaces them. inquiry/config/voice/dismiss all work whether or not flow is enabled. See soul-manual skill for enabling/disabling, troubleshooting, and the privacy/cost rationale.",
+                "enum": ["inquiry", "flow", "config", "voice", "dismiss", "manual"],
+                "description": "inquiry: ask yourself a question — the answer returns in the tool result. Requires 'inquiry' parameter. Always available. flow: OPT-IN, DISABLED by default. Only runs when the operator sets env LINGTAI_SOUL_FLOW_ENABLED=1 (case-insensitive true/yes/on) and refreshes/restarts. While DISABLED, invoking flow returns {status:'disabled', enabled:false} with an explanation — this is expected config state, NOT an error, so do NOT retry it; the operator must set the env var first. When ENABLED, flow fires automatically every soul_delay seconds while IDLE — appears in history as a soul(action='flow') call you did not initiate, with voices from past selves and a stepped-back read of your current chat. You may ALSO invoke flow voluntarily while ACTIVE: the call returns immediately with a success acknowledgement, and the actual voices arrive shortly after as a separate involuntary soul(action='flow') pair. If a fire is already running when you invoke, the call is rejected with 'soul flow ongoing, request rejected' — wait for the current fire to land, then try again. config: tune flow knobs — pass any subset of delay_seconds (wall-clock cadence, min 30s), consultation_past_count (K voices per fire, 0–5). At least one field required. Persists to init.json. config does NOT enable flow — delay_seconds is only cadence after the env opt-in, never an off switch. voice: choose how your own soul-flow voice sounds. Bare (no 'set') reads the current voice + the resolved prompt. Pass set='inner' or set='observer' to switch presets. Pass set='custom' with a 'prompt' field to write your own — speak to yourself as the soul, describe how you want to be framed when reading your own diary. Persists to init.json. This is yours; the operator does not choose it for you. dismiss: clear the current soul flow notification from the notification panel. Use when you've read the voices and want to dismiss them before the next fire replaces them. inquiry/config/voice/dismiss all work whether or not flow is enabled. manual returns the installed soul-manual skill without changing soul state. See that manual for enabling/disabling, troubleshooting, and the privacy/cost rationale.",
             },
             "inquiry": {
                 "type": "string",
@@ -129,6 +130,9 @@ def handle(agent, args: dict) -> dict:
     wire pair.
     """
     action = args.get("action", "")
+
+    if action == "manual":
+        return load_installed_manual(agent, "soul-manual")
 
     if action == "flow":
         # Opt-in gate: soul flow is disabled by default. When disabled,
@@ -243,6 +247,6 @@ def handle(agent, args: dict) -> dict:
     return {
         "error": (
             f"Unknown soul action: {action}. Use inquiry, config, voice, dismiss, "
-            "or wait for flow (mechanical)."
+            "manual, or wait for flow (mechanical)."
         )
     }

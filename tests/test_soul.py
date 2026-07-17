@@ -188,7 +188,7 @@ class TestSoulSchema:
         # at runtime), voice (agent picks/customizes own soul-flow
         # prompt — read or set), and dismiss (clear soul notification).
         assert schema["properties"]["action"]["enum"] == [
-            "inquiry", "flow", "config", "voice", "dismiss",
+            "inquiry", "flow", "config", "voice", "dismiss", "manual",
         ]
 
     def test_schema_inquiry_property_present(self):

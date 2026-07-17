@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from lingtai.kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
 
 from .._file_paths import resolve_workdir_path
+from .._manual import load_installed_manual
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -51,20 +52,21 @@ def _resolve_call_cap(agent: "BaseAgent", requested_max_chars: object) -> int:
 
 
 def get_description(lang: str = "en") -> str:
-    return "Read the contents of a text file. Returns numbered lines. Text files only — cannot read binary, images, or audio. Before using read, especially for large files, complete-content workflows, truncation, or line_truncated handling, read the read-manual skill. If the file is non-UTF-8 or needs careful search/edit workflow, read file-manual first. Use offset/limit for line windows and optional max_chars to choose the per-call character budget. Default read budget is 100 000 characters; max_chars can raise/lower that per call but is clamped by the non-configurable runtime hard cap of 200 000 characters. A successful read can still be truncated: check truncated=true, cap_chars, returned_chars, next_offset, remaining_lines_estimate, and line_truncated. Continue with next_offset until done. If line_truncated=true, the shown physical line is only a prefix; next_offset skips to the next line and does not recover the hidden tail. Use the read-manual's bash/Python metadata/stats workflow (file size, line count, longest line) and targeted grep/sed/Python processing for such content."
+    return "Read the contents of a text file. Returns numbered lines. Text files only — cannot read binary, images, or audio. Call read(action='manual') to return the installed read-manual skill. Before ordinary reads, especially for large files, complete-content workflows, truncation, or line_truncated handling, read that manual. If the file is non-UTF-8 or needs careful search/edit workflow, read file-manual first. Use offset/limit for line windows and optional max_chars to choose the per-call character budget. Default read budget is 100 000 characters; max_chars can raise/lower that per call but is clamped by the non-configurable runtime hard cap of 200 000 characters. A successful read can still be truncated: check truncated=true, cap_chars, returned_chars, next_offset, remaining_lines_estimate, and line_truncated. Continue with next_offset until done. If line_truncated=true, the shown physical line is only a prefix; next_offset skips to the next line and does not recover the hidden tail. Use the read-manual's bash/Python metadata/stats workflow (file size, line count, longest line) and targeted grep/sed/Python processing for such content."
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "file_path": {"type": "string", "description": 'Absolute path to the file to read'},
+            "action": {"type": "string", "enum": ["manual"], "description": "Use action='manual' to return the installed read-manual skill without reading a target file."},
+            "file_path": {"type": "string", "description": "Absolute path to the file to read. Required for ordinary reads; omit for action='manual'."},
             "offset": {"type": "integer", "description": 'Line number to start from (1-based)', "default": 1},
             "limit": {"type": "integer", "description": 'Max lines to read', "default": 2000},
             "max_chars": {"type": "integer", "description": 'Optional per-call character budget for read content. Defaults to 100 000; values above the runtime hard cap are clamped to 200 000. Use read-manual before setting this for large files.'},
             "summary": {"type": "boolean", "description": 'Optional. Default false. When true, this tool runs normally and the raw result is preserved in the durable log (retrievable by tool_call_id), but before the result enters your context it is replaced by an LLM-generated summary driven by your `reasoning` field — so make `reasoning` specific about what to retain. Set true only when the output is expected to be large (>10k chars) and you do NOT need the exact raw text. Leave false when you need exact line/file/diff/stderr text. The summary is non-canonical; if the raw exceeds 500,000 chars no summary is generated and you get a refusal pointing at the preserved raw.', "default": False},
         },
-        "required": ["file_path"],
+        "required": [],
     }
 
 
@@ -129,6 +131,8 @@ def setup(agent: "BaseAgent") -> None:
     """Set up the read capability on an agent."""
 
     def handle_read(args: dict) -> dict:
+        if args.get("action") == "manual":
+            return load_installed_manual(agent, "read-manual")
         path = args.get("file_path", "")
         if not path:
             return {"status": "error", "message": "file_path is required"}
