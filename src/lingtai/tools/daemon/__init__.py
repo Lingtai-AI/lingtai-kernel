@@ -123,6 +123,42 @@ DAEMON_CONTEXT_WARNING = "context warning, consider compact! see compact.manual 
 _DAEMON_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 
 
+def _build_daemon_apriori_summarizer_fn(service, run_dir, *, provider, model, endpoint=None):
+    """Build the daemon-local a-priori summary gateway.
+
+    The closure deliberately owns the effective daemon service and run directory for this run:
+    it creates an untracked, no-tools session on that same provider/model and
+    accounts usage through the daemon dual-ledger path. It is inert unless the
+    ToolExecutor receives summary=true.
+    """
+    if service is None or not callable(getattr(service, "create_session", None)):
+        return None
+
+    def _summarize(system_prompt, user_prompt, tool_name, tool_call_id=None):
+        session = service.create_session(
+            system_prompt=system_prompt,
+            tools=None,
+            model=model,
+            tracked=False,
+            provider=provider,
+        )
+        response = session.send(user_prompt)
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            run_dir.append_tokens(
+                input=usage.input_tokens,
+                output=usage.output_tokens,
+                thinking=usage.thinking_tokens,
+                cached=usage.cached_tokens,
+                model=model,
+                endpoint=endpoint,
+                usage_extra=getattr(usage, "extra", None),
+            )
+        return getattr(response, "text", "") or ""
+
+    return _summarize
+
+
 class _DaemonMetaState:
     """Daemon-local projector inputs for the canonical ``agent_meta`` envelope.
 
@@ -2687,6 +2723,9 @@ class DaemonManager:
         compact_reset_accepted = False
 
         endpoint = getattr(service, "_base_url", None)
+        daemon_summarizer_fn = _build_daemon_apriori_summarizer_fn(
+            service, run_dir, provider=provider, model=effective_model, endpoint=endpoint,
+        )
 
         if "compact" in {schema.name for schema in schemas}:
             dispatch = dict(dispatch)
@@ -2763,6 +2802,7 @@ class DaemonManager:
             meta_fn=lambda: {"agent_state": daemon_meta_state.snapshot(session)},
             working_dir=self._agent._working_dir,
             tool_call_guard=getattr(self._agent, "_tool_call_guard", None),
+            summarizer_fn=daemon_summarizer_fn,
         )
 
         def _accum(resp):

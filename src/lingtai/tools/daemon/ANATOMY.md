@@ -6,6 +6,9 @@ related_files:
   - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/prompts/ANATOMY.md
   - src/lingtai/kernel/meta_block.py
+  - src/lingtai/kernel/tool_executor.py
+  - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/llm/service.py
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/process_port.py
   - src/lingtai/tools/daemon/interactive_terminal/__init__.py
@@ -18,6 +21,7 @@ related_files:
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/mcp_servers/daemon_common/server.py
   - tests/test_daemon.py
+  - tests/test_apriori_summary_executor.py
   - tests/test_daemon_run_dir.py
   - tests/test_daemon_codex_usage.py
   - tests/test_codex_standalone_compaction.py
@@ -276,6 +280,12 @@ intentional omission of the parent notification axis.
 
 - **Parent:** `src/lingtai/tools/` (tool package).
 - **Siblings:** `avatar/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), canonical `shell` (retained `bash/` implementation).
+- **Summary composition edge:** `_build_daemon_apriori_summarizer_fn` in
+  `daemon/__init__.py` closes over the effective daemon `LLMService` and
+  `DaemonRunDir`; `_run_emanation` injects it into the kernel `ToolExecutor`.
+  The executor retains raw-log, cap, and fail-closed replacement ownership;
+  the daemon logger preserves the raw result in the parent `logs/events.jsonl`
+  before the generated summary reaches the worker.
 - **Manual:** `daemon/manual/SKILL.md` — skill documentation for the LLM.
 - **Contract:** `daemon/CONTRACT.md` — unified daemon contract for tool-surface behavior, selected skills, one-run MCP registrations, completion, artifacts, backend support status, review triggers, and acceptance gates.
 - **Kernel hooks:** `setup()` is called during capability initialization; `DaemonManager.handle()` is registered as the `daemon` tool handler.

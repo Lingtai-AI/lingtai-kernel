@@ -1,11 +1,12 @@
 ---
 name: grep-contract
 tool: grep
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/grep/__init__.py
   - src/lingtai/tools/_file_paths.py
   - src/lingtai/services/file_io_sidecar.py
+  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -44,10 +45,21 @@ the code is the source of truth.
 
 ## Tool surface
 
-Single action; the handler is `handle_grep`. The schema requires `pattern`. Note
-the tool-facing names differ from the service kwargs: the schema exposes `glob`
-and `max_matches`, which the handler maps to the service's `glob_filter` and
-`max_results`.
+`handle_grep` has two modes:
+
+- **Ordinary:** omit `action` (backward compatible) or set
+  `action="grep"`; both forms run the same grep operation.
+- **Manual:** `action="manual"` returns the installed `file-manual` without
+  attempting to search file content.
+
+The schema lists `grep` before `manual`. Any other explicit action
+returns a plain error before file I/O. After a manual response, the caller
+continues the original task with an ordinary call rather than repeating the
+manual.
+
+The tool-facing names differ from the service kwargs: the schema exposes
+`glob` and `max_matches`, which the handler maps to the service's
+`glob_filter` and `max_results`.
 
 | Call | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|

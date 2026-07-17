@@ -102,6 +102,11 @@ files, not standalone top-level skills.
   finish truthfully. The complete rendered system prompt is capped at 20,000
   characters and fails instead of truncating task/skill/MCP context. Keep the
   run-specific objective, authority, safety boundary, and deliverable in `task`.
+- On the LingTai backend, explicit `summary=true` uses a daemon-local,
+  no-tools session on the same effective service, provider, and model.
+  `ToolExecutor` logs the raw result first through the daemon logger into the
+  parent `logs/events.jsonl`, then returns only the generated summary or
+  fail-closed refusal/error to the worker.
 - Think of each task item as **task objective + behavior guidance + tool
   surface**:
   - `task` is the complete parent-controlled daemon system instruction:

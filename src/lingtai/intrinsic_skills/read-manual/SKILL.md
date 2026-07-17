@@ -193,3 +193,17 @@ Before calling `read`:
 - Does the result show `line_truncated=true`? Switch to `bash`/`grep`/`sed`/Python.
 - Does the result show `status=spilled`? Read the `spill_path` artifact or reduce `limit`.
 - Do you need a specific region? Pass `offset` and a tight `limit`.
+
+
+## Manual versus ordinary reads
+
+Normal reading is primary:
+
+- For backward compatibility, an ordinary read may omit `action` or set
+  `action="read"`, then provide `file_path` and any window controls.
+- Use `action="manual"` as a one-time entry when you need this guide. It
+  returns the installed manual and does not read a target file.
+
+After the manual returns, continue the original task with an ordinary read.
+Do not request the same manual again. Repeating an identical manual call is
+an error loop, not progress.

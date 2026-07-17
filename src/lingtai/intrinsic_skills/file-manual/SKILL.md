@@ -178,3 +178,19 @@ Before using file tools:
 - Is the file large? If yes, search or read a slice.
 - Am I about to overwrite? If yes, read first or confirm intent.
 - Am I about to replace many occurrences? If yes, grep first.
+
+
+## Manual versus ordinary calls
+
+Normal file work is primary. Each file tool has two explicit modes:
+
+- **Ordinary work:** for backward compatibility, omit `action` or set it to
+  the tool name: `action="read"`, `"write"`, `"edit"`, `"glob"`, or `"grep"`.
+  Supply the ordinary arguments shown in that tool's schema.
+- **Manual lookup:** use `action="manual"` as a one-time entry when you need
+  the installed workflow guide. This returns documentation and does not
+  perform the file operation.
+
+After a manual result, continue the original task with an ordinary call.
+Do not request the same manual again. Repeating an identical manual call is
+an error loop, not progress.

@@ -14,14 +14,14 @@ if TYPE_CHECKING:
 
 
 def get_description(lang: str = "en") -> str:
-    return "Search file contents for lines matching a regex pattern. Returns matching lines with file path and line number. Searches recursively when given a directory. Use the glob filter to narrow to specific file types. Call grep(action='manual') to return the installed file-manual skill."
+    return "Search file contents for lines matching a regex pattern. Normal searches are the primary operation: omit action for the legacy ordinary call or use action='grep' explicitly. Returns matching lines with file path and line number. Searches recursively when given a directory. Use the glob filter to narrow to specific file types. Use action='manual' once to return the installed file-manual skill; after the manual result, continue the original ordinary grep instead of repeating manual, because repeated identical manual calls are an error loop."
 
 
 def get_schema(lang: str = "en") -> dict:
     return {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["manual"], "description": "Use action='manual' to return the installed file-manual skill without searching."},
+            "action": {"type": "string", "enum": ["grep", "manual"], "description": "Omit action for the legacy ordinary grep, use action='grep' for an explicit ordinary search, or use action='manual' once for the installed file-manual skill."},
             "pattern": {"type": "string", "description": "Regex pattern to search for. Required for ordinary searches; omit for action='manual'."},
             "path": {"type": "string", "description": 'File or directory to search in'},
             "glob": {"type": "string", "description": "File glob filter (e.g., '*.py')", "default": "*"},
@@ -37,8 +37,11 @@ def setup(agent: "BaseAgent") -> None:
     """Set up the grep capability on an agent."""
 
     def handle_grep(args: dict) -> dict:
-        if args.get("action") == "manual":
+        action = args.get("action")
+        if action == "manual":
             return load_installed_manual(agent, "file-manual")
+        if action is not None and action != "grep":
+            return {"status": "error", "message": f"Unsupported action for grep: {action!r}"}
         pattern = args.get("pattern", "")
         if not pattern:
             return {"status": "error", "message": "pattern is required"}
