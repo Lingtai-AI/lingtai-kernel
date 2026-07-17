@@ -11,6 +11,12 @@ on:
           release.published trigger always publishes.
         type: boolean
         default: false
+      release_tag:
+        description: >-
+          Optional existing v* tag to check out for an exact-tag manual
+          recovery. Empty keeps the selected workflow ref.
+        type: string
+        default: ""
   release:
     types: [published]
 
@@ -50,6 +56,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Set up QEMU for Linux aarch64 wheels
         if: runner.os == 'Linux'
@@ -152,6 +160,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -187,8 +197,9 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.release_tag || github.ref }}
           # sync_gitee_mirror.py needs the full history reachable from
-          # ${{ github.sha }} to `git cat-file -e`/push it; a shallow
+          # the checked-out commit to `git cat-file -e`/push it; a shallow
           # checkout (the actions/checkout@v4 default) would make that fail.
           fetch-depth: 0
 
@@ -216,10 +227,10 @@ jobs:
       - name: Generate release manifest + SHA256SUMS
         env:
           # release.published fires with a real tag; workflow_dispatch has no
-          # tag, so fall back to the pyproject version prefixed with "v" and
-          # the checked-out commit — this keeps manual-dispatch runs usable
-          # for manifest-shape testing without pretending a release exists.
-          KERNEL_TAG: ${{ github.event.release.tag_name || '' }}
+          # tag unless release_tag explicitly selects an existing tag for
+          # exact-source recovery. Otherwise fall back to the pyproject version
+          # and checked-out workflow ref for dry-run manifest-shape testing.
+          KERNEL_TAG: ${{ github.event.release.tag_name || inputs.release_tag || '' }}
         run: |
           set -euo pipefail
           version="$(python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
@@ -229,7 +240,7 @@ jobs:
             --assets-dir release-assets \
             --kernel-version "$version" \
             --kernel-tag "$tag" \
-            --commit "${{ github.sha }}" \
+            --commit "$(git rev-parse HEAD)" \
             --generated-at "$generated_at" \
             --out-manifest release-assets/lingtai-kernel-release-manifest.json \
             --out-sha256sums release-assets/SHA256SUMS
@@ -259,25 +270,26 @@ jobs:
         run: |
           set -euo pipefail
           version="$(python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
-          tag="${{ github.event.release.tag_name || '' }}"
+          tag="${{ github.event.release.tag_name || inputs.release_tag || '' }}"
           tag="${tag:-v${version}}"
           # Skips cleanly (exit 0, prints why) when GITEE_ACCESS_TOKEN is
           # unset — see sync_gitee_mirror.py. Every push is non-force; a
           # divergence/existing-tag conflict fails this step loud rather than
           # silently overwriting the mirror.
           python scripts/sync_gitee_mirror.py \
-            --commit "${{ github.sha }}" \
+            --commit "$(git rev-parse HEAD)" \
             --tag "$tag" \
             --branch main \
             --execute
 
       - name: Publish manifest/wheels/sdist
         env:
+          GH_TOKEN: ${{ github.token }}
           GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           version="$(python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
-          tag="${{ github.event.release.tag_name || '' }}"
+          tag="${{ github.event.release.tag_name || inputs.release_tag || '' }}"
           tag="${tag:-v${version}}"
           execute_flag=""
           if [[ "${{ steps.publish_mode.outputs.execute }}" == "1" ]]; then

@@ -1,7 +1,8 @@
 """Static assertions over .github/workflows/wheels.yml's release-manifest job:
 proves the publish step is actually reachable with --execute on the real
-release trigger (Blocker 3 repair), that manual dispatch defaults to dry-run,
-and that the Gitee sync step never force-pushes. This is a workflow-shape
+release trigger (Blocker 3 repair), that manual dispatch defaults to dry-run, that exact-tag recovery checks out
+the selected tag, that GitHub publication is authenticated, and that the
+Gitee sync step never force-pushes. This is a workflow-shape
 test, not a live GitHub Actions run — it parses the committed YAML/shell
 text.
 """
@@ -131,3 +132,40 @@ def test_release_manifest_job_installs_declared_packaging_dependency():
     script = step["run"]
     assert "python -m pip install" in script
     assert "packaging>=24.0" in script
+
+
+
+def test_workflow_dispatch_exact_tag_recovery_input_defaults_empty():
+    data = _load_workflow()
+    on = data.get("on") or data.get(True)
+    recovery = on["workflow_dispatch"]["inputs"]["release_tag"]
+    assert recovery["type"] == "string"
+    assert recovery["default"] == ""
+
+
+def test_all_release_jobs_checkout_the_optional_exact_recovery_tag():
+    data = _load_workflow()
+    expected = "${{ inputs.release_tag || github.ref }}"
+    for job_name in ("build-wheels", "build-sdist", "release-manifest"):
+        step = _step(data["jobs"][job_name], "Check out repository")
+        assert step.get("with", {}).get("ref") == expected, job_name
+
+
+def test_manifest_and_gitee_sync_use_the_checked_out_commit_and_recovery_tag():
+    job = _release_manifest_job(_load_workflow())
+    manifest = _step(job, "Generate release manifest")
+    sync = _step(job, "synchronize the exact commit/tag to Gitee")
+    publish = _step(job, "Publish manifest")
+    assert "inputs.release_tag" in manifest["env"]["KERNEL_TAG"]
+    for step in (manifest, sync):
+        assert "git rev-parse HEAD" in step["run"]
+        assert "github.sha" not in step["run"]
+    assert "inputs.release_tag" in sync["run"]
+    assert "inputs.release_tag" in publish["run"]
+
+
+def test_publish_step_receives_github_cli_token_without_printing_it():
+    job = _release_manifest_job(_load_workflow())
+    step = _step(job, "Publish manifest")
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "$GH_TOKEN" not in step["run"]
