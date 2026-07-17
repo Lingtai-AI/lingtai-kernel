@@ -64,6 +64,7 @@ _CONVERSATION_PREVIEW_MESSAGES = 20
 # Keep 20 structured Telegram messages below the MCP inbox structured metadata cap.
 _STRUCTURED_MESSAGE_TEXT_CAP = 500
 _DOCUMENT_DOWNLOAD_REASON_CAP = 200
+_TASK_CARD_BACKEND_REASON_CAP = 200
 _TELEGRAM_API_ERROR_PREFIX = "Telegram API error: "
 
 # Task Card edit outcomes are deliberately narrower than generic transport
@@ -152,6 +153,14 @@ def _safe_document_download_reason(exc: Exception) -> str:
     if isinstance(status, int) and not isinstance(status, bool):
         return f"{exc_class} (HTTP {status})"
     return exc_class
+
+
+def _safe_task_card_backend_reason(exc: Exception) -> str:
+    """Return one redacted, bounded Telegram transport reason for controller use."""
+    from lingtai.kernel.trace_redaction import redact_text
+
+    reason = " ".join(redact_text(_safe_document_download_reason(exc)).split())
+    return reason[:_TASK_CARD_BACKEND_REASON_CAP] or type(exc).__name__
 
 
 def _document_download_failure_notice(reason: str) -> str:
@@ -1579,13 +1588,13 @@ class TelegramManager:
         self,
         compound_id: str,
         text: str,
-    ) -> str:
-        """Edit once and preserve whether replacement is actually permissible."""
+    ) -> tuple[str, str | None]:
+        """Edit once; return its semantic outcome and a safe failure reason."""
         try:
             account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
             acct = self._service.get_account(account)
             acct.edit_message(chat_id, tg_msg_id, text)
-            return _TASK_CARD_EDIT_OK
+            return _TASK_CARD_EDIT_OK, None
         except Exception as exc:
             outcome = self._task_card_edit_error_outcome(exc)
             if outcome == _TASK_CARD_EDIT_OK:
@@ -1597,7 +1606,12 @@ class TelegramManager:
                     "Task card edit failed; resident retained (error_type=%s)",
                     type(exc).__name__,
                 )
-            return outcome
+            reason = (
+                _safe_task_card_backend_reason(exc)
+                if outcome == _TASK_CARD_EDIT_FAILED
+                else None
+            )
+            return outcome, reason
 
     def update_progress_message(
         self,
@@ -1605,7 +1619,8 @@ class TelegramManager:
         text: str,
     ) -> bool:
         """Compatibility bool: true for an applied edit or identical-content no-op."""
-        return self._try_update_progress_message(compound_id, text) == _TASK_CARD_EDIT_OK
+        outcome, _reason = self._try_update_progress_message(compound_id, text)
+        return outcome == _TASK_CARD_EDIT_OK
 
     # ------------------------------------------------------------------
     # Private Task Card helpers (internally driven — by the kernel automatic
@@ -1734,14 +1749,17 @@ class TelegramManager:
                 if rotated.get("status") == "ok":
                     self._set_channel_frame(account, chat_id, channel, frame)
                 return rotated
-            edit_outcome = self._try_update_progress_message(resident_id, text)
+            edit_outcome, edit_error = self._try_update_progress_message(
+                resident_id, text
+            )
             if edit_outcome == _TASK_CARD_EDIT_OK:
                 self._set_channel_frame(account, chat_id, channel, frame)
                 return {"status": "ok", "message_id": resident_id}
             if edit_outcome == _TASK_CARD_EDIT_FAILED:
                 # Unknown, transient, network, and provider failures do not prove
-                # that replacement is safe. Preserve both resident and slot state.
-                return {"status": "error", "error": error}
+                # that replacement is safe. Preserve both resident and slot state,
+                # and surface only the redacted bounded provider reason.
+                return {"status": "error", "error": edit_error or error}
             # The provider confirmed this exact message is missing/uneditable.
             # Confirm exact delete-or-missing before any replacement send.
             recovered = self._recover_task_card_by_replacement(
@@ -2568,11 +2586,11 @@ class TelegramManager:
         """
         committed_text = self._compose_channels(account, chat_id)
         if committed_text:
-            probe_outcome = self._try_update_progress_message(
+            probe_outcome, probe_error = self._try_update_progress_message(
                 stale_id, committed_text
             )
             if probe_outcome == _TASK_CARD_EDIT_FAILED:
-                return {"status": "error", "error": error}
+                return {"status": "error", "error": probe_error or error}
         return self._replace_task_card_after_probe(
             account, chat_id, stale_id, text, error=error
         )

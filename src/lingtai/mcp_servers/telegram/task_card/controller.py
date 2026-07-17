@@ -49,6 +49,7 @@ _DEFAULT_TIMEOUT_S = 10.0
 _DEFAULT_INTERVAL_S = 5.0
 _MIN_INTERVAL_S = 1.0
 _REVERSE_CALL_TIMEOUT_S = 5.0
+_BACKEND_ERROR_CAP = 300
 # Watcher-thread join budget on stop/shutdown. A tick blocked in the reverse
 # call can take up to ``_REVERSE_CALL_TIMEOUT_S``; join must exceed that (plus a
 # small margin) to be a truthful join rather than a premature timeout.
@@ -361,15 +362,16 @@ class TaskCardController:
         # preserves the old programmable frame on a transient/unknown edit failure,
         # so reporting ``stopped`` and dropping the handle would strand a visible
         # frame with no way to retry.
-        if self._project(watch, "finalize", None).get("status") == "error":
-            error = {
-                "code": "stop_finalize_failed",
-                "retryable": True,
-                "message": (
+        project_result = self._project(watch, "finalize", None)
+        if project_result.get("status") == "error":
+            error = self._backend_failure(
+                "stop_finalize_failed",
+                (
                     "task card backend rejected the stop/finalize; the watch is "
                     "retained so stop can be retried"
                 ),
-            }
+                project_result,
+            )
             with watch.lock:
                 if not watch.finalized:
                     watch.error = error
@@ -460,11 +462,11 @@ class TaskCardController:
         if result.get("status") == "error":
             self._mark_error(
                 watch,
-                {
-                    "code": "backend_edit_failed",
-                    "retryable": True,
-                    "message": "task card backend rejected the frame",
-                },
+                self._backend_failure(
+                    "backend_edit_failed",
+                    "task card backend rejected the frame",
+                    result,
+                ),
             )
             return
         self._mark_recovered(watch, frame)
@@ -485,7 +487,8 @@ class TaskCardController:
         (accepted) or re-attempt the clear (failed). No duplicate/concurrent
         finalize is possible: public stop/retry refuse to finalize while this
         thread is alive."""
-        accepted = self._project(watch, "finalize", None).get("status") != "error"
+        project_result = self._project(watch, "finalize", None)
+        accepted = project_result.get("status") != "error"
         with watch.lock:
             if accepted:
                 watch.finalized = True
@@ -501,14 +504,14 @@ class TaskCardController:
                     ),
                 }
             elif not watch.finalized:
-                watch.error = {
-                    "code": "stop_finalize_failed",
-                    "retryable": True,
-                    "message": (
+                watch.error = self._backend_failure(
+                    "stop_finalize_failed",
+                    (
                         "stop requested; clearing the in-flight update failed — "
                         "retry stop to re-attempt the clear"
                     ),
-                }
+                    project_result,
+                )
 
     # -- fail-loud / recovery transitions ----------------------------------
 
@@ -575,6 +578,11 @@ class TaskCardController:
                 "code": code,
                 "retryable": (error or {}).get("retryable", "unknown"),
             }
+            backend_error = self._safe_backend_error(
+                (error or {}).get("backend_error")
+            )
+            if backend_error:
+                extra["backend_error"] = backend_error
             if last_valid_at:
                 extra["last_valid_frame_at"] = last_valid_at
             key = f"task_card.error:{watch.watch_id}:{epoch}:{code}"
@@ -665,13 +673,43 @@ class TaskCardController:
             code = "renderer_failed"
         return {"code": code, "message": msg, "retryable": True}
 
+    @staticmethod
+    def _safe_backend_error(value: object) -> str | None:
+        """Redact, normalize, and bound one downstream transport reason."""
+        if not isinstance(value, str):
+            return None
+        from lingtai.kernel.trace_redaction import redact_text
+
+        text = " ".join(redact_text(value).split())
+        return text[:_BACKEND_ERROR_CAP] or None
+
+    @classmethod
+    def _backend_failure(
+        cls, code: str, message: str, project_result: dict
+    ) -> dict:
+        """Build one stable controller error while retaining a safe backend reason."""
+        error = {"code": code, "retryable": True, "message": message}
+        reason = cls._safe_backend_error(project_result.get("backend_error"))
+        if reason:
+            error["backend_error"] = reason
+            error["message"] = f"{message}: {reason}"
+        return error
+
     # -- reverse call to the private Telegram programmable channel ----------
 
     def _project(self, watch: _Watch, sub_action: str, frame: dict | None) -> dict:
         """Forward validated data to the programmable channel; never raises."""
+
+        def rejected(value: object = None) -> dict:
+            outcome = {"status": "error"}
+            reason = self._safe_backend_error(value)
+            if reason:
+                outcome["backend_error"] = reason
+            return outcome
+
         client = getattr(self._agent, "_mcp_clients_by_tool", {}).get("telegram")
         if client is None:
-            return {"status": "error"}
+            return rejected("Telegram client is unavailable")
         payload: dict[str, Any] = {
             "sub_action": sub_action,
             "channel": "programmable",
@@ -684,15 +722,15 @@ class TaskCardController:
             result = client.call_tool(
                 _TASK_CARD_TOOL, payload, timeout=_REVERSE_CALL_TIMEOUT_S
             )
-        except Exception:
-            return {"status": "error"}
+        except Exception as exc:
+            return rejected(type(exc).__name__)
         if not isinstance(result, dict) or result.get("status") != "ok":
-            return {"status": "error"}
+            return rejected(result.get("error") if isinstance(result, dict) else None)
         # ``stale_delete_failed`` is the manager's pre-send error condition,
         # never a successful partial delivery. Reject contradictory payloads
         # rather than claiming a new resident was adopted.
         if result.get("stale_delete_failed") is True:
-            return {"status": "error"}
+            return rejected(result.get("error"))
         message_id = result.get("message_id")
         if result.get("resident_persist_failed") is True:
             # The ONE allowed successful partial. It REQUIRES a validated,

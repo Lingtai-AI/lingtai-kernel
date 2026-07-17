@@ -106,7 +106,10 @@ the procedure lives in [`SKILL.md`](SKILL.md), not here:
    types are handled failures, never crashes.
 4. After a handle exists, failures preserve the last valid frame and emit a
    **deduped, per-episode** fail-loud `task_card.error` wake plus one `recovered`
-   wake; raw renderer output and secrets never enter the wake.
+   wake. A Telegram backend rejection keeps the stable controller error code and
+   carries its redacted, whitespace-normalized, bounded provider reason as optional
+   `backend_error` through `retry`/`inspect`/`stop` results and the failure wake;
+   raw renderer output and secrets never enter the wake.
 5. Projection uses `channel="programmable"` only; the controller forwards a
    validated card object, **never** code. Updating the programmable slot never
    disturbs the automatic slot.
