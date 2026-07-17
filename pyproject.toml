@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lingtai"
-version = "0.17.0"
+version = "0.17.1"
 description = "Generic research agent with intrinsic tools and MCP-compatible extension interface"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,6 +27,7 @@ dependencies = [
     "trafilatura>=2.0",
     "filelock>=3.0",
     "pyyaml>=6.0",
+    "packaging>=24.0",
     # Curated MCP server implementations live in this distribution under
     # `lingtai.mcp_servers.*` so the catalog can launch them with `python -m`
     # without separate PyPI wheels. Keep their third-party runtime dependencies
