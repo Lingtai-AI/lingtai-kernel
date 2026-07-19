@@ -489,6 +489,132 @@ def test_cli_session_policy_preserves_legacy_and_inherits_for_detached():
     assert host._cli_start_new_session() is False
 
 
+@pytest.mark.parametrize("backend", ["claude-p", "claude-code", "qwen-code"])
+def test_detached_native_mcp_rehydration_preserves_common_and_owner_values(
+    tmp_path, backend,
+):
+    """The last native-config writer keeps finish plus real owner-only values."""
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task=f"{backend} native MCP rehydration")
+    config_path = run_dir.path / f"{backend}-mcp.json"
+    marker = (
+        "--mcp-config"
+        if backend in {"claude-p", "claude-code"}
+        else "__lingtai_qwen_system_settings_path"
+    )
+    backend_argv = [marker, str(config_path)]
+    real_mcp = [
+        {
+            "name": "daemon_common",
+            "transport": "stdio",
+            "command": sys.executable,
+            "args": ["-m", "lingtai.mcp_servers.daemon_common"],
+            "env": {
+                "LINGTAI_DAEMON_COMPLETION_FILE": str(
+                    run_dir.path / "daemon_completion.json"
+                )
+            },
+        },
+        {
+            "name": "parent-docs",
+            "transport": "stdio",
+            "command": "/bin/echo",
+            "args": ["docs"],
+            "env": {"DOC_TOKEN": "owner-only-token"},
+        },
+    ]
+    manifest = build_manifest(
+        run_id=run_dir.run_id,
+        backend=backend,
+        parent_working_dir=str(run_dir.path.parent.parent),
+        run_dir=str(run_dir.path),
+        task="native MCP rehydration",
+        tools=[],
+        max_turns=1,
+        timeout_s=30,
+        group_id=None,
+        backend_argv=backend_argv,
+        mcp=real_mcp,
+    )
+    assert manifest["mcp"][1]["env"]["DOC_TOKEN"] == "<redacted>"
+
+    host = DetachedDaemonExecutionHost(
+        run_dir,
+        manifest,
+        Event(),
+        Event(),
+        capsule={"mcp": real_mcp, "backend_argv": backend_argv},
+    )
+    host._rehydrate_native_mcp_files()
+
+    servers = json.loads(config_path.read_text(encoding="utf-8"))["mcpServers"]
+    assert list(servers) == ["daemon_common", "parent-docs"]
+    assert servers["daemon_common"]["args"] == [
+        "-m", "lingtai.mcp_servers.daemon_common"
+    ]
+    assert servers["daemon_common"]["env"][
+        "LINGTAI_DAEMON_COMPLETION_FILE"
+    ].endswith("daemon_completion.json")
+    assert servers["parent-docs"]["env"] == {
+        "DOC_TOKEN": "owner-only-token"
+    }
+
+
+def test_detached_lingtai_surface_keeps_one_local_finish_without_external_common(
+    tmp_path, monkeypatch,
+):
+    """LingTai filters the reserved server because it owns one local finish."""
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="local completion surface")
+    real_mcp = [
+        {
+            "name": "daemon_common",
+            "transport": "stdio",
+            "command": sys.executable,
+            "args": ["-m", "lingtai.mcp_servers.daemon_common"],
+        },
+        {
+            "name": "parent-docs",
+            "transport": "stdio",
+            "command": "/bin/echo",
+            "args": ["docs"],
+        },
+    ]
+    manifest = build_manifest(
+        run_id=run_dir.run_id,
+        backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent),
+        run_dir=str(run_dir.path),
+        task="local completion surface",
+        tools=[],
+        max_turns=1,
+        timeout_s=30,
+        group_id=None,
+        mcp=real_mcp,
+    )
+    host = DetachedDaemonExecutionHost(
+        run_dir, manifest, Event(), Event(), capsule={"mcp": real_mcp}
+    )
+    connected = []
+
+    def fake_connect(_host, registrations):
+        connected.extend(registrations)
+        return {}, {}, []
+
+    monkeypatch.setattr(
+        host._manager_type, "_connect_task_mcp_registrations", fake_connect
+    )
+    schemas, dispatch = host._build_lingtai_surface()
+
+    assert [schema.name for schema in schemas].count("finish") == 1
+    assert list(dispatch).count("finish") == 1
+    assert [registration["name"] for registration in connected] == ["parent-docs"]
+
+
 def test_codex_detached_reclaim_kills_exact_own_process_group_only(tmp_path):
     """Explicit reclaim of a detached codex run kills only its own pgid."""
     from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
