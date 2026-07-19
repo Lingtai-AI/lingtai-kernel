@@ -500,9 +500,11 @@ def test_agent_creates_manifest(tmp_path):
 
 
 def test_agent_creates_lock_file(tmp_path):
-    # With a real POSIX lease injected, constructing the agent acquires the
-    # on-disk lock through the Port (the in-memory fake has no lock file).
-    from lingtai.adapters.posix.workdir_lease import PosixWorkdirLeaseAdapter
+    # With the platform's real production lease injected, constructing the
+    # agent acquires the on-disk lock through the Port (the in-memory fake has
+    # no lock file). The selector returns the flock adapter on POSIX and the
+    # msvcrt byte-range adapter on Windows; the observable pin is identical.
+    from lingtai.adapters.workdir_lease import select_workdir_lease
 
     workdir = tmp_path / "test"
     agent = BaseAgent(
@@ -510,7 +512,7 @@ def test_agent_creates_lock_file(tmp_path):
         service=make_mock_service(),
         agent_name="alice",
         working_dir=workdir,
-        workdir_lease=PosixWorkdirLeaseAdapter(workdir),
+        workdir_lease=select_workdir_lease(workdir),
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(workdir),
     )
     assert (agent.working_dir / ".agent.lock").is_file()
