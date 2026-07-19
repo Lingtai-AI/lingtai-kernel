@@ -55,9 +55,13 @@ def test_git_cli_initialize_writes_gitignore_as_utf8(tmp_path):
 
     gitignore = directory / ".gitignore"
     assert gitignore.is_file()
-    # Explicit utf-8 read round-trips to the exact source constant.
+    # Explicit utf-8 read round-trips to the exact source constant. The
+    # write_text default newline translation makes line endings
+    # platform-native (CRLF on Windows), which is irrelevant to the encoding
+    # promise — normalize before comparing.
     assert gitignore.read_text(encoding="utf-8") == _GITIGNORE
-    assert gitignore.read_bytes() == _GITIGNORE.encode("utf-8")
+    raw_normalized = gitignore.read_bytes().replace(b"\r\n", b"\n")
+    assert raw_normalized == _GITIGNORE.encode("utf-8")
 
 
 def test_git_cli_ensure_system_files_writes_empty_utf8(tmp_path):

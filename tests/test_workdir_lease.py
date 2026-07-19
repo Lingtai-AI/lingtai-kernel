@@ -461,9 +461,15 @@ def test_base_agent_releases_the_lease_when_construction_fails(tmp_path):
     assert recording.acquires == [10]
     assert recording.releases == 1
 
+    # Hand BaseAgent an unacquired production adapter: construction acquires
+    # it (10s grace), fails on the system-file conflict, and the rollback must
+    # release the OS lock so a fresh adapter can immediately reacquire. (The
+    # adapter is deliberately NOT pre-acquired here — a second acquire of an
+    # already-held lease through a new handle is a real conflict on Windows
+    # byte-range locks, and only ever appeared to succeed on macOS because of
+    # BSD flock's same-process semantics.)
     production = _platform_production_adapter()
     real = production(workdir)
-    real.acquire(10)
     with pytest.raises(FileExistsError):
         BaseAgent(
             service=object(),
