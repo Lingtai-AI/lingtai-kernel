@@ -28,17 +28,16 @@ Design constraints (Jason's spec):
     (legacy fallback). Flat v1 files keep byte-identical behavior for every
     model. The kernel keys off structure, never off the ``version`` field.
   * **Quota-aware exclusion at NEW selection only:** :func:`select_codex_pool_auth`
-    excludes an account from THIS pick only when a fresh, available quota
-    snapshot explicitly PROVES ``remaining_percent <= 0`` on its main
-    rate-limit window (see :func:`_is_proven_exhausted`). Unavailable/error/
-    malformed/missing quota data always FAILS OPEN (never excludes). Weights
-    are preserved exactly among the remaining eligible accounts. This never
-    migrates an already-created adapter/session (the function is only called
-    at construction time) and never mutates any pool/config/auth file,
-    weight, or the deterministic failover sequence. If every validated
-    account is proven exhausted, :class:`CodexPoolAllAccountsExhaustedError`
-    is raised instead of silently falling back or picking a proven-unusable
-    account.
+    excludes an account from THIS pick only when
+    :func:`~lingtai.llm.openai.codex_quota.read_remaining_percent` explicitly
+    returns a value ``<= 0`` for it. ``None`` (unavailable/error/malformed)
+    always FAILS OPEN (never excludes). Weights are preserved exactly among
+    the remaining eligible accounts, and ``source_index`` stays anchored to
+    the full validated list. This never migrates an already-created
+    adapter/session and never mutates any pool/config/auth file. Every call
+    reads fresh (no cache), so a since-reset account re-enters immediately.
+    If every validated account is proven exhausted,
+    :class:`CodexPoolAllAccountsExhaustedError` is raised.
 
 Public helpers:
 
@@ -49,9 +48,6 @@ Public helpers:
                                           selection metadata, or ``None``; may
                                           raise ``CodexPoolAllAccountsExhaustedError``.
   * :func:`select_codex_pool_auth_path`-> chosen token path only, or ``None``.
-  * :func:`list_codex_pool_quota_snapshots` -> per-account Codex quota/rate-limit
-                                          snapshots (read-only reporting; never
-                                          touches selection/routing).
 """
 
 from __future__ import annotations
@@ -59,8 +55,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import threading
-import time
 from pathlib import Path
 
 # Manifest / provider-defaults override for the pool file location. Parallels the
@@ -86,108 +80,9 @@ MAX_FAILOVER_SWITCHES = 10
 # Legacy single-token default, used as the fallback when the pool is unusable.
 _LEGACY_TOKEN_FILENAME = "codex-auth.json"
 
-# Bounded freshness window for the quota-aware exclusion check at NEW
-# ``codex-pool`` selection. A cached snapshot older than this is
-# treated as stale and re-fetched; this bounds how long a since-reset account
-# can stay wrongly excluded, and how long a since-exhausted account can stay
-# wrongly eligible, without adding per-selection subprocess latency on every
-# call. Selection itself remains fast: an already-cached, still-fresh entry
-# costs no subprocess spawn at all.
-_QUOTA_EXCLUSION_CACHE_TTL_SECONDS = 30.0
-
-# Process-local cache: resolved auth path -> (monotonic timestamp, quota dict
-# from ``codex_quota.quota_snapshot_to_dict``). Guarded by ``_QUOTA_CACHE_LOCK``
-# since selection can run from multiple threads (e.g. request-scoped failover
-# building isolated adapters concurrently). Never persisted to disk; holds no
-# token/auth content — only the already-safe quota snapshot dict.
-_QUOTA_CACHE: dict[str, tuple[float, dict]] = {}
-_QUOTA_CACHE_LOCK = threading.Lock()
-
 
 class CodexPoolAllAccountsExhaustedError(Exception):
-    """Raised by :func:`select_codex_pool_auth` when EVERY validated account in
-    the configured (category-scoped) pool is explicitly PROVEN exhausted by a
-    fresh, available quota snapshot (``remaining_percent <= 0`` on its main
-    rate-limit window).
-
-    This is intentionally distinct from the ordinary "pool unusable" case
-    (missing/empty pool, no exact model category), which still returns
-    ``None`` so the caller falls back to the legacy default token — falling
-    back here would silently hand the caller a token that is, by the same
-    proof, ALSO exhausted (the legacy default itself is not distinguished
-    from a pool member) or would mask a real "everything is out of quota"
-    operator-actionable condition behind a quiet fallback. The message names
-    only the account count and, for a classified pool, the public model name —
-    never a pool mapping, auth-path-derived identifier, token, or account id.
-    """
-
-
-def _quota_remaining_percent_from_dict(quota: dict) -> float | None:
-    """Extract the ``primary`` bucket's ``primary`` window ``remaining_percent``.
-
-    This is the "applicable main quota snapshot" the exclusion rule reads —
-    the protocol's backward-compatible single-bucket view (``rateLimits`` ->
-    ``primary`` window), not a specific ``rateLimitsByLimitId`` entry (there
-    may be several, and the task scope is the account's overall/main quota).
-    Returns ``None`` when the snapshot is unavailable, malformed, or the
-    window itself is absent — callers MUST treat ``None`` as "not proven
-    exhausted" (fail open), never as exhausted.
-    """
-    if not isinstance(quota, dict) or not quota.get("available"):
-        return None
-    primary_bucket = quota.get("primary")
-    if not isinstance(primary_bucket, dict):
-        return None
-    primary_window = primary_bucket.get("primary")
-    if not isinstance(primary_window, dict):
-        return None
-    value = primary_window.get("remaining_percent")
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return float(value)
-
-
-def _cached_quota_dict(auth_path: str, *, timeout_seconds: float | None) -> dict:
-    """Return a fresh-enough cached quota dict for ``auth_path``, fetching on
-    a cache miss / stale entry. Thread-safe; never raises (the underlying
-    ``read_codex_quota_snapshot`` is itself fail-soft and never raises)."""
-    now = time.monotonic()
-    with _QUOTA_CACHE_LOCK:
-        cached = _QUOTA_CACHE.get(auth_path)
-        if cached is not None and (now - cached[0]) < _QUOTA_EXCLUSION_CACHE_TTL_SECONDS:
-            return cached[1]
-
-    from lingtai.llm.openai.codex_quota import (
-        quota_snapshot_to_dict,
-        read_codex_quota_snapshot,
-    )
-
-    kwargs = {} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
-    snapshot = read_codex_quota_snapshot(auth_path, **kwargs)
-    quota = quota_snapshot_to_dict(snapshot)
-    with _QUOTA_CACHE_LOCK:
-        _QUOTA_CACHE[auth_path] = (time.monotonic(), quota)
-    return quota
-
-
-def _is_proven_exhausted(auth_path: str, *, timeout_seconds: float | None) -> bool:
-    """``True`` only if a fresh, available quota snapshot proves ``remaining_percent
-    <= 0`` for ``auth_path``'s main rate-limit window.
-
-    Fail-open by construction: unavailable / error / malformed / missing quota
-    (``_quota_remaining_percent_from_dict`` returning ``None``) returns
-    ``False`` here — the account stays eligible. Only an explicit, fresh,
-    non-negative proof of exhaustion excludes it. A snapshot proving a
-    POSITIVE ``remaining_percent`` after having previously been exhausted
-    naturally restores eligibility on its own — there is no separate
-    unexclusion path to maintain, since exclusion is recomputed fresh (subject
-    to the bounded cache TTL) on every call rather than latched.
-    """
-    quota = _cached_quota_dict(auth_path, timeout_seconds=timeout_seconds)
-    remaining = _quota_remaining_percent_from_dict(quota)
-    if remaining is None:
-        return False
-    return remaining <= 0
+    """Every validated account reports zero remaining quota."""
 
 
 def resolve_codex_tui_dir() -> Path:
@@ -378,14 +273,11 @@ def _weighted_pick(accounts: list[dict], seed: str) -> tuple[int, dict]:
 def _weighted_pick_indexed(
     indexed_accounts: list[tuple[int, dict]], seed: str
 ) -> tuple[int, dict]:
-    """Like :func:`_weighted_pick`, but over an explicit ``(original_index,
-    account)`` pair list so a caller can filter accounts (e.g. quota-excluded
-    ones) while still returning the ORIGINAL index into the full validated
-    account list — required so ``source_index`` stays a stable anchor for
-    :func:`_codex_pool_failover_candidates` regardless of which accounts were
-    filtered out of this particular pick. Configured weights are preserved
-    exactly among whatever accounts are passed in; only the SET eligible for
-    the pick changes. Same seed + same filtered set always picks the same one.
+    """Like :func:`_weighted_pick`, but over explicit ``(original_index,
+    account)`` pairs so a caller can filter out quota-excluded accounts while
+    the returned index still anchors into the FULL validated account list
+    (needed by :func:`_codex_pool_failover_candidates`). Configured weights
+    are preserved exactly among whatever accounts are passed in.
     """
     total = sum(acct["weight"] for _, acct in indexed_accounts)
     digest = hashlib.sha256(seed.encode("utf-8")).digest()
@@ -399,11 +291,23 @@ def _weighted_pick_indexed(
     return indexed_accounts[-1]
 
 
+def _is_proven_exhausted(auth_path: str) -> bool:
+    """``True`` only if a fresh quota read proves ``auth_path`` exhausted.
+
+    Fail-open by construction: ``read_remaining_percent`` returning ``None``
+    (unavailable/error/malformed) returns ``False`` — the account stays
+    eligible. Always reads fresh (no cache).
+    """
+    from lingtai.llm.openai.codex_quota import read_remaining_percent
+
+    remaining = read_remaining_percent(auth_path)
+    if remaining is None:
+        return False
+    return remaining <= 0
+
+
 def select_codex_pool_auth(
-    defaults: dict | None = None,
-    model: str | None = None,
-    *,
-    quota_timeout_seconds: float | None = None,
+    defaults: dict | None = None, model: str | None = None
 ) -> dict | None:
     """Select the pool account and describe the choice for runtime logging.
 
@@ -416,35 +320,6 @@ def select_codex_pool_auth(
     The model is NOT mixed into the selection seed: a flat v1 pool picks the
     same account regardless of ``model`` (zero churn), and for v2 the category
     list itself already differentiates the outcome.
-
-    **Quota-aware exclusion at NEW selection.** This function is only ever
-    called at a NEW selection moment (adapter construction in
-    ``_register.py``'s ``_codex_pool`` factory, or an explicit ``vision``
-    manual pool lookup) — never on an already-created adapter/session, so this
-    exclusion can never migrate a live sticky session. Before picking, each
-    validated (category-scoped) account is checked via
-    :func:`_is_proven_exhausted` (bounded-TTL cached
-    ``account/rateLimits/read`` probe): an account is excluded from THIS pick
-    only when a fresh, available snapshot explicitly proves
-    ``remaining_percent <= 0`` on its main rate-limit window. Every other case
-    — unavailable, error, malformed, missing quota, or a snapshot that simply
-    couldn't be read — FAILS OPEN (the account stays eligible); this function
-    never guesses exhaustion from absence of proof. Configured weights are
-    preserved EXACTLY among the remaining eligible accounts (the cumulative
-    weighted pick runs over the filtered set with each account's own
-    configured weight, unchanged). If a since-exhausted account's quota later
-    shows a positive ``remaining_percent`` (or a cache entry ages out and a
-    fresh read proves it recovered), it is automatically eligible again on the
-    next call — there is no separate "cooldown" state to expire. If ALL
-    validated accounts in scope are explicitly proven exhausted, raises
-    :class:`CodexPoolAllAccountsExhaustedError` instead of silently falling
-    back to the legacy default (which would hand back a token equally likely
-    to be exhausted) or arbitrarily picking an account already proven unusable.
-
-    This exclusion pass affects ONLY which account gets selected right now; it
-    never disables an account, writes a cooldown, reorders
-    :func:`_codex_pool_failover_candidates`'s deterministic sequence, or
-    touches the pool/config/auth files on disk.
 
     ``selection`` is the NON-SECRET attribution breadcrumb an operator needs to
     answer "which codex-pool source handled this call" from the event log:
@@ -463,9 +338,12 @@ def select_codex_pool_auth(
                              ``None`` (flat v1 pool). Model names are already
                              non-secret manifest values.
 
-    Quota probes read only process-owned temporary copies of the configured
-    token files; no token content, Authorization material, or raw auth-file data
-    appears in the returned metadata or logs.
+    Applies quota-aware exclusion at this NEW-selection moment only — see the
+    module docstring's "Quota-aware exclusion" note. May raise
+    :class:`CodexPoolAllAccountsExhaustedError`.
+
+    No token content, Authorization material, or raw auth-file data appears in
+    the returned metadata.
     """
     tui_dir = resolve_codex_tui_dir()
     pool_path = resolve_codex_pool_path(defaults)
@@ -479,25 +357,15 @@ def select_codex_pool_auth(
     eligible = [
         (i, acct)
         for i, acct in enumerate(accounts)
-        if not _is_proven_exhausted(
-            resolved_paths[i], timeout_seconds=quota_timeout_seconds
-        )
+        if not _is_proven_exhausted(resolved_paths[i])
     ]
     if not eligible:
         raise CodexPoolAllAccountsExhaustedError(
-            f"All {len(accounts)} configured Codex-pool account(s) "
-            f"{'for model ' + repr(model) + ' ' if classified else ''}"
-            "are exhausted (remaining_percent <= 0 on a fresh quota read). "
-            "Add another account, wait for a rate-limit reset, or configure "
-            "additional pool capacity before retrying."
+            "All Codex pool accounts are exhausted"
         )
 
     seed = _selection_seed(defaults, tui_dir)
     if len(eligible) == len(accounts):
-        # No account was excluded: use the plain (non-indexed) picker so this
-        # stays the exact same call/seam as before quota-aware exclusion
-        # existed — byte-identical selection behavior AND the same monkeypatch
-        # point existing tests/tools bind to (`_weighted_pick`).
         idx, chosen = _weighted_pick(accounts, seed)
     else:
         idx, chosen = _weighted_pick_indexed(eligible, seed)
@@ -519,10 +387,7 @@ def select_codex_pool_auth(
 
 
 def select_codex_pool_auth_path(
-    defaults: dict | None = None,
-    model: str | None = None,
-    *,
-    quota_timeout_seconds: float | None = None,
+    defaults: dict | None = None, model: str | None = None
 ) -> str | None:
     """Select the Codex token path for the ``codex-pool`` provider.
 
@@ -530,86 +395,13 @@ def select_codex_pool_auth_path(
     for this agent session by weighted selection, or ``None`` when the pool file
     is missing / has no valid enabled accounts (for a model-classified pool:
     no valid accounts in the exact-``model`` category) — in which case the
-    caller falls back to the legacy default Codex token path. May raise
-    :class:`CodexPoolAllAccountsExhaustedError` — see
-    :func:`select_codex_pool_auth`, which this delegates to unchanged.
+    caller falls back to the legacy default Codex token path.
 
     Path-only view of :func:`select_codex_pool_auth` (one selection, two views).
-    No token file is read here beyond what the quota-aware exclusion check
-    itself performs (a read-only rate-limit probe); nothing secret is logged.
+    The same quota check runs during selection; nothing secret is logged.
     """
-    selected = select_codex_pool_auth(
-        defaults, model, quota_timeout_seconds=quota_timeout_seconds
-    )
+    selected = select_codex_pool_auth(defaults, model)
     return selected["auth_path"] if selected else None
-
-
-def list_codex_pool_quota_snapshots(
-    defaults: dict | None = None,
-    model: str | None = None,
-    *,
-    timeout_seconds: float | None = None,
-) -> list[dict]:
-    """Return a safe, per-account Codex quota snapshot for every pool entry.
-
-    Reuses :func:`_load_pool_entries` — the SAME validated, model-category
-    filtered, duplicate/alias-preserving account order that
-    :func:`select_codex_pool_auth` uses — so this never guesses a mapping
-    the selection logic doesn't already use, and never alters selection,
-    weights, sticky-session state, failover order, or any pool/config/auth
-    file. Each entry's Codex quota is read via a throwaway ``codex
-    app-server`` stdio probe (``lingtai.llm.openai.codex_quota``); a missing,
-    unqueryable, or unsupported account surfaces as
-    ``available=False`` rather than being fabricated or silently dropped.
-
-    An empty/unusable pool (or no exact model category) returns ``[]`` — same
-    fallback condition as :func:`select_codex_pool_auth` returning ``None``.
-
-    Each returned entry::
-
-        {
-          "source_index": int,        # position in the validated account list
-          "source_ref": str,          # relative ref, or ABSOLUTE_REF_REDACTED
-          "auth_path_sha8": str,      # sha256(resolved path)[:8], never the raw path
-          "weight": int,
-          "model_scope": str | None,  # exact v2 category key, or None (flat v1)
-          "quota": <CodexQuotaSnapshot dict from codex_quota.quota_snapshot_to_dict>,
-        }
-
-    Never mutates or reads any deterministic-selection state; this is a
-    read-only reporting view over the same pool file :func:`load_codex_auth_pool`
-    parses. No token content, auth-file content, or raw account id is ever
-    read or returned — only the resolved token PATH is used, to spawn the
-    read-only quota probe.
-    """
-    from lingtai.llm.openai.codex_quota import (
-        quota_snapshot_to_dict,
-        read_codex_quota_snapshot,
-    )
-
-    tui_dir = resolve_codex_tui_dir()
-    pool_path = resolve_codex_pool_path(defaults)
-    accounts, classified = _load_pool_entries(pool_path, model)
-    if not accounts:
-        return []
-    model_scope = model if classified else None
-
-    kwargs = {} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
-    out: list[dict] = []
-    for idx, acct in enumerate(accounts):
-        auth_path = str(_resolve_relative_to_tui(acct["path"], tui_dir))
-        snapshot = read_codex_quota_snapshot(auth_path, **kwargs)
-        out.append(
-            {
-                "source_index": idx,
-                "source_ref": _safe_source_ref(acct["path"]),
-                "auth_path_sha8": hashlib.sha256(auth_path.encode("utf-8")).hexdigest()[:8],
-                "weight": acct["weight"],
-                "model_scope": model_scope,
-                "quota": quota_snapshot_to_dict(snapshot),
-            }
-        )
-    return out
 
 
 def _structured_status_code(exc: BaseException) -> int | None:

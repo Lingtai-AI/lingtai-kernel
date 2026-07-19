@@ -12,6 +12,8 @@ related_files:
   - src/lingtai/llm/openai/codex_ws.py
   - src/lingtai/llm/openai/defaults.py
   - src/lingtai/auth/codex_pool.py
+  - tests/test_codex_quota.py
+  - tests/test_codex_pool_quota_exclusion.py
   - src/lingtai/llm/mimo/adapter.py
   - src/lingtai/llm/mimo/ANATOMY.md
   - src/lingtai/llm/service.py
@@ -20,8 +22,6 @@ related_files:
   - tests/test_codex_prompt_cache_key.py
   - tests/test_codex_standalone_compaction.py
   - tests/test_mimo_responses_compaction.py
-  - tests/test_codex_quota.py
-  - tests/test_codex_pool_quota_exclusion.py
   - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -42,7 +42,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `OpenAIAdapter`, `OpenAIChatSession` |
 | `adapter.py` | large | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
-| `codex_quota.py` | 490 | Read-only Codex OAuth quota/rate-limit client over the `codex` CLI app-server's stdio JSON-RPC protocol (`account/rateLimits/read`) — see "Codex quota/rate-limit read" below |
+| `codex_quota.py` | ~230 | `read_remaining_percent(auth_path)` — reads the Codex CLI's own OAuth rate-limit via `codex app-server`'s `account/rateLimits/read` stdio JSON-RPC call; returns the main window's remaining percent or `None` on any failure/malformed field. Used by `lingtai.auth.codex_pool`'s quota-aware pool exclusion. Tests: `tests/test_codex_quota.py`. |
 | `defaults.py` | 12 | `DEFAULTS` dict: `api_compat="openai"`, `use_responses_api=True`, `wire_api="auto"` |
 
 ### adapter.py class map
@@ -54,7 +54,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `OpenAIAdapter` | `adapter.py:2126` | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key`; carries the internal `_responses_stateless_replay` constructor mode into Responses sessions (`adapter.py:2184`, `adapter.py:2189`, `adapter.py:2282-2334`). |
 | `_StandaloneCompactionMixin` | `adapter.py:2561` | Shared standalone `/responses/compact` machinery extracted from `CodexResponsesSession`: projected-token trigger, turn-aware boundary selection (`_prepare_compact_request`, `adapter.py:2736`), opaque compacted-prefix-plus-delta replay. Mixed into both `CodexResponsesSession` (non-fatal failure policy) and MiMo's `MimoResponsesSession` (`src/lingtai/llm/mimo/adapter.py`, hard-failure policy) — see "Standalone Codex compaction" below. |
 | `CodexResponsesSession` | `adapter.py:2801` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, honest Codex metadata envelope, and standalone daemon-task-triggered compaction via `POST /responses/compact` (mixes in `_StandaloneCompactionMixin`; Codex-specific wire-shaping + non-fatal `_compact_now` at `adapter.py:3647`; see "Standalone Codex compaction" below). |
-| `CodexOpenAIAdapter` | `adapter.py:4804` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. Maps an omitted/`default` thinking level to an explicit `reasoning.effort = "xhigh"` in its `_create_responses_session` (Codex-only default — omitting the field would fall back to the backend's lower default; explicit levels pass through unchanged, and the generic `OpenAIAdapter` keeps omit-on-default). `codex-pool` reuses this adapter, so it inherits the same default. Also exposes `read_codex_quota()` (`adapter.py:5006`) — an explicit, on-demand Codex OAuth quota/rate-limit read (see "Codex quota/rate-limit read" below); shared by both `codex` and `codex-pool` since both build this same class. |
+| `CodexOpenAIAdapter` | `adapter.py:4776` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. Maps an omitted/`default` thinking level to an explicit `reasoning.effort = "xhigh"` in its `_create_responses_session` (Codex-only default — omitting the field would fall back to the backend's lower default; explicit levels pass through unchanged, and the generic `OpenAIAdapter` keeps omit-on-default). `codex-pool` reuses this adapter, so it inherits the same default. |
 
 ### adapter.py helpers
 
@@ -423,20 +423,6 @@ The default request identity is explicit LingTai: `_CODEX_ORIGINATOR = "lingtai"
 See `docs/references/codex-http-anatomy-investigation.md` for the capture history, Codex CLI comparison, and the safety rationale behind which metadata LingTai does and does not send.
 
 When a Codex session has a stable LingTai session/thread identity, `CodexResponsesSession` adds an honest metadata envelope alongside the cache-affinity headers (`adapter.py:2795` and the Codex send path at `adapter.py:4318`). Each request gets a fresh `x-client-request-id`; `x-codex-window-id` is the LingTai window id `<session_id>:0`; `x-codex-turn-metadata` is compact JSON carrying `session_id`, `thread_id`, a generated `turn_id`, a truthful LingTai `sandbox` label, and `turn_started_at_unix_ms`; and body `client_metadata.x-codex-installation-id` is carried through `extra_body` because the OpenAI Python SDK has no typed `client_metadata` argument. This is compatibility metadata, not CLI impersonation: LingTai keeps `originator: lingtai` / `User-Agent: LingTai/<version>`, does not send `x-codex-beta-features`, and derives its installation id from LingTai state rather than from the official Codex CLI installation file.
-
-### Codex quota/rate-limit read (`codex_quota.py`)
-
-A narrow, read-only client for the Codex CLI's OWN OAuth quota/rate-limit data — separate from every Responses/Chat call above, and from `codex doctor --json` (not quota). Neither `codex` nor `codex-pool` calls this automatically on a per-request basis; it is an explicit, on-demand read.
-
-**Wire protocol** (verified against the installed `codex-cli 0.144.3` binary's own `codex app-server generate-ts`/`generate-json-schema` bundles plus a live stdio handshake — not guessed): spawn `codex app-server` with `$CODEX_HOME` pointed at a throwaway auth dir; send bare newline-delimited JSON (NOT LSP `Content-Length` framing) — `{"id":1,"method":"initialize","params":{"clientInfo":{...}}}` → response → `{"method":"initialized"}` notification (no `id`) → `{"id":2,"method":"account/rateLimits/read","params":null}` → response carrying `rateLimits` (the backward-compatible single-bucket view) / `rateLimitsByLimitId` / `rateLimitResetCredits`, matching the generated `GetAccountRateLimitsResponse`/`RateLimitSnapshot`/`RateLimitWindow` types (`usedPercent`, `windowDurationMins`, `resetsAt`, `planType`, `credits`, `limitId`). Only this explicit snapshot read is implemented — the rolling `account/rateLimits/updated` notification (a long-lived watcher) is out of scope.
-
-**Bounded, cross-platform read loop.** `_run_app_server_read()` (`codex_quota.py:287`) starts a background reader thread (`_stdout_reader_thread`, `codex_quota.py:226`) that pushes each stdout line onto a `queue.Queue`; `_read_line_until()` (`codex_quota.py:255`) reads from that queue with a bounded `Queue.get(timeout=...)` per iteration, so a hung/silent child process can never block the caller past `timeout_seconds` regardless of platform. (An earlier revision used `select.select()` directly on the subprocess pipe, which works on POSIX but not on Windows — `select()` there only supports sockets; the thread+queue design is the small, cross-platform-correct replacement, verified by an explicit timeout test bounded to ~1s rather than the fake child's full sleep duration.) `_terminate_process()` (`codex_quota.py:359`) does bounded `terminate()` → `wait()` → `kill()` → `wait()`, swallowing all exceptions; process cleanup never raises.
-
-**Auth isolation.** `_prepare_temp_codex_home()` (`codex_quota.py:203`) builds a process-owned `tempfile.TemporaryDirectory` (mode `0700`) with a mode-`0600` copy of the target auth file; `CODEX_DISABLE_ANALYTICS=1` is set on the child env; the real auth file/dir is never opened for writing, and cleanup runs via the `TemporaryDirectory`'s own bounded lifecycle in a `finally`.
-
-**Fail-soft contract.** `read_codex_quota_snapshot()` (`codex_quota.py:383`) never raises — every failure mode (missing binary, bad/missing auth file, handshake timeout, malformed/error response) returns `CodexQuotaSnapshot(available=False, error=<safe category string>)`. `quota_snapshot_to_dict()` (`codex_quota.py:424`) is the stable, documented JSON-safe return shape consumers rely on. Never includes tokens, auth file contents, raw auth paths, raw account IDs, command stderr, or the raw response payload; `limit_id` is kept only because the protocol itself documents it as a public/stable field (e.g. `"codex"`).
-
-**Adapter/pool wiring.** `CodexOpenAIAdapter.read_codex_quota()` (`adapter.py`, reads `self._codex_token_mgr._path`) is the explicit, on-demand entry point shared by BOTH `codex` and `codex-pool` (the latter reuses this same adapter class unchanged). `lingtai.auth.codex_pool.list_codex_pool_quota_snapshots()` (see `../../auth/ANATOMY.md`) is the read-only per-account reporting view over the pool file. `lingtai.auth.codex_pool.select_codex_pool_auth()`'s quota-AWARE EXCLUSION at new selection (also documented in `../../auth/ANATOMY.md`) is the one place this module's data changes actual behavior — but only which pool account gets picked, never the wire protocol or normalization logic here.
 
 ## State
 
