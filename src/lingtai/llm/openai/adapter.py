@@ -5003,6 +5003,39 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         """Codex adapter comments are intentionally disabled before chat creation."""
         return None
 
+    def read_codex_quota(self, *, timeout_seconds: float | None = None) -> dict[str, Any]:
+        """Read this adapter's own Codex OAuth quota/rate-limit snapshot.
+
+        Reads the SAME auth file this adapter's ``CodexTokenManager`` uses
+        (``_codex_token_mgr._path``, set by ``_register.py``'s ``_codex``
+        factory) via a throwaway ``codex app-server`` stdio process — never
+        the shared adapter's own live OAuth session. This is an explicit,
+        on-demand read (no automatic per-request subprocess spawn); callers
+        decide when to invoke it.
+
+        Returns the stable JSON-safe dict documented by
+        ``codex_quota.quota_snapshot_to_dict`` — always
+        ``{"available": bool, "error": str | None, "primary": ..., "by_limit_id": ...}``,
+        never raises, and never includes token/auth contents or raw paths.
+        A bare adapter with no token manager returns
+        ``{"available": False, "error": "no_auth_configured", ...}``.
+        """
+        from .codex_quota import (
+            CodexQuotaSnapshot,
+            quota_snapshot_to_dict,
+            read_codex_quota_snapshot,
+        )
+
+        mgr = getattr(self, "_codex_token_mgr", None)
+        auth_path = getattr(mgr, "_path", None) if mgr is not None else None
+        if not auth_path:
+            return quota_snapshot_to_dict(
+                CodexQuotaSnapshot(available=False, error="no_auth_configured")
+            )
+        kwargs = {} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}
+        snapshot = read_codex_quota_snapshot(auth_path, **kwargs)
+        return quota_snapshot_to_dict(snapshot)
+
     def _resolve_codex_ids(self, model: str) -> tuple[str | None, str | None]:
         """Resolve the (session_id, thread_id) headers for ``model``.
 

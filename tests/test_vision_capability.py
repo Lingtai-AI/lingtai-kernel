@@ -431,6 +431,35 @@ def test_codex_family_vision_aliases_use_codex_service(tmp_path, provider):
             assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-pool.json"
 
 
+def test_codex_pool_vision_all_accounts_exhausted_degrades_to_manual(tmp_path):
+    """When quota-aware selection proves every pool account exhausted,
+    ``select_codex_pool_auth`` raises ``CodexPoolAllAccountsExhaustedError`` —
+    vision setup must degrade to the same safe manual-reason UX as every
+    other setup failure (never propagate the exception to the caller, never
+    leak exception content beyond the type name)."""
+    from lingtai.auth.codex_pool import CodexPoolAllAccountsExhaustedError
+
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_pool.select_codex_pool_auth",
+        side_effect=CodexPoolAllAccountsExhaustedError(
+            "All 2 configured Codex-pool account(s) are exhausted. "
+            "Excluded accounts: [{'source_ref': 'a.json', 'auth_path_sha8': 'deadbeef'}, "
+            "{'source_ref': 'b.json', 'auth_path_sha8': 'cafef00d'}]."
+        ),
+    ):
+        agent = make_provider_agent(
+            tmp_path, provider="codex-pool", model="gpt-5.6-sol", base_url=None,
+        )
+        mgr = setup(agent, provider="codex-pool")
+
+    mock_factory.assert_not_called()
+    assert mgr._vision_service is None
+    assert "CodexPoolAllAccountsExhaustedError" in mgr._manual_reason
+    assert "use vision(action='manual')" in mgr._manual_reason
+    assert "a.json" not in mgr._manual_reason
+    assert "deadbeef" not in mgr._manual_reason
+
+
 def test_codex_vision_inherits_active_model_and_endpoint(tmp_path):
     with patch("lingtai.services.vision.create_vision_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=VisionService)

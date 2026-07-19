@@ -314,15 +314,26 @@ def setup(
                     # The pool selector is the single owner of deterministic
                     # account choice. It reads only the current pool's
                     # non-secret file; an unrelated active provider is ignored.
+                    # ``select_codex_pool_auth`` may raise
+                    # ``CodexPoolAllAccountsExhaustedError`` when quota-aware
+                    # exclusion proves every configured account exhausted;
+                    # degrade to the same manual-vision guidance as every
+                    # other setup failure in this function rather than
+                    # propagating an uncaught exception.
                     if same_provider:
                         from lingtai.auth.codex_pool import select_codex_pool_auth
-                        selection = select_codex_pool_auth(
-                            bucket,
-                            model=kwargs.get("model"),
-                        )
-                        if selection:
-                            kwargs["token_path"] = selection["auth_path"]
-                    if not kwargs.get("token_path"):
+                        try:
+                            selection = select_codex_pool_auth(
+                                bucket,
+                                model=kwargs.get("model"),
+                            )
+                        except Exception as exc:
+                            selection = None
+                            manual_reason = _setup_failure(provider, exc)
+                        else:
+                            if selection:
+                                kwargs["token_path"] = selection["auth_path"]
+                    if not manual_reason and not kwargs.get("token_path"):
                         manual_reason = "Codex pool vision has no selected current OAuth identity; use vision(action='manual')."
                 kwargs.pop("api_compat", None)
                 kwargs.pop("base_url", None)
