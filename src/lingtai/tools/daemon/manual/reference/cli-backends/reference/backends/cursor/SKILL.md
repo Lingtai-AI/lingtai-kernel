@@ -7,7 +7,7 @@ description: >
   CLI's live help via shell and shows how to translate that help into the
   generic `backend_options` mechanism. It is not a flag catalog.
 version: 0.1.0
-last_changed_at: "2026-07-09T19:23:56-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-cursor-agent/SKILL.md
@@ -17,9 +17,9 @@ maintenance: |
 
 # Cursor Daemon Backend — Flag Discovery Entrypoint
 
-This page is deliberately tiny: it only tells you where the knowledge lives.
-The Cursor Agent CLI revs its flags and accepted values, so installed CLI help
-is the authority — not this page, and not any flag list LingTai could ship.
+The installed CLI's own help is the authority for Cursor Agent flags; this page
+is only the entrypoint. Conversion rules, key safety, and persistence live in the
+parent [`reference/cli-backends/SKILL.md`](../../../SKILL.md).
 
 ## Discover flags from the installed CLI
 
@@ -29,10 +29,8 @@ is the authority — not this page, and not any flag list LingTai could ship.
    `agent` directly — `agent -p --force --output-format stream-json <prompt>` —
    so root help is authoritative (open a subcommand only if root routes there).
    These are read-only checks; keychain errors happen before help on some builds.
-3. Translate the long flags you found into `backend_options` using the
-   generic conversion rules in the parent `reference/cli-backends/SKILL.md`
-   (key→flag mapping, value handling, key safety, persistence). Nothing
-   Cursor-specific is added to that contract here.
+3. Translate what you found into `backend_options` with the parent's generic
+   conversion rules. Nothing Cursor-specific is added to that contract here.
 
 ## Example: model selection via the generic route
 
@@ -53,10 +51,10 @@ flags and before the task prompt:
 // argv: --model opus
 ```
 
-The flag and model vocabulary belong to the installed CLI — LingTai does
-not validate, enumerate, or simulate them. Confirm `--model` and its
-accepted values in your installed `agent --help` before relying on this;
-an unknown flag or value is the CLI's error, not the daemon's.
+The flag and model vocabulary belong to the installed CLI — LingTai does not
+validate, enumerate, or simulate them. Confirm `--model` and its accepted values
+in your installed `agent --help` before relying on this; an unknown flag or value
+is the CLI's error, not the daemon's.
 
 ## Source-pinned stream-json usage
 For installed `agent-cli@2026.05.28-a70ca7c`, accept usage only from `type=result`, `subtype=success`, `is_error=false` with all four non-negative integer fields: `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`.
@@ -84,7 +82,5 @@ this backend yet, so there are no MCP loader flags to collide with and no
 `finish` contract: success comes from the stream's final result event and
 the process exit code.
 
-`backend_options` is honored only at `emanate` time; `ask` follow-ups reuse
-the session without re-passing it. To debug what was actually sent,
-`daemon.json` records the raw `backend_options` object alongside the
-resolved `backend_argv` token list.
+`backend_options` is honored only at `emanate` time; `ask` follow-ups reuse the
+session without re-passing it.

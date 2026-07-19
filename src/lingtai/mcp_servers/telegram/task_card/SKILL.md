@@ -1,11 +1,12 @@
 ---
 name: telegram-task-card-manual
 description: |
-  Manual for the programmable Telegram Task Card (`task_card` tool). Read this
-  when a task needs a truthful, task-specific watcher: inspect the actual task
-  and producer evidence, design a small renderer, and use the start | inspect |
-  retry | stop lifecycle without prescribing a fixed layout or data source.
-last_changed_at: "2026-07-16T14:57:00-07:00"
+  Nested telegram-mcp-manual reference for the programmable Telegram Task Card
+  (`task_card` tool). Read this when a task needs a truthful, task-specific
+  watcher: inspect the actual task and producer evidence, design a small
+  renderer, and use the start | inspect | retry | stop lifecycle without
+  prescribing a fixed layout or data source.
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/telegram/SKILL.md
 - src/lingtai/mcp_servers/telegram/task_card/controller.py
@@ -60,10 +61,8 @@ reliably available:
    the next evidence-based transition or review gate, and any blocker. Do not call
    work `running`, `done`, or `healthy` without evidence; say `unknown` or
    `unavailable` when that is the truth.
-6. **Feedback and improvement** — after the watcher has had meaningful real use,
-   proactively ask whether it helped and what should improve. Use the answer to
-   improve this current watcher first; only then extract a reusable method into a
-   skill.
+6. **Feedback and improvement** — after meaningful real use, ask whether the
+   watcher helped (see **Feedback and reuse loop**).
 
 These are information requirements, not a visual template. The frame may use any
 layout that keeps the facts legible and bounded. Do not add decorative fields just
@@ -88,6 +87,23 @@ proof of progress. If the task has no reliable activity or token signal, report
 that limitation plainly and choose another truthful signal rather than inventing
 one. Write snapshots atomically when the orchestrator owns them, so a renderer
 never mistakes a half-written update for a real state.
+
+## Renderer contract
+
+A renderer is an ordinary Python file inside the agent working directory. Each run
+must exit `0` and print exactly one JSON object to stdout:
+
+- `title` is a string (optional);
+- `lines` is an array of at most 20 strings (optional);
+- `footer` is a string (optional);
+- at least one of those values must be non-empty.
+
+Nonzero exit, timeout, empty or multi-object output, a non-object, or wrong field
+types are handled failures. The controller uses `sys.executable`, the working
+directory as `cwd`, a per-run timeout, and symlink-resolved containment for
+`renderer_path`. Telegram receives only the validated card data, never renderer
+code. Keep secrets, credentials, raw logs, and unbounded output out of the frame;
+the manager also redacts at its boundary but cannot make an unsafe source safe.
 
 ## Safe custom renderer example
 
@@ -163,23 +179,6 @@ not report. Start it with the controller only after adapting and testing it:
 {"action": "start", "renderer_path": "watcher.py", "interval_s": 5, "timeout_s": 10}
 ```
 
-## Renderer contract
-
-A renderer is an ordinary Python file inside the agent working directory. Each run
-must exit `0` and print exactly one JSON object to stdout:
-
-- `title` is a string (optional);
-- `lines` is an array of at most 20 strings (optional);
-- `footer` is a string (optional);
-- at least one of those values must be non-empty.
-
-Nonzero exit, timeout, empty or multi-object output, a non-object, or wrong field
-types are handled failures. The controller uses `sys.executable`, the working
-directory as `cwd`, a per-run timeout, and symlink-resolved containment for
-`renderer_path`. Telegram receives only the validated card data, never renderer
-code. Keep secrets, credentials, raw logs, and unbounded output out of the frame;
-the manager also redacts at its boundary but cannot make an unsafe source safe.
-
 ## Lifecycle: `start` | `inspect` | `retry` | `stop`
 
 - **`start`** validates the path and runs the renderer once synchronously. A bad
@@ -204,18 +203,18 @@ the manager also redacts at its boundary but cannot make an unsafe source safe.
 
 The Telegram manager remains the single owner of the tracked resident, composition,
 transport, persistence, and the independent automatic slot. `/taskcard off` hides
-both slots at presentation time while rendering, watches, retries, and bookkeeping
-continue; re-enabling needs no restart.
+both slots at presentation time while everything here keeps running — see
+**TASKCARD STATE** in the parent [`telegram` manual](../SKILL.md).
 
 ## Terminal cleanup and fail-loud behavior
 
 A passive renderer cannot stop itself. When the producer reaches a terminal state,
 record that terminal evidence and immediately call
-`task_card(action="stop", watch_id="<watch_id>")`. Retry the same call if it
-returns `stop_failed`; do not restart or duplicate the watch. Terminal evidence
-must still distinguish success, failure, cancellation, timeout, or an unavailable
-outcome according to the producer's contract. Do not leave a completed watcher
-resident merely because its card can still refresh.
+`task_card(action="stop", watch_id="<watch_id>")`. Terminal evidence must still
+distinguish success, failure, cancellation, timeout, or an unavailable outcome
+according to the producer's contract. Do not restart or duplicate the watch, and
+do not leave a completed watcher resident merely because its card can still
+refresh.
 
 After a handle exists, a renderer or backend failure preserves the last valid frame
 and emits one deduplicated, fail-loud `task_card.error` wake per failure episode,
@@ -240,11 +239,8 @@ It is harmful when a static renderer, guessed token count, or redraw timestamp
 creates the appearance of movement. The controller therefore owns validation,
 confinement, lifecycle, and fail-loud recovery, while the Agent owns judgment about
 the task, evidence source, facts to show, and how to improve the current watcher.
-The paired `CONTRACT.md` defines the stable interface and behavior promises; this
-manual defines how an Agent should design and operate a watcher without weakening
-those promises.
 
-This manual is co-located at
-`src/lingtai/mcp_servers/telegram/task_card/SKILL.md`. The top-level Telegram
-manual routes here for the programmable Task Card procedure. The paired
-`ANATOMY.md` maps the controller, resident, transport, and producer connections.
+The paired [`CONTRACT.md`](CONTRACT.md) defines the stable interface and behavior
+promises; this manual defines how an Agent should design and operate a watcher
+without weakening those promises. The paired [`ANATOMY.md`](ANATOMY.md) maps the
+controller, resident, transport, and producer connections.

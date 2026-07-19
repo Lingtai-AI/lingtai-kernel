@@ -8,7 +8,7 @@ description: >
   translate that help into the generic `backend_options` mechanism. It is not
   a flag catalog.
 version: 0.1.0
-last_changed_at: "2026-07-09T19:22:21-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-opencode/SKILL.md
@@ -18,10 +18,9 @@ maintenance: |
 
 # OpenCode Daemon Backend — Flag Discovery Entrypoint
 
-This page is deliberately tiny: it only tells you where the knowledge lives.
-The OpenCode CLI revs its flags and accepted values between releases, so the
-installed CLI's own help output is the authority — not this page, and not any
-flag list LingTai could ship.
+The installed CLI's own help is the authority for OpenCode flags; this page is
+only the entrypoint. Conversion rules, key safety, and persistence live in the
+parent [`reference/cli-backends/SKILL.md`](../../../SKILL.md).
 
 ## Discover flags from the installed CLI
 
@@ -31,10 +30,8 @@ flag list LingTai could ship.
    `opencode run --help`. The daemon backend wraps `opencode run`, so
    `opencode run --help` is the relevant flag surface. These are local
    read-only commands; no session is started.
-3. Translate the long flags you found into `backend_options` using the
-   generic conversion rules in the parent `reference/cli-backends/SKILL.md`
-   (key→flag mapping, value handling, key safety, persistence). Nothing
-   OpenCode-specific is added to that contract here.
+3. Translate what you found into `backend_options` with the parent's generic
+   conversion rules. Nothing OpenCode-specific is added to that contract here.
 
 ## Example: model and reasoning variant
 
@@ -57,10 +54,8 @@ for both). Through `backend_options`, plain scalars become `--flag <value>`:
 // argv: --model anthropic/claude-sonnet-4-5 --variant high
 ```
 
-The model and variant vocabularies belong to the installed CLI and the
-selected provider — LingTai does not validate, enumerate, or simulate them. A
-value passes through and the CLI/provider decides its semantics (or rejects
-it).
+The model and variant vocabularies belong to the installed CLI and the selected
+provider — LingTai does not validate, enumerate, or simulate them.
 
 ## Harness boundary
 
@@ -74,8 +69,6 @@ completion MCP is injected through the `OPENCODE_CONFIG_CONTENT` environment
 variable — not argv — so breaking either silently breaks progress/result
 extraction and completion enforcement.
 
-To debug what was actually sent, `daemon.json` records the raw
-`backend_options` object alongside the resolved `backend_argv` /
-`backend_harness_argv` token lists. For OpenCode, `backend_harness_argv`
-holds a sentinel token pair that the runner converts into the
-`OPENCODE_CONFIG_CONTENT` environment variable rather than real argv flags.
+In `daemon.json`, OpenCode's `backend_harness_argv` holds a sentinel token pair
+that the runner converts into the `OPENCODE_CONFIG_CONTENT` environment variable
+rather than real argv flags.

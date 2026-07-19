@@ -8,8 +8,8 @@ description: |
   notification transient-hook vs persistent-context split, and
   external-delivery side-effect caveats. Pulled on demand via action='manual'; you
   do not need to call it before every send.
-version: 1.1.0
-last_changed_at: "2026-07-06T00:00:00-07:00"
+version: 1.2.0
+last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
 - src/lingtai/mcp_servers/whatsapp/manager.py
 - src/lingtai/mcp_servers/whatsapp/server.py
@@ -19,10 +19,6 @@ maintenance: |
 ---
 
 # WhatsApp MCP — usage manual (progressive disclosure)
-
-This manual is pulled on demand via `action='manual'` so the per-action tool
-schema can stay concise. Read it when you need detail beyond the one-line action
-descriptions; you do not need to call it before every send.
 
 This client uses the official Meta WhatsApp Cloud API only (no WhatsApp Web
 bridge).
@@ -53,8 +49,9 @@ bridge).
 ## READING: check / read / search
 
 - `check`: list recent conversations.
-- `read`: read messages from one conversation (`wa_id`; optional `limit`,
-  `mark_read`).
+- `read`: read messages from one conversation (`wa_id`, or a `message_id` to
+  resolve it; optional `limit`). `mark_read` defaults to true — `read` marks the
+  conversation read on WhatsApp unless you pass `mark_read=false`.
 - `search`: regex search over message text (`query`).
 
 ## CONTACTS / ACCOUNTS / STATUS

@@ -77,7 +77,7 @@ Use this checklist as the Telegram setup acceptance test. It is intentionally se
 `cloud_mail` is a REST client for a self-hosted [Cloud Mail](https://github.com/maillab/cloud-mail) deployment (Cloudflare Workers). It is **not** IMAP/SMTP — it talks to Cloud Mail's HTTP API. Inbound mail is discovered by polling Cloud Mail's `POST /public/emailList` and delivered to your inbox via LICC.
 
 - **Env var:** `LINGTAI_CLOUD_MAIL_CONFIG` — path to the config JSON (resolved relative to the agent dir when not absolute).
-- **Omnibus tool:** `cloud_mail` with actions `check` (recent inbound mail), `search` (filter by sender/recipient/subject/content), `read` (full content by compound id `<account>:<emailId>`), `send` (requires user credentials), `accounts` (redacted status), and `add_user` (admin convenience).
+- **Omnibus tool:** `cloud_mail`. Its action surface is owned by the addon's own manual — `cloud_mail(action="manual")`.
 - **Auth model:** the addon mints a *public token* from `admin_email`/`admin_password` via `/public/genToken` for read/poll/search, and logs in with `user_email`/`user_password` via `/login` for `send`. If user creds are absent, read/check/search/poll still work; only `send` is disabled with a clear error.
 - **Watermark:** the first poll seeds the per-account high-water mark silently (no flood of old mail) unless `notify_existing: true`. State lives under `<agent_dir>/cloud_mail/<alias>/watermark.json`.
 
@@ -106,7 +106,7 @@ Config schema (plaintext; copy verbatim, never commit real passwords):
 
 ## After it's running
 
-Inbound events (new emails, chat messages) flow into your `.mcp_inbox/<name>/` via the LICC v1 inbox callback contract — the kernel auto-injects them into your next turn as `[system]` messages. You don't poll; the kernel does. Outbound calls go through the omnibus tool: `imap(action="send", ...)`, `telegram(action="send", ...)`, etc. — see each addon's README for the action list.
+Inbound events (new emails, chat messages) flow into your `.mcp_inbox/<name>/` via the LICC v1 inbox callback contract — the kernel auto-injects them into your next turn as `[system]` messages. You don't poll; the kernel does. Outbound calls go through the omnibus tool: `imap(action="send", ...)`, `telegram(action="send", ...)`, etc. Each addon owns its own action surface and side-effect rules — pull it with `<addon>(action="manual")`; this file stops at setup.
 
 ## WeChat setup checklist
 

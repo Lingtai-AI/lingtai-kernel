@@ -11,9 +11,9 @@ description: >
   maintenance. This is a nested skill-reference under `system-manual`, not a
   standalone catalog skill; its folder may carry scripts/assets as procedure
   guidance grows.
-version: 1.2.0
+version: 1.3.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
-last_changed_at: "2026-07-03T00:00:00Z"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -76,47 +76,19 @@ methodology.
 
 ### Delayed summarization reconstruction threshold
 
-Summarize records compact replacements in runtime history and may clear large-result
-reminders immediately, but provider-side reconstruction is deliberate: recording a
-summary does not by itself rebuild the active provider context. Runtimes usually
-append onto a stable cache/continuation prefix instead of rebuilding that prefix
-every turn. Below the full-context boundary, keep working: do not treat pending
-summarized history as failure, and do not call `refresh` just to force a rebuild.
-Once context is at/above 0.85, the runtime stamps `_meta.agent_meta.agent_state.context.rebuild`;
-if a fresh provider context is worth the cost, make one proactive tactical
-`system(action="summarize", rebuild=true)` call — with new items (record then
-apply the pending set) or with no items (pure rebuild of the already-pending
-summaries); applied summaries flip to `status: done`. Do not loop
-rebuild/summarize. At context usage 1.0 (the full-context hard boundary) the
-runtime forces a rebuild on the next request regardless of whether pending
-summaries exist, but only ONCE per continuous full-context episode (it does not
-re-force while context stays at/above 1.0, and re-arms only after context later
-drops below 1.0): pending markers are applied and marked done. `summarize` is
-the only historical tool-result body replacement a rebuild applies; the fresh
-replay otherwise preserves each historical timely-transient holder and does
-not strip its `agent_meta`/`guidance` or
-`notifications`/`notification_guidance` keys, on every provider, without
-rewriting recorded history — only the LATEST holder
-per family represents current state, older holders are historical traces and
-must not be acted on. Every 1.0 forced rebuild
-ALWAYS carries a one-shot `reconstruction.warning` (before→after context,
-proactive-0.85-rebuild advice, and "if still above the 0.75 recovery target, molt").
-If that one forced rebuild does NOT clear the overflow (post-rebuild context stays
-strictly above 1.0), every result then also carries a permanent
-`_meta.agent_meta.agent_state.context.molt` line `100% context Forced Rebuild Failed to Bring Usage Below 100%. Context
-overflowed!! (xxx %) Molt IMMEDIATELY!!` — molt immediately.
-Waiting for the 1.0 boundary is not ideal — prefer the proactive 0.85 rebuild; if
-the pending total is 0, the forced rebuild has nothing to apply, so summarize more
-or molt instead. At task completion, default to proactive task-boundary molt only when
-session (since-last-molt) API calls exceed 100. Below that threshold, go idle
-unless context pressure, explicit human request, or conversation confusion makes
-the fresh briefing worth the molt cost. Summarize is a mini molt for a consumed
-tool result. If you have already decided to molt, do not summarize first merely
-to prepare: molt is the stronger whole-conversation summarize boundary.
+Summarize records compact replacements in runtime history immediately, but
+provider-side reconstruction is deliberately delayed. Below the full-context
+boundary, keep working: pending summarized history is not a failure, and
+`refresh` is reserved for emergencies (broken/stale context), never a way to
+force a rebuild.
 
-Reserve `refresh` for emergencies (broken/stale context). If summarize or a
-rebuild still cannot bring context below `0.75 * context_window`, tend durable
-stores and molt deliberately.
+`reference/summarize-manual/SKILL.md` §3a owns this mechanism in full — the 0.85
+`context.rebuild` stamp and the one proactive
+`system(action="summarize", rebuild=true)` call it permits, the 1.0
+once-per-episode forced rebuild, the `reconstruction.warning`, the persistent
+overflow `Molt IMMEDIATELY` line, and the task-boundary molt threshold. Do not
+loop rebuild/summarize. If summarize or a rebuild still cannot bring context
+below `0.75 * context_window`, tend durable stores and molt deliberately.
 
 ## 2. Action and responsiveness
 
@@ -128,9 +100,9 @@ For human-facing work:
 
 - Acknowledge human instructions promptly on the same channel.
 - If the next action may take more than a few seconds, send a short progress
-  message first with the communication tool directly. If the notification
-  preview is truncated, ambiguous, or needs exact anchoring, fetch the full
-  message first with the producer channel's normal read action.
+  message first with the communication tool directly. When a notification
+  preview is not enough, read the producer channel first — the conditions are
+  listed in `reference/substrate-manual/SKILL.md` §4.
 - During long work, report meaningful progress, blockers, or completion evidence.
 - Never reply to humans via diary text.
 - Do not infer approval for external side effects when standing rules require
@@ -150,15 +122,9 @@ standing exceptions.
 
 ## 3. Use the right body
 
-Choose the smallest durable body:
-
-- Use shell for deterministic local work.
-- Use daemon for noisy, isolated, disposable exploration, batch analysis, and
-  long-context branches that would otherwise burden the parent.
-- Use avatar for persistent specialization or recurring collaboration.
-- Use MCP for durable external integrations.
-- Use knowledge for private durable facts.
-- Use skills for reusable procedures.
+`reference/substrate-manual/SKILL.md` §1 owns the extension table and the
+smallest-durable-form decision tree (shell, daemon, avatar, MCP, knowledge,
+skill). This section owns the *procedure* built on it.
 
 If a task exceeds current capability, acquire capability rather than stalling:
 search documentation, install tools when appropriate, use daemon for isolated
@@ -273,26 +239,9 @@ mechanics here. For the checklist, templates, and summary rules, go to
 
 ## 7. Skill routing
 
-| Situation | Load |
-|---|---|
-| Runtime model, lifecycle, communication, memory layers, substrate expansion | `system-manual` → `reference/substrate-manual/SKILL.md` |
-| Procedures expansion, routing logic, deliverable/reporting discipline | `system-manual` → `reference/procedures-manual/SKILL.md` |
-| SQLite, log.sqlite, runtime trace inspection, `lingtai-agent log doctor/query/rebuild` | `system-manual` → `reference/sqlite-log-query/SKILL.md` |
-| Tool-result summarization, large-result ranking via agent_meta, original-result recovery, summarize vs molt | `system-manual` → `reference/summarize-manual/SKILL.md` |
-| Molt, pad tending, session journaling, post-wipe recovery | `psyche-manual` |
-| Spawning/managing avatars | `avatar-manual` |
-| Internal email protocol | `email-manual` |
-| Real email/chat/MCP configuration | `mcp-manual` plus the addon's README/resources |
-| Daemon inspection/debugging | `daemon-manual` |
-| Skill authoring/publishing | `skills-manual` |
-| Knowledge entries | `knowledge-manual` |
-| Shell commands, cron, host scheduling | `shell-manual` |
-| Querying LingTai runtime logs / SQLite log sidecar | `system-manual` → `reference/sqlite-log-query/SKILL.md` |
-| Kernel architecture / breaking changes | `lingtai-kernel-anatomy` |
-| TUI / portal code navigation | `lingtai-tui-anatomy` |
-| Web fetching/search/scraping | `web-browsing` |
-| Image understanding | `vision` |
-| Bug/stale-doc/missing-capability reports | `lingtai-issue-report` |
+The situation→manual table is resident in `procedures`, and the `system-manual`
+router table owns routing into this manual's sibling references. Do not maintain
+a third copy here.
 
 Read the named manual before using tools whose developer instructions require it
 (e.g. bash, daemon, skills, knowledge, MCP, web browsing).

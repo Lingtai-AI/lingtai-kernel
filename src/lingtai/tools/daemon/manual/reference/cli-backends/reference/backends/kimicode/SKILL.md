@@ -7,7 +7,7 @@ description: >
   installed CLI's live help via shell and shows how to translate that help into
   the generic `backend_options` mechanism. It is not a flag catalog.
 version: 0.1.0
-last_changed_at: "2026-07-09T19:22:52-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-kimicode/SKILL.md
@@ -17,11 +17,11 @@ maintenance: |
 
 # Kimi Code Daemon Backend — Flag Discovery Entrypoint
 
-This page is deliberately tiny: it only tells you where the knowledge lives.
-The Kimi Code CLI revs its flags and accepted values between releases, so the
-installed CLI's own help output is the authority — not this page, and not any
-flag list LingTai could ship. `kimi` is the accepted short alias; persisted
-daemon entries use the canonical backend name `kimicode`.
+The installed CLI's own help is the authority for Kimi Code flags; this page is
+only the entrypoint. Conversion rules, key safety, and persistence live in the
+parent [`reference/cli-backends/SKILL.md`](../../../SKILL.md). `kimi` is the
+accepted short alias; persisted daemon entries use the canonical backend name
+`kimicode`.
 
 ## Discover flags from the installed CLI
 
@@ -34,10 +34,8 @@ daemon entries use the canonical backend name `kimicode`.
    `exec`-style wrapper subcommand. Run `kimi <subcommand> --help` only when a
    task actually needs one of the listed subcommands. These are local
    read-only commands; no session is started.
-3. Translate the long flags you found into `backend_options` using the
-   generic conversion rules in the parent `reference/cli-backends/SKILL.md`
-   (key→flag mapping, value handling, key safety, persistence). Nothing
-   Kimi-specific is added to that contract here.
+3. Translate what you found into `backend_options` with the parent's generic
+   conversion rules. Nothing Kimi-specific is added to that contract here.
 
 ## Example: model selection
 
@@ -59,9 +57,7 @@ Through `backend_options`, a string value becomes `--flag <value>`:
 ```
 
 The model vocabulary belongs to the installed CLI and its provider
-configuration — LingTai does not validate, enumerate, or simulate model
-names. A value passes through and the CLI decides its semantics (or rejects
-it).
+configuration — LingTai does not validate, enumerate, or simulate model names.
 
 ## Harness boundary
 
@@ -84,6 +80,4 @@ stdout becomes the result. The run-private MCP loader is not argv-based —
 the daemon writes `daemon_common` plus parent stdio and HTTP registrations
 to `<run>/kimi-code-home/mcp.json` (path recorded in `daemon.json` under
 `backend_harness_files.kimicode_mcp_config`); secret env/header values stay
-out of prompts and logs. To debug what was actually sent, `daemon.json`
-records the raw `backend_options` object alongside the resolved
-`backend_argv` token list.
+out of prompts and logs.

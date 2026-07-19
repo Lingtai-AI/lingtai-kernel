@@ -9,7 +9,7 @@ description: >
   large-result compaction remains owned by summarize-manual.
 version: 0.4.0
 tags: [lingtai, notifications, channels, dismiss, manual, force, stale, nudge]
-last_changed_at: "2026-07-12T20:20:43-07:00"
+last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
 - src/lingtai/tools/notification/__init__.py
 - src/lingtai/tools/notification/schema.py
@@ -50,11 +50,11 @@ do not voluntarily call `check` again merely to confirm the clear.
 <agent>/.library/intrinsic/capabilities/notification-manual/SKILL.md
 ```
 
-Success returns exactly `status`, `notification_manual`, and `manual_path`.
-A missing installed file returns `status: degraded`, an empty
+Success returns exactly `status`, `notification_manual`, and `manual_path`. A
+missing installed file returns `status: degraded`, an empty
 `notification_manual`, the same fixed `manual_path`, and an actionable `error`
-that points to an initializer or capability-install problem. It never falls back
-to a source checkout and never touches `.notification/`, the Notification Store,
+naming an initializer or capability-install problem. It never falls back to a
+source checkout and never touches `.notification/`, the Notification Store,
 producer state, delivery fingerprints, or acknowledgement state.
 
 ## Nested reference catalog
@@ -88,22 +88,20 @@ producer state, delivery fingerprints, or acknowledgement state.
 
 ## Safety boundaries to keep resident
 
-- `manual` is documentation retrieval only; it is not a notification-state read.
-- `check` is the notification-state read and does not itself write state.
+- `check` is the notification-state read; `manual` is documentation retrieval
+  only. Neither writes notification state.
 - Generic dismiss clears a notification mirror, never producer-owned canonical
   state. Prefer the producer's own verb when one exists.
 - `force=true` is for knowingly clearing a stale or guarded mirror. It does not
   override protected source-of-truth channels and never mutates producer state.
 - Large tool results are ranked under
   `_meta.agent_meta.agent_state.current_tool_result_chars`, not emitted as new
-  notifications. Follow `../system-manual/reference/summarize-manual/SKILL.md`; do not invent a second
-  summarization procedure here.
+  notifications. Follow `../system-manual/reference/summarize-manual/SKILL.md`;
+  do not invent a second summarization procedure here.
 
 ## Why the boundary is split this way
 
 The filesystem protocol lets in-process and external producers publish one
-current surface without sharing a queue. Atomic action names make the clearing
-target explicit. Producer guards prevent a mirror clear from being mistaken for
-handling source-of-truth state. The read-only `manual` action completes
-progressive disclosure without coupling documentation access to notification
-persistence, delivery, or dismissal policy.
+current surface without sharing a queue; atomic action names make the clearing
+target explicit; producer guards keep a mirror clear from being mistaken for
+handling source-of-truth state.

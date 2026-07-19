@@ -8,7 +8,7 @@ description: >
   producing, or debugging notification payloads; skip for dismissal policy.
 version: 0.1.0
 tags: [lingtai, notifications, channels, protocol, sync, nudge]
-last_changed_at: "2026-07-15T12:00:00-07:00"
+last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
 - src/lingtai/tools/notification/schema.py
@@ -110,7 +110,7 @@ clearing guarded, stale, protected, or event-granular state.
 ## Footprint
 
 The protocol footprint is `.notification/<channel>.json` plus kernel-owned
-notification metadata such as legacy acknowledgement state. Inspect it
-read-only before diagnosing a producer. Do not delete the directory or bulk
-remove files: use the producer's action or an authorized atomic notification
-action so guards and stale checks remain effective.
+notification metadata such as legacy acknowledgement state. Inspect it read-only
+before diagnosing a producer. Never delete the directory or bulk-remove files —
+that bypasses the guards and stale checks that only the producer verb or an
+atomic notification action honor.

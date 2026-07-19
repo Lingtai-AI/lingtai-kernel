@@ -6,7 +6,7 @@ description: >
   chat_history.jsonl, token_ledger.jsonl, events.jsonl, exit code 143 / SIGTERM,
   and how to inspect progress without guessing.
 version: 1.2.1
-last_changed_at: "2026-07-03T10:53:00-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/run_dir.py
@@ -70,14 +70,10 @@ the manifest, computes an equivalent listing on the fly (`source: "fallback"`).
 Read the `artifacts` block first to learn which files exist and how big they are,
 then open `result_path` / `error_path` for the full content.
 
-Progressive disclosure starts with `daemon(action="list")`: it reads these
-per-run JSON/files and returns a compact searchable index (metadata, visible call
-parameters, prompt/result previews, paths). `daemon.json` carries a
-`data_version`; if the file is missing, corrupt, or stale, list-time lazy
-migration rebuilds a best-effort replacement from the folder name, `.prompt`,
-`result.txt`, mtimes, and recent `events.jsonl`, recording a `migration`
-reason. If the index is not enough, read the returned `.prompt` or
-`result.txt` directly. Only then drop to full forensic grep over
+Read these artifacts in disclosure order: start with `daemon(action="list")` (the
+compact searchable index over these per-run files — see
+`../cli-backends/SKILL.md` for its filters and lazy-rebuild behavior), then the
+returned `.prompt` / `result.txt`, and only then drop to full forensic grep over
 `logs/events.jsonl`, `history/chat_history.jsonl`, or `logs/token_ledger.jsonl`.
 
 ## Inspection patterns

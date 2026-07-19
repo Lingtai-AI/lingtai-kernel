@@ -9,7 +9,7 @@ description: >
   local checks without exposing secrets.
 version: 0.1.0
 tags: [doctor, diagnostics, mcp, addons, heartbeat, migration, recovery]
-last_changed_at: "2026-06-12T14:27:46-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/intrinsic_skills/lingtai-doctor/scripts/doctor.py
 maintenance: |
@@ -23,85 +23,65 @@ the evidence is mixed: Telegram/Feishu/WeChat cannot reach it, the TUI says it
 is offline, a heartbeat is fresh, MCP configuration points at an old runtime, or
 logs/notifications/status files disagree.
 
-The goal is **diagnosis before repair**. The bundled script is read-only. It
-summarizes local evidence, redacts secrets, and suggests safe next steps; it does
-not edit `init.json`, touch mailboxes, refresh agents, or kill processes.
+**Diagnosis before repair.** The bundled script is read-only: it summarizes local
+evidence, redacts secrets, and suggests next steps. It never edits `init.json`,
+touches mailboxes, refreshes agents, or kills processes. Repairs belong to the
+owning manuals routed below.
 
-## Quick use
-
-From any shell with access to an agent workdir:
+## Run it
 
 ```bash
+# From a source checkout, against any agent workdir:
 python3 src/lingtai/intrinsic_skills/lingtai-doctor/scripts/doctor.py \
   --agent-dir /path/to/project/.lingtai/mimo-1
-```
 
-From inside an agent process where `LINGTAI_AGENT_DIR` is set:
-
-```bash
+# From inside an agent (installed bundle); --agent-dir defaults to $LINGTAI_AGENT_DIR:
 python3 .library/intrinsic/capabilities/lingtai-doctor/scripts/doctor.py
-```
 
-For machine-readable output:
-
-```bash
-python3 .../doctor.py --agent-dir /path/to/agent --json
-```
-
-For a packaging/sanity check:
-
-```bash
-python3 .../doctor.py --self-test
+# Add --json for machine-readable output, or --self-test for a packaging check.
 ```
 
 ## What it checks
 
-The script layers evidence so you do not confuse one broken surface with a dead
-agent:
+Layered so one broken surface is not mistaken for a dead agent:
 
 1. **Identity / lifecycle files** — `.agent.json`, `.status.json`, and
    `.agent.heartbeat` freshness.
 2. **Process evidence** — best-effort `ps` scan for `lingtai-agent run <agent-dir>` / `python -m lingtai run <agent-dir>`.
-3. **Notifications and logs** — channel files, mtimes, sizes, and common log
-   files such as `logs/events.jsonl`, `logs/agent.log`, and token ledgers.
+3. **Notifications and logs** — channel files plus common logs such as
+   `logs/events.jsonl`, `logs/agent.log`, and token ledgers, by mtime/size only.
 4. **Internal mail footprint** — inbox/outbox counts without message bodies.
 5. **MCP/addon configuration** — `init.json` top-level `mcp` entries and
-   `mcp_registry.jsonl` stdio commands. Commands are checked for existence and
-   executability (or `PATH` resolution). Environment values are redacted; only
-   path-like existence facts are reported.
+   `mcp_registry.jsonl` stdio commands, checked for existence and executability
+   (or `PATH` resolution). Environment values are redacted; only path-like
+   existence facts are reported.
 6. **Migration drift hints** — stale Linux `/home/...` paths on macOS-style
    hosts, stale macOS `/Users/...` paths on Linux-style hosts, and likely
    `~/.lingtai-tui/runtime/venv/bin/python` replacements.
 7. **First-party MCP server imports** — if a configured stdio command points at a
-   usable Python executable, the script can try importing configured LingTai
-   curated MCP modules (`lingtai.mcp_servers.telegram`, `lingtai.mcp_servers.feishu`,
-   `lingtai.mcp_servers.wechat`, `lingtai.mcp_servers.whatsapp`,
-   `lingtai.mcp_servers.imap`) without reading credentials.
+   usable Python executable, tries importing the configured LingTai curated MCP
+   modules (`lingtai.mcp_servers.` `telegram`/`feishu`/`wechat`/`whatsapp`/`imap`)
+   without reading credentials.
 
 ## Reading the result
 
-The top-level severity is:
+Top-level severity is **OK** (no obvious local mismatch), **WARN** (at least one
+surface looks stale, missing, or inconsistent), or **FAIL** (a critical local
+file/config/path is missing or broken).
 
-- **OK** — no obvious local mismatch was found.
-- **WARN** — at least one surface looks stale, missing, or inconsistent.
-- **FAIL** — a critical local file/config/path is missing or broken.
+The report ends with the same next steps summarized here. Triage in this order,
+then follow the owning manual rather than improvising a repair:
 
-Suggested recovery order:
+| Doctor evidence | Do | Owner |
+|---|---|---|
+| `.agent.heartbeat` is fresh | The agent is probably alive; internal email should wake it even if an external addon is broken. | [`email-manual`](../../tools/email/manual/SKILL.md) |
+| Heartbeat and process are both dead | CPR may be appropriate. If the process is alive but status/logs are stale, investigate before CPR. | [`substrate-manual`](../system-manual/reference/substrate-manual/SKILL.md) |
+| An MCP stdio command points at a missing runtime | **Back up `init.json` and `mcp_registry.jsonl` first**, then replace the stale command path and refresh the agent. | [`mcp-manual` troubleshooting](../../tools/mcp/manual/reference/troubleshooting.md) |
+| Notifications are stale while the agent is healthy | Clear the producer channel after reading/handling it; generic dismiss only clears a mirror, so do not use it for producer state unless you know it is stale. | [`notification-manual` dismissal safety](../notification-manual/reference/dismissal-safety/SKILL.md) |
 
-1. If `.agent.heartbeat` is fresh, the agent is probably alive. Internal email
-   should wake it even if an external addon is broken.
-2. If heartbeat/process are dead, CPR may be appropriate; if the process is
-   alive but status/logs are stale, investigate before CPR.
-3. If MCP stdio commands point at missing runtimes, back up `init.json` and
-   `mcp_registry.jsonl`, replace stale command paths, then refresh the agent.
-4. If notifications are stale while the agent is healthy, clear the producer
-   channel after reading/handling it; do not use generic dismiss for producer
-   state unless you know it is only a stale mirror.
+## Scope
 
-## Scope and follow-ups
-
-This intrinsic skill is the shared diagnostic foundation. TUI `/doctor` should
-become a thin caller of these scripts instead of maintaining a separate copy of
-logic. Kernel-level `mcp(action="info")` executable validation is also a natural
-follow-up, but the doctor script remains useful because it checks the whole
-agent footprint, not only MCP registry syntax.
+Doctor is the shared diagnostic foundation and covers the whole agent footprint,
+not only MCP registry syntax — `mcp(action="info")` validates the registry, not
+lifecycle, process, log, or mail evidence. TUI `/doctor` should call these
+scripts instead of maintaining a separate copy of the logic.

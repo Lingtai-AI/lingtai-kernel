@@ -8,8 +8,8 @@ description: |
   transient-hook vs persistent-context split, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.1.0
-last_changed_at: "2026-07-06T00:00:00-07:00"
+version: 1.2.0
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/manager.py
 - src/lingtai/mcp_servers/feishu/server.py
@@ -19,10 +19,6 @@ maintenance: |
 ---
 
 # Feishu (Lark) MCP — usage manual (progressive disclosure)
-
-This manual is pulled on demand via `action='manual'` so the per-action tool
-schema can stay concise. Read it when you need detail beyond the one-line action
-descriptions; you do not need to call it before every send.
 
 ## RECIPIENTS: receive_id / receive_id_type
 
@@ -70,22 +66,25 @@ descriptions; you do not need to call it before every send.
 
 ## NOTIFICATIONS: TRANSIENT HOOK vs PERSISTENT CONTEXT
 
-- Inbound Feishu messages surface to the agent in two `_meta` lanes:
-  - `_meta.agent_meta.notifications.attention.mcp.feishu` is a compact high-attention hook only —
-    `data.message_ids` (compound `{alias}:{chat_id}:{feishu_message_id}` ids)
-    and dismiss guidance, never message text or routing context.
-  - `_meta.agent_meta.notifications.persistent.mcp.feishu` carries durable context:
-    recent conversation messages (bounded text, both directions), sender/chat
-    routing hooks, reply refs when present, and per-message comments for the
-    agent's own outgoing messages or truncated text.
-- The feishu tool remains the source of truth. Neither lane marks anything
-  read; use `read`/`check` for exact producer state, especially when a
-  persistent message is truncated.
-- Reply in Feishu when the message arrived through Feishu (`reply` with the
-  compound message id, or `send` to the chat/open_id).
-- After handling, dismiss the transient hook via
-  `notification.dismiss_channel("mcp.feishu")`; the persistent block is
-  context history, not unread state.
+Inbound Feishu messages surface to the agent in two `_meta` lanes:
+
+- `_meta.agent_meta.notifications.attention.mcp.feishu` — a compact
+  high-attention hook only: `data.message_ids` and dismiss guidance, never
+  message text or routing context.
+- `_meta.agent_meta.notifications.persistent.mcp.feishu` — durable context:
+  recent conversation messages (bounded text, both directions), sender/chat
+  routing hooks, reply refs when present, and per-message comments for the
+  agent's own outgoing messages or truncated text.
+
+The feishu tool remains the source of truth: neither lane marks anything read,
+so use `read`/`check` for exact producer state — especially when a persistent
+message is truncated. Reply in Feishu when the message arrived through Feishu
+(`reply` with the compound message id, or `send` to the chat/open_id). After
+handling, dismiss the transient hook with
+`notification.dismiss_channel("mcp.feishu")`; the persistent block is context
+history, not unread state. Generic mirror-vs-canonical-state and dismiss-safety
+rules live in
+[`notification-manual`](../../intrinsic_skills/notification-manual/SKILL.md).
 
 ## SIDE EFFECTS & ERROR SURFACING
 

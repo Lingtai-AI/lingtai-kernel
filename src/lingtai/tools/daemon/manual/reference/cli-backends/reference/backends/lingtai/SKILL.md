@@ -8,7 +8,7 @@ description: >
   authorities for preset selection/inspection, lingtai/tools/skills/MCP inheritance,
   and the daemon completion contract. It is not a rules catalog.
 version: 0.1.0
-last_changed_at: "2026-07-09T19:22:26-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/daemon/manual/SKILL.md
@@ -19,7 +19,6 @@ maintenance: |
 
 # LingTai Daemon Backend — Knowledge Entrypoint
 
-This page is deliberately tiny: it only tells you where the knowledge lives.
 `backend="lingtai"` is the built-in default — an in-process ChatSession run
 loop, not a wrapped external CLI. There is no installed binary whose help
 output could be consulted, and `backend_options` is ignored (there is no CLI
@@ -30,9 +29,10 @@ and source — route to the current authority instead of memorizing snapshots.
 ## Where the knowledge lives
 
 1. **Task shape and behavior contract** — the `daemon-manual` router
-   (`manual/SKILL.md`): `task` vs `system_prompt` vs `tools` vs `skills` vs
-   `mcp` semantics, and the shared parent `reference/cli-backends/SKILL.md`
-   ("LingTai backend tool surface") for how this backend curates tools.
+   ([`manual/SKILL.md`](../../../../../SKILL.md)): `task` vs `prompt` vs
+   `tools` vs `skills` vs `mcp` semantics, and the shared parent
+   [`reference/cli-backends/SKILL.md`](../../../SKILL.md) ("LingTai backend
+   tool surface") for how this backend curates tools.
 2. **Preset selection and inspection** — run `system(action="presets")` for
    the live tier/connectivity/capability listing (guidance:
    `system-manual` → `reference/substrate-manual/SKILL.md`). A per-task
@@ -78,7 +78,7 @@ in prompts).
 
 There is nothing to tune at the process-spawn layer: no reserved flags, no
 argv, no `backend_argv`/`backend_harness_argv` in `daemon.json`. Model and
-tool shape are chosen through `preset`; behavior is guided through
-`system_prompt`; capability comes from `tools`/`skills`/`mcp`. LingTai-backend
-tool calls still pass the kernel ToolExecutor/ToolCallGuard gate — a daemon
-run does not bypass normal execution policy.
+tool shape are chosen through `preset`; behavior is guided through `task`;
+capability comes from `tools`/`skills`/`mcp`. LingTai-backend tool calls still
+pass the kernel ToolExecutor/ToolCallGuard gate — a daemon run does not bypass
+normal execution policy.

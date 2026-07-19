@@ -7,7 +7,7 @@ description: >
   to the installed CLI's live help via shell and shows how to translate that
   help into the generic `backend_options` mechanism. It is not a flag catalog.
 version: 0.2.0
-last_changed_at: "2026-07-11T00:00:00-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-mimocode/SKILL.md
@@ -17,10 +17,10 @@ maintenance: |
 
 # MiMo Code Daemon Backend — Flag Discovery Entrypoint
 
-This page is deliberately tiny: it only tells you where the knowledge lives.
-The MiMo Code CLI (npm package `@mimo-ai/cli`, binary `mimo`) revs its flags
-and accepted values between releases, so the installed CLI's own help output
-is the authority — not this page, and not any flag list LingTai could ship.
+The installed CLI's own help is the authority for MiMo Code (npm package
+`@mimo-ai/cli`, binary `mimo`) flags; this page is only the entrypoint.
+Conversion rules, key safety, and persistence live in the parent
+[`reference/cli-backends/SKILL.md`](../../../SKILL.md).
 
 ## Backend identity and spawn shape
 
@@ -36,10 +36,8 @@ between the harness flags and the trailing prompt positional.
 2. Run, in bash: `mimo --version`, `mimo --help`, and `mimo run --help`.
    The daemon backend wraps `mimo run`, so `mimo run --help` is the relevant
    flag surface. These are local read-only commands; no session is started.
-3. Translate the long flags you found into `backend_options` using the
-   generic conversion rules in the parent `reference/cli-backends/SKILL.md`
-   (key→flag mapping, value handling, key safety, persistence). Nothing
-   MiMo-specific is added to that contract here.
+3. Translate what you found into `backend_options` with the parent's generic
+   conversion rules. Nothing MiMo-specific is added to that contract here.
 
 ## Example: model selection via the generic route
 
@@ -58,8 +56,7 @@ between the harness flags and the trailing prompt positional.
 ```
 
 The flag/value vocabulary belongs to the installed CLI — LingTai does not
-validate, enumerate, or simulate it. A value passes through and the CLI
-decides its semantics (or rejects it).
+validate, enumerate, or simulate it.
 
 ## Harness boundary
 
@@ -99,7 +96,3 @@ writes either token ledger and does not infer provider or model.
 Per-run `daemon_common` MCP injection is not wired for `mimocode` yet, so the
 MCP completion contract is not enforced on this backend; parent MCP
 registrations reach the run as prompt catalog only.
-
-To debug what was actually sent, `daemon.json` records the raw
-`backend_options` object alongside the resolved `backend_argv` /
-`backend_harness_argv` token lists.

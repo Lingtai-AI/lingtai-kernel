@@ -13,9 +13,9 @@ description: >
   and resident substrate maintenance. This is
   a nested skill-reference under `system-manual`, not a standalone catalog skill;
   its folder may carry scripts/assets as the substrate reference grows.
-version: 1.2.0
+version: 1.3.0
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp, preset]
-last_changed_at: "2026-07-14T00:00:00-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/substrate/substrate.md
@@ -140,11 +140,8 @@ single `system` event. Prefer producer-specific verbs first for guarded
 producers (`email.read`, `email.dismiss`, Telegram `read`, other MCP read
 actions); a generic channel dismiss is for channels that do not own their own
 read state, or for stale mirrors when the producer-owned state is already
-handled.
-
-Never treat a notification preview as the full source of truth when it is
-truncated, ambiguous, lacks an exact anchor, includes media/attachments, or
-contains human instructions. Read the producer channel.
+handled. Never treat a notification preview as the full source of truth — §4
+lists when to read the producer channel instead.
 
 For channel allowlist, envelope shape, protected channels, stale-version/force
 semantics, and how large results are ranked via agent_meta and summarized (plus
@@ -157,29 +154,17 @@ LingTai has three deliberate ways to keep context lean, from local to
 whole-conversation. All three preserve the raw original in durable logs; none is
 canonical.
 
-1. **A priori — reasoning-guided** (`summary=true` on `bash`/`read`/`grep`/`daemon`/`glob`): the
-   tool runs normally and the raw is preserved, but the result is replaced by a
-   generated summary *before* it ever enters your context. Prefer this over a
-   posteriori summarization when you can predict bulk and already know the facts,
-   counts, anchors, or conclusion to retain; it is the cheapest path because raw
-   bulk never spends context. The summary is driven by your `reasoning` field. Hard cap:
-   500,000 raw chars, above which no summary is generated and you get a refusal
-   pointing at the preserved raw. A priori is **lossy** and assumption-driven —
-   it compresses *before* you inspect, so prefer it only when you already know the
-   narrow facts to keep. It does **not** replace a posteriori for
-   high-information-density daemon outputs, reviews, long reports, or results
-   whose important facts you cannot name in advance; for those, leave
-   `summary=false`, consume, then summarize a posteriori. See
-   `reference/summarize-manual/SKILL.md`.
-2. **A posteriori — agent-guided** (`system(action="summarize")`, below): replace
-   a result you have *already seen* and digested with your own summary.
+1. **A priori — reasoning-guided** (`summary=true` on
+   `bash`/`read`/`grep`/`daemon`/`glob`): the raw is replaced by a
+   `reasoning`-driven generated summary *before* it enters your context.
+2. **A posteriori — agent-guided** (`system(action="summarize")`): replace a
+   result you have *already seen* and digested with your own summary.
 3. **Molt — context-pressure-triggered** (§5): the whole-conversation
-   continuation / reset, the stronger boundary when per-result summarization
-   cannot keep context healthy.
+   continuation / reset.
 
-Pick a priori first when you can predict bulk, do not need the raw, and already
-know what the call must retain; use a posteriori when you've already consumed a
-result or the important facts could not be named before inspection; molt when the
+Pick a priori when you can predict bulk, do not need the raw, and already know
+what the call must retain; a posteriori when you have already consumed a result
+or could not name the important facts before inspection; molt when the
 conversation as a whole is the problem.
 
 ### `summarize`
@@ -187,62 +172,28 @@ conversation as a whole is the problem.
 `summarize` is the a-posteriori system action for tool-result context hygiene:
 after you have consumed a completed prior tool result and no longer need the raw
 text visible, record a compact summary replacement for its raw payload regardless
-of length. The
-summary preserves the conclusion, evidence, anchors, validation, risks, and next
-steps while lowering active context. Runtime high-attention guidance for this
-behavior is carried in `_meta.agent_meta.guidance`, including the resident 0.85 manual
-rebuild hint and the 1.0 hard forced-rebuild boundary rule.
-Treat guidance as a system-prompt-like appendix placed at the end of context: it
-is an ordered `sections[]` structure, not a loose metadata bag.  The kernel's
-`meta_readme` explanation of the `_meta` envelope is therefore one guidance
-section inside `sections[]`, alongside the packaged sections assembled from the
-skill-style Markdown guidance catalog under `src/lingtai/prompts/meta_guidance/catalog/`
-(`INDEX.md` + one `<id>.md` per section); follow that latest guidance first when
-it appears.
+of length. The summary preserves the conclusion, evidence, anchors, validation,
+risks, and next steps while lowering active context.
 
-Summarize records a compact replacement in runtime history and may clear large-result
-reminders, but active provider-side reconstruction is delayed.
-At the provider layer, runtimes serve requests by *appending* onto a stable
-cache/continuation prefix rather than *reconstructing* it each turn; rebuilding
-that prefix on every summarize would discard the cache benefit. So below the
-full-context boundary the summarize stays pending and the session keeps appending —
-this delay is normal. Once context is at/above 0.85, the runtime stamps
-`_meta.agent_meta.agent_state.context.rebuild`; if an earlier fresh provider context is worth
-the cost, make one proactive tactical `system(action="summarize", rebuild=true)`
-call — with new items (record then apply the pending set) or with no items (pure
-rebuild of the already-pending summaries); applied summaries flip to
-`status: done`. Do not loop rebuild/summarize. At context usage 1.0 (the
-full-context hard boundary) the runtime forces a rebuild on the next request
-regardless of whether pending summaries exist, but only ONCE per continuous
-full-context episode (it does not re-force while context stays at/above 1.0, and
-re-arms only after context later drops below 1.0): pending markers are applied and
-marked done, and with no pending summaries it still runs to release transient
-context. Every 1.0 forced rebuild ALWAYS carries a one-shot
-`reconstruction.warning` (before→after context, proactive-0.85-rebuild advice, and
-"if still above the 0.75 recovery target, molt"). If that one forced rebuild does
-NOT clear the overflow (post-rebuild context stays strictly above 1.0), every
-result then also carries a permanent `_meta.agent_meta.agent_state.context.molt` line `100%
-context Forced Rebuilt Failed. Context overflowed!! (xxx %) Molt IMMEDIATELY!!` —
-molt immediately. Waiting until full context is not
-ideal — prefer the proactive 0.85 rebuild; if the pending total is 0, the forced
-rebuild has nothing to apply, so summarize more or molt instead.
-`refresh` is reserved for emergency reconstruction (see above). Summarize
-is a mini molt for a consumed tool result; molt is the stronger
-whole-conversation summarize boundary when summarize/reconstruction cannot get
-context below `0.75 * context_window`. A completed task can also be an
-efficiency boundary, but molt is not free cleanup: after necessary reporting and
-durable-store updates, if no concrete next action remains, default to proactive
-task-boundary molt only once session (since-last-molt) API calls exceed 100. Below that
-threshold, go idle unless context pressure, explicit human request, or
-conversation confusion makes the fresh briefing worth the molt cost. If you have
-already decided to molt, do not spend a separate summarize call merely to
-prepare.
+Runtime high-attention guidance for this behavior is carried in
+`_meta.agent_meta.guidance`. Treat guidance as a system-prompt-like appendix
+placed at the end of context: it is an ordered `sections[]` structure, not a
+loose metadata bag. The kernel's `meta_readme` explanation of the `_meta`
+envelope is therefore one guidance section inside `sections[]`, alongside the
+packaged sections assembled from the skill-style Markdown guidance catalog under
+`src/lingtai/prompts/meta_guidance/catalog/` (`INDEX.md` + one `<id>.md` per
+section); follow that latest guidance first when it appears.
 
-For the full operating procedure — urgent large-result summarization, idle
-cleanup sweeps, original-result recovery by `tool_call_id`, summary quality,
-large-result notification behavior, append-vs-reconstruction timing, and the
-distinction between summarize and molt — read
-`reference/summarize-manual/SKILL.md`.
+Two boundaries matter here and are **owned in full by
+`reference/summarize-manual/SKILL.md`**: summarize records history now but
+provider-side reconstruction is delayed, so a pending summary is normal and
+`refresh` is not the way to apply one; and `refresh` stays reserved for emergency
+context reconstruction (see above), never as a summarize substitute. Read that
+reference for the 0.85 proactive-rebuild stamp, the 1.0 forced-rebuild boundary
+and its overflow warning, urgent versus idle-cleanup cadence, summary quality,
+original-result recovery by `tool_call_id`, and the summarize-versus-molt
+distinction — including when a completed task is worth a proactive
+task-boundary molt.
 
 ### Sleep, lull, interrupt, suspend, CPR, clear, nirvana
 
@@ -276,12 +227,9 @@ Notification previews are hints. Read the producer channel when:
 - exact wording matters for authorization;
 - the channel has producer-owned read/dismiss state.
 
-For human instructions, acknowledge promptly. If work will take longer than a few
-seconds, send a progress message with the communication tool directly before the
-long tool call. If the notification preview is incomplete, ambiguous, or exact
-anchoring matters, fetch the full message first with the producer channel's
-normal read action, then continue. During long work, report meaningful progress
-or blockers.
+The responsiveness discipline built on this surface — acknowledging promptly,
+sending a progress message before long work, and reporting blockers — belongs to
+`reference/procedures-manual/SKILL.md` §2.
 
 ## 5. Memory layers and molt model
 
@@ -351,14 +299,12 @@ When there is no concrete task, go idle/asleep rather than spinning, polling, or
 using timed sleeps. Idle keeps listeners available.
 
 Soul flow is advice, not command — and it is **opt-in, disabled by default**
-(gated by the `LINGTAI_SOUL_FLOW_ENABLED` env var). When it is off,
-`soul(action='flow')` returns a `disabled` status; `inquiry`/`config`/`voice`/
-`dismiss` still work. Verify external-event claims through the relevant channel
-before acting on any voice. Use self-inquiry when you need a deliberate pause for
-judgment; use durable stores for conclusions that should survive molt. For the
-full soul-flow mechanics — the env gate, disabled behavior, `delay_seconds` as
-cadence-not-off-switch, enabling/disabling, and the privacy/cost rationale — read
-the `soul-manual` skill.
+(gated by the `LINGTAI_SOUL_FLOW_ENABLED` env var). Verify external-event claims
+through the relevant channel before acting on any voice. Use self-inquiry when
+you need a deliberate pause for judgment; use durable stores for conclusions that
+should survive molt. `soul-manual` owns the full soul-flow mechanics: the env
+gate, disabled-flow behavior, `delay_seconds` as cadence-not-off-switch,
+enabling/disabling, and the privacy/cost rationale.
 
 ## 10. Resident substrate maintenance
 

@@ -4,7 +4,7 @@ description: >
   Use this manual when the vision capability has no usable provider route or
   reports a direct setup/request failure and needs safe, provider-neutral
   troubleshooting guidance.
-last_changed_at: "2026-07-16T21:00:00-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/ANATOMY.md
@@ -18,21 +18,21 @@ maintenance: |
 This is the provider-neutral fallback for `vision`. It contains guidance only;
 it does not discover, install, start, or invoke a backend.
 
-## OpenRouter and custom try first
+## Route behavior and failures
 
 For OpenRouter and custom OpenAI-compatible presets, `vision(action="analyze")`
 first tries the current endpoint, model, and credential. It does not reject the
-route merely because downstream image support cannot be known in advance. If
-the real request fails, the sanitized vision tool result reports the failure
-type and points here for explicit alternatives; it does not expose exception
-contents or silently switch provider, model, credential, or MCP.
+route merely because downstream image support cannot be known in advance. Any
+direct setup or request failure returns a sanitized vision tool result that
+reports the failure type and points here for explicit alternatives; it never
+exposes exception contents.
 
-## Direct route
+## Stay on the active preset
 
-When `vision` reports a direct setup or request failure, inspect the identity
-already shown in the prompt: the current provider, model, and sanitized
-endpoint. Do not substitute another provider, model, credential, endpoint, or
-wire protocol. Retry only after the operator has corrected the active preset.
+Inspect the identity already shown in the prompt: the current provider, model,
+and sanitized endpoint. Do not substitute another provider, model, credential,
+endpoint, or wire protocol, and never silently switch or auto-invoke an MCP.
+Retry only after the operator has corrected the active preset.
 
 ## Find the current preset's method
 

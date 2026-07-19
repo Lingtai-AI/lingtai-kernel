@@ -8,7 +8,7 @@ description: >
   translate that help into the generic `backend_options` mechanism. It is
   not a flag catalog.
 version: 0.1.0
-last_changed_at: "2026-07-09T19:22:18-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-qwen-code/SKILL.md
@@ -18,11 +18,11 @@ maintenance: |
 
 # Qwen Code Daemon Backend — Flag Discovery Entrypoint
 
-This page is deliberately tiny: it only tells you where the knowledge lives.
-The Qwen Code CLI (npm package `@qwen-code/qwen-code`, binary `qwen`) revs its
-flags and accepted values between releases, so the installed CLI's own help
-output is the authority — not this page, and not any flag list LingTai could
-ship. The alias `qwen` canonicalizes to the `qwen-code` backend id.
+The installed CLI's own help is the authority for Qwen Code (npm package
+`@qwen-code/qwen-code`, binary `qwen`) flags; this page is only the entrypoint.
+Conversion rules, key safety, and persistence live in the parent
+[`reference/cli-backends/SKILL.md`](../../../SKILL.md). The alias `qwen`
+canonicalizes to the `qwen-code` backend id.
 
 ## Discover flags from the installed CLI
 
@@ -33,10 +33,8 @@ ship. The alias `qwen` canonicalizes to the `qwen-code` backend id.
    `qwen --yolo <backend_argv...> -p <prompt>`, no subcommand — so
    `qwen --help` is the whole relevant flag surface. These are local
    read-only commands; no session is started.
-3. Translate the long flags you found into `backend_options` using the
-   generic conversion rules in the parent `reference/cli-backends/SKILL.md`
-   (key→flag mapping, value handling, key safety, persistence). Nothing
-   Qwen-specific is added to that contract here.
+3. Translate what you found into `backend_options` with the parent's generic
+   conversion rules. Nothing Qwen-specific is added to that contract here.
 
 ## Example: model selection via the generic route
 
@@ -58,10 +56,8 @@ Your options land between the harness-owned `--yolo` and the final
 // argv: qwen --yolo --model qwen3-coder-plus -p <prompt>
 ```
 
-The model vocabulary belongs to the installed CLI and the configured
-provider — LingTai does not validate, enumerate, or simulate model names. A
-value passes through and the CLI/provider decides its semantics (or rejects
-it).
+The model vocabulary belongs to the installed CLI and the configured provider —
+LingTai does not validate, enumerate, or simulate model names.
 
 ## Harness boundary
 
@@ -81,7 +77,3 @@ text — Qwen Code headless mode has no machine-readable event stream here, so
 stdout/stderr are recorded as-is and the result is the final stdout text;
 the `daemon_common` `finish(status="done")` call is still required for
 success.
-
-To debug what was actually sent, `daemon.json` records the raw
-`backend_options` object alongside the resolved `backend_argv` /
-`backend_harness_argv` token lists.

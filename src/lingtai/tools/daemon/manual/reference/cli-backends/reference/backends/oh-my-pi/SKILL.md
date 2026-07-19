@@ -8,7 +8,7 @@ description: >
   translate that help into the generic `backend_options` mechanism. It is
   not a flag catalog.
 version: 0.1.0
-last_changed_at: "2026-07-09T19:24:35-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-oh-my-pi/SKILL.md
@@ -18,12 +18,12 @@ maintenance: |
 
 # Oh-My-Pi Daemon Backend — Flag Discovery Entrypoint
 
-This page is deliberately tiny: it only tells you where the knowledge lives.
-The Oh-My-Pi CLI (npm package `@oh-my-pi/pi-coding-agent`, binary `omp`) revs
-its flags and accepted values between releases, so the installed CLI's own
-help output is the authority — not this page, and not any flag list LingTai
-could ship. `omp` is an accepted backend alias that canonicalizes to
-`oh-my-pi`; persisted daemon entries use the canonical name.
+The installed CLI's own help is the authority for Oh-My-Pi (npm package
+`@oh-my-pi/pi-coding-agent`, binary `omp`) flags; this page is only the
+entrypoint. Conversion rules, key safety, and persistence live in the parent
+[`reference/cli-backends/SKILL.md`](../../../SKILL.md). `omp` is an accepted
+backend alias that canonicalizes to `oh-my-pi`; persisted daemon entries use the
+canonical name.
 
 ## Discover flags from the installed CLI
 
@@ -35,10 +35,8 @@ could ship. `omp` is an accepted backend alias that canonicalizes to
    started. Run `omp <command> --help` only on demand for a subcommand the
    installed root help itself lists — subcommands are outside the daemon
    wrapper.
-3. Translate the long flags you found into `backend_options` using the
-   generic conversion rules in the parent `reference/cli-backends/SKILL.md`
-   (key→flag mapping, value handling, key safety, persistence). Nothing
-   Oh-My-Pi-specific is added to that contract here.
+3. Translate what you found into `backend_options` with the parent's generic
+   conversion rules. Nothing Oh-My-Pi-specific is added to that contract here.
 
 ## Example: model selection
 
@@ -56,10 +54,9 @@ could ship. `omp` is an accepted backend alias that canonicalizes to
 // argv: --model <model id from the installed CLI>
 ```
 
-The model vocabulary belongs to the installed CLI and its configured
-providers — LingTai does not validate, enumerate, or simulate model ids. Use
-the CLI's own discovery surface (root `--help`) and
-pass the id through; the CLI decides its semantics (or rejects it).
+The model vocabulary belongs to the installed CLI and its configured providers —
+LingTai does not validate, enumerate, or simulate model ids. Use the CLI's own
+discovery surface (root `--help`) and pass the id through.
 
 ## Harness boundary: reserved flags
 
@@ -89,6 +86,3 @@ prompting, or hijack session ownership.
   (pending source evidence of an accepted config/env path), so the MCP
   `finish` completion contract does not apply here — and `backend_options`
   is not the place to hand-wire MCP.
-- To debug what was actually sent, `daemon.json` records the raw
-  `backend_options` object alongside the resolved `backend_argv` /
-  `backend_harness_argv` token lists.

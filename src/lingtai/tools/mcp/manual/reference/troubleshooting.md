@@ -20,17 +20,12 @@ Call `mcp(action="info")` to see:
 - The `problems` list (invalid registry lines, missing config, etc.)
 - A runtime health snapshot (registry path, count, status per server)
 
-Invalid registry lines are skipped silently with a warning at refresh time, so always verify with `show` after editing.
+Invalid registry lines are skipped silently with a warning at refresh time, so always verify with `mcp(action="info")` after editing.
 
 ## Common boot failures
 
 **Boot failure with cryptic `KeyError`**
-The MCP subprocess hit a missing config field. The error message *is* the missing field name. For kernel-curated addons, first re-read `reference/curated-addons.md`, then use the catalog homepage for deep provider docs if needed. For third-party Python MCPs, fetch the server README via:
-
-```bash
-~/.lingtai-tui/runtime/venv/bin/python3 \
-  .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>
-```
+The MCP subprocess hit a missing config field. The error message *is* the missing field name. For kernel-curated addons, first re-read `curated-addons.md`, then use the catalog homepage for deep provider docs if needed. For third-party Python MCPs, fetch the server README (see §When in doubt, step 1).
 
 Check the exact field name spelling — `email_password` not `password`, `bot_token` not `token`, etc. This is the single most common failure mode and the docs always have the correct field name.
 
@@ -48,7 +43,9 @@ Eager-start failed silently. Check the agent's stderr / `logs/agent.log` for the
 
 ## When in doubt
 
-1. Read the relevant docs — `reference/curated-addons.md` for kernel-curated addons, or a third-party README via:
+1. Read the relevant docs — `curated-addons.md` for kernel-curated addons, or a
+   third-party README via the bundled script (`<pkg-name>` is the installed
+   distribution name; use the runtime venv's Python):
    ```bash
    ~/.lingtai-tui/runtime/venv/bin/python3 \
      .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>

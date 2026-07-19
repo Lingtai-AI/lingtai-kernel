@@ -9,7 +9,7 @@ description: |
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
 version: 1.5.2
-last_changed_at: "2026-07-16T14:57:00-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/manager.py
@@ -25,6 +25,30 @@ maintenance: |
 This manual is pulled on demand via `action='manual'` so the per-action tool
 schema can stay concise. Read it when you need detail beyond the one-line action
 descriptions; you do not need to call it before every send.
+
+Registration, `init.json` activation, config-file placement/permissions, and the
+setup readiness checklist are **not** here — they belong to `mcp-manual`
+(`reference/curated-addons.md`).
+
+## Nested reference catalog
+
+```yaml
+- name: telegram-task-card-manual
+  location: task_card/SKILL.md
+  description: |
+    Nested telegram-mcp-manual reference for the programmable Task Card
+    (`task_card` tool): when a watcher is warranted, the watcher information
+    contract, how to inspect a task's producer evidence, a safe runnable
+    custom-renderer example, the renderer contract, the
+    start|inspect|retry|stop walkthrough, and terminal/fail-loud cleanup.
+    Read this before authoring a renderer.
+```
+
+| Need | Read |
+|---|---|
+| Send/reply/edit, media, reading, rich text, slash commands, `/taskcard`, errors | this file |
+| Authoring or operating a programmable Task Card watcher | [`task_card/SKILL.md`](task_card/SKILL.md) |
+| Normative resident/slot promises and code structure | [`task_card/CONTRACT.md`](task_card/CONTRACT.md), [`task_card/ANATOMY.md`](task_card/ANATOMY.md) |
 
 ## MEDIA: document vs photo
 
@@ -49,35 +73,13 @@ descriptions; you do not need to call it before every send.
 - The final answer must be a **separate durable message** using `action='send'`
   or `action='reply'`. Do **not** edit the placeholder into the final answer;
   the placeholder shows progress only (it may optionally be deleted).
-- When the current agent has `taskcard: True`, the manager-owned automatic Task
-  Card updates separately from your own send/reply messages. It is a mechanical
-  view of recent `tool_call` events in `logs/events.jsonl`, not a turn-local
-  heartbeat or completion lifecycle. While the resident Task Card is still the
-  chat's last message, automatic event-tail and programmable frames edit that one
-  stable resident message ID in place; an identical Telegram edit is a successful
-  no-op. See **AUTOMATIC TASK CARD: `events.jsonl` → resident broadcast** and
-  **TASKCARD STATE** below.
-- The Task Card's tracked resident target is kept as the last message. When a
-  newer message has arrived below it — your own durable send/reply, or an incoming
-  user message — the addon same-content-probes the exact old resident with its last committed
-  render when available. After a cold in-memory start, the exact delete result is
-  itself the existence/removal probe. Unknown/transient probe failures fail closed
-  and send nothing.
-- Before injecting a replacement, the exact old resident must be confirmed deleted
-  or Telegram must explicitly report it already missing. A delete failure blocks
-  the new send. Only then is the fresh card sent and persisted, so tracked rotation
-  never deliberately displays two cards. A later send failure may leave zero and
-  is reported explicitly; a new-id persistence failure retains the in-process id
-  and surfaces a partial durability failure. Malformed/cross-bound resident ids
-  never reach transport, ordinary messages are never deletion candidates, and
-  unknown historical orphan cards are not scanned or deleted. The durable map is
-  one tracked target per account+chat, not proof of global chat-history cardinality.
-- Automatic and programmable delivery shares one per-account+chat transaction.
-  While the tracked resident remains latest it is edited in place; an identical
-  Telegram edit is a successful no-op. An unknown latest-message high-water stays
-  conservative and does not authorize rotation or deletion.
 - For very fast responses (under ~5s), native Telegram typing/👀 presence is
   enough — skip the placeholder.
+- The Task Card is a separate surface from your placeholder. When the current
+  agent has `taskcard: True`, the manager-owned automatic Task Card updates on
+  its own; it is a mechanical view of recent `tool_call` events in
+  `logs/events.jsonl`, not a turn-local heartbeat or completion lifecycle. See
+  **AUTOMATIC TASK CARD** and **TASKCARD STATE** below.
 
 ## REPLY vs SEND
 
@@ -126,9 +128,7 @@ Telegram has two separate slash-command layers:
 To dynamically add a command such as `/tokenstats` to a bot's Telegram menu:
 
 1. Edit the Telegram config file used by that agent (normally
-   `<agent>/.secrets/telegram.json`; the active path is exposed as
-   `LINGTAI_TELEGRAM_CONFIG` in the MCP process, and `lingtai://status` reports
-   only a redacted, non-secret view).
+   `<agent>/.secrets/telegram.json`, the path in `LINGTAI_TELEGRAM_CONFIG`).
 2. Add or update the account's `commands` list. Command names are stored
    **without** the leading slash and should follow Telegram's Bot API
    constraints (lowercase letters, digits, underscores; 1-32 characters; short
@@ -169,7 +169,7 @@ Important behavior notes:
 - If `commands` is omitted or `null`, the addon falls back to its built-in
   default command menu.
 - Do not edit or print `bot_token` values while documenting or debugging slash
-  commands.
+  commands. `lingtai://status` reports only a redacted, non-secret view.
 
 ## AUTOMATIC TASK CARD: `events.jsonl` → resident broadcast
 
@@ -180,23 +180,27 @@ programmable slot:
 1. `TelegramManager` owns one tail worker for its lifetime. It reads
    `<workdir>/logs/events.jsonl` and accepts only canonical public `diary` text
    plus validated `tool_call` name and redacted/bounded `_reasoning`. Hidden
-   thinking, aliases, raw action/arguments/results, auth material, and private
-   runtime diagnostics are never projected.
+   thinking, aliases, raw action/arguments/results, external response bodies,
+   URLs, tokens, prompts, paths, tracebacks, auth material, and private runtime
+   diagnostics are never projected. `tool_result`, completion, elapsed,
+   heartbeat, API-error, and provider-error rows are not rendered either.
 2. A provider/API call is identified by its `api_call_id`. All public text and
    safe tool events with the same id remain in one atomic group. The card emits
    exactly one TUI-style divider (`──────────`) before each selected group;
    multiple text/tool events do not create extra dividers.
 3. `/taskcard N` selects the latest N API-call groups (1–10), not N tool uses.
    The existing persisted `normal_rows` value is reused as this numeric group
-   window, so no schema migration or latest-chat route is needed. If a selected
-   group is larger than the card budget, content is truncated inside that group
-   after the group count has been chosen.
-4. The manager renders the bounded groups once and broadcasts the same
+   window. If a selected group is larger than the card budget, content is
+   truncated inside that group after the group count has been chosen.
+4. Each rendered card carries the safe public text and tool rows, the fixed
+   no-reply footer naming both `/taskcard` command forms, and the render-time
+   timestamp.
+5. The manager renders the bounded groups once and broadcasts the same
    agent-behavior view to every tracked resident Task Card across configured
    Telegram accounts and chats. Groups carry no account/chat route and are not
    correlated to the chat that created a resident card; one target's failure
    does not block the others.
-5. There is no durable cursor or second behavior store. The byte offset, groups,
+6. There is no durable cursor or second behavior store. The byte offset, groups,
    and channel frames are in-memory optimizations. Startup, refresh, molt, and
    detected log truncation/replacement rehydrate from the existing
    `events.jsonl` and `TelegramAccount.task_cards` state. An unterminated final
@@ -208,6 +212,22 @@ Architecture and lifecycle details live in the owning
 [`task_card/resident.py`](task_card/resident.py); the programmable renderer/tool
 structure lives in the separate
 [`telegram/task_card` Anatomy](task_card/ANATOMY.md).
+
+### Resident-card behavior you can rely on
+
+Both slots share one per-account+chat delivery transaction over a single tracked
+resident target. While that resident is still the chat's last message it is edited
+in place (an identical Telegram edit is a successful no-op). Once a newer message
+sits below it — your own durable send/reply, or an incoming user message — the
+manager replaces it old-first and fails closed: the exact old card must be
+confirmed deleted, or Telegram must explicitly report it already missing, before a
+replacement is sent, so rotation never deliberately shows two cards. A replacement
+that then fails may leave **zero** cards and says so explicitly; a durable-id write
+failure surfaces as a partial, not as success. Ordinary messages are never deletion
+candidates and unknown historical orphan cards are never scanned or deleted; the
+durable map is one tracked target per account+chat, not proof of global
+chat-history cardinality. Normative source:
+[`task_card/CONTRACT.md`](task_card/CONTRACT.md) §Behavior 7–8.
 
 ## TASKCARD STATE
 
@@ -229,54 +249,43 @@ structure lives in the separate
   many of the newest bounded API-call groups the automatic card renders; it is
   not a tool-row count.
 - `taskcard: True` means automatic and programmable Task Cards may be sent to
-  Telegram. `taskcard: False` hides delivery of **both** slots at the presentation
-  boundary. The event tail still follows the journal and programmable renderers,
-  watchers, retries, and bookkeeping continue, but no automatic broadcast is
-  delivered while disabled. Turning delivery back on needs no restart.
-- Automatic event-tail cards render safe public text and tool rows, one divider
-  per selected API-call group, the fixed no-reply footer
-  that names both command forms, and the render-time timestamp. They do not render
-  `tool_result`, completion, elapsed, heartbeat, API-error, or provider-error rows,
-  and they do not forward raw arguments, external response bodies, URLs, tokens,
-  prompts, paths, or tracebacks.
+  Telegram. **`taskcard: False` / `/taskcard off` hides delivery of *both* slots**
+  at the presentation boundary while every mechanic continues — the event tail
+  still follows the journal, and programmable renderers, watches, retries, and
+  bookkeeping keep running. Nothing is broadcast while disabled. Turning delivery
+  back on needs no restart.
 - When answering whether Task Cards are on or how many normal rows they keep, use
   the explicit current `/taskcard` status rather than inferring from a visible card.
 
 ## PROGRAMMABLE TASK CARD (`task_card` tool)
 
-- **Task-specific watcher guidance during Telegram-originated turns:** when you
-  launch meaningful long-running work and then wait for its producer, inspect the
-  actual task and producer evidence and design a human-visible watcher when it will
+- **When to reach for it:** during a Telegram-originated turn, when you launch
+  meaningful long-running work and then wait for its producer, inspect the actual
+  task and producer evidence and design a human-visible watcher if it will
   prevent a silent gap. Record a truthful snapshot after launch, after meaningful
   polls/checks, and at the terminal result. Skip it for quick or invisible work;
   do not treat a watcher as a fixed layout or an autonomous live feed.
-- The resident Task Card has two independent slots: the **automatic** event-journal
-  slot (manager-owned, described under **AUTOMATIC TASK CARD: `events.jsonl` →
-  resident broadcast**) and a **programmable** slot you drive with the separate
-  public `task_card` tool. With both present, the
+- The resident Task Card has two independent slots: the **automatic**
+  event-journal slot described above (manager-owned) and a **programmable** slot
+  you drive with the separate public `task_card` tool. With both present, the
   programmable block appears under a `— WATCH —` header; updating one slot never
   disturbs the other.
-- You surface your latest reported snapshot on the programmable slot by supplying
-  a small **Python renderer** file inside your working directory whose stdout is
-  exactly one Task Card JSON object (`title` string, `lines` array of ≤20 strings,
-  `footer` string; at least one present). Telegram never runs your code — the
-  controller runs the renderer as a subprocess and forwards only the validated
-  data.
-- Actions: `start` (validate + run once, then watch on an interval; returns a
-  `watch_id`), `inspect` (state + last valid frame), `retry` (re-run now), `stop`
-  (end the watch, clear only the programmable frame; renderer files are never
-  deleted). A bad first run is an immediate error and starts no watch; later
-  failures keep the last valid frame and raise a deduped fail-loud system wake.
-- `/taskcard off` hides delivery of **both** slots (see **TASKCARD STATE**) while
-  the renderer, watches, and last-valid bookkeeping keep running.
-- **Full task-specific manual (evidence selection, required watcher facts, safe
-  custom-renderer example, renderer contract, and the full
-  start|inspect|retry|stop walkthrough):** follow the relative path
-  `task_card/SKILL.md` from this manual's directory (the co-located Programmable
-  Task Card manual). Starting a watch drives the programmable slot of the
-  `TelegramManager`-owned single resident card, reusing the tracked resident or
-  creating its one resident if none exists yet; it does not start another manager
-  or a second card.
+- You drive the programmable slot by supplying a small **Python renderer** file
+  inside your working directory whose stdout is exactly one Task Card JSON
+  object. Telegram never runs your code — the controller runs the renderer as a
+  subprocess and forwards only the validated data.
+- Actions are `start | inspect | retry | stop`. `start` validates and runs the
+  renderer once synchronously, so a bad first run is an immediate error that
+  starts no watch; later failures keep the last valid frame and raise a deduped
+  fail-loud system wake. `stop` clears only the programmable frame; renderer
+  files are never deleted.
+- Starting a watch drives the programmable slot of the `TelegramManager`-owned
+  single resident card, reusing the tracked resident or creating its one resident
+  if none exists yet; it does not start another manager or a second card.
+- **Read [`task_card/SKILL.md`](task_card/SKILL.md) before authoring a
+  renderer.** It owns evidence selection, the required watcher facts, a safe
+  runnable custom-renderer example, the renderer contract, the full
+  `start|inspect|retry|stop` walkthrough, and terminal/fail-loud cleanup.
 
 ## ERROR SURFACING
 

@@ -4,8 +4,8 @@ description: >
   Nested shell-manual reference for one-shot wakeup reminders using
   `.notification/cron.json`: payload shape, atomic writer, shell example, and the
   rest checklist for agents leaving work pending.
-version: 1.0.0
-last_changed_at: "2026-06-20T13:05:49-07:00"
+version: 1.0.1
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/notification/__init__.py
@@ -148,7 +148,7 @@ tmp.replace(target)
 PY' >/tmp/lingtai-cron-reminder.log 2>&1 &
 ```
 
-This is not a replacement for OS scheduling: a detached sleeper can be lost if the shell/process tree is killed or the machine sleeps through the interval. For long delays or repeated checks, put the same writer into launchd/systemd/crontab using the sections above.
+This is not a replacement for OS scheduling: a detached sleeper can be lost if the shell/process tree is killed or the machine sleeps through the interval. For long delays or repeated checks, put the same writer into launchd/systemd/crontab following `../scheduled-work/SKILL.md`.
 
 ### Rest checklist
 

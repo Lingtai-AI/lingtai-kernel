@@ -2,27 +2,18 @@
 name: system-manual
 description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
-  Read this when resident substrate/procedures are too compact and you need to
-  route to the right lower reference. References include
-  `reference/substrate-manual/SKILL.md` for the expanded substrate/body/lifecycle/
-  communication/memory/idle/system-operations model;
-  `reference/procedures-manual/SKILL.md` for the expanded procedures/action discipline,
-  skill routing, responsiveness, deliverables, artifact sharing, and issue
-  reporting guidance; `reference/summarize-manual/SKILL.md` for tool-result
-  summarization, progressive disclosure, original-result recovery, and
-  summarize-vs-molt distinctions; and `reference/sqlite-log-query/SKILL.md` for
-  SQLite/log.sqlite runtime trace inspection and trajectory/anomaly mining from
-  event traces; and `reference/runtime-update-checks/SKILL.md` for
-  runtime/kernel self-checks, the complete nudge lifecycle, editable/dev/source
-  identification, safe refresh/update handoffs, and read-only diagnostics. Also
-  route here for lifecycle operations, notification/nudge
-  handling (including direct `notification(action='manual')` retrieval),
-  runtime/kernel update checks, molt/memory questions, MCP/addon
-  ownership, preset tiers, collaboration/network topology, resident prompt
-  design, and the `system` tool actions.
-version: 1.7.0
+  Read this when resident substrate/procedures are too compact and you need the
+  right lower reference. Route here for the expanded substrate/runtime model,
+  lifecycle and `system` tool actions, the init.json composition and preset
+  runtime model route, action/procedure discipline and skill routing, tool-result
+  summarization, SQLite/`log.sqlite` trace inspection and trajectory mining,
+  runtime/kernel update checks and nudges, environment variables, goal
+  notifications, molt/memory questions, MCP/addon ownership, collaboration
+  topology, and resident prompt design. The nested catalog below names each
+  reference and its exact trigger.
+version: 1.8.0
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, preset]
-last_changed_at: "2026-07-15T12:00:00-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -59,59 +50,59 @@ selects that topic.
 - name: substrate-manual
   location: reference/substrate-manual/SKILL.md
   description: |
-    Expanded LingTai substrate/runtime model: body/extensions, bash vs daemon vs
-    avatar vs MCP, lifecycle states, system tool actions, notification/read/
-    dismiss discipline, communication channels, memory layers, molt model,
-    runtime log routing, collaboration topology, MCP/addon ownership, idle/soul,
-    preset tiers, the detailed preset runtime model and init.json composition
-    route (raw vs resolved manifest, preset identity, TUI/library vs main-agent
-    allowed-only catalogs, swap/revert/refresh, daemon task explicit/omitted/
-    CLI-skip paths), and resident substrate maintenance.
+    Nested system-manual reference for the expanded substrate/runtime model:
+    body/extensions, lifecycle states, `system` tool actions, communication and
+    notification discipline, memory layers and the molt model, collaboration
+    topology, MCP/addon ownership, idle/soul, preset tiers, and (§11) the
+    canonical `init.json` composition and preset runtime model.
 - name: procedures-manual
   location: reference/procedures-manual/SKILL.md
   description: |
-    Expanded LingTai procedure/action guidance: progressive disclosure,
-    responsiveness, external side-effect authorization, choosing bash vs daemon
-    vs avatar vs MCP, depositing work into pad/knowledge/skills/character,
-    idle/lifecycle procedure, molt checklist, skill routing, web/file/media/
-    artifact handling, standalone HTML deliverables, sharing artifacts, issue
-    reporting, and resident procedures maintenance.
-
+    Nested system-manual reference for expanded action discipline: progressive
+    disclosure, responsiveness, external side-effect authorization, the daemon
+    workflow methodology, depositing work into pad/knowledge/skills/character,
+    idle/lifecycle procedure, skill routing, HTML deliverables, artifact
+    sharing, and issue reporting.
 - name: summarize-manual
   location: reference/summarize-manual/SKILL.md
   description: |
-    Detailed operational guide for `system(action="summarize")`: what tool-result summarization is, why it implements progressive disclosure, when to summarize urgently versus during idle cleanup, how to write good summaries, how to recover the original result by `tool_call_id`, and how summarize differs from molt.
-
+    Nested system-manual reference and canonical owner of tool-result
+    summarization: the three compression modes (a-priori `summary=true`,
+    a-posteriori `system(action="summarize")`, molt), summarize cadences,
+    delayed provider reconstruction and the 0.85/1.0 rebuild boundaries,
+    original-result recovery by `tool_call_id`, and summarize versus molt.
 - name: sqlite-log-query
   location: reference/sqlite-log-query/SKILL.md
   description: |
-    SQLite/log.sqlite runtime trace inspection and trajectory/anomaly mining:
-    `lingtai-agent log doctor`, `lingtai-agent log query`,
-    `lingtai-agent log rebuild`, JSONL source-of-truth rules, read-only SQL
-    safety, offline rebuild/WAL caveats, events and chat_entries schema,
-    daemon/chat-history indexing, query recipes, runtime problem investigation,
-    SQL-based event metrics, cheap-model daemon strategy, finding schema,
-    improvement digest output, redaction/privacy rules, and event_summary.py script.
+    Nested system-manual reference for SQLite/`log.sqlite` runtime trace
+    inspection and trajectory/anomaly mining: `lingtai-agent log doctor`,
+    `lingtai-agent log query`, `lingtai-agent log rebuild`, JSONL
+    source-of-truth rules, read-only SQL safety, offline rebuild/WAL caveats,
+    the events/chat_entries/token_entries schema, query recipes, cheap-model
+    daemon strategy, finding schema, digests, redaction rules, and
+    event_summary.py.
 - name: runtime-update-checks
   location: reference/runtime-update-checks/SKILL.md
   description: |
-    Complete kernel update/nudge lifecycle: runtime and source discovery,
-    `kernel_version` and `source_drift` checks, heartbeat dispatch, durable
-    throttle state, `.notification/nudge.json` envelopes, sync/wake/dismiss
-    behavior, packaged versus editable/source paths, human confirmation, TUI
-    update ownership, refresh boundaries, verification, and read-only diagnosis.
+    Nested system-manual reference for the kernel update/nudge lifecycle:
+    runtime and source discovery, `kernel_version` and `source_drift`,
+    heartbeat dispatch, `.notification/nudge.json` envelopes, sync/wake/dismiss,
+    packaged versus editable/source runtimes, installer ownership and human
+    confirmation, refresh boundaries, and read-only diagnosis.
 - name: environment-variables
   location: reference/environment-variables/SKILL.md
   description: |
-    Complete catalogue of LingTai environment variables: purpose, defaults,
-    accepted values, scope, read point, reload/restart behavior, invalid-value
-    handling, implementation anchors, examples, and security cautions.
+    Nested system-manual reference cataloguing every LingTai environment
+    variable: purpose, default, accepted values, scope, read point,
+    reload/restart behavior, invalid-value handling, implementation anchor,
+    and security caution.
 - name: goal-manual
   location: reference/goal-manual/SKILL.md
   description: |
-    Goal notification manual: protected `.notification/goal.json` as the active
-    goal source of truth, recommended fields and instructions, idle goal
-    reminders as short system events, and cancellation/completion semantics.
+    Nested system-manual reference for goal notifications: protected
+    `.notification/goal.json` as the active-goal source of truth, `/goal`
+    guided setup, recommended fields, idle goal reminders, and
+    cancellation/completion semantics.
 ```
 
 ## Router table
@@ -147,25 +138,10 @@ selects that topic.
 
 ## Substrate and procedures are separate on purpose
 
-`substrate` describes what an agent *is* and how the runtime behaves: bodies,
-lifecycle states, communication surfaces, memory layers, idle/soul, and system
-operations. `procedures` describes how an agent *acts*: progressive disclosure,
-tool/body selection, responsiveness, durable-store tending, skill routing,
-deliverables, artifact sharing, and issue reporting.
-
-Do not collapse their long explanations back into one resident prompt or one
-monolithic manual body. Keep the resident prompt compact, keep this file as a
-router, and put detailed explanations in `reference/substrate-manual/SKILL.md`,
-`reference/procedures-manual/SKILL.md`, and topic-specific references.
-
-## Runtime log / SQLite note
-
-SQLite log guidance, including trajectory/anomaly mining from event traces,
-lives only in this manual's nested reference:
-`reference/sqlite-log-query/SKILL.md`. Route here for keywords such as SQLite,
-`log.sqlite`, runtime logs, trace index, `lingtai-agent log query`, `doctor`,
-`rebuild`, JSONL source of truth, daemon events, chat history, WAL, SQL recipes,
-improvement digests, cheap-model strategy, or finding schema.
+`substrate` describes what an agent *is* and how the runtime behaves;
+`procedures` describes how an agent *acts*. Keep the resident prompt compact,
+keep this file a router, and put detailed explanations in the nested references
+above rather than collapsing them back into one monolithic body.
 
 ## Maintaining this router
 

@@ -5,9 +5,9 @@ description: >
   runtime/version/source identity, packaged versus editable/source behavior,
   heartbeat dispatch, nudge persistence and notification delivery, refresh
   versus installation, human confirmation, and post-refresh verification.
-version: 0.2.0
+version: 0.2.1
 tags: [lingtai, runtime, kernel, nudge, updates, refresh, editable, source, diagnostics]
-last_changed_at: "2026-07-15T12:00:00-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
@@ -47,10 +47,10 @@ Kernel-local read-only diagnosis and refresh mechanics
 For a `kernel_version` nudge, use the release-manifest facts for diagnosis.
 When a newer release exists, let Shell execute the official installer at
 `https://lingtai.ai/install.sh` with `--help` and then `update --help`; do not
-read or paste the large script source into agent context. Use this bundled
-reference for the local read-only diagnosis and refresh mechanics. A `source_drift` nudge stays local to those mechanics and never
-enters release-migration routing. This is operational guidance, not permission
-to download, install, change configuration, or relaunch a runtime.
+read or paste the large script source into agent context. A `source_drift` nudge
+stays local to these mechanics and never enters release-migration routing. This
+is operational guidance, not permission to download, install, change
+configuration, or relaunch a runtime.
 
 ## The lifecycle and its owners
 
@@ -111,17 +111,16 @@ The end-to-end path is:
    authorization for every migration/config write and for refresh. Apply only
    authorized writes, validate
    the resulting configuration, and refresh last. A release-manifest availability
-   nudge also requires telling the human what was found and receiving explicit
-   confirmation before any download or package update. A nudge or this manual
+   nudge also requires telling the human what was found and receiving explicit confirmation
+   before any download or package update. A nudge or this manual
    never grants authority; a local refresh remains gated by work safety and the
    human's intent when it could interrupt active work.
 9. **Install/update — the single official installer.** Normal user-facing
    installation and updates, including `lingtai-tui`, `lingtai-portal`, the
    managed kernel runtime, exact-tag migration guidance, mirror comparison, and
-   artifact verification, belong to `https://lingtai.ai/install.sh`. This kernel
-   manual does not reproduce that cross-repository procedure or make bare
-   `pip install --upgrade lingtai` the normal user instruction. Pip/venv commands
-   below are diagnostic or developer verification only.
+   artifact verification, belong to `https://lingtai.ai/install.sh`. Bare
+   `pip install --upgrade lingtai` is not the normal user instruction; pip/venv
+   commands below are diagnostic or developer verification only.
 10. **Refresh and verify — kernel lifecycle plus the operator.**
     After authorized writes are validated, `system(action="refresh")` requests a
     deferred relaunch only when the runtime can build a valid launch command and
@@ -161,14 +160,13 @@ policy block. `kind: kernel_version` has `running`, `installed`, `latest` (or
 carries startup and disk fingerprints instead.
 
 The shared Nudge policy records finding identity and dismissal mute expiry in
-`.notification/.nudge_state.json`. `LINGTAI_NUDGE_ENABLED` defaults to `on` and
-suppresses all kinds when `off`; `LINGTAI_NUDGE_REPEAT_INTERVAL` defaults to
-`24h` and controls when the same unresolved finding may reappear after
- dismissal. Values are reread at each Nudge operation; invalid values fail safe
-and are diagnosed. Producer probe gates are only bounded observation costs, not
-product cadence. A producer removes an entry when its real fact resolves or the
-runtime is intentionally skipped. Read the complete env catalogue for exact
-accepted values and reload behavior.
+`.notification/.nudge_state.json`. The two global controls
+(`LINGTAI_NUDGE_ENABLED`, `LINGTAI_NUDGE_REPEAT_INTERVAL`) suppress publication
+and set the post-dismiss repeat window for an unresolved finding; their defaults,
+accepted values, reload behavior, and invalid-value fallback are owned by
+`reference/environment-variables/SKILL.md`. Producer probe gates are only bounded
+observation costs, not product cadence. A producer removes an entry when its real
+fact resolves or the runtime is intentionally skipped.
 
 After interpreting a nudge, use the narrowest safe action:
 

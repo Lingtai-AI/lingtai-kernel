@@ -1,41 +1,15 @@
 ---
 name: skills-manual
 description: >
-  Operational guide for the `skills` capability — your skill catalog's
-  on-disk layout, how the YAML skill catalog in your system prompt
-  is built, and the full authoring/publishing workflow for new skills.
-
-  Reach for this manual when:
-    - You're authoring a new skill in `.library/custom/<name>/` and need
-      the frontmatter schema, the bundled template, the validator, or the
-      "do create a skill / do NOT create a skill" decision rules.
-    - You received an external skill repository and need the intake flow:
-      install it into this agent's `.library/custom/<skill-name>/`, validate it,
-      then refresh so it enters the skills catalog.
-    - A skill you expect to see isn't showing up in the catalog — the
-      health-check workflow (`skills({"action": "info"})`) and the
-      `intrinsic` vs `custom` directory split tell you what's wrong.
-    - You want to pin a skill's body into your pad (so it survives the
-      next molt and stays in the cached prefix) — the `psyche` pinning
-      recipe lives here.
-    - You're adding a new skills path source (e.g. a project-specific
-      utilities directory) by editing `init.json`'s
-      `manifest.capabilities.skills.paths`.
-    - You're turning a large manual into a progressive-disclosure router
-      and need the nested skill/reference pattern.
-
-  Covers: directory layout (`.library/{intrinsic,custom}/`), required vs
-  optional frontmatter fields, name-collision discipline, when to author
-  a skill and when not to, what makes a skill description trigger-friendly,
-  nested skill/reference catalogs, the validator's failure modes, and the
-  relationship between the kernel's intrinsic skill bundles and your
-  editable `custom/` territory.
-
-  Does NOT cover: the bundled skills themselves — their READMEs and
-  SKILL.md files document them. This is meta — how the skills *system*
-  works, not what's *inside* it.
+  Meta-manual for the `skills` capability: how your catalog is built from
+  `.library/{intrinsic,custom}/` plus `init.json` paths, and how to author,
+  validate, install, share, publish, and pin skills. Read when writing a skill in
+  `.library/custom/<name>/`, installing an external skill repo, debugging a skill
+  missing from the catalog, adding a skills path, or turning a manual into a
+  progressive-disclosure router. Does NOT document the bundled skills themselves
+  — their own SKILL.md files do.
 version: 1.1.0
-last_changed_at: "2026-07-06T14:50:00-07:00"
+last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
 - src/lingtai/tools/skills/__init__.py
 - src/lingtai/tools/skills/ANATOMY.md
@@ -46,7 +20,15 @@ maintenance: |
 
 # The Skills Capability
 
-This is the skills capability's own manual. It documents how the skill catalog works from your side: the on-disk layout, the YAML catalog, and the authoring/publishing workflow. The skills capability scans `.library/` plus any extra paths declared in `init.json`, builds the YAML skill catalog, and injects it into your system prompt. An external skill is not loaded merely because someone shared a URL; it must be installed into a scanned skill root and then loaded by refresh.
+This is the skills capability's own manual — how the skills *system* works, not
+what is inside it. The capability scans `.library/` plus any extra paths declared
+in `init.json`, builds a YAML catalog, and injects it into your system prompt.
+
+**The one rule behind everything below:** a skill exists for you only after it is
+(1) installed into a scanned skill root and (2) picked up by
+`system({"action": "refresh"})`. A shared URL, a temporary clone, or a file you
+just wrote is not yet in the catalog. Every write/install step in this manual
+ends with a refresh.
 
 ## On-disk layout
 
@@ -62,62 +44,88 @@ Your skill catalog lives at `<agent>/.library/`:
 └── custom/
 ```
 
-- `intrinsic/` — **CLI-managed.** Wiped and rewritten from kernel-shipped manual bundles on every `system({"action": "refresh"})`. Do not edit — your edits will be erased. Read-only territory.
-- `intrinsic/capabilities/<cap>/` — manual for each loaded capability (e.g. `skills/`, `email/`, `psyche/`).
-- `intrinsic/addons/<addon>/` — manual for each loaded addon (e.g. `imap/`, `telegram/`, `feishu/`).
-- `custom/` — **your territory.** Authored skills live here. The CLI never touches this directory.
+- `intrinsic/` — **CLI-managed.** Wiped and rewritten from kernel-shipped manual
+  bundles on every refresh. Do not edit; your edits will be erased.
+  `capabilities/<cap>/` holds each loaded capability's manual (`skills/`,
+  `email/`, `psyche/`); `addons/<addon>/` holds each loaded addon's
+  (`imap/`, `telegram/`, `feishu/`).
+- `custom/` — **your territory.** Authored skills live here; the CLI never
+  touches this directory.
 
-Additional paths come from `init.json` at `manifest.capabilities.skills.paths` — typically `~/.lingtai-tui/utilities/` (operational utilities shipped by the TUI), plus any project-specific roots. `../.library_shared/` is an opt-in local-network sharing path, not a default path to add to every agent. For ordinary sharing, install the skill into each receiving agent's `custom/` directory instead.
+Additional roots come from `init.json` at `manifest.capabilities.skills.paths` —
+typically `~/.lingtai-tui/utilities/`, plus any project-specific roots. To add
+one: `edit` that list (absolute, or relative to your working dir; `~/` expansion
+honored), then refresh. `init.json` is the ground truth — there is no runtime
+state, so whatever is in `paths` at setup time is the exact set scanned.
 
-If the skills capability is NOT loaded, the files still exist on disk — you just don't get a catalog in your prompt. You can still reach the manuals via `read`, `grep`, `ls`.
+`../.library_shared/` is an **opt-in** local-network sharing root, not a default.
+For ordinary sharing, install into each receiving agent's `custom/` instead.
 
-## External skill intake (default flow)
+If the skills capability is not loaded, the files still exist on disk — you just
+get no catalog in your prompt. Reach the manuals with `read`, `grep`, `ls`.
 
-When a human, peer, or repository URL shares an external skill, do **not** treat the
-URL or a temporary clone as "loaded." The default intake flow is local-first:
+## The catalog, and checking its health
 
-1. **Clone or copy into this agent's custom root:**
-   `<agent>/.library/custom/<skill-name>/`. Keep the repository metadata when the
-   skill has an upstream so future syncs can use `git pull --ff-only`.
-2. **Validate structure before trusting it:** run the bundled validator against
-   the installed folder and inspect `SKILL.md` frontmatter (`name`,
-   `description`) plus any referenced `scripts/`, `assets/`, or `references/`.
-3. **Refresh this agent:** call `system({"action": "refresh"})` so the skills
-   catalog is rebuilt and the skill appears in the system prompt. Until refresh
-   succeeds, the skill is only a file on disk.
-4. **Load it by catalog entry:** after refresh, use the cataloged `location:` to
-   read the skill body (and follow any nested references). Record the commit or
-   source URL in your task notes when it matters.
-5. **Share by telling recipients to install into their own `custom/`:** if other
-   agents need the skill, send the URL plus this intake recipe. Each receiving
-   agent installs, validates, and refreshes itself. Do not make a network shared
-   folder the default distribution path.
+The `skills` section of your system prompt is a YAML list. Each skill is one
+`- name: <name>` block with a `location:` (absolute path to that skill's
+`SKILL.md`) and a `description:` block scalar. To read a skill's body, `read` the
+file at its `location`.
 
-Use a temporary/quarantine clone only for pre-inspection when the source is
-untrusted; move or clone a reviewed copy into `.library/custom/<skill-name>/`
-before relying on the skill. Installing a skill does not authorize external side
-effects described by that skill; normal human authorization boundaries still
-apply.
+`skills({"action": "info"})` refreshes/reconciles the catalog and returns a
+runtime snapshot — `skills_dir`/`library_dir`, `catalog_size`, resolved paths
+with exist/skill-count info, and any `problems` (invalid frontmatter, unreadable
+folders) — without the manual body. Use it first when a skill you expect is
+missing. `skills({"action": "manual"})` returns this SKILL.md body instead. A
+`status` of `"degraded"` carries an error message naming the fix — typically a
+missing manual under `intrinsic/capabilities/skills/`, meaning the initializer
+did not install manuals correctly.
 
-## How the catalog works
-
-The `skills` section of your system prompt is a YAML list. Each skill is one `- name: <name>` block with a `location:` (absolute path to the skill's `SKILL.md`) and a `description:` block scalar. To read a skill's body, use `read` on the file at that `location`. That gives you the full Markdown for that one turn.
-
-## Loading a skill into active working memory
-
-If you plan to use a skill across many turns or need it to survive a molt, pin its `SKILL.md` into your pad:
+To pin a skill's body into your pad so it survives a molt and rides in the cached
+system-prompt prefix:
 
 ```
 psyche({"object": "pad", "action": "append", "files": ["<location>"]})
 ```
 
-The body is appended to your pad's read-only reference section, which is part of the cached system-prompt prefix. To unpin, call the same action with a new `files` list that omits the path (or `files: []` to clear everything).
+Pinning is cheap per-token over a session; repeated `read`s of the same file are
+not. Pad semantics (read-only reference section, clearing with `files: []`, the
+token ceiling) belong to `psyche-manual` §5 — read it there.
 
-Pinning is cheap per-token over a session because the pad sits in the cached prefix — repeated `read`s of the same file do NOT benefit from that cache.
+## External skill intake (default flow)
+
+When a human, peer, or repository URL shares a skill, do not treat the URL or a
+temporary clone as loaded. The default flow is local-first:
+
+1. **Clone or copy into this agent's `<agent>/.library/custom/<skill-name>/`.**
+   Keep repository metadata when the skill has an upstream, so future syncs can
+   use `git pull --ff-only`.
+2. **Validate before trusting it** — run the bundled validator (below) against
+   the installed folder and inspect `SKILL.md` frontmatter plus any referenced
+   `scripts/`, `assets/`, or `references/`.
+3. **Refresh** — call `system({"action": "refresh"})`. Until refresh succeeds
+   the skill is only a file on disk.
+4. **Load it by catalog entry** — `read` the cataloged `location:` and follow any
+   nested references. Record the commit or source URL in your task notes when it
+   matters.
+
+Use a temporary/quarantine clone only to pre-inspect an untrusted source; move or
+re-clone a reviewed copy into `.library/custom/<skill-name>/` before relying on
+it. **Installing a skill does not authorize the external side effects it
+describes** — normal human authorization boundaries still apply.
+
+**Sharing works the same way in reverse.** Send peers the source URL (or artifact
+path) plus this recipe. Each receiving agent clones/copies it into its own
+`.library/custom/<name>/`, validates it, then refreshes itself. That keeps
+ownership, updates, and rollback local to the agent actually using the skill.
+A network may instead maintain `.library_shared/<name>/`; add `../.library_shared` to each participating
+agent's `manifest.capabilities.skills.paths`. Do not assume `.library_shared` is loaded by default:
+it is an explicit opt-in with a shared stewardship burden, never the default
+distribution path.
 
 ## Authoring a new skill
 
-Create a folder under `<agent>/.library/custom/<skill-name>/` with a `SKILL.md` starting with YAML frontmatter:
+Create `<agent>/.library/custom/<skill-name>/SKILL.md` starting with YAML
+frontmatter, then refresh:
 
 ```
 ---
@@ -131,101 +139,92 @@ last_changed_at: "2026-06-29T08:00:00Z"
 Full instructions in Markdown below...
 ```
 
-Required frontmatter for ordinary custom/external skills: `name`,
-`description`. Optional for those skills: `version`, `author`, `tags`,
+Required: `name`, `description`. Optional: `version`, `author`, `tags`,
 `last_changed_at`.
 
-**LingTai-maintained skill metadata:** every skill bundle maintained inside a
-LingTai repository must also include `last_changed_at` in its YAML frontmatter.
-This applies to intrinsic capability manuals, standalone intrinsic skills, MCP
-manual bundles, TUI preset utility skills, and their nested reference
-`SKILL.md` files. Use an ISO 8601 timestamp with timezone, for example:
+**LingTai-maintained skill metadata.** Every skill bundle maintained inside a
+LingTai repository — intrinsic capability manuals, standalone intrinsic skills,
+MCP manual bundles, TUI preset utility skills, and their nested reference
+`SKILL.md` files — must carry `last_changed_at` as an ISO 8601 timestamp with
+timezone (`"2026-06-29T08:00:00Z"`). Update it in the same commit as any
+substantive edit to the skill body. For a historical backfill or metadata-only
+edit, derive the value from git history
+(`git log -1 --format=%cI -- path/to/SKILL.md`) so it points at the latest
+meaningful content change rather than the bookkeeping commit.
 
-```yaml
-last_changed_at: "2026-06-29T08:00:00Z"
+`tags` is a list of lowercase, hyphenated strings aiding discoverability and
+(eventually) tier filtering, along three axes — language/runtime (`python`,
+`fortran`, `bash`, `node`), domain (`physics`, `mhd`, `plasma`, `ml`, `web`), and
+type (`solver`, `workflow`, `reference`, `cheatsheet`). Example:
+`tags: [python, physics, mhd, solver]`. Tags are best-effort metadata, not
+load-bearing — the catalog still finds skills without them.
+
+**Check for name collisions first.** Two skills sharing a `name` collide in the
+catalog:
+
+```
+shell({"command": "grep -rh '^name:' .library/ ~/.lingtai-tui/utilities/ 2>/dev/null"})
 ```
 
-For a historical backfill or metadata-only edit, derive the value from git
-history, e.g. `git log -1 --format=%cI -- path/to/SKILL.md`, so the field points
-to the latest meaningful skill-content change rather than the bookkeeping commit.
-For any substantive future edit to the skill body, update `last_changed_at` in
-the same commit.
-
-`tags` is a list of lowercase, hyphenated strings that aid discoverability and (eventually) tier filtering. Three useful axes:
-
-- **Language / runtime**: `python`, `fortran`, `bash`, `node`
-- **Domain**: `physics`, `mhd`, `plasma`, `ml`, `web`
-- **Type**: `solver`, `workflow`, `reference`, `cheatsheet`
-
-Example: `tags: [python, physics, mhd, solver]`. Tags are best-effort metadata, not load-bearing — the catalog still finds skills without them.
-
-After writing, call `system({"action": "refresh"})` so the skills capability rescans and re-injects the catalog.
-
-
-### Cleanup / Footprint contract for tool manuals
-
-Every tool/capability manual that owns persistent state must include a `Cleanup / Footprint` section. This is a contract, not a janitor: the section teaches agents what the tool leaves behind and how to audit it safely.
-
-Minimum requirements:
-
-- list concrete files/directories/caches/logs the tool creates;
-- say what must never be deleted blindly;
-- provide a read-only footprint check script or command;
-- recommend an audit/cleanup cadence;
-- require a dry-run report plus explicit user consent before destructive cleanup;
-- append a cleanup/audit record to `logs/cleanup.jsonl` after the script runs;
-- guide agents who read the manual for setup/troubleshooting/long-running work to self-audit the footprint.
-
-The full template and consent rule live in `reference/cleanup-footprint-contract.md`.
+On a hit: rename, or adapt the existing skill instead of forking a second one.
 
 ### Starting from the template
-
-If you'd rather not start from a blank file, copy the bundled template:
 
 ```
 cp .library/intrinsic/capabilities/skills/assets/skill-template.md \
    .library/custom/<skill-name>/SKILL.md
 ```
 
-The template has placeholder slots (`[SKILL_NAME]`, `[ONE_LINE_DESCRIPTION]`, etc.) and a soft skeleton of headings (`When this applies` / `Procedure` / `What to expect` / `Constraints` / `Scripts` / `Assets`). It works for code/executable skills out of the box; for reference-style skills (manuals, cheatsheets, chronicles) delete the `Procedure` section and write prose instead — there is a note at the top of the template reminding you of this.
+The template carries placeholder slots (`[SKILL_NAME]`,
+`[ONE_LINE_DESCRIPTION]`, …) and a soft heading skeleton (`When this applies` /
+`Procedure` / `What to expect` / `Constraints` / `Scripts` / `Assets`). It works
+for code/executable skills as-is; for reference-style skills (manuals,
+cheatsheets, chronicles) delete the `Procedure` section and write prose — a note
+at the top of the template says so.
 
 ### Validating before installing or publishing
 
-A bundled validator script catches the common failures before you ship:
-
 ```
 python3 .library/intrinsic/capabilities/skills/scripts/validate.py \
-   .library/custom/<skill-name>/
+   [--require-last-changed-at] .library/custom/<skill-name>/
 ```
 
-It checks: required frontmatter (`name`, `description`), unfilled `[PLACEHOLDER]` slots from the template, broken internal references (paths under `scripts/`, `assets/`, `references/` mentioned in `SKILL.md` that don't exist on disk), and `chmod +x` on Python scripts under `scripts/`. Exits 1 on any FAIL, 0 on PASS (warnings allowed). Run it after authoring, after installing an external skill into `.library/custom/`, and before any broader distribution.
-
-For LingTai-maintained skill bundles, require the timestamp field too:
-
-```
-python3 .library/intrinsic/capabilities/skills/scripts/validate.py \
-   --require-last-changed-at .library/custom/<skill-name>/
-```
+It checks required frontmatter (`name`, `description`), unfilled `[PLACEHOLDER]`
+slots left over from the template, broken internal references (paths under
+`scripts/`, `assets/`, `references/` mentioned in `SKILL.md` that do not exist on
+disk), and `chmod +x` on Python scripts under `scripts/`. Exits 1 on any FAIL, 0
+on PASS (warnings allowed). Add `--require-last-changed-at` for
+LingTai-maintained bundles. Run it after authoring, after installing an external
+skill, and before any broader distribution.
 
 ### Self-test before publishing
 
-The validator catches structural issues but not content errors. After writing, walk through your skill as a fresh agent:
+The validator catches structure, not content. After writing, walk your skill as a
+fresh agent:
 
-1. **Decision-tree test** — start at SKILL.md's first decision. Follow each branch. Does every reference file actually exist? Is the content reachable from the routing hub?
-2. **Assertion test** — `grep` the actual codebase / file system for every claim in your skill: file paths, API signatures, parameter names, default values. Do NOT trust your memory of the code.
-3. **Regression test** — fix any issues found, then repeat step 2.
+1. **Decision-tree test** — start at SKILL.md's first decision and follow each
+   branch. Does every reference file exist? Is the content reachable from the
+   routing hub?
+2. **Assertion test** — `grep` the actual codebase/filesystem for every claim:
+   file paths, API signatures, parameter names, default values. Do NOT trust your
+   memory of the code.
+3. **Regression test** — fix what you found, then repeat step 2.
 
-Common errors this catches that the validator misses:
+This catches what the validator cannot see: fictional file paths (e.g.
+referencing a `helmholtz*.f90` that does not exist), API signatures from an older
+code version, and default parameter values that have since changed. Treat it as
+mandatory for skills documenting an external codebase — fabricated paths and
+stale signatures are the most damaging failure mode.
 
-- Fictional file paths (e.g. referencing `helmholtz*.f90` that doesn't exist)
-- API signatures from a previous code version
-- Default parameter values that have since changed
+## Structuring a skill
 
-Treat the self-test as mandatory for skills that document an external codebase — fabricated paths and stale signatures are the most damaging failure mode and the validator cannot see them.
+| Content | Shape |
+|---|---|
+| Under ~300 lines, or one path through it | Flat `SKILL.md` |
+| Multi-topic reference, decision tree, ≥300 lines | Two-level: `SKILL.md` router + `reference/<topic>.md` files |
+| Umbrella router whose children need their own frontmatter, scripts, or assets | Nested skill/reference pattern (below) |
 
-### Recommended structure for complex knowledge skills
-
-For skills that bundle non-trivial domain knowledge (multi-topic references, decision trees, ≥300 lines of total content), use a two-level progressive-disclosure structure:
+### Two-level progressive disclosure
 
 ```
 <skill-name>/
@@ -233,23 +232,25 @@ For skills that bundle non-trivial domain knowledge (multi-topic references, dec
 ├── README.md             # GitHub-facing description (humans, not agents)
 └── reference/
     ├── topic-a.md        # Self-contained deep-dive, loaded on demand
-    ├── topic-b.md
-    └── ...
+    └── topic-b.md
 ```
 
-`SKILL.md` is a **decision tree** (~150–180 lines): the agent picks a path, then does a single `read` on the right reference file. Each reference doc covers ONE topic (100–300 lines). The agent loads SKILL.md (~150 lines) plus one reference (~150 lines) instead of one 1000-line monolith.
+`SKILL.md` is a **decision tree** (~150–180 lines): the agent picks a path, then
+does a single `read` on the right reference file. Each reference covers ONE topic
+(100–300 lines). The agent loads ~150 lines plus one reference instead of a
+1000-line monolith. Do not use this for simple skills — single-API wrappers,
+linear checklists, prose-only references.
 
-When NOT to use this pattern: simple skills (single-API wrappers, linear checklists, prose-only references). A flat SKILL.md is correct when total content is under ~300 lines or there is only one path through it.
-
-Reference implementations: `huangzesen/laps-skill`, `huangzesen/helmholtz-skill`.
+Reference implementations: `huangzesen/laps-skill`,
+`huangzesen/helmholtz-skill`.
 
 ### Nested skill/reference pattern for umbrella manuals
 
-Use this pattern when a parent skill is itself a **router** and some child
-references need to behave like mini-skills: their own frontmatter, trigger
-summary, future `scripts/` or `assets/`, and a stable addressable folder. This is
-for second-layer progressive disclosure inside one top-level catalog entry, not a
-way to hide unrelated reusable skills.
+Use this when a parent skill is itself a **router** and some children need to
+behave like mini-skills: their own frontmatter, trigger summary, future
+`scripts/` or `assets/`, and a stable addressable folder. This is second-layer
+progressive disclosure inside one top-level catalog entry, not a way to hide
+unrelated reusable skills.
 
 ```
 <parent-skill>/
@@ -257,26 +258,22 @@ way to hide unrelated reusable skills.
 └── reference/
     ├── topic-a/
     │   └── SKILL.md                 # Nested reference, loaded only via parent
-    ├── topic-b/
-    │   └── SKILL.md
-    └── ...
+    └── topic-b/
+        └── SKILL.md
 ```
 
-Key rule: a nested `reference/<topic>/SKILL.md` is **not automatically promoted**
-to the global skills catalog. The catalog scanner treats a directory that already
-has `SKILL.md` as a skill boundary and does not descend into that folder for
-additional catalog entries. Therefore the parent `SKILL.md` must inject the
-children's routing metadata explicitly and keep the heavy procedural content in
-the children.
+**Key rule: a nested `reference/<topic>/SKILL.md` is not automatically promoted
+to the global catalog.** The catalog scanner treats a directory that already has
+a `SKILL.md` as a skill boundary and does not descend into it for additional
+entries. The parent must therefore inject the children's routing metadata explicitly
+and keep the heavy procedural content in the children.
 
-Every parent-owned nested-reference router should contain **both**:
+Every such parent must contain **both**:
 
-1. a `## Nested reference catalog` section with a fenced YAML list containing one
-   item per child (`name`, `location`, `description`); and
-2. a human-readable `## Routing table` (or equivalent decision table) that maps
-   user/agent needs to the same child `location`s.
-
-Preferred catalog shape:
+1. a `## Nested reference catalog` section with a fenced YAML list, one item per
+   child (`name`, `location`, `description`); and
+2. a human-readable `## Routing table` (or equivalent decision table) mapping
+   needs to the same child `location`s.
 
 ```yaml
 - name: parent-topic-a
@@ -290,157 +287,131 @@ Preferred catalog shape:
     Nested <parent-skill> reference for ...
 ```
 
-The YAML catalog is not just decoration: it is the machine-readable routing table
-for the second layer. Keep it in sync with child frontmatter and with the human
+The YAML catalog is not decoration — it is the machine-readable routing table for
+the second layer. Keep it in sync with child frontmatter and with the human
 routing table. Do not leave the parent as only a prose list of links.
 
-Use nested references when all of these are true:
-
-- callers should enter through one umbrella skill first;
-- the child topic is substantial enough to deserve frontmatter and possibly its
-  own `scripts/` or `assets/` later;
-- exposing the child as a standalone top-level skill would clutter the catalog or
-  bypass important routing context;
-- the parent can clearly say when to read each child.
-
-Do **not** use nested references for independent workflows that agents should
-find directly from the top-level catalog. Those should be normal skills under
-`.library/custom/<name>/`, an opt-in shared root such as `.library_shared/<name>/`, or an intrinsic skill root.
+Use nested references when all of these hold: callers should enter through one
+umbrella skill first; the child is substantial enough to deserve frontmatter and
+possibly its own `scripts/` or `assets/` later; exposing it standalone would clutter
+the catalog or bypass important routing context; and the parent can clearly say
+when to read each child. Do **not** use them for independent workflows agents
+should find directly from the top-level catalog — those belong in
+`.library/custom/<name>/`, an opt-in shared root such as `.library_shared/<name>/`,
+or an intrinsic skill root.
 
 Nested child conventions:
 
-- Each child `reference/<topic>/SKILL.md` must have normal skill frontmatter:
-  `name` and `description` required; `version`/`tags` optional. If the parent
-  skill is maintained inside a LingTai repository, the child must also carry
-  `last_changed_at`. `name` should be unique within the parent and descriptive
-  (`system-manual-sqlite-log-query`, `daily-reflection-data-collection`), even
+- Each child `reference/<topic>/SKILL.md` carries normal skill frontmatter:
+  `name` and `description` required, `version`/`tags` optional, plus
+  `last_changed_at` when the parent is maintained inside a LingTai repository.
+  `name` should be unique within the parent and descriptive
+  (`system-manual-sqlite-log-query`, `daily-reflection-data-collection`) even
   though it is not globally cataloged.
-- The child `description` and the parent catalog `description` should start with
-  the fact that it is nested, name the parent, and give the trigger condition:
+- The child `description` and the parent catalog `description` should open by
+  saying it is nested, name the parent, and give the trigger condition:
   `Nested system-manual reference for ...`.
-- `location` in the parent YAML catalog should be relative to the parent folder so
-  it survives copy/install moves; agents reading the parent can resolve it next to
-  the parent `SKILL.md`.
-- The parent should remain the routing hub. Resident prompts and sibling skills
-  should route to the parent first, then to the nested reference; do not bypass
-  the parent unless the caller already has the parent context loaded.
+- `location` in the parent YAML catalog is relative to the parent folder, so it
+  survives copy/install moves and resolves next to the parent `SKILL.md`.
+- The parent stays the routing hub. Resident prompts and sibling skills route to
+  the parent first, then the nested reference; do not bypass the parent unless
+  the caller already has parent context loaded.
 - Tests should verify both levels: the parent body contains the YAML catalog,
-  every child `name` and `location`, and the human routing table; the
-  installed/copied skill tree contains each child `SKILL.md` with valid
-  frontmatter and key content.
-- The bundled validator checks one skill folder at a time. For nested children,
-  validate the parent and then validate each nested child folder directly, e.g.
+  every child `name`/`location`, and the human routing table; the
+  installed/copied tree contains each child `SKILL.md` with valid frontmatter and
+  key content.
+- The validator handles one skill folder at a time — validate the parent, then
+  each nested child folder directly, e.g.
   `python3 .../validate.py reference/topic-a/` from the parent skill folder.
 
 Reference implementations: `system-manual` is a top-level router with nested
 `reference/substrate-manual/SKILL.md`, `reference/procedures-manual/SKILL.md`,
-and `reference/sqlite-log-query/SKILL.md`, advertised through a `Nested reference
-catalog` in the parent. Utility routers such as `swiss-knife`, `web-browsing`,
-and `daily-reflection` use the same two-part shape: YAML child metadata first,
-human routing table second.
+and `reference/sqlite-log-query/SKILL.md`. Utility routers such as
+`swiss-knife`, `web-browsing`, and `daily-reflection` use the same two-part
+shape: YAML child metadata first, human routing table second.
 
-### SKILL.md vs README.md
+### Cleanup / Footprint contract for tool manuals
 
-Skills published as standalone repos need both files — they serve different audiences.
-
-| File         | Audience                      | Loaded by                            |
-|--------------|-------------------------------|--------------------------------------|
-| `SKILL.md`   | LingTai agents                | `skills` capability (system prompt) |
-| `README.md`  | Humans browsing GitHub        | Not loaded by agents                 |
-
-`SKILL.md` is the agent-facing routing hub (frontmatter + decision tree). `README.md` is the human-facing repo description (purpose, install, examples). They are NOT redundant — `README.md` carries information agents do not need (project status, license, contributor notes, screenshots), and `SKILL.md` carries fields humans do not parse (frontmatter `tags`, `version`, machine-readable description).
-
-If you only ship through an opt-in local shared root such as `.library_shared/` and never publish to GitHub, you can omit `README.md`.
-
-## Sharing skills with other agents
-
-If a custom skill is worth sharing with other agents, the recommended path is
-simple skill sharing: send them the source URL (or an artifact path) plus the
-external-skill intake recipe above. Each receiving agent clones/copies it into
-its own `.library/custom/<name>/`, validates it, then refreshes itself. This
-keeps ownership, updates, and rollback local to the agent that will actually use
-the skill.
-
-A local network can still choose a shared-root model, but it must be explicit:
-maintain `.library_shared/<name>/`, add `../.library_shared` to each participating
-agent's `init.json` under `manifest.capabilities.skills.paths`, and refresh those
-agents. Do not assume `.library_shared` is loaded by default; it is an opt-in
-coordination mechanism for agents that deliberately choose to share one on-disk
-copy and accept the stewardship/update burden.
-
-## Adding a new skills path
-
-To expand your skill catalog with another source directory:
-
-1. `edit` `init.json` under `manifest.capabilities.skills.paths`. Append your new path (absolute or relative to your working dir; `~/` expansion honored).
-2. Call `system({"action": "refresh"})`.
-
-`init.json` is the ground truth. There is no runtime state — whatever is in `paths` at setup time is the exact set scanned.
-
-## Name collision discipline
-
-Two skills with the same `name` in the catalog would collide. Before authoring or installing a skill in `custom/`, grep the existing catalog:
-
-```
-shell({"command": "grep -rh '^name:' .library/ ~/.lingtai-tui/utilities/ 2>/dev/null"})
-```
-
-If you hit a collision: rename, or adapt the existing skill instead of forking a second one.
-
-## Health check
-
-Call `skills({"action": "info"})` to verify your skill catalog is wired correctly. It refreshes/reconciles the catalog and returns a runtime snapshot: `library_dir`, `catalog_size`, resolved paths with exist/skill-count info, and any `problems` (invalid frontmatter, unreadable folders), without returning the manual body. Use `skills({"action": "manual"})` when you need this SKILL.md body. If `status` is `"degraded"`, the error message tells you what needs fixing — typically a missing manual under `intrinsic/capabilities/skills/`, which means the initializer didn't install manuals correctly.
+Every tool/capability manual that owns persistent state must include a
+`Cleanup / Footprint` section. It is a contract, not a janitor: it teaches agents
+what the tool leaves behind and how to audit it safely. The required fields, the
+consent rule, the self-audit rule, and the standard `logs/cleanup.jsonl` record
+snippet live in [`reference/cleanup-footprint-contract.md`](reference/cleanup-footprint-contract.md)
+— read it before writing or reviewing such a section.
 
 ## When to create a skill
 
-**Do create a skill when:**
+**Do** when the task is repeatable with consistent steps; the procedure needs
+domain knowledge not reliably available without notes; the workflow involves
+multi-step orchestration or error handling worth codifying; or you want to share
+expertise with other agents in the network.
 
-- The task is repeatable with consistent steps.
-- The procedure requires domain knowledge not reliably available without notes.
-- A workflow involves multi-step orchestration or error handling worth codifying.
-- You want to share expertise with other agents in the network.
-
-**Do NOT create a skill when:**
-
-- It's a one-off task with no reuse value.
-- The task is just "call this one API endpoint" — pick it up at the call site.
-- The instructions are personality or style preferences — those live in the covenant or your lingtai character, not here.
+**Do NOT** when it is a one-off with no reuse value; the task is just "call this
+one API endpoint" (pick it up at the call site); or the instructions are
+personality or style preferences — those live in the covenant or your lingtai
+character, not here.
 
 ## Writing a good skill
 
-1. **Trigger-optimized description.** The `description` is the only thing visible in the catalog without loading the file, so it has to answer: *what does this skill do, what domain is it for, and when should the agent reach for it vs skip?* Aim for 2–4 sentences.
+1. **Trigger-optimized description.** The `description` is the only thing visible
+   in the catalog without loading the file, so it must answer: what does this
+   skill do, what domain is it for, and when should the agent reach for it vs
+   skip? Aim for 2–4 sentences, and spell out what it does NOT cover — that is
+   what stops an agent loading the file on a superficial match.
 
    - Bad: `description: "Helmholtz solver"` — what about it? when would I use it?
    - Good: `description: "Python implementation of the Helmholtz algorithm — an iterative alternating-projection method for constructing divergence-free, constant-magnitude 3D vector fields. Used to generate SPAW initial conditions for MHD simulations."`
+2. **Numbered steps in imperative form.** "Extract the text...", not "You should
+   extract...".
+3. **Concrete templates in `assets/`** rather than prose describing the desired
+   output format.
+4. **Deterministic scripts in `scripts/`** for fragile or repetitive operations —
+   a script that always produces the same result beats prose the LLM must
+   re-derive every time.
+5. **Keep `SKILL.md` focused.** Target under 500 lines; offload dense content to
+   references and heavy logic to scripts.
+6. **Structure subdirectories conventionally.** `scripts/` for executables,
+   `references/` for supplementary context (schemas, cheatsheets, worked
+   examples), `assets/` for templates and static files.
 
-   Spell out what the skill does NOT cover too — that is what stops an agent from loading the file when the task only superficially matches.
-2. **Numbered steps in imperative form.** "Extract the text...", not "You should extract...".
-3. **Concrete templates in `assets/`** rather than prose descriptions of desired output format.
-4. **Deterministic scripts in `scripts/`** for fragile or repetitive operations — a Python script that always produces the same result is better than prose the LLM has to re-derive every time.
-5. **Keep `SKILL.md` focused.** Target under 500 lines. Offload dense content to `references/` and heavy logic to `scripts/`. The body is the procedure; supporting material is a `read` call away.
-6. **Structure subdirectories conventionally.** `scripts/` for executables, `references/` for supplementary context (schemas, cheatsheets, worked examples), `assets/` for templates and static files.
+## SKILL.md vs README.md
+
+Skills published as standalone repos need both — they serve different audiences.
+
+| File | Audience | Loaded by |
+|---|---|---|
+| `SKILL.md` | LingTai agents | `skills` capability (system prompt) |
+| `README.md` | Humans browsing GitHub | Not loaded by agents |
+
+They are not redundant: `README.md` carries project status, license, contributor
+notes, and screenshots that agents do not need, while `SKILL.md` carries
+frontmatter fields (`tags`, `version`, machine-readable description) humans do
+not parse. If you only ship through an opt-in shared root such as
+`.library_shared/` and never publish to GitHub, you can omit `README.md`.
 
 ## Publishing to GitHub
 
-If a custom skill is worth sharing outside the network — with humans, external collaborators, or as a standalone resource — publish it as its own GitHub repo:
+To share a skill outside the network — with humans, external collaborators, or as
+a standalone resource:
 
-1. Author the skill in `<agent>/.library/custom/<name>/` as usual.
-2. Copy to a temp directory: `cp -r .library/custom/<name> /tmp/<name>`.
-3. Initialize: `cd /tmp/<name> && git init && git add . && git commit -m "Initial release"`.
-4. Add `README.md` (human-facing — see "SKILL.md vs README.md" above).
-5. Create the repo: `gh repo create <owner>/<name>-skill --public --source=. --push`.
+1. Author it in `<agent>/.library/custom/<name>/` as usual.
+2. Copy out: `cp -r .library/custom/<name> /tmp/<name>`.
+3. `cd /tmp/<name> && git init && git add . && git commit -m "Initial release"`.
+4. Add `README.md` (human-facing — see above).
+5. `gh repo create <owner>/<name>-skill --public --source=. --push`.
 
-Do NOT `git init` inside `.library/custom/` directly — it is a subtree of your agent working directory and you would entangle two repos. Always copy out first.
-
-Once published, agents elsewhere can install it with `git clone` into their `.library/custom/` and call `system({"action": "refresh"})`.
+Do NOT `git init` inside `.library/custom/` directly — it is a subtree of your
+agent working directory and you would entangle two repos. Always copy out first.
+Once published, other agents install it with `git clone` into their
+`.library/custom/` and refresh.
 
 ## Cleanup / Footprint
 
-Skills live under `.library/intrinsic/`, `.library/custom/`, opt-in shared
-skill paths when configured, and any extra paths configured in `init.json`.
-Intrinsic skills are runtime-owned; do not delete them. Custom skills are
-portable procedure memory: cleanup should usually mean validation, renaming,
-consolidation, or git removal through a reviewed PR, not ad-hoc `rm`.
+Skills live under `.library/intrinsic/`, `.library/custom/`, opt-in shared skill
+paths when configured, and any extra paths configured in `init.json`. Intrinsic
+skills are runtime-owned; do not delete them. Custom skills are portable
+procedure memory: cleanup should usually mean validation, renaming,
+consolidation, or git removal through a reviewed PR — not ad-hoc `rm`.
 
 Footprint check (read-only, records the audit):
 
@@ -460,6 +431,6 @@ log.open("a", encoding="utf-8").write(json.dumps({"ts": time.strftime("%Y-%m-%dT
 PY
 ```
 
-Recommended cadence: after authoring/publishing skills, before recipe export,
-and monthly for shared libraries. Destructive cleanup requires a dry-run report,
+Recommended cadence: after authoring/publishing skills, before recipe export, and
+monthly for shared libraries. Destructive cleanup requires a dry-run report,
 explicit user consent, and a git commit/PR when the skill root is tracked.
