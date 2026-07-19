@@ -374,9 +374,11 @@ class DetachedDaemonExecutionHost:
         """Write unavoidable run-private native files only inside the owner."""
         if not self._capsule.get("mcp"):
             return
+        # External CLIs do not receive LingTai's local completion surface, so
+        # their native config must retain the reserved daemon_common server.
         regs = [
             r for r in self._capsule.get("mcp", [])
-            if isinstance(r, dict) and r.get("name") != _DAEMON_COMMON_NAME
+            if isinstance(r, dict)
         ]
         argv = self._manifest.get("backend_argv") or []
         if not isinstance(argv, list):
