@@ -17,6 +17,7 @@ class FakeAccount:
         self.resident: dict[int, str] = {}
         self.next_id = 100
         self.edit_error: Exception | None = None
+        self.delete_error: Exception | None = None
 
     def send_message(self, chat_id, text, reply_to_message_id=None, **kwargs):
         message_id = self.next_id
@@ -34,6 +35,8 @@ class FakeAccount:
 
     def delete_message(self, chat_id, message_id):
         self.calls.append(("delete", chat_id, message_id))
+        if self.delete_error is not None:
+            raise self.delete_error
         self.messages.pop(message_id, None)
         return {"ok": True}
 
@@ -175,3 +178,40 @@ def test_edit_impossible_replaces_only_after_failed_edit_attempt(tmp_path):
     assert recovered["message_id"] != stale_id
     assert [call[0] for call in account.calls[-3:]] == ["edit", "delete", "send"]
     assert account.get_task_card(55) == recovered["message_id"]
+
+
+def test_exact_nondeletable_resident_self_heals_once_per_chat(tmp_path):
+    descriptions = (
+        "Bad Request: message can't be deleted for everyone",
+        "  Bad   Request: message can not be deleted for everyone  ",
+    )
+    for index, description in enumerate(descriptions):
+        manager, account = _manager(tmp_path / str(index))
+        stale_id = _automatic(manager, "create", reasoning="first")["message_id"]
+        account.set_task_card(77, "mybot:77:88")
+        account.edit_error = RuntimeError(
+            "Telegram API error: Bad Request: message can't be edited"
+        )
+        account.delete_error = RuntimeError(
+            f"Telegram API error: {description}"
+        )
+
+        recovered = _automatic(
+            manager, "update", card_message_id=stale_id, reasoning="replacement"
+        )
+
+        replacement_id = recovered["message_id"]
+        assert recovered["status"] == "ok"
+        assert replacement_id != stale_id
+        assert set(account.messages) == {100, 101}
+        assert account.get_task_card(55) == replacement_id
+        assert account.get_task_card(77) == "mybot:77:88"
+
+        account.edit_error = None
+        assert _programmable(manager, {"lines": ["watch"]})["message_id"] == replacement_id
+        assert _automatic(
+            manager, "update", card_message_id=stale_id, reasoning="later"
+        )["message_id"] == replacement_id
+        assert len(_calls(account, "send")) == 2
+        assert len(_calls(account, "delete")) == 1
+        assert [call[2] for call in _calls(account, "edit")[-2:]] == [101, 101]

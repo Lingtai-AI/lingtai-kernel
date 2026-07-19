@@ -84,9 +84,14 @@ _TASK_CARD_EDIT_IMPOSSIBLE_DESCRIPTIONS = frozenset({
 })
 _TASK_CARD_DELETE_OK = "ok"
 _TASK_CARD_DELETE_MISSING = "missing"
+_TASK_CARD_DELETE_NONDELETABLE = "nondeletable"
 _TASK_CARD_DELETE_FAILED = "failed"
 _TASK_CARD_DELETE_MISSING_DESCRIPTIONS = frozenset({
     "bad request: message to delete not found",
+})
+_TASK_CARD_DELETE_NONDELETABLE_DESCRIPTIONS = frozenset({
+    "bad request: message can't be deleted for everyone",
+    "bad request: message can not be deleted for everyone",
 })
 
 # Fixed human warning shown on every Task Card render (running and frozen
@@ -1573,7 +1578,7 @@ class TelegramManager:
 
     @staticmethod
     def _task_card_delete_error_outcome(exc: Exception) -> str:
-        """Classify only explicit not-found as an already-absent old card."""
+        """Classify only explicit terminal delete semantics; unknowns fail closed."""
         detail = str(exc)
         if not detail.startswith(_TELEGRAM_API_ERROR_PREFIX):
             return _TASK_CARD_DELETE_FAILED
@@ -1582,6 +1587,8 @@ class TelegramManager:
         ).casefold()
         if description in _TASK_CARD_DELETE_MISSING_DESCRIPTIONS:
             return _TASK_CARD_DELETE_MISSING
+        if description in _TASK_CARD_DELETE_NONDELETABLE_DESCRIPTIONS:
+            return _TASK_CARD_DELETE_NONDELETABLE
         return _TASK_CARD_DELETE_FAILED
 
     def _try_update_progress_message(
@@ -2494,7 +2501,7 @@ class TelegramManager:
     def _replace_task_card_after_probe(
         self, account: str, chat_id: int, stale_id: str, text: str, *, error: str,
     ) -> dict:
-        """Delete/missing-confirm the exact old resident, then send and persist."""
+        """Resolve the exact old resident, then send and persist one replacement."""
         delete_outcome = self._delete_task_card_message_outcome(stale_id)
         if delete_outcome == _TASK_CARD_DELETE_FAILED:
             return {
@@ -2617,9 +2624,9 @@ class TelegramManager:
     def _delete_task_card_message_outcome(self, compound_id: str) -> str:
         """Delete the exact tracked old card, distinguishing explicit absence.
 
-        ``missing`` is returned only for Telegram's exact not-found response; all
-        malformed ids, unknown provider responses, network errors, and permission
-        failures are ``failed`` so callers cannot inject a second card on a guess.
+        ``missing`` and ``nondeletable`` are returned only for Telegram's exact
+        terminal responses; malformed ids and every other failure remain ``failed``
+        so callers cannot inject a second card on a guess.
         """
         try:
             account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
@@ -2630,6 +2637,8 @@ class TelegramManager:
             outcome = self._task_card_delete_error_outcome(exc)
             if outcome == _TASK_CARD_DELETE_MISSING:
                 log.debug("Prior task card was already missing")
+            elif outcome == _TASK_CARD_DELETE_NONDELETABLE:
+                log.debug("Prior task card cannot be deleted for everyone")
             else:
                 log.debug(
                     "Failed to delete prior task card message (error_type=%s)",
