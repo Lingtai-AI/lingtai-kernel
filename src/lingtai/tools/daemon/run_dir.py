@@ -28,6 +28,66 @@ from lingtai.kernel.token_ledger import (
 )
 
 
+@contextmanager
+def _exclusive_state_lock(lock_path: Path):
+    """Hold the cross-process exclusive lock on one ``.daemon-state.lock`` file.
+
+    Module-internal platform seam shared by ``DaemonRunDir.state_file_lock``
+    and ``DaemonRunDir._state_transaction`` — the only two daemon-state lock
+    entry points. POSIX keeps the historical blocking ``fcntl.flock(LOCK_EX)``
+    on a text-mode ``"a+"`` handle, byte-for-byte unchanged. Windows uses the
+    ``msvcrt`` byte-range mechanism below. Any other platform fails loudly at
+    the ``fcntl`` import rather than pretending to serialize.
+    """
+    if os.name == "nt":
+        with _windows_exclusive_state_lock(lock_path):
+            yield
+        return
+    import fcntl
+
+    lock_path.touch(mode=0o600, exist_ok=True)
+    with open(lock_path, "a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _windows_exclusive_state_lock(lock_path: Path):
+    """Windows daemon-state lock: ``msvcrt`` byte 0 / length 1, retried.
+
+    ``LK_NBLCK`` in an explicit sleep loop, never ``LK_LOCK`` — the CRT's
+    blocking mode retries ~10 times at ~1s intervals and then *fails*, a
+    hidden bounded timeout where this transaction needs indefinite blocking
+    semantics (same rationale as
+    ``adapters/windows/powershell_state_lock.py``). The single seeded byte and
+    the ``seek(0)`` before every lock/unlock match the workdir-lease adapter's
+    ``msvcrt`` discipline; the OS releases the byte range when a holder dies,
+    so a crashed writer never wedges the file.
+    """
+    import msvcrt
+
+    with open(lock_path, "a+b") as lock:
+        lock.seek(0)
+        if lock.tell() == 0 and lock_path.stat().st_size == 0:
+            lock.write(b"\0")
+            lock.flush()
+        lock.seek(0)
+        while True:
+            try:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                time.sleep(0.01)
+        try:
+            yield
+        finally:
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 class DaemonRunDir:
     """Filesystem-backed mini-avatar log surface for one daemon emanation.
 
@@ -280,16 +340,8 @@ class DaemonRunDir:
         This narrow boundary exposes the same fixed lock file used by
         ``_state_transaction`` without constructing or mutating an in-memory run.
         """
-        import fcntl
-
-        lock_path = Path(path) / ".daemon-state.lock"
-        lock_path.touch(mode=0o600, exist_ok=True)
-        with open(lock_path, "a+") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        with _exclusive_state_lock(Path(path) / ".daemon-state.lock"):
+            yield
 
     @property
     def prompt_path(self) -> Path:
@@ -348,22 +400,15 @@ class DaemonRunDir:
     @contextmanager
     def _state_transaction(self):
         """Serialize one daemon.json read/modify/write across processes."""
-        import fcntl
-
         with self._state_writer_lock:
-            self.state_lock_path.touch(mode=0o600, exist_ok=True)
-            with open(self.state_lock_path, "a+") as lock:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            with _exclusive_state_lock(self.state_lock_path):
                 try:
-                    try:
-                        disk = json.loads(self.daemon_json_path.read_text(encoding="utf-8"))
-                        if isinstance(disk, dict):
-                            self._state = disk
-                    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-                        pass
-                    yield
-                finally:
-                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                    disk = json.loads(self.daemon_json_path.read_text(encoding="utf-8"))
+                    if isinstance(disk, dict):
+                        self._state = disk
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                    pass
+                yield
 
     def set_ephemeral_redactions(self, values) -> None:
         """Install runtime-only literals that must not reach durable output."""

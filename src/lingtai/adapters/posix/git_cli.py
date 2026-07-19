@@ -36,12 +36,12 @@ class PosixGitCliAdapter(SnapshotPort, SourceRevisionPort):
         for name in ("covenant.md", "principle.md", "pad.md"):
             path = system_dir / name
             if not path.is_file():
-                path.write_text("")
+                path.write_text("", encoding="utf-8")
 
     def initialize(self) -> None:
         if (self._directory / ".git").is_dir():
             return
-        (self._directory / ".gitignore").write_text(_GITIGNORE)
+        (self._directory / ".gitignore").write_text(_GITIGNORE, encoding="utf-8")
         self._ensure_system_files()
         try:
             subprocess.run(

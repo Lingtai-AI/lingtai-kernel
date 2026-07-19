@@ -4,6 +4,7 @@ contract_version: 1
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/event_journal/ANATOMY.md
+  - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/kernel/event_journal/__init__.py
   - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/adapters/posix/event_journal.py

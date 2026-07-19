@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/avatar/manual/SKILL.md
   - src/lingtai/adapters/avatar_launcher.py
   - src/lingtai/adapters/posix/avatar_launcher.py
+  - src/lingtai/adapters/windows/avatar_launcher.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -164,12 +165,26 @@ live descendant.
 - Production adapters disconnect stdin/stdout and own a binary-write stderr
   file, closing the parent descriptor after launch. `release()` performs a
   best-effort, non-raising final observation and never terminates a live avatar.
-- POSIX uses `start_new_session=True`; `terminate()` is one-process TERM and
+- POSIX (`src/lingtai/adapters/posix/avatar_launcher.py`) uses
+  `start_new_session=True`; `terminate()` is one-process TERM and
   `force_terminate()` is one-process KILL. Neither operation claims tree
   management.
-- Unsupported platforms, including Windows, fail loudly at the selector;
-  this re-cut adds no Windows launch implementation, selector wiring, or
-  native acceptance claim.
+- Windows (`src/lingtai/adapters/windows/avatar_launcher.py`,
+  `WindowsAvatarLauncherAdapter`) uses
+  `creationflags=_win32.DETACHED_CREATIONFLAGS` (new process group + no window,
+  from the shared `lingtai.adapters.windows._win32` surface) plus
+  `close_fds=True` in place of `start_new_session`. It keeps the same
+  stdin/stdout-disconnect, owned binary-write stderr file, PID/exit-code, and
+  non-killing `release()` contracts. Honest termination tier (owner decision
+  U7): on Windows `Popen.terminate()` and `Popen.kill()` **both** call
+  `TerminateProcess` — there is no graceful signal. The Windows adapter does not
+  pretend a graceful tier exists: `terminate()` and `force_terminate()` are
+  **both** forceful, immediate termination of exactly the owned process, never a
+  tree kill.
+- The selector `select_avatar_launcher()` returns the Windows adapter when
+  `os.name == "nt"` (lazy import) and the POSIX adapter when `os.name ==
+  "posix"`, both via lazy imports so each mechanism module loads only on its
+  own platform. Any other `os.name` still fails loudly with `NotImplementedError`.
 - `python` is resolved lazily via `lingtai.venv_resolve.resolve_venv` /
   `venv_python` from the avatar's `init.json` → global runtime. The
   `lingtai.tools → lingtai` import edge is allowed only inside setup/handlers.
@@ -182,7 +197,8 @@ live descendant.
 
 | Claim | Source | Test |
 |---|---|---|
-| The POSIX launcher preserves exact detached launch, PID/exit truth, one-process termination, and non-killing release contracts; unsupported platforms fail loudly | `src/lingtai/adapters/posix/avatar_launcher.py`, `src/lingtai/adapters/avatar_launcher.py` | `tests/test_avatar_launcher.py::test_posix_launch_contract_and_release`, `::test_selector_selects_posix_and_fails_loud_for_unsupported` |
+| The POSIX launcher preserves exact detached launch, PID/exit truth, one-process termination, and non-killing release contracts; unrecognized platforms fail loudly | `src/lingtai/adapters/posix/avatar_launcher.py`, `src/lingtai/adapters/avatar_launcher.py` | `tests/test_avatar_launcher.py::test_posix_launch_contract_and_release`, `::test_selector_selects_posix_and_fails_loud_for_unsupported` |
+| The Windows launcher uses `DETACHED_CREATIONFLAGS` + `close_fds` (no `start_new_session`), keeps the same disconnect/stderr/PID/exit/non-killing-release contracts, and maps both `terminate` and `force_terminate` to forceful `TerminateProcess`; the selector routes `os.name == "nt"` to it | `src/lingtai/adapters/windows/avatar_launcher.py`, `src/lingtai/adapters/avatar_launcher.py` | `tests/test_avatar_launcher_windows.py::test_selector_returns_windows_adapter_when_os_name_is_nt`, `::test_windows_launch_uses_detached_flags_and_disconnects_streams`, `::test_windows_terminate_and_force_terminate_both_forceful`, `::test_windows_release_never_raises_and_never_terminates` |
 | Boot policy keeps heartbeat-first precedence, exact early-exit truth, and a live-process slow path without termination | `src/lingtai/tools/avatar/__init__.py` | `tests/test_avatar_launcher.py::test_manager_boot_policy_uses_opaque_port_and_preserves_precedence`, `::test_manager_slow_observation_does_not_terminate_child` |
 | `setup` registers exactly one public tool, `avatar`, and no old public names | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::test_setup_avatar`, `::test_add_capability_avatar`, `::TestUnifiedAvatarTool::test_setup_registers_exactly_one_public_tool` |
 | Each spawn appends a ledger record | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::test_ledger_records_spawn` |

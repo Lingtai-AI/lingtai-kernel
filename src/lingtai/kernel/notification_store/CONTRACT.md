@@ -4,6 +4,7 @@ contract_version: 1
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/notification_store/ANATOMY.md
+  - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/kernel/notification_store/__init__.py
   - src/lingtai/adapters/posix/notification_store.py
   - src/lingtai/kernel/notifications.py

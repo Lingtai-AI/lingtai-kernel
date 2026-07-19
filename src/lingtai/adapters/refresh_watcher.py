@@ -1,9 +1,11 @@
 """Outer platform selector for the RefreshWatcher capability.
 
-Composition roots call this selector instead of constructing the POSIX handoff
-adapter directly.  This slice has one real implementation; unsupported
-platforms fail before importing it rather than receiving a no-op watcher or a
-misleading default.
+Composition roots call this selector instead of constructing a platform
+handoff adapter directly.  Two production adapters exist — the POSIX
+session-detached adapter and the Windows detached-process adapter — and each
+composes its own platform entrypoint and watcher-local process mechanism.
+Unsupported platforms fail before importing either rather than receiving a
+no-op watcher or a misleading default.
 """
 from __future__ import annotations
 
@@ -16,17 +18,19 @@ from lingtai.kernel.refresh_watcher import RefreshWatcherPort
 def select_refresh_watcher() -> RefreshWatcherPort:
     """Return the production refresh-watcher Port for this platform.
 
-    The current vertical slice intentionally ships only the POSIX adapter.  The
-    selector is the capability-level registration point for a future genuine
-    platform implementation and owns the fail-loud unsupported-platform
-    behavior.
+    The selector is the capability-level registration point for platform
+    implementations and owns the fail-loud unsupported-platform behavior.
     """
-    if sys.platform == "win32" or os.name != "posix":
+    if sys.platform == "win32":
+        from lingtai.adapters.windows.refresh_watcher import WindowsRefreshWatcherAdapter
+
+        return WindowsRefreshWatcherAdapter()
+    if os.name != "posix":
         raise NotImplementedError(
             f"No production refresh-watcher adapter for platform {sys.platform!r} "
-            f"(os.name={os.name!r}). This vertical slice ships a POSIX process "
-            "adapter only; a Windows adapter with its own conformance evidence "
-            "is out of scope."
+            f"(os.name={os.name!r}). Production adapters exist for POSIX and "
+            "Windows only; any other platform needs its own adapter with its "
+            "own conformance evidence."
         )
     from lingtai.adapters.posix.refresh_watcher import PosixRefreshWatcherAdapter
 

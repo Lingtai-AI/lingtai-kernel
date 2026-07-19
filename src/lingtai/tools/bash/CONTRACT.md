@@ -266,6 +266,14 @@ those Ports.
   conservatively `running`/uncancellable; after that PID is gone, its explicit
   unknown terminal response is one-shot via a legacy consumption marker and never
   invents `-1` or a false `command_status: failed`.
+- The `working_dir` sandbox check resolves both the requested cwd and the agent
+  working directory and accepts the cwd only when it equals the sandbox or is
+  nested under it, using the live platform separator `os.sep` as the boundary
+  (`resolved == sandbox or resolved.startswith(sandbox + os.sep)`). The
+  separator is read at call time so `Path.resolve()`'s platform-native output —
+  `/` on POSIX, `\` on Windows — is matched correctly; a hardcoded `/` would
+  reject every legitimate nested Windows cwd. Sibling-prefix directories
+  (`<sandbox>bb` for sandbox `<sandbox>b`) stay rejected.
 
 These POSIX process-group, signal, and `shell=True` assumptions are load-bearing
 for cancellation correctness.

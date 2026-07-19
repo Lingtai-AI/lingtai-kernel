@@ -11,6 +11,12 @@ related_files:
   - src/lingtai/adapters/posix/daemon_execution_child_entrypoint.py
   - src/lingtai/adapters/posix/daemon_resume_owner_entrypoint.py
   - src/lingtai/adapters/posix/process_identity.py
+  - src/lingtai/adapters/windows/daemon_supervisor.py
+  - src/lingtai/adapters/windows/daemon_supervisor_entrypoint.py
+  - src/lingtai/adapters/windows/daemon_execution_child_entrypoint.py
+  - src/lingtai/adapters/windows/daemon_resume_owner_entrypoint.py
+  - src/lingtai/adapters/windows/process_identity.py
+  - tests/test_daemon_windows_supervisor.py
   - src/lingtai/tools/daemon/manual/SKILL.md
 maintenance: |
   Keep this Contract paired with its ANATOMY.md and preserve the repository
@@ -41,6 +47,26 @@ starts an exact execution child before its watcher; terminal CLI resume uses a
 durable single-writer generation and a detached resume owner. No parent future
 or process handle is retained, and no broad process matching is performed.
 
+The Windows adapter (`WindowsDaemonSupervisorAdapter`) is the `nt` production
+sibling behind the same Port: the same encoded request and secret-stripped
+environment, launched against Windows-owned entrypoint mirrors
+(`lingtai.adapters.windows.daemon_supervisor_entrypoint`, execution child,
+resume owner) with `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW` creation
+flags instead of a POSIX session. The one-shot capsule crosses as an
+inherited pipe HANDLE allowed through
+`STARTUPINFO.lpAttributeList["handle_list"]` under `close_fds=True`; the
+child environment carries only the numeric handle
+(`LINGTAI_DAEMON_CAPSULE_HANDLE`), which the entrypoint mirrors convert back
+to a CRT fd (`msvcrt.open_osfhandle`) and republish on the shared fd wire so
+the POSIX modules' mechanism-free read loops run unchanged. Capsule bytes are
+still written after `Popen`, bounded at 4 MiB, never on disk/argv/env, and
+consumed exactly once. Platform selection is
+`select_daemon_supervisor_adapter` in the tools-layer supervisor runtime;
+other platforms fail loudly. Windows records `execution_pgid=None` (no POSIX
+process group exists) and identity is the shared
+`windows:<creation_filetime>` incarnation token, so ownership checks stay
+fail-closed on missing/mismatched identity.
+
 ## Runtime promise
 
 One supervisor owns one run from birth through terminal state. It validates
@@ -63,7 +89,11 @@ inherited one-shot capsule and final child spawn arguments; credential-shaped
 environment values are restored only in the dedicated execution child. Every
 durable command rendering uses the shared auth-shaped redaction policy. On
 Darwin, ownership control uses the libproc birth second/usecond token and
-refuses unknown identity; it never falls back to second-resolution `ps`.
+refuses unknown identity; it never falls back to second-resolution `ps`. On
+Windows, the capsule descriptor in the child environment is a handle number
+only — never capsule content — and ownership control uses the
+creation-filetime incarnation token with the same refuse-unknown-identity
+rule.
 
 ## Conformance
 

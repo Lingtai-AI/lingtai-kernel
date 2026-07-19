@@ -33,6 +33,15 @@ MATCH_CASES = [
     ("tail -f /var/log/x lingtai run /a/foo", "/a/foo", None),
     ("vim /a/foo/notes about lingtai run", "/a/foo", None),
     ("/v/bin/python -m lingtai poll /a/foo", "/a/foo", None),
+    # Windows-shaped command lines: the module form is what every runtime
+    # relaunch path spawns, and backslash paths anchor the program forms.
+    (r"C:\v\python.exe -m lingtai run C:\a\foo", r"C:\a\foo", "module"),
+    (r"C:\v\Scripts\lingtai-agent run C:\a\foo", r"C:\a\foo", "console"),
+    (r"C:\v\Scripts\lingtai run C:\a\foo", r"C:\a\foo", "legacy"),
+    # Known residual limitation, pinned deliberately: the Windows console
+    # script is `lingtai-agent.exe`, which the console token does not match.
+    # Runtime-spawned processes always use the module form.
+    (r"C:\v\Scripts\lingtai-agent.exe run C:\a\foo", r"C:\a\foo", None),
 ]
 
 

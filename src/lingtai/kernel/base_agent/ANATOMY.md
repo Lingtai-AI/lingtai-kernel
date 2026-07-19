@@ -1,5 +1,7 @@
 ---
 related_files:
+  - src/lingtai/kernel/base_agent/CONTRACT.md
+  - docs/references/windows-support.md
   - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - src/lingtai/agent.py
   - src/lingtai/kernel/ANATOMY.md

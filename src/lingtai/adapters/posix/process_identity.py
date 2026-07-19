@@ -126,6 +126,18 @@ def process_identity(pid: int) -> str | None:
     """Capture a stable process incarnation token, never PID alone."""
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return None
+    if sys.platform == "win32":
+        # Naming awkwardness, kept deliberately: this ``adapters.posix`` module
+        # is the single consumer import surface for process identity, so the
+        # Windows implementation is reached by delegation instead of renaming
+        # the module (zero consumer churn). The delegation MUST happen before
+        # the ``os.kill(pid, 0)`` liveness probe below — on Windows that call
+        # TERMINATES the target instead of probing it.
+        from lingtai.adapters.windows.process_identity import (
+            process_identity as _windows_process_identity,
+        )
+
+        return _windows_process_identity(pid)
     try:
         os.kill(pid, 0)
     except OSError:

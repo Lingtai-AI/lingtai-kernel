@@ -5,10 +5,12 @@ related_files:
   - src/lingtai/__main__.py
   - src/lingtai/agent.py
   - src/lingtai/adapters/posix/ANATOMY.md
+  - src/lingtai/adapters/windows/ANATOMY.md
   - src/lingtai/adapters/shell.py
   - src/lingtai/adapters/shell_process.py
   - src/lingtai/adapters/shell_state_lock.py
   - src/lingtai/adapters/refresh_watcher.py
+  - src/lingtai/adapters/process_scan.py
   - src/lingtai/adapters/lifecycle_clock.py
   - src/lingtai/auth/ANATOMY.md
   - src/lingtai/cli.py
@@ -59,7 +61,8 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `__init__.py` | Lazy public API facade — re-exports every name in ``__all__`` on first access via PEP-562 ``__getattr__`` from its canonical source module (``__init__.py:18-110``). ``import lingtai`` loads only the stdlib and the package version; heavy implementation modules are resolved lazily. |
 | `__main__.py` | `python -m lingtai` → `cli.main()` |
 | `agent.py` | **THE key file.** `Agent(BaseAgent)` — layer-2 agent with capability composition, preset swap, MCP, init.json refresh, and default POSIX event-journal + notification-store + agent-presence + workdir-lease + snapshot/source-revision injection for outer callers (it selects the platform lease via `lingtai.adapters.workdir_lease.select_workdir_lease` when `working_dir` is present and no `workdir_lease` was passed, and constructs `PosixAgentPresenceStoreAdapter(working_dir)` when no `agent_presence` was passed — see `kernel/agent_presence/CONTRACT.md`). It selects the refresh-watcher capability through `lingtai.adapters.refresh_watcher.select_refresh_watcher` when no watcher is injected. It also constructs the portable `SystemLifecycleClockAdapter()` when no `lifecycle_clock` was passed (no `working_dir` needed — see `kernel/lifecycle_clock/CONTRACT.md`). Selection and `BaseAgent` construction share one guard that closes the wrapper-owned journal best-effort while preserving the original failure. Tool schemas registered here carry package ownership into the inherited BaseAgent inventory renderer; `Agent` no longer duplicates tool-inventory rendering, so package glossaries are appended once in the kernel path. |
-| `adapters/posix/` | Narrow production POSIX adapter package for the JSONL + SQLite event journal, filesystem mail transport, notification store, POSIX workdir lease, fixed-command Git snapshot/source-revision adapter, and POSIX avatar launcher. See `adapters/posix/ANATOMY.md`. |
+| `adapters/posix/` | Narrow production POSIX adapter package for the JSONL + SQLite event journal, filesystem mail transport, notification store, POSIX workdir lease, refresh-watcher trio, duplicate-launch process scan, fixed-command Git snapshot/source-revision adapter, and POSIX avatar launcher. See `adapters/posix/ANATOMY.md`. |
+| `adapters/windows/` | Narrow production native-Windows adapter package: `msvcrt` byte-range workdir lease, refresh-watcher trio (detached handoff, entrypoint, CIM/`.suspend` process mechanism), CIM duplicate-launch process scan, avatar launcher, detached daemon supervisor with inherited-handle capsule wire and entrypoint mirrors, process-incarnation identity, PowerShell shell dialect, Job Object async shell process adapter, `msvcrt` shell state lock, and the shared `_win32` ctypes surface. See `adapters/windows/ANATOMY.md`. |
 | `adapters/lifecycle_clock.py` | The one portable production `SystemLifecycleClockAdapter` for the Core-owned `LifecycleClockPort` — direct `wall_seconds()`→`time.time()` / `monotonic_seconds()`→`time.monotonic()`, no caching or policy. Not POSIX (no filesystem/`fcntl`/platform selection), so it sits at the top of `adapters/` rather than under `adapters/posix/`; its promise/navigation are owned by the kernel `lifecycle_clock/` governed pair (`src/lingtai/kernel/lifecycle_clock/CONTRACT.md` + `ANATOMY.md`). |
 | `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent check-caps` / `lingtai-agent log ...` / `lingtai-agent maintenance cleanup <target>` entry points; the `run` composition root performs a post-stop hard exit only when existing worker-poison state would otherwise keep the old process alive and block the refresh watcher |
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |

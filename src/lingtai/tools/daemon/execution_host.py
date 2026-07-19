@@ -33,6 +33,28 @@ _DAEMON_COMMON_NAME = "daemon_common"
 _REDACTED_MARKER = "<redacted>"
 
 
+def _default_detached_process_port():
+    """Compose the platform's detached-scope daemon process Port.
+
+    The detached execution child already owns its isolation boundary (POSIX:
+    the session/process group it was spawned into; Windows: the supervisor's
+    exact-PID ownership), so both defaults carry the explicit
+    ``INHERITED_SUPERVISOR_GROUP`` scope: lifecycle operations signal only
+    exact children. Any other platform fails loudly.
+    """
+    if os.name == "posix":
+        from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
+        return PosixDaemonProcessPort(start_new_session=False)
+    if os.name == "nt":
+        from lingtai.tools.daemon.windows_process import WindowsDaemonProcessPort
+        return WindowsDaemonProcessPort(
+            termination_scope=DaemonProcessTerminationScope.INHERITED_SUPERVISOR_GROUP,
+        )
+    raise RuntimeError(
+        "detached daemon execution composition is unsupported on this platform"
+    )
+
+
 def _contains_redacted(value) -> bool:
     """Detect a public redaction marker that must never reach a runner."""
     if isinstance(value, str):
@@ -89,12 +111,10 @@ class DetachedDaemonExecutionHost:
         # deliberately adapter-facing: Core sees no Popen object, only a
         # portable PID/PGID/start-identity receipt.
         if process_port is None:
-            if os.name != "posix":
-                raise RuntimeError(
-                    "detached POSIX execution composition is unsupported on this platform"
-                )
-            from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
-            process_port = PosixDaemonProcessPort(start_new_session=False)
+            process_port = _default_detached_process_port()
+        # Interactive terminal remains POSIX-only: on Windows this stays None
+        # (ConPTY is out of scope) and the claude-interactive bridge fails
+        # loudly when it receives no terminal port.
         if interactive_terminal_port is None and os.name == "posix":
             from lingtai.adapters.posix.interactive_terminal import (
                 PosixInteractiveTerminalAdapter,
@@ -259,19 +279,29 @@ class DetachedDaemonExecutionHost:
         )
         # Close the cancellation-before-registration race. Identity and group
         # checks are repeated immediately before signalling so PID reuse cannot
-        # turn a stale callback into ownership of an unrelated process.
+        # turn a stale callback into ownership of an unrelated process. On
+        # Windows there is no PGID to re-check (recorded as None): the guard is
+        # identity-only and the close is an exact-PID TerminateProcess.
         cancel_event = getattr(self, "_cancel_event", None)
         if cancel_event is not None and cancel_event.is_set():
-            try:
-                if (
-                    isinstance(pgid, int)
-                    and isinstance(identity, str)
-                    and os.getpgid(pid) == pgid
-                    and process_identity_matches(pid, identity)
-                ):
-                    os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
+            if os.name == "nt":
+                from lingtai.adapters.windows import _win32
+                try:
+                    if isinstance(identity, str) and process_identity_matches(pid, identity):
+                        _win32.terminate_pid(pid)
+                except OSError:
+                    pass
+            else:
+                try:
+                    if (
+                        isinstance(pgid, int)
+                        and isinstance(identity, str)
+                        and os.getpgid(pid) == pgid
+                        and process_identity_matches(pid, identity)
+                    ):
+                        os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
 
     def _register_cli_proc(self, proc, group_id=None):
         # Legacy direct-Popen callers still use this manager-shaped hook; the

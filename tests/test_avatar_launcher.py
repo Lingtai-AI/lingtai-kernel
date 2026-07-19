@@ -73,7 +73,10 @@ def test_selector_selects_posix_and_fails_loud_for_unsupported():
          patch.object(avatar_launcher.sys, "platform", "linux"):
         assert isinstance(avatar_launcher.select_avatar_launcher(), PosixAvatarLauncherAdapter)
 
-    for name, platform in (("nt", "win32"), ("other", "other")):
+    # ``nt`` is now a supported platform (Windows adapter) — its positive
+    # selector assertion lives in tests/test_avatar_launcher_windows.py. Only a
+    # genuinely unrecognized ``os.name`` still fails loudly here.
+    for name, platform in (("other", "other"),):
         with patch.object(avatar_launcher.os, "name", name), \
              patch.object(avatar_launcher.sys, "platform", platform):
             try:

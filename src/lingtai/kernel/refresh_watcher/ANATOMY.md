@@ -11,7 +11,12 @@ related_files:
   - src/lingtai/adapters/posix/refresh_watcher.py
   - src/lingtai/adapters/posix/refresh_watcher_process.py
   - src/lingtai/adapters/posix/refresh_watcher_entrypoint.py
+  - src/lingtai/adapters/windows/ANATOMY.md
+  - src/lingtai/adapters/windows/refresh_watcher.py
+  - src/lingtai/adapters/windows/refresh_watcher_process.py
+  - src/lingtai/adapters/windows/refresh_watcher_entrypoint.py
   - src/lingtai/kernel/base_agent/lifecycle.py
+  - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/agent.py
   - src/lingtai/cli.py
   - tests/test_refresh_watcher_process.py
@@ -29,7 +34,7 @@ maintenance: |
 This folder maps the Core refresh-watcher capability: the immutable outer
 handoff request/Port, the generated refresh policy, and the watcher-local typed
 process-mechanism Port used by that policy. Concrete process ownership is
-outside Core in the POSIX adapter package. Normative promises live in the paired
+outside Core in the POSIX and Windows adapter packages. Normative promises live in the paired
 [`CONTRACT.md`](CONTRACT.md); [`MANUAL.md`](MANUAL.md) remains the capability
 walkthrough.
 
@@ -65,6 +70,13 @@ walkthrough.
 - `PosixRefreshWatcherProcessAdapter` owns process-table observation, liveness,
   replacement launch, graceful termination, and forced termination
   (`src/lingtai/adapters/posix/refresh_watcher_process.py:26-87`).
+- `WindowsRefreshWatcherAdapter` owns the Windows detached handoff
+  (`src/lingtai/adapters/windows/refresh_watcher.py`); its entrypoint injects a
+  workdir-bound `WindowsRefreshWatcherProcessAdapter` as `PROCESS_MECHANISM`
+  (`src/lingtai/adapters/windows/refresh_watcher_entrypoint.py`), which owns
+  CIM observation, handle-based liveness, detached relaunch, the `.suspend`
+  graceful-stop channel, and exact-PID forced termination
+  (`src/lingtai/adapters/windows/refresh_watcher_process.py`).
 
 ## Composition
 
@@ -72,13 +84,14 @@ walkthrough.
 - **Paired contract:** [`CONTRACT.md`](CONTRACT.md) owns interface and behavior.
 - **Outer selector:** [`src/lingtai/adapters/refresh_watcher.py`](../../adapters/refresh_watcher.py).
 - **POSIX adapters:** [`src/lingtai/adapters/posix/ANATOMY.md`](../../adapters/posix/ANATOMY.md).
+- **Windows adapters:** [`src/lingtai/adapters/windows/ANATOMY.md`](../../adapters/windows/ANATOMY.md).
 - **Canonical matcher:** `src/lingtai/kernel/process_match.py`.
 
 ## State
 
 The Core Port and value objects own no runtime process state. The generated
 policy owns only transient retry/failure metadata and the existing filesystem
-artifacts/events. The POSIX process adapter owns no long-lived supervisor; it
+artifacts/events. The platform process adapters own no long-lived supervisor; each
 creates observations/handles for one policy run and writes replacement stderr
 through the requested log path. The outer adapter owns only its detached
 entrypoint handoff.

@@ -22,6 +22,24 @@ from lingtai.llm.service import LLMService, build_provider_defaults_from_manifes
 from lingtai.kernel.prompt import build_system_prompt
 
 
+def _detached_spawn_kwargs() -> dict[str, Any]:
+    """Platform kwargs for launching a detached agent-run child.
+
+    This wrapper is a composition root, so the one platform branch for the
+    CPR relaunch mechanism lives here rather than in kernel Core. POSIX
+    detaches into a new session; Windows uses the shared detached creation
+    flags (new process group, no window — ``start_new_session`` is
+    POSIX-only and Windows children survive parent exit by default).
+    """
+    import os as _os
+
+    if _os.name == "nt":
+        from lingtai.adapters.windows._win32 import DETACHED_CREATIONFLAGS
+
+        return {"creationflags": DETACHED_CREATIONFLAGS, "close_fds": True}
+    return {"start_new_session": True}
+
+
 def _run_preset_library_migrations(directory: Path) -> None:
     """Retained callback slot; production preset reads are migration-free.
 
@@ -908,7 +926,7 @@ class Agent(BaseAgent):
                 stdin=subprocess.DEVNULL,
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
-                start_new_session=True,
+                **_detached_spawn_kwargs(),
             )
 
         self._log("cpr_launched", target=str(target), pid=proc.pid, log=str(log_path))
