@@ -16,6 +16,7 @@ related_files:
   - src/lingtai/tools/daemon/interactive_terminal/ANATOMY.md
   - src/lingtai/adapters/posix/interactive_terminal.py
   - src/lingtai/tools/daemon/posix_process.py
+  - src/lingtai/tools/daemon/windows_process.py
   - src/lingtai/tools/daemon/claude_interactive.py
   - src/lingtai/tools/daemon/manual/SKILL.md
   - src/lingtai/tools/daemon/run_dir.py
@@ -141,6 +142,14 @@ remains deferred until ConPTY has its own accepted adapter. `ClaudeInteractiveBr
   supervisor exact-run reclaim owns the inherited group. Observation callback
   failure is transactional: exact-child reap, registry removal, and callback
   descriptor cleanup happen before the original exception is re-raised.
+- `daemon/windows_process.py` — the Windows adapter selected by `setup()` on
+  `nt`. It maps `PRIVATE_PROCESS_GROUP` to one Job Object per spawn
+  (suspended spawn → assignment → `NtResumeProcess`, no `KILL_ON_JOB_CLOSE`)
+  and `INHERITED_SUPERVISOR_GROUP` to exact-child-only termination through the
+  retained handle; termination is forceful-only with the same bounded
+  wait/reap, first-writer-wins reason receipts, and transactional
+  observation-callback failure semantics as the POSIX sibling. Identity comes
+  from the shared `adapters/windows/_win32` creation-time surface.
 
 ## Public API
 

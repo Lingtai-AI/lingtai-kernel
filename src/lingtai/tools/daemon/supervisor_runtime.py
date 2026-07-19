@@ -50,6 +50,37 @@ def _process_start_identity(pid: int) -> str | None:
     return process_identity(pid)
 
 
+def _process_group_of(pid: int) -> int | None:
+    """Return the POSIX process group of *pid*; ``None`` on Windows.
+
+    Windows has no PGID concept — supervision scope there is the process
+    Port's Job Object plus exact-PID identity guards, and every recorded
+    ``*_pgid`` field stays ``None`` so signal paths refuse group semantics.
+    """
+    if os.name == "nt":
+        return None
+    return os.getpgid(pid)
+
+
+def select_daemon_supervisor_adapter():
+    """Return the platform's production detached-supervisor adapter.
+
+    Capability-local composition seam shared by the parent manager's spawn
+    sites and this runtime's execution-child/resume spawns. POSIX and Windows
+    each have exactly one production adapter; any other platform fails loudly
+    instead of pretending detached supervision exists.
+    """
+    if os.name == "posix":
+        from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+        return PosixDaemonSupervisorAdapter()
+    if os.name == "nt":
+        from lingtai.adapters.windows.daemon_supervisor import WindowsDaemonSupervisorAdapter
+        return WindowsDaemonSupervisorAdapter()
+    raise NotImplementedError(
+        f"detached daemon supervision is unsupported on {os.name!r}"
+    )
+
+
 def _maybe_register_test_fake_llm() -> None:
     """Test-only seam: register a deterministic fake LLM adapter, if asked.
 
@@ -159,9 +190,8 @@ def run_resume_owner(manifest_path: str, run_id: str, generation: str,
     if not run_dir.activate_resume_generation(generation, nonce):
         return
     try:
-        from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
         run_dir.update_state(execution_registration="spawned")
-        child = PosixDaemonSupervisorAdapter().spawn_execution_child(
+        child = select_daemon_supervisor_adapter().spawn_execution_child(
             python_executable=sys.executable,
             manifest_path=str(Path(manifest_path).resolve()),
             run_id=run_id, run_dir=run_dir.path,
@@ -170,7 +200,7 @@ def run_resume_owner(manifest_path: str, run_id: str, generation: str,
         if run_dir.read_state_from_disk(run_dir.path).get("execution_registration") != "registered":
             run_dir.update_state(
                 execution_registration="spawned", execution_pid=child.pid,
-                execution_pgid=os.getpgid(child.pid),
+                execution_pgid=_process_group_of(child.pid),
                 execution_start_identity=_process_start_identity(child.pid),
             )
         deadline = time.monotonic() + float(manifest.get("timeout_s", 30)) + 5.0
@@ -220,9 +250,8 @@ def _run_one_emanation(
     # Never fork after creating watcher threads.  The supervisor launches a
     # fresh interpreter child, which is the only process allowed to construct
     # the manager-shaped execution host and enter provider/CLI code.
-    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
     run_dir.update_state(execution_registration="spawned")
-    child = PosixDaemonSupervisorAdapter().spawn_execution_child(
+    child = select_daemon_supervisor_adapter().spawn_execution_child(
         python_executable=sys.executable,
         manifest_path=str(Path(manifest["run_dir"]) / "supervisor_manifest.json"),
         run_id=run_dir.run_id,
@@ -233,7 +262,7 @@ def _run_one_emanation(
         run_dir.update_state(
             execution_registration="spawned",
             execution_pid=child.pid,
-            execution_pgid=os.getpgid(child.pid),
+            execution_pgid=_process_group_of(child.pid),
             execution_start_identity=_process_start_identity(child.pid),
         )
     registration_deadline = time.monotonic() + 5.0
@@ -270,8 +299,58 @@ def _run_one_emanation(
         ))
 
 
+def _terminate_exact_run_children_windows(run_dir, owned_procs=()) -> None:
+    """Windows reclaim: identity-guarded ``TerminateProcess`` of exact PIDs.
+
+    Deliberately narrower than the POSIX ``killpg`` reclaim: only the exact
+    recorded nested-CLI child and execution-child PIDs are terminated, each
+    gated on its recorded start identity (fail-closed on ``None``/mismatch).
+    Grandchildren those children spawned outside the execution Port's Job are
+    NOT swept — there is no inherited process group to signal on Windows, and
+    this supervisor holds no Job handle of its own. Documented as a residual
+    in ``tools/daemon/CONTRACT.md``.
+    """
+    from lingtai.adapters.windows import _win32
+
+    state = run_dir.read_state_from_disk(run_dir.path)
+    rows: list[tuple[int, object]] = []
+    pid = state.get("child_pid") or state.get("cli_pid")
+    if isinstance(pid, int) and not isinstance(pid, bool):
+        # The nested CLI is terminated first so the live execution child can
+        # reap its exact subprocess before the execution interpreter itself is
+        # terminated — same ordering rationale as the POSIX branch.
+        rows.append((pid, state.get("child_start_identity")))
+    execution_pid = state.get("execution_pid")
+    if isinstance(execution_pid, int) and not isinstance(execution_pid, bool):
+        rows.append((execution_pid, state.get("execution_start_identity")))
+    owned_by_pid = {
+        getattr(proc, "pid", None): proc for proc in owned_procs
+        if isinstance(getattr(proc, "pid", None), int)
+    }
+    for pid, expected_identity in rows:
+        if not isinstance(expected_identity, str) or not expected_identity:
+            continue
+        if not process_identity_matches(pid, expected_identity):
+            continue
+        owned = owned_by_pid.get(pid)
+        if owned is not None and owned.poll() is not None:
+            continue
+        try:
+            _win32.terminate_pid(pid)
+        except OSError:
+            continue
+        if owned is not None:
+            try:
+                owned.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                pass
+
+
 def _terminate_exact_run_children(run_dir, owned_procs=()) -> None:
     """Terminate only exact execution and nested CLI groups for this run."""
+    if os.name == "nt":
+        _terminate_exact_run_children_windows(run_dir, owned_procs)
+        return
     state = run_dir.read_state_from_disk(run_dir.path)
     identities = []
     execution_pid = state.get("execution_pid")
@@ -419,19 +498,31 @@ def _mark_cancelled_or_timeout(run_dir, timeout_event: threading.Event | None) -
 
 def _run_shared_backend(run_dir, manifest: dict, cancel_event, timeout_event) -> None:
     """Compatibility seam: compose the production host for direct callers."""
-    if os.name != "posix":
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    if os.name == "posix":
+        from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
+        from lingtai.adapters.posix.interactive_terminal import PosixInteractiveTerminalAdapter
+        process_port = PosixDaemonProcessPort(start_new_session=False)
+        interactive_terminal_port = PosixInteractiveTerminalAdapter(
+            start_new_session=False,
+        )
+    elif os.name == "nt":
+        from lingtai.tools.daemon.process_port import DaemonProcessTerminationScope
+        from lingtai.tools.daemon.windows_process import WindowsDaemonProcessPort
+        process_port = WindowsDaemonProcessPort(
+            termination_scope=DaemonProcessTerminationScope.INHERITED_SUPERVISOR_GROUP,
+        )
+        # ConPTY is out of scope: no interactive terminal port exists on
+        # Windows and the claude-interactive bridge refuses None loudly.
+        interactive_terminal_port = None
+    else:
         raise RuntimeError(
             "detached POSIX execution composition is unsupported on this platform"
         )
-    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
-    from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
-    from lingtai.adapters.posix.interactive_terminal import PosixInteractiveTerminalAdapter
     host = DetachedDaemonExecutionHost(
         run_dir, manifest, cancel_event, timeout_event,
-        process_port=PosixDaemonProcessPort(start_new_session=False),
-        interactive_terminal_port=PosixInteractiveTerminalAdapter(
-            start_new_session=False,
-        ),
+        process_port=process_port,
+        interactive_terminal_port=interactive_terminal_port,
     )
     host.run_with_events(cancel_event, timeout_event)
 
@@ -568,4 +659,4 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
     return bool(applied_event_id)
 
 
-__all__ = ["run_supervisor"]
+__all__ = ["run_supervisor", "select_daemon_supervisor_adapter"]

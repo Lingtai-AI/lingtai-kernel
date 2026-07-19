@@ -120,9 +120,18 @@ def _run_policy(
 def test_refresh_watcher_selector_fails_loudly_on_unsupported_platform(monkeypatch):
     import lingtai.adapters.refresh_watcher as selector
 
-    monkeypatch.setattr(selector.sys, "platform", "win32")
+    monkeypatch.setattr(selector.sys, "platform", "haiku1")
+    monkeypatch.setattr(selector.os, "name", "java")
     with pytest.raises(NotImplementedError, match="refresh-watcher adapter"):
         selector.select_refresh_watcher()
+
+
+def test_refresh_watcher_selector_returns_windows_adapter_on_win32(monkeypatch):
+    import lingtai.adapters.refresh_watcher as selector
+    from lingtai.adapters.windows.refresh_watcher import WindowsRefreshWatcherAdapter
+
+    monkeypatch.setattr(selector.sys, "platform", "win32")
+    assert isinstance(selector.select_refresh_watcher(), WindowsRefreshWatcherAdapter)
 
 
 def test_core_policy_chooses_process_port_operations_without_keywords(tmp_path):

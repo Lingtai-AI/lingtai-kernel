@@ -229,7 +229,9 @@ def test_daemon_shutdown_waits_for_cli_ask_future_before_releasing_liveness(tmp_
         _working_dir=tmp_path / "agent",
         _log=lambda *args, **kwargs: None,
     )
-    mgr = daemon_module.DaemonManager(agent, process_port=daemon_module.PosixDaemonProcessPort())
+    # Default construction selects the platform's production process port
+    # (POSIX or Windows); this test never spawns, it only pins teardown order.
+    mgr = daemon_module.DaemonManager(agent)
 
     primary_done = Future()
     primary_done.set_result("done")

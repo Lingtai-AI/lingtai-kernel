@@ -171,7 +171,8 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         final_path = msg_dir / "message.json"
         try:
             tmp_path.write_text(
-                json.dumps(message, indent=2, ensure_ascii=False, default=str)
+                json.dumps(message, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
             )
             os.replace(str(tmp_path), str(final_path))
         except OSError as e:
@@ -317,7 +318,8 @@ class PosixFilesystemMailAdapter(MailTransportPort):
             try:
                 own_inbox_dir.mkdir(parents=True, exist_ok=True)
                 own_tmp_file.write_text(
-                    json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+                    json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+                    encoding="utf-8",
                 )
                 os.replace(str(own_tmp_file), str(own_msg_file))
             except OSError:

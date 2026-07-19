@@ -12,6 +12,23 @@ import pytest
 from lingtai.kernel.process_match import match_agent_run
 
 
+def _posix_scan_pinned():
+    """Pin the POSIX ps-scan adapter for guard-policy tests on every platform.
+
+    These tests feed `ps`-shaped rows through a patched
+    ``subprocess.check_output``; on Windows the platform selector would return
+    the CIM adapter, which speaks JSON, so the ps fixture would silently parse
+    to nothing. The Windows scan→guard wiring has its own test in
+    ``tests/test_process_scan.py``.
+    """
+    from lingtai.adapters.posix.process_scan import PosixAgentProcessScanAdapter
+
+    return patch(
+        "lingtai.adapters.process_scan.select_agent_process_scan",
+        lambda: PosixAgentProcessScanAdapter(),
+    )
+
+
 ROOT = Path(__file__).resolve().parents[1]
 DOCTOR = ROOT / "src" / "lingtai" / "intrinsic_skills" / "lingtai-doctor" / "scripts" / "doctor.py"
 
@@ -33,6 +50,15 @@ MATCH_CASES = [
     ("tail -f /var/log/x lingtai run /a/foo", "/a/foo", None),
     ("vim /a/foo/notes about lingtai run", "/a/foo", None),
     ("/v/bin/python -m lingtai poll /a/foo", "/a/foo", None),
+    # Windows-shaped command lines: the module form is what every runtime
+    # relaunch path spawns, and backslash paths anchor the program forms.
+    (r"C:\v\python.exe -m lingtai run C:\a\foo", r"C:\a\foo", "module"),
+    (r"C:\v\Scripts\lingtai-agent run C:\a\foo", r"C:\a\foo", "console"),
+    (r"C:\v\Scripts\lingtai run C:\a\foo", r"C:\a\foo", "legacy"),
+    # Known residual limitation, pinned deliberately: the Windows console
+    # script is `lingtai-agent.exe`, which the console token does not match.
+    # Runtime-spawned processes always use the module form.
+    (r"C:\v\Scripts\lingtai-agent.exe run C:\a\foo", r"C:\a\foo", None),
 ]
 
 
@@ -90,7 +116,7 @@ def test_cli_duplicate_process_detects_console_script(tmp_path):
     working_dir.mkdir()
 
     ps_out = f"4242 /usr/local/bin/lingtai-agent run {working_dir.resolve()}\n"
-    with patch("subprocess.check_output", return_value=ps_out):
+    with _posix_scan_pinned(), patch("subprocess.check_output", return_value=ps_out):
         with pytest.raises(SystemExit):
             _check_duplicate_process(working_dir)
 
@@ -102,7 +128,7 @@ def test_cli_duplicate_process_rejects_argument_position_false_positive(tmp_path
     working_dir.mkdir()
 
     ps_out = f"4242 tail -f /var/log/x lingtai run {working_dir.resolve()}\n"
-    with patch("subprocess.check_output", return_value=ps_out):
+    with _posix_scan_pinned(), patch("subprocess.check_output", return_value=ps_out):
         _check_duplicate_process(working_dir)
 
 

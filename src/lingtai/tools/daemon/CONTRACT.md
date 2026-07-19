@@ -8,7 +8,7 @@ description: >
   terminal notifications, and compaction boundaries.
 status: active
 contract_version: 5
-last_changed_at: "2026-07-16"
+last_changed_at: "2026-07-19"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
@@ -24,6 +24,7 @@ related_files:
   - src/lingtai/tools/daemon/interactive_terminal/ANATOMY.md
   - src/lingtai/adapters/posix/interactive_terminal.py
   - src/lingtai/tools/daemon/posix_process.py
+  - src/lingtai/tools/daemon/windows_process.py
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/manual/SKILL.md
   - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
@@ -41,6 +42,9 @@ related_files:
   - tests/test_daemon_run_dir.py
   - tests/test_daemon_codex_usage.py
   - tests/test_codex_standalone_compaction.py
+  - tests/test_daemon_windows_lock.py
+  - tests/test_daemon_windows_process_port.py
+  - tests/test_daemon_windows_supervisor.py
 review_triggers:
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/system_prompt.py
@@ -435,6 +439,11 @@ release never performs an unbounded wait. A concurrently blocked waiter reads
 the final first-writer-wins local termination cause, and group/all sweeps return
 the number of targeted children for truthful lifecycle reporting.
 
+`WindowsDaemonProcessPort` is the `os.name == "nt"` production sibling behind
+the same Port with the same handle/receipt/release semantics. Composition
+selects it wherever POSIX composition selects `PosixDaemonProcessPort`; any
+other platform still fails loudly at construction.
+
 ### Interactive Claude transport status
 
 The hidden interactive Claude compatibility route has a bounded POSIX-first
@@ -445,11 +454,17 @@ session/process-group termination, reaping, and terminal resource release.
 watchdog timeout, reclaim, and parent stop. The bridge retains all terminal and
 result policy. This does not add ConPTY, a pipe-only Windows substitute, or a
 public backend name; native Windows interactive support remains deferred until
-a genuine ConPTY adapter and native acceptance lane exist.
+a genuine ConPTY adapter and native acceptance lane exist. On Windows,
+composition injects `interactive_terminal_port=None` and the bridge fails
+loudly (`ClaudeInteractiveError`, "requires an injected
+InteractiveTerminalPort") — interactive Claude is unsupported-on-Windows, never
+a silent no-op.
 
 ### POSIX invariants
 
-DOCUMENT ONLY — do not change these assumptions and do not propose Windows work.
+DOCUMENT ONLY — POSIX behavior is a hard invariant; do not change these
+assumptions. Windows has its own invariants section below and never rewrites
+POSIX mechanics for symmetry.
 
 - On POSIX, ordinary in-process `DaemonManager` composition keeps
   `start_new_session=True`: its Port owns the private child process group,
@@ -467,12 +482,57 @@ DOCUMENT ONLY — do not change these assumptions and do not propose Windows wor
 - The LingTai backend spawns no CLI process; its watchdog only flips
   cancel/timeout events for in-thread run loops.
 
+### Windows invariants
+
+Windows (`os.name == "nt"`) maps the POSIX ownership vocabulary onto native
+mechanisms; every mechanism import is lazy/guarded so all modules import on
+every platform.
+
+- **Daemon-state lock.** The cross-process `daemon.json` transaction lock
+  (`.daemon-state.lock`, used by both `DaemonRunDir._state_transaction` and
+  `DaemonRunDir.state_file_lock`) is an `msvcrt.locking` byte-range lock on
+  byte 0, length 1, acquired with `LK_NBLCK` in an explicit retry loop —
+  never `LK_LOCK`, whose CRT blocking mode hides a bounded ~10-attempt
+  timeout. POSIX keeps blocking `fcntl.flock(LOCK_EX)` unchanged.
+- **Process-group mapping.** `WindowsDaemonProcessPort` with
+  `PRIVATE_PROCESS_GROUP` scope gives each spawn its own Job Object, assigned
+  while the child is `CREATE_SUSPENDED` and resumed after assignment, WITHOUT
+  `KILL_ON_JOB_CLOSE` (POSIX private-session children survive manager death;
+  so do Job members here). Group termination is `TerminateJobObject` plus a
+  bounded active-process wait. With `INHERITED_SUPERVISOR_GROUP` scope no Job
+  is created and lifecycle operations terminate only the exact `Popen` child
+  through its retained handle. Windows termination is forceful-only: the
+  SIGTERM→SIGKILL ladder collapses to force-then-reap with the same bounded
+  waits and first-writer-wins reason receipts.
+- **Identity and signalling.** Process identity is
+  `windows:<creation_filetime>` from the shared `_win32` observation surface;
+  `pgid` fields are recorded as `None` and every signal path stays fail-closed
+  on missing/mismatched identity. `os.kill(pid, 0)` is NEVER used as a
+  liveness probe on Windows (it terminates); liveness uses
+  `OpenProcess`/`GetExitCodeProcess`.
+- **Narrower supervisor reclaim (residual).** Supervisor exact-run reclaim on
+  Windows performs identity-guarded `TerminateProcess` of only the exact
+  recorded nested-CLI and execution-child PIDs. Grandchildren spawned outside
+  those exact PIDs are not swept by the supervisor (there is no inherited
+  process group to signal); the execution Port's own Job/exact-child
+  ownership is the containment boundary.
+- **Capsule transport.** The one-shot secret capsule crosses to detached
+  processes as an inherited pipe HANDLE allowed through
+  `STARTUPINFO.lpAttributeList["handle_list"]`; the child environment carries
+  only the numeric handle (`LINGTAI_DAEMON_CAPSULE_HANDLE`). Capsule bytes
+  never touch disk, argv, or an environment value, keep the 4 MiB bound, and
+  are consumed exactly once (see `kernel/daemon_supervisor/CONTRACT.md`).
+- **Interactive backend.** No interactive terminal port exists on Windows;
+  the claude-interactive backend fails loudly (see the transport status
+  section above). ConPTY remains out of scope.
+
 ## Execution Ownership: One Detached Supervisor per Run
 
 Every backend is created under one detached supervisor process at emanation
 birth. The parent `DaemonManager` validates the request, writes a secret-free
-manifest, launches the POSIX entrypoint, and retains only a durable submit /
-inspect / control facade. `execution_host.py` composes the existing
+manifest, launches the platform's supervisor entrypoint (POSIX or Windows
+adapter, selected by `select_daemon_supervisor_adapter`; other platforms fail
+loudly), and retains only a durable submit / inspect / control facade. `execution_host.py` composes the existing
 `DaemonManager` and `_BackendSpec` execution units inside the supervisor, so
 all backend parsers, option/session behavior, native MCP setup, skills/preset
 setup, and completion gates remain single-source production code. The

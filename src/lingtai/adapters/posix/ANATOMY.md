@@ -14,6 +14,7 @@ related_files:
   - src/lingtai/adapters/posix/refresh_watcher.py
   - src/lingtai/adapters/posix/refresh_watcher_process.py
   - src/lingtai/adapters/posix/refresh_watcher_entrypoint.py
+  - src/lingtai/adapters/posix/process_scan.py
   - src/lingtai/adapters/posix/bash.py
   - src/lingtai/adapters/posix/bash_process.py
   - src/lingtai/adapters/posix/bash_state_lock.py
@@ -111,6 +112,10 @@ co-located owning ANATOMY.md files.
   `RefreshWatcherProcessPort`: it owns `ps` command-line observation, liveness,
   replacement launch, graceful stop, and forced stop
   (`src/lingtai/adapters/posix/refresh_watcher_process.py:26-87`).
+- `PosixAgentProcessScanAdapter` implements the CLI duplicate-launch guard's
+  `AgentProcessScanPort` with one bounded `ps -eo pid=,command=` invocation,
+  yielding `(pid, command_line)` and yielding nothing when `ps` is unavailable
+  (`src/lingtai/adapters/posix/process_scan.py`).
 - `PosixBashAsyncProcessAdapter` implements the Bash-local async process Port:
   detached supervisor launch, `ShellInvocation` command spawn, neutral
   identity observation, exact owned waits, and bounded process-tree cancellation

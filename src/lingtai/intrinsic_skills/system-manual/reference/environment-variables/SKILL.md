@@ -16,6 +16,7 @@ related_files:
 - src/lingtai/kernel/refresh_watcher/MANUAL.md
 - src/lingtai/ANATOMY.md
 - src/lingtai/adapters/posix/ANATOMY.md
+- src/lingtai/adapters/windows/ANATOMY.md
 - src/lingtai/auth/ANATOMY.md
 - src/lingtai/kernel/ANATOMY.md
 - src/lingtai/kernel/base_agent/ANATOMY.md
@@ -97,6 +98,7 @@ Do not set them in a production agent environment.
 | Variable | Purpose / default | Accepted values and scope | Read/reload and invalid behavior | Anchor / security |
 |---|---|---|---|---|
 | `LINGTAI_DAEMON_CAPSULE_FD` | Supervisor-provided capsule file descriptor; default unset. | Integer FD supplied by the supervisor. | Read once at daemon start; restart daemon. Invalid/missing fails the supervised path. | `src/lingtai/kernel/daemon_supervisor`; never accept an arbitrary inherited FD without supervisor validation. |
+| `LINGTAI_DAEMON_CAPSULE_HANDLE` | Windows capsule pipe HANDLE number; default unset. | Integer OS handle inherited via the spawn `handle_list`. | Read/consumed once by the Windows daemon entrypoints, which convert it to the FD wire above; restart daemon. Carries only the handle number, never capsule content. | `src/lingtai/adapters/windows/daemon_supervisor.py`; never accept an arbitrary inherited handle without supervisor validation. |
 | `LINGTAI_DAEMON_COMPLETION_FILE` | Daemon completion marker path; default unset. | Supervisor-owned local path. | Read once at daemon start; restart daemon. Invalid path fails completion reporting. | Daemon completion MCP/runner; keep path within the assigned run directory. |
 | `LINGTAI_DAEMON_CREDENTIALS_RESTORED` | Internal marker that credential restoration finished; default unset. | Supervisor boolean marker. | Read during daemon startup; restart daemon. Invalid/missing means credentials are not considered restored. | Daemon supervisor; never log restored credential contents. |
 | `LINGTAI_DAEMON_DETACHED_SUPERVISOR` | Internal detached-supervisor mode; default unset/off. | Supervisor boolean marker. | Read once at daemon startup; restart daemon. Invalid is treated as off/fails the detached path. | Daemon supervisor; does not authorize external side effects. |

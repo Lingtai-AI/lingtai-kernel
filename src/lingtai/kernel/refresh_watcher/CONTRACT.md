@@ -4,6 +4,7 @@ contract_version: 3
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/refresh_watcher/ANATOMY.md
+  - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/kernel/refresh_watcher/__init__.py
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
   - src/lingtai/kernel/refresh_watcher/MANUAL.md
@@ -12,6 +13,10 @@ related_files:
   - src/lingtai/adapters/posix/refresh_watcher.py
   - src/lingtai/adapters/posix/refresh_watcher_process.py
   - src/lingtai/adapters/posix/refresh_watcher_entrypoint.py
+  - src/lingtai/adapters/windows/refresh_watcher.py
+  - src/lingtai/adapters/windows/refresh_watcher_process.py
+  - src/lingtai/adapters/windows/refresh_watcher_entrypoint.py
+  - tests/test_refresh_watcher_windows.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/agent.py
@@ -50,7 +55,8 @@ event policy.
 
 The generated program is still rendered by
 `watcher_program.render_watcher_script(request)` and still crosses the existing
-compact `encode_request`/`decode_request` wire via the POSIX `-m` entrypoint.
+compact `encode_request`/`decode_request` wire via each platform's `-m`
+entrypoint.
 The generated policy receives a second, watcher-local
 `RefreshWatcherProcessPort` through the entrypoint's `PROCESS_MECHANISM` global.
 That narrow Port performs no policy: it supplies only observation, process
@@ -70,8 +76,9 @@ existing handshake, calls `RefreshWatcherPort.spawn_detached` exactly once,
 and then signals the existing cancellation/shutdown path. Failed ACK setup does
 not spawn. A watcher runs the rendered policy with the exact copied environment
 from `build_watcher_env(request)`, including authoritative true/false handling
-of `LINGTAI_REFRESH_ENV_OVERWRITE`, detached stdio, and the original POSIX outer
-handoff semantics.
+of `LINGTAI_REFRESH_ENV_OVERWRITE`, detached stdio, and its platform's detached
+outer handoff semantics (POSIX session detachment, or the Windows detached
+creation flags).
 
 `RefreshWatcherRequest` is frozen and carries only handshake paths, working
 directory, a tuple command, identity fields JSON, and the env-overwrite policy
@@ -124,30 +131,49 @@ shell-language, platform, signal, process-table, stream, or session vocabulary.
 
 ## Adapters and composition
 
-`PosixRefreshWatcherAdapter` (`adapters/posix/refresh_watcher.py`) remains the
-sole implementation of the outer `RefreshWatcherPort`. It encodes the request,
+`PosixRefreshWatcherAdapter` (`adapters/posix/refresh_watcher.py`) implements
+the outer `RefreshWatcherPort` on POSIX. It encodes the request,
 builds the full environment, and launches
 `lingtai.adapters.posix.refresh_watcher_entrypoint` with detached stdio and
 POSIX session semantics.
 
+`WindowsRefreshWatcherAdapter` (`adapters/windows/refresh_watcher.py`) is the
+Windows outer implementation: same encode/env/`-m` transport against
+`lingtai.adapters.windows.refresh_watcher_entrypoint`, detached with
+`CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW` creation flags instead of a
+POSIX session. It reuses the sibling's platform-neutral `build_watcher_env` as
+the single source of the env-overwrite policy translation.
+
 `PosixRefreshWatcherProcessAdapter`
-(`adapters/posix/refresh_watcher_process.py`) is the sole implementation of the
-watcher-local process Port in this slice. It alone performs process-table
-command-line observation, liveness probing, graceful/forced termination, and
+(`adapters/posix/refresh_watcher_process.py`) implements the
+watcher-local process Port on POSIX: process-table
+command-line observation (`ps`), liveness probing (`os.kill(pid, 0)`),
+graceful/forced termination (SIGTERM/SIGKILL), and
 detached replacement launch. It does not decide retries, heartbeat health,
 duplicate identity, or alerts.
 
-`refresh_watcher_entrypoint.main` decodes the request, renders the Core policy,
-and executes it with `PROCESS_MECHANISM` set to a newly composed
-`PosixRefreshWatcherProcessAdapter`. The entrypoint is the only composition
-site for the generated policy's process mechanism; Core never imports the
-adapter.
+`WindowsRefreshWatcherProcessAdapter`
+(`adapters/windows/refresh_watcher_process.py`) is the Windows sibling, bound
+at construction to the supervised working directory: observation via a
+PowerShell CIM `Win32_Process` command-line query; liveness via
+`OpenProcess`/`GetExitCodeProcess` (never `os.kill`, which terminates rather
+than probes on Windows); detached replacement launch with the shared creation
+flags; graceful stop via the target working directory's `.suspend` cooperative
+file channel (the platform's normal termination request for a LingTai agent
+process — the agent's heartbeat loop consumes it and performs the ordered
+stop); forced stop via `TerminateProcess` on the exact PID, never a tree kill.
+
+Each platform's `refresh_watcher_entrypoint.main` decodes the request, renders
+the Core policy, and executes it with `PROCESS_MECHANISM` set to a newly
+composed platform process adapter (the Windows entrypoint binds it to
+`request.working_dir`). The entrypoints are the only composition sites for the
+generated policy's process mechanism; Core never imports the adapters.
 
 `select_refresh_watcher` (`src/lingtai/adapters/refresh_watcher.py`) is the outer
-platform selector. It returns the POSIX outer adapter on POSIX and raises
-`NotImplementedError` before importing a concrete adapter on unsupported
-platforms. There is no default fake, no no-op implementation, and no Windows
-implementation in this slice. `lingtai.Agent` and CLI construction route
+platform selector. It returns the POSIX outer adapter on POSIX and the Windows
+outer adapter on `win32`, and raises `NotImplementedError` before importing a
+concrete adapter on any other platform. There is no default fake and no no-op
+implementation. `lingtai.Agent` and CLI construction route
 through this selector.
 
 ## Core policy boundary
@@ -178,12 +204,16 @@ same matcher import and not embed a second matcher implementation.
 4. A process mechanism implementation must exercise the typed value objects and
    five Port operations; a fake may be used only in focused policy tests and is
    not a production fallback.
-5. The POSIX process adapter is the only code that owns process-table parsing,
-   OS liveness probing, graceful/forced termination, and detached replacement
-   launch. The outer POSIX handoff adapter remains responsible for its own
-   detached entrypoint launch.
-6. Unsupported platform selection fails loudly with `NotImplementedError`.
-   No no-op/default fake or Windows code is implied.
+5. The platform process adapters are the only code that owns process-table
+   parsing/queries, OS liveness probing, graceful/forced termination, and
+   detached replacement launch. Each outer handoff adapter remains responsible
+   for its own detached entrypoint launch, and each entrypoint composes only
+   its own platform's process mechanism.
+6. Selection returns the POSIX adapter on POSIX and the Windows adapter on
+   `win32`; any other platform fails loudly with `NotImplementedError`. There
+   is no no-op or default-fake watcher on any platform. The Windows graceful
+   stop is the supervised working directory's `.suspend` cooperative channel;
+   the Windows forced stop terminates exactly one PID and never a tree.
 7. The generated stale-duplicate guard imports
    `from lingtai.kernel.process_match import match_agent_run` and contains no
    local matcher definition.
@@ -203,7 +233,13 @@ permanent-alert tests remain the behavior evidence in
 rendered Core policy with a small fake process mechanism and asserts policy
 selection of observation, liveness, launch, graceful stop, and forced stop
 without source-keyword scanning. The real POSIX `-m` smoke remains the evidence
-that the entrypoint composes the production process adapter.
+that the POSIX entrypoint composes the production process adapter.
+`tests/test_refresh_watcher_windows.py` pins the Windows side: exact detached
+spawn shape (Windows entrypoint module, creation flags, env-overwrite policy in
+both directions), entrypoint composition of the workdir-bound Windows process
+mechanism, the `.suspend` graceful-stop channel, CIM observation shapes with
+failure-to-`None` mapping, and — on native Windows — real detached launch,
+liveness, forced-stop, and self-observation mechanism truth.
 
 ## Maintenance
 

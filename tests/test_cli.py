@@ -4,6 +4,23 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
+def _posix_scan_pinned():
+    """Pin the POSIX ps-scan adapter for guard-policy tests on every platform.
+
+    These tests feed `ps`-shaped rows through a patched
+    ``subprocess.check_output``; on Windows the platform selector would return
+    the CIM adapter, which speaks JSON, so the ps fixture would silently parse
+    to nothing. The Windows scan→guard wiring has its own test in
+    ``tests/test_process_scan.py``.
+    """
+    from lingtai.adapters.posix.process_scan import PosixAgentProcessScanAdapter
+
+    return patch(
+        "lingtai.adapters.process_scan.select_agent_process_scan",
+        lambda: PosixAgentProcessScanAdapter(),
+    )
+
+
 
 def _write_init(tmp_path: Path, overrides: dict | None = None) -> Path:
     """Write a valid init.json to tmp_path and return the path."""
@@ -535,7 +552,7 @@ def test_check_duplicate_process_ignores_prefix_sibling(tmp_path):
     colleague.mkdir()
 
     ps_out = _ps_line(42779, colleague.resolve()) + "\n"
-    with patch("subprocess.check_output", return_value=ps_out):
+    with _posix_scan_pinned(), patch("subprocess.check_output", return_value=ps_out):
         # Must NOT raise SystemExit — the colleague is a different agent.
         _check_duplicate_process(codex)
 
@@ -548,7 +565,7 @@ def test_check_duplicate_process_detects_exact_match(tmp_path):
     codex.mkdir()
 
     ps_out = _ps_line(99999, codex.resolve()) + "\n"
-    with patch("subprocess.check_output", return_value=ps_out):
+    with _posix_scan_pinned(), patch("subprocess.check_output", return_value=ps_out):
         with pytest.raises(SystemExit):
             _check_duplicate_process(codex)
 
@@ -566,7 +583,7 @@ def test_check_duplicate_process_ignores_shell_wrapper(tmp_path):
     codex.mkdir()
 
     wrapper = f"67192 /bin/zsh -ic 'lingtai run {codex.resolve()} && echo done'"
-    with patch("subprocess.check_output", return_value=wrapper + "\n"):
+    with _posix_scan_pinned(), patch("subprocess.check_output", return_value=wrapper + "\n"):
         _check_duplicate_process(codex)
 
 
@@ -578,5 +595,5 @@ def test_check_duplicate_process_excludes_own_pid(tmp_path):
     codex.mkdir()
 
     ps_out = _ps_line(os.getpid(), codex.resolve()) + "\n"
-    with patch("subprocess.check_output", return_value=ps_out):
+    with _posix_scan_pinned(), patch("subprocess.check_output", return_value=ps_out):
         _check_duplicate_process(codex)

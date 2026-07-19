@@ -54,6 +54,10 @@ def match_agent_run(cmdline: str, working_dir: str) -> str | None:
     Residual limitation: ``ps command=`` is a flat string, not the original argv
     vector. A non-LingTai process can still match if its argument text is shaped
     exactly like an absolute LingTai program path followed by ``run <dir>``.
+
+    Program anchoring accepts both path separators: Windows process tables
+    report backslash program paths, and a backslash immediately before the
+    program name is as much a path anchor there as ``/`` is on POSIX.
     """
     target = os.path.normpath(working_dir)
     for token, label, program_anchored in (
@@ -63,7 +67,7 @@ def match_agent_run(cmdline: str, working_dir: str) -> str | None:
     ):
         idx = cmdline.find(token)
         while idx != -1:
-            if (not program_anchored) or idx == 0 or cmdline[idx - 1] == "/":
+            if (not program_anchored) or idx == 0 or cmdline[idx - 1] in ("/", "\\"):
                 tail = cmdline[idx + len(token):].strip()
                 if tail and os.path.normpath(tail) == target:
                     return label

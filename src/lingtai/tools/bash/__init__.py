@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import secrets
 import subprocess
@@ -56,6 +57,19 @@ _RETURN_HANDOFF_RECHECK_SECONDS = 0.05
 _SUPERVISOR_COMMIT_GRACE_SECONDS = 0.25
 _CANCEL_COMMIT_TIMEOUT_SECONDS = 3.0
 _JOB_ID_RE = re.compile(r"job-(?:[0-9a-f]{32}|[0-9a-f]{8})\Z")
+
+
+def _working_dir_contained(resolved: str, sandbox: str) -> bool:
+    """Return whether resolved-path *resolved* is the sandbox or nested under it.
+
+    Both arguments are already-resolved absolute-path strings. The boundary
+    separator is the live platform ``os.sep``, read at call time: POSIX
+    ``resolve()`` yields ``/``-joined paths, Windows ``resolve()`` yields
+    ``\\``-joined paths, so a hardcoded ``"/"`` would reject every legitimate
+    nested Windows working_dir. Appending the separator before the prefix test
+    keeps sibling-prefix directories (``/a/bb`` under sandbox ``/a/b``) out.
+    """
+    return resolved == sandbox or resolved.startswith(sandbox + os.sep)
 
 
 def _select_shell_dialect() -> ShellDialect:
@@ -409,7 +423,7 @@ class ShellManager:
         try:
             resolved = str(Path(cwd).resolve())
             sandbox = str(Path(self._working_dir).resolve())
-            if not (resolved == sandbox or resolved.startswith(sandbox + "/")):
+            if not _working_dir_contained(resolved, sandbox):
                 return {
                     "status": "error",
                     "message": (

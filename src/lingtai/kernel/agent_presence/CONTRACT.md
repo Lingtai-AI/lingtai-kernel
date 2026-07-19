@@ -4,6 +4,7 @@ contract_version: 1
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/agent_presence/ANATOMY.md
+  - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/kernel/agent_presence/__init__.py
   - src/lingtai/adapters/posix/agent_presence.py
   - src/lingtai/kernel/base_agent/__init__.py

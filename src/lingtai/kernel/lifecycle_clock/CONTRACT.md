@@ -4,6 +4,7 @@ contract_version: 1
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/lifecycle_clock/ANATOMY.md
+  - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/kernel/lifecycle_clock/__init__.py
   - src/lingtai/adapters/lifecycle_clock.py
   - src/lingtai/kernel/base_agent/__init__.py

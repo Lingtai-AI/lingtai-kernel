@@ -1308,12 +1308,15 @@ class DaemonManager:
         self._default_model = agent.service.model
         self._notify_threshold = notify_threshold
         # Direct construction is a supported test/in-process composition path
-        # as well as setup(). It remains POSIX-only until a real Windows
-        # process adapter is separately accepted.
+        # as well as setup(). POSIX and Windows each have one production
+        # process adapter; any other platform fails loudly.
         if process_port is None:
             if os.name == "posix":
                 from .posix_process import PosixDaemonProcessPort
                 process_port = PosixDaemonProcessPort()
+            elif os.name == "nt":
+                from .windows_process import WindowsDaemonProcessPort
+                process_port = WindowsDaemonProcessPort()
             else:
                 raise NotImplementedError(
                     f"daemon process supervision is unsupported on {os.name!r}"
@@ -1322,7 +1325,8 @@ class DaemonManager:
         # Interactive Claude is a separate byte-stream capability. On POSIX
         # setup injects one shared adapter so group/all lifecycle sweeps own
         # children that the bridge cannot otherwise see. Windows deliberately
-        # receives no fallback adapter until a real ConPTY implementation exists.
+        # receives None until a real ConPTY implementation exists — the
+        # claude-interactive bridge refuses a None terminal port loudly.
         if interactive_terminal_port is None and os.name == "posix":
             from lingtai.adapters.posix.interactive_terminal import (
                 PosixInteractiveTerminalAdapter,
@@ -1447,6 +1451,12 @@ class DaemonManager:
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
+        if os.name == "nt":
+            # os.kill(pid, 0) on Windows TERMINATES the target (TerminateProcess
+            # with exit code 0) — it is never a liveness probe. Use the shared
+            # OpenProcess-based observation instead.
+            from lingtai.adapters.windows import _win32
+            return _win32.process_alive(pid)
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
@@ -2532,7 +2542,7 @@ class DaemonManager:
         write_manifest(run_dir.path, manifest)
 
         from lingtai.kernel.daemon_supervisor.manifest import manifest_path_for
-        from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+        from .supervisor_runtime import select_daemon_supervisor_adapter
 
         request = DaemonSupervisorRequest(
             run_id=run_dir.run_id,
@@ -2567,7 +2577,7 @@ class DaemonManager:
             runtime_llm["provider_defaults"] = normalized_defaults
         if runtime_llm:
             capsule.setdefault("llm", {}).update(runtime_llm)
-        PosixDaemonSupervisorAdapter().spawn_detached(request, capsule=capsule)
+        select_daemon_supervisor_adapter().spawn_detached(request, capsule=capsule)
         self._await_supervisor_startup(run_dir)
 
     def _await_supervisor_startup(self, run_dir: DaemonRunDir) -> None:
@@ -4352,7 +4362,7 @@ class DaemonManager:
             try:
                 from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
                 from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_path_for, write_manifest
-                from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+                from .supervisor_runtime import select_daemon_supervisor_adapter
                 from lingtai.adapters.posix.daemon_supervisor import selected_credential_environment
                 manifest = build_manifest(
                     run_id=run_dir.run_id,
@@ -4374,7 +4384,7 @@ class DaemonManager:
                     manifest_path=str(manifest_path_for(run_dir.path)),
                     python_executable=sys.executable,
                 )
-                PosixDaemonSupervisorAdapter().spawn_detached(
+                select_daemon_supervisor_adapter().spawn_detached(
                     request,
                     capsule={
                         "task": cli_task,
@@ -5025,12 +5035,11 @@ class DaemonManager:
         if claim.get("status") == "busy":
             return {"status": "busy", "id": em_id,
                     "message": f"a previous ask on {em_id} is still running; retry after it completes"}
-        from lingtai.adapters.posix.daemon_supervisor import (
-            PosixDaemonSupervisorAdapter, selected_credential_environment,
-        )
+        from lingtai.adapters.posix.daemon_supervisor import selected_credential_environment
         from lingtai.kernel.daemon_supervisor.manifest import manifest_path_for
+        from .supervisor_runtime import select_daemon_supervisor_adapter
         try:
-            PosixDaemonSupervisorAdapter().spawn_resume_owner(
+            select_daemon_supervisor_adapter().spawn_resume_owner(
                 python_executable=sys.executable,
                 manifest_path=str(manifest_path_for(run_dir.path)),
                 run_id=run_dir.run_id, run_dir=run_dir.path,
@@ -8025,10 +8034,16 @@ def setup(agent: "Agent", max_emanations: int = 100,
     if process_port is None:
         if os.name == "posix":
             process_port = PosixDaemonProcessPort()
+        elif os.name == "nt":
+            from .windows_process import WindowsDaemonProcessPort
+            process_port = WindowsDaemonProcessPort()
         else:
             raise NotImplementedError(
                 f"daemon process supervision is unsupported on {os.name!r}"
             )
+    # Interactive terminal stays POSIX-only (no ConPTY adapter exists); on
+    # Windows the manager receives None and the claude-interactive backend
+    # fails loudly instead of pretending PTY support.
     if interactive_terminal_port is None and os.name == "posix":
         from lingtai.adapters.posix.interactive_terminal import (
             PosixInteractiveTerminalAdapter,

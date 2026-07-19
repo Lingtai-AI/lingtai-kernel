@@ -152,53 +152,62 @@ def _clean_signal_files(working_dir: Path) -> None:
                 pass
 
 
+def _stop_signal_numbers() -> list[int]:
+    """Stop signals the CLI host hooks on this platform.
+
+    POSIX delivers SIGTERM/SIGINT. Windows never delivers SIGTERM to a
+    process; console-control events surface as SIGINT (Ctrl+C) and SIGBREAK
+    (Ctrl+Break / console close), so those are the honest hooks there. The
+    cooperative ``.suspend`` file channel remains the primary stop path on
+    both platforms.
+    """
+    if os.name == "nt":
+        numbers = [signal.SIGINT]
+        sigbreak = getattr(signal, "SIGBREAK", None)
+        if sigbreak is not None:
+            numbers.append(sigbreak)
+        return numbers
+    return [signal.SIGTERM, signal.SIGINT]
+
+
 def _install_signal_handlers(working_dir: Path, agent: Agent) -> None:
-    """SIGTERM/SIGINT → touch .suspend and unblock main thread."""
+    """Platform stop signals → touch .suspend and unblock main thread."""
     suspend_file = working_dir / ".suspend"
 
     def _handler(signum, frame):
         suspend_file.touch()
         agent._shutdown.set()
 
-    signal.signal(signal.SIGTERM, _handler)
-    signal.signal(signal.SIGINT, _handler)
+    for signum in _stop_signal_numbers():
+        signal.signal(signum, _handler)
 
 
 def _check_duplicate_process(working_dir: Path) -> None:
     """Abort if another LingTai run process for ``working_dir`` is already alive.
 
-    Defense-in-depth alongside the kernel's flock — the flock prevents
-    data corruption, but a duplicate Python process still shows up in
-    `ps` and can mislead users.  This check catches the case where the
-    old process is mid-teardown (heartbeat file gone, lock about to be
-    released) but still visible in `ps`.
+    Defense-in-depth alongside the kernel's workdir lease — the lease prevents
+    data corruption, but a duplicate process still shows up in the process
+    table and can mislead users.  This check catches the case where the old
+    process is mid-teardown (heartbeat file gone, lease about to be released)
+    but still visible. The concrete process-table mechanism lives behind the
+    platform-selected ``AgentProcessScanPort``; an unavailable scan falls
+    through to the lease, which is the exclusion authority.
     """
-    import subprocess as _sp
+    from lingtai.adapters.process_scan import select_agent_process_scan
+
+    scan = select_agent_process_scan()
+    if scan is None:
+        return  # no scan mechanism on this platform — the lease is the guard
     abs_dir = str(working_dir.resolve())
-    try:
-        out = _sp.check_output(
-            ["ps", "-eo", "pid=,command="], stderr=_sp.DEVNULL, text=True
-        )
-    except Exception:
-        return  # ps unavailable — fall through to flock
-    # Match the command segment, not the whole ps row, so start-of-command
-    # anchoring still works after the leading PID column.
     my_pid = os.getpid()
-    for line in out.splitlines():
-        trimmed = line.strip()
-        if not trimmed:
-            continue
-        parts = trimmed.split(None, 1)
-        if len(parts) != 2:
-            continue
-        pid_str, command = parts
-        if not pid_str.isdigit() or int(pid_str) == my_pid:
+    for pid, command in scan.iter_process_commands():
+        if pid == my_pid:
             continue
         if match_agent_run(command, abs_dir) is None:
             continue
         print(
             f"error: another lingtai agent is already running in {abs_dir}\n"
-            f"  PID {pid_str}: {trimmed}\n"
+            f"  PID {pid}: {command}\n"
             f"  If this is a stale process, kill it first.",
             file=sys.stderr,
         )
