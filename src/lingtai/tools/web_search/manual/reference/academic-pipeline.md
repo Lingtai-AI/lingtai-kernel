@@ -7,12 +7,8 @@ maintenance: |
 # Academic Search Pipeline
 
 > Part of the [web-browsing](../SKILL.md) skill.
-> Complete pipeline for finding, enriching, and acquiring academic papers.
-
-# academic-search-pipeline
-
-> **Academic paper search, resolution, and acquisition — from a DOI string to a full PDF with metadata.**
-> Part of the `web-browsing-manual` v3.0 skill family. For general web browsing, see the parent skill.
+> Academic paper search, resolution, and acquisition — from a DOI string to a
+> full PDF with metadata, finding → enrich → get PDF.
 
 ---
 
@@ -62,12 +58,19 @@ Input arrives ────────┐
 
 ## PDF Acquisition Chain
 
-The goal: get a free PDF for any paper. Try in this order:
+The goal: get a free PDF for any paper. Try in this order — all are free `requests.get`
+calls against JSON APIs; see [tier-1-apis.md](./tier-1-apis.md) for the shared endpoint
+table (base URLs, params, free tiers):
 
-### 1. Unpaywall (DOI → OA PDF)
+| Order | Source | When | Speed | Key needed |
+|---|---|---|---|---|
+| 1 | Unpaywall | Have a DOI, check OA first | ~0.5s | No (email param, 100k/day) |
+| 2 | arXiv | CS/Physics/Math, ID known or discoverable | ~1s | No |
+| 3 | CORE | Need OA full text, 30M+ articles | ~1s | Recommended (1000/day) |
+| 4 | Europe PMC | Biomedical, PMC full-text XML available | ~1s | No |
 
-**When to use:** You have a DOI. First check for open access.
-**Speed:** ~0.5s | **Free:** ✅ (100k/day with email) | **Key needed:** No (just email)
+Unpaywall is the representative example — its email-format gotcha applies to the
+whole chain:
 
 ```python
 import requests
@@ -75,200 +78,42 @@ import requests
 def unpaywall_find_pdf(doi, email="lingtai@users.noreply.github.com"):
     """Find free PDF for any paper via Unpaywall.
 
-    Returns dict with pdf_url if found, None if no OA version exists.
-
-    NOTE: Unpaywall requires a real-looking email address. Generic addresses
-    like test@example.com or research@example.com will be rejected with 422.
-    Pass your actual email, or at minimum something plausible.
+    NOTE: requires a real-looking email address — placeholders like
+    test@example.com are rejected with 422. Pass your actual email or
+    something plausible.
     """
     url = f"https://api.unpaywall.org/v2/{doi}?email={email}"
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
         data = r.json()
-
         if data.get("is_oa"):
             best = data.get("best_oa_location", {})
             pdf_url = best.get("url_for_pdf") or best.get("url")
             if pdf_url:
-                return {
-                    "pdf_url": pdf_url,
-                    "version": best.get("version"),  # publishedVersion, acceptedVersion
-                    "host_type": best.get("host_type"),  # publisher, repository
-                    "license": best.get("license"),
-                }
-
-        # Check all OA locations
+                return {"pdf_url": pdf_url, "version": best.get("version"),
+                        "host_type": best.get("host_type"), "license": best.get("license")}
         for loc in data.get("oa_locations", []):
             if loc.get("url_for_pdf"):
-                return {
-                    "pdf_url": loc["url_for_pdf"],
-                    "version": loc.get("version"),
-                    "host_type": loc.get("host_type"),
-                }
-
+                return {"pdf_url": loc["url_for_pdf"], "version": loc.get("version"),
+                        "host_type": loc.get("host_type")}
         return None  # No OA version available
     except Exception as e:
         print(f"[Unpaywall error] {e}")
         return None
 ```
 
-**When NOT to use:** No DOI available. Fall through to other methods.
+arXiv, CORE, and Europe PMC follow the same shape (GET → check status → map JSON
+fields into a flat dict, catch and log exceptions). Notable per-source details:
 
-### 2. arXiv (arXiv ID → PDF + Metadata)
-
-**When to use:** CS/Physics/Math papers, arXiv ID known or discoverable.
-**Speed:** ~1s | **Free:** ✅ | **Key needed:** No
-
-```python
-import xml.etree.ElementTree as ET
-
-def arxiv_search(query, max_results=10, sort_by="relevance"):
-    """Search arXiv for papers.
-
-    sort_by: 'relevance', 'lastUpdatedDate', 'submittedDate'
-    """
-    url = "https://export.arxiv.org/api/query"
-    params = {
-        "search_query": query,
-        "max_results": max_results,
-        "sortBy": sort_by,
-        "sortOrder": "descending"
-    }
-    try:
-        r = requests.get(url, params=params, timeout=30)
-        r.raise_for_status()
-        root = ET.fromstring(r.text)
-        ns = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
-
-        papers = []
-        for entry in root.findall("atom:entry", ns):
-            pdf_url = None
-            for link in entry.findall("atom:link", ns):
-                if link.get("title") == "pdf":
-                    pdf_url = link.get("href")
-
-            papers.append({
-                "title": entry.find("atom:title", ns).text.strip().replace("\n", " "),
-                "authors": [a.find("atom:name", ns).text for a in entry.findall("atom:author", ns)],
-                "abstract": entry.find("atom:summary", ns).text.strip(),
-                "pdf_url": pdf_url,
-                "arxiv_id": entry.find("atom:id", ns).text.split("/abs/")[-1],
-                "published": entry.find("atom:published", ns).text,
-                "updated": entry.find("atom:updated", ns).text,
-                "categories": [c.get("term") for c in entry.findall("atom:category", ns)],
-            })
-        return papers
-    except Exception as e:
-        print(f"[arXiv error] {e}")
-        return []
-
-def arxiv_by_id(arxiv_id):
-    """Get a specific arXiv paper by ID (e.g., '2401.12345' or '2401.12345v2')."""
-    url = "https://export.arxiv.org/api/query"
-    params = {"id_list": arxiv_id, "max_results": 1}
-    try:
-        r = requests.get(url, params=params, timeout=30)
-        r.raise_for_status()
-        root = ET.fromstring(r.text)
-        ns = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
-        papers = []
-        for entry in root.findall("atom:entry", ns):
-            pdf_url = None
-            for link in entry.findall("atom:link", ns):
-                if link.get("title") == "pdf":
-                    pdf_url = link.get("href")
-            papers.append({
-                "title": entry.find("atom:title", ns).text.strip().replace("\n", " "),
-                "authors": [a.find("atom:name", ns).text for a in entry.findall("atom:author", ns)],
-                "abstract": entry.find("atom:summary", ns).text.strip(),
-                "pdf_url": pdf_url,
-                "arxiv_id": entry.find("atom:id", ns).text.split("/abs/")[-1],
-                "published": entry.find("atom:published", ns).text,
-                "updated": entry.find("atom:updated", ns).text,
-                "categories": [c.get("term") for c in entry.findall("atom:category", ns)],
-            })
-        return papers
-    except Exception as e:
-        print(f"[arXiv error] {e}")
-        return []
-```
-
-**Direct PDF download:** `https://arxiv.org/pdf/{ID}.pdf`
-
-### 3. CORE (Open Access Full Text)
-
-**When to use:** Need full text of open access papers. 30M+ OA articles.
-**Speed:** ~1s | **Free:** ✅ (1000/day) | **Key needed:** Recommended (free at core.ac.uk)
-
-```python
-def core_search(query, api_key=None, limit=10):
-    """Search CORE for open access papers with full text.
-
-    CORE is the world's largest collection of OA research papers.
-    Many entries include fullText directly in the API response.
-    """
-    url = "https://api.core.ac.uk/v3/search/works"
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    params = {"q": query, "limit": limit}
-    try:
-        r = requests.get(url, headers=headers, params=params, timeout=30)
-        r.raise_for_status()
-        results = r.json().get("results", [])
-        return [{
-            "title": p.get("title"),
-            "authors": p.get("authors", []),
-            "abstract": p.get("abstract"),
-            "fullText": p.get("fullText"),  # Often available!
-            "downloadUrl": p.get("downloadUrl"),
-            "year": p.get("yearPublished"),
-            "doi": p.get("doi"),
-            "journals": p.get("journals", []),
-        } for p in results]
-    except Exception as e:
-        print(f"[CORE error] {e}")
-        return []
-```
-
-### 4. Europe PMC (Biomedical + PMC Full Text)
-
-**When to use:** Biomedical/life sciences papers. PMC full text XML available.
-**Speed:** ~1s | **Free:** ✅ | **Key needed:** No
-
-```python
-def europe_pmc_search(query, page_size=25):
-    """Search Europe PMC for biomedical literature."""
-    url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-    params = {"query": query, "format": "json", "pageSize": page_size}
-    try:
-        r = requests.get(url, params=params, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        return [{
-            "title": r.get("title"),
-            "authors": r.get("authorString"),
-            "doi": r.get("doi"),
-            "pmid": r.get("pmid"),
-            "pmcid": r.get("pmcid"),
-            "journal": r.get("journalTitle"),
-            "year": r.get("pubYear"),
-            "isOpenAccess": r.get("isOpenAccess") == "Y",
-        } for r in data.get("resultList", {}).get("result", [])]
-    except Exception as e:
-        print(f"[Europe PMC error] {e}")
-        return []
-
-def europe_pmc_fulltext(pmcid):
-    """Get full text XML for a PMC article."""
-    url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML"
-    try:
-        r = requests.get(url, timeout=30)
-        if r.status_code == 200:
-            return r.text  # XML full text
-        return None
-    except Exception:
-        return None
-```
+- **arXiv** (`export.arxiv.org/api/query`, XML/Atom not JSON): `id_list={ID}` for a
+  known ID, `search_query=` + `sortBy=relevance|lastUpdatedDate|submittedDate` for
+  search. PDF link is the `<link title="pdf">` href, or derive
+  `https://arxiv.org/pdf/{ID}.pdf` directly.
+- **CORE** (`api.core.ac.uk/v3/search/works`): many results include `fullText`
+  directly in the response — check before falling through further.
+- **Europe PMC** (`ebi.ac.uk/europepmc/webservices/rest/`): `/search` for metadata,
+  `/{pmcid}/fullTextXML` for full-text XML.
 
 ---
 
@@ -396,52 +241,14 @@ def semantic_scholar_paper(doi):
         return None
 ```
 
-### 4. DBLP (CS Conference Papers)
+### 4. DBLP (CS) & 5. Papers With Code (ML/AI)
 
-**When to use:** Computer science conference papers specifically.
-**Speed:** ~0.5s | **Free:** ✅ | **Key needed:** No
+Two more keyword sources, same GET → JSON shape:
 
-```python
-def dblp_search(query, max_results=10):
-    """Search DBLP for CS publications."""
-    url = "https://dblp.org/search/publ/api"
-    params = {"q": query, "format": "json", "h": max_results}
-    try:
-        r = requests.get(url, params=params, timeout=15)
-        r.raise_for_status()
-        hits = r.json().get("result", {}).get("hits", {}).get("hit", [])
-        return [{
-            "title": h.get("info", {}).get("title"),
-            "authors": h.get("info", {}).get("authors", {}).get("author", []),
-            "venue": h.get("info", {}).get("venue"),
-            "year": h.get("info", {}).get("year"),
-            "doi": h.get("info", {}).get("doi"),
-            "url": h.get("info", {}).get("url"),
-            "type": h.get("info", {}).get("type"),
-        } for h in hits]
-    except Exception as e:
-        print(f"[DBLP error] {e}")
-        return []
-```
-
-### 5. Papers With Code (ML/AI + Code + Benchmarks)
-
-**When to use:** ML/AI papers that may have code implementations.
-**Speed:** ~1s | **Free:** ✅ | **Key needed:** No
-
-```python
-def pwc_search(query, limit=10):
-    """Search Papers With Code for ML papers with code."""
-    url = "https://paperswithcode.com/api/v1/search/"
-    params = {"q": query, "page": 1, "items_per_page": limit}
-    try:
-        r = requests.get(url, params=params, timeout=15)
-        r.raise_for_status()
-        return r.json().get("results", [])
-    except Exception as e:
-        print(f"[PWC error] {e}")
-        return []
-```
+- **DBLP** (CS conference papers): `GET https://dblp.org/search/publ/api?q=&format=json&h={n}`
+  → hits at `result.hits.hit[].info` (title/authors/venue/year/doi/url/type).
+- **Papers With Code** (ML papers with code/benchmarks):
+  `GET https://paperswithcode.com/api/v1/search/?q=&items_per_page={n}` → `results`.
 
 ---
 
@@ -528,20 +335,43 @@ def academic_pipeline(query_or_id):
                 result["sources"].append("unpaywall")
 
         if not result["pdf_url"]:
-            core = core_search(f"doi:{doi}", limit=1)
-            if core and core[0].get("downloadUrl"):
-                result["pdf_url"] = core[0]["downloadUrl"]
-                result["sources"].append("core")
+            # CORE (api.core.ac.uk/v3/search/works) — see PDF Acquisition Chain
+            try:
+                core = requests.get("https://api.core.ac.uk/v3/search/works",
+                                    params={"q": f"doi:{doi}", "limit": 1},
+                                    timeout=30).json().get("results", [])
+                if core and core[0].get("downloadUrl"):
+                    result["pdf_url"] = core[0]["downloadUrl"]
+                    result["sources"].append("core")
+            except Exception:
+                pass
 
         # BibTeX
         result["bibtex"] = get_bibtex(doi)
 
     elif input_type == "arxiv":
-        papers = arxiv_by_id(result['arxiv_id'])
-        if papers:
-            result["metadata"] = papers[0]
-            result["pdf_url"] = papers[0].get("pdf_url")
+        # arXiv (export.arxiv.org/api/query, id_list) — see PDF Acquisition Chain
+        aid = result['arxiv_id']
+        result["pdf_url"] = f"https://arxiv.org/pdf/{aid}.pdf"  # derivable directly
+        try:
+            import xml.etree.ElementTree as ET
+            r = requests.get("https://export.arxiv.org/api/query",
+                             params={"id_list": aid, "max_results": 1}, timeout=30)
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            entry = ET.fromstring(r.text).find("atom:entry", ns)
+            if entry is not None:
+                result["metadata"].update({
+                    "title": entry.find("atom:title", ns).text.strip(),
+                    "authors": [a.find("atom:name", ns).text for a in entry.findall("atom:author", ns)],
+                    "abstract": entry.find("atom:summary", ns).text.strip(),
+                    "arxiv_id": aid,
+                    "published": entry.find("atom:published", ns).text,
+                    "updated": entry.find("atom:updated", ns).text,
+                    "categories": [c.get("term") for c in entry.findall("atom:category", ns)],
+                })
             result["sources"].append("arxiv")
+        except Exception as e:
+            print(f"[arXiv error] {e}")
 
     elif input_type == "pmid":
         # PubMed lookup
@@ -588,17 +418,29 @@ def academic_pipeline(query_or_id):
         except Exception:
             pass
 
-        # Also try arXiv if CS-related
-        arxiv_results = arxiv_search(query_or_id, max_results=5)
-        if arxiv_results:
-            result.setdefault("search_results", [])
-            result["search_results"].extend([{
-                "title": p["title"],
-                "arxiv_id": p["arxiv_id"],
-                "pdf_url": p.get("pdf_url"),
-                "year": p.get("published", "")[:4],
-            } for p in arxiv_results])
-            result["sources"].append("arxiv")
+        # Also try arXiv if CS-related (search_query, Atom) — see PDF Acquisition Chain
+        try:
+            import xml.etree.ElementTree as ET
+            r = requests.get("https://export.arxiv.org/api/query",
+                             params={"search_query": query_or_id, "max_results": 5,
+                                     "sortBy": "relevance"}, timeout=30)
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            entries = ET.fromstring(r.text).findall("atom:entry", ns)
+            if entries:
+                result.setdefault("search_results", [])
+                for e in entries:
+                    aid = e.find("atom:id", ns).text.split("/abs/")[-1]
+                    pdf = next((l.get("href") for l in e.findall("atom:link", ns)
+                                if l.get("title") == "pdf"), None)
+                    result["search_results"].append({
+                        "title": e.find("atom:title", ns).text.strip(),
+                        "arxiv_id": aid,
+                        "pdf_url": pdf,
+                        "year": (e.find("atom:published", ns).text or "")[:4],
+                    })
+                result["sources"].append("arxiv")
+        except Exception:
+            pass
 
     return result
 ```
