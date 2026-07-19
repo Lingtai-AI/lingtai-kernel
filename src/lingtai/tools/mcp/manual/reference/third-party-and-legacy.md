@@ -13,12 +13,10 @@ Two routes for non-curated MCPs: the **registry route** (recommended, gated by `
 
 For any non-curated MCP — typically `npx`/`uvx`-launched servers from the broader MCP ecosystem.
 
-1. **Fetch the MCP's setup doc.** If it's pip-installed, use the bundled script:
-   ```bash
-   ~/.lingtai-tui/runtime/venv/bin/python3 \
-     .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>
-   ```
-   Otherwise (npx/uvx servers), `web_read` the homepage URL. Either way, get the install command, env vars, and config schema before writing any config.
+1. **Fetch the MCP's setup doc.** If it's pip-installed, use the bundled
+   `find_readme.py` script; otherwise (npx/uvx servers) `web_read` the homepage
+   URL. Both routes are in `SKILL.md` §Reading an MCP's README. Either way, get
+   the install command, env vars, and config schema before writing any config.
 2. Append a single JSON record to `mcp_registry.jsonl` (one line, atomic write). For the schema, see `lingtai-kernel-anatomy reference/file-formats.md` §6.5.
 3. Add an `init.json` `mcp.<name>` activation entry.
 4. Run `system(action="refresh")`.

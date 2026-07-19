@@ -5,7 +5,7 @@ description: >
   validate, or document `kimicode / kimi` as a long-running shell subprocess or
   LingTai daemon harness candidate.
 version: 0.1.0
-last_changed_at: "2026-07-01T00:00:00-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/kimicode/SKILL.md
@@ -15,9 +15,10 @@ maintenance: |
 
 # Kimi Code CLI
 
-Nested shell-manual reference. This page owns **shell execution hygiene** for
-`kimicode / kimi`: command shape, async/poll discipline, one-shot mode, and the
-session/resume caveats that keep `ask` unsupported in the daemon backend.
+Nested shell-manual reference. Read `shell-manual` `## Coding-CLI harness
+baseline` first — it owns the shared run-`--help`-before-you-rely rule, the
+CLI-vs-daemon choice, the candidate-harness promotion criteria, and the generic
+validation checklist. This page adds only what is specific to this CLI.
 
 ## Status
 
@@ -38,10 +39,6 @@ kimi --prompt '<prompt>' --output-format text
 - **Do not combine `--prompt` with `--yolo`** — the CLI refuses that pairing.
 - The daemon backend owns `--prompt` / `--output-format` and forbids `--yolo`;
   free-form `backend_options` are inserted before those owned flags.
-
-Before relying on the command in production, run the current CLI's `--help` and
-prefer `shell(async=true)` for work that can think, edit files, or run tools for
-minutes. Do not run long coding CLIs synchronously from the parent turn.
 
 ## Environment
 
@@ -78,11 +75,10 @@ native MCP config.
   `daemon.json` contexts still redact `env`/`headers` values; the unredacted
   values live only in the native per-run config.
 
-## Validation checklist
+## Validation — Kimi-specific steps
 
-1. `command -v kimi` or documented installation path exists.
-2. `--help` confirms `--prompt` / `--output-format` and that `--yolo` conflicts
-   with `--prompt`.
-3. A dry-run in a disposable worktree exits non-interactively.
-4. Before enabling `ask`, source-cite a stable session-id output + tested resume
-   command from local help/code (do not guess).
+Run the baseline checklist, with these substitutions:
+
+- Step 2 must additionally confirm that `--yolo` conflicts with `--prompt`.
+- Before enabling `ask`, source-cite a stable session-id output plus a tested
+  resume command from local help/code — do not guess.

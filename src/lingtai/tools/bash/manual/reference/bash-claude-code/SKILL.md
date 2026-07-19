@@ -7,9 +7,9 @@ description: >
   quality/effort/budget controls. Use this when you need to write code, generate
   patches, refactor files, create documentation, or do any multi-file code work
   that would be faster delegated than done manually.
-version: 1.0.3
+version: 1.1.0
 tags: [cli, code, delegation, claude, implementation]
-last_changed_at: "2026-06-30T00:00:00-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/claude-p/SKILL.md
@@ -46,7 +46,9 @@ env \
 
 This runs Claude Code in non-interactive mode (`-p` = print and exit), skipping permission checks for automation.
 
-> **Agent responsiveness rule:** long synchronous `claude -p` jobs in an agent's main turn are **strongly discouraged**. The Claude CLI itself is synchronous: `claude -p` starts a subprocess, waits until the work is done, prints stdout, and exits. If you run that subprocess through a normal blocking bash tool call, the whole agent is blocked until it returns: the agent cannot answer new human messages, cannot checkpoint progress, and appears "stuck" even though the process is alive. Use inline `claude -p` only for short, bounded jobs where waiting inline is acceptable. For PR-sized, multi-file, exploratory, or 15+ minute work, prefer the LingTai daemon Claude-Code backend; if you must use the CLI, wrap it in an explicitly supervised background/async job with logs, timeout, and recovery instructions.
+`claude -p` is itself synchronous: it starts a subprocess, waits, prints stdout,
+and exits. Long synchronous runs in an agent's main turn are strongly
+discouraged — see `shell-manual` `## Coding-CLI harness baseline`.
 
 ### Weekly-limit smoke test
 
@@ -84,72 +86,30 @@ env -u CLAUDE_CODE_OAUTH_TOKEN /bin/zsh -lc \
 
 If the variable is hard-coded in a shell startup file, comment out only that export line and keep a backup. A plain `claude` process can then use Claude Code's own refreshed local OAuth credentials instead of a stale environment override. Already-running LingTai agents may still have inherited the old environment until they are refreshed or restarted; for those current processes, keep using the `env -u ...` child-process wrapper.
 
-## CLI vs Daemon — Which to Use
+## CLI vs Daemon — Claude-specific notes
 
-LingTai exposes Claude Code in two forms. They are **not interchangeable** — pick the one whose shape matches the work.
+The general CLI-vs-daemon choice, the "a CLI has no LingTai job protocol of its
+own" rule, and the short-and-explicitly-timed discipline live in `shell-manual`
+`## Coding-CLI harness baseline`. Read that first. What is specific to Claude
+Code:
 
-### CLI (`claude -p ...` via shell)
-
-A single synchronous subprocess. You wait for it to finish, you get one transcript, the conversation ends when the bash call returns.
-
-**Use the CLI when:**
-- The task is **one-off** and you want the result inline — a typo fix, a single-file refactor, generating a snippet
-- You want the output **threaded back into your current reasoning** (you'll read the diff and decide next steps yourself)
-- The task is **quick** (under a few minutes), budget-bounded, and has an explicit bash timeout
-- You only need **one** of these running at a time
-
-**Synchronous CLI is strongly discouraged when:**
-- The work is PR-sized, branch-producing, exploratory, or likely to run 15+ minutes
-- The human is waiting for responsiveness or may send follow-up instructions
-- A stalled subprocess would make the parent agent look dead
-- You need progress checkpoints, retries, or the ability to inspect/interrupt work independently
-
-`claude -p` does not provide its own async/job protocol. "Async" means a LingTai or OS wrapper around the CLI (for example bash `async=true`, a supervised background job, or an independent daemon/backend), and that wrapper must own logs, timeout, cancellation, and recovery notes.
+- The daemon form is the LingTai `daemon` capability with `backend="claude-code"`
+  (alias of `claude-p`). It runs in its own worktree, context window, and branch.
+- **Claude Code daemons** suit exploratory code reading, multi-file edits,
+  skill/doc work, and PR composition; Codex daemons suit tightly-scoped
+  deterministic diffs. See `../bash-openai-codex/SKILL.md`.
+- Claude Code has **no built-in timeout** — the bash tool's timeout is the only
+  bound on an inline `claude -p`.
+- `--max-budget-usd` bounds spend on ambiguous tasks; there is no daemon-side
+  equivalent, so use it whenever the scope is unknown.
+- Claude Code reads the repo context itself: give it the goal, constraints, and
+  acceptance criteria rather than dumping the codebase into the prompt.
 
 > **Inside `claude -p` (print mode), the inner Claude's own background jobs never notify it back.** `run_in_background`, `&`, and wait-loops are interactive-session affordances; in `--print` there is no second prompt and no `<task-notification>` re-entry, so the model is never woken when the job finishes. If you are the Claude running inside a `claude -p` daemon, **do not background a job and then end your turn waiting for its completion** — run validation synchronously with an adequate explicit timeout and read the result in the same turn, or report a blocker. (The LingTai `claude-p` daemon backend enforces this: a run that ends while awaiting a background-job notification is marked failed, not done.)
 
-**Examples:**
-```bash
-# Fix a typo
-claude -p "fix the typo in line 42 of README.md" --dangerously-skip-permissions
-
-# Generate a small patch you'll review immediately
-claude -p "add a --verbose flag to the build script" --dangerously-skip-permissions
-
-# Quick documentation pass on one file
-claude -p "add docstrings to utils/parser.py" --dangerously-skip-permissions
-```
-
-### Daemon (LingTai `daemon` capability with `backend="claude-code"`)
-
-A persistent agent spawned by the LingTai kernel. Runs in its **own worktree**, with its **own context window**, on its **own branch**. You dispatch it, it works asynchronously, you come back and review the diff.
-
-**Use the daemon when:**
-- You need to run **multiple tasks in parallel** — three disjoint refactors at once, batch validation across N files
-- The task is **complex or multi-step** — designing then implementing, exploring then refactoring — and you want a fresh context window dedicated to it (not competing with your conversation history)
-- You need **context isolation** — the daemon shouldn't see (and shouldn't pollute) your current session's context
-- The work runs **long enough** that a synchronous bash call would be awkward — large refactors, multi-file feature implementations, PR composition
-- You're acting as an **orchestrator** — planning and reviewing, not hand-coding (see the LingTai contributing guide's orchestrator-and-daemons discipline)
-
-**Examples of daemon-shaped work:**
-- "Implement the caching layer in `feat/cache` branch, with tests, and open a PR" — long, multi-step, deserves its own worktree
-- Three parallel skill rewrites that don't share files — dispatch three daemons, review three diffs
-- An exploratory refactor where you don't want intermediate steps cluttering your conversation
-- A "fire-and-check-back-later" task
-
-### Quick decision rule
-
-| Signal | Pick |
-|--------|------|
-| "I want the answer in this conversation, now" | **CLI** |
-| "I want to do three of these at once" | **Daemon** (one per task) |
-| "I'll review a diff afterward, not the transcript" | **Daemon** |
-| "The output is a small string/snippet I'll paste somewhere" | **CLI** |
-| "This might block my main turn while a human waits" | **Daemon** or supervised background wrapper |
-| "This will take 15+ minutes and produce a branch" | **Daemon** |
-| "I'm the orchestrator; the daemon is the worker" | **Daemon** |
-
-When in doubt for non-trivial work: daemon. The orchestrator/daemon split is the project's default discipline — see `utilities/lingtai-dev-guide/reference/contributing/SKILL.md` for the full convention.
+The orchestrator/daemon split is the project's default discipline — see
+`utilities/lingtai-dev-guide/reference/contributing/SKILL.md` for the full
+convention.
 
 ## Key Flags
 
@@ -168,71 +128,43 @@ When in doubt for non-trivial work: daemon. The orchestrator/daemon split is the
 
 ## Recommended Patterns
 
-### Simple task (default quality)
 ```bash
+# Simple task, default quality
 claude -p "fix the typo in README.md" --dangerously-skip-permissions
-```
 
-### Bounded implementation (max quality, still short)
-
-Use this shape only when you expect the task to finish quickly enough that blocking the current turn is acceptable. If it is PR-sized or exploratory, prefer a daemon; if you must use CLI anyway, run it through a supervised background wrapper rather than a blocking main-turn bash call.
-
-```bash
-# Run inside a bash tool call with an explicit timeout, e.g. timeout=300.
+# Bounded implementation at max quality — run inside a bash tool call with an
+# explicit timeout, e.g. timeout=300, and only when blocking the turn is
+# acceptable. PR-sized or exploratory work belongs in a daemon.
 claude -p "implement the small caching helper described in DESIGN.md" \
-  --dangerously-skip-permissions \
-  --effort max \
-  --model opus
-```
+  --dangerously-skip-permissions --effort max --model opus
 
-### With budget control
-```bash
+# Budget-capped for an ambiguous scope
 claude -p "refactor the auth module" \
-  --dangerously-skip-permissions \
-  --effort max \
-  --model opus \
-  --max-budget-usd 5.0
-```
+  --dangerously-skip-permissions --effort max --model opus --max-budget-usd 5.0
 
-### Working in a specific repo
-```bash
+# Target a specific repo
 claude -p "add unit tests for the parser module" \
-  --dangerously-skip-permissions \
-  -d /path/to/repo
-```
+  --dangerously-skip-permissions -d /path/to/repo
 
-### Restricted tools (safer)
-```bash
+# Restrict the tool surface (safer)
 claude -p "generate a patch for issue #42" \
-  --dangerously-skip-permissions \
-  --allowedTools "Bash Edit Read Write"
+  --dangerously-skip-permissions --allowedTools "Bash Edit Read Write"
 ```
 
 ## Best Practices
 
-1. **Keep synchronous calls short and explicitly timed**: Claude Code has no built-in timeout; the bash tool's timeout controls it. For inline `claude -p`, set a short explicit timeout (for example 300 seconds). Solving a long task by raising the synchronous timeout to 15+ minutes while the main agent waits is strongly discouraged.
+The generic ones — keep synchronous calls short and explicitly timed, prefer a
+daemon or supervised wrapper for long/PR-sized work, checkpoint before
+delegating, split large tasks — are in the baseline. Claude-specific:
 
-2. **Prefer daemon or supervised background execution for long or PR-sized work**: If the task is complex, multi-file, branch-producing, or exploratory, dispatch it to the LingTai daemon Claude-Code backend or another independently inspectable supervised wrapper. The parent agent should stay responsive and able to report progress. Remember: the wrapper is asynchronous; `claude -p` itself is not.
-
-3. **Checkpoint before delegation**: For any task that might outlive the current turn, write the worktree, branch, goal, and recovery instructions to pad or a journal before dispatching.
-
-4. **Use `--effort max` for complex work**: This tells Claude to think harder. Worth it for architecture, refactoring, and multi-file changes — but complexity is also a signal to avoid synchronous `claude -p` in the main turn.
-
-5. **Use `--model opus` for quality**: Opus produces better code for complex logic. Use Sonnet (default) for simple tasks.
-
-6. **Split large tasks**: Multiple smaller, bounded `claude -p` calls are safer than one monolithic prompt. If the steps still take long or need a branch, prefer a daemon or supervised background wrapper.
-
-7. **Write clear prompts**: Claude Code reads the repo context itself. Give it the goal, constraints, and acceptance criteria — don't dump the entire codebase into the prompt.
-
-8. **Set budget for unknown tasks**: Use `--max-budget-usd` to prevent runaway spending on ambiguous tasks.
+1. **Use `--effort max` for complex work**: This tells Claude to think harder. Worth it for architecture, refactoring, and multi-file changes — but complexity is also a signal to avoid synchronous `claude -p` in the main turn.
+2. **Use `--model opus` for quality**: Opus produces better code for complex logic. Use Sonnet (default) for simple tasks.
 
 ## Workflow for Patch/PR Creation
 
-1. **Design**: Write a clear spec (what to change, why, constraints)
-2. **Choose execution shape**: quick, bounded patch → `claude -p` with an explicit short bash timeout; PR-sized or long-running work → LingTai daemon Claude-Code backend or a supervised background wrapper, not a blocking main-turn subprocess
-3. **Delegate**: run the chosen workflow with clear constraints and a recovery checkpoint
-4. **Review**: Check the output, run tests
-5. **Push**: Create branch, commit, push as PR
+Design a clear spec → choose the execution shape per the baseline → delegate
+with explicit constraints and a recovery checkpoint → review the output and run
+tests → create the branch, commit, and push as a PR.
 
 ## What to Delegate
 

@@ -9,7 +9,7 @@ description: |
   before sending). Pulled on demand via action='manual'; you do not need to call
   it before every send.
 version: 1.0.0
-last_changed_at: "2026-06-27T17:30:57-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/imap/manager.py
 - src/lingtai/mcp_servers/imap/server.py
@@ -20,64 +20,57 @@ maintenance: |
 
 # IMAP/SMTP email MCP — usage manual (progressive disclosure)
 
-This manual is pulled on demand via `action='manual'` so the per-action tool
-schema can stay concise. Read it when you need detail beyond the one-line action
-descriptions; you do not need to call it before every send.
+Pulled on demand via `action='manual'`; read it for detail beyond the tool
+schema's one-line action descriptions.
 
-## EMAIL IDS
+## ACTIONS
+
+| Action | Purpose | Arguments |
+|---|---|---|
+| `send` | compose a new email | `address`, `message`; optional `subject`, `cc`, `bcc`, `attachments` |
+| `reply` | reply to an existing email; preserves threading/subject from the original | `email_id`, `message`; optional `cc`, `attachments` |
+| `check` | list recent envelopes from a folder | optional `folder`, `n` |
+| `read` | fetch full email(s) | `email_id` |
+| `search` | server-side IMAP search | `query`; optional `folder` |
+| `folders` | list available IMAP folders | — |
+| `move` | move email(s) to another folder | `email_id`, `folder` (destination) |
+| `flag` | set/clear flags | `email_id`, `flags` |
+| `delete` | delete email(s) | `email_id` |
+| `contacts` | list all contacts | — |
+| `add_contact` | add/update a contact | `address`, `name`; optional `note` |
+| `edit_contact` | update contact fields | `address`; optional `name`, `note` |
+| `remove_contact` | remove a contact | `address` |
+| `accounts` | list configured IMAP accounts and connection status | — |
+
+`address`/`cc`/`bcc` accept a single string or a list; `email_id` takes one id or
+a list of ids.
+
+## IDS, FOLDERS, ACCOUNTS
 
 - `email_id` is a compound key: `account:folder:uid` (e.g.
-  `me@example.com:INBOX:1234`). `read`, `reply`, `delete`, `move`, and `flag`
-  take one id or a list of ids. Use the ids returned by `check`/`search`; do not
+  `me@example.com:INBOX:1234`). Use the ids returned by `check`/`search`; do not
   construct them by hand.
-
-## READING: check / read / search
-
-- `check`: list recent envelopes from a folder (optional `folder`, `n`). An
-  empty or whitespace-only `folder` is treated as omitted and defaults to
-  `INBOX`.
-- `read`: fetch full email(s) by `email_id` (a single id or a list). You are
-  encouraged to read multiple relevant — or even all unread — emails and think
-  before acting.
-- `search`: server-side IMAP search (`query`; optional `folder`, empty/whitespace-only defaults to `INBOX`). Queries use a server-side search DSL, e.g.
+- An empty or whitespace-only `folder` (check/search) or `account` (any action)
+  is treated as omitted: `folder` defaults to `INBOX`, and `account` uses the
+  default/sole account rather than failing with `Unknown account`. Most actions
+  accept an optional `account` (email address), defaulting to the primary
+  account. `move` is the exception — its destination `folder` is required, must
+  be non-empty, and is never defaulted to `INBOX`.
+- `flags` is required for `flag` and maps flag name to bool, e.g.
+  `flags={"seen": true, "flagged": false}`; `flags={"seen": true}` marks read. A
+  missing or empty `flags` returns an error rather than silently doing nothing.
+- `search` queries use a server-side search DSL, e.g.
   `from:addr subject:text unseen since:YYYY-MM-DD`; supported fields depend on
   the IMAP addon, so prefer examples returned by this tool over raw RFC IMAP
   search syntax.
-- `folders`: list available IMAP folders.
 
-## SEND vs REPLY
+## READING & ATTACHMENTS
 
-- `send`: compose a new email (`address`, `message`; optional `subject`, `cc`,
-  `bcc`, `attachments`). `address`/`cc`/`bcc` accept a single string or a list.
-- `reply`: reply to an existing email (`email_id`, `message`; optional `cc`,
-  `attachments`). Reply preserves threading/subject from the original.
-
-## ATTACHMENTS
-
+- You are encouraged to `read` multiple relevant — or even all unread — emails
+  and think before acting.
 - `attachments` is a list of file paths (absolute or relative to the working
   dir) for `send`/`reply`. Attach generated artifacts (charts, reports, CSVs,
   PDFs) as files rather than pasting a path into the body.
-
-## ORGANIZING: move / flag / delete
-
-- `move`: move email(s) to another folder (`email_id`, `folder`=destination).
-  The destination `folder` is required and must be non-empty — unlike
-  check/search it is never defaulted to `INBOX`.
-- `flag`: set/clear flags (`email_id`, `flags={"seen": true, "flagged": false}`).
-  `flags` is required; e.g. `flags={"seen": true}` marks read. A missing or
-  empty `flags` returns an error rather than silently doing nothing.
-- `delete`: delete email(s) by `email_id`.
-
-## CONTACTS / ACCOUNTS
-
-- `contacts`: list all contacts.
-- `add_contact`: add/update a contact (`address`, `name`; optional `note`).
-- `edit_contact`: update contact fields (`address`; optional `name`, `note`).
-- `remove_contact`: remove a contact (`address`).
-- `accounts`: list configured IMAP accounts and connection status. Most actions
-  accept an optional `account` (email address); it defaults to the primary
-  account. An empty or whitespace-only `account` is treated as omitted and
-  uses the default/sole account rather than failing with `Unknown account`.
 
 ## SIDE EFFECTS & SAFETY
 

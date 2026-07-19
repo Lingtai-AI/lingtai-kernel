@@ -8,7 +8,7 @@ description: >-
   is, why it implements progressive disclosure, when to summarize urgently versus
   during idle cleanup, how to write good summaries, how to recover the original
   tool result by tool_call_id, and how summarize differs from molt.
-last_changed_at: "2026-07-03T00:00:00Z"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/tools/system/summarize.py
@@ -45,13 +45,9 @@ is canonical.
 | **A posteriori** — agent-guided | `system(action="summarize")` | *after* you have already seen and digested it | you |
 | **Molt** — context-pressure-triggered | `psyche(context, molt, ...)` | the whole conversation is continued/reset | you (briefing) |
 
-A priori is preferred when you can predict bulk, do not need the raw text, and
-already know what the call must retain, because the raw never enters context. A
-posteriori reclaims context after the fact for results you have consumed or whose
-important facts could not be named before inspection. Molt
-is the strongest boundary when per-result summarization is not enough. Sections
-1–6 below are mostly about the a-posteriori `summarize` action; §1a covers the
-a-priori `summary=true` option; §6 contrasts both with molt.
+Sections 1–6 below are mostly about the a-posteriori `summarize` action; §1a
+covers the a-priori `summary=true` option and when to prefer it; §6 contrasts
+both with molt.
 
 ## 1a · A priori summary: `summary=true` on bash / read / grep / daemon / glob
 
@@ -279,17 +275,12 @@ summarize would discard cache benefit.
   overflow warning (the warning is for strictly `> 1.0`).
 
 Waiting for the 1.0 forced boundary is the emergency path — prefer the proactive
-0.85 rebuild. If no summary is pending, the forced rebuild has nothing to apply;
-the fresh replay still preserves each historical timely-transient holder and
-does not strip its agent_meta/guidance or notifications/notification_guidance
-keys on any provider, without rewriting recorded history — only the LATEST
-holder per
-family represents current state, older holders are historical traces and must
-not be acted on. `refresh`
-remains the emergency path for broken/stale context or explicit human direction,
-not the normal way to apply summarize. If summarize or a rebuild still cannot
-bring context below `0.75 * context_window` (the recovery target), tend durable
-stores and molt deliberately.
+0.85 rebuild. If no summary is pending, the forced rebuild has nothing to apply
+(the replay-preservation rule above still holds), so summarize more or molt
+instead. `refresh` remains the emergency path for broken/stale context or
+explicit human direction, not the normal way to apply summarize. If summarize or
+a rebuild still cannot bring context below `0.75 * context_window` (the recovery
+target), tend durable stores and molt deliberately.
 
 ## 4 · Recovering the original result
 

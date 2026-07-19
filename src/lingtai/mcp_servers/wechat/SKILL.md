@@ -6,8 +6,8 @@ description: |
   reply, check/read/search, media_path attachments (image/video/voice/file),
   contacts/accounts basics, and external-delivery side-effect caveats. Pulled on
   demand via action='manual'; you do not need to call it before every send.
-version: 1.0.0
-last_changed_at: "2026-06-26T14:33:19-07:00"
+version: 1.0.1
+last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
 - src/lingtai/mcp_servers/wechat/manager.py
 - src/lingtai/mcp_servers/wechat/server.py
@@ -18,14 +18,12 @@ maintenance: |
 
 # WeChat MCP — usage manual (progressive disclosure)
 
-This manual is pulled on demand via `action='manual'` so the per-action tool
-schema can stay concise. Read it when you need detail beyond the one-line action
-descriptions; you do not need to call it before every send.
-
 ## RECIPIENTS: user_id
 
-- Messages target a WeChat user by `user_id` (e.g. `wxid_abc123@im.wechat`). Use
-  the `user_id` returned by `check`/`read`/`contacts`; do not invent one.
+- Messages target a WeChat user by `user_id` (e.g. `wxid_abc123@im.wechat`).
+  `user_id` is the routing truth; aliases are convenience labels only. Use the
+  `user_id` returned by `check`/`read`/`contacts` and do not invent one — when
+  in doubt, especially for replies, take it from `read`/`check`.
 
 ## SEND vs REPLY
 
@@ -69,8 +67,6 @@ descriptions; you do not need to call it before every send.
 
 ## WAKE / REPLAY / DUPLICATE-REPLY DISCIPLINE
 
-- `user_id` is the routing truth; aliases are convenience labels only. When in
-  doubt, use the `user_id` returned by `read`/`check`, especially for replies.
 - Reply once per inbound `message_id`. Before sending after a refresh, molt, or
   worker-hang recovery, use `read` to reconcile the merged inbox+sent view and
   avoid duplicate replies.

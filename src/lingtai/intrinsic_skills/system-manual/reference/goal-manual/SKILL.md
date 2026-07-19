@@ -4,9 +4,9 @@ description: >
   Goal notification manual: `.notification/goal.json` source-of-truth, fields,
   instructions, idle reminders, protected dismiss behavior, and cancellation or
   completion semantics.
-version: 0.2.0
+version: 0.2.1
 tags: [lingtai, goal, notifications, reminders]
-last_changed_at: "2026-07-12T20:20:43-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/kernel/nudge/goal.py
@@ -52,11 +52,8 @@ When you receive a `source="goal.request"` event:
    - reminder cadence: optional `data.reminder_delay_seconds`;
    - constraints: deadlines, channels to report on, what not to do, or approval
      gates.
-4. **Explain cancellation and completion before writing.** Canceling the goal
-   means deleting `.notification/goal.json` or marking `data.status`
-   `inactive`/`cancelled`/`canceled`. Completing or superseding it means marking
-   status `done`/`complete`/`completed`/`superseded`, or deleting/replacing the
-   file. Dismissing a `goal.reminder` does **not** cancel the goal.
+4. **Explain cancellation and completion before writing** — see "Protected
+   dismiss behavior" below for the exact semantics.
 5. **Write `.notification/goal.json` only after confirmation.** If the human gave
    a complete inline draft with `/goal <text>`, restate the structured goal and
    ask for confirmation unless the instruction explicitly and unambiguously says
@@ -115,8 +112,10 @@ details.
 notification(action="dismiss_channel", channel="goal")  # refused
 ```
 
-To cancel the goal, delete `.notification/goal.json`. To complete the goal, either
-mark `data.status` as `done`/`superseded` or delete/replace the file. Agents are
+To cancel the goal, delete `.notification/goal.json` or mark `data.status`
+`inactive`/`cancelled`/`canceled`. To complete or supersede it, mark
+`data.status` `done`/`complete`/`completed`/`superseded`, or delete/replace the
+file. Dismissing a `goal.reminder` does **not** cancel the goal. Agents are
 trusted to decide when the source-of-truth file should change; the protection only
 prevents misleading API semantics where dismissing a notification looks like
 canceling a goal.

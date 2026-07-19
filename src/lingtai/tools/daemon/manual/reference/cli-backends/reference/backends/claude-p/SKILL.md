@@ -8,7 +8,7 @@ description: >
   shows how to translate that help into the generic `backend_options`
   mechanism. It is not a flag catalog.
 version: 0.1.0
-last_changed_at: "2026-07-14T19:04:52-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-claude-code/SKILL.md
@@ -18,10 +18,11 @@ maintenance: |
 
 # claude-p Daemon Backend — Flag Discovery Entrypoint
 
-This page is deliberately tiny: the Claude Code CLI revs its flags between
-releases, so the installed CLI's own help output is the authority — not this
-page. `claude-p` is the canonical print-mode backend id; `claude-code` is a
-compatibility alias with the same runner and reserved-flag set.
+The installed CLI's own help is the authority for Claude Code flags; this page is
+only the entrypoint. Conversion rules, key safety, and persistence live in the
+parent [`reference/cli-backends/SKILL.md`](../../../SKILL.md). `claude-p` is the
+canonical print-mode backend id; `claude-code` is a compatibility alias with the
+same runner and reserved-flag set.
 
 ## Discover flags from the installed CLI
 
@@ -31,10 +32,8 @@ compatibility alias with the same runner and reserved-flag set.
    wraps `claude --print`, so the print-mode flags in `claude --help` are the
    relevant surface. These are local read-only commands; no session is
    started.
-3. Translate the long flags you found into `backend_options` using the
-   generic conversion rules in the parent `reference/cli-backends/SKILL.md`
-   (key→flag mapping, value handling, key safety, persistence). Nothing
-   Claude-specific is added to that contract here.
+3. Translate what you found into `backend_options` with the parent's generic
+   conversion rules. Nothing Claude-specific is added to that contract here.
 
 ## Example: automatic fallback model for a long print run
 
@@ -54,9 +53,8 @@ Through `backend_options`, an underscore key becomes a dashed long flag:
 // argv: --fallback-model claude-sonnet-5
 ```
 
-The model-name vocabulary belongs to the installed CLI and the provider
-account — LingTai does not validate, enumerate, or simulate model names. A
-value passes through and the CLI decides its semantics (or rejects it).
+The model-name vocabulary belongs to the installed CLI and the provider account —
+LingTai does not validate, enumerate, or simulate model names.
 
 ## Harness boundary
 
@@ -82,9 +80,13 @@ Related run-scoped behavior you should not fight through flags:
   --print ...` against the session id persisted to
   `daemon.json.claude_session_id`; `backend_options` are not re-passed on
   ask — emanate-time flags persist for the session's life.
-- Auth-env hygiene: the spawn environment strips `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_OAUTH_TOKEN` so the CLI's own
-  OAuth credentials win; do not re-inject auth overrides via flags.
-
-To debug what was actually sent, `daemon.json` records the raw
-`backend_options` alongside the resolved `backend_argv` / `backend_harness_argv`.
+- Auth-env hygiene: the spawn environment strips `ANTHROPIC_API_KEY` and
+  `ANTHROPIC_AUTH_TOKEN` (they force API billing; GH #107) plus
+  `CLAUDE_CODE_OAUTH_TOKEN` (a stale inherited token can override a refreshed
+  `~/.claude/.credentials.json` and surface as a false "weekly limit"; see
+  Lingtai-AI/lingtai#189), so the CLI's own OAuth credentials win. Do not
+  re-inject auth overrides via flags. A *manual* `claude` shell invocation has no
+  such protection — for the weekly-limit smoke test and how to find the stale
+  token's source, read `shell-manual` →
+  `reference/bash-claude-code/SKILL.md`. Never print token values while
+  diagnosing.

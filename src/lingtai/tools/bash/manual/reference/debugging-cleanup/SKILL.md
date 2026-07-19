@@ -4,8 +4,8 @@ description: >
   Nested shell-manual reference for debugging silent scheduled jobs and retiring
   cron jobs safely: scheduler fired, script ran, work landed, agent saw mail,
   worked launchd diagnosis, cleanup, and bash work footprint hygiene.
-version: 1.0.0
-last_changed_at: "2026-06-01T01:47:09-07:00"
+version: 1.0.1
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/bash/manual/reference/scheduled-work/SKILL.md
@@ -95,12 +95,6 @@ Reverse of setup, in this order:
 5. Remove any `~/Library/LaunchAgents/<label>.plist` entry that wasn't caught above.
 
 Don't delete the script first — if the unit is still loaded and tries to fire a missing executable, you get noisy error logs.
-
----
-
-## Future debugging topics
-
-This section is empty. As more operational knowledge accumulates (debugging pipelines, working with binary data, locale handling), it gets added here.
 
 ## Cleanup / Footprint for bash work
 

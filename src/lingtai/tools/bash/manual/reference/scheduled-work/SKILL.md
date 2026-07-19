@@ -5,8 +5,8 @@ description: >
   schedulers, the LingTai wake-by-mailbox-drop contract, prompt boundaries,
   script hygiene, macOS launchd, Linux systemd timers, crontab fallback, and the
   launchd process-tree reaping gotcha.
-version: 1.0.0
-last_changed_at: "2026-06-01T01:47:09-07:00"
+version: 1.0.1
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/bash/_async_supervisor.py
@@ -18,8 +18,6 @@ maintenance: |
 
 Nested shell-manual reference. Open this when the top-level `shell-manual` router
 selects host-scheduler setup for recurring or time-driven work.
-
-## Scheduled / cron-driven work
 
 ## When to use scheduled work
 

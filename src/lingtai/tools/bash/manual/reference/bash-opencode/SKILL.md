@@ -7,9 +7,9 @@ description: >
   Read this when the human asks to use OpenCode as a CLI tool, compare it with
   Claude Code or Codex, configure providers/agents/MCPs, or run non-interactive
   coding tasks from bash.
-version: 1.0.0
+version: 1.1.0
 tags: [cli, code, delegation, opencode, automation]
-last_changed_at: "2026-06-13T04:32:46-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/opencode/SKILL.md
@@ -52,19 +52,29 @@ OpenCode stores provider credentials in `~/.local/share/opencode/auth.json`. It 
 
 ## CLI vs Long-Running Work
 
-This sub-skill is about using OpenCode directly from the shell. For longer work, first check whether your active LingTai daemon schema explicitly supports an OpenCode backend; otherwise supervise OpenCode through bash/worktrees.
+The general CLI-vs-daemon choice lives in `shell-manual` `## Coding-CLI harness
+baseline`. One OpenCode-specific caveat overrides its "pick the daemon" advice:
 
-### CLI (`opencode run ...` via shell)
+> **Do not assume an OpenCode daemon backend exists.** Some LingTai
+> installations expose external coding CLIs through `daemon` backends, but only
+> use one if the active `daemon` tool schema explicitly lists
+> `backend="opencode"`.
 
-A single synchronous subprocess. You wait for it to finish, review its transcript/diff, and decide the next step in your own context.
+If `backend="opencode"` is present, treat the baseline table as written. If it
+is **not**, every "Daemon" row degrades to supervised CLI work from bash:
 
-**Use the CLI when:**
-- The task is **one-off** and bounded: a small edit, quick code review, narrow documentation pass, or a question about a repo.
-- You want the result **threaded back into your current reasoning** instead of launching a background worker.
-- You need a specific OpenCode flag, provider/model, agent, attached file, or headless-server attachment.
-- You only need **one** OpenCode run at a time.
+- create a disposable git worktree;
+- run `opencode run --dir /path/to/worktree ...` with a generous bash timeout or
+  async bash job;
+- periodically inspect `git diff`, captured stdout/stderr, and test output
+  yourself;
+- commit only after review.
 
-**Examples:**
+Two rows also stay **CLI** regardless of backend availability: when you need a
+specific OpenCode model/agent/flag, and when you want to attach to a warm
+`opencode serve` backend.
+
+**Inline CLI examples:**
 
 ```bash
 # Quick answer without opening the TUI
@@ -79,27 +89,6 @@ opencode run --model openai/gpt-5.5 "Review the auth module for race conditions"
 # Ask for raw JSON events, useful for scripts
 opencode run --format json "Summarize the public API changes"
 ```
-
-### Long-running work from the CLI
-
-This sub-skill documents OpenCode as a direct CLI. Some LingTai installations may also expose external coding CLIs through `daemon` backends, but do not assume an OpenCode daemon is available unless the active `daemon` tool schema explicitly lists `backend="opencode"`.
-
-If `backend="opencode"` is available, use the daemon for parallel or long-running worker tasks that should be tracked outside your current context. If it is not available, keep OpenCode CLI work supervised from bash:
-
-- create a disposable git worktree;
-- run `opencode run --dir /path/to/worktree ...` with a generous bash timeout or async bash job;
-- periodically inspect `git diff`, captured stdout/stderr, and test output yourself;
-- commit only after review.
-
-**Quick decision rule:**
-
-| Signal | Pick |
-|--------|------|
-| “I need the answer inline now” | **CLI** |
-| “Use this exact OpenCode model/agent/flag” | **CLI** |
-| “I want to attach to a warm OpenCode server” | **CLI** |
-| “Run three disjoint coding tasks at once” | **Daemon only if `backend="opencode"` is present; otherwise separate supervised worktrees/async bash jobs** |
-| “This may take 15+ minutes and produce a branch/diff” | **Daemon if supported; otherwise supervised CLI in a worktree** |
 
 ## Key Commands
 

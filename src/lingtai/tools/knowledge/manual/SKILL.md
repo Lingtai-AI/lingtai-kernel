@@ -8,7 +8,7 @@ description: >
   need to create, organize, or load private knowledge, lay out a routing parent
   over related entries, or explain how knowledge differs from portable skills.
 version: 1.0.0
-last_changed_at: "2026-06-09T13:24:44-07:00"
+last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
 - src/lingtai/tools/knowledge/__init__.py
 - src/lingtai/tools/knowledge/ANATOMY.md
@@ -21,29 +21,32 @@ maintenance: |
 
 Knowledge is an agent's private long-term memory. It is for facts, decisions, observations, local paths, mail context, and operational lessons that are useful to this agent but are not necessarily portable to every other agent.
 
-Skills are different: a skill is a reusable procedure meant to travel across agents. Knowledge may point to skills; skills should not depend on private knowledge.
+The private-memory capability is named `knowledge`, and it registers exactly one
+tool, also named `knowledge`.
 
+## Knowledge vs skills
 
-## Names you will see
-
-The private-memory capability is named `knowledge`, and the only tool it registers is:
-
-```text
-knowledge({"action": "info"})
-```
-
-Do not confuse `knowledge` with the `.library/` directory: `.library/` is the on-disk home for **skills** (`SKILL.md` files), not for private `knowledge` entries.
-
-Quick map:
+Knowledge and skills are **isomorphic in layout and progressive disclosure**:
+each entry is a folder with a marker file (`KNOWLEDGE.md` here, `SKILL.md`
+there), the prompt carries only the catalog, and a top-level entry may act as a
+routing/index parent over nested children. They are physically separate stores
+with different audiences:
 
 | Term / path | Meaning |
 |---|---|
 | `knowledge` tool / capability | Private per-agent durable memory catalog. |
 | `<agent>/knowledge/<name>/KNOWLEDGE.md` | One private knowledge entry. |
-| `.library/intrinsic`, `.library/custom`, `.library_shared` | Skill shelves containing `SKILL.md` files. |
 | `skills` tool / capability | Catalog of reusable portable procedures. |
+| `.library/intrinsic`, `.library/custom`, `.library_shared` | Skill shelves holding `SKILL.md` files — never private `knowledge` entries. |
 
-Prefer `knowledge` for private memory and `skills` for reusable procedures.
+Knowledge is **private, local, and non-portable** by default: it may reference
+agent-local paths, mail IDs, and logs. Skills are **reusable, shareable, and
+portable**.
+
+**Direction matters:** private knowledge may point outward to skills; shared
+skills must not point inward to private knowledge paths, mail IDs, or local
+logs. If content is a reusable how-to another agent could apply without your
+private context, write a skill instead.
 
 ## Layout
 
@@ -77,31 +80,17 @@ Required fields are `name` and `description`. Supporting files are optional and 
 
 ## Progressive disclosure
 
-The system prompt only receives a compact catalog: each entry's `name`, `description`, and `location`. The body of `KNOWLEDGE.md` and supporting files stay on disk until you explicitly read them.
+The system prompt only receives a compact catalog: each entry's `name`, `description`, and `location`. The body of `KNOWLEDGE.md` and supporting files stay on disk until you explicitly read them. This keeps the prompt small while still making the memory discoverable.
 
-Use:
-
-```text
-knowledge({"action": "info"})
-```
-
-to rescan the catalog and refresh the prompt section, then use `read` on the listed `location` when an entry becomes relevant.
-
-This keeps the prompt small while still making the memory discoverable.
+Call `knowledge({"action": "info"})` to rescan the catalog and refresh the prompt section, then use `read` on the listed `location` when an entry becomes relevant.
 
 ## Nesting and sub-knowledge
 
-Knowledge and skills are **isomorphic in layout and progressive disclosure**:
-each top-level entry is a folder with a marker file (`KNOWLEDGE.md` here,
-`SKILL.md` there), the prompt carries only the catalog, and a top-level entry may
-act as a **routing/index parent** with nested children that hold the substance —
-exactly the nested-reference pattern documented in the skills manual.
+A top-level entry may act as a **routing/index parent** with nested children that
+hold the substance — exactly the nested-reference pattern documented in the
+skills manual.
 
-The only real difference is *audience*: knowledge is **private, local, and
-non-portable** by default (it may reference agent-local paths, mail IDs, and
-logs); skills are **reusable, shareable, and portable**.
-
-So for the routing/index parent pattern — when to use it, how the parent stays a
+For the routing/index parent pattern — when to use it, how the parent stays a
 short scannable index, how children carry the detail, relative child paths,
 keeping the catalog in sync — **read the skills manual's nested reference
 section** (`.library/intrinsic/capabilities/skills/SKILL.md`, "Nested
@@ -138,8 +127,6 @@ Knowledge may also reference skills when a reusable procedure exists:
 For the repeatable workflow, read `.library/intrinsic/capabilities/skills/SKILL.md`.
 ```
 
-Direction matters: private knowledge can point outward to skills, but shared skills should not point inward to private knowledge paths, mail IDs, or local logs.
-
 ## When to create knowledge
 
 Create or update a knowledge entry when the information is useful beyond the current turn but is not a portable procedure:
@@ -149,8 +136,6 @@ Create or update a knowledge entry when the information is useful beyond the cur
 - local repo paths, branch relationships, and known gotchas;
 - incident notes and debugging evidence;
 - conclusions from research that are specific to this agent's work.
-
-If the content is a reusable how-to that another agent should be able to apply without your private context, write a skill instead.
 
 ## Cleanup / Footprint
 

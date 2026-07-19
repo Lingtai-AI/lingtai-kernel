@@ -7,9 +7,9 @@ description: >
   browser integration. Read this when the human asks to use OpenAI Codex CLI,
   wants to compare it with Claude Code, or needs help with installation and
   configuration.
-version: 1.0.1
+version: 1.1.0
 tags: [cli, code, delegation, openai, codex]
-last_changed_at: "2026-06-13T04:41:27-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/codex/SKILL.md
@@ -26,31 +26,28 @@ maintenance: |
 > **OpenAI's coding agent — run locally from your terminal.**
 > Built in Rust for speed. Open source. ~4 million weekly active users (as of April 2026).
 
-## CLI vs Daemon — Which to Use
+## CLI vs Daemon — Codex-specific notes
 
-LingTai exposes Codex in two forms. They are **not interchangeable** — pick the one whose shape matches the work.
+The general CLI-vs-daemon choice, the "a CLI has no LingTai job protocol of its
+own" rule, and the responsiveness practices (short explicitly-timed synchronous
+calls, checkpoint before delegating, split large tasks) live in `shell-manual`
+`## Coding-CLI harness baseline`. Read that first.
 
-### CLI (`codex exec ...` via shell)
+**Codex vs Claude Code — a different axis.** CLI-vs-daemon is about the *shape*
+of the work; Codex-vs-Claude-Code is about its *style*:
 
-A single synchronous subprocess. You wait for it to finish, you get one transcript back, the conversation ends when the bash call returns.
+- **Codex** — tightly-scoped diffs, deterministic refactors, mechanical
+  validation sweeps. More conservative; the right choice when the change is
+  well-specified and the scope is clear.
+- **Claude Code** — exploratory code reading, multi-file edits, skill/doc work,
+  PR composition.
 
-> **Agent responsiveness rule:** long synchronous `codex exec` jobs in an agent's main turn are **strongly discouraged**. The Codex CLI command is a blocking subprocess from the parent agent's point of view: if you run it through a normal blocking bash tool call, the whole agent is blocked until it returns. The agent cannot answer new human messages, cannot checkpoint progress, and appears "stuck" even though the process is alive. Use inline `codex exec` only for short, bounded jobs where waiting inline is acceptable. For PR-sized, multi-file, exploratory, or 15+ minute work, prefer the LingTai daemon Codex backend; if you must use the CLI, wrap it in an explicitly supervised background/async job with logs, timeout, and recovery instructions.
+The daemon form is the LingTai `daemon` capability with `backend="codex"`. See
+`utilities/lingtai-dev-guide/reference/contributing/SKILL.md` for the full
+orchestrator/daemon convention.
 
-**Use the CLI when:**
-- The task is **one-off** and you want the result inline — a tightly-scoped edit, a single deterministic refactor, a quick mechanical pass
-- You want the output **threaded back into your current reasoning** (you'll read it and decide next steps yourself)
-- The task is **quick**, well-bounded, and has an explicit bash timeout
-- You only need **one** of these running at a time
+**Inline CLI examples:**
 
-**Synchronous CLI is strongly discouraged when:**
-- The work is PR-sized, branch-producing, exploratory, or likely to run 15+ minutes
-- The human is waiting for responsiveness or may send follow-up instructions
-- A stalled subprocess would make the parent agent look dead
-- You need progress checkpoints, retries, or the ability to inspect/interrupt work independently
-
-`codex exec` does not provide a LingTai job protocol by itself. "Async" means a LingTai or OS wrapper around the CLI (for example bash `async=true`, a supervised background job, or an independent daemon/backend), and that wrapper must own logs, timeout, cancellation, and recovery notes.
-
-**Examples:**
 ```bash
 # Rename a symbol across a small file
 codex exec "rename the function foo() to fooBar() in utils/helpers.py"
@@ -61,57 +58,6 @@ codex exec --model gpt-5.5 "remove unused imports from src/main.py"
 # Quick scoped fix
 codex exec --dir /path/to/project "fix the off-by-one in parse_range()"
 ```
-
-### Daemon (LingTai `daemon` capability with `backend="codex"`)
-
-A persistent agent spawned by the LingTai kernel. Runs in its **own worktree**, with its **own context window**, on its **own branch**. You dispatch it, it works asynchronously, you come back and review the diff.
-
-**Use the daemon when:**
-- You need to run **multiple tasks in parallel** — several disjoint deterministic refactors at once, a batch validation sweep
-- The task is **complex or multi-step** enough to deserve a fresh context window dedicated to it (not competing with your conversation history)
-- You need **context isolation** — the daemon shouldn't see (and shouldn't pollute) your current session's context
-- The work runs **long enough** that a synchronous bash call would be awkward — wide mechanical refactors, multi-file deterministic diffs, validation passes that touch the whole tree
-- You're acting as an **orchestrator** — planning and reviewing, not hand-coding (see the LingTai contributing guide's orchestrator-and-daemons discipline)
-
-Per the LingTai dev guide, Codex daemons are particularly good for **tightly-scoped diffs, deterministic refactors, and mechanical validation passes** — they're more conservative than Claude Code daemons and are the right choice when the change is well-specified and the scope is clear.
-
-**Examples of daemon-shaped work:**
-- "Apply this codemod across `src/**/*.ts` and open a PR" — wide, mechanical, deserves its own worktree
-- Three parallel deterministic refactors that don't share files — dispatch three daemons, review three diffs
-- A validation sweep over the repo that produces a report and (optionally) fixes
-- A "fire-and-check-back-later" task
-
-### Quick decision rule
-
-| Signal | Pick |
-|--------|------|
-| "I want the answer in this conversation, now" | **CLI** |
-| "I want to do three of these at once" | **Daemon** (one per task) |
-| "I'll review a diff afterward, not the transcript" | **Daemon** |
-| "The output is a small string/snippet I'll paste somewhere" | **CLI** |
-| "This might block my main turn while a human waits" | **Daemon** or supervised background wrapper |
-| "This will take 15+ minutes and produce a branch" | **Daemon** |
-| "I'm the orchestrator; the daemon is the worker" | **Daemon** |
-
-### Codex vs Claude Code (same axis)
-
-Both backends are available as CLI and daemon. The CLI-vs-daemon choice is about **shape of work** (one-shot vs parallel/long/isolated). The Codex-vs-Claude-Code choice is about **style of work**:
-
-- **Codex daemons** — tightly-scoped diffs, deterministic refactors, mechanical validation
-- **Claude Code daemons** — exploratory code reading, multi-file edits, skill/doc work, PR composition
-
-When in doubt for non-trivial work: daemon. See `utilities/lingtai-dev-guide/reference/contributing/SKILL.md` for the full orchestrator/daemon convention.
-
-## Agent Responsiveness Practices
-
-1. **Keep synchronous calls short and explicitly timed**: For inline `codex exec`, set a short explicit bash timeout appropriate to the scoped task. Solving a long task by raising the synchronous timeout to 15+ minutes while the main agent waits is strongly discouraged.
-
-2. **Prefer daemon or supervised background execution for long or PR-sized work**: If the task is complex, multi-file, branch-producing, exploratory, or a wide validation sweep, dispatch it to the LingTai daemon Codex backend or another independently inspectable supervised wrapper. The parent agent should stay responsive and able to report progress. Remember: the wrapper is asynchronous; the CLI subprocess itself is not a LingTai job.
-
-3. **Checkpoint before delegation**: For any task that might outlive the current turn, write the worktree, branch, goal, and recovery instructions to pad or a journal before dispatching.
-
-4. **Split large tasks**: Multiple smaller, bounded `codex exec` calls are safer than one monolithic prompt. If the steps still take long or need a branch, prefer a daemon or supervised background wrapper.
-
 
 ## Installation
 
@@ -165,6 +111,7 @@ codex exec "your prompt"
 New in 0.130.0 — headless, remotely controllable app-server:
 ```bash
 codex remote-control
+codex connect localhost:8080
 ```
 - Start a headless app-server
 - Control Codex remotely
@@ -183,7 +130,7 @@ codex exec "your prompt"
 Workspace sharing and marketplace:
 ```bash
 codex plugins list      # List installed plugins
-codex plugins install   # Install from marketplace
+codex plugins install @openai/plugin-name  # Install from marketplace
 codex plugins share     # Share with workspace
 ```
 
@@ -199,6 +146,7 @@ Browseable and toggleable hooks:
 ```bash
 codex hooks list        # List available hooks
 codex hooks toggle      # Toggle hook on/off
+codex exec --hooks my-hook "<prompt>"
 ```
 
 Capabilities:
@@ -208,95 +156,18 @@ Capabilities:
 - MCP elicitations through TUI/Guardian flows
 
 ### 5. Chrome Extension
-Browser integration without takeover:
-- Works in parallel across tabs
-- Background operation
-- User controls which websites Codex can use
-- Install from Chrome Web Store
+Browser integration without takeover: works in parallel across tabs, operates in
+the background, and the user controls which websites Codex may use. Install from
+the Chrome Web Store.
 
 ### 6. App-Server
-Thread management and pagination:
-```bash
-codex exec "your prompt"
-# In TUI:
-# - Resume/fork picker
-# - Raw scrollback mode
-# - /ide context injection
-# - /diff workspace-aware diffing
-```
+Thread management and pagination inside the TUI: resume/fork picker, raw
+scrollback mode, `/ide` context injection, and `/diff` workspace-aware diffing.
 
-## Usage Examples
+## Codex vs Claude Code — capability differences
 
-### Basic Usage
-```bash
-# Start interactive session
-codex exec "Create a Python script that reads CSV files"
-
-# With specific model
-codex exec --model gpt-5.5 "Refactor this function"
-
-# In specific directory
-codex exec --dir /path/to/project "Fix the bug in main.py"
-```
-
-### Remote Control
-```bash
-# Start headless server
-codex remote-control
-
-# Connect from another terminal
-codex connect localhost:8080
-```
-
-### Plugin Management
-```bash
-# List plugins
-codex plugins list
-
-# Install plugin
-codex plugins install @openai/plugin-name
-
-# Share with workspace
-codex plugins share ./my-plugin
-```
-
-### Hooks
-```bash
-# List hooks
-codex hooks list
-
-# Toggle hook
-codex hooks toggle my-hook
-
-# Run with hooks
-codex exec --hooks my-hook "your prompt"
-```
-
-## Integration with LingTai
-
-### Workflow Integration
-Codex CLI can be used alongside Claude Code for different tasks:
-
-| Task | Claude Code | OpenAI Codex |
-|------|-------------|--------------|
-| Complex reasoning | ✅ Excellent | ✅ Good |
-| Local file operations | ✅ Good | ✅ Excellent |
-| Browser integration | ❌ No | ✅ Chrome extension |
-| Remote control | ❌ No | ✅ Yes |
-| Plugin ecosystem | ❌ Limited | ✅ Rich marketplace |
-
-### When to Use Codex CLI
-- **Browser automation**: Use Chrome extension for web tasks
-- **Remote development**: Use remote-control for headless operation
-- **Plugin ecosystem**: Leverage marketplace for specialized tools
-- **Vim users**: Native Vim editing support
-
-### When to Use Claude Code
-- **Complex reasoning**: Deep analysis and multi-step problem solving
-- **LingTai integration**: Native integration with LingTai kernel
-- **Cost efficiency**: Uses Claude Max subscription
-
-## Comparison with Claude Code
+Both ship a LingTai daemon backend and a bash subskill. The *style* axis is
+above under "CLI vs Daemon"; these are the capability facts behind it:
 
 | Feature | OpenAI Codex CLI | Claude Code |
 |---------|------------------|-------------|
@@ -304,10 +175,16 @@ Codex CLI can be used alongside Claude Code for different tasks:
 | Open Source | ✅ Yes | ❌ No |
 | Vim Support | ✅ Native | ❌ No |
 | Browser Extension | ✅ Chrome | ❌ No |
-| Remote Control | ✅ Yes | ❌ No |
+| Remote Control | ✅ Yes (headless app-server) | ❌ No |
 | Plugin Marketplace | ✅ Rich | ❌ Limited |
-| LingTai Integration | ✅ Daemon backend + bash subskill | ✅ Daemon backend + bash subskill |
+| Local file operations | ✅ Excellent | ✅ Good |
+| Complex reasoning | ✅ Good | ✅ Excellent |
 | Cost | API usage | Claude Max subscription |
+
+So reach for Codex CLI specifically for browser automation (Chrome extension),
+remote/headless development (`codex remote-control`), the plugin marketplace, or
+native Vim editing; reach for Claude Code for deep multi-step analysis and
+subscription-based cost.
 
 ## Troubleshooting
 

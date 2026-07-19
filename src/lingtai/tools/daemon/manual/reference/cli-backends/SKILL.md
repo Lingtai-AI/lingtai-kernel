@@ -7,7 +7,7 @@ description: >
   per-backend references (Codex, OpenCode, claude-p, MiMo Code, Qwen Code,
   Kimi Code, Cursor, and Oh-My-Pi flag discovery, built-in LingTai knowledge entrypoint).
 version: 1.13.0
-last_changed_at: "2026-07-09T19:24:35-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/CONTRACT.md
@@ -36,80 +36,65 @@ catalog. Only backends with proven demand get a page.
 - name: daemon-backend-codex
   location: reference/backends/codex/SKILL.md
   description: |
-    Nested daemon-cli-backends reference for the Codex daemon backend's flag
-    surface. Read this only when a daemon task needs Codex-specific CLI flags
-    (model selection, reasoning effort, config overrides): it routes to the
-    installed CLI's live help via shell and shows how to translate that help
-    into generic `backend_options` (e.g. repeated `--config` overrides).
+    Nested daemon-cli-backends reference for the Codex backend's flag surface.
+    Read this only when a daemon task needs Codex-specific CLI flags: model
+    selection, reasoning effort, repeated `--config` overrides.
 - name: daemon-backend-opencode
   location: reference/backends/opencode/SKILL.md
   description: |
-    Nested daemon-cli-backends reference for the OpenCode daemon backend's
-    flag surface. Read this only when a daemon task needs OpenCode-specific
-    CLI flags (model selection, reasoning variants, agent choice): it routes
-    to the installed CLI's live help via shell and shows how to translate that
-    help into generic `backend_options` (e.g. `--model provider/model`).
+    Nested daemon-cli-backends reference for the OpenCode backend's flag
+    surface. Read this only when a daemon task needs OpenCode-specific CLI
+    flags: `--model provider/model`, `--variant`, agent choice, the reserved
+    `--format` boundary.
 - name: daemon-backend-claude-p
   location: reference/backends/claude-p/SKILL.md
   description: |
     Nested daemon-cli-backends reference for the claude-p (alias claude-code)
-    daemon backend's flag surface. Read this only when a daemon task needs
-    Claude Code-specific CLI flags (model selection, fallback model, tool
-    restrictions): it routes to the installed CLI's live help via shell and
-    shows how to translate that help into generic `backend_options` (e.g.
-    underscore keys becoming dashed long flags like `--fallback-model`).
+    backend's flag surface. Read this only when a daemon task needs Claude
+    Code-specific CLI flags (model, `--fallback-model`, tool restrictions), the
+    reserved-flag boundary, resume, or auth-env hygiene.
 - name: daemon-backend-mimocode
   location: reference/backends/mimocode/SKILL.md
   description: |
     Nested daemon-cli-backends reference for the MiMo Code (`mimocode` /
-    `mimo`) daemon backend's flag surface. Read this only when a daemon task
-    needs MiMo-specific CLI flags (model selection, provider switches): it
-    routes to the installed CLI's live help via shell (`mimo run --help`) and
-    shows how to translate that help into generic `backend_options`.
+    `mimo`) backend's flag surface. Read this only when a daemon task needs
+    MiMo-specific CLI flags, the reserved session flags, or the verified JSONL
+    answer/error and usage contract.
 - name: daemon-backend-qwen-code
   location: reference/backends/qwen-code/SKILL.md
   description: |
     Nested daemon-cli-backends reference for the Qwen Code (`qwen-code` /
-    `qwen`) daemon backend's flag surface. Read this only when a daemon task
-    needs Qwen-specific CLI flags (model selection, provider tunables): it
-    routes to the installed CLI's live help via shell and shows how to
-    translate that help into generic `backend_options`, plus the backend's
-    reserved-flag and no-resume boundaries.
+    `qwen`) backend's flag surface. Read this only when a daemon task needs
+    Qwen-specific CLI flags, the reserved `--prompt`/`--yolo`/`--approval-mode`
+    boundary, or the no-`ask` planning constraint.
 - name: daemon-backend-kimicode
   location: reference/backends/kimicode/SKILL.md
   description: |
-    Nested daemon-cli-backends reference for the Kimi Code daemon backend's
-    flag surface. Read this only when a daemon task needs Kimi-specific CLI
-    flags (model selection, skills/workspace directories): it routes to the
-    installed CLI's live help via shell and shows how to translate that help
-    into generic `backend_options`, plus the exact reserved harness flags,
-    the run-private `mcp.json` loader, and the current ask/resume limitation.
+    Nested daemon-cli-backends reference for the Kimi Code backend's flag
+    surface. Read this only when a daemon task needs Kimi-specific CLI flags,
+    the exact reserved harness flags, the run-private `mcp.json` loader, or the
+    ask/resume limitation.
 - name: daemon-backend-cursor
   location: reference/backends/cursor/SKILL.md
   description: |
-    Nested daemon-cli-backends reference for the Cursor daemon backend's flag
-    surface. Read this only when a daemon task needs Cursor-specific CLI
-    flags (model selection, output/tooling switches): it routes to the
-    installed `agent` CLI's live help via shell and shows how to translate
-    that help into generic `backend_options`.
+    Nested daemon-cli-backends reference for the Cursor backend's flag surface.
+    Read this only when a daemon task needs Cursor-specific `agent` CLI flags,
+    the harness-owned surfaces, or the source-pinned stream-json usage contract.
 - name: daemon-backend-oh-my-pi
   location: reference/backends/oh-my-pi/SKILL.md
   description: |
-    Nested daemon-cli-backends reference for the Oh-My-Pi (`omp`) daemon
-    backend's flag surface. Read this only when a daemon task needs
-    Oh-My-Pi-specific CLI flags (model selection, tool or provider
-    switches): it routes to the installed CLI's live help via shell, lists
-    the exact harness-reserved flags, and shows how to translate that help
-    into generic `backend_options`.
+    Nested daemon-cli-backends reference for the Oh-My-Pi (`omp`) backend's
+    flag surface. Read this only when a daemon task needs Oh-My-Pi-specific CLI
+    flags, the exact harness-reserved mode/approval/session flags, or its
+    session/ask/MCP status.
 - name: daemon-backend-lingtai
   location: reference/backends/lingtai/SKILL.md
   description: |
-    Nested daemon-cli-backends reference for the built-in `lingtai` daemon
-    backend (the in-process ChatSession default). Read this when routing a
-    daemon task to the built-in backend: it has no external CLI and no
-    `backend_options` flag surface; the page routes to the live authorities
-    for preset selection/inspection, lingtai/tools/skills/MCP inheritance, and the
-    daemon completion contract.
+    Nested daemon-cli-backends reference for the built-in `lingtai` backend
+    (the in-process ChatSession default). Read this when routing a task to the
+    built-in backend: it has no CLI and no `backend_options` surface, and the
+    page routes to the live authorities for preset selection/inspection,
+    tools/skills/MCP inheritance, and the completion contract.
 ```
 
 ## Routing table
@@ -176,15 +161,15 @@ The `backend` parameter selects the execution engine for emanations. Default is
 `lingtai` (the built-in ChatSession loop). External CLI backends are also
 available:
 
-For Claude Code daemon work, use the print-mode backend `claude-p` (alias
-`claude-code`). The legacy interactive PTY/TUI backend (`claude` /
-`claude-interactive`) is **no longer a user-selectable backend** — it is hidden
-from the daemon schema enum and description. Do not select it for new work; it
-proved unreliable under the daemon watchdog (mid-exploration SIGTERM / exit code
-143). The print-mode backend covers the same Claude Code use cases without
-driving a TUI. The interactive code path remains in the tree only so older
-callers and stored daemon entries that recorded `backend="claude"` keep
-resolving.
+**Claude backend naming.** For Claude Code daemon work select `claude-p`, the
+print-mode backend that wraps Claude Code's official `--print`/stream-json mode;
+`claude-code` is a compatibility alias with the same runner and reserved-flag
+set. The legacy interactive PTY/TUI names (`claude` / `claude-interactive`) are
+**no longer user-selectable** — hidden from the daemon schema enum and
+description. Do not select them for new work; that path proved unreliable under
+the daemon watchdog (mid-exploration SIGTERM / exit code 143). The code path
+remains in the tree only so older callers and stored entries that recorded
+`backend="claude"` keep resolving.
 
 > **MCP completion contract.** MCP-capable daemon backends load LingTai's
 > built-in `daemon_common` MCP for every run. The model must call the MCP
@@ -208,75 +193,47 @@ resolving.
 | `kimicode` / `kimi` | `KIMI_CODE_HOME=<run>/kimi-code-home kimi --prompt <prompt> --output-format text` (same per-run env: telemetry/auto-update off, `KIMI_MODEL_API_KEY` mapped from `KIMICODE_API_KEY`/`KIMI_API_KEY`/`MOONSHOT_API_KEY` when unset, provider/base-url/model/context defaults only when absent) | Not supported yet; `ask` returns an explicit unsupported-backend error | MoonshotAI Kimi Code CLI backend (official `MoonshotAI/kimi-code`, binary `kimi`, source-verified v0.22.3 for MCP config). `kimi` canonicalizes to `kimicode`. LingTai owns `--prompt`/`--output-format` and forbids `--yolo` (the CLI refuses `--prompt` + `--yolo`); session/`--continue` flags are reserved because resume is not wired. Stable session-id output was not verified, so `ask`/resume is intentionally unsupported. The daemon writes `<run>/kimi-code-home/mcp.json` with `daemon_common` plus parent stdio and HTTP MCP registrations; secret env/header values stay out of prompts/logs and live only in the native per-run config. |
 | `cursor` | `agent -p <prompt>` | `agent -p --resume <cursor_session_id> ...` via `ask` (async) | Cursor Agent CLI backend. Per-run MCP injection is not wired yet; local `agent --help` could not be inspected in this environment because the CLI attempted macOS keychain access and failed before printing help. |
 
-**Per-task mapping.** `task` is the complete parent-controlled system
-instruction for LingTai and the exact CLI prompt for external backends. LingTai
-alone accepts optional `prompt` as its first ordinary user message (blank or
-omitted defaults to `Begin the assigned daemon task.`). External CLI tasks that
-contain `prompt` are rejected before run-dir creation. The removed
-`system_prompt` field has no alias: migrate its complete behavior contract into
-`task`. When the daemon needs a workflow, pass `skills: [...]` as skill
-directories or direct `SKILL.md` paths; the runtime renders a compact YAML
-catalog in the one-run context. Omit `prompt` for the exact default.
-For the built-in `lingtai` backend the complete `task` is compiled into the
-daemon system prompt beside selected skills/MCP/tool guidance; it cannot
+**Per-task mapping.** The task-shape contract (`task` / `prompt` / `tools` /
+`skills` / `mcp`) is owned by the `daemon-manual` router. The backend-dependent
+part: for the built-in `lingtai` backend the complete `task` is compiled into the
+daemon system prompt beside selected skills/MCP/tool guidance, and it cannot
 override lifecycle limits, tool schemas, or the ToolExecutor/ToolCallGuard
-execution gate. For CLI backends, `task` remains the exact CLI prompt and is
-persisted in the daemon `.prompt` file for forensics.
+execution gate. For external CLI backends `task` is the exact CLI prompt,
+persisted in the daemon `.prompt` file for forensics, and a task containing
+`prompt` is rejected before run-dir creation (`prompt` is LingTai-only).
 
 **LingTai backend tool surface.** The built-in `lingtai` backend uses preset
 resolution plus daemon tool curation. Parent MCP tools are not auto-inherited:
 provide full one-run MCP registrations per task with `mcp: [{name, transport,
 ...}]`. The runtime serializes those registrations into the oneshot prompt as
-YAML for every backend. For the built-in LingTai backend, it also starts the
+YAML for every backend; for the built-in LingTai backend it also starts the
 registered MCP clients for this run and exposes their tools in the daemon tool
-surface; clients are closed when the run finishes. The `daemon_common` MCP is
-added automatically and its `finish` tool is the hard terminal-success contract.
-Claude print backends receive a per-run `--mcp-config` file; Codex receives
-`-c mcp_servers.daemon_common.*` overrides; OpenCode receives
-`OPENCODE_CONFIG_CONTENT`; and Qwen receives a per-run settings file path.
-MiMo, Oh-My-Pi, and Cursor are not declared unsupported: they have documented
-(or plausible) MCP entrypoints that still need daemon-native config wiring and
-tests. Kimi Code is wired through its source-verified run-private `mcp.json`
-loader for stdio and HTTP registrations. Secret
-`env`/`headers` values are redacted in prompts. The daemon-eligible `email`
-intrinsic is available only
-when explicitly requested in the task `tools` list, so result-only/no-tool
-emanations cannot communicate in the local agent network unless the parent opted
-in. Other intrinsics remain unavailable to keep daemon lightweight and
-non-recursive. As with file/shell/web/MCP tools, technical availability is not a
-policy by itself: the parent should use `task` to say when and how the
-daemon may use any available tool, including who it may contact and what context
-it may share if email is involved.
+surface, closing them when the run finishes. Secret `env`/`headers` values are
+redacted in prompts. Beyond the daemon-eligible, opt-in `email` intrinsic, other
+intrinsics remain unavailable to keep daemon lightweight and non-recursive.
+
+Where each backend receives its native `daemon_common` MCP config:
+
+| Backend | Injection path |
+|---|---|
+| `claude-p` / `claude-code` | per-run `--mcp-config` file |
+| `codex` | `-c mcp_servers.daemon_common.*` overrides |
+| `opencode` | `OPENCODE_CONFIG_CONTENT` environment variable |
+| `qwen-code` | per-run settings file path |
+| `kimicode` | run-private `mcp.json` loader (stdio **and** HTTP registrations) |
+| `mimocode`, `oh-my-pi`, `cursor` | **not wired yet** — documented or plausible MCP entrypoints still needing daemon-native config and tests; not declared unsupported |
 
 **When to use CLI backends:** Use them when the task benefits from a different
 agent runtime's tool surface (for example Claude Code's built-in file editing or
 Codex's sandboxed execution) rather than the LingTai emanation's curated tool
 set. `mimocode`/`mimo`, `qwen-code`/`qwen`, `oh-my-pi`/`omp`, and `kimicode`/`kimi` are accepted as canonical backend names plus short aliases; persisted daemon entries use the canonical name.
 
-**Claude backend naming:** Select `claude-p` for Claude Code daemon work; it is
-the print-mode backend that wraps Claude Code's official `--print`/stream-json
-mode. `claude-code` remains a compatibility alias for `claude-p` so older calls
-and persisted daemon entries keep working. The interactive PTY/TUI names
-(`claude` / `claude-interactive`) are hidden from the daemon schema and are not
-user-selectable; only existing stored entries still resolve through them.
-
-**Claude Code auth environment hygiene.** The print-mode Claude backend
-(`claude-p` / compatibility `claude-code`) — and the hidden legacy interactive
-path it shares code with — start `claude` with auth override variables stripped
-from the subprocess environment.
-This includes `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (which force API
-billing; GH #107) and `CLAUDE_CODE_OAUTH_TOKEN` (a stale inherited token can
-override a refreshed `~/.claude/.credentials.json` and appear as a false
-"weekly limit"; see Lingtai-AI/lingtai#189). If a manual shell invocation of
-`claude` reports a quota/weekly-limit error, run a tiny smoke test with the stale
-env token unset before concluding the account is actually exhausted:
-
-```bash
-env -u CLAUDE_CODE_OAUTH_TOKEN claude -p 'Reply exactly OK' --allowedTools Read -c
-```
-
-Do not print token values while diagnosing; `claude auth status` plus redacted
-environment variable names are enough.
+**Claude Code auth environment hygiene.** The print-mode Claude backend strips
+auth override variables from the subprocess environment, so daemon runs are
+already protected; a *manual* `claude` shell invocation is not. For the exact
+variables, the weekly-limit smoke test, and how to find a stale token's source,
+read `reference/backends/claude-p/SKILL.md` and `shell-manual` →
+`reference/bash-claude-code/SKILL.md`. Never print token values while diagnosing.
 
 **CLI backends skip preset resolution** — the external CLI manages its own model,
 tools, and permissions. The `tools` field in the task spec is ignored for CLI
@@ -290,32 +247,15 @@ prompt. This lets you reach the underlying CLI's flag surface (model selection,
 search/web access, effort levels, sandbox/policy switches, etc.) without the
 daemon needing to hard-code every flag. This is the default generic path for
 backend flags: one object may carry any number of keys, each converted
-independently in insertion order. For Codex-specific discovery and translation
-examples (e.g. reasoning effort via repeated `--config` overrides), read
-`reference/backends/codex/SKILL.md`. For OpenCode-specific examples (e.g.
-`--model provider/model`, `--variant`), read
-`reference/backends/opencode/SKILL.md`. For Claude Code-specific discovery and
-the `claude-p` harness boundary (reserved flags, MCP config, resume, auth-env
-hygiene), read `reference/backends/claude-p/SKILL.md`. For MiMo Code
-(`mimocode` / `mimo`) discovery and translation, read
-`reference/backends/mimocode/SKILL.md`. For Qwen Code–specific discovery and
-translation (e.g. model selection, reserved headless flags), read
-`reference/backends/qwen-code/SKILL.md`. For Kimi Code-specific discovery and
-translation (model selection, exact reserved flags, the run-private `mcp.json`
-loader), read `reference/backends/kimicode/SKILL.md`. For Cursor (binary `agent`), read
-`reference/backends/cursor/SKILL.md`.
+independently in insertion order. Per-backend discovery and translation examples
+live on each backend's page — see the routing table above.
 
-This is intentionally a passthrough, not a fixed table. Claude Code, Codex,
-OpenCode, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, and Cursor rev their flag
-lists between releases. Before adding new options, run the installed CLI's
-`--help` in `shell` to discover what it supports today (`claude --help`,
-`codex exec --help`, `opencode run --help`, `mimo run --help`, `qwen --help`,
-`omp --help`, `kimi --help`, or `agent --help`). Anything here is illustrative,
-not authoritative. Note that each backend reserves its own harness-owned flags
-(e.g. Oh-My-Pi reserves `--mode`, `--approval-mode yolo`, and the
-session/`--resume` flags; Kimi Code reserves `--prompt`, `--output-format`,
-`--yolo`, and session/`--continue`) — passing a reserved flag in
-`backend_options` refuses the whole batch with a clear error.
+This is intentionally a passthrough, not a fixed table. Every wrapped CLI revs
+its flag list between releases, so before adding new options run the installed
+CLI's `--help` in `shell` (`claude --help`, `codex exec --help`,
+`opencode run --help`, `mimo run --help`, `qwen --help`, `omp --help`,
+`kimi --help`, or `agent --help`). Anything here is illustrative, not
+authoritative.
 
 ```jsonc
 // Print-mode Claude backend (the recommended Claude backend)
@@ -364,23 +304,18 @@ becomes `--approval-policy never`. Unsafe keys are rejected before any subproces
 call.
 
 **Do not set a CLI backend's `max_turns` too low.** A turn budget that fits a
-quick scripted task will kill a Claude Code / Codex backend mid-exploration — the
-agent is still reading files and orienting when the watchdog terminates it,
+quick scripted task will kill a Claude Code / Codex backend mid-exploration,
 surfacing as **exit code 143** (SIGTERM) with little or no useful output. The
 exploration-then-act shape of these agents means early turns are spent on reads
-and greps, not the deliverable; budget for that. If you must cap turns, size the
-cap to the *full* task (explore + act + verify), not to a single edit, and prefer
-leaving `max_turns` unset over guessing low. Treat a 143 exit with a short
-transcript as "I starved it," not "the model failed."
+and greps, not the deliverable; budget for that. Size any cap to the *full* task
+(explore + act + verify), not to a single edit, and prefer leaving `max_turns`
+unset over guessing low. For how to read and report a 143, see
+`../forensics/SKILL.md`.
 
-**Claude reserved flags:** The `claude-p` daemon backend owns its execution mode.
-`backend_options` cannot override harness-owned flags such as `--print` or
-`--output-format`, or completion-MCP flags such as `--mcp-config` and
-`--strict-mcp-config`; attempts are rejected before spawn. `claude-p` must keep
-stream-json output and the per-run MCP config so daemon progress/result
-extraction and completion enforcement remain reliable. (The hidden legacy
-interactive `claude` path also reserves `--settings` and the managed
-system-prompt flags, but that backend is no longer user-selectable.)
+**Reserved flags are per backend.** Each backend refuses its own harness-owned
+flags in `backend_options` before spawn — one bad key refuses the whole batch.
+The exact list lives on that backend's page under "Harness boundary"; consult it
+before adding options.
 
 **When it applies:** `backend_options` is honored only at `emanate` time (when
 the CLI session is first spawned). `daemon(action="ask", ...)` reuses the
@@ -429,12 +364,10 @@ is drained by the in-process run loop.
 
 ## Backend-specific observability
 
-**Legacy interactive Claude (`claude` — hidden, not user-selectable).** This
-backend is no longer offered in the daemon schema. Older stored runs may still
+**Legacy interactive Claude (`claude` — hidden).** Older stored runs may still
 carry `claude_interactive_*` fields in `daemon.json` (managed-workspace path,
 transcript path, raw PTY log, trust-answer flag, etc.); they are kept only for
-forensics on historical runs. Do not start new emanations on this backend — use
-`claude-p`.
+forensics on historical runs.
 
 **Print-mode Claude (`claude-p` / `claude-code`).** `claude_session_id` is set on
 the first stream-json event that carries a session id (typically the system

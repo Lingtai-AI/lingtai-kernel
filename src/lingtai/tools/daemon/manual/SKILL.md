@@ -7,7 +7,7 @@ description: >
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
 version: 0.9.0
-last_changed_at: "2026-07-16T21:00:00-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
@@ -157,10 +157,8 @@ files, not standalone top-level skills.
     returns. Omitting `preset` inherits the parent's regular (non-MCP)
     effective surface instead of a fresh independent default, and does not
     perform this allowlist check at all. External CLI backends skip LingTai
-    preset resolution entirely and use their own model/tools/permissions. For
-    the full preset runtime model (raw vs resolved `init.json`, preset
-    identity, main-agent catalog vs this worker path, and how to authorize a
-    new preset for this path), read `system-manual` →
+    preset resolution entirely and use their own model/tools/permissions. The
+    full preset runtime model is owned by `system-manual` →
     `reference/substrate-manual/SKILL.md` §11.
   - `backend_options`: raw CLI flags for CLI backends only.
 - `context_token_limit`: optional context-token compaction threshold (rendered/provider-context tokens, not cumulative spend). Effective only for `backend="lingtai"` tasks whose resolved provider is Codex (`codex`/`codex-pool`) or the native `mimo` LLM provider (`manifest.llm.provider="mimo"` — NOT the `backend` enum's `mimo`/`mimocode` alias, which drives the external `mimo` CLI as a subprocess and never consults this field at all); every other provider and every external CLI backend ignores it. When the session's provider-visible input-token count reaches the limit, the runtime compacts provider context via that provider's standalone compaction (`POST /responses/compact`) and continues the same tool loop — the daemon keeps running; nothing restarts or drops history. Native `mimo` defaults to the stateless OpenAI Responses wire (full-history/raw-output-item replay; never `store`/`previous_response_id`/`conversation`/generic `context_management` — MiMo's Responses API marks those incompatible); an explicit `wire_api="chat_completions"` on the preset still selects the Chat Completions escape hatch instead. **Failure policy differs by provider:** a standalone-compaction failure is non-fatal for Codex (that turn's compaction is skipped; the loop continues on full history) but a HARD failure for native `mimo` (it propagates to the caller — never silently continuing on full history and never falling back to a different wire), because MiMo has no generic `context_management` fallback and no server-side state to lean on. Omit to inherit the parent service's resolved context window as the threshold. Must be a positive integer; a boolean is rejected.
@@ -198,15 +196,12 @@ files, not standalone top-level skills.
   and selected skills/MCP context, not only for communication. If a daemon receives `shell`,
   say whether it may run mutating commands; if it receives file access, say what
   it may read/write; if it receives web/MCP tools, say what external calls are
-  allowed; if it can communicate, say who it may contact and what context it may
-  share; if `skills` or `mcp` are selected, say when to read/apply/call them.
-- `email` is daemon-eligible but opt-in. Grant it only with `tools: ["email"]`
-  when a daemon truly needs to communicate in the local agent network: reporting
-  to peers, asking a sibling for context, or handing off a result. Availability
-  is not authorization to broadcast. The parent should specify communication
-  rules in `task`: allowed recipients, purpose, tone, thread/reply
-  discipline, information boundaries, whether the daemon may ask questions or
-  only report, how to report back to the parent, and when not to send mail.
+  allowed; if `skills` or `mcp` are selected, say when to read/apply/call them.
+  For `email` specifically — daemon-eligible but opt-in, granted only with
+  `tools: ["email"]` — availability is not authorization to broadcast: state the
+  allowed recipients, purpose, thread/reply discipline, information boundaries,
+  whether the daemon may ask questions or only report, and how to report back to
+  the parent.
 - LingTai-backend daemon tool calls go through the kernel `ToolExecutor` /
   `ToolCallGuard` path before dispatch, so guarded side effects are not allowed
   to bypass normal proposal/execution policy just because they run in a daemon.
@@ -230,13 +225,10 @@ files, not standalone top-level skills.
   easy to point at over copying or reviving a daemon session.
 - Each emanation is disposable memory but durable evidence: its folder persists
   after completion or reclaim until cleanup.
-- `daemon(action="list")` is the first layer of progressive disclosure: it
-  reads active in-memory runs plus historical `daemons/*/daemon.json` run
-  records, returning compact metadata, prompt/result previews, paths, and
-  optional `contains`/`status`/`last` filtering. If a historical
-  `daemon.json` is missing, invalid, or has an old `data_version`, list
-  does a best-effort lazy rebuild from the run folder before indexing it.
-  It is not a full transcript; use the returned paths for details.
+- `daemon(action="list")` is the first layer of progressive disclosure over
+  active and historical runs — compact metadata, previews, and paths, not a full
+  transcript. Use the returned paths for detail; see
+  `reference/cli-backends/SKILL.md` for its filters and lazy-rebuild behavior.
 - **Every terminal outcome is push-notified exactly once** — done, failed,
   cancelled, or timed out. After you dispatch, you can safely go IDLE and wait
   for the notification; do not poll only to ask "is it done yet". The
@@ -245,12 +237,10 @@ files, not standalone top-level skills.
   `daemon(action="check", id=...)` (and read `result.txt` for the full output).
 - **Use a Task Card for progress when one is available for this turn.**
   The dispatch success `handoff` is conditional: if Telegram is connected and a
-  Task Card is available for the current turn, use it to report progress; call
-  `telegram(action='manual')` and follow its `Programmable Task Card` section
-  for details. The daemon tool does not create a Task Card automatically or
-  require a watcher; the calling agent follows the Task Card manual. This keeps
-  daemon lifecycle and terminal-notification behavior unchanged while giving
-  Telegram-originated turns a better progress surface.
+  Task Card is available for the current turn, use it to report progress — call
+  `telegram(action='manual')` and follow its `Programmable Task Card` section.
+  The daemon tool does not create a Task Card automatically or require a
+  watcher; daemon lifecycle and terminal-notification behavior are unchanged.
 - **`check` still resolves a daemon after refresh/molt.** A refresh/molt gives
   you a fresh daemon registry with no in-memory entries, but the run folders
   and their notifications survive on disk. New daemon ids are compact run ids
@@ -265,12 +255,10 @@ files, not standalone top-level skills.
   that never reaches a terminal state at all.** The terminal notification covers
   every state a run can *finish* in, but a run that hangs without the watchdog
   firing, or a degraded notification-wake path, could leave you waiting forever.
-  When daemon work is pending and unverified-healthy, you may arm one self-wake
-  (a `.notification/cron.json` reminder) sized to the task's expected duration as
-  a backstop. On wake, health-check — `state`/`last_output_at` advancing,
-  `current_tool`/`tool_call_count` changing, events alive — and if there is no
-  progress, reclaim/downgrade/switch path and report rather than waiting
-  indefinitely. Do not turn this backstop into frequent polling. See
+  When daemon work is pending and unverified-healthy, arm one self-wake sized to
+  the task's expected duration as a backstop, then health-check on wake and
+  reclaim/downgrade/switch path rather than waiting indefinitely. Do not turn
+  this backstop into frequent polling. Procedure:
   `reference/inspection/SKILL.md`.
 - If repeated-call `_advisory` appears on `daemon(list/check)`, the call still
   ran; treat it as a signal to stop the loop, centralize status checking in the
@@ -300,9 +288,9 @@ Use `prompt` only when LingTai needs a custom first ordinary user message:
 }
 ```
 
-The same pattern applies to non-email tools: `tools` grants a capability surface;
-`skills` grants a selected workflow catalog; `mcp` grants one-run MCP registrations (serialized for all backends and mounted only where the backend has a native MCP path); `task` tells the daemon how to
-exercise all of them in this one run.
+`tools` grants a capability surface, `skills` a selected workflow catalog, `mcp`
+one-run registrations; `task` tells the daemon how to exercise all of them in
+this one run.
 
 ## Maintenance
 

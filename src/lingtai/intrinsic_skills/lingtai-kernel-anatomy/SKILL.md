@@ -8,7 +8,7 @@ description: >
   distributed CONTRACT.md interface-definition graph, and what to do when code
   and navigation disagree.
 version: 0.3.0
-last_changed_at: "2026-07-11T18:35:00-07:00"
+last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
 - ANATOMY.md
 - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py
@@ -22,77 +22,83 @@ maintenance: |
 ## Canonical source
 
 The repository-root [`ANATOMY.md`](../../../../ANATOMY.md) is the normative
-**anatomy of anatomy**. It defines the distributed navigation system, YAML and
-body template, pairing/link rules, component-grain gate, and maintenance
-contract. Do not maintain a second competing convention in this skill.
+**anatomy of anatomy**: the template, frontmatter and body conventions,
+component-grain gate, link/pairing semantics, and maintenance contract. Root
+[`CONTRACT.md`](../../../../CONTRACT.md) owns the governed-component pairing,
+ownership, mutual-progressive-disclosure, and fail-loud mismatch rule. Read
+them there; do not maintain a competing convention in this skill.
+
+- **ANATOMY** describes where code lives and how it composes. Code is the
+  structural source of truth.
+- **CONTRACT** defines each layer's Core, Ports, Adapters, promises, and
+  expected agent behavior. Contract is normative when implementation behavior
+  disagrees.
 
 When this skill is read from an installed package without a source checkout,
-locate the checkout you intend to modify and read its root `ANATOMY.md` before
-editing. A packaged copy is routing help, not evidence that an arbitrary local
-checkout follows the same revision.
-
-## Two paired distributed systems
-
-- **ANATOMY is the distributed code navigation system.** It describes where
-  files and symbols live, how layers connect and compose, and where state lives.
-  Code is the structural source of truth.
-- **CONTRACT is the distributed code interface definition system.** It defines
-  each layer's Core, inbound/outbound Ports, Adapters, code-interface promises,
-  expected agent behavior, and conformance tests. Contract is normative when
-  implementation behavior accidentally disagrees; manuals and skills explain
-  how agents fulfill its obligations.
-
-A root-governed architectural component keeps reciprocal `ANATOMY.md` and
-`CONTRACT.md` twins beside its code. An implementation, Adapter, or
-navigation-only Anatomy that owns no independent promise instead points to
-its unique owning governed Contract. Root `CONTRACT.md` owns the full pairing,
-ownership, mutual-progressive-disclosure, and fail-loud reporting rule; do not
-duplicate or auto-fix that rule here.
+locate the checkout you intend to modify and read *its* root `ANATOMY.md`
+before editing. A packaged copy is routing help, not evidence that an arbitrary
+local checkout follows the same revision.
 
 ## Navigation workflow
 
-For a structural question:
-
 1. Open the repository-root `ANATOMY.md`.
 2. Read its `Components` and `Composition` sections.
-3. Choose the relevant child anatomy and descend.
-4. Repeat until the local anatomy points at the exact code citation.
-5. Open the cited code. Anatomy is navigation; code is evidence.
+3. Choose the relevant child anatomy and descend; repeat until the local
+   anatomy points at an exact code citation.
+4. Open the cited code. Anatomy is navigation; code is evidence.
 
 For enumeration questions — every callsite, matching file, or import — use
 search after anatomy identifies the correct territory.
 
 The current source root is `src/lingtai/`; the kernel implementation descends
-through `src/lingtai/kernel/ANATOMY.md`.
-
-## When a layer earns a pair
-
-Create or govern a component layer when a competent agent can reason about it as
-an independent architectural unit and it owns a meaningful responsibility or
-interface boundary. Do not create ceremonial anatomies for trivial helper
-folders, single value objects, or one-function leaves.
-
-During staged migration, existing anatomy files remain useful navigation. A
-component joins the paired governed system when its co-located contract is
-linked from the root contract; from then on, the reciprocal pair and
-parent/child graph rules in root `ANATOMY.md` apply.
+through [`src/lingtai/kernel/ANATOMY.md`](../../kernel/ANATOMY.md).
 
 ## Maintenance direction
+
+Who repairs drift depends on which agent you are:
+
+- **Coding agents** update the affected anatomy in the same commit as the code
+  change that moved files, symbols, ownership, connections, composition, or
+  state.
+- **LingTai agents** report drift as issues, mail, or PR proposals. Do not
+  silently fix.
 
 The repair direction differs by document:
 
 - **Code vs Anatomy:** code is normally the current structural fact. Repair
-  stale paths, citations, connections, composition, or state descriptions in
-  the same PR. If the code move itself is defective, fix/report the code rather
-  than encoding a false map.
-- **Code vs Contract:** do not rewrite the promise to match accidental behavior.
-  Treat implementation as defective unless an authorized contract change
-  updates the Port, affected Adapters, contract version, and shared tests.
+  stale paths, citations, connections, composition, or state descriptions. If
+  the code move itself is defective, fix or report the code rather than
+  encoding a false map.
+- **Code vs Contract:** do not rewrite the promise to match accidental
+  behavior. Treat implementation as defective unless an authorized contract
+  change updates the Port, affected Adapters, contract version, and shared
+  tests.
 
-Every code change that moves or renames mapped symbols, changes ownership or
-connections, or changes persistent/ephemeral state updates the relevant anatomy
-in the same commit. Verify touched citations and run the repository's
-architecture-document validator plus the anatomy drift checker.
+Verify every touched citation, then run the repository's architecture-document
+validator and the drift checker below.
+
+## Drift checker
+
+This skill owns the canonical advisory citation-rot checker. Run it from the
+repository root (cwd is taken as the repo root):
+
+```bash
+# Report only; exits 0 even when drift is found.
+python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py
+# CI / pre-commit gate: exits 1 if any drift is found.
+python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py --check
+# Narrow the scan (default: src).
+python src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py --root src/lingtai/kernel
+```
+
+It catches only mechanical citation rot — a `file.py:line` target that is
+missing or past end-of-file. An in-range citation can still point at the wrong
+code, so an agent must open the cited line to confirm the claim.
+
+`scripts/bench_agent_session_rebuild.py` is the companion benchmark cited by
+`src/lingtai/kernel/ANATOMY.md` for the tiered `rebuild_agent_session_from_events()`
+path; it takes `--events`/`--molt-every` against a synthetic temp agent dir, or
+`--agent-dir <path>` to time an existing one.
 
 ## Fallback essentials
 

@@ -3,7 +3,7 @@ name: psyche-manual
 description: |
   Router and operational guide for the psyche tool — molt, pad management, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with a system-authored summary; or you need to understand keep_tool_calls, keep_last, and pad.append. Routes consequential molt handoffs to assets/molt-template.md while keeping routine guidance compact.
 version: 1.1.0
-last_changed_at: "2026-07-06T14:50:00-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/psyche/__init__.py
 - src/lingtai/tools/psyche/_molt.py
@@ -72,7 +72,7 @@ reachable only through the parent index. That is why the parent must list every
 child explicitly. See the knowledge manual's "Nesting and sub-knowledge" section
 (`.library/intrinsic/capabilities/knowledge/SKILL.md`) for the structural rule.
 
-The directory name is `<YYYY-MM-DD>-molt-<molt-count>-<slug>`. Read the molt count from your resident system prompt's identity section — "You have undergone N molts since birth." Use that N: the entry records the pre-molt segment, written *before* you call `psyche(context, molt)`. (The molt tool result afterward reports the next count, N+1; that belongs to the next segment, not this one.) Embedding the count keeps chronology stable when you molt more than once on the same date: the date alone cannot order two same-day entries, but the molt count always can.
+The directory name is `<YYYY-MM-DD>-molt-<molt-count>-<slug>`. Read `<molt-count>` from your resident system prompt's identity section — "You have undergone N molts since birth." Use that N: the entry records the pre-molt segment. Embedding the count keeps chronology stable when you molt more than once on the same date, which the date alone cannot order.
 
 **The parent `knowledge/session-journal/KNOWLEDGE.md` is routing-only** — short,
 scannable, progressive-disclosure. It is a table of contents, not a journal. One
@@ -81,20 +81,9 @@ line per sub-entry: date, slug, one-sentence hook, and the child's *relative* pa
 Never let narrative leak into the parent — if a line grows past its hook, the
 detail belongs in the child.
 
-**The sub-entry `<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md` is the substance** — write it as the molt-history record of the segment, *before* you molt. Use `assets/session-journal-entry-template.md` from this skill directory for the frontmatter (including the `molt_count` field **and the required `type: session-journal` marker**) and section layout. This sub-entry's path is what you pass to `psyche(context, molt, session_journal_path=...)`, and the kernel validates the marker before letting the molt proceed (see §6). It is a journal, not a transcript — capture, in roughly this shape:
+**The sub-entry `<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md` is the substance** — write it as the molt-history record of the segment, *before* you molt, via `write`/`edit` directly. Read `assets/session-journal-entry-template.md` from this skill directory for the frontmatter (including `molt_count`, the required `type: session-journal` marker, and the YAML block-scalar `description` that keeps a `: ` in the text from breaking the gate) and the section layout. It is a journal, not a transcript. Several thousand tokens is fine when the segment was rich; keep it concise when it was small.
 
-**YAML frontmatter safety:** `name` and `description` are real YAML, not free-form text. Prefer the template's `description: >-` block scalar. If you write a one-line value containing a colon followed by a space (for example `description: Session record for runtime relay: cache handoff`), YAML treats the second colon as a mapping separator and the molt gate rejects the file. Quote the value or use the block scalar, then retry the same `psyche(context, molt, session_journal_path=...)` call.
-
-- **Top-of-entry timestamp + TL;DR** *(soft convention)* — open the body with a visible timestamp and a one- or two-line gist before the sections, so the next you can date and grasp the entry at a glance; the molt gate validates only frontmatter, never this
-- **What the segment was about** — the original ask, the framing
-- **Accomplishments** — what you completed/moved forward, the outputs, who was told and where
-- **Decisions and their reasoning** — the *why*, especially where an alternative was rejected
-- **Artifacts and paths** — files, reports, branches, PRs, commits, message IDs that anchor the work; reference paths/IDs, never inline secrets or large blobs
-- **Open tasks** — things noticed or started but deferred, each with a next step
-- **Collaborators** — who is involved, their channels, who is waiting on what
-- **Gotchas and lessons** — actionable warnings and failed approaches
-
-Several thousand tokens is fine when the segment was rich; keep it concise when it was small. The `<YYYY-MM-DD>-molt-<molt-count>-<slug>` prefix keeps chronology visible and stable in `ls` even across multiple molts on one day. Each child is sub-knowledge under the routing parent — the scanner does not catalog it separately, so it is reachable only via the parent index; that is why you append the index line below. Write files via `write`/`edit` directly.
+This sub-entry's path is what you pass to `psyche(context, molt, session_journal_path=...)`, and the kernel validates it before letting the molt proceed (see §6).
 
 Updating the parent index at each session is part of the practice — append one line referencing the new sub-entry. Then write the successor summary (§6), which points back at this entry's path.
 
@@ -172,25 +161,19 @@ For a routine molt, include:
 - **The session journal sub-entry path** — so the next you can read the full narrative
 - **Anything else worth carrying forward** — insights, gotchas
 
-For a consequential molt — long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, or any handoff the next you could not reconstruct quickly — read `assets/molt-template.md` from this skill directory and use the full scaffold there. Fill every section; write `None` rather than omitting a section.
-
 Quick routing:
 
 | Need | Use |
 |---|---|
 | Routine molt | The short bullet list above. |
-| Consequential molt / successor handoff | Read `assets/molt-template.md` from this skill directory; use its full scaffold and checklist. |
+| Consequential molt / successor handoff — long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, or any handoff the next you could not reconstruct quickly | Read `assets/molt-template.md` from this skill directory; use its full scaffold and checklist. Fill every section; write `None` rather than omitting one. |
 | Unsure whether the handoff is complex | Use the asset; extra structure is cheaper than a bad handoff. |
 
 Before you call `psyche(object="context", action="molt", ...)`, always verify at minimum:
 
-- The just-finished session segment is recorded as a session-journal sub-entry
-  (your molt history) under `knowledge/session-journal/`, using
-  `assets/session-journal-entry-template.md` — see §4. Write this *before* the
-  summary; it is the narrative the summary points back to. **Its path is the
-  required `session_journal_path` argument and the kernel validates it before
-  shedding context** — the journal must carry the `type: session-journal`
-  marker or the molt is refused.
+- The session-journal sub-entry for the just-finished segment exists and is
+  written *before* the summary (§4) — it is the narrative the summary points
+  back to, and its path is the validated `session_journal_path`.
 - Durable stores and session journal were updated where needed before writing the summary.
 - Every outstanding task has an explicit next action.
 - Collaborators, channels, approvals, and key paths are named where relevant.
@@ -205,7 +188,7 @@ Before you call `psyche(object="context", action="molt", ...)`, always verify at
 
 Context pressure is agent state, not a dismissible notification. Tool results surface a natural-language reminder under `_meta.agent_meta.agent_state.context.molt` only after context has stayed high for several consecutive fresh provider rounds (the sustained-pressure threshold is 85%). It rides on the current `agent_meta` snapshot (carried on the designated final result of each batch; restamped there while active) so the reminder persists. The field name is historical: the reminder is a context-pressure action, not an early staged molt order or a machine-readable tag block.
 
-When this reminder appears, batch already-digested noisy history before summarizing. Repeated summarize calls while context stays above 85% substantially hurt token efficiency, so avoid summarizing one small piece at a time. If a batched summarize/reconstruction pass still leaves context above 85%, stop repeating summarize, tend durable stores, and molt deliberately. If context falls below the high-pressure threshold but remains above the recovery target, continue only when the current task still needs the carried context; otherwise molt at a natural task boundary. The reminder points back to this manual/procedure without inlining the full workflow.
+When this reminder appears, batch already-digested noisy history into one summarize pass rather than summarizing a small piece at a time — the summarize cadence, rebuild semantics, and recovery target are owned by `system-manual` → `reference/summarize-manual/SKILL.md`. The molt decision is yours: if a batched summarize/reconstruction pass still leaves context above 85%, stop repeating summarize, tend durable stores, and molt deliberately. If context falls below 85% but stays above the recovery target, continue only when the current task still needs the carried context; otherwise molt at a natural task boundary.
 
 ### Cache-miss budget
 

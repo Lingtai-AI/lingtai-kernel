@@ -20,16 +20,16 @@ maintenance: |
 # LingTai Kernel Development
 
 Read this skill before every development task in this repository. It owns the
-**workflow**, not the architecture facts or interface promises. Follow its links
-instead of copying the root documents into this file.
+**workflow**; Anatomy owns structure and Contract owns interface promises.
+Follow its links instead of copying the root documents into this file.
 
-Above all, the root [`CONTRACT.md`](../CONTRACT.md) `## Design principles`
-section is mandatory reading, and you MUST apply those principles to every
-change: gate any new or expanded i18n on explicit human confirmation, prefer
-progressive disclosure, ensure every capability you touch is taught by a manual
-(what/how/why), and keep that manual discoverable from **both** the corresponding
-`CONTRACT.md` and its paired `ANATOMY.md` (`related_files` on both twins) — one
-edge alone is a defect.
+Above all, root [`CONTRACT.md`](../CONTRACT.md) `## Design principles` is
+mandatory reading, and you MUST apply every one of those principles to each
+change — including the i18n gate, progressive disclosure, the
+manual-per-capability rule, and manual discoverability from **both** the
+capability `CONTRACT.md` and its paired `ANATOMY.md` (`related_files` on both
+twins; one edge alone is a defect). Route each change to the manual that teaches
+the capability it touches.
 
 ## First establish the task and baseline
 
@@ -49,28 +49,22 @@ workflow and its route to the full coding-agent and test reference.
 
 Use progressive disclosure in this order:
 
-1. Read root [`ANATOMY.md`](../ANATOMY.md), then descend through
-   the nearest child
-   anatomy until cited code answers where the relevant files, connections,
-   composition, and state live.
-2. Read root [`CONTRACT.md`](../CONTRACT.md), **beginning with its
-   `## Design principles` section, and apply those principles to every change**
-   (i18n gate, progressive disclosure, every-capability-has-a-manual, and manual
-   discoverability from both the corresponding Contract and Anatomy). If the
-   component is
-   governed, read its
-   paired local contract before changing its interface or expected behavior.
+1. Read root [`ANATOMY.md`](../ANATOMY.md), then descend through the nearest
+   child anatomy until cited code answers where the relevant files,
+   connections, composition, and state live.
+2. Read root [`CONTRACT.md`](../CONTRACT.md), beginning with `## Design
+   principles`. If the component is governed, read its paired local contract
+   before changing its interface or expected behavior.
 3. Read the cited code and narrow tests. Anatomy is navigation, not evidence in
    place of code; Contract is the normative promise, not a description to weaken
    when implementation drifts.
 4. Load a narrower manual only when the task needs its commands, examples, or
    troubleshooting. Do not preload unrelated references.
 
-The three local systems have different jobs:
-
-- **ANATOMY** tells you where code is and how it is connected.
-- **CONTRACT** tells you what interfaces and expected agent behavior promise.
-- **This skill** tells you how to develop and validate a change.
+The
+[`lingtai-kernel-anatomy`](../src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md)
+skill owns how to enter and descend those two graphs; this skill owns how to
+develop and validate a change.
 
 ## Make the smallest complete change
 
@@ -89,24 +83,23 @@ For every code or architecture-document change, assess both distributed systems:
 - Neither changed: record that both were checked; do not create documentation
   churn to simulate compliance.
 
-Follow the repair direction defined by the roots. Verified code is normally the
-structural truth for Anatomy. Contract is normative for interface and Behavior:
-implementation drift is a defect unless a maintainer explicitly authorizes a
-promise change. Do not create a second graph registry; maintain YAML
-`related_files` around the nodes you touch.
+Follow the repair direction defined by root `CONTRACT.md` `## Maintenance
+contract`: verified code is normally the structural truth for Anatomy, while
+Contract is normative for interface and Behavior, so implementation drift is a
+defect unless a maintainer explicitly authorizes a promise change. Do not create
+a second graph registry; maintain YAML `related_files` around the nodes you
+touch.
 
 ### Classify the Anatomy/Contract relationship first
 
-Follow the full pairing and ownership rule in root
-[`CONTRACT.md`](../CONTRACT.md). A governed architectural component owns
-reciprocal Anatomy/Contract twins; an implementation, Adapter, or
-navigation-only Anatomy may instead point to exactly one owning governed
-Contract and explain why it has no independent local Contract. Read Anatomy
-for structure and Contract for promises, following their reciprocal links
-rather than copying either body. Never manufacture an empty or duplicate
-Contract for filename symmetry. If the relationship does not satisfy the root
-rule, stop and report the root-defined mismatch fields and suggested action;
-do not normalize or auto-fix it without authorization.
+Root [`CONTRACT.md`](../CONTRACT.md) owns the full pairing and ownership rule: a
+governed architectural component owns reciprocal Anatomy/Contract twins, while an
+implementation, Adapter, or navigation-only Anatomy instead points to exactly one
+owning governed Contract and explains why it has no independent local Contract.
+Never manufacture an empty or duplicate Contract for filename symmetry. If the
+relationship does not satisfy the root rule, stop and report the root-defined
+mismatch fields and suggested action; do not normalize or auto-fix it without
+authorization.
 
 ### Keep Maintenance guidance aligned
 
@@ -116,17 +109,6 @@ retain complete, safe `related_files`, reciprocal Anatomy/Contract and ownership
 links, and the rule to update the pair when structure or normative behavior
 changes. The note is documentation, not a byte-identical snapshot; do not add a
 second registry or a generated/hash-based maintenance mechanism.
-
-Run the focused architecture check when the graph changes:
-
-```bash
-python -m pytest -q tests/test_architecture_documents.py
-```
-
-It validates frontmatter path safety, root and child pairing, reciprocal graph
-links, and unique ownership for linked implementation Anatomies. If it reports
-a mismatch, stop and report the offending path and links rather than silently
-normalizing or auto-fixing documents.
 
 ## Validate in layers
 
@@ -139,6 +121,11 @@ python -m pytest -q tests/test_architecture_documents.py  # when either graph ch
 # Run the canonical Anatomy drift checker in --check mode (see the Anatomy skill).
 git diff --check
 ```
+
+`tests/test_architecture_documents.py` validates frontmatter path safety, root
+and child pairing, reciprocal graph links, and unique ownership for linked
+implementation Anatomies. If it reports a mismatch, stop and report the offending
+path and links rather than silently normalizing or auto-fixing documents.
 
 Also run package, import, build, adapter, or source-drift tests when the diff
 crosses those boundaries. Use the repository virtual environment, inspect every
@@ -176,21 +163,13 @@ satisfies this baseline.
 
 This directory owns the kernel repository's complete reusable development kit,
 not only this entry document. Add supporting material when real repeated work
-justifies it:
+justifies it: `scripts/` for deterministic checks, maintenance, or generation;
+`references/` for deep procedures loaded only when needed; `assets/` for
+templates, examples, or fixed resources. Do not create empty directories or copy
+repository rules into support files.
 
-- `scripts/` for deterministic checks, maintenance, or generation;
-- `references/` for deep procedures loaded only when needed;
-- `assets/` for templates, examples, or fixed resources.
-
-Do not create empty directories or copy repository rules into support files.
-Keep one `SKILL.md` entry, let it route progressively, and validate every script
-or asset against the workflow that needs it.
-
-## Keep the network maintainable
-
-When this workflow changes, update this repository-local skill and the
-README/Anatomy/Contract entry routes together. Change
-the normative root documents only when their own meaning, schema, or promises
-change. Keep this file a concise router: detailed
-architecture belongs in Anatomy/Contract, and tool-specific recipes belong in
-the narrower manuals they own.
+Keep one `SKILL.md` entry and let it route progressively: detailed architecture
+belongs in Anatomy/Contract, and tool-specific recipes belong in the narrower
+manuals they own. When this workflow changes, update this skill and the
+README/Anatomy/Contract entry routes together; change the normative root
+documents only when their own meaning, schema, or promises change.

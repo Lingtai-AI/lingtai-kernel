@@ -26,14 +26,9 @@ where the substance lives, and stop. Reference paths/PRs/message IDs — never
 inline secrets or full file contents. After writing it, append one line to the
 parent index at `knowledge/session-journal/KNOWLEDGE.md`.
 
-It also helps to open the body with an **immediately visible timestamp and a
-one- or two-line TL;DR** before the sections — so the next you can date the
-entry and grasp its gist at a glance without reading the whole record. This is a
-soft convention, not a gate: the molt validator checks only the frontmatter
-marker and structure, never the body. Skip or reshape it when it does not fit.
-
 The frontmatter below is the on-disk format; fill every section, writing `None`
-rather than omitting one.
+rather than omitting one. The molt validator checks only the frontmatter marker
+and structure, never the body.
 
 > **Required marker (the molt gate):** the frontmatter **must** include
 > `type: session-journal` (or, equivalently, `session_journal: true`). The

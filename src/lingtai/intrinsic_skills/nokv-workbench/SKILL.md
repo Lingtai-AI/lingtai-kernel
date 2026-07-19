@@ -1,5 +1,5 @@
 ---
-last_changed_at: 2026-07-08T14:30:00-07:00
+last_changed_at: 2026-07-19T00:00:00Z
 name: nokv-workbench
 description: >
   Thin routing manual for NoKV-controlled workbenches. Use when an agent is
@@ -28,25 +28,18 @@ manual.
 
 ## MCP registration
 
-Register the MCP with a per-agent `mcp_registry.jsonl` line like:
+Add one line to the per-agent `mcp_registry.jsonl` (copy
+`assets/mcp_registry.example.jsonl`):
 
 ```json
 {"name":"nokv-workbench","summary":"NoKV-controlled workbench artifact namespace.","transport":"stdio","command":"/path/to/nokv","args":["--server-bind","127.0.0.1:7777","--object-backend","rustfs","--s3-bucket","nokv-lingtai-workbench","mcp","--profile","workbench","--workbench-root","/agents/{agent_id}/wb"],"source":"local-nokv"}
 ```
 
-Activate it from `init.json`:
-
-```json
-{
-  "mcp": {
-    "nokv-workbench": {
-      "type": "stdio",
-      "command": "/path/to/nokv",
-      "args": ["--server-bind", "127.0.0.1:7777", "--object-backend", "rustfs", "--s3-bucket", "nokv-lingtai-workbench", "mcp", "--profile", "workbench", "--workbench-root", "/agents/{agent_id}/wb"]
-    }
-  }
-}
-```
+Activate the same `command` and `args` from `init.json` under
+`mcp.nokv-workbench` with `"type": "stdio"` — copy `assets/init-snippet.json`.
+Where the registry file lives, how to edit it, and how `system(action="refresh")`
+applies the change belong to `mcp-manual`; only the NoKV-specific arguments
+are documented here.
 
 Keep the global NoKV flags before `mcp`, and set them to the same metadata
 server and object-store bucket used by the running NoKV service. If your
@@ -83,16 +76,6 @@ LingTai's local `read`, `write`, `edit`, `grep`, or `glob` tools.
 Each workbench id maps to `<workbench-root>/<id>/` (with the per-agent root
 above, `/agents/<agent_id>/wb/<id>/`) with these sections:
 
-```text
-input/
-scripts/
-outputs/
-logs/
-metadata/
-```
-
-Use the sections consistently:
-
 | Section | Contents |
 |---|---|
 | `input` | task event payloads, dataset references, parameters |
@@ -107,13 +90,11 @@ local LingTai workdir.
 
 ## Workflow
 
-1. Create the workbench:
+1. Create the workbench with `workbench_create`:
 
 ```json
 {"id":"spedas-task-001"}
 ```
-
-with `workbench_create`.
 
 2. Write inputs, scripts, outputs, and evidence with
    `workbench_put_file`. Pass `replace=true` only when intentionally
@@ -159,13 +140,9 @@ with `workbench_create`.
 `workbench_commit` publishes `metadata/run_manifest.json`. In v0 this file
 is the completion marker. A workbench without it is not complete.
 
-6. Snapshot the committed workbench with `workbench_snapshot`, giving it a
-   `name` (a stable checkpoint alias) and a `ttl_days` that outlasts how long
-   the handoff must stay restorable (default lease is 7 days). In final reports
-   or handoff notes, cite the checkpoint `name`, its `snapshot_id`, and the
-   returned `lease_expires_at` so a later reader knows both what to restore and
-   when it reaps. If the note must outlive the lease, call
-   `workbench_snapshot_renew` first — see "Checkpoints and leases".
+6. Snapshot the committed workbench with `workbench_snapshot`, choosing a
+   `ttl_days` that outlasts how long the handoff must stay restorable — see
+   "Checkpoints and leases" for naming, lease, renewal, and citation rules.
 
 ## Checkpoints and leases
 
@@ -176,7 +153,8 @@ failure mode that strands handoffs — a `snapshot_id` cited in a note, then
 unreachable a couple of days later because nobody extended it.
 
 **The default lease is 7 days, but only when you mint through this tool.** Pass
-`ttl_days` to `workbench_snapshot` to choose the lease (default 7, maximum 90):
+`ttl_days` to `workbench_snapshot` to choose the lease (default 7, maximum 90),
+along with a `name`:
 
 ```json
 {"id":"spedas-task-001","name":"final-v1","ttl_days":30}
@@ -192,18 +170,18 @@ handoff.
 read by, instead of memorizing an opaque `snapshot_id`. The name is the durable
 handle; the id is for pinning an exact version.
 
+In final reports or handoff notes, cite the checkpoint `name`, its
+`snapshot_id`, and the returned `lease_expires_at` so a later reader knows both
+what to restore and when it reaps.
+
 ### Renew before a handoff outlives the lease
 
 If a checkpoint must survive longer than its lease — a cross-session handoff, a
-note someone opens next week — renew it **before** you commit or hand off:
-
-```json
-{"id":"spedas-task-001","name":"final-v1","ttl_days":30}
-```
-
-with `workbench_snapshot_renew`. Renew is **extend-only**: it pushes
-`lease_expires_at` further out and never pulls it in, so a `ttl_days` that would
-shorten the lease is ignored. Address the checkpoint by `name` or `snapshot_id`.
+note someone opens next week — call `workbench_snapshot_renew` **before** you
+commit or hand off, with the same argument shape as `workbench_snapshot` above.
+Renew is **extend-only**: it pushes `lease_expires_at` further out and never
+pulls it in, so a `ttl_days` that would shorten the lease is ignored. Address
+the checkpoint by `name` or `snapshot_id`.
 
 ### Discover checkpoints with workbench_snapshot_list
 
@@ -266,10 +244,6 @@ Reading inside one workbench:
 - Files larger than the structured limit: use `format="bytes"` with
   `offset`/`limit` ranges (bytes come back base64-encoded), or
   `workbench_grep` to locate lines first.
-- To read a past checkpoint instead of the current state, pass `at_snapshot`
-  (a checkpoint `name` or `snapshot_id`) to `workbench_read`, `workbench_list`,
-  or `workbench_stat`. Reaped checkpoints error loudly — see "Checkpoints and
-  leases".
 - Record shape depends on content type: `.json` files parse into JSON
   records; `.jsonl`, `.log`, and other text files come back as `text_lines`
   records whose `value.text` holds the raw line — parse it yourself when the
@@ -282,6 +256,8 @@ Reading inside one workbench:
   `glob` (basename match, `*` and `?`, CJK-safe, e.g. `"*.md"`). `limit`
   accepts up to 300 matches. Narrow with `section`/`glob` first; huge result
   sets get compacted out of your context later.
+- To read a past state instead of the current one, pass `at_snapshot` — see
+  "Checkpoints and leases".
 
 Searching across workbenches:
 
@@ -296,13 +272,12 @@ Searching across workbenches:
   (no index registration needed): `path`, `name`, `kind`, `size_bytes`,
   `body.content_type`, `body.producer`, `body.manifest_id`. A single
   `workbench_search` with `facets: ["body.content_type"]` replaces a
-  list-then-stat sweep.
+  list-then-stat sweep. **It matches paths and metadata, not file contents —
+  content search stays with `workbench_grep`.**
 - `workbench_aggregate` computes count/sum/avg/min/max with `group_by` over
   the same fields. `workbench_catalog` lists the queryable fields; until
   custom indexes exist it always returns the built-in set above, so calling
   it is rarely necessary.
-- **Content search stays with `workbench_grep`** — `workbench_search`
-  matches paths and metadata, not file contents.
 
 `workbench_search`, `workbench_grep`, `workbench_list`, `workbench_stat`,
 and `workbench_read` return flat `section`, `relative_path`, and `path`

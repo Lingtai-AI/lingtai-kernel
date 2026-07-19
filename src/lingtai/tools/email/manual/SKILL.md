@@ -1,20 +1,16 @@
 ---
 name: email-manual
 description: >
-  Operational guide for the `email` tool — LingTai email protocol within
-  your `.lingtai/` network. Covers send/check/read/dismiss/reply/reply_all/
-  search/delete/archive/contacts, reply discipline (always reply on the
-  channel the message arrived on), addressing (bare paths like `human`,
-  `mimo-1`), self-send for persistent notes that survive molt, time
-  capsules (delayed self-send via `delay`; for recurring alarms use the
-  host scheduler — see `shell-manual` and `system-manual`), the full-body
-  persistent notification contract, the 50,000-character send cap, and addon
-  ownership. This is for INTERNAL email
-  only — for real internet email via IMAP/SMTP, see the `mcp-manual`
-  skill (the lingtai-imap addon owns that surface).
+  Operational guide for the `email` tool — LingTai email protocol within your
+  `.lingtai/` network. Covers send/check/read/dismiss/reply/reply_all/search/
+  archive/delete/contacts, reply discipline, bare-path addressing (`human`,
+  `mimo-1`) and `peer`/`abs` modes, self-send notes that survive molt, delayed
+  self-send time capsules, the full-body persistent notification contract, and
+  the 50,000-char send cap. INTERNAL only — real internet email is `mcp-manual`;
+  recurring schedules are `shell-manual`.
 version: 1.0.1
 tags: [capabilities, email, communication]
-last_changed_at: "2026-07-09T22:24:00-07:00"
+last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
 - src/lingtai/tools/email/manager.py
 - src/lingtai/tools/email/primitives.py
@@ -33,26 +29,22 @@ maintenance: |
 The `email` tool moves messages as files between agents that share a `.lingtai/` directory tree:
 
 - `email(action="send")` records sender-side outbox/sent state, then starts one `_mailman` daemon thread per recipient. Even when `delay=0`, the tool may return `status: "sent"` before that background delivery attempt finishes.
-- Peer/absolute delivery to a normal agent accepts only a target with `.agent.json` and a fresh `.agent.heartbeat` (normally younger than two seconds); human recipients (`admin: null`) skip the heartbeat check. If the target is refreshing/relaunching and its heartbeat is not fresh yet, delivery is refused as `not running`; no recipient inbox entry is queued for later. The eventual failure is surfaced to the sender as an `email.bounce` system notification.
+- Delivery to a normal agent accepts only a target with `.agent.json` and a fresh `.agent.heartbeat` (normally younger than two seconds); human recipients (`admin: null`) skip the heartbeat check. If the target is refreshing/relaunching and its heartbeat is not fresh yet, delivery is refused as `not running`; no recipient inbox entry is queued for later. The eventual failure is surfaced to the sender as an `email.bounce` event in `.notification/system.json`.
 - Read state lives in the recipient's `mailbox/read.json` (a set of message IDs).
 - The kernel mirrors current unread mail into `.notification/email.json`, which surfaces as a notification block read via `notification(action="check")` — that's how you find out new mail arrived.
 
 > **Refresh/relaunch window.** A target `lingtai run` process can already be visible in `ps` before it publishes a fresh heartbeat. In that interval, internal email may bounce for liveness while a CPR attempt's child launch exits because the CLI duplicate-process guard finds the existing same-workdir PID. Those results are compatible: do not stack CPR attempts. Wait for the target heartbeat to become fresh, then retry the email once. Use CPR only if the existing startup exits or fails to become live.
 
-There is no concept of an SMTP server, an MX record, or an external address. **If a request involves `@gmail.com`, `@outlook.com`, IMAP folders, or anything that needs to leave the machine, the right tool is the `lingtai-imap` MCP addon — see the `mcp-manual` skill, not this one.**
+**If a request involves `@gmail.com`, `@outlook.com`, IMAP folders, or anything that needs to leave the machine, the right tool is the `imap` MCP addon — see the `mcp-manual` skill, not this one.**
 
-## Internal Email vs IMAP
-
-| Feature         | Internal Email (this skill)                                  | IMAP (see `mcp-manual`)                                         |
-|-----------------|--------------------------------------------------------------|-----------------------------------------------------------------|
-| What            | LingTai email protocol within `.lingtai/` network            | Real email via IMAP/SMTP (Gmail, Outlook, etc.)                 |
-| Address format  | Bare path (e.g. `human`, `mimo-1`)                           | `@` address (e.g. `alice@gmail.com`)                            |
-| Tool            | `email` (intrinsic)                                          | `imap` (MCP server, `lingtai-imap` addon)                       |
-| Reply policy    | Always reply on the same channel                             | Requires confirmation for unknown senders                       |
-| Persistence     | Survives molt, lives in working directory                    | External mailbox, managed by IMAP server                        |
-| Use case        | Agent-to-agent communication, self-send, time capsules       | Real-world email integration                                    |
-
-This skill covers INTERNAL email only. For IMAP/SMTP email, see the `mcp-manual` skill.
+| Feature         | Internal Email (this skill)                            | IMAP (see `mcp-manual`)                          |
+|-----------------|--------------------------------------------------------|--------------------------------------------------|
+| What            | LingTai email protocol within `.lingtai/` network      | Real email via IMAP/SMTP (Gmail, Outlook, etc.)  |
+| Address format  | Bare path (e.g. `human`, `mimo-1`)                     | `@` address (e.g. `alice@gmail.com`)             |
+| Tool            | `email` (intrinsic)                                    | `imap` (MCP server, `imap` addon)                |
+| Reply policy    | Always reply on the same channel                       | Requires confirmation for unknown senders        |
+| Persistence     | Survives molt, lives in working directory              | External mailbox, managed by IMAP server         |
+| Use case        | Agent-to-agent communication, self-send, time capsules | Real-world email integration                     |
 
 ## 2. Addressing
 
@@ -71,9 +63,16 @@ email(action="send", address=["mimo-1", "scribe"], cc=["human"],
       subject="status", message="ready")
 ```
 
-To discover who exists: glob `.lingtai/*/.agent.json` from a shell. Use the `agent_name` field of each as the address. Do not invent addresses—a refused dispatch produces an `email.bounce` event in `.notification/system.json`; no recipient inbox entry is queued for later.
+To discover who exists: glob `.lingtai/*/.agent.json` from a shell. Use the `agent_name` field of each as the address. Do not invent addresses — a refused dispatch produces an `email.bounce` event and queues no recipient inbox entry.
 
-When displaying a sender to the human or another agent, prefer **`sender_nickname` if set, else `sender_name`** (both are in the inbound message's `identity` block). Bare addresses are routable but ugly.
+### `mode` — peer vs abs address resolution
+
+`mode` is the **address mode for `send`**, not an output-verbosity knob. Almost always leave it unset:
+
+- `peer` (default) — `address` is a bare agent name resolved against your own network folder. Correct for the human, fellow agents, and your own avatars.
+- `abs` — `address` is a literal absolute path to another agent's working directory, e.g. `/Users/alice/projectB/.lingtai/外援`. Use it only to reach an agent in a *different* `.lingtai/` network on the same machine. It embeds a `_return_route` so replies resolve unambiguously, and it does **not** bypass the handshake: the recipient still needs a valid `.agent.json` and a fresh heartbeat.
+
+Any other value is rejected with `invalid mode`.
 
 ## 3. Reply discipline — the one rule you cannot break
 
@@ -105,8 +104,6 @@ When you mention the sender in a reply body or in a summary you give the human, 
 
 ## 5. Actions — full surface
 
-The `email` tool dispatches by `action`. All actions take optional `mode` for output verbosity (see §11).
-
 | Action            | Purpose                                                            | Required args                                      |
 |-------------------|--------------------------------------------------------------------|----------------------------------------------------|
 | `send`            | Start a new thread; body hard-capped at 50,000 characters          | `address`, `subject`, `message`                    |
@@ -117,7 +114,7 @@ The `email` tool dispatches by `action`. All actions take optional `mode` for ou
 | `reply_all`       | Reply to sender + all original recipients minus self               | `email_id`, `message`                              |
 | `search`          | Search across inbox/sent/archive by `query` + `filter`             | `query` (and/or `filter`)                          |
 | `archive`         | Move from inbox to archive folder (keeps thread, removes from view)| `email_id`                                         |
-| `delete`          | Permanently delete                                                 | `email_id`                                         |
+| `delete`          | Permanently delete (inbox/archive only; `sent` is read-only)       | `email_id`                                         |
 | `contacts`        | List your address book                                             | —                                                  |
 | `add_contact`     | Add or upsert by `address`                                         | `address`, `name`, optional `note`                 |
 | `remove_contact`  | Remove by `address`                                                | `address`                                          |
@@ -125,13 +122,15 @@ The `email` tool dispatches by `action`. All actions take optional `mode` for ou
 
 ### `read` vs `dismiss` — when to use which
 
-Unread email bodies are injected in full into `_meta.agent_meta.notifications.persistent.email` (up to the 50,000-character send-layer cap described below). You do **not** need `email.read` merely to see ordinary message text. After you have handled the visible content, prefer `dismiss`: same read-state effect, no body returned, and the unread notification clears once count reaches zero.
+Unread email bodies are injected in full into `_meta.agent_meta.notifications.persistent.email` (up to the 50,000-character send-layer cap below). You do **not** need `read` merely to see ordinary message text. After you have handled the visible content, prefer `dismiss`: same read-state effect, no body returned, and the unread notification clears once count reaches zero.
 
 Use `read` when you need to refresh the source-of-truth mailbox record, inspect attachment/metadata details, or deliberately fetch the producer state before a reply/audit. Use `reply`/`reply_all` when answering. Failing to `dismiss`, `read`, `archive`, or `delete` a handled mail keeps the notification reminding you on every heartbeat.
 
+These are the producer-owned verbs for the `email` notification channel; a generic `notification(action='dismiss_channel', channel='email')` would clear only the mirror. See `notification-manual` → `reference/dismissal-safety/SKILL.md`.
+
 ### 50,000-character send cap
 
-Internal email bodies are intentionally capped at 50,000 characters at **send time**. The reason is architectural: unread bodies are injected in full into the persistent notification stream, so the reading/notification layer should not guess, summarize, or truncate ordinary mail. If a message is too large for that guarantee, `send` refuses it with `limit_chars` and `actual_chars`; shorten the body, attach a file, or put bulky material somewhere else and mail a pointer.
+Internal email bodies are capped at 50,000 characters at **send time**. The reason is architectural: unread bodies are injected in full into the persistent notification stream, so the reading/notification layer should not guess, summarize, or truncate ordinary mail. If a message is too large for that guarantee, `send` refuses it with `limit_chars` and `actual_chars`; shorten the body, attach a file, or put bulky material somewhere else and mail a pointer.
 
 ### `check` filter
 
@@ -160,60 +159,37 @@ Mail sent to **your own address** lands in your own inbox. It is marked self-sen
 - It surfaces in the persistent unread notification lane until you `dismiss`, `read`, `archive`, or `delete` it.
 - It can be `search`ed by the future you.
 
-Use this for: TODOs you want to remember after a memory rotation, breadcrumbs about decisions, "hand-off to self" notes during a long task.
-
-```python
-email(action="send", address="<your-own-name>",
-      subject="resume here", message="Picked the Helmholtz approach; see paper/drafts/2026-05-18.md")
-```
+Use this for: TODOs you want to remember after a memory rotation, breadcrumbs about decisions, "hand-off to self" notes during a long task. See the recipes in §10.
 
 ## 7. Time capsule — delayed self-send
 
-Add `delay=<seconds>` to defer delivery. The outbox entry is written immediately; the `_mailman` daemon thread sleeps until the deadline, then dispatches.
+Add `delay=<seconds>` to defer delivery. The outbox entry is written immediately; the `_mailman` daemon thread sleeps until the deadline, then dispatches. Combined with self-send this gives you cheap one-shot alarms without standing up a cron; the notification is delivered exactly once.
 
-```python
-# Remind self in 1 hour
-email(action="send", address="<your-own-name>", delay=3600,
-      subject="check on long task", message="Did `daemon(check, id=...)` finish?")
-```
+Use delayed self-send as a **future nudge**, not delayed tool execution. The message should tell the future you what to inspect and why, then let that future turn decide with current context whether to run `shell(action="poll")`, `daemon(check)`, a channel read, or nothing at all. It is one of the escape hatches when a repeated-call `_advisory` says you may be polling the same thing: write one concrete reminder, then yield/idle.
 
-Combined with self-send, this gives you cheap one-shot alarms without standing up a cron. The notification is delivered exactly once. For **recurring** reminders, use a host scheduler (cron, launchd, systemd, or an event watcher) via `shell-manual`; do not use the email tool for recurring execution.
+**Recurring work is not an email feature.** The internal `email` tool has no recurring scheduling API. For repeating reminders or agent-side scheduled work, use a host scheduler (cron, launchd, systemd, or an event watcher) via `shell-manual` → `reference/scheduled-work/SKILL.md`; for a single lightweight wakeup that does not need mailbox state, `shell-manual` → `reference/notification-reminders/SKILL.md` owns the `.notification/cron.json` pattern.
 
-Use delayed self-send as a **future nudge**, not delayed tool execution. The message should tell the future you what to inspect and why, then let that future turn decide with current context whether to run `shell(action="poll")`, `daemon(check)`, a channel read, or nothing at all. This is the preferred escape hatch when a repeated-call `_advisory` tells you that you may be polling the same thing: write one concrete reminder, then yield/idle instead of immediately calling the same tool again.
+## 8. Privacy — internal IDs
 
-## 8. Recurring reminders live outside email
-
-The internal `email` tool no longer has a recurring scheduling API. Use delayed
-self-send (`delay=`) for one-shot time capsules only. For repeating reminders or
-agent-side scheduled work, use a host scheduler (cron, launchd, systemd, or an
-event watcher) following `shell-manual`; consult `system-manual` for lifecycle and
-notification behavior.
-
-## 9. Privacy — internal IDs
-
-The mailbox UUID (`email_id`) is **local to your working directory**. Never paste a raw mailbox ID into a message to another agent or to the human — it has no meaning outside your tree and reveals nothing useful. Refer to messages by `subject` + `from` + approximate time. If you must show the human exactly which mail you're acting on, use the **subject line and sender**.
+The mailbox UUID (`email_id`) is **local to your working directory**. Never paste a raw mailbox ID into a message to another agent or to the human — it has no meaning outside your tree and reveals nothing useful. Refer to messages by `subject` + `from` + approximate time.
 
 The exception: when you call `email(action="read"/"dismiss"/"reply", email_id=[...])`, you pass IDs you read out of *your own* persistent notification or mailbox listing. That's internal plumbing, fine.
 
-## 10. Addon ownership — what this skill does NOT cover
+## 9. Addon ownership — what this skill does NOT cover
 
 This skill is the manual for the **kernel-intrinsic `email` tool** only. Adjacent surfaces live elsewhere:
 
 | Want to …                                          | Use                                          |
 |----------------------------------------------------|----------------------------------------------|
-| Send/receive real internet email (Gmail, etc.)     | `mcp-manual` → `lingtai-imap` MCP addon      |
-| Send Telegram / Feishu / WeChat messages           | `mcp-manual` → respective MCP addon          |
+| Send/receive real internet email (Gmail, etc.)     | `mcp-manual` → `imap` or `cloud_mail` addon  |
+| Send Telegram / Feishu / WeChat / WhatsApp messages | `mcp-manual` → respective MCP addon          |
 | Send a notification-style ping to another agent    | This skill — it IS the notification channel  |
 | Schedule a one-off wake-up of your own loop        | This skill, `delay` + self-send (§7)         |
-| Run recurring agent-side work                       | Host scheduler / event watcher via `shell-manual` (§8) |
+| Run recurring agent-side work                       | Host scheduler / event watcher via `shell-manual` |
 
-The IMAP, Telegram, Feishu, and WeChat MCP addons each ship their own SKILL.md and `mcp-manual` entry. They are separate processes, separate auth surfaces, and separate failure modes. Do not try to use the `email` tool for an external address: an unknown target is refused without creating a recipient inbox entry and is reported through `email.bounce`.
+Those MCP addons are separate processes with separate auth surfaces and failure modes; each ships its own manual. Do not try to use the `email` tool for an external address: an unknown target is refused without creating a recipient inbox entry and is reported through `email.bounce`.
 
-## 11. Mode (output verbosity)
-
-Every `email` action accepts an optional `mode` (set by `mode_field`) controlling how much detail is rendered in the tool result. Defaults are usually fine. Bump it when you are debugging delivery or read-state issues; lower it when you are iterating in a tight loop and only need confirmation.
-
-## 12. Quick reference — common recipes
+## 10. Quick reference — common recipes
 
 ```python
 # Handle content already injected into notification_persistent.email
@@ -229,14 +205,16 @@ email(action="check", filter={"unread_only": True}, n=20)
 email(action="reply", email_id=["<id>"], message="ack, looking now")
 
 # Self-note that survives molt
-email(action="send", address="<self>", subject="resume", message="next: ...")
+email(action="send", address="<self>", subject="resume",
+      message="Picked the Helmholtz approach; see paper/drafts/2026-05-18.md")
 
 # 5-minute timer
 email(action="send", address="<self>", delay=300,
       subject="ding", message="check the deploy")
 
-# Recurring nudges/work are not an email feature; use a host scheduler
-# or event watcher via shell-manual/system-manual instead.
+# Reach an agent in another .lingtai/ network on this machine
+email(action="send", mode="abs", address="/Users/alice/projectB/.lingtai/外援",
+      subject="cross-network", message="ping")
 
 # Find related mail
 email(action="search", query="helmholtz",
@@ -255,8 +233,8 @@ email(action="add_contact", address="mimo-1", name="MiMo (vision)",
 Internal email persists under the agent mailbox: inbox/archive/sent message
 files, attachments, contacts, and read/archive state. Mail is also memory: do not
 blindly delete it. Prefer `email(archive)` or `email(delete)` verbs over `rm`,
-and never delete mail that is the only copy of a decision,
-handoff, or attachment the human may expect you to retain.
+and never delete mail that is the only copy of a decision, handoff, or
+attachment the human may expect you to retain.
 
 Footprint check (read-only, records the audit):
 

@@ -8,7 +8,7 @@ description: |
   external-email side-effect caveats. Pulled on demand via action='manual'; you
   do not need to call it before every send.
 version: 1.0.0
-last_changed_at: "2026-06-26T14:33:19-07:00"
+last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
 - src/lingtai/mcp_servers/cloud_mail/manager.py
 - src/lingtai/mcp_servers/cloud_mail/server.py
@@ -19,28 +19,26 @@ maintenance: |
 
 # Cloud Mail MCP — usage manual (progressive disclosure)
 
-This manual is pulled on demand via `action='manual'` so the per-action tool
-schema can stay concise. Read it when you need detail beyond the one-line action
-descriptions; you do not need to call it before every send.
+Inbound mail also arrives automatically in your inbox via per-account polling,
+so you don't have to poll `check` yourself.
 
-Cloud Mail is a REST email client for a self-hosted Cloud Mail deployment
-(Cloudflare Workers). Inbound mail also arrives automatically in your inbox via
-per-account polling, so you don't have to poll `check` yourself.
+Setup, config file/schema, credential and auth model, and watermark state are
+owned by the `mcp-manual` skill (`reference/curated-addons.md`, §Cloud Mail
+setup). Read it before editing config; do not guess field names.
 
 ## EMAIL IDS
 
-- `read` takes a compound id `id='<account>:<emailId>'`, or `account` plus a
-  numeric `email_id`. Use the ids returned by `check`/`search`; do not construct
-  them by hand.
+- `read` fetches the full content of one email by compound id
+  `id='<account>:<emailId>'`, or by `account` plus a numeric `email_id`. Use the
+  ids returned by `check`/`search`; do not construct them by hand.
 
-## READING: check / search / read
+## READING: check / search
 
 - `check`: list recent inbound emails (optional `limit`/`n`, plus the same
   filters as search).
 - `search`: filter the public email list by `to_email`, `send_email`,
   `send_name`, `subject`, `content`, `time_sort` (`asc`/`desc`), and paginate
   with `num`/`size`. Filters are LIKE matches.
-- `read`: fetch the full content of one email by compound `id`.
 
 ## SEND
 

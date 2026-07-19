@@ -2,7 +2,7 @@
 related_files:
 - src/lingtai/intrinsic_skills/nokv-workbench/SKILL.md
 maintenance: |
-  Developer-facing TUI deployment preflight pointed to by nokv-workbench/SKILL.md:49; update it whenever the workbench MCP tool surface (9-tool vs 16-tool, checkpoint-lifecycle fields) or the runtime-version compatibility check changes.
+  Developer-facing TUI deployment preflight pointed to by nokv-workbench/SKILL.md; update it whenever the workbench MCP tool surface (9-tool vs 16-tool, checkpoint-lifecycle fields) or the runtime-version compatibility check changes.
 ---
 
 # TUI runtime preflight (developer-facing)
@@ -34,18 +34,17 @@ print((root / "nokv-workbench" / "SKILL.md").exists())
 PY
 ```
 
-Tool-surface note: the 16-tool surface documented in SKILL.md (including
-workbench_append / workbench_edit / workbench_search / workbench_aggregate /
-workbench_catalog and conditional reads) requires a NoKV build that ships the
-specialized workbench MCP. Older 9-tool NoKV servers still work with this
-skill; the extra tools are simply absent from tools/list and the SKILL
-sections about them do not apply.
+Tool-surface note: parts of the SKILL.md surface depend on the NoKV build. An
+older server still works with this skill — the newer tools and parameters are
+simply absent from tools/list, and the SKILL sections about them do not apply.
 
-The checkpoint-lifecycle surface — workbench_snapshot_renew and
-workbench_snapshot_list, the workbench_snapshot `name`/`ttl_days` parameters
-and its `lease_expires_at`/`expiry_warning` output, and the `at_snapshot`
-parameter on workbench_read / workbench_list / workbench_stat — needs a NoKV
-build that ships Phase 1 snapshot leasing. Against an older build these tools
-and parameters are absent, and the "Checkpoints and leases" SKILL section does
-not apply; snapshots there fall back to the legacy 1-hour lease with no
-renewal path.
+- **16-tool workbench MCP** (workbench_append / workbench_edit /
+  workbench_search / workbench_aggregate / workbench_catalog and conditional
+  reads) requires a build shipping the specialized workbench MCP; older 9-tool
+  NoKV servers lack it.
+- **Checkpoint lifecycle** (workbench_snapshot_renew, workbench_snapshot_list,
+  the workbench_snapshot `name`/`ttl_days` parameters and its
+  `lease_expires_at`/`expiry_warning` output, and the `at_snapshot` parameter
+  on workbench_read / workbench_list / workbench_stat) requires a build
+  shipping Phase 1 snapshot leasing. Without it, snapshots fall back to the
+  legacy 1-hour lease with no renewal path.

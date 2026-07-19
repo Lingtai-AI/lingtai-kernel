@@ -12,9 +12,9 @@ description: >
   digest output, or log redaction pitfalls. This is a nested skill-reference
   under `system-manual`, not a standalone catalog skill; its folder may carry
   companion scripts and assets as SQLite trace tooling grows.
-version: 1.2.0
+version: 1.2.1
 tags: [lingtai, system-manual, sqlite, log.sqlite, runtime-logs, trace, jsonl, daemon, trajectory, mining, event-log, improvement, pitfalls, observability, cheap-model]
-last_changed_at: "2026-06-24T23:45:17-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts/event_summary.py
@@ -399,17 +399,8 @@ to shared storage.
 
 ### Mechanical first-pass metrics (SQL queries)
 
-Run cheap aggregations before any LLM call. These are free signal.
-
-**Event-type counts:**
-
-```sql
-SELECT type, COUNT(*) AS n
-FROM events
-GROUP BY type
-ORDER BY n DESC
-LIMIT 30;
-```
+Run cheap aggregations before any LLM call. These are free signal. Start with the
+event-type and source-kind counts from **Query recipes** above, then add:
 
 **Tool call / result summary:**
 
@@ -881,41 +872,25 @@ Write the digest to: reports/trajectory-digest-YYYYMMDD.md
 
 ### On-demand procedure (step-by-step)
 
-1. **Clarify window and scope**
-   - Default: recent event logs for the current agent/project plus daemon
-     events from the active workstream.
-   - "最近轨迹" → last 24h or current active workstream.
-   - Named subsystem → filter events to that subsystem.
+Run the sections above in this order:
 
-2. **Discover sources** (source discovery above)
-   - Run SQL source discovery. Build manifest.
-
-3. **Schema discovery**
-   - Sample keys via `json_each()` before writing any extraction code.
-
-4. **Mechanical first-pass** (SQL metric queries above)
-   - Run aggregation queries. Capture output. Do not pass raw logs to any LLM.
-
-5. **Chunk and redact** (slicing queries + redaction rules below)
-   - Apply chunking strategy. Redact secrets and paths.
-
-6. **Dispatch cheap daemon batch**
-   - Send manifests + aggregates + bounded redacted excerpts to cheap models.
-     One daemon per source family / time window.
-
-7. **Primary-agent triage**
-   - Merge daemon findings. Validate each against the confidence rubric.
-
-8. **Produce digest**
-   - Render digest template. Include evidence appendix.
-
-9. **Route outputs**
-   - Propose routing for each finding. Wait for human approval before any
-     side effect.
-
-10. **Stop**
-    A good digest gives the human enough to choose: update skill, file issue,
-    make patch, ignore, or schedule.
+1. **Clarify window and scope.** Default: recent event logs for the current
+   agent/project plus daemon events from the active workstream. "最近轨迹" →
+   last 24h or current active workstream. Named subsystem → filter to it.
+2. **Discover sources** and build the manifest.
+3. **Schema discovery** — sample keys via `json_each()` before writing any
+   extraction code.
+4. **Mechanical first-pass** — run the aggregation queries; do not pass raw logs
+   to any LLM.
+5. **Chunk and redact** — apply a slicing strategy, then the redaction rules.
+6. **Dispatch cheap daemon batch** — one daemon per source family / time window.
+7. **Primary-agent triage** — merge findings, validate against the confidence
+   rubric.
+8. **Produce digest** — render the template, include the evidence appendix.
+9. **Route outputs** — propose routing; wait for human approval before any side
+   effect.
+10. **Stop.** A good digest gives the human enough to choose: update skill, file
+    issue, make patch, ignore, or schedule.
 
 ---
 
@@ -939,6 +914,8 @@ Apply these in order, before any LLM call:
    jobs, or agent refreshes.
 
 ## Pitfalls
+
+Beyond the safety contract above:
 
 - Do not treat `log.sqlite` as a coordination database. It is an observability
   index, not agent state.

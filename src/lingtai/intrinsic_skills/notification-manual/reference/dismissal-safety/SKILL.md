@@ -9,7 +9,7 @@ description: >
   summarize-manual instead.
 version: 0.1.0
 tags: [lingtai, notifications, dismiss, force, stale, safety]
-last_changed_at: "2026-07-12T20:20:43-07:00"
+last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
 - src/lingtai/tools/notification/__init__.py
@@ -77,10 +77,6 @@ notification(
 )
 ```
 
-A dismissal clears only the notification surface. It never removes producer
-history, mailbox state, goal semantics, or the underlying result that caused a
-legacy reminder.
-
 ## Large results and legacy reminder escape hatch
 
 New large tool results are not notification events. The kernel ranks formal
@@ -104,16 +100,17 @@ system events, so prefer event/ref targeting. Dismissal acknowledges and removes
 the reminder surface only; the original tool result remains unchanged in chat
 history and `events.jsonl`.
 
-## Refusal checklist
+## On a refusal
 
-1. Confirm the channel and whether its `instructions` name a producer action.
-2. If the reason is stale, read the current delivered payload before deciding on
-   `force=true`.
-3. If the channel is protected, follow its owning manual rather than retrying.
-4. If `post-molt` lacks a reason, record the real continue/defer/obsolete
+1. Check whether the channel's `instructions` name a producer action; if so, use
+   it instead of retrying the generic dismiss.
+2. Stale — read the current delivered payload before deciding on `force=true`.
+3. Protected — follow the channel's owning manual; do not retry.
+4. `post-molt` without a reason — record the real continue/defer/obsolete
    decision.
-5. If the target is one system event, use `dismiss_event` or `dismiss_ref`, not a
+5. Targeting one system event — use `dismiss_event`/`dismiss_ref`, not a
    whole-channel clear.
 
-These rules prevent a notification mirror operation from silently becoming a
-producer-state decision or from erasing concurrent unseen events.
+These rules keep a mirror operation from silently becoming a producer-state
+decision or erasing concurrent unseen events. No dismissal ever removes producer
+history, mailbox state, or goal semantics.

@@ -5,7 +5,7 @@ description: >
   patterns, backend-specific polling notes, and setting reminders before resting
   while daemon work remains pending.
 version: 1.1.0
-last_changed_at: "2026-06-24T16:24:16-07:00"
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
@@ -44,7 +44,7 @@ Use `elapsed_s` (from `daemon.json` or `list`) to pick an interval. These are st
 ### Which call to use, in order
 
 1. **`daemon(action="list")` first** when multiple emanations are in flight and you want a status sweep. Cheap; one line per emanation with `elapsed_s` and `state`. Use it to decide *which* (if any) to investigate.
-2. **`daemon(action="check", id="em-N", last=20, truncate=500)`** when one emanation looks suspicious. `last=20` covers ~10 tool dispatches; bump to `last=50` for wider history. Keep `truncate=500` unless you specifically need full tool I/O. The response also carries an `artifacts` block (the run's artifact manifest: relative path/size/mtime/role per important file, plus `result_path`/`error_path`) — read it to learn which files exist and how big they are before opening any of them, instead of `ls`-ing the run folder by hand.
+2. **`daemon(action="check", id="em-N", last=20, truncate=500)`** when one emanation looks suspicious. `last=20` covers ~10 tool dispatches; bump to `last=50` for wider history. Keep `truncate=500` unless you specifically need full tool I/O. Read the response's `artifacts` block to learn which files exist and how big they are before opening any of them, instead of `ls`-ing the run folder by hand (see `../forensics/SKILL.md`).
 3. **Direct `Read` of `daemon.json`** — only when you need a field `check` doesn't surface (rare). Prefer `check`.
 4. **`tail` of `history/chat_history.jsonl`** — when `check` events don't tell you what the LLM is *thinking*. The last assistant text shows the current line of reasoning. (lingtai backend only — CLI backends don't write the LLM transcript here.)
 
@@ -96,20 +96,7 @@ When the reminder fires, **health-check before trusting it kept working**:
 
 If there is **no** progress, do not re-arm and wait again — apply the stall heuristic and `reclaim`, downgrade the backend/scope, switch path, and **report to the human**. Indefinite waiting on a dead daemon is the failure this rule exists to prevent.
 
-Use this when:
-
-- a Claude Code / Codex backend task is still running but has enough context to finish alone;
-- you opened a PR and want to check CI/mergeability later;
-- a render/download/build/test run is expected to complete after you sleep;
-- the human asked for a later follow-up and the reminder is for you, not for them.
-
-The reminder should say what is pending and what to check, for example:
-
-```text
-⏺ Codex active. Plot regenerated (362KB, 23:38) — waiting for caption + commit. Polling at 23:42.
-```
-
-When the `cron` notification wakes you, read pad first, inspect the relevant daemon/job/PR, act, then dismiss the channel with `notification(action="dismiss_channel", channel="cron")`.
+The reminder payload shape, the atomic writer, the rest checklist, and dismissing the `cron` channel afterward are owned by that `shell-manual` section — follow it rather than improvising a second procedure here.
 
 This complements the polling rule above: completion is push-notified, stalls are inspected sparingly, and deliberate rest gets one future reminder rather than a busy loop.
 
