@@ -166,18 +166,26 @@ def _format_notification_summary(mcp_name: str, count: int, has_human_messages: 
     )
 
 
-def _copy_structured_preview_meta(value: object) -> object | None:
-    """Return a JSON-safe structured preview field, or None if unsafe/too large."""
+def _copy_structured_preview_meta(
+    value: object,
+) -> tuple[object | None, str | None, int | None]:
+    """Return ``(json_safe_copy, drop_reason, json_chars)`` for a structured field.
+
+    ``json_safe_copy`` is None when the value is unserializable or larger
+    than ``_PREVIEW_STRUCTURED_META_JSON_CAP``; ``drop_reason``/``json_chars``
+    then describe why so the caller can surface an explicit marker instead
+    of silently losing the field.
+    """
     try:
         encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError):
-        return None
+        return None, "unserializable", None
     if len(encoded) > _PREVIEW_STRUCTURED_META_JSON_CAP:
-        return None
+        return None, "oversize", len(encoded)
     try:
-        return json.loads(encoded)
+        return json.loads(encoded), None, len(encoded)
     except json.JSONDecodeError:
-        return None
+        return None, "unserializable", len(encoded)
 
 
 def _extract_preview_meta(event: dict) -> dict:
@@ -191,9 +199,12 @@ def _extract_preview_meta(event: dict) -> dict:
     a Markdown conversation transcript to find the actionable message.
 
     Strictly additive: events without ``metadata`` or with non-dict /
-    non-string / wrong-type / oversized values yield only the supported safe
-    subset. No validation errors raised — a malformed metadata payload just
-    produces no extra preview fields.
+    non-string / wrong-type values yield only the supported safe subset.
+    A structured field of the right type that is unserializable or over the
+    JSON cap is replaced by an explicit ``licc_structured_omitted`` marker
+    carrying the reason and a recovery hint (never silently dropped). No
+    validation errors raised — a malformed metadata payload just produces
+    no extra preview fields.
     """
     meta = event.get("metadata")
     if not isinstance(meta, dict):
@@ -208,9 +219,24 @@ def _extract_preview_meta(event: dict) -> dict:
     for key, expected_type in _PREVIEW_STRUCTURED_META_FIELDS.items():
         val = meta.get(key)
         if isinstance(val, expected_type):
-            safe_val = _copy_structured_preview_meta(val)
+            safe_val, drop_reason, json_chars = _copy_structured_preview_meta(val)
             if safe_val is not None:
                 out[key] = safe_val
+            else:
+                # Never silently erase a curated structured family. Publish an
+                # explicit marker with a usable recovery path: the producing
+                # MCP's durable records still hold the authoritative data and
+                # its read action returns it in full.
+                out[key] = {
+                    "licc_structured_omitted": True,
+                    "field": key,
+                    "reason": drop_reason,
+                    "json_chars": json_chars,
+                    "recovery": (
+                        "call the producing MCP's read action; its durable "
+                        "records retain the full structure"
+                    ),
+                }
     return out
 
 def _bounded_elapsed_s(start_ts: float, end_ts: float) -> float:

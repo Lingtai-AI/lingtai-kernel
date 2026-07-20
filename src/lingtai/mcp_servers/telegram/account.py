@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from . import updates as tg_updates
+
 logger = logging.getLogger(__name__)
 
 # httpx is lazy-imported to keep the module importable without the optional dep.
@@ -312,10 +314,7 @@ class TelegramAccount:
             self._last_update_id = update_id
             self._save_state()
 
-        # Determine the user who triggered this update
-        user_id = None
         if "message" in update:
-            user_id = update["message"].get("from", {}).get("id")
             # A plain message is a new bottom message in the chat; record it so a
             # resident Task Card sent earlier is now known to be superseded. Done
             # before allow-list filtering because the message exists in the chat
@@ -326,7 +325,6 @@ class TelegramAccount:
             self._note_chat_message_id(
                 msg.get("chat", {}).get("id"), msg.get("message_id"))
         elif "callback_query" in update:
-            user_id = update["callback_query"].get("from", {}).get("id")
             # Auto-answer callback query to dismiss spinner
             cq_id = update["callback_query"].get("id")
             if cq_id:
@@ -334,11 +332,14 @@ class TelegramAccount:
                     self._request("answerCallbackQuery", json={"callback_query_id": cq_id})
                 except Exception:
                     pass
-        elif "edited_message" in update:
-            user_id = update["edited_message"].get("from", {}).get("id")
 
-        # Filter by allowed users
-        if self._allowed_users is not None and user_id not in self._allowed_users:
+        # Admission policy: every Update branch resolves an explicit actor
+        # (see lingtai.mcp_servers.telegram.updates). A resolvable triggering
+        # user is enforced against allowed_users; chat-actor / actorless /
+        # unknown-branch events are admitted under the bot-placement trust
+        # boundary with their uncertainty recorded on the envelope.
+        actor = tg_updates.resolve_update_actor(update)
+        if not tg_updates.is_admitted(actor, self._allowed_users):
             return
 
         # Intercept slash commands before they reach the agent
