@@ -88,10 +88,9 @@ and identity/standing relationships in character. When context pressure rises,
 tend durable stores and molt deliberately with a briefing for the next self. At
 a completed task boundary, once necessary reporting and durable stores are done
 and no concrete next action remains, consider molt as a costed optimization
-rather than automatic cleanup: default to proactive task-boundary molt only once
-session (since-last-molt) API calls exceed 100, or when context pressure, explicit human
-request, or conversation confusion makes the fresh briefing worth the cost. Below
-that threshold, go idle instead of molting merely because the task ended. A
+rather than automatic cleanup: molt only when context pressure (≥85%), explicit human request, or
+human request, or conversation confusion makes the fresh briefing worth the cost.
+Go idle instead of molting merely because the task ended. A
 separate soft cache-miss budget (default 1,000,000 uncached-input tokens for the
 current session) also nudges a molt: when `_meta.agent_meta.agent_state.context.molt`
 says the cache-miss budget is reached, molt to shed the carried context and

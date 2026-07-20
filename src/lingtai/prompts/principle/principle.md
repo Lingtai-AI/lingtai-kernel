@@ -81,4 +81,4 @@ Keep each layer concise. A rule should have one source of truth; other layers sh
 
 ## Token efficiency principle
 
-Token efficiency principle: the current session's active context is carried into every provider request. When continuing, summarize consumed tool results whose raw text is no longer needed. At completed task boundaries, after reporting and durable stores are tended, do not molt automatically; default to a proactive task-boundary molt only once session (since-last-molt) API calls exceed 100, or when context pressure, explicit human request, or conversation confusion makes the molt worth its cost. Use daemons to keep bulky or noisy work out of the main context.
+Token efficiency principle: the current session's active context is carried into every provider request. When continuing, summarize consumed tool results whose raw text is no longer needed. At completed task boundaries, after reporting and durable stores are tended, do not molt automatically; molt only when context pressure (≥85%), explicit human request, or conversation confusion makes the fresh briefing worth its cost. Use daemons to keep bulky or noisy work out of the main context.

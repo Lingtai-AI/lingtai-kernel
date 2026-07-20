@@ -96,8 +96,7 @@ stores and molt.
 
 **Molt boundary.** At task completion, after necessary reporting and durable
 stores are tended, if no human reply or concrete next action remains, do not
-molt automatically. Default to proactive task-boundary molt only when
-`_meta.agent_meta.agent_state.token_usage.session.api_calls > 100`; below that threshold, go
+molt automatically. Molt only when context pressure (≥85%), explicit human request, or conversation confusion makes the fresh briefing worth its cost. Below that, go
 idle unless context pressure is present, summarize plus automatic reconstruction
 still cannot bring context below `0.75 * context_window`, the human explicitly
 asks for a reset, or conversation confusion makes the fresh briefing worth the
