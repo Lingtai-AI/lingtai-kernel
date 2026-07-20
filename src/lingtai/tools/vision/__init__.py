@@ -311,17 +311,28 @@ def setup(
                     else:
                         manual_reason = "Codex vision has no explicit current OAuth identity; use vision(action='manual')."
                 else:
-                    # The pool selector is the single owner of deterministic
-                    # account choice. It reads only the current pool's
-                    # non-secret file; an unrelated active provider is ignored.
+                    # WeightedAccountSource selects an account from the pool file
+                    # (thin-wrapper spec v3).  Reads only the non-secret pool;
+                    # Codex core owns token refresh, quota, retry, and transport.
                     if same_provider:
-                        from lingtai.auth.codex_pool import select_codex_pool_auth
-                        selection = select_codex_pool_auth(
-                            bucket,
-                            model=kwargs.get("model"),
+                        from lingtai.auth.codex_pool import (
+                            resolve_codex_pool_path,
+                            resolve_codex_tui_dir,
                         )
-                        if selection:
-                            kwargs["token_path"] = selection["auth_path"]
+                        from lingtai.auth.codex_account_source import (
+                            WeightedAccountSource,
+                            NoCandidateError,
+                        )
+                        tui_dir = resolve_codex_tui_dir()
+                        pool_path = resolve_codex_pool_path(bucket)
+                        source = WeightedAccountSource(
+                            pool_path, tui_dir, model=kwargs.get("model"),
+                        )
+                        try:
+                            candidate = source.select()
+                            kwargs["token_path"] = candidate.auth_ref
+                        except NoCandidateError:
+                            pass
                     if not kwargs.get("token_path"):
                         manual_reason = "Codex pool vision has no selected current OAuth identity; use vision(action='manual')."
                 kwargs.pop("api_compat", None)

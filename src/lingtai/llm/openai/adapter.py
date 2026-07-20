@@ -4823,9 +4823,15 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         codex_base_urls: object = None,
         codex_molt_count: int | None = None,
         codex_compact_token_limit: int | None = None,
+        codex_service_tier: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        # service_tier: normalized wire value from the common Codex boundary
+        # (e.g. user ``fast`` → wire ``priority``).  ``None`` omits the field.
+        self._codex_service_tier: str | None = (
+            str(codex_service_tier) if codex_service_tier else None
+        )
         # Standalone Codex compaction threshold (daemon task
         # ``context_token_limit``), Codex-only and orthogonal to the generic
         # ``compact_threshold``/``context_management`` this adapter always
@@ -5087,6 +5093,10 @@ class CodexOpenAIAdapter(OpenAIAdapter):
 
         # Codex's backend doesn't accept context_management compaction —
         # leave compact_threshold unset.
+        # service_tier: common Codex capability (REST + WS).  Omitted when None.
+        if self._codex_service_tier is not None:
+            extra_kwargs["service_tier"] = self._codex_service_tier
+
         session_id, thread_id = self._resolve_codex_ids(model)
         return CodexResponsesSession(
             client=self._client,
