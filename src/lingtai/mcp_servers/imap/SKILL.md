@@ -87,7 +87,9 @@ a list of ids.
   failure (e.g. unknown account, bad `email_id`, unreadable attachment). Check
   for the error and surface or act on it rather than assuming delivery.
 
-### Outlook IMAP OAuth
+### Outlook.com IMAP (OAuth2/Modern Auth)
+Microsoft's [current Outlook.com settings](https://support.microsoft.com/en-US/Outlook/pop-imap-and-smtp-settings-for-outlook-com) specify `outlook.office365.com` on port `993`, with `SSL/TLS` and `OAuth2/Modern Auth`.
+
 ```json
 {
   "email_address": "user@outlook.com",
@@ -96,3 +98,5 @@ a list of ids.
 }
 ```
 Generate the serialized cache with a trusted external MSAL enrollment flow, then place it at `token_cache` while the MCP is stopped.
+
+An app password is still a password used with Basic authentication, not an OAuth token. Microsoft [retired Basic authentication for Outlook.com on September 16, 2024](https://support.microsoft.com/en-us/office/modern-authentication-methods-now-needed-to-continue-syncing-outlook-email-in-non-microsoft-email-apps-c5d65390-9676-4763-b41f-d7986499a90d), so app passwords are not a supported Outlook.com IMAP route. See Microsoft's [app-password definition](https://support.microsoft.com/en-US/accounts-billing/manage/how-to-get-and-use-app-passwords).
