@@ -494,3 +494,132 @@ def test_marker_only_payload_still_builds_a_block() -> None:
     )
     assert lane_payload is not None
     assert lane_payload["structured_omitted"][0]["reason"] == "oversize"
+
+
+# ---------------------------------------------------------------------------
+# Terra R2 residual — matched edits stay deliverable in a warm persistent
+# lane via the additive current (last-applied edit) event identity.
+# ---------------------------------------------------------------------------
+
+def _warm_agent_with_delivered(identity: str) -> _Agent:
+    """Agent stub whose warm Telegram lane already delivered *identity*."""
+    agent = _Agent()
+    padding = [f"main:123:{i}" for i in range(TELEGRAM_LANE.min_context)]
+    setattr(agent, TELEGRAM_LANE.delivered_ids_attr, padding + [identity])
+    setattr(agent, TELEGRAM_LANE.last_tool_id_attr, "tool-1")
+    return agent
+
+
+def test_matched_edit_reaches_warm_persistent_lane_with_raw_evidence(
+    tmp_path: Path,
+) -> None:
+    events: list[dict] = []
+    manager = _manager(tmp_path, events)
+
+    original = {"update_id": 9001, "message": _msg(70, text="v1")}
+    manager.on_incoming("main", original)
+    # Fresh records start with current identity == root identity (no
+    # regression for the non-edit path).
+    latest = events[-1]["metadata"]["latest_incoming"]
+    assert latest["event_id"] == "main:update:9001"
+    assert latest["telegram"]["current_event_id"] == "main:update:9001"
+
+    # Warm lane: the original event identity is already delivered.
+    agent = _warm_agent_with_delivered("main:update:9001")
+
+    edit = {"update_id": 9002,
+            "edited_message": _msg(70, text="v2", edit_date=DATE + 60)}
+    manager.on_incoming("main", edit)
+
+    payload = _notification_payload([_preview_for(events[-1])], count=1)
+    lane_payload = meta_block._build_im_notification_persistent_payload(
+        agent, payload, TELEGRAM_LANE,
+    )
+    assert lane_payload is not None
+    delta = [m for m in lane_payload["messages"]
+             if m.get("id") == "main:123:70"]
+    assert len(delta) == 1, "merged edited record must re-deliver in the delta"
+    merged = delta[0]
+    # Delta carries the edit identity, the immutable root identity, the
+    # legacy compound reply id, and the full append-only raw edit evidence.
+    assert merged["event_id"] == "main:update:9002"
+    assert merged["telegram"]["event_id"] == "main:update:9001"
+    assert merged["telegram"]["current_event_id"] == "main:update:9002"
+    assert merged["telegram"]["update"] == json.loads(json.dumps(original))
+    edits = merged["telegram"]["edits"]
+    assert [e["event_id"] for e in edits] == ["main:update:9002"]
+    assert edits[0]["update"] == json.loads(json.dumps(edit))
+    assert merged["text"] == "v2"
+
+    meta_block._record_im_persistent_delivery(
+        agent, lane_payload, TELEGRAM_LANE, tool_call_id="tool-2",
+    )
+    assert "main:update:9002" in getattr(agent, TELEGRAM_LANE.delivered_ids_attr)
+
+
+def test_repeated_edits_each_deliver_under_new_identity(tmp_path: Path) -> None:
+    events: list[dict] = []
+    manager = _manager(tmp_path, events)
+    manager.on_incoming("main", {"update_id": 9101, "message": _msg(71, text="v1")})
+    manager.on_incoming("main", {
+        "update_id": 9102,
+        "edited_message": _msg(71, text="v2", edit_date=DATE + 60),
+    })
+
+    # First edit delivered; a later second edit must still deliver as new.
+    agent = _warm_agent_with_delivered("main:update:9101")
+    getattr(agent, TELEGRAM_LANE.delivered_ids_attr).append("main:update:9102")
+
+    second_edit = {"update_id": 9103,
+                   "edited_message": _msg(71, text="v3", edit_date=DATE + 120)}
+    manager.on_incoming("main", second_edit)
+
+    payload = _notification_payload([_preview_for(events[-1])], count=1)
+    lane_payload = meta_block._build_im_notification_persistent_payload(
+        agent, payload, TELEGRAM_LANE,
+    )
+    assert lane_payload is not None
+    merged = next(m for m in lane_payload["messages"]
+                  if m.get("id") == "main:123:71")
+    assert merged["event_id"] == "main:update:9103"
+    assert [e["event_id"] for e in merged["telegram"]["edits"]] == [
+        "main:update:9102", "main:update:9103",
+    ]
+    assert merged["telegram"]["edits"][1]["update"] == json.loads(
+        json.dumps(second_edit),
+    )
+    assert merged["text"] == "v3"
+
+
+def test_edit_identity_does_not_regress_callback_or_delivered_filtering(
+    tmp_path: Path,
+) -> None:
+    """Non-edit records keep current == root identity end-to-end: an already
+    delivered (unedited) message is still delta-filtered, and repeated
+    callbacks keep their distinct per-update identities."""
+    _events, previews = _two_callback_previews(tmp_path)
+    payload = _notification_payload(previews, count=2)
+    messages = meta_block._im_persistent_messages_from_notifications(
+        payload, "mcp.telegram",
+    )
+    callbacks = [m for m in messages
+                 if str(m.get("event_id", "")).startswith("main:update:800")]
+    assert {m["event_id"] for m in callbacks} == {
+        "main:update:8001", "main:update:8002",
+    }
+    for m in callbacks:
+        assert m["telegram"]["current_event_id"] == m["event_id"]
+
+    events: list[dict] = []
+    manager = _manager(tmp_path / "plain", events)
+    manager.on_incoming("main", {"update_id": 9201, "message": _msg(72)})
+    agent = _warm_agent_with_delivered("main:update:9201")
+    plain_payload = _notification_payload([_preview_for(events[-1])], count=1)
+    lane_payload = meta_block._build_im_notification_persistent_payload(
+        agent, plain_payload, TELEGRAM_LANE,
+    )
+    # The only candidate is already delivered and unedited: no re-delivery.
+    assert lane_payload is None or not [
+        m for m in lane_payload.get("messages", [])
+        if m.get("id") == "main:123:72"
+    ]

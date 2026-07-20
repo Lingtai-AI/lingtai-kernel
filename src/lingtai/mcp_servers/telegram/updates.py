@@ -193,14 +193,23 @@ def build_envelope(account_alias: str, update: dict, *, branch: str | None = Non
     unknown future field survives byte-for-byte after JSON round-trip. All
     derived metadata (event identity, branch, actor policy result) lives
     beside ``update``, never inside it.
+
+    ``event_id`` is the immutable identity of the root update that created
+    the record. ``current_event_id`` is the additive *last-applied inbound
+    event* identity: it starts equal to ``event_id`` and is advanced to each
+    matched edit's event id when the edit is appended to ``edits`` — so
+    structured projection / persistent delivery tracking can treat a merged
+    edited record as new again while the root identity stays untouched.
     """
     if branch is None:
         branch, _ = classify_update(update)
     if actor is None:
         actor = resolve_update_actor(update)
+    event_id = event_id_for(account_alias, update)
     return {
         "schema": TELEGRAM_ENVELOPE_SCHEMA,
-        "event_id": event_id_for(account_alias, update),
+        "event_id": event_id,
+        "current_event_id": event_id,
         "account": account_alias,
         "branch": branch,
         "update_id": update.get("update_id") if isinstance(update, dict) else None,

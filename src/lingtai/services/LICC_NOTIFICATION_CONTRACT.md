@@ -214,7 +214,12 @@ the kernel carries it into persistent `events[]` and uses it (falling back to
 the compound `id`) for persistent message de-duplication and delivery
 tracking — so repeated events that share one compound message id (e.g. two
 callback presses on the same inline keyboard) never collapse into one
-persistent entry.
+persistent entry. For a merged edited record the structured `event_id` is the
+producer envelope's additive `current_event_id` (the last-applied edit's
+identity, advanced on every matched edit while the immutable root `event_id`
+stays inside `telegram`) — so an edit arriving after the original was already
+delivered into a warm persistent context is re-delivered together with its
+append-only raw edit evidence instead of being delta-filtered away.
 
 ### 2. Content has one model-visible home
 

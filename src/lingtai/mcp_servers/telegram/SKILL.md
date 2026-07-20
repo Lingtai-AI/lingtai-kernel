@@ -99,7 +99,9 @@ setup readiness checklist are **not** here — they belong to `mcp-manual`
 - Every inbound record from `read`/`search` carries an additive `telegram`
   envelope: the complete raw Bot API Update (`update_id`, branch name, actor
   policy result, every nested/unknown field) plus, for edited messages, an
-  append-only `edits` history of the raw edit events. Use it for selected-text
+  append-only `edits` history of the raw edit events; `current_event_id`
+  tracks the last-applied edit while `event_id` stays the immutable root
+  event. Use it for selected-text
   reply quotes (`update.message.quote`), entities, forwards, topics, callback
   identity, etc. The concise top-level fields stay the quick view.
 - Non-message updates (reactions, polls, member/boost/business events,

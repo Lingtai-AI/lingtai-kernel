@@ -830,6 +830,12 @@ class TelegramManager:
                         "branch": branch,
                         "update": envelope["update"],
                     })
+                    # The merged record's last-applied inbound event is now
+                    # this edit: advance the additive current identity so a
+                    # warm persistent lane (original already delivered)
+                    # re-delivers the record with its raw edit evidence. The
+                    # immutable root event_id stays untouched.
+                    env["current_event_id"] = envelope["event_id"]
                 else:
                     # Original stored before envelope support — this edit's
                     # own envelope becomes the record's root; envelope.branch
@@ -1395,7 +1401,11 @@ class TelegramManager:
             # Additive per-update identity beside the legacy compound id, so
             # downstream persistent dedup/delivery can distinguish events
             # (e.g. repeated callbacks) that share one compound message id.
-            env_event_id = env.get("event_id")
+            # For merged edited records the *current* (last-applied edit)
+            # identity is used so a warm persistent lane re-delivers the
+            # record with its appended raw edit evidence; the immutable root
+            # event_id remains inside the envelope.
+            env_event_id = env.get("current_event_id") or env.get("event_id")
             if isinstance(env_event_id, str) and env_event_id:
                 item["event_id"] = env_event_id
             ref = {
