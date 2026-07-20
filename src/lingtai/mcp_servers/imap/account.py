@@ -140,6 +140,13 @@ class IMAPAccount:
         self._allowed_senders = allowed_senders
         self._poll_interval = poll_interval
 
+        # Socket timeout (seconds) applied to every IMAPClient created by this
+        # account.  When the OS suspends (e.g. WSL sleep) TCP connections go
+        # stale but the kernel does not know it until the next send/recv.  A
+        # short timeout turns an otherwise 120 s OS-level hang into a quick
+        # socket.timeout → reconnect via _ensure_connected / _with_reconnect.
+        self._socket_timeout = 30
+
         # Tool-call connection
         self._tool_imap: IMAPClient | None = None
         self._lock = threading.Lock()
@@ -260,7 +267,10 @@ class IMAPAccount:
         """Open the tool-call connection, parse capabilities, discover folders."""
         if self._tool_imap is not None:
             return
-        client = IMAPClient(self._imap_host, port=self._imap_port, ssl=True)
+        client = IMAPClient(
+            self._imap_host, port=self._imap_port, ssl=True,
+            timeout=self._socket_timeout,
+        )
         self._login(client)
         self._tool_imap = client
         self._fetch_capabilities()
@@ -941,7 +951,10 @@ class IMAPAccount:
                 self._listen_imap.logout()
             except Exception:
                 pass
-        client = IMAPClient(self._imap_host, port=self._imap_port, ssl=True)
+        client = IMAPClient(
+            self._imap_host, port=self._imap_port, ssl=True,
+            timeout=self._socket_timeout,
+        )
         self._login(client)
         client.select_folder(folder)
         self._listen_imap = client
