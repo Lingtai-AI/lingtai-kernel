@@ -623,3 +623,162 @@ def test_edit_identity_does_not_regress_callback_or_delivered_filtering(
         m for m in lane_payload.get("messages", [])
         if m.get("id") == "main:123:72"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Terra R3 residual — reading the synthetic events bucket must clear its
+# notification mirror (read-state-only identity validation).
+# ---------------------------------------------------------------------------
+
+import pytest as _pytest
+
+from lingtai.kernel.notifications import submit as _submit
+from lingtai.mcp_servers.telegram.manager import _mirror_identity_account
+from tests._notification_store_helpers import store_agent_for
+
+
+def _publish_mirror_from_event(workdir: Path, event: dict) -> Path:
+    """Publish the real mcp.telegram mirror from an actual LICC event."""
+    _submit(
+        store_agent_for(workdir),
+        "mcp.telegram",
+        header="1 new event from MCP 'telegram'",
+        icon="💬",
+        priority="normal",
+        instructions="Call the MCP 'telegram' read/check action to fetch.",
+        data={
+            "count": 1,
+            "source": "telegram",
+            "has_human_messages": False,
+            "previews": [_preview_for(event)],
+        },
+    )
+    return workdir / ".notification" / "mcp.telegram.json"
+
+
+@_pytest.mark.parametrize(
+    ("branch", "obj"),
+    [
+        (
+            "message_reaction",  # known actorless/service-family branch
+            {"chat": PRIVATE_CHAT, "message_id": 55, "user": USER_A,
+             "date": DATE, "old_reaction": [],
+             "new_reaction": [{"type": "emoji", "emoji": "👍"}]},
+        ),
+        (
+            "brand_new_branch",  # unknown-branch open fallback
+            {"future": {"shape": [1, 2, 3]}, "date": DATE},
+        ),
+    ],
+)
+def test_reading_updates_bucket_clears_its_notification_mirror(
+    tmp_path: Path, branch: str, obj: dict,
+) -> None:
+    workdir = tmp_path / "agent"
+    events: list[dict] = []
+    manager = _manager(workdir, events)
+    manager.on_incoming("main", {"update_id": 5100, branch: obj})
+
+    assert events and events[0]["metadata"]["message_ref"] == "main:updates:5100"
+    mirror = _publish_mirror_from_event(workdir, events[0])
+    assert mirror.exists()
+
+    result = _call_tool(manager, {
+        "action": "read",
+        "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
+    })
+    assert not result.isError
+    payload = _payload(result)
+    assert payload["status"] == "ok"
+    assert payload["messages"][0]["id"] == "main:updates:5100"
+
+    # The synthetic id is marked read AND the mirror is cleared.
+    read_ids = json.loads(
+        (workdir / "telegram" / "main" / "read.json").read_text(encoding="utf-8"),
+    )
+    assert "main:updates:5100" in read_ids
+    assert not mirror.exists()
+
+
+def test_mirror_stays_while_another_numeric_event_is_unread(
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / "agent"
+    events: list[dict] = []
+    manager = _manager(workdir, events)
+    manager.on_incoming("main", {"update_id": 5200, "poll": {
+        "id": "p1", "question": "?", "options": [], "total_voter_count": 0,
+        "is_closed": False, "is_anonymous": True, "type": "regular",
+        "allows_multiple_answers": False,
+    }})
+    manager.on_incoming("main", {"update_id": 5201, "message": _msg(90)})
+
+    _submit(
+        store_agent_for(workdir),
+        "mcp.telegram",
+        header="2 new events from MCP 'telegram'",
+        icon="💬",
+        priority="high",
+        data={
+            "count": 2,
+            "source": "telegram",
+            "previews": [_preview_for(e) for e in events],
+        },
+    )
+    mirror = workdir / ".notification" / "mcp.telegram.json"
+    assert mirror.exists()
+
+    # Reading only the synthetic bucket must NOT clear a mirror that still
+    # references the unread numeric message.
+    result = _call_tool(manager, {
+        "action": "read",
+        "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
+    })
+    assert not result.isError
+    assert mirror.exists()
+
+    # Reading the remaining numeric chat completes the lifecycle.
+    result = _call_tool(manager, {"action": "read", "chat_id": 123})
+    assert not result.isError
+    assert not mirror.exists()
+
+
+def test_mirror_identity_account_accepts_exactly_two_shapes() -> None:
+    assert _mirror_identity_account("main:123:53") == "main"
+    assert _mirror_identity_account("main:-1001:7") == "main"
+    assert _mirror_identity_account(
+        f"main:{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}:5100") == "main"
+    for bad in (
+        "junk",
+        "main:123",
+        "main:123:53:9",
+        ":123:53",
+        "main:notachat:53",
+        f"main:{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}:not-an-update-id",
+        f"main:{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}:",
+        "main:123:abc",
+    ):
+        assert _mirror_identity_account(bad) is None, bad
+
+
+def test_outbound_paths_still_reject_synthetic_bucket(tmp_path: Path) -> None:
+    """The read-state validator must not loosen outbound targeting."""
+    manager = _manager(tmp_path)
+    send = _payload(_call_tool(manager, {
+        "action": "send",
+        "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
+        "text": "hi",
+    }))
+    assert "read/search-only" in send["error"]
+    for action in ("reply", "edit"):
+        result = manager.handle({
+            "action": action,
+            "message_id": f"main:{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}:5100",
+            "text": "hi",
+        })
+        assert "synthetic events-bucket" in result["error"], action
+    result = manager.handle({
+        "action": "delete",
+        "message_id": f"main:{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}:5100",
+    })
+    assert "synthetic events-bucket" in result["error"]

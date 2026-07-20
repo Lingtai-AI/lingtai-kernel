@@ -201,6 +201,35 @@ def _looks_like_compound_id(value: str) -> bool:
     return True
 
 
+def _mirror_identity_account(value: str) -> str | None:
+    """Read-state-only identity validator for notification-mirror clearing.
+
+    Accepts a normal numeric Telegram compound ID ``account:chat:message`` or
+    exactly the reserved synthetic events-bucket form
+    ``account:updates:<update_id>`` and returns the account segment needed to
+    look up ``read.json``; returns ``None`` for malformed/arbitrary strings.
+    Deliberately separate from the strict ``_parse_compound_id``, which keeps
+    rejecting the reserved bucket for reply/edit/delete/outbound targeting —
+    clearing a mirror after a documented read is read-state bookkeeping, not
+    an outbound operation.
+    """
+    if not isinstance(value, str):
+        return None
+    parts = value.split(":")
+    if len(parts) != 3 or not parts[0]:
+        return None
+    if parts[1] != tg_updates.SYNTHETIC_EVENTS_CHAT_ID:
+        try:
+            int(parts[1])
+        except ValueError:
+            return None
+    try:
+        int(parts[2])
+    except ValueError:
+        return None
+    return parts[0]
+
+
 # Emoji reactions for different states (Bot API 7.0+)
 REACTION_SEEN = [{"type": "emoji", "emoji": "👀"}]      # Message received
 REACTION_DONE = [{"type": "emoji", "emoji": "✅"}]       # Response sent
@@ -1645,7 +1674,10 @@ class TelegramManager:
                 return None
 
             ref = preview.get("message_ref")
-            if isinstance(ref, str) and _looks_like_compound_id(ref):
+            # Accepts numeric compound IDs and the reserved synthetic
+            # events-bucket form, so admitted actorless/service/unknown
+            # updates can complete the documented read → clear lifecycle.
+            if isinstance(ref, str) and _mirror_identity_account(ref) is not None:
                 ids.add(ref)
                 continue
 
@@ -1680,9 +1712,11 @@ class TelegramManager:
             if notification_ids is None:
                 return current_payload, False, ()
             for compound_id in notification_ids:
-                try:
-                    account, _chat_id, _msg_id = self._parse_compound_id(compound_id)
-                except ValueError:
+                # Read-state-only validation: unlike the strict outbound
+                # _parse_compound_id, this accepts the reserved synthetic
+                # events bucket so reading it can clear its mirror.
+                account = _mirror_identity_account(compound_id)
+                if account is None:
                     return current_payload, False, ()
                 read_ids = next(
                     (ids for alias, ids in read_by_account if alias == account),
