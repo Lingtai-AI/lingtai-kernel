@@ -8,8 +8,12 @@ related_files:
   - src/lingtai/llm/identity_headers.py
   - src/lingtai/llm/openai/__init__.py
   - src/lingtai/llm/openai/adapter.py
+  - src/lingtai/llm/openai/codex_quota.py
   - src/lingtai/llm/openai/codex_ws.py
   - src/lingtai/llm/openai/defaults.py
+  - src/lingtai/auth/codex_pool.py
+  - tests/test_codex_quota.py
+  - tests/test_codex_pool_quota_exclusion.py
   - src/lingtai/llm/mimo/adapter.py
   - src/lingtai/llm/mimo/ANATOMY.md
   - src/lingtai/llm/service.py
@@ -38,6 +42,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `OpenAIAdapter`, `OpenAIChatSession` |
 | `adapter.py` | large | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
+| `codex_quota.py` | ~230 | `read_remaining_percent(auth_path)` — reads the Codex CLI's own OAuth rate-limit via `codex app-server`'s `account/rateLimits/read` stdio JSON-RPC call; returns the main window's remaining percent or `None` on any failure/malformed field. Used by `lingtai.auth.codex_pool`'s quota-aware pool exclusion. Tests: `tests/test_codex_quota.py`. |
 | `defaults.py` | 12 | `DEFAULTS` dict: `api_compat="openai"`, `use_responses_api=True`, `wire_api="auto"` |
 
 ### adapter.py class map

@@ -27,6 +27,17 @@ Design constraints (Jason's spec):
     matching: a model with no exact category behaves like an unusable pool
     (legacy fallback). Flat v1 files keep byte-identical behavior for every
     model. The kernel keys off structure, never off the ``version`` field.
+  * **Quota-aware exclusion at NEW selection only:** :func:`select_codex_pool_auth`
+    excludes an account from THIS pick only when
+    :func:`~lingtai.llm.openai.codex_quota.read_remaining_percent` explicitly
+    returns a value ``<= 0`` for it. ``None`` (unavailable/error/malformed)
+    always FAILS OPEN (never excludes). Weights are preserved exactly among
+    the remaining eligible accounts, and ``source_index`` stays anchored to
+    the full validated list. This never migrates an already-created
+    adapter/session and never mutates any pool/config/auth file. Every call
+    reads fresh (no cache), so a since-reset account re-enters immediately.
+    If every validated account is proven exhausted,
+    :class:`CodexPoolAllAccountsExhaustedError` is raised.
 
 Public helpers:
 
@@ -34,7 +45,8 @@ Public helpers:
   * :func:`resolve_codex_pool_path`    -> the pool file path (override-aware).
   * :func:`load_codex_auth_pool`       -> validated list of enabled accounts.
   * :func:`select_codex_pool_auth`     -> chosen token path + non-secret
-                                          selection metadata, or ``None``.
+                                          selection metadata, or ``None``; may
+                                          raise ``CodexPoolAllAccountsExhaustedError``.
   * :func:`select_codex_pool_auth_path`-> chosen token path only, or ``None``.
 """
 
@@ -67,6 +79,10 @@ MAX_FAILOVER_SWITCHES = 10
 
 # Legacy single-token default, used as the fallback when the pool is unusable.
 _LEGACY_TOKEN_FILENAME = "codex-auth.json"
+
+
+class CodexPoolAllAccountsExhaustedError(Exception):
+    """Every validated account reports zero remaining quota."""
 
 
 def resolve_codex_tui_dir() -> Path:
@@ -251,16 +267,43 @@ def _weighted_pick(accounts: list[dict], seed: str) -> tuple[int, dict]:
     O(len(accounts)). The same seed + same accounts always picks the same one.
     Returns ``(index, account)`` — the index within the validated account list.
     """
-    total = sum(a["weight"] for a in accounts)
+    return _weighted_pick_indexed(list(enumerate(accounts)), seed)
+
+
+def _weighted_pick_indexed(
+    indexed_accounts: list[tuple[int, dict]], seed: str
+) -> tuple[int, dict]:
+    """Like :func:`_weighted_pick`, but over explicit ``(original_index,
+    account)`` pairs so a caller can filter out quota-excluded accounts while
+    the returned index still anchors into the FULL validated account list
+    (needed by :func:`_codex_pool_failover_candidates`). Configured weights
+    are preserved exactly among whatever accounts are passed in.
+    """
+    total = sum(acct["weight"] for _, acct in indexed_accounts)
     digest = hashlib.sha256(seed.encode("utf-8")).digest()
     point = int.from_bytes(digest[:8], "big") % total
     cumulative = 0
-    for idx, acct in enumerate(accounts):
+    for original_idx, acct in indexed_accounts:
         cumulative += acct["weight"]
         if point < cumulative:
-            return idx, acct
+            return original_idx, acct
     # Unreachable (point < total == final cumulative) — defensive fallback.
-    return len(accounts) - 1, accounts[-1]
+    return indexed_accounts[-1]
+
+
+def _is_proven_exhausted(auth_path: str) -> bool:
+    """``True`` only if a fresh quota read proves ``auth_path`` exhausted.
+
+    Fail-open by construction: ``read_remaining_percent`` returning ``None``
+    (unavailable/error/malformed) returns ``False`` — the account stays
+    eligible. Always reads fresh (no cache).
+    """
+    from lingtai.llm.openai.codex_quota import read_remaining_percent
+
+    remaining = read_remaining_percent(auth_path)
+    if remaining is None:
+        return False
+    return remaining <= 0
 
 
 def select_codex_pool_auth(
@@ -295,8 +338,12 @@ def select_codex_pool_auth(
                              ``None`` (flat v1 pool). Model names are already
                              non-secret manifest values.
 
-    No token file is read and no token content, Authorization material, or raw
-    auth-file data appears in the returned metadata.
+    Applies quota-aware exclusion at this NEW-selection moment only — see the
+    module docstring's "Quota-aware exclusion" note. May raise
+    :class:`CodexPoolAllAccountsExhaustedError`.
+
+    No token content, Authorization material, or raw auth-file data appears in
+    the returned metadata.
     """
     tui_dir = resolve_codex_tui_dir()
     pool_path = resolve_codex_pool_path(defaults)
@@ -304,9 +351,25 @@ def select_codex_pool_auth(
     if not accounts:
         return None
 
+    resolved_paths = [
+        str(_resolve_relative_to_tui(a["path"], tui_dir)) for a in accounts
+    ]
+    eligible = [
+        (i, acct)
+        for i, acct in enumerate(accounts)
+        if not _is_proven_exhausted(resolved_paths[i])
+    ]
+    if not eligible:
+        raise CodexPoolAllAccountsExhaustedError(
+            "All Codex pool accounts are exhausted"
+        )
+
     seed = _selection_seed(defaults, tui_dir)
-    idx, chosen = _weighted_pick(accounts, seed)
-    auth_path = str(_resolve_relative_to_tui(chosen["path"], tui_dir))
+    if len(eligible) == len(accounts):
+        idx, chosen = _weighted_pick(accounts, seed)
+    else:
+        idx, chosen = _weighted_pick_indexed(eligible, seed)
+    auth_path = resolved_paths[idx]
     return {
         "auth_path": auth_path,
         "selection": {
@@ -335,7 +398,7 @@ def select_codex_pool_auth_path(
     caller falls back to the legacy default Codex token path.
 
     Path-only view of :func:`select_codex_pool_auth` (one selection, two views).
-    Pure path computation: no token file is read and nothing secret is logged.
+    The same quota check runs during selection; nothing secret is logged.
     """
     selected = select_codex_pool_auth(defaults, model)
     return selected["auth_path"] if selected else None
