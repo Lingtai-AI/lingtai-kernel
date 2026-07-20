@@ -109,4 +109,29 @@ def redact_for_trajectory(value: Any) -> Any:
             return value
 
 
-__all__ = ["redact_for_trajectory", "redact_text"]
+# Fields that carry file content for write/edit tools — these should NOT be
+# redacted because the agent is intentionally creating config/secrets files.
+_CONTENT_FIELDS: frozenset[str] = frozenset({"content", "new_string", "old_string"})
+_TOOLS_WITH_CONTENT: frozenset[str] = frozenset({"write", "edit"})
+
+
+def redact_tool_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Redact tool arguments, preserving content fields for write/edit.
+
+    File-content fields (``content``, ``new_string``, ``old_string``) on
+    ``write`` and ``edit`` tools are passed through unredacted so that
+    intentionally-created config and secrets files are not corrupted.
+    All other arguments and tool names are redacted normally.
+    """
+    result: dict[str, Any] = {}
+    for key, value in args.items():
+        if key in _CONTENT_FIELDS and tool_name in _TOOLS_WITH_CONTENT:
+            result[key] = value
+        elif isinstance(value, str):
+            result[key] = redact_text(value)
+        else:
+            result[key] = value
+    return result
+
+
+__all__ = ["redact_for_trajectory", "redact_text", "redact_tool_args"]
