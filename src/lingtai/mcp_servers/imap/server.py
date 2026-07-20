@@ -14,16 +14,24 @@ Config schema (plaintext, no env-indirection):
       "accounts": [
         {
           "email_address": "agent@example.com",
-          "email_password": "16-char-app-password",
-          "imap_host": "imap.gmail.com",      // optional, default Gmail
-          "imap_port": 993,                    // optional
-          "smtp_host": "smtp.gmail.com",       // optional
+          "auth": {
+            "type": "microsoft_oauth2",
+            "client_id": "PUBLIC_CLIENT_ID",
+            "token_cache": "imap/oauth2/outlook.cache",
+            "smtp_enabled": false
+          },
+          "imap_host": "outlook.office365.com",
+          "imap_port": 993,
+          "smtp_host": "smtp-mail.outlook.com",
           "smtp_port": 587,                    // optional
           "allowed_senders": ["a@x.com"],      // optional allow-list
           "poll_interval": 30                  // optional, seconds
         }
       ]
     }
+
+For password mode, use `email_password` in place of `auth`. OAuth and password
+fields must never be combined.
 
 Env vars injected by the LingTai kernel for LICC:
     LINGTAI_AGENT_DIR — host agent's working directory.
@@ -50,6 +58,7 @@ from .bridge import FilesystemMailBridge
 from .licc import push_inbox_event
 from .manager import IMAPMailManager, SCHEMA, DESCRIPTION
 from .service import IMAPMailService
+from .oauth import normalize_accounts
 
 log = logging.getLogger("lingtai.mcp_servers.imap")
 
@@ -60,8 +69,8 @@ _SERVER_INSTRUCTIONS = (
     "Inbound mail flows into the host agent's inbox via LICC. "
     "This server publishes LingTai profile resources; read lingtai://manifest "
     "to discover MCP-owned docs, routing hints, and status. "
-    "Setup, config schema, and troubleshooting: "
-    "https://github.com/Lingtai-AI/lingtai-imap"
+    "Read lingtai://docs/configuration and lingtai://docs/troubleshooting "
+    "for setup and diagnostics."
 )
 
 LINGTAI_PROFILE_MIME = "application/vnd.lingtai.mcp-profile+json"
@@ -284,11 +293,40 @@ The value points to a JSON file; relative paths are resolved under
 A legacy single-account flat object with `email_address` is still accepted, but
 new configs should use the `accounts` list.
 
+## Microsoft personal-account OAuth2
+
+Password accounts remain unchanged. Explicitly opt in with nested `auth` and no
+`email_password`:
+
+```json
+{
+  "email_address": "agent@example.com",
+  "auth": {
+    "type": "microsoft_oauth2",
+    "client_id": "PUBLIC_CLIENT_ID",
+    "token_cache": "imap/oauth2/outlook.cache",
+    "smtp_enabled": false
+  },
+  "imap_host": "outlook.office365.com",
+  "smtp_host": "smtp-mail.outlook.com"
+}
+```
+
+This path uses the fixed Microsoft `consumers` authority and Outlook delegated
+IMAP permission, plus SMTP permission only when `smtp_enabled` is true. Register
+the app for personal Microsoft accounts and enable public-client flows. Bootstrap
+separately, while the server is stopped, from the agent directory (or with
+`LINGTAI_AGENT_DIR` set): `lingtai-imap-bootstrap --config PATH --account ADDRESS`;
+it displays only
+Microsoft's device instructions and stores an owner-only MSAL cache. Runtime
+acquisition is silent and never falls back to a password. Missing or revoked
+consent is reported as `oauth_reauthorization_required`. Status exposes only
+`auth_type`, `auth_state`, and `smtp_enabled`.
+
 ## Field notes
 
-- `email_address` and `email_password` are required for each account. Prefer an
-  app password or provider token; do not store a primary account password unless
-  the provider requires it.
+- Password configurations require `email_password`; OAuth configurations reject
+  passwords, client secrets, and unknown auth fields.
 - `imap_host`, `imap_port`, `smtp_host`, and `smtp_port` default to Gmail values
   when omitted. Set them explicitly for Outlook, custom domains, or other
   providers.
@@ -316,8 +354,9 @@ Most often the server could not initialize the manager. Check:
    `LINGTAI_AGENT_DIR`.
 3. The JSON is valid and contains either `accounts: [...]` or the legacy
    single-account `email_address` shape.
-4. Credentials are valid for both IMAP and SMTP. Many providers require app
-   passwords or OAuth/app-specific tokens.
+4. Password credentials are valid for both IMAP and SMTP, or the account's
+   Microsoft OAuth cache was bootstrapped separately. OAuth failures are explicit
+   and never fall back to a password.
 
 Read `lingtai://status`; if `manager_initialized` is `false`, fix config and
 restart or refresh the host agent.
@@ -394,14 +433,16 @@ the agent's secret/config file according to the local LingTai deployment convent
 
 ## Verification checklist
 
-1. Refresh/restart the host agent after config changes.
-2. Read `lingtai://status`; confirm `manager_initialized: true` and the account is
+1. For Microsoft OAuth, run `lingtai-imap-bootstrap --config PATH --account ADDRESS`
+   once while the server is stopped; do not put tokens in config or chat.
+2. Refresh/restart the host agent after config changes.
+3. Read `lingtai://status`; confirm `manager_initialized: true` and the account is
    listed. Status is secret-redacted by design.
-3. Run `imap(action="accounts")`; confirm the account and listener fields look sane.
-4. Send a test email from an allowed sender to the configured mailbox.
-5. Run `imap(action="check", n=5)` or wait for the MCP notification.
-6. Send a test outbound message with `imap(action="send", ...)` to confirm SMTP.
-7. If inbound works but wake notifications do not, check `allowed_senders` and LICC
+4. Run `imap(action="accounts")`; confirm the account and listener fields look sane.
+5. Send a test email from an allowed sender to the configured mailbox.
+6. Run `imap(action="check", n=5)` or wait for the MCP notification.
+7. Send a test outbound message with `imap(action="send", ...)` to confirm SMTP.
+8. If inbound works but wake notifications do not, check `allowed_senders` and LICC
    delivery logs.
 
 ## Agent guidance
@@ -480,28 +521,8 @@ def load_config() -> dict:
 
 
 def _accounts_from_config(cfg: dict) -> list[dict]:
-    """Normalize config into the accounts list IMAPMailService expects.
-
-    Accepts either the canonical ``{accounts: [...]}`` shape or a flat
-    single-account dict for back-compat with very old configs.
-    """
-    if "accounts" in cfg:
-        return list(cfg["accounts"])
-    if "email_address" in cfg:
-        return [{
-            "email_address": cfg["email_address"],
-            "email_password": cfg.get("email_password", ""),
-            "imap_host": cfg.get("imap_host", "imap.gmail.com"),
-            "imap_port": cfg.get("imap_port", 993),
-            "smtp_host": cfg.get("smtp_host", "smtp.gmail.com"),
-            "smtp_port": cfg.get("smtp_port", 587),
-            "allowed_senders": cfg.get("allowed_senders"),
-            "poll_interval": cfg.get("poll_interval", 30),
-        }]
-    raise ValueError(
-        "config must contain either 'accounts' (list) or 'email_address' "
-        "(single-account back-compat shape)"
-    )
+    """Validate and normalize canonical or legacy account configuration."""
+    return normalize_accounts(cfg)
 
 
 # ---------------------------------------------------------------------------

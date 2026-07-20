@@ -33,6 +33,7 @@ dependencies = [
     # without separate PyPI wheels. Keep their third-party runtime dependencies
     # here.
     "imapclient>=3.0.0",
+    "msal>=1.37.0",
     "lark-oapi>=1.4.0",
     "cryptography>=42.0.0",
     "qrcode>=7.4.0",
@@ -42,6 +43,7 @@ dependencies = [
 [project.scripts]
 lingtai-agent = "lingtai.cli:main"
 lingtai-imap = "lingtai.mcp_servers.imap.__main__:main"
+lingtai-imap-bootstrap = "lingtai.mcp_servers.imap.oauth:main"
 lingtai-telegram = "lingtai.mcp_servers.telegram.__main__:main"
 lingtai-feishu = "lingtai.mcp_servers.feishu.__main__:main"
 lingtai-wechat = "lingtai.mcp_servers.wechat.__main__:main"
