@@ -93,6 +93,16 @@ EDIT_BRANCHES: frozenset[str] = frozenset({
     "edited_business_message",
 })
 
+# Non-edit human Message-typed branches whose text is eligible for local
+# slash-command interception (/kanban, /system, …). Channel posts are
+# excluded deliberately: they are broadcast content, not operator console
+# input, and a local command reply would post into the channel.
+LOCAL_COMMAND_BRANCHES: frozenset[str] = frozenset({
+    "message",
+    "business_message",
+    "guest_message",
+})
+
 # Branches that wake the agent: new human-authored message content plus
 # button presses (existing behavior for message/callback_query). Edits,
 # channel broadcasts, and service/aggregate events are recorded without a

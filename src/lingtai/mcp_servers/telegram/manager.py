@@ -353,8 +353,20 @@ SCHEMA = {
             "description": "Bot account alias (optional — defaults to first configured account)",
         },
         "chat_id": {
-            "type": "integer",
-            "description": "Telegram chat ID",
+            # Integer Telegram chat ID, or exactly the one reserved synthetic
+            # events-bucket identifier for read/search recovery of non-chat
+            # updates. Arbitrary strings remain schema-invalid.
+            "anyOf": [
+                {"type": "integer"},
+                {"type": "string", "enum": [tg_updates.SYNTHETIC_EVENTS_CHAT_ID]},
+            ],
+            "description": (
+                "Telegram chat ID (integer). read/search also accept the "
+                f"reserved '{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}' bucket, "
+                "which holds non-chat update events (reactions, polls, "
+                "member/boost/business events, inline-only callbacks, unknown "
+                "branches); send requires a real numeric chat ID."
+            ),
         },
         "text": {
             "type": "string",
@@ -582,6 +594,11 @@ class TelegramManager:
         parts = compound_id.split(":")
         if len(parts) != 3:
             raise ValueError(f"Invalid message ID format: {compound_id}")
+        if parts[1] == tg_updates.SYNTHETIC_EVENTS_CHAT_ID:
+            raise ValueError(
+                f"{compound_id!r} is a synthetic events-bucket record; it has "
+                "no real chat to reply/edit/delete into (read/search-only)"
+            )
         return parts[0], int(parts[1]), int(parts[2])
 
     # ------------------------------------------------------------------
@@ -1375,6 +1392,12 @@ class TelegramManager:
                 item[flag] = message[flag]
         env = message.get("telegram")
         if isinstance(env, dict):
+            # Additive per-update identity beside the legacy compound id, so
+            # downstream persistent dedup/delivery can distinguish events
+            # (e.g. repeated callbacks) that share one compound message id.
+            env_event_id = env.get("event_id")
+            if isinstance(env_event_id, str) and env_event_id:
+                item["event_id"] = env_event_id
             ref = {
                 "event_id": env.get("event_id"),
                 "branch": env.get("branch"),
@@ -3384,6 +3407,16 @@ class TelegramManager:
 
         if not chat_id:
             return {"error": "chat_id is required"}
+        if not isinstance(chat_id, int) or isinstance(chat_id, bool):
+            # The reserved synthetic events bucket is read/search-only; there
+            # is no real chat behind it to deliver a message to.
+            return {
+                "error": (
+                    "chat_id must be a numeric Telegram chat ID for send; the "
+                    f"reserved '{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}' events "
+                    "bucket is read/search-only"
+                ),
+            }
 
         # Chat action shortcut: when chat_action is set and no text/media is
         # provided, send the typing indicator instead of a message. Skips

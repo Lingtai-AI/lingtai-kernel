@@ -293,6 +293,17 @@ class TelegramAccount:
                     json={
                         "offset": self._last_update_id + 1,
                         "timeout": 30,
+                        # Subscribe to every catalogued Update branch at the
+                        # acquisition boundary. Bot API semantics: an omitted
+                        # allowed_updates reuses the previous server-side
+                        # setting, and the default set excludes branches like
+                        # chat_member / message_reaction / message_reaction_count
+                        # — so without this explicit list those audited
+                        # branches would never reach the lossless envelope.
+                        # Unknown *future* branches are still preserved when
+                        # delivered (open fallback); Telegram only sends
+                        # branches it knows this list requested.
+                        "allowed_updates": list(tg_updates.KNOWN_UPDATE_BRANCHES),
                     },
                 )
                 for update in updates:
@@ -351,12 +362,16 @@ class TelegramAccount:
 
     def _handle_slash_command(self, update: dict) -> bool:
         """Handle slash commands locally (no LLM call). Returns True if handled."""
-        # Extract text from message
+        # Extract text from any non-edit human Message-typed branch (message,
+        # business_message, guest_message) via the shared classification, so
+        # local commands stay local on every admitted human-content branch.
+        # Runs strictly after the allowlist gate in _process_update.
         text = ""
         chat_id = None
-        if "message" in update:
-            text = (update["message"].get("text") or "").strip()
-            chat_id = update["message"]["chat"]["id"]
+        branch, branch_obj = tg_updates.classify_update(update)
+        if branch in tg_updates.LOCAL_COMMAND_BRANCHES and isinstance(branch_obj, dict):
+            text = (branch_obj.get("text") or "").strip()
+            chat_id = (branch_obj.get("chat") or {}).get("id")
         elif "callback_query" in update:
             text = (update["callback_query"].get("data") or "").strip()
             cq_msg = update["callback_query"].get("message", {})

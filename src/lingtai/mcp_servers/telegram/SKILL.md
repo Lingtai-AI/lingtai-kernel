@@ -103,9 +103,11 @@ setup readiness checklist are **not** here — they belong to `mcp-manual`
   reply quotes (`update.message.quote`), entities, forwards, topics, callback
   identity, etc. The concise top-level fields stay the quick view.
 - Non-message updates (reactions, polls, member/boost/business events,
-  unknown future branches) land in the synthetic conversation bucket
-  `chat_id='updates'` with `synthetic: true`; the raw event is in their
-  `telegram` envelope.
+  inline-only callbacks, unknown future branches) land in the synthetic
+  conversation bucket with `synthetic: true`; the raw event is in their
+  `telegram` envelope. Pass `chat_id='updates'` (the one reserved
+  non-numeric value the schema accepts) to `read`/`search` to recover them;
+  `send`/`reply` still require a real numeric chat ID.
 
 ## RICH TEXT: parse_mode / entities
 

@@ -82,7 +82,11 @@ _PREVIEW_FIELD_CAP = 10000  # chars of body to inline as the snippet (raised for
 # Capped at the same 200 chars as `subject` — these are refs/handles, not
 # message bodies, so they should be naturally short. A misbehaving MCP that
 # stuffs a kilobyte into `conversation_ref` won't bloat the notification.
-_PREVIEW_META_FIELDS = ("conversation_ref", "message_ref", "platform")
+# ``event_id`` is the producer's additive per-update identity (e.g. Telegram
+# ``<account>:update:<update_id>``) — unlike ``message_ref`` it stays unique
+# when repeated events (callback presses) share one message id, so the
+# persistent lane can hook/dedup on it.
+_PREVIEW_META_FIELDS = ("conversation_ref", "message_ref", "platform", "event_id")
 _PREVIEW_META_FIELD_CAP = 200
 
 # Optional structured metadata that curated IM producers can attach under

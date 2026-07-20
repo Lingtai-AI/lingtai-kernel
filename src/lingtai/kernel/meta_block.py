@@ -1938,10 +1938,63 @@ def _im_fallback_message_from_preview(preview: dict) -> dict | None:
     return item
 
 
+def _im_message_identity(message: dict) -> str | None:
+    """Return the dedup/delivery identity for a persistent IM message.
+
+    Prefers the additive per-update ``event_id`` (unique per inbound update —
+    repeated callback presses on one keyboard share a compound message ``id``
+    but never an ``event_id``); falls back to the legacy compound ``id`` for
+    producers/records that do not carry one.
+    """
+    event_id = message.get("event_id")
+    if isinstance(event_id, str) and event_id:
+        return event_id
+    msg_id = message.get("id")
+    if isinstance(msg_id, str) and msg_id:
+        return msg_id
+    return None
+
+
+def _im_structured_omission_marker(value: object) -> dict | None:
+    """Return *value* when it is an explicit LICC structured-omission marker."""
+    if isinstance(value, dict) and value.get("licc_structured_omitted"):
+        return value
+    return None
+
+
+def _im_structured_omission_markers_from_notifications(
+    notification_payload: dict, source_key: str
+) -> list[dict]:
+    """Collect explicit ``licc_structured_omitted`` markers from IM previews.
+
+    The LICC consumer replaces an oversize/unserializable curated structured
+    family with a marker carrying the reason and the producer's recovery
+    handle. Markers are not message candidates — they are carried into the
+    persistent lane as explicit metadata so the agent still learns what was
+    omitted and how to recover it (never silently dropped).
+    """
+    markers: list[dict] = []
+    seen: set[str] = set()
+    for preview in _im_preview_list(notification_payload, source_key):
+        for key in ("latest_incoming", "recent_messages", "referenced_messages"):
+            marker = _im_structured_omission_marker(preview.get(key))
+            if marker is None:
+                continue
+            dedup_key = _json.dumps(marker, sort_keys=True, default=str)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            markers.append(dict(marker))
+    return markers
+
+
 def _im_persistent_event_from_preview(preview: dict) -> dict | None:
     """Move IM event/routing hook metadata into the persistent lane."""
     event: dict = {}
-    for key in ("from", "subject", "conversation_ref", "message_ref", "platform"):
+    for key in (
+        "from", "subject", "conversation_ref", "message_ref", "platform",
+        "event_id",
+    ):
         value = preview.get(key)
         if isinstance(value, str) and value:
             event[key] = value
@@ -1997,7 +2050,10 @@ def _im_persistent_messages_from_notifications(
             candidates.extend(recent)
             has_structured = True
         latest = preview.get("latest_incoming")
-        if isinstance(latest, dict):
+        # An explicit LICC omission marker is not a message and must not
+        # suppress the bounded preview fallback; it is carried separately
+        # (see _im_structured_omission_markers_from_notifications).
+        if isinstance(latest, dict) and not _im_structured_omission_marker(latest):
             candidates.append(latest)
             has_structured = True
         if not has_structured:
@@ -2010,10 +2066,14 @@ def _im_persistent_messages_from_notifications(
             msg_id = candidate.get("id")
             if not isinstance(msg_id, str) or not msg_id:
                 continue
-            if msg_id not in by_id:
-                order.append(msg_id)
-            by_id[msg_id] = dict(candidate)
-    return [by_id[msg_id] for msg_id in order if msg_id in by_id]
+            # De-duplicate by per-update event identity when present so
+            # distinct events sharing one compound message id (repeated
+            # callbacks on one keyboard) never collapse into one entry.
+            identity = _im_message_identity(candidate) or msg_id
+            if identity not in by_id:
+                order.append(identity)
+            by_id[identity] = dict(candidate)
+    return [by_id[identity] for identity in order if identity in by_id]
 
 
 def _im_referenced_messages_from_notifications(
@@ -2209,6 +2269,8 @@ def _build_snapshot_im_persistent_payload(
     lane: _ImPersistentLane,
     candidates: list[dict],
     events: list[dict],
+    *,
+    omission_markers: list[dict] | None = None,
 ) -> dict:
     """Build a snapshot (email-style) persistent payload for one IM lane.
 
@@ -2230,6 +2292,8 @@ def _build_snapshot_im_persistent_payload(
         payload["count"] = count
     if events:
         payload["events"] = events
+    if omission_markers:
+        payload["structured_omitted"] = omission_markers
     return payload
 
 
@@ -2256,12 +2320,16 @@ def _build_im_notification_persistent_payload(
     events = _im_persistent_events_from_notifications(
         notification_payload, lane.source_key
     )
-    if not candidates and not events:
+    omission_markers = _im_structured_omission_markers_from_notifications(
+        notification_payload, lane.source_key
+    )
+    if not candidates and not events and not omission_markers:
         return None
 
     if lane.mode == "snapshot":
         return _build_snapshot_im_persistent_payload(
-            notification_payload, lane, candidates, events
+            notification_payload, lane, candidates, events,
+            omission_markers=omission_markers,
         )
 
     delivered = getattr(agent, lane.delivered_ids_attr, [])
@@ -2284,7 +2352,8 @@ def _build_im_notification_persistent_payload(
         messages = [
             message
             for message in candidates
-            if isinstance(message.get("id"), str) and message["id"] not in delivered_ids
+            if isinstance(message.get("id"), str)
+            and _im_message_identity(message) not in delivered_ids
         ]
     elif candidates:
         messages = candidates[-lane.min_context:]
@@ -2292,7 +2361,7 @@ def _build_im_notification_persistent_payload(
     else:
         messages = []
 
-    if not messages and not events:
+    if not messages and not events and not omission_markers:
         return None
 
     # Newly-arrived (not previously delivered) incoming messages drive the burst
@@ -2301,11 +2370,11 @@ def _build_im_notification_persistent_payload(
     annotated_messages: list[dict] = []
     for message in messages:
         annotated_messages.append(_annotate_im_message(message, lane))
-        msg_id = message.get("id")
+        identity = _im_message_identity(message)
         if (
             message.get("direction") == "incoming"
-            and isinstance(msg_id, str)
-            and msg_id not in delivered_ids
+            and isinstance(identity, str)
+            and identity not in delivered_ids
         ):
             new_incoming += 1
     messages = annotated_messages
@@ -2334,13 +2403,13 @@ def _build_im_notification_persistent_payload(
             notification_payload, lane.source_key
         )
         present_ids = {
-            message.get("id")
-            for message in messages
-            if isinstance(message.get("id"), str)
+            identity
+            for identity in (_im_message_identity(m) for m in messages)
+            if isinstance(identity, str)
         }
         referenced_out: list[dict] = []
         for ref in referenced:
-            if ref.get("id") in present_ids:
+            if _im_message_identity(ref) in present_ids:
                 continue
             annotated = _annotate_im_message(ref, lane)
             existing = annotated.get("comment")
@@ -2354,6 +2423,12 @@ def _build_im_notification_persistent_payload(
 
     if events:
         lane_payload["events"] = events
+
+    # Explicit LICC structured-omission markers (oversize/unserializable
+    # curated family) ride into the persistent lane so the agent still gets
+    # the omission reason and the producer's recovery handle.
+    if omission_markers:
+        lane_payload["structured_omitted"] = omission_markers
 
     # Every persistent block carries an explicit hook to the previous block for
     # its lane (Jason #6148). The first block after startup/molt has no
@@ -2424,7 +2499,10 @@ def _record_im_persistent_delivery(
     for message in messages:
         if not isinstance(message, dict):
             continue
-        msg_id = message.get("id")
+        # Track delivery by per-update event identity when present (falls
+        # back to the compound id) so a later event that shares a compound id
+        # (repeated callback) is still delivered as new.
+        msg_id = _im_message_identity(message)
         if isinstance(msg_id, str) and msg_id and msg_id not in seen:
             existing.append(msg_id)
             seen.add(msg_id)
