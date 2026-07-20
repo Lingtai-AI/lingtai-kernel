@@ -106,6 +106,9 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     # the adapter chooses one endpoint at request time without changing
     # prompt_cache_key/session/thread identity.
     "codex_base_urls",
+    # Optional Codex service tier. ``fast`` is normalized to the wire value
+    # ``priority`` at the common Codex factory boundary.
+    "service_tier",
     # OpenAI-compatible wire selection. ``auto`` preserves legacy behavior;
     # ``chat_completions``/``responses`` explicitly select the wire path even
     # for custom base URLs. Scoped to OpenAI-compatible adapters.
