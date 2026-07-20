@@ -15,4 +15,7 @@ def select_shell_async_process() -> BashAsyncProcessPort:
     if os.name == "nt":
         from .windows.powershell_process import WindowsShellAsyncProcessAdapter
         return WindowsShellAsyncProcessAdapter()
+    if sys.platform == "win32":
+        from lingtai.adapters.windows.powershell_process import WindowsPowerShellAsyncProcess
+        return WindowsPowerShellAsyncProcess()
     raise NotImplementedError(f"shell async process supervision is unsupported on {os.name!r}")

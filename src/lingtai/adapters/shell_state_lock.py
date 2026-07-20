@@ -15,4 +15,7 @@ def select_shell_state_lock() -> BashStateLockPort:
     if os.name == "nt":
         from .windows.powershell_state_lock import WindowsShellStateLockAdapter
         return WindowsShellStateLockAdapter()
+    if sys.platform == "win32":
+        from lingtai.adapters.windows.powershell_state_lock import WindowsPowerShellStateLock
+        return WindowsPowerShellStateLock()
     raise NotImplementedError(f"shell async state locking is unsupported on {os.name!r}")

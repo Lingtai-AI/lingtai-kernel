@@ -7,9 +7,9 @@ this module — the composition roots (``lingtai.agent``, ``lingtai.cli``) call
 ``select_workdir_lease`` and inject the returned Port into ``BaseAgent`` and the
 SQLite rebuild.
 
-Two production adapters exist: the POSIX ``flock`` adapter and the Windows
-``msvcrt`` byte-range adapter. On any other platform the selector fails loudly
-rather than silently degrading or shipping an unproven mechanism.
+This slice ships a POSIX adapter only. On any unsupported platform the selector
+fails loudly rather than silently degrading or shipping an unproven Windows
+mechanism.
 """
 from __future__ import annotations
 
@@ -23,13 +23,12 @@ from lingtai.kernel.workdir_lease import WorkdirLeasePort
 def select_workdir_lease(working_dir: str | Path) -> WorkdirLeasePort:
     """Return the production working-directory lease for the current platform.
 
-    On ``win32`` returns the Windows ``msvcrt`` byte-range adapter; on POSIX
-    returns the ``flock`` adapter. Raises ``NotImplementedError`` on every
-    platform without a production lease adapter. Each rejection happens
-    *before* the concrete adapter module (which needs ``fcntl`` or ``msvcrt``
-    mechanisms) is exercised, so an unsupported-platform failure is this
-    selector's explicit error rather than a bare mechanism import error. The
-    failure is loud and explicit: there is no unlocked or no-op fallback.
+    Raises ``NotImplementedError`` on every platform without a production lease
+    adapter — anything that is not POSIX (``win32`` and any other non-POSIX
+    ``os.name``). The rejection happens *before* the POSIX adapter (which imports
+    ``fcntl`` at module top) is imported, so the unsupported-platform failure is
+    this selector's explicit error rather than a bare ``fcntl`` ``ModuleNotFoundError``.
+    The failure is loud and explicit: there is no unlocked or no-op fallback.
     """
     if sys.platform == "win32":
         from lingtai.adapters.windows.workdir_lease import WindowsWorkdirLeaseAdapter
@@ -38,9 +37,9 @@ def select_workdir_lease(working_dir: str | Path) -> WorkdirLeasePort:
     if os.name != "posix":
         raise NotImplementedError(
             f"No production workdir-lease adapter for platform {sys.platform!r} "
-            f"(os.name={os.name!r}). Production adapters exist for POSIX "
-            "(flock) and Windows (msvcrt byte-range) only; any other platform "
-            "needs its own adapter with its own lock conformance suite."
+            f"(os.name={os.name!r}). This vertical slice ships a POSIX flock "
+            "adapter and a native Windows adapter; other non-POSIX platforms "
+            "are out of scope."
         )
     from lingtai.adapters.posix.workdir_lease import PosixWorkdirLeaseAdapter
 

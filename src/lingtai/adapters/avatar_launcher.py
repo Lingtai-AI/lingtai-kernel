@@ -8,12 +8,12 @@ from lingtai.tools.avatar._launcher import AvatarLauncherPort
 
 
 def select_avatar_launcher() -> AvatarLauncherPort:
-    if os.name == "nt":
-        from lingtai.adapters.windows.avatar_launcher import WindowsAvatarLauncherAdapter
-        return WindowsAvatarLauncherAdapter()
     if os.name == "posix":
         from lingtai.adapters.posix.avatar_launcher import PosixAvatarLauncherAdapter
         return PosixAvatarLauncherAdapter()
+    if sys.platform == "win32":
+        from .windows.avatar_launcher import WindowsAvatarLauncherAdapter
+        return WindowsAvatarLauncherAdapter()
     raise NotImplementedError(
         f"No production avatar launcher for platform {sys.platform!r} (os.name={os.name!r})"
     )
