@@ -32,6 +32,7 @@ from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError
 
 from ._watermark import WatermarkStore
+from .oauth import AuthProvider, OAuthError, PasswordAuthProvider
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ class IMAPAccount:
     def __init__(
         self,
         email_address: str,
-        email_password: str,
+        email_password: str = "",
         *,
         imap_host: str = "imap.gmail.com",
         imap_port: int = 993,
@@ -126,9 +127,12 @@ class IMAPAccount:
         working_dir: Path | str | None = None,
         allowed_senders: list[str] | None = None,
         poll_interval: int = 30,
+        auth_provider: AuthProvider | None = None,
+        smtp_enabled: bool = True,
     ) -> None:
         self._email_address = email_address
-        self._email_password = email_password
+        self._auth_provider = auth_provider or PasswordAuthProvider(email_password)
+        self._smtp_enabled = smtp_enabled
         self._imap_host = imap_host
         self._imap_port = imap_port
         self._smtp_host = smtp_host
@@ -200,6 +204,13 @@ class IMAPAccount:
         return dict(self._folders)
 
     @property
+    def auth_status(self) -> dict:
+        status = dict(self._auth_provider.status())
+        status.setdefault("auth_type", self._auth_provider.mode)
+        status["smtp_enabled"] = self._smtp_enabled
+        return status
+
+    @property
     def connected(self) -> bool:
         """True iff the tool-call connection is alive (NOOP succeeds)."""
         if self._tool_imap is None:
@@ -228,7 +239,7 @@ class IMAPAccount:
         if self._tool_imap is not None:
             return
         client = IMAPClient(self._imap_host, port=self._imap_port, ssl=True)
-        client.login(self._email_address, self._email_password)
+        self._auth_provider.authenticate_imap(client, account=self._email_address)
         self._tool_imap = client
         self._fetch_capabilities()
         self._discover_folders()
@@ -671,6 +682,8 @@ class IMAPAccount:
         in_reply_to: str | None = None,
         references: str | None = None,
     ) -> str | None:
+        if not self._smtp_enabled:
+            return "smtp_disabled"
         if not subject and not body and not attachments:
             return "Cannot send empty email (no subject, no body, and no attachments)"
         if attachments:
@@ -717,11 +730,14 @@ class IMAPAccount:
 
             with smtplib.SMTP(self._smtp_host, self._smtp_port) as server:
                 server.starttls()
-                server.login(self._email_address, self._email_password)
+                self._auth_provider.authenticate_smtp(server, account=self._email_address)
                 server.sendmail(
                     self._email_address, all_recipients, mime_msg.as_string(),
                 )
             return None
+        except OAuthError as e:
+            logger.error("SMTP send failed: %s", e.code)
+            return e.code
         except Exception as e:
             error = f"SMTP send failed: {e}"
             logger.error(error)
@@ -884,6 +900,12 @@ class IMAPAccount:
                 # cycle. A connection that succeeds but immediately fails
                 # in IDLE should still advance the reconnect backoff.
                 self._backoff_index = 0
+            except OAuthError as e:
+                logger.warning("listener auth error on %s: %s", self._email_address, e.code)
+                self._disconnect_listener()
+                if self._stop_event.wait(self._backoff_steps[min(self._backoff_index, len(self._backoff_steps) - 1)]):
+                    return
+                self._backoff_index += 1
             except (socket.error, OSError, IMAPClientError) as e:
                 logger.warning(
                     "listener error on %s: %s", self._email_address, e,
@@ -909,7 +931,7 @@ class IMAPAccount:
             except Exception:
                 pass
         client = IMAPClient(self._imap_host, port=self._imap_port, ssl=True)
-        client.login(self._email_address, self._email_password)
+        self._auth_provider.authenticate_imap(client, account=self._email_address)
         client.select_folder(folder)
         self._listen_imap = client
 
