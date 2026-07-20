@@ -108,9 +108,8 @@ selects that topic.
   location: reference/how-to-change-name/SKILL.md
   description: |
     Nested system-manual reference for changing a live agent workdir/address on
-    POSIX. Read this after loading system-manual when a cooperative suspend,
-    same-parent atomic rename, JSONC runtime-path rebase, verified resume,
-    receipt, or no-rollback recovery is needed.
+    POSIX. Read this after loading system-manual for suspend, an atomic
+    no-replace rename, and a verified resume.
 ```
 
 ## Router table
@@ -126,7 +125,7 @@ selects that topic.
 | Kernel update lifecycle; runtime/source discovery; `kernel_version` and `source_drift`; heartbeat nudge dispatch; `.notification/nudge.json`; durable state; sync/wake/dismiss mechanics; packaged vs editable/source installs; refresh vs TUI-managed update; verification/troubleshooting | `reference/runtime-update-checks/SKILL.md` |
 | Environment variables; Nudge controls; accepted values; read/reload behavior; invalid-value fallback; security cautions | `reference/environment-variables/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
-| Change an agent workdir basename/address; POSIX suspend → atomic rename → resume; in-workdir runtime path rebase; receipts; shutdown timeout; post-rename recovery; preserved `agent_id`/true name | `reference/how-to-change-name/SKILL.md` |
+| Change an agent workdir basename/address; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `psyche-manual` |
 | Soul tool; soul flow opt-in (`LINGTAI_SOUL_FLOW_ENABLED`); disabled-flow behavior; `delay_seconds` as cadence-not-off-switch; inquiry/config/voice/dismiss; privacy/cost rationale | `soul-manual` |
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |
