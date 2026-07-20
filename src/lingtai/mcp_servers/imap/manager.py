@@ -774,15 +774,11 @@ class IMAPMailManager:
                 and acct._bg_thread.is_alive()
                 and getattr(acct, "_listen_imap", None) is not None
             )
-            status = getattr(acct, "auth_status", {})
             out.append({
                 "address": acct.address,
                 "tool_connected": acct.connected,
                 "listener_connected": listener_connected,
                 "listening": getattr(acct, "listening", False),
-                "auth_type": status.get("auth_type", "password"),
-                "auth_state": status.get("auth_state", "configured"),
-                "smtp_enabled": status.get("smtp_enabled", True),
             })
         return {"accounts": out}
 

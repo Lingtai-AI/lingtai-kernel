@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Callable
 
 from .account import IMAPAccount
-from .oauth import normalize_account, provider_from_config
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +26,7 @@ class IMAPMailService:
     ) -> None:
         self._working_dir = Path(working_dir) if working_dir else None
         self._accounts: list[IMAPAccount] = []
-        for index, raw_cfg in enumerate(accounts):
-            cfg = normalize_account(raw_cfg, index)
-            provider, smtp_enabled = provider_from_config(cfg, self._working_dir)
+        for cfg in accounts:
             acct = IMAPAccount(
                 email_address=cfg["email_address"],
                 email_password=cfg.get("email_password", ""),
@@ -40,8 +37,7 @@ class IMAPMailService:
                 working_dir=self._working_dir,
                 allowed_senders=cfg.get("allowed_senders"),
                 poll_interval=cfg.get("poll_interval", 30),
-                auth_provider=provider,
-                smtp_enabled=smtp_enabled,
+                auth=cfg.get("auth"),
             )
             self._accounts.append(acct)
         self._account_map: dict[str, IMAPAccount] = {

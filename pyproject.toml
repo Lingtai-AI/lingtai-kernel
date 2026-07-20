@@ -43,7 +43,6 @@ dependencies = [
 [project.scripts]
 lingtai-agent = "lingtai.cli:main"
 lingtai-imap = "lingtai.mcp_servers.imap.__main__:main"
-lingtai-imap-bootstrap = "lingtai.mcp_servers.imap.oauth:main"
 lingtai-telegram = "lingtai.mcp_servers.telegram.__main__:main"
 lingtai-feishu = "lingtai.mcp_servers.feishu.__main__:main"
 lingtai-wechat = "lingtai.mcp_servers.wechat.__main__:main"

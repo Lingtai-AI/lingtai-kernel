@@ -4,16 +4,14 @@ description: |
   Progressive-disclosure usage manual for the IMAP/SMTP email MCP tool. Read this
   when you need detail beyond the one-line action descriptions: send vs reply,
   check/read/search over folders, the compound email_id (account:folder:uid),
-  attachments, move/flag/delete/folders, contacts/accounts basics, Microsoft
-  personal-account OAuth bootstrap, and the important external-email side-effect
-  caveats. Pulled on demand via action='manual'; you do not need to call it before
-  every send.
-version: 1.1.0
-last_changed_at: 2026-07-20T00:00:00Z
+  attachments, move/flag/delete/folders, contacts/accounts basics, and the
+  important external-email side-effect caveats (real outbound mail — confirm
+  before sending). Pulled on demand via action='manual'; you do not need to call
+  it before every send.
+version: 1.0.0
+last_changed_at: 2026-07-19T00:00:00Z
 related_files:
-- src/lingtai/mcp_servers/imap/account.py
 - src/lingtai/mcp_servers/imap/manager.py
-- src/lingtai/mcp_servers/imap/oauth.py
 - src/lingtai/mcp_servers/imap/server.py
 - src/lingtai/mcp_servers/imap/service.py
 maintenance: |
@@ -46,35 +44,6 @@ schema's one-line action descriptions.
 
 `address`/`cc`/`bcc` accept a single string or a list; `email_id` takes one id or
 a list of ids.
-
-## OUTLOOK.COM PERSONAL OAUTH2
-
-Password accounts are unchanged. For a personal Microsoft account, omit
-`email_password` and opt in explicitly:
-
-```json
-{
-  "email_address": "agent@example.com",
-  "imap_host": "outlook.office365.com",
-  "smtp_host": "smtp-mail.outlook.com",
-  "auth": {
-    "type": "microsoft_oauth2",
-    "client_id": "PUBLIC_CLIENT_ID",
-    "token_cache": "imap/oauth2/outlook.cache",
-    "smtp_enabled": false
-  }
-}
-```
-
-Register the app for personal Microsoft accounts and enable public-client flows.
-With the MCP stopped, run from the agent directory (or set `LINGTAI_AGENT_DIR`):
-`lingtai-imap-bootstrap --config PATH --account ADDRESS`. It shows Microsoft's
-device instructions and writes an owner-only MSAL cache; it never prints token
-results. Runtime acquisition is silent, MSAL adds its reserved `offline_access`
-scope automatically, and missing/revoked consent reports
-`oauth_reauthorization_required` without password fallback. Set `smtp_enabled`
-to `true` only when send/reply is needed; status exposes only `auth_type`,
-`auth_state`, and `smtp_enabled`.
 
 ## IDS, FOLDERS, ACCOUNTS
 
@@ -117,3 +86,13 @@ to `true` only when send/reply is needed; status exposes only `auth_type`,
 - Actions return a result dict on success or one carrying an `'error'` key on
   failure (e.g. unknown account, bad `email_id`, unreadable attachment). Check
   for the error and surface or act on it rather than assuming delivery.
+
+### Outlook IMAP OAuth
+```json
+{
+  "email_address": "user@outlook.com",
+  "imap_host": "outlook.office365.com",
+  "auth": {"type": "microsoft_oauth2", "client_id": "PUBLIC_CLIENT_ID", "token_cache": "imap/outlook.cache"}
+}
+```
+Generate the serialized cache with a trusted external MSAL enrollment flow, then place it at `token_cache` while the MCP is stopped.
