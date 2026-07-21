@@ -477,6 +477,7 @@ def test_main_dry_run_default_never_executes_github_upload(tmp_path, monkeypatch
 def test_main_dry_run_missing_github_release_does_not_plan_assets(tmp_path, monkeypatch, capsys):
     manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
     calls = []
+    monkeypatch.setenv("GITEE_ACCESS_TOKEN", "fake-token")
 
     def fake_run(cmd, capture_output=True, text=True, check=False):
         calls.append(cmd)
@@ -485,11 +486,18 @@ def test_main_dry_run_missing_github_release_does_not_plan_assets(tmp_path, monk
         raise AssertionError(f"unexpected command before dry-run release exists: {cmd}")
 
     monkeypatch.setattr(pub.subprocess, "run", fake_run)
+    monkeypatch.setattr(pub, "gitee_find_release_by_tag", lambda *a, **k: None)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("Gitee verification, planning, or mutation must not run")
+
+    monkeypatch.setattr(pub, "gitee_verify_tag_synchronized", fail_if_called)
+    monkeypatch.setattr(pub, "plan_gitee_uploads", fail_if_called)
+    monkeypatch.setattr(pub, "execute_gitee_upload", fail_if_called)
     rc = pub.main([
         "--manifest", str(manifest_path),
         "--assets-dir", str(assets_dir),
         "--github-repo", "Lingtai-AI/lingtai-kernel",
-        "--skip-gitee",
     ])
 
     assert rc == 0
@@ -497,9 +505,35 @@ def test_main_dry_run_missing_github_release_does_not_plan_assets(tmp_path, monk
     assert "does not exist yet" in out
     assert "DRY RUN: would create release" in out
     assert "cannot plan attachment uploads without a release" in out
+    assert "[gitee] release v0.16.4 does not exist yet" in out
+    assert "[gitee] DRY RUN: would create release v0.16.4" in out
+    assert "[gitee] DRY RUN: cannot plan attachment uploads without a release id" in out
     assert not any(cmd[:3] == ["gh", "release", "create"] for cmd in calls)
     assert not any(cmd[:3] == ["gh", "release", "upload"] for cmd in calls)
     assert not any("--json" in cmd for cmd in calls)
+
+
+def test_main_dry_run_existing_gitee_release_verifies_then_plans(tmp_path, monkeypatch, capsys):
+    manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
+    monkeypatch.setenv("GITEE_ACCESS_TOKEN", "fake-token")
+    calls = []
+
+    monkeypatch.setattr(pub, "gitee_find_release_by_tag", lambda *args: calls.append(("find", args)) or {"id": 42})
+    monkeypatch.setattr(pub, "gitee_verify_tag_synchronized", lambda *args: calls.append(("verify", args)))
+    monkeypatch.setattr(pub, "plan_gitee_uploads", lambda *args: calls.append(("plan", args)) or [])
+
+    rc = pub.main([
+        "--manifest", str(manifest_path),
+        "--assets-dir", str(assets_dir),
+        "--skip-github",
+    ])
+
+    assert rc == 0
+    assert [name for name, _ in calls] == ["find", "verify", "plan"]
+    assert calls[0][1] == ("huangzesen1997", "lingtai-kernel", "v0.16.4", "fake-token")
+    assert calls[1][1] == ("huangzesen1997", "lingtai-kernel", "v0.16.4", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fake-token")
+    assert calls[2][1] == (manifest, assets_dir, manifest_path, "huangzesen1997", "lingtai-kernel", 42, "fake-token")
+    assert "tag v0.16.4 is synchronized" in capsys.readouterr().out
 
 
 def test_main_skips_gitee_when_token_env_unset(tmp_path, monkeypatch, capsys):

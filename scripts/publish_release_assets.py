@@ -477,10 +477,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print(f"\n[gitee] target: {args.gitee_owner}/{args.gitee_repo} tag {manifest.kernel_tag}")
-    gitee_verify_tag_synchronized(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, manifest.commit, gitee_token)
-    print(f"  [gitee] tag {manifest.kernel_tag} is synchronized to {manifest.commit[:12]}")
-
-    release = gitee_find_release_by_tag(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, gitee_token)
+    if args.execute:
+        gitee_verify_tag_synchronized(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, manifest.commit, gitee_token)
+        print(f"  [gitee] tag {manifest.kernel_tag} is synchronized to {manifest.commit[:12]}")
+        release = gitee_find_release_by_tag(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, gitee_token)
+    else:
+        release = gitee_find_release_by_tag(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, gitee_token)
+        if release is not None:
+            gitee_verify_tag_synchronized(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, manifest.commit, gitee_token)
+            print(f"  [gitee] tag {manifest.kernel_tag} is synchronized to {manifest.commit[:12]}")
     if release is None:
         print(f"  [gitee] release {manifest.kernel_tag} does not exist yet")
         if args.execute:
