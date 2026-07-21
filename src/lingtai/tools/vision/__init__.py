@@ -31,14 +31,37 @@ def _setup_failure(provider: str, exc: BaseException) -> str:
     )
 
 
+_CODEX_POOL_ALIASES = {"codex-pool", "codex_pool"}
+_CODEX_FAMILY = {"codex"} | _CODEX_POOL_ALIASES
+
+
+def _codex_active_route(requested: str, active: str) -> str | None:
+    """Resolve the current Codex sub-route a request shares with the active service.
+
+    Returns ``"pool"`` or ``"direct"`` when the request identifies the same
+    current Codex route, else ``None`` (fail closed to manual). A *generic*
+    ``codex`` request adopts whatever the active Codex service is (a pool when
+    the active service is a pool, direct otherwise); the explicit
+    ``codex-pool``/``codex_pool`` spellings match only an active pool, so an
+    explicit pool request over an active *direct* Codex service does not match.
+    """
+    if requested not in _CODEX_FAMILY or active not in _CODEX_FAMILY:
+        return None
+    if requested == "codex":
+        return "pool" if active in _CODEX_POOL_ALIASES else "direct"
+    # Explicit pool spellings require an active pool.
+    return "pool" if active in _CODEX_POOL_ALIASES else None
+
+
 def _same_provider_identity(requested: str, active: str) -> bool:
     """Return whether two provider names identify the same current route."""
     if requested == active:
         return True
-    return {requested, active} <= {"glm", "zhipu"} or {
-        requested,
-        active,
-    } <= {"codex-pool", "codex_pool"}
+    if {requested, active} <= {"glm", "zhipu"}:
+        return True
+    if requested in _CODEX_FAMILY or active in _CODEX_FAMILY:
+        return _codex_active_route(requested, active) is not None
+    return False
 
 
 def _effective_openai_wire(
@@ -287,10 +310,15 @@ def setup(
             else:
                 manual_reason = f"No direct vision route is supported for provider {provider!r}; use vision(action='manual')."
         else:
-            if provider_key in {"codex", "codex-pool", "codex_pool"}:
+            if provider_key in _CODEX_FAMILY:
                 # Codex vision is a standalone Responses request. It may share
                 # the active Codex family's model and endpoint, but never
-                # inherits those from an unrelated main provider.
+                # inherits those from an unrelated main provider. The direct vs
+                # pool credential route follows the *active* Codex service: a
+                # generic ``codex`` request over an active pool takes the pool
+                # route, while explicit pool spellings still require an active
+                # pool (``None`` means no shared identity → manual-only).
+                codex_route = _codex_active_route(provider_key, active_provider_key)
                 if same_provider:
                     if active_model:
                         kwargs.setdefault("model", active_model)
@@ -304,7 +332,7 @@ def setup(
                     bucket = {}
                 if not kwargs.get("model"):
                     manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual')."
-                elif provider_key == "codex":
+                elif codex_route == "direct":
                     token_path = kwargs.pop("token_path", None) or bucket.get("codex_auth_path")
                     if token_path:
                         kwargs["token_path"] = token_path
@@ -314,7 +342,9 @@ def setup(
                     # WeightedAccountSource selects an account from the pool file
                     # (thin-wrapper spec v3).  Reads only the non-secret pool;
                     # Codex core owns token refresh, quota, retry, and transport.
-                    if same_provider:
+                    # Runs only for a resolved active pool route (generic codex
+                    # over an active pool, or explicit pool over an active pool).
+                    if codex_route == "pool":
                         from lingtai.auth.codex_pool import (
                             resolve_codex_pool_path,
                             resolve_codex_tui_dir,

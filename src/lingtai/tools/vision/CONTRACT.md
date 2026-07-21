@@ -42,6 +42,18 @@ Direct routes inherit identity only from the same current provider (including th
 explicit GLM/Zhipu and codex-pool spelling pairs); a different provider must supply
 its own model and credential. Missing identity fails closed to `manual` instead of
 using a service default model, a default OAuth path, or an SDK environment key.
+A generic `codex` request follows the active Codex service's route: over an active
+`codex-pool`/`codex_pool` service it takes the pool route, preserving the active
+pool model/endpoint and passing the exact pool-selected credential reference (the
+selected candidate's token path) to the native Codex vision service; over an active
+direct `codex` service it keeps the explicit `codex_auth_path` route and never
+borrows pool accounts. Explicit `codex-pool`/`codex_pool` spellings share the
+active identity only with an active pool; over an active direct or unrelated
+service they do not inherit its model or direct auth and fail closed to `manual`
+unless a complete explicit capability identity is supplied independently per the
+preceding rule. Any Codex request over an unrelated provider, or a missing
+pool-selected credential reference, likewise fails closed without manufacturing an
+identity.
 OpenAI preserves current default headers, endpoint, model, and `wire_api`.
 A missing, blank/whitespace-only, or `auto` selector means automatic selection:
 the current route uses Responses only when it explicitly prefers Responses and

@@ -505,6 +505,94 @@ def test_codex_pool_vision_selects_exact_model_and_passes_result(tmp_path):
         assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-b.json"
 
 
+@pytest.mark.parametrize("active_provider", ["codex-pool", "codex_pool"])
+def test_generic_codex_over_active_pool_follows_active_pool_route(tmp_path, active_provider):
+    """Live mixed-name repro: generic ``codex`` over an active ``codex-pool``/
+    ``codex_pool`` service must take the active pool route — preserving the active
+    pool model/base and passing the exact pool-selected credential reference
+    (the selected candidate's ``auth_ref`` token path) to the native Codex vision
+    service, never a direct ``codex_auth_path``."""
+    from lingtai.auth.codex_account_source import AccountCandidate
+    selected = AccountCandidate(
+        auth_ref="/tmp/codex-pool-selected.json",
+        source_ref="pool.json",
+        source_index=0,
+        weight=1,
+    )
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=selected,
+    ) as mock_select, patch(
+        "lingtai.auth.codex_pool.load_codex_auth_pool",
+        return_value=[{"path": "pool.json", "weight": 1}],
+    ):
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = active_provider
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
+        agent.service._provider_defaults = {
+            active_provider: {"codex_auth_pool_path": "pool.json"}
+        }
+        setup(agent, provider="codex")
+
+    assert mock_factory.call_args.args == ("codex",)
+    assert mock_factory.call_args.kwargs["api_key"] is None
+    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
+    assert mock_factory.call_args.kwargs["base_url"] == "https://codex-pool.example/backend-api/codex"
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-pool-selected.json"
+    mock_select.assert_called()
+
+
+def test_explicit_pool_request_over_active_direct_codex_fails_closed(tmp_path):
+    """Inverse route: an explicit ``codex-pool`` request over an active *direct*
+    Codex service must not borrow the direct ``codex_auth_path`` credential as a
+    pool identity. An explicit capability ``model`` is supplied so the request
+    gets past the missing-model guard, proving the failure is the pool
+    identity/candidate failure rather than merely a missing model."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=None,
+    ):
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex"
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = None
+        agent.service._provider_defaults = {"codex": {"codex_auth_path": "/tmp/codex-direct.json"}}
+        mgr = setup(agent, provider="codex-pool", model="gpt-5.6-sol")
+
+    mock_factory.assert_not_called()
+    assert mgr._vision_service is None
+    # Fail-closed on the pool identity, never borrowing the active direct auth path.
+    assert "no selected current OAuth identity" in mgr._manual_reason
+    assert "no resolved current model" not in mgr._manual_reason
+    assert "/tmp/codex-direct.json" not in mgr._manual_reason
+
+
+def test_generic_codex_over_active_pool_without_candidate_fails_closed(tmp_path):
+    """Generic ``codex`` over an active pool whose source yields no candidate must
+    stay manual-only rather than manufacture a direct/default identity."""
+    from lingtai.auth.codex_account_source import NoCandidateError
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        side_effect=NoCandidateError("empty pool"),
+    ), patch(
+        "lingtai.auth.codex_pool.load_codex_auth_pool",
+        return_value=[],
+    ):
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex-pool"
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
+        agent.service._provider_defaults = {"codex-pool": {"codex_auth_pool_path": "pool.json"}}
+        mgr = setup(agent, provider="codex")
+
+    mock_factory.assert_not_called()
+    assert mgr._vision_service is None
+    assert "no selected current OAuth identity" in mgr._manual_reason
+    assert "Exception" not in mgr._manual_reason
+
+
 @pytest.mark.parametrize(
     ("provider", "model", "base_url", "expects_base_url"),
     [
@@ -864,8 +952,17 @@ def test_create_vision_service_codex_uses_explicit_path_and_filters_extra_kwargs
 
 def test_codex_vision_service_streams_responses_api(monkeypatch, tmp_path):
     """CodexVisionService should parse streaming output_text deltas without network calls."""
+    import base64
+
+    # A genuinely valid 1x1 truecolor PNG (stdlib base64 decode; no external
+    # dependency, file fixture, or network). This exercises the direct Codex
+    # request seam with real image bytes rather than a non-PNG placeholder.
+    valid_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+    )
+    assert valid_png.startswith(b"\x89PNG\r\n\x1a\n")
     img_path = tmp_path / "chart.png"
-    img_path.write_bytes(b"fake png bytes")
+    img_path.write_bytes(valid_png)
 
     events = [
         SimpleNamespace(type="response.created"),
@@ -902,7 +999,10 @@ def test_codex_vision_service_streams_responses_api(monkeypatch, tmp_path):
     content = kwargs["input"][0]["content"]
     assert content[0] == {"type": "input_text", "text": "What is shown?"}
     assert content[1]["type"] == "input_image"
-    assert content[1]["image_url"].startswith("data:image/png;base64,")
+    image_url = content[1]["image_url"]
+    assert image_url.startswith("data:image/png;base64,")
+    # The direct seam must carry the exact valid PNG, not a mangled placeholder.
+    assert base64.b64decode(image_url.split(",", 1)[1]) == valid_png
 
 
 def test_openai_responses_vision_sends_exact_request_shape(monkeypatch, tmp_path):
