@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from lingtai.kernel.config import AgentConfig
 from lingtai.kernel.llm.base import ChatSession, FunctionSchema, LLMResponse, ToolCall, UsageMetadata
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock, ToolResultBlock
@@ -561,311 +563,114 @@ def test_compact_schema_requires_explicit_run_or_manual_action(tmp_path):
     assert "default" not in schema.parameters["properties"]["action"]["description"]
 
 
+_LOW_USAGE = UsageMetadata(input_tokens=20, output_tokens=1)
+_HIGH_USAGE = UsageMetadata(input_tokens=90, output_tokens=1)
+
+
+def _manual_compact_responses(count):
+    """``count`` manual-compact tool calls at >=90% usage, oldest first."""
+    return [
+        LLMResponse(tool_calls=[ToolCall(name="compact", args={"action": "manual"}, id=f"manual-{i}")], usage=_HIGH_USAGE)
+        for i in range(1, count + 1)
+    ]
+
+
+def _run_countdown_daemon(tmp_path, monkeypatch, em_id, session_responses, *, on_session=None, service_cls=None):
+    """Run the daemon loop over ``session_responses`` with a 100-token window
+    (input_tokens=90 reads as the >=90% countdown trigger)."""
+    agent = _make_agent(tmp_path, ["daemon"], working_dir_name=f"daemon-agent-{em_id}")
+    service = (service_cls or _CanonicalFakeService)(session_responses)
+    mgr = agent.get_capability("daemon")
+    original_create_session = service.create_session
+
+    def create_session_with_window(**kwargs):
+        session = original_create_session(**kwargs)
+        session.context_window = lambda: 100
+        session.interface.estimate_context_tokens = lambda: 20
+        if on_session:
+            on_session(mgr, em_id, session, len(service.sessions) - 1)
+        return session
+
+    service.create_session = create_session_with_window
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    run_dir = _make_run_dir(agent, em_id=em_id, task="task")
+    mgr._emanations[em_id] = {"followup_buffer": "", "followup_lock": threading.Lock(), "run_dir": run_dir}
+    result = mgr._run_emanation(
+        em_id, run_dir, *mgr._build_tool_surface([]), "task", threading.Event(), max_turns=10,
+    )
+    return mgr, run_dir, service, result
+
+
 def test_daemon_context_countdown_enters_ticks_and_resets():
-    state = daemon_tool._DaemonMetaState("em-countdown", "run-countdown", max_turns=10, context_window=100)
-
-    class Session:
-        def context_window(self):
-            return 100
-
-    session = Session()
-    for round_id, input_tokens in enumerate((89, 90, 90, 89, 90), start=1):
-        response = LLMResponse(usage=UsageMetadata(input_tokens=input_tokens, output_tokens=1))
-        state.note_response(response, session)
-        snapshot = state.snapshot(session)
-        context = snapshot["context"]
-        if input_tokens < 90:
-            assert "compact_countdown" not in context
-            assert not state.compact_due
-        elif round_id in (2, 5):
-            assert context["compact_countdown"] == 9
-            countdown_warning = context["compact_countdown_warning"].lower()
-            assert "daemon context is at or above 90%" in countdown_warning
-            assert "9 proactive round(s) remain" in countdown_warning
-            assert 'compact(action="run", _reason="...")' in countdown_warning
-        else:
-            assert context["compact_countdown"] == 8
-
-    assert state.snapshot(session)["context"]["compact_countdown"] == 9
-    assert not state.compact_due
+    """Countdown starts at 9 on first >=90%, ticks 9->1, holds at 1 for one
+    extra round before compact_due, and resets below 90% or on compact."""
+    state = daemon_tool._DaemonMetaState("em", "run", max_turns=10, context_window=100)
+    session = MagicMock(context_window=lambda: 100)
+    state.note_response(LLMResponse(usage=UsageMetadata(input_tokens=89, output_tokens=1)), session)
+    assert "compact_countdown" not in state.snapshot(session)["context"]
+    state.note_response(LLMResponse(usage=_HIGH_USAGE), session)
+    context = state.snapshot(session)["context"]
+    assert context["compact_countdown"] == 9
+    warning = context["compact_countdown_warning"].lower()
+    assert "daemon context is at or above 90%" in warning and "9 proactive round(s) remain" in warning
+    state.note_response(LLMResponse(usage=_HIGH_USAGE), session)
+    assert state.snapshot(session)["context"]["compact_countdown"] == 8
     state.note_compact_reset(session)
+    assert "compact_countdown" not in state.snapshot(session)["context"]
+
+    for _ in range(daemon_tool.DAEMON_CONTEXT_COUNTDOWN_ROUNDS):
+        state.note_response(LLMResponse(usage=_HIGH_USAGE), session)
+    assert state.snapshot(session)["context"]["compact_countdown"] == 1
+    assert not state.compact_due
+    state.note_response(LLMResponse(usage=_HIGH_USAGE), session)  # one extra round at value=1
+    assert state.compact_due
+    state.note_response(LLMResponse(usage=UsageMetadata(input_tokens=89, output_tokens=1)), session)
     assert "compact_countdown" not in state.snapshot(session)["context"]
     assert not state.compact_due
 
-    expiry_state = daemon_tool._DaemonMetaState(
-        "em-expiry", "run-expiry", max_turns=10, context_window=100
-    )
-    high_response = LLMResponse(
-        usage=UsageMetadata(input_tokens=90, output_tokens=1)
-    )
-    for _ in range(daemon_tool.DAEMON_CONTEXT_COUNTDOWN_ROUNDS):
-        expiry_state.note_response(high_response, session)
-    assert expiry_state.snapshot(session)["context"]["compact_countdown"] == 1
-    assert not expiry_state.compact_due
-    expiry_state.note_response(high_response, session)
-    assert expiry_state.snapshot(session)["context"]["compact_countdown"] == 1
-    assert expiry_state.compact_due
-    expiry_state.note_response(
-        LLMResponse(usage=UsageMetadata(input_tokens=89, output_tokens=1)), session
-    )
-    assert "compact_countdown" not in expiry_state.snapshot(session)["context"]
-    assert not expiry_state.compact_due
 
-
-def test_daemon_mechanical_compact_counts_down_and_requires_recovery(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["daemon"])
-    responses = [
-        LLMResponse(
-            tool_calls=[ToolCall(name="compact", args={"action": "manual"}, id=f"manual-{i}")],
-            usage=UsageMetadata(input_tokens=90, output_tokens=1),
-        )
-        for i in range(1, 11)
-    ]
-    responses.append(LLMResponse(text="recovered", usage=UsageMetadata(input_tokens=20, output_tokens=1)))
+def test_daemon_mechanical_compact_recovers_bounded_and_terminal_on_failure(tmp_path, monkeypatch):
+    """End-to-end: value=1 still gets one ordinary send (no off-by-one), and
+    only the response to that send gets mechanically compacted, retaining
+    system + latest assistant/tool-result pair with an explicit recovery
+    instruction. Recovery grants exactly one extra tool batch at max_turns —
+    a chained call beyond it fails truthfully instead of an unbounded cap
+    reset — and a mechanical-compact failure (fresh session creation
+    raising) propagates instead of being swallowed.
+    """
     recovery_tool = ToolCall(name="compact", args={"action": "manual"}, id="recovery-tool")
-    service = _CanonicalFakeService([
-        responses[:-1],
+    mgr, run_dir, service, result = _run_countdown_daemon(
+        tmp_path, monkeypatch, "em-mechanical",
         [
-            LLMResponse(tool_calls=[recovery_tool], usage=UsageMetadata(input_tokens=20, output_tokens=1)),
-            responses[-1],
+            _manual_compact_responses(10),
+            [LLMResponse(tool_calls=[recovery_tool], usage=_LOW_USAGE), LLMResponse(text="recovered", usage=_LOW_USAGE)],
         ],
-    ])
-    original_create_session = service.create_session
-
-    def create_session_with_window(**kwargs):
-        session = original_create_session(**kwargs)
-        session.context_window = lambda: 100
-        session.interface.estimate_context_tokens = lambda: 20
-        return session
-
-    service.create_session = create_session_with_window
-    import lingtai.llm.service as service_mod
-    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
-    mgr = agent.get_capability("daemon")
-    run_dir = _make_run_dir(agent, em_id="em-mechanical", task="task")
-    mgr._emanations["em-mechanical"] = {
-        "followup_buffer": "",
-        "followup_lock": threading.Lock(),
-        "run_dir": run_dir,
-    }
-
-    assert mgr._run_emanation(
-        "em-mechanical", run_dir, *mgr._build_tool_surface([]), "task", threading.Event(),
-        max_turns=10,
-    ) == "recovered"
-    assert len(service.sessions) == 2
-
-    first_session = service.sessions[0]
-    # The final ordinary continuation request carries countdown=1.  The
-    # response from that request is the one whose non-compact tool turn is
-    # mechanically compacted; it must not be skipped by the force boundary.
-    assert len(first_session.request_snapshots) == 10  # kickoff + nine ordinary continuations
-    value_one_request = first_session.request_snapshots[-1]
-    value_one_result = value_one_request[-1]["content"][0]
-    assert value_one_request[-1]["role"] == "user"
-    assert value_one_result["type"] == "tool_result"
-    assert value_one_result["metadata"]["agent_meta"]["agent_state"]["context"]["compact_countdown"] == 1
-
-    ordinary_countdowns = [
+    )
+    assert result == "recovered"
+    # kickoff + nine ordinary continuations: the ninth (value=1) still sent
+    # normally, and the mechanically-compacted result is a distinct 10th
+    # duplicate-value=1 tail entry appended after it (no skipped/extra round).
+    countdowns = [
         request[-1]["content"][0]["metadata"]["agent_meta"]["agent_state"]["context"]["compact_countdown"]
-        for request in first_session.request_snapshots[1:]
+        for request in service.sessions[0].request_snapshots[1:]
     ]
-    assert ordinary_countdowns == [*range(9, 0, -1)]
+    assert countdowns == [*range(9, 0, -1)]
+    recovery_user = service.sessions[1].request_snapshots[0][-1]["content"][0]["text"]
+    assert "mechanically compacted" in recovery_user and "recovery" in recovery_user.lower()
 
-    # The mechanically compacted result is attached after the final ordinary
-    # request; its duplicate value=1 is retained for explicit recovery but was
-    # not another provider continuation opportunity.
-    countdowns = []
-    first_countdown_result = None
-    for entry in first_session.interface.entries:
-        for block in entry.content:
-            if isinstance(block, ToolResultBlock):
-                agent_meta = block.metadata["agent_meta"]["agent_state"]
-                context = agent_meta["context"]
-                if "compact_countdown" in context:
-                    countdowns.append(context["compact_countdown"])
-                    first_countdown_result = first_countdown_result or block
-    assert countdowns == [*range(9, 0, -1), 1]
-    from lingtai.llm.interface_converters import _project_tool_result
-    projected = _project_tool_result(first_countdown_result)
-    assert projected["_meta"]["agent_meta"]["agent_state"]["context"]["compact_countdown"] == 9
-
-    recovery_snapshot = service.sessions[1].request_snapshots[0]
-    recovery_user = recovery_snapshot[-1]["content"][0]["text"]
-    assert "mechanically compacted" in recovery_user
-    assert "recovery" in recovery_user.lower()
-    assert "Before continuing" in recovery_user
-    assert len(recovery_snapshot) == 4  # system + preserved assistant/result pair + recovery user
-
-
-def test_daemon_value_one_response_can_proactively_compact(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["daemon"])
-    responses = [
-        LLMResponse(
-            tool_calls=[ToolCall(name="compact", args={"action": "manual"}, id=f"manual-{i}")],
-            usage=UsageMetadata(input_tokens=90, output_tokens=1),
-        )
-        for i in range(1, 10)
-    ]
-    responses.append(
-        LLMResponse(
-            tool_calls=[
-                ToolCall(
-                    name="compact",
-                    args={"action": "run", "_reason": "proactive value-one handoff"},
-                    id="compact-proactive",
-                )
+    chained = ToolCall(name="compact", args={"action": "manual"}, id="recovery-chained")
+    with pytest.raises(RuntimeError, match="max_turns exhausted"):
+        _run_countdown_daemon(
+            tmp_path, monkeypatch, "em-chained",
+            [
+                _manual_compact_responses(10),
+                [
+                    LLMResponse(tool_calls=[recovery_tool], usage=_LOW_USAGE),
+                    LLMResponse(tool_calls=[chained], usage=_LOW_USAGE),
+                ],
             ],
-            usage=UsageMetadata(input_tokens=90, output_tokens=1),
         )
-    )
-    service = _CanonicalFakeService([responses, [_resp("done after proactive compact")]])
-    original_create_session = service.create_session
-
-    def create_session_with_window(**kwargs):
-        session = original_create_session(**kwargs)
-        session.context_window = lambda: 100
-        session.interface.estimate_context_tokens = lambda: 20
-        return session
-
-    service.create_session = create_session_with_window
-    import lingtai.llm.service as service_mod
-    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
-    mgr = agent.get_capability("daemon")
-    em_id = "em-proactive-value-one"
-    run_dir = _make_run_dir(agent, em_id=em_id, task="task")
-    mgr._emanations[em_id] = {
-        "followup_buffer": "",
-        "followup_lock": threading.Lock(),
-        "run_dir": run_dir,
-    }
-
-    assert mgr._run_emanation(
-        em_id, run_dir, *mgr._build_tool_surface([]), "task", threading.Event()
-    ) == "done after proactive compact"
-    assert len(service.sessions) == 2
-
-    # The proactive response was generated only after this ordinary request
-    # carried the final visible warning; it therefore prevents mechanics.
-    value_one_request = service.sessions[0].request_snapshots[-1]
-    value_one_result = value_one_request[-1]["content"][0]
-    assert value_one_result["metadata"]["agent_meta"]["agent_state"]["context"]["compact_countdown"] == 1
-    retained_request = service.sessions[1].request_snapshots[0]
-    assert [entry["role"] for entry in retained_request] == ["system", "assistant", "user"]
-    assert retained_request[1]["content"][0]["id"] == "compact-proactive"
-    assert retained_request[2]["content"][0]["content"]["status"] == "success"
-    proactive_context = retained_request[2]["content"][0]["metadata"]["agent_meta"]["agent_state"]["context"]
-    assert "compact_countdown" not in proactive_context
-    assert "warning" not in proactive_context
-    assert not any(
-        entry["role"] == "user"
-        and entry["content"][0].get("type") == "text"
-        and "mechanically compacted" in entry["content"][0].get("text", "")
-        for entry in retained_request
-    )
-
-
-def test_daemon_expired_text_response_recovers_before_queued_followup(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["daemon"])
-    first_responses = [
-        LLMResponse(
-            tool_calls=[ToolCall(name="compact", args={"action": "manual"}, id=f"manual-{i}")],
-            usage=UsageMetadata(input_tokens=90, output_tokens=1),
-        )
-        for i in range(1, 10)
-    ]
-    first_responses.append(
-        LLMResponse(text="expired text", usage=UsageMetadata(input_tokens=90, output_tokens=1))
-    )
-    recovery_tool = ToolCall(name="compact", args={"action": "manual"}, id="recovery-tool")
-    service = _CanonicalFakeService([
-        first_responses,
-        [
-            LLMResponse(tool_calls=[recovery_tool], usage=UsageMetadata(input_tokens=20, output_tokens=1)),
-            LLMResponse(text="recovery complete", usage=UsageMetadata(input_tokens=20, output_tokens=1)),
-            LLMResponse(text="followup complete", usage=UsageMetadata(input_tokens=20, output_tokens=1)),
-        ],
-    ])
-    original_create_session = service.create_session
-
-    def create_session_with_window(**kwargs):
-        session = original_create_session(**kwargs)
-        session.context_window = lambda: 100
-        session.interface.estimate_context_tokens = lambda: 20
-        if len(service.sessions) == 1:
-            original_send = session.send
-
-            def send_and_queue(message):
-                response = original_send(message)
-                if response.text == "expired text":
-                    mgr._emanations[em_id]["followup_buffer"] = "queued followup"
-                return response
-
-            session.send = send_and_queue
-        return session
-
-    service.create_session = create_session_with_window
-    import lingtai.llm.service as service_mod
-    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
-    mgr = agent.get_capability("daemon")
-    em_id = "em-expired-text-followup"
-    run_dir = _make_run_dir(agent, em_id=em_id, task="task")
-    mgr._emanations[em_id] = {
-        "followup_buffer": "",
-        "followup_lock": threading.Lock(),
-        "run_dir": run_dir,
-    }
-
-    assert mgr._run_emanation(
-        em_id, run_dir, *mgr._build_tool_surface([]), "task", threading.Event()
-    ) == "followup complete"
-
-    assert len(service.sessions) == 2
-    first_session, fresh_session = service.sessions
-    assert all(message != "queued followup" for message in first_session.sent_messages)
-    assert fresh_session.sent_messages[0].startswith("The runtime mechanically compacted")
-    assert isinstance(fresh_session.sent_messages[1], list)
-    assert fresh_session.sent_messages[2] == "queued followup"
-    assert fresh_session.sent_messages.index("queued followup") > 1
-    assert fresh_session.request_snapshots[0][-2]["role"] == "user"
-    assert fresh_session.request_snapshots[0][-2]["content"][0]["type"] == "tool_result"
-    assert fresh_session.request_snapshots[0][-1]["content"][0]["type"] == "text"
-
-    durable_entries = [
-        json.loads(line)
-        for line in run_dir.chat_path.read_text(encoding="utf-8").splitlines()
-    ]
-    recovery_user_index = next(
-        index
-        for index, entry in enumerate(durable_entries)
-        if entry.get("kind") == "mechanical_compact_recovery"
-    )
-    recovery_index = recovery_user_index + 1
-    assert durable_entries[recovery_index]["role"] == "assistant"
-    assert durable_entries[recovery_index]["text"] == ""
-    tool_result_index = next(
-        index
-        for index, entry in enumerate(durable_entries[recovery_index + 1 :], recovery_index + 1)
-        if entry.get("kind") == "tool_results"
-    )
-    followup_index = next(
-        index
-        for index, entry in enumerate(durable_entries[tool_result_index + 1 :], tool_result_index + 1)
-        if entry.get("kind") == "followup"
-    )
-    assert recovery_index < tool_result_index < followup_index
-    assert json.loads(run_dir.daemon_json_path.read_text(encoding="utf-8"))["turn"] == durable_entries[-1]["turn"]
-
-
-def test_daemon_mechanical_compact_failure_is_terminal(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["daemon"])
-    responses = [
-        LLMResponse(
-            tool_calls=[ToolCall(name="compact", args={"action": "manual"}, id=f"manual-{i}")],
-            usage=UsageMetadata(input_tokens=90, output_tokens=1),
-        )
-        for i in range(1, 11)
-    ]
 
     class FailingService(_CanonicalFakeService):
         def create_session(self, **kwargs):
@@ -873,39 +678,84 @@ def test_daemon_mechanical_compact_failure_is_terminal(tmp_path, monkeypatch):
                 raise RuntimeError("mechanical compact failure")
             return super().create_session(**kwargs)
 
-    service = FailingService([responses])
-    original_create_session = service.create_session
-
-    def create_session_with_window(**kwargs):
-        session = original_create_session(**kwargs)
-        session.context_window = lambda: 100
-        session.interface.estimate_context_tokens = lambda: 20
-        return session
-
-    service.create_session = create_session_with_window
-    import lingtai.llm.service as service_mod
-    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
-    mgr = agent.get_capability("daemon")
-    run_dir = _make_run_dir(agent, em_id="em-mechanical-failure", task="task")
-    mgr._emanations["em-mechanical-failure"] = {
-        "followup_buffer": "",
-        "followup_lock": threading.Lock(),
-        "run_dir": run_dir,
-    }
-
-    try:
-        mgr._run_emanation(
-            "em-mechanical-failure",
-            run_dir,
-            *mgr._build_tool_surface([]),
-            "task",
-            threading.Event(),
+    run_dirs = {}
+    with pytest.raises(RuntimeError, match="mechanical compact failure"):
+        _run_countdown_daemon(
+            tmp_path, monkeypatch, "em-failure", [_manual_compact_responses(10)],
+            service_cls=FailingService,
+            on_session=lambda mgr, em_id, session, i: run_dirs.setdefault("d", mgr._emanations[em_id]["run_dir"]),
         )
-    except RuntimeError as exc:
-        assert str(exc) == "mechanical compact failure"
-    else:
-        raise AssertionError("mechanical compact failure was swallowed")
-    assert run_dir.state_snapshot()["state"] == "failed"
+    assert run_dirs["d"].state_snapshot()["state"] == "failed"
+
+
+def test_daemon_value_one_proactive_compact_prevents_mechanics(tmp_path, monkeypatch):
+    """A proactive compact(action="run") issued from the value=1 response
+    prevents mechanical compaction entirely: no recovery message, no
+    duplicate countdown carrier in the fresh session."""
+    responses = _manual_compact_responses(9)
+    responses.append(LLMResponse(
+        tool_calls=[ToolCall(name="compact", args={"action": "run", "_reason": "handoff"}, id="compact-proactive")],
+        usage=_HIGH_USAGE,
+    ))
+    _, _, service, result = _run_countdown_daemon(
+        tmp_path, monkeypatch, "em-proactive", [responses, [_resp("done")]],
+    )
+    assert result == "done"
+    retained = service.sessions[1].request_snapshots[0]
+    assert [e["role"] for e in retained] == ["system", "assistant", "user"]
+    assert retained[1]["content"][0]["id"] == "compact-proactive"
+    assert "compact_countdown" not in retained[2]["content"][0]["metadata"]["agent_meta"]["agent_state"]["context"]
+
+
+def test_daemon_expired_text_response_recovers_before_queued_followup(tmp_path, monkeypatch):
+    """A text-only expiry response plus a followup queued during that same
+    send must not be sent on the stale session; the fresh session runs the
+    direct recovery tool batch and durably records it before the queued
+    followup is drained."""
+    em_id = "em-expired-text-followup"
+    first_responses = _manual_compact_responses(9)
+    first_responses.append(LLMResponse(text="expired text", usage=_HIGH_USAGE))
+
+    def queue_followup_after_expiry(mgr, em_id, session, session_index):
+        if session_index != 0:
+            return
+        original_send = session.send
+
+        def send_and_queue(message):
+            response = original_send(message)
+            if response.text == "expired text":
+                mgr._emanations[em_id]["followup_buffer"] = "queued followup"
+            return response
+
+        session.send = send_and_queue
+
+    recovery_tool = ToolCall(name="compact", args={"action": "manual"}, id="recovery-tool")
+    mgr, run_dir, service, result = _run_countdown_daemon(
+        tmp_path, monkeypatch, em_id,
+        [
+            first_responses,
+            [
+                LLMResponse(tool_calls=[recovery_tool], usage=_LOW_USAGE),
+                LLMResponse(text="recovery complete", usage=_LOW_USAGE),
+                LLMResponse(text="followup complete", usage=_LOW_USAGE),
+            ],
+        ],
+        on_session=queue_followup_after_expiry,
+    )
+    assert result == "followup complete"
+    first_session, fresh_session = service.sessions
+    assert all(message != "queued followup" for message in first_session.sent_messages)
+    # Fresh-session send order proves recovery, then its direct tool batch,
+    # then the queued followup — never on the stale session.
+    assert fresh_session.sent_messages[0].startswith("The runtime mechanically compacted")
+    assert isinstance(fresh_session.sent_messages[1], list)  # direct recovery tool batch
+    assert fresh_session.sent_messages[2] == "queued followup"
+
+    durable = [json.loads(line) for line in run_dir.chat_path.read_text(encoding="utf-8").splitlines()]
+    durable_kinds = [entry.get("kind") for entry in durable]
+    recovery_at = durable_kinds.index("mechanical_compact_recovery")
+    assert durable[recovery_at + 1]["role"] == "assistant"  # recovery response was bumped durably
+    assert durable_kinds[recovery_at:].index("tool_results") < durable_kinds[recovery_at:].index("followup")
 
 
 def test_daemon_agent_meta_is_local_and_warning_tracks_current_usage(tmp_path, monkeypatch):
@@ -976,9 +826,6 @@ def test_daemon_agent_meta_is_local_and_warning_tracks_current_usage(tmp_path, m
         "Daemon context is at or above 90%. 8 proactive round(s) remain "
         "before runtime mechanical compact; call compact(action=\"run\", "
         "_reason=\"...\") now to compact with your own handoff."
-    )
-    assert third_meta["agent_state"]["context"]["compact_countdown_warning"] == (
-        third_meta["agent_state"]["context"]["warning"]
     )
     assert fourth_meta["agent_state"]["context"]["context_usage"] == 0.2
     assert fourth_meta["agent_state"]["token_usage"]["current_call"]["input"] == 0
