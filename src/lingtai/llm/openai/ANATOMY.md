@@ -54,8 +54,8 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `OpenAIResponsesSession` | `adapter.py:1782` | Responses API session. Official OpenAI mode is server-stateful via `previous_response_id`; custom/OpenAI-compatible mode can be internally stateless (`stateless_replay=True`) and replays full canonical history via `to_responses_input` while recording assistant turns and exposing no resume id (`adapter.py:1806-1807`, `adapter.py:1974-1975`, `adapter.py:1985-1986`, `adapter.py:2092-2103`). |
 | `OpenAIAdapter` | `adapter.py:2126` | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key`; carries the internal `_responses_stateless_replay` constructor mode into Responses sessions (`adapter.py:2184`, `adapter.py:2189`, `adapter.py:2282-2334`). |
 | `_StandaloneCompactionMixin` | `adapter.py:2561` | Shared standalone `/responses/compact` machinery extracted from `CodexResponsesSession`: projected-token trigger, turn-aware boundary selection (`_prepare_compact_request`, `adapter.py:2736`), opaque compacted-prefix-plus-delta replay. Mixed into both `CodexResponsesSession` (non-fatal failure policy) and MiMo's `MimoResponsesSession` (`src/lingtai/llm/mimo/adapter.py`, hard-failure policy) — see "Standalone Codex compaction" below. |
-| `CodexResponsesSession` | `adapter.py:2801` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): every real send first asks its adapter for one fresh credential, account switches reset the wire epoch, `store=false` always, encrypted reasoning include/replay and self-heal remain native, and standalone daemon-task compaction uses `POST /responses/compact`. |
-| `CodexOpenAIAdapter` | `adapter.py:4867` | The one Codex provider specialization shared by `codex`/`codex-pool` aliases. It owns fixed-or-weighted AccountSource selection, per-request OAuth token/account binding, quota/exclusion state, safe `codex_pool_selection` attribution, cache/session ids, installation id, endpoint/service-tier settings, and Codex's explicit default `reasoning.effort = "xhigh"`; no pool-specific session or retry adapter exists. |
+| `CodexResponsesSession` | `adapter.py:2801` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): every real send asks its adapter for the current epoch binding and refreshes only that account's safe quota telemetry, account switches reset the wire epoch, `store=false` always, encrypted reasoning include/replay and self-heal remain native, and standalone daemon-task compaction uses `POST /responses/compact`. |
+| `CodexOpenAIAdapter` | `adapter.py:4892` | The one Codex provider specialization shared by `codex`/`codex-pool` aliases. It owns fixed-or-weighted AccountSource selection once per approved context epoch, epoch-bound OAuth token/account binding, realtime quota/exclusion state, safe `codex_pool_selection` attribution, cache/session ids, installation id, endpoint/service-tier settings, and Codex's explicit default `reasoning.effort = "xhigh"`; no pool-specific session or retry adapter exists. |
 
 ### adapter.py helpers
 
@@ -132,7 +132,7 @@ constructor kwarg.
 
 Flow:
 
-Before staging input, `send_stream` calls `_codex_refresh_account_for_request()` (`adapter.py:4232-4265`). Host-wired sessions therefore consume exactly one fresh AccountSource draw per real send; direct/test sessions with no resolver preserve their existing credential. A changed account SHA resets the WebSocket epoch before rebinding, closing authenticated transport plus response/compaction continuation state so no wire state crosses accounts.
+Before staging input, `send_stream` calls `_codex_refresh_account_for_request()` (`adapter.py:4253-4286`). Host-wired sessions therefore consume one AccountSource draw at the first real request of an approved context epoch, then reuse that account for ordinary requests while refreshing only its current quota metadata. Explicit summarize/reconstruction resets clear the adapter binding; refresh/restart starts with a new adapter and molt is detected from the live `molt_count`. Technical transport/self-heal/turn-count resets preserve the binding. A changed account SHA resets the WebSocket epoch before rebinding, closing authenticated transport plus response/compaction continuation state so no wire state crosses accounts.
 
 1. Record message into canonical `ChatInterface`.
 2. `_frozen_responses_input(interface)` — the full conversation as input items
@@ -161,17 +161,17 @@ Before staging input, `send_stream` calls `_codex_refresh_account_for_request()`
      strict-additive delta plus `previous_response_id`.
 5. If Codex rejects a full replay with `The encrypted content for item ... could
    not be verified`, treat it as stale raw reasoning state: `_strip_codex_encrypted_reasoning_items`
-   (`adapter.py:4092`) removes replay-only `encrypted_content` anchors from
-   `ThinkingBlock.provider_data`, `_reset_ws_epoch` (`adapter.py:3258`) clears
+   (`adapter.py:4154-4196`) removes replay-only `encrypted_content` anchors from
+   `ThinkingBlock.provider_data`, `_reset_ws_epoch` (`adapter.py:3509`) clears
    stale baselines/response-id state, and the adapter retries the same visible
    transcript once as `rest_full_self_heal` / `stateless_full_self_heal`
-   (`adapter.py:4446-4490`). Summary text, assistant text, and tool calls remain
+   (`adapter.py:4553-4597`). Summary text, assistant text, and tool calls remain
    in the canonical interface; only the opaque provider blob is dropped.
 6. After success: record the assistant response into the interface and recompute
    the converter-stable delta baseline (`_ws_record_baseline_from_interface`) so the
-   next turn can strict-prefix-match and stay incremental; the adapter clears the current exclusion chain without preselecting the next credential (`adapter.py:4859-4863`).
+   next turn can strict-prefix-match and stay incremental; the adapter clears the current exclusion chain without preselecting the next credential (`adapter.py:5253-5256`).
 
-Only the final exception escaping all built-in fallback/self-heal paths reaches the adapter account-error callback (`adapter.py:4736-4745`). A structural `usage_limit_reached` excludes that safe account identity for the existing AED rebuild; if any text delta was already delivered, the exception is marked `_lingtai_partial_stream` so BaseAgent terminates rather than replaying visible output (`adapter.py:4670-4674`, `adapter.py:5139-5148`).
+Only the final exception escaping all built-in fallback/self-heal paths reaches the adapter account-error callback (`adapter.py:4761-4765`). A structural `usage_limit_reached` excludes that safe account identity for the existing AED rebuild; if any text delta was already delivered, the exception is marked `_lingtai_partial_stream` so BaseAgent terminates rather than replaying visible output (`adapter.py:4695-4699`, `adapter.py:5232-5241`).
 
 **Usage metadata axes:** the session's `codex_pool_selection` records only safe selection fields; `_usage_extra` maps them to the stable `codex_pool_source_ref` / source-index / pool-size / weight / quota / model-scope / failover / fallback fields plus `codex_auth_path_sha8` (`adapter.py:3135-3145`) — never tokens or raw absolute auth paths. `UsageMetadata.extra` also carries `codex_transport`
 (`rest`/`websocket`), `codex_transfer_mode` (`full`/`incremental`), and the
@@ -439,6 +439,7 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 - **`OpenAIResponsesSession._response_id` / `_stateless_replay`** — in official/stateful mode `_response_id` is the server-side chain pointer and `session_resume_id`; in custom/stateless mode `_stateless_replay=True`, `_response_id` is not advanced, `session_resume_id` returns `None`, and `get_history()` returns full canonical `ChatInterface` history for durable restart (`adapter.py:1806-1807`, `adapter.py:2092-2103`).
 - **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (`adapter.py:2549`).
 - **`CodexResponsesSession._current_id`** — the single per-agent affinity id (the hash of the agent path + current molt count) handed to this session, used byte-identically for `_prompt_cache_key` / `_session_id` / `_thread_id`. Set once per session at construction — a NEW session is built for each `create_chat`, and the adapter resolves the molt-current id at that point, so a molt-advanced id reaches the next session without any in-session mutation (no rotation, no epoch, no clock).
+- **`CodexOpenAIAdapter._codex_current_binding`** — the ephemeral account binding for the current product context epoch. It survives ordinary session/transport resets and is cleared only by an approved summarize/reconstruction boundary, a changed molt count, a new adapter after refresh/restart, or structural usage-limit failover. `_refresh_codex_bound_quota` updates only the safe `quota_left` field; absent/unavailable reads remove the field rather than writing zero.
 - **Codex Responses trace** — opt-in diagnostics write JSONL metadata to `logs/codex_responses_trace.jsonl` when `LINGTAI_CODEX_RESPONSES_TRACE=1` (override path with `LINGTAI_CODEX_RESPONSES_TRACE_PATH`). Default off; stores event/item shapes, lengths/hashes, usage, and accumulator counts, not raw content.
 - **`OpenAIAdapter._client`** — shared `openai.OpenAI` instance. `_client_kwargs` stored for session `reset()`. Constructor passes `default_headers=merge_lingtai_identity_headers(...)` (`adapter.py:2189`), so OpenAI-compatible HTTP requests carry non-secret LingTai identity/version headers unless a caller/provider header overrides them case-insensitively.
 - **`OpenAIAdapter._session_class`** — class var, subclasses override (e.g. DeepSeek and MiMo inject `reasoning_content` round-trip fallbacks).
