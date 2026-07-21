@@ -107,10 +107,24 @@ def _ensure_sidecar_built() -> Path | None:
     global _built_once
     if _built_once:
         existing = PACKAGE_BIN_DIR / BINARY_NAME
-        return existing if existing.is_file() else None
+        if existing.is_file():
+            return existing
+        if os.environ.get("LINGTAI_REQUIRE_RUST_BUILD") == "1":
+            raise RuntimeError(
+                "LINGTAI_REQUIRE_RUST_BUILD=1 but no sidecar binary is staged "
+                f"at {existing} on a repeat build-hook call in this process — "
+                "the first call must have skipped or failed the cargo build."
+            )
+        return None
     _built_once = True
 
     if not SIDECAR_CRATE.is_dir():
+        if os.environ.get("LINGTAI_REQUIRE_RUST_BUILD") == "1":
+            raise RuntimeError(
+                f"LINGTAI_REQUIRE_RUST_BUILD=1 but the sidecar crate directory "
+                f"is missing at {SIDECAR_CRATE} — the source tree used for this "
+                "build does not carry crates/lingtai-search-sidecar."
+            )
         _clear_staged_sidecar()
         return None
     if _should_skip():
@@ -137,7 +151,14 @@ def _ensure_sidecar_built() -> Path | None:
     try:
         subprocess.run(
             ["cargo", "build", "--release", "--locked",
-             "--manifest-path", str(SIDECAR_CRATE / "Cargo.toml")],
+             "--manifest-path", str(SIDECAR_CRATE / "Cargo.toml"),
+             # Pin the output location so the staging step below always finds
+             # the binary at the same path regardless of an ambient
+             # CARGO_TARGET_DIR (env var or .cargo/config.toml) the caller's
+             # build environment may set — cargo honors --target-dir over
+             # both, so this makes the build deterministic rather than
+             # silently producing no bundle when the ambient target dir wins.
+             "--target-dir", str(SIDECAR_CRATE / "target")],
             check=True,
         )
     except subprocess.CalledProcessError as exc:
@@ -153,6 +174,12 @@ def _ensure_sidecar_built() -> Path | None:
 
     built = SIDECAR_CRATE / "target" / "release" / BINARY_NAME
     if not built.is_file():
+        if os.environ.get("LINGTAI_REQUIRE_RUST_BUILD") == "1":
+            raise RuntimeError(
+                f"LINGTAI_REQUIRE_RUST_BUILD=1 but cargo build exited "
+                f"successfully with no binary at {built} — check the crate's "
+                "[[bin]] name/target-dir configuration."
+            )
         print(f"[lingtai] cargo build produced no binary at {built}; skipping bundle.",
               file=sys.stderr)
         _clear_staged_sidecar()

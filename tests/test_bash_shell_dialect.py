@@ -141,6 +141,6 @@ def test_async_state_persists_dialect_invocation_and_raw_command(tmp_path):
 def test_selector_fails_loudly_on_unsupported_platform(monkeypatch):
     import lingtai.adapters.bash as composition
 
-    monkeypatch.setattr(composition.os, "name", "nt")
+    monkeypatch.setattr(composition.os, "name", "java")
     with pytest.raises(NotImplementedError, match="unsupported"):
         composition.select_bash_shell_dialect()

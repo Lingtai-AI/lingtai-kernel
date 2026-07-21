@@ -66,6 +66,11 @@ class _Mechanism:
     def __init__(self):
         self.events: list[tuple] = []
         self.jobs: list[object] = []
+        # Job id -> bool | Exception, consulted by wait_job_empty/terminate_job.
+        # Absent entries default to "empty"/"succeeds" so existing tests that
+        # never configure this keep their prior behavior.
+        self.job_empty: dict[int, bool] = {}
+        self.terminate_job_result: dict[int, bool | Exception] = {}
 
     def install(self, monkeypatch, *, procs_by_job_termination=None):
         def assign_new_job(proc):
@@ -79,15 +84,18 @@ class _Mechanism:
 
         def terminate_job(job):
             self.events.append(("terminate_job", job))
-            if procs_by_job_termination is not None:
+            result = self.terminate_job_result.get(id(job), True)
+            if isinstance(result, Exception):
+                raise result
+            if result and procs_by_job_termination is not None:
                 proc = procs_by_job_termination.get(id(job))
                 if proc is not None:
                     proc.returncode = 1
-            return True
+            return result
 
         def wait_job_empty(job, timeout):
             self.events.append(("wait_job_empty", job))
-            return True
+            return self.job_empty.get(id(job), True)
 
         def close_job(job):
             self.events.append(("close_job", job))
@@ -231,6 +239,95 @@ def test_private_termination_contract_and_first_reason_wins(tmp_path, nt):
     assert port.terminate(handle_stubborn, reason="agent_stop").reason == "reclaim"
 
 
+def test_release_refuses_to_close_job_while_root_exited_descendant_lives(tmp_path, nt):
+    """Root exit alone must never be treated as proof the Job is empty.
+
+    A private root can spawn a descendant and exit normally (no terminate()
+    call at all — the ordinary wait()-then-release() path). If the Job still
+    has an active member at that point, release() must not report success or
+    close the only Job handle: the Job has no KILL_ON_JOB_CLOSE, so closing it
+    while non-empty silently orphans the descendant with no supervisor sweep
+    to recover it.
+    """
+    mechanism = _Mechanism()
+    mechanism.install(nt)
+    proc = _FakeProc(501, returncode=0)  # root already exited
+    nt.setattr(windows_process.subprocess, "Popen", lambda *a, **k: proc)
+    port = windows_process.WindowsDaemonProcessPort()
+    handle = port.spawn(DaemonProcessCommand(("codex",), tmp_path))
+    job = port._handles[handle][3]
+    mechanism.job_empty[id(job)] = False  # a descendant is still alive
+
+    assert port.release(handle) is False
+    assert handle in port._handles
+    assert ("close_job", job) not in mechanism.events
+
+    # Once the descendant is gone, release() succeeds and closes the Job.
+    mechanism.job_empty[id(job)] = True
+    assert port.release(handle) is True
+    assert mechanism.events[-1] == ("close_job", job)
+
+
+def test_release_refuses_to_close_job_on_wait_job_empty_timeout(tmp_path, nt):
+    """terminate() where TerminateJobObject succeeds but the Job never empties
+    within the bounded wait must not let a later release() report success."""
+    mechanism = _Mechanism()
+    mechanism.install(nt)
+    proc = _FakeProc(502, returncode=None)
+    nt.setattr(windows_process.subprocess, "Popen", lambda *a, **k: proc)
+    port = windows_process.WindowsDaemonProcessPort(term_timeout=0.01, kill_timeout=0.01)
+    handle = port.spawn(DaemonProcessCommand(("codex",), tmp_path))
+    job = port._handles[handle][3]
+    mechanism.job_empty[id(job)] = False  # TerminateJobObject "succeeds" but never empties
+
+    def kill_then_exit():
+        proc.kill_calls += 1
+        proc.returncode = 1
+
+    proc.kill = kill_then_exit
+    receipt = port.terminate(handle, reason="reclaim")
+    assert receipt == DaemonProcessExit(1, "reclaim")
+    assert ("terminate_job", job) in mechanism.events
+    assert ("wait_job_empty", job) in mechanism.events
+
+    # The root was reaped by the exact-child kill fallback, but the Job
+    # itself was never confirmed empty — release() must still refuse.
+    assert port.release(handle) is False
+    assert handle in port._handles
+    assert ("close_job", job) not in mechanism.events
+
+
+def test_release_refuses_to_close_job_when_terminate_job_object_fails(tmp_path, nt):
+    """A false TerminateJobObject result must not let an exited root's
+    release() silently close a Job that was never actually reclaimed."""
+    mechanism = _Mechanism()
+    mechanism.install(nt)
+    proc = _FakeProc(503, returncode=None)
+    nt.setattr(windows_process.subprocess, "Popen", lambda *a, **k: proc)
+    port = windows_process.WindowsDaemonProcessPort(term_timeout=0.01, kill_timeout=0.01)
+    handle = port.spawn(DaemonProcessCommand(("codex",), tmp_path))
+    job = port._handles[handle][3]
+    mechanism.terminate_job_result[id(job)] = False  # TerminateJobObject fails
+    mechanism.job_empty[id(job)] = False  # unreclaimed Job members remain
+
+    def kill_then_exit():
+        proc.kill_calls += 1
+        proc.returncode = 1
+
+    proc.kill = kill_then_exit
+    port.terminate(handle, reason="reclaim")
+    assert ("terminate_job", job) in mechanism.events
+    # A failed TerminateJobObject must not be treated as a green light to
+    # wait for/assume emptiness.
+    assert ("wait_job_empty", job) not in mechanism.events
+
+    # The exact-child fallback reaped the root, but the Job was never
+    # reclaimed — release() must still refuse rather than fake success.
+    assert port.release(handle) is False
+    assert handle in port._handles
+    assert ("close_job", job) not in mechanism.events
+
+
 def test_windows_adapter_rejects_unknown_handles_and_observation_failure_cleanup(tmp_path, nt):
     mechanism = _Mechanism()
     mechanism.install(nt)
@@ -265,6 +362,174 @@ def test_windows_adapter_rejects_unknown_handles_and_observation_failure_cleanup
         with pytest.raises(KeyError):
             operation()
     assert port.release(fake) is True
+
+
+def test_observation_failure_cleanup_refuses_to_close_job_when_terminate_job_object_fails(
+    tmp_path, nt,
+):
+    """A callback/identity failure after resume must not close the Job when
+    TerminateJobObject itself fails — the same no-orphan gate release() and
+    terminate() honor, now also honored by the spawn-failure cleanup path."""
+    mechanism = _Mechanism()
+    mechanism.install(nt)
+    proc = _FakeProc(601, returncode=None)
+
+    def kill_then_exit():
+        proc.kill_calls += 1
+        proc.returncode = 1
+
+    proc.kill = kill_then_exit
+    nt.setattr(windows_process.subprocess, "Popen", lambda *a, **k: proc)
+
+    def failing_callback(observation):
+        raise RuntimeError("observation transaction failed")
+
+    # Pin TerminateJobObject to fail AND the Job to stay non-empty for the
+    # Job this spawn creates, before spawning — install() defaults every job
+    # to "succeeds"/"empty", so both must be wired in via the same
+    # assign-event-observing wrapper the sibling timeout test below uses.
+    # (A failed TerminateJobObject with a Job that is independently confirmed
+    # empty is safe to close — the hazard is specifically failed-terminate
+    # PLUS non-empty, so both must be pinned to exercise it.)
+    original_assign = windows_process._assign_new_job
+    def pinned_terminate_fails_assign(proc):
+        job = original_assign(proc)
+        mechanism.terminate_job_result[id(job)] = False
+        mechanism.job_empty[id(job)] = False
+        return job
+    nt.setattr(windows_process, "_assign_new_job", pinned_terminate_fails_assign)
+
+    port = windows_process.WindowsDaemonProcessPort(
+        observation_callback=failing_callback, term_timeout=0.01, kill_timeout=0.01,
+    )
+    with pytest.raises(RuntimeError, match="observation transaction failed"):
+        port.spawn(DaemonProcessCommand(("codex",), tmp_path))
+    job = mechanism.jobs[-1]
+
+    assert ("terminate_job", job) in mechanism.events
+    # _terminate()'s own internal wait is gated on TerminateJobObject having
+    # succeeded (it did not here); the confirmed-empty check that decides
+    # whether to close is a separate, independent query _finalize_job always
+    # makes before closing — that is the one that fires here, and it
+    # correctly reports non-empty, so the Job is never closed.
+    assert ("wait_job_empty", job) in mechanism.events
+    assert ("close_job", job) not in mechanism.events
+    assert port._handles == {}, "handle must still be forgotten even though the Job is leaked"
+    # Only one terminate_job call was issued for this job — proves the outer
+    # except in spawn() did not repeat _cleanup_spawn_failure's attempt.
+    assert mechanism.events.count(("terminate_job", job)) == 1
+
+
+def test_observation_failure_cleanup_refuses_to_close_job_on_wait_job_empty_timeout(
+    tmp_path, nt,
+):
+    """A callback/identity failure after resume must not close the Job when
+    TerminateJobObject succeeds but the bounded empty-wait times out."""
+    mechanism = _Mechanism()
+    mechanism.install(nt)
+    proc = _FakeProc(602, returncode=None)
+
+    def kill_then_exit():
+        proc.kill_calls += 1
+        proc.returncode = 1
+
+    proc.kill = kill_then_exit
+    nt.setattr(windows_process.subprocess, "Popen", lambda *a, **k: proc)
+
+    def failing_callback(observation):
+        raise RuntimeError("observation transaction failed")
+
+    port = windows_process.WindowsDaemonProcessPort(
+        observation_callback=failing_callback, term_timeout=0.01, kill_timeout=0.01,
+    )
+    # Configure emptiness to fail persistently: install() defaults every job
+    # to "empty", so the Job created during this spawn must be pinned false
+    # via a wrapper that observes the assign event.
+    original_assign = windows_process._assign_new_job
+    def pinned_not_empty_assign(proc):
+        job = original_assign(proc)
+        mechanism.job_empty[id(job)] = False
+        return job
+    nt.setattr(windows_process, "_assign_new_job", pinned_not_empty_assign)
+
+    with pytest.raises(RuntimeError, match="observation transaction failed"):
+        port.spawn(DaemonProcessCommand(("codex",), tmp_path))
+    job = mechanism.jobs[-1]
+
+    assert ("terminate_job", job) in mechanism.events
+    assert ("wait_job_empty", job) in mechanism.events
+    assert ("close_job", job) not in mechanism.events
+    assert port._handles == {}, "handle must still be forgotten even though the Job is leaked"
+
+
+def test_resume_failure_before_registration_closes_confirmed_empty_job_once(tmp_path, nt):
+    """A pre-registration failure (resume itself raises) must gate Job close
+    on confirmed emptiness, and must not double-close: this path never goes
+    through _cleanup_spawn_failure (the handle was never registered), so it
+    is the outer except's own responsibility in spawn(). This is the honest-
+    success side: the Job is genuinely empty, so it is closed exactly once."""
+    mechanism = _Mechanism()
+    mechanism.install(nt)
+    proc = _FakeProc(603, returncode=None)
+
+    def kill_then_exit():
+        proc.kill_calls += 1
+        proc.returncode = 1
+
+    proc.kill = kill_then_exit
+    nt.setattr(windows_process.subprocess, "Popen", lambda *a, **k: proc)
+
+    def failing_resume(proc):
+        mechanism.events.append(("resume", proc.pid))
+        raise OSError("NtResumeProcess failed")
+
+    nt.setattr(windows_process, "_resume_suspended_process", failing_resume)
+    port = windows_process.WindowsDaemonProcessPort(term_timeout=0.01, kill_timeout=0.01)
+
+    with pytest.raises(OSError, match="NtResumeProcess failed"):
+        port.spawn(DaemonProcessCommand(("codex",), tmp_path))
+    job = mechanism.jobs[-1]
+    assert port._handles == {}
+    # _finalize_job consults emptiness (default True in this mechanism) and
+    # closes exactly once — proving the pre-registration path also goes
+    # through the shared confirmed-empty gate, not an unconditional close.
+    assert mechanism.events.count(("close_job", job)) == 1
+
+
+def test_resume_failure_before_registration_refuses_to_close_nonempty_job(tmp_path, nt):
+    """Same pre-registration resume failure, but the Job is confirmed
+    non-empty: the outer except in spawn() must leave it open (leaked, not
+    closed) rather than orphan a descendant, exactly like the callback-
+    failure and release() paths."""
+    mechanism = _Mechanism()
+    mechanism.install(nt)
+    proc = _FakeProc(604, returncode=None)
+
+    def kill_then_exit():
+        proc.kill_calls += 1
+        proc.returncode = 1
+
+    proc.kill = kill_then_exit
+    nt.setattr(windows_process.subprocess, "Popen", lambda *a, **k: proc)
+
+    def failing_resume(proc):
+        mechanism.events.append(("resume", proc.pid))
+        raise OSError("NtResumeProcess failed")
+
+    nt.setattr(windows_process, "_resume_suspended_process", failing_resume)
+    original_assign = windows_process._assign_new_job
+    def pinned_not_empty_assign(proc):
+        job = original_assign(proc)
+        mechanism.job_empty[id(job)] = False
+        return job
+    nt.setattr(windows_process, "_assign_new_job", pinned_not_empty_assign)
+    port = windows_process.WindowsDaemonProcessPort(term_timeout=0.01, kill_timeout=0.01)
+
+    with pytest.raises(OSError, match="NtResumeProcess failed"):
+        port.spawn(DaemonProcessCommand(("codex",), tmp_path))
+    job = mechanism.jobs[-1]
+    assert port._handles == {}, "handle must still be forgotten even though the Job is leaked"
+    assert ("close_job", job) not in mechanism.events
 
 
 _PRIVATE_TREE_CHILD = textwrap.dedent("""

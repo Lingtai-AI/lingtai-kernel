@@ -5094,11 +5094,12 @@ class CodexOpenAIAdapter(OpenAIAdapter):
 
     def _clone_codex_client(self):
         """Create a client whose mutable authentication belongs to one context."""
-        if isinstance(self._client, openai.OpenAI):
+        if isinstance(openai.OpenAI, type) and isinstance(self._client, openai.OpenAI):
             return openai.OpenAI(**dict(self._client_kwargs))
-        # Unit/integration fakes replace ``_client`` after construction.  Keep
-        # their response capture seam while still giving each chat its own
-        # mutable api_key/account-bearing client object.
+        # Unit/integration fakes replace ``_client`` (or patch ``openai.OpenAI``
+        # itself, e.g. with a ``MagicMock``) after construction.  Keep their
+        # response capture seam while still giving each chat its own mutable
+        # api_key/account-bearing client object.
         return copy.copy(self._client)
 
     @staticmethod

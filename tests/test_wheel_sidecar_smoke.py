@@ -42,6 +42,7 @@ archive for the sidecar at the platlib root without executing it.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import ntpath
 import posixpath
@@ -276,16 +277,32 @@ def verify_wheel_install_and_run(wheel: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _build_native_wheel(dest: Path) -> Path:
+def _run_wheel_build(
+    dest: Path, *, extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    """Run ``pip wheel --no-deps`` against the repo and return the raw result.
+
+    Does not assert success — callers that expect a working native wheel use
+    ``_build_native_wheel``; callers proving a build *fails* (strict-mode
+    regressions) inspect ``returncode``/``stdout`` directly.
+    """
     import os
 
     env = dict(os.environ)
     env.pop("LINGTAI_SKIP_RUST_BUILD", None)
-    env["LINGTAI_REQUIRE_RUST_BUILD"] = "1"  # fail loud if no binary is produced
-    result = subprocess.run(
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
         [sys.executable, "-m", "pip", "wheel", "--no-deps", "-w", str(dest), str(REPO_ROOT)],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True,
     )
+
+
+def _build_native_wheel(dest: Path, *, extra_env: dict[str, str] | None = None) -> Path:
+    env = {"LINGTAI_REQUIRE_RUST_BUILD": "1"}  # fail loud if no binary is produced
+    if extra_env:
+        env.update(extra_env)
+    result = _run_wheel_build(dest, extra_env=env)
     if result.returncode != 0:
         raise AssertionError(
             "native wheel build failed:\n%s\n%s" % (result.stdout, result.stderr)
@@ -293,6 +310,56 @@ def _build_native_wheel(dest: Path) -> Path:
     wheels = sorted(dest.glob("*.whl"))
     assert len(wheels) == 1, wheels
     return wheels[0]
+
+
+def _fake_cargo_path(tmp_path: Path) -> str:
+    """A ``PATH`` prefix whose ``cargo`` always exits 0 without building
+    anything — makes ``_have_cargo()`` true and ``cargo build`` "succeed"
+    while producing no binary, deterministically and without a real Rust
+    toolchain or network access."""
+    import os
+    import stat
+
+    shim_dir = tmp_path / "fake-cargo-bin"
+    shim_dir.mkdir()
+    cargo_shim = shim_dir / "cargo"
+    cargo_shim.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cargo_shim.chmod(cargo_shim.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
+@contextlib.contextmanager
+def _sidecar_binary_hidden():
+    """Temporarily rename aside a real ``target/release/`` sidecar binary
+    left in this worktree by an earlier build (gitignored cargo build
+    output), if any, so the fake-cargo tests below observe a clean "no
+    binary produced" state without deleting anything. Restores it on exit,
+    even if the test fails.
+
+    Checks every name in ``BINARY_NAMES`` (POSIX ``lingtai-search-sidecar``
+    and Windows ``lingtai-search-sidecar.exe``), not just the POSIX one —
+    the platform this test happens to run on is not necessarily the platform
+    whose binary is staged, and native Windows CI is exactly where a missed
+    ``.exe`` would silently contaminate the fake-cargo assertions below.
+    """
+    release_dir = REPO_ROOT / "crates" / "lingtai-search-sidecar" / "target" / "release"
+    parked: list[tuple[Path, Path]] = []
+    try:
+        for name in BINARY_NAMES:
+            binary = release_dir / name
+            if not binary.is_file():
+                continue
+            park_path = binary
+            suffix = 0
+            while park_path.exists():
+                suffix += 1
+                park_path = binary.with_name(f"{binary.name}.test-parked-{suffix}")
+            binary.rename(park_path)
+            parked.append((binary, park_path))
+        yield
+    finally:
+        for binary, park_path in parked:
+            park_path.rename(binary)
 
 
 if pytest is not None:  # only collected under pytest; CI runs this file scriptwise
@@ -303,6 +370,65 @@ if pytest is not None:  # only collected under pytest; CI runs this file scriptw
     def test_native_wheel_ships_and_runs_sidecar(tmp_path: Path) -> None:
         wheel = _build_native_wheel(tmp_path)
         verify_wheel_install_and_run(wheel)
+
+    @pytest.mark.skipif(
+        shutil.which("cargo") is None, reason="Rust toolchain is optional"
+    )
+    def test_native_wheel_ships_sidecar_under_ambient_cargo_target_dir(
+        tmp_path: Path,
+    ) -> None:
+        """A caller-set CARGO_TARGET_DIR must not make setup.py silently ship
+        a pure wheel: cargo honors that env var and redirects its build
+        output away from the crate-local ``target/`` directory setup.py
+        checks, so the build step must pin ``--target-dir`` explicitly
+        rather than trust the ambient default."""
+        redirected_target = tmp_path / "ambient-cargo-target"
+        wheel = _build_native_wheel(
+            tmp_path / "wheelout",
+            extra_env={"CARGO_TARGET_DIR": str(redirected_target)},
+        )
+        verify_wheel_archive_only(wheel)
+
+    # -----------------------------------------------------------------------
+    # Strict-mode fail-loud vs. non-strict soft-degrade when cargo exits 0 but
+    # produces no binary at the expected path (setup.py's own docstring calls
+    # this "fail loud if no binary is produced" for LINGTAI_REQUIRE_RUST_BUILD;
+    # a fake cargo shim makes this deterministic — no real Rust toolchain or
+    # network dependency, and it never touches the real CARGO_TARGET_DIR
+    # regression above).
+    # -----------------------------------------------------------------------
+
+    def test_strict_build_fails_loud_when_cargo_produces_no_binary(
+        tmp_path: Path,
+    ) -> None:
+        with _sidecar_binary_hidden():
+            result = _run_wheel_build(
+                tmp_path,
+                extra_env={
+                    "PATH": _fake_cargo_path(tmp_path),
+                    "LINGTAI_REQUIRE_RUST_BUILD": "1",
+                },
+            )
+        assert result.returncode != 0, (
+            "strict mode must fail the build, not silently ship a pure wheel:\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
+        assert "no binary" in result.stdout + result.stderr
+
+    def test_non_strict_build_degrades_to_pure_wheel_when_cargo_produces_no_binary(
+        tmp_path: Path,
+    ) -> None:
+        with _sidecar_binary_hidden():
+            result = _run_wheel_build(tmp_path, extra_env={"PATH": _fake_cargo_path(tmp_path)})
+        assert result.returncode == 0, (
+            f"non-strict soft degrade must still succeed:\n{result.stdout}\n{result.stderr}"
+        )
+        wheels = sorted(tmp_path.glob("*.whl"))
+        assert len(wheels) == 1, wheels
+        assert wheels[0].name.endswith("-py3-none-any.whl"), wheels[0].name
+        with zipfile.ZipFile(wheels[0]) as zf:
+            names = zf.namelist()
+        assert not [n for n in names if Path(n).name in BINARY_NAMES], names
 
     # -----------------------------------------------------------------------
     # Deterministic regression for the Windows glob response shape.

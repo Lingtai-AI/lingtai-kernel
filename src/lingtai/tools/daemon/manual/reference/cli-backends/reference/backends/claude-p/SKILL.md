@@ -61,12 +61,11 @@ LingTai does not validate, enumerate, or simulate model names.
 The harness spawns `claude --print --dangerously-skip-permissions
 --output-format stream-json --verbose --name <em_id>`, then your
 `backend_options` argv, then harness-owned MCP flags, with the task prompt as
-the trailing positional argument. Validation therefore refuses the
-harness-owned flags `--settings`, `--print`, `--output-format`,
-`--mcp-config`, and `--strict-mcp-config` in `backend_options` before spawn:
-breaking stream-json output or the per-run MCP config silently breaks
-progress/result extraction and completion enforcement.
-
+the trailing positional argument. Validation refuses the harness-owned flags
+`--settings`, `--print`, `--output-format`, `--mcp-config`, and
+`--strict-mcp-config` in `backend_options` before spawn: breaking stream-json
+output or the per-run MCP config silently breaks progress/result extraction
+and completion enforcement.
 Related run-scoped behavior you should not fight through flags:
 
 - MCP: the harness writes stdio registrations (including `daemon_common`) to
@@ -77,16 +76,15 @@ Related run-scoped behavior you should not fight through flags:
   `daemon_common.finish(status="done")`. For read-only runs, keep MCP enabled
   and combine a read-only brief with the live-help `--allowedTools` surface.
 - Resume: `daemon(action="ask")` runs `claude --resume <claude_session_id>
-  --print ...` against the session id persisted to
-  `daemon.json.claude_session_id`; `backend_options` are not re-passed on
-  ask — emanate-time flags persist for the session's life.
+  --print ...` against the session id persisted to `daemon.json.claude_session_id`;
+  `backend_options` are not re-passed on ask — emanate-time flags persist for
+  the session's life.
 - Auth-env hygiene: the spawn environment strips `ANTHROPIC_API_KEY` and
-  `ANTHROPIC_AUTH_TOKEN` (they force API billing; GH #107) plus
+  `ANTHROPIC_AUTH_TOKEN` (force API billing; GH #107) plus
   `CLAUDE_CODE_OAUTH_TOKEN` (a stale inherited token can override a refreshed
-  `~/.claude/.credentials.json` and surface as a false "weekly limit"; see
-  Lingtai-AI/lingtai#189), so the CLI's own OAuth credentials win. Do not
-  re-inject auth overrides via flags. A *manual* `claude` shell invocation has no
-  such protection — for the weekly-limit smoke test and how to find the stale
-  token's source, read `shell-manual` →
-  `reference/bash-claude-code/SKILL.md`. Never print token values while
-  diagnosing.
+  `~/.claude/.credentials.json`, surfacing as a false "weekly limit"; see
+  Lingtai-AI/lingtai#189) so the CLI's own OAuth credentials win — do not
+  re-inject auth overrides via flags. A *manual* `claude` shell invocation has
+  no such protection; for the weekly-limit smoke test and the stale token's
+  source, read `shell-manual` → `reference/bash-claude-code/SKILL.md`. Never
+  print token values while diagnosing.

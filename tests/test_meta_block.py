@@ -4026,7 +4026,7 @@ def test_packaged_guidance_resource_is_valid():
     assert "carrying more into each provider request" in body
     assert "Apply the token-efficiency principle" in body
     assert "do not molt automatically" in body
-    assert "api_calls > 100" in body
+    assert "context pressure (≥" in body
     assert "mini molt for consumed tool results" in body
     assert "stronger whole-conversation boundary" in body
     assert "skip pre-molt summarize" in body
