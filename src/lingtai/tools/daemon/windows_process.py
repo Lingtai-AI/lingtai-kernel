@@ -218,6 +218,13 @@ def _close_job(job_handle) -> None:
     _kernel32().CloseHandle(job_handle)
 
 
+def _job_confirmed_empty(job_handle) -> bool:
+    """Instantaneous "is it empty right now" check — the single seam every
+    close path must consult before calling ``_close_job``. A zero timeout
+    means no blocking wait; it only reads the Job's current membership."""
+    return _wait_job_empty(job_handle, 0.0)
+
+
 class _Drain:
     def __init__(self, thread: threading.Thread, lines: list[str]) -> None:
         self._thread, self.lines = thread, lines
@@ -273,6 +280,13 @@ class WindowsDaemonProcessPort:
     def spawn(self, command, *, group_id=None):
         proc = self._popen(command)
         job = None
+        # Whether the handle was registered and _cleanup_spawn_failure has
+        # already taken (or attempted) ownership of finalizing `job`. Once
+        # true, the outer except below must not touch `job` again — doing so
+        # unconditionally was the double-close/premature-close bug: closing
+        # an already-closed Win32 handle, or closing one _cleanup_spawn_failure
+        # correctly left open because the Job was not yet confirmed empty.
+        job_finalized_by_cleanup = False
         try:
             if self._termination_scope is DaemonProcessTerminationScope.PRIVATE_PROCESS_GROUP:
                 job = _assign_new_job(proc)
@@ -289,15 +303,18 @@ class WindowsDaemonProcessPort:
                         termination_scope=self._termination_scope,
                     ))
                 except BaseException:
+                    job_finalized_by_cleanup = True
                     self._cleanup_spawn_failure(handle)
                     raise
             return handle
         except BaseException:
-            if job is not None:
-                try:
-                    _terminate_job(job)
-                finally:
-                    _close_job(job)
+            if job is not None and not job_finalized_by_cleanup:
+                # Pre-registration failure (Job/resume setup itself raised):
+                # the same confirmed-empty gate as every other close path —
+                # nothing has run in the Job yet in the ordinary case, but a
+                # partially-assigned/resumed process is possible, so this
+                # must not assume emptiness either.
+                self._finalize_job(job)
             try:
                 proc.kill()
                 proc.wait(timeout=2)
@@ -381,6 +398,25 @@ class WindowsDaemonProcessPort:
                         pass
         return DaemonProcessExit(proc.returncode, reason)
 
+    def _finalize_job(self, job) -> bool:
+        """Close ``job`` iff its emptiness is confirmed; otherwise leave the
+        handle open and return ``False``.
+
+        This is the single seam every spawn/observation-failure cleanup path
+        must go through: closing a Job's last handle while a member remains
+        would silently orphan it (no ``KILL_ON_JOB_CLOSE``, and the
+        supervisor never sweeps grandchildren). A caller that gets ``False``
+        back has a bounded, honest incomplete cleanup — the Win32 handle is
+        deliberately leaked rather than closed unsafely; it is never closed
+        twice because this is the only place that closes it.
+        """
+        if job is None:
+            return True
+        if not _job_confirmed_empty(job):
+            return False
+        _close_job(job)
+        return True
+
     def _cleanup_spawn_failure(self, handle) -> None:
         """Reap and forget a child whose observation transaction failed."""
         with self._lock:
@@ -393,8 +429,7 @@ class WindowsDaemonProcessPort:
         finally:
             with self._lock:
                 self._handles.pop(handle, None)
-            if job is not None:
-                _close_job(job)
+            self._finalize_job(job)
             for stream in (proc.stdin, proc.stdout, proc.stderr):
                 if stream is not None:
                     try:
@@ -452,7 +487,7 @@ class WindowsDaemonProcessPort:
             # manager death), so closing its last handle while members remain
             # would silently orphan them with no supervisor sweep to recover
             # them. Confirm emptiness before ever closing the handle.
-            if job is not None and not _wait_job_empty(job, 0.0):
+            if job is not None and not _job_confirmed_empty(job):
                 return False
             self._handles.pop(handle, None)
         if job is not None:
