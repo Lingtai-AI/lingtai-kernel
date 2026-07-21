@@ -3,14 +3,46 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
+from pathlib import Path
 
 
 def main() -> int:
     name = os.environ.get("FAKE_DAEMON_CLI", "codex")
     args = sys.argv[1:]
     resume = "resume" in args or "--session" in args
+    completion_path = None
+    run_id = None
+    for index, arg in enumerate(args[:-1]):
+        if arg != "-c":
+            continue
+        value = args[index + 1]
+        for key in ("LINGTAI_DAEMON_COMPLETION_FILE", "LINGTAI_DAEMON_RUN_ID"):
+            match = re.search(
+                rf'{key}\s*=\s*("(?:\\.|[^"])*")',
+                value,
+            )
+            if not match:
+                continue
+            parsed = json.loads(match.group(1))
+            if key == "LINGTAI_DAEMON_COMPLETION_FILE":
+                completion_path = parsed
+            else:
+                run_id = parsed
+    completion_status = os.environ.get("FAKE_DAEMON_FINISH_STATUS")
+    if resume and completion_path and completion_status:
+        payload = {
+            "schema": "lingtai.daemon_completion.v1",
+            "status": completion_status,
+            "run_id": run_id or os.environ.get("LINGTAI_DAEMON_RUN_ID"),
+        }
+        if completion_status != "done":
+            payload["reason"] = "fake follow-up status"
+        target = Path(completion_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload), encoding="utf-8")
     calls_path = os.environ.get("FAKE_DAEMON_RESUME_CALLS")
     if resume and calls_path:
         with open(calls_path, "a", encoding="utf-8") as calls:

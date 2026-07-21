@@ -225,17 +225,31 @@ def run_resume_owner(manifest_path: str, run_id: str, generation: str,
     finally:
         state = run_dir.read_state_from_disk(run_dir.path)
         status = state.get("followup_status") or "failed"
-        run_dir.release_resume_generation(
-            generation, nonce, owner_pid=os.getpid(),
-            owner_identity=owner_identity, result_status=status,
-        )
+        # Claim before releasing the generation: a supervisor crash after the
+        # result is durable but before publication must leave a recoverable
+        # per-generation claim.  The receipt is written only after the sink
+        # reports success; a false result or exception intentionally leaves the
+        # claim pending for fresh-manager reconciliation.
         try:
-            state = run_dir.read_state_from_disk(run_dir.path)
-            _publish_daemon_notification(
-                run_dir, manifest, status=f"follow-up {status}",
-                state=state, idempotency_key=f"daemon-followup:{run_id}:{generation}",
+            idempotency_key = run_dir.claim_followup_notification(generation, status)
+            released = run_dir.release_resume_generation(
+                generation, nonce, owner_pid=os.getpid(),
+                owner_identity=owner_identity, result_status=status,
             )
+            if released and idempotency_key is not None:
+                state = run_dir.read_state_from_disk(run_dir.path)
+                published = _publish_daemon_notification(
+                    run_dir, manifest, status=f"follow-up {status}",
+                    state=state, idempotency_key=idempotency_key,
+                )
+                if published:
+                    run_dir.mark_followup_notification_published(
+                        generation, idempotency_key,
+                    )
         except Exception:
+            # Keep the durable claim as the source of truth.  Recovery retries
+            # the same generation-specific idempotency key and can recognize a
+            # sink event that won the race before this process crashed.
             pass
 
 

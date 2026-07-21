@@ -7,7 +7,7 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 6
+contract_version: 7
 last_changed_at: "2026-07-21"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
@@ -41,6 +41,7 @@ related_files:
   - tests/test_daemon_claude_interactive_backend.py
   - tests/test_daemon_run_dir.py
   - tests/test_daemon_codex_usage.py
+  - tests/test_daemon_codex_resume_contract.py
   - tests/test_codex_standalone_compaction.py
   - tests/test_daemon_windows_lock.py
   - tests/test_daemon_windows_process_port.py
@@ -62,6 +63,7 @@ review_triggers:
   - tests/test_daemon_claude_interactive_backend.py
   - tests/test_daemon_run_dir.py
   - tests/test_daemon_codex_usage.py
+  - tests/test_daemon_codex_resume_contract.py
   - tests/test_codex_standalone_compaction.py
 maintenance: |
   Keep this unified daemon Contract in the same maintenance graph as the daemon
@@ -228,6 +230,28 @@ When `daemon_common` is loaded, a conversational final answer is not enough.
 Success requires a validated `finish(status="done")`; missing completion,
 invalid JSON, invalid status, run-id mismatch, `failed`, or `incomplete` must
 prevent terminal `done`.
+
+A Codex `daemon(action="ask")` is a new completion generation, not a reuse of
+the initial run's receipt. Before spawning, the live manager allocates a safe,
+unique `followups/<generation>.completion.json` path for each ask while the
+entry's single-writer guard is held; sequential asks therefore cannot reuse an
+older receipt. A detached supervisor instead claims the durable generation and
+passes its pre-provisioned path to the execution host, which must preserve that
+identity. Both paths give Codex a fresh `daemon_common` registration; the
+`turn.completed` event and stale initial `daemon_completion.json` are never
+sufficient. A fresh receipt must contain exactly the `daemon_common.finish`
+envelope (`schema`, `status`, `run_id`, and any optional finish fields), with
+the exact run id, a valid status, string-valued present `summary`/`reason`, and
+a list of strings for present `artifacts`; unknown keys and present nulls are
+invalid. The historical initial-run reader remains identity-optional. Missing,
+invalid, `failed`, or `incomplete` fresh receipts fail the follow-up before it
+is recorded done or its usage is accepted. Live manager workers publish one
+structured success or failure notification; detached workers defer both
+outcomes so the supervisor records a per-generation durable notification claim
+and publishes exactly one generation-keyed event. The claim remains pending on
+sink failure or a publish-before-receipt crash; a fresh manager retries the
+same key and records the receipt only after successful or idempotently observed
+publication.
 
 ### 4. Artifacts separate review evidence from secret-bearing config
 
@@ -432,6 +456,8 @@ All paths are relative to the parent agent working directory (`<parent>/`):
   logs/token_ledger.jsonl      # per-call tokens, daemon-scoped (source="daemon")
   logs/events.jsonl            # tool_call / tool_result / cli_output / cli_usage / daemon_*
   result.txt                   # full terminal result when available
+  followups/<generation>.txt    # detached ask result/error receipt
+  followups/<generation>.completion.json  # fresh Codex finish receipt
 
 <parent>/logs/token_ledger.jsonl   # ALSO receives each daemon token row, tagged
                                     # source="daemon" + em_id + run_id (dual-ledger)
