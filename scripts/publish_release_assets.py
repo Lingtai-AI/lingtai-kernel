@@ -455,9 +455,13 @@ def main(argv: list[str] | None = None) -> int:
                      "--title", manifest.kernel_tag, "--notes", f"Kernel release {manifest.kernel_tag}"],
                     check=True,
                 )
+                github_files = plan_github_uploads(manifest, args.assets_dir, args.manifest, args.github_repo, manifest.kernel_tag)
             else:
                 print(f"  [github] DRY RUN: would create release {manifest.kernel_tag}")
-        github_files = plan_github_uploads(manifest, args.assets_dir, args.manifest, args.github_repo, manifest.kernel_tag)
+                print("  [github] DRY RUN: cannot plan attachment uploads without a release object (would create first)")
+                github_files = []
+        else:
+            github_files = plan_github_uploads(manifest, args.assets_dir, args.manifest, args.github_repo, manifest.kernel_tag)
         if args.execute:
             execute_github_upload(manifest.kernel_tag, args.github_repo, github_files)
         else:

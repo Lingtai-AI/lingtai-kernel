@@ -474,6 +474,34 @@ def test_main_dry_run_default_never_executes_github_upload(tmp_path, monkeypatch
     assert "DRY RUN" in out
 
 
+def test_main_dry_run_missing_github_release_does_not_plan_assets(tmp_path, monkeypatch, capsys):
+    manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
+    calls = []
+
+    def fake_run(cmd, capture_output=True, text=True, check=False):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "release", "view"] and "--json" not in cmd:
+            return _FakeCompletedProcess(returncode=1)
+        raise AssertionError(f"unexpected command before dry-run release exists: {cmd}")
+
+    monkeypatch.setattr(pub.subprocess, "run", fake_run)
+    rc = pub.main([
+        "--manifest", str(manifest_path),
+        "--assets-dir", str(assets_dir),
+        "--github-repo", "Lingtai-AI/lingtai-kernel",
+        "--skip-gitee",
+    ])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "does not exist yet" in out
+    assert "DRY RUN: would create release" in out
+    assert "cannot plan attachment uploads without a release" in out
+    assert not any(cmd[:3] == ["gh", "release", "create"] for cmd in calls)
+    assert not any(cmd[:3] == ["gh", "release", "upload"] for cmd in calls)
+    assert not any("--json" in cmd for cmd in calls)
+
+
 def test_main_skips_gitee_when_token_env_unset(tmp_path, monkeypatch, capsys):
     manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
     monkeypatch.delenv("GITEE_ACCESS_TOKEN", raising=False)
