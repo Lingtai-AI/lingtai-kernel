@@ -12,7 +12,7 @@ LingTai's first-party email and chat integrations. They now ship inside the `lin
 
 ## The four-step setup
 
-1. **Read the curated setup docs before editing config.** The table below gives the registry/module/env/config-file names. If exact provider-specific fields are needed, inspect the shipped module resources or the catalog `homepage` for that addon. Field names like `email_password` (imap), `bot_token` (telegram), `app_id`/`app_secret` (feishu), and gewechat host (wechat) are addon-specific; do not guess them from memory.
+1. **Read the curated setup docs before editing config.** The table below gives the registry/module/env/config-file names. If exact provider-specific fields are needed, inspect the shipped module resources or the catalog `homepage` for that addon. Field names like `email_password` (imap), `bot_token` (telegram), `app_id`/`app_secret` (feishu), and gewechat host (wechat) are addon-specific; do not guess them from memory. Make exact configuration changes only within explicit human authorization; this contract is the setup procedure, not a TUI setup screen.
 
 2. **Add the addon to `init.json`.** Append the registry name to the top-level `addons:` list, then add an `mcp.<name>` activation entry with the subprocess spec from this table or the addon docs:
 

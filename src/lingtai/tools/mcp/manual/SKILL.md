@@ -49,6 +49,12 @@ The `mcp` capability is your interface to Model Context Protocol (MCP) servers â
 
 This is the router. Detail lives in `reference/`. Load only what you need.
 
+## TUI command boundary
+
+`/addon` is retired; never recommend it. `/mcp` is the only current TUI command for this surface, and it is read-only config/status inspection. It is **not** a guided setup or configuration screen; never describe it as one or redirect a human there for addon setup.
+
+For curated addon setup, load `reference/curated-addons.md` (the curated-addon setup contract) and the relevant provider docs before editing. Make exact configuration changes only within explicit human authorization, using that contract's four-step mechanism; do not redirect the human to a nonexistent or setup-like TUI screen.
+
 ## Three states of an MCP
 
 For any MCP server, relative to this agent:

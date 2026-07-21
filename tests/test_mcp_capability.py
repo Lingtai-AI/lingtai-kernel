@@ -8,6 +8,7 @@ registry membership.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -293,6 +294,40 @@ def test_mcp_show_action_returns_health_snapshot(tmp_path):
     manual = handler({"action": "manual"})
     assert manual["status"] == "ok"
     assert "mcp_manual" in manual and manual["mcp_manual"]  # umbrella SKILL.md body
+
+
+def test_mcp_manual_preserves_tui_command_boundary():
+    """The shipped MCP router must not route setup to a retired TUI surface."""
+    manual_root = Path(__file__).resolve().parents[1] / "src/lingtai/tools/mcp/manual"
+    router = (manual_root / "SKILL.md").read_text(encoding="utf-8")
+    curated = (manual_root / "reference/curated-addons.md").read_text(encoding="utf-8")
+
+    assert re.search(r'/addon.{0,120}(?:retired|never recommended)', router, re.I | re.S)
+    assert not re.search(r'(?:use|open|run|launch|recommend)[ \t]+`?/addon', router, re.I)
+    assert re.search(r'/mcp.{0,140}only current TUI command', router, re.I | re.S)
+    assert re.search(r'/mcp.{0,180}read[- ]only', router, re.I | re.S)
+    assert re.search(
+        r"/mcp.{0,240}(?:not|isn't).{0,90}(?:guided[ \t]+)?(?:setup|configuration)",
+        router,
+        re.I | re.S,
+    )
+    assert re.search(
+        r'curated addon setup.{0,220}(?:curated-addons.*contract|provider docs)',
+        router,
+        re.I | re.S,
+    )
+    assert re.search(r'explicit human authorization', router, re.I)
+
+    # Keep the existing four-step mechanism in the owning reference while the
+    # router adds only the TUI boundary and authorization rule.
+    assert re.search(r'## The four-step setup', curated)
+    for step in (
+        r'1[.].*read.*setup docs',
+        r'2[.].*init[.]json',
+        r'3[.].*config file',
+        r"4[.].*system[(]action=.*refresh.*[)]",
+    ):
+        assert re.search(step, curated, re.I | re.S)
 
 
 def test_mcp_show_unknown_action_returns_error(tmp_path):
