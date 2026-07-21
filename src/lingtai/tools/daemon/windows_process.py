@@ -446,6 +446,14 @@ class WindowsDaemonProcessPort:
             proc, _group, _reason, job = entry
             if proc.poll() is None:
                 return False
+            # The root exiting does not prove the Job is empty: a descendant
+            # spawned under the root can outlive it. The Job is deliberately
+            # created WITHOUT KILL_ON_JOB_CLOSE (private sessions survive
+            # manager death), so closing its last handle while members remain
+            # would silently orphan them with no supervisor sweep to recover
+            # them. Confirm emptiness before ever closing the handle.
+            if job is not None and not _wait_job_empty(job, 0.0):
+                return False
             self._handles.pop(handle, None)
         if job is not None:
             _close_job(job)
