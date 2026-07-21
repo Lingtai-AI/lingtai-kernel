@@ -2827,6 +2827,10 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         account_id: str | None = None,
         codex_auth_path_sha8: str | None = None,
         codex_auth_path_source: str | None = None,
+        codex_pool_selection: dict[str, Any] | None = None,
+        codex_account_error_callback: Callable[[Exception, bool], None] | None = None,
+        codex_account_success_callback: Callable[[], dict[str, Any] | None] | None = None,
+        codex_account_request_callback: Callable[[], dict[str, Any]] | None = None,
         installation_id: str | None = None,
         metadata_sandbox: str = "lingtai",
         transport: str | None = None,
@@ -2962,6 +2966,19 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         # It is a non-secret account identifier and is never copied into usage
         # metadata or logs.
         self._account_id = account_id if isinstance(account_id, str) and account_id else None
+        # Native Codex account selection is owned by this session's provider
+        # request path.  The callbacks never receive canonical history or
+        # provider policy; they only refresh auth and report a safe selection /
+        # structural failure to the ordinary Codex adapter.
+        self._codex_pool_selection = (
+            dict(codex_pool_selection) if isinstance(codex_pool_selection, dict) else {}
+        )
+        self.codex_pool_selection = dict(self._codex_pool_selection)
+        self._codex_account_error_callback = codex_account_error_callback
+        self._codex_account_success_callback = codex_account_success_callback
+        self._codex_account_request_callback = codex_account_request_callback
+        self._codex_partial_output = False
+        self._codex_account_error_reported = False
         # Non-secret attribution for token/debug ledgers. The raw account id is
         # already needed for the ChatGPT-Account-ID request header, but it must
         # never be copied into UsageMetadata.extra / token_ledger / events.
@@ -3117,19 +3134,15 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         pool_selection = getattr(self, "codex_pool_selection", None)
         if isinstance(pool_selection, dict):
             pool_fields = {
-                "fallback": "codex_pool_fallback",
                 "source_ref": "codex_pool_source_ref",
                 "source_index": "codex_pool_source_index",
                 "pool_size": "codex_pool_size",
                 "weight": "codex_pool_weight",
                 "auth_path_sha8": "codex_auth_path_sha8",
-                # Exact category key of a model-classified pool (a non-secret
-                # manifest model string); None on flat v1 pools -> omitted.
+                "quota_left": "codex_pool_quota_left",
                 "model_scope": "codex_pool_model_scope",
-                # Present only on a codex-pool request-scoped usage-limit switch:
-                # the value ``usage_limit_reached`` marks that THIS response was
-                # served by a switched-to account (not the initial primary).
                 "failover": "codex_pool_failover",
+                "fallback": "codex_pool_fallback",
             }
             for source_key, ledger_key in pool_fields.items():
                 value = pool_selection.get(source_key)
@@ -4207,7 +4220,48 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         delta_interface.entries.extend(entries)
         return self._frozen_responses_input(delta_interface)
 
+    def _codex_report_account_error(self, exc: Exception) -> None:
+        """Report one structural request failure to the native Codex adapter."""
+        if self._codex_account_error_reported:
+            return
+        self._codex_account_error_reported = True
+        callback = self._codex_account_error_callback
+        if callback is not None:
+            callback(exc, self._codex_partial_output)
+
+    def _codex_refresh_account_for_request(self) -> None:
+        """Bind exactly one freshly selected account for this provider request."""
+        callback = self._codex_account_request_callback
+        if callback is None:
+            self._codex_account_error_reported = False
+            self._codex_partial_output = False
+            return
+        binding = callback()
+        if not isinstance(binding, dict):
+            raise TypeError("Codex account request callback returned non-dict binding")
+
+        previous_sha8 = self._codex_auth_path_sha8
+        next_sha8 = binding.get("auth_path_sha8")
+        if previous_sha8 and next_sha8 and previous_sha8 != next_sha8:
+            # A websocket transport is authenticated when opened.  Never reuse
+            # it, or its previous_response_id chain, after switching accounts.
+            self._reset_ws_epoch("codex_account_switch")
+
+        self._client.api_key = binding.get("api_key")
+        if hasattr(self, "_ws_api_key"):
+            self._ws_api_key = binding.get("api_key")
+        self._account_id = binding.get("account_id")
+        self._codex_auth_path_sha8 = next_sha8
+        self._codex_auth_path_source = binding.get("auth_path_source")
+        selection = binding.get("selection")
+        if isinstance(selection, dict):
+            self._codex_pool_selection = dict(selection)
+            self.codex_pool_selection = dict(selection)
+        self._codex_account_error_reported = False
+        self._codex_partial_output = False
+
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
+        self._codex_refresh_account_for_request()
         # Maintain the canonical interface for local recovery and full-replay
         # fallback, but capture the entries added by this turn so subsequent
         # stored-response requests can send only the incremental delta.
@@ -4614,6 +4668,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                             })
                     continue
                 if event.type == "response.output_text.delta":
+                    self._codex_partial_output = True
                     acc.add_text(event.delta)
                     if on_chunk:
                         on_chunk(event.delta)
@@ -4678,7 +4733,11 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                                 ws_diag=(self._ws_last_diag if self._continuation_enabled else None),
                             ),
                         )
-        except Exception:
+        except Exception as exc:
+            # Only the final exception escaping all built-in Codex fallback
+            # paths may affect account exclusion. Intermediate fallbacks must
+            # not poison the AED chain.
+            self._codex_report_account_error(exc)
             # Revert the trailing user entry we just added so the next retry
             # doesn't double-record it. Mirrors OpenAIChatSession.send's
             # error path. ToolResultBlock entries also revert — the executor
@@ -4798,6 +4857,10 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         # Stored only as a transient debug aid; never threaded into the next
         # request.
         self._response_id = response_id
+        if self._codex_account_success_callback is not None:
+            # Success only closes the current AED exclusion chain.  The next
+            # provider request performs its own fresh live selection.
+            self._codex_account_success_callback()
         return result
 
 
@@ -4808,8 +4871,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
     Use this with `provider=codex` only. Always set `use_responses=True,
     force_responses=True`. `base_url` defaults to the official Codex endpoint
     (`https://chatgpt.com/backend-api/codex`) but is configurable — the `codex`
-    factory forwards an explicit `manifest.llm['base_url']` so a future local
-    `lingtai-codex-pool` can front this provider without a separate adapter.
+    factory forwards an explicit `manifest.llm['base_url']`. Account selection
+    remains inside this adapter; aliases do not create a second implementation.
     """
 
     def __init__(
@@ -4824,6 +4887,9 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         codex_molt_count: int | None = None,
         codex_compact_token_limit: int | None = None,
         codex_service_tier: str | None = None,
+        codex_account_source: Any = None,
+        codex_token_manager_factory: Callable[..., Any] | None = None,
+        codex_fallback_auth_path: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -4885,6 +4951,22 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         self.codex_auth_path_source: str | None = (
             str(codex_auth_path_source) if codex_auth_path_source else None
         )
+        # Account selection is a native Codex adapter concern.  The source is
+        # deliberately retained as a live object so a weighted pool re-reads its
+        # snapshot for every request; no session manager or pool chat wrapper is
+        # involved.
+        self._codex_account_source = codex_account_source
+        self._codex_token_manager_factory = codex_token_manager_factory
+        self._codex_fallback_auth_path = codex_fallback_auth_path
+        self._codex_account_resolution_enabled = not (
+            codex_account_source is None
+            and codex_token_manager_factory is None
+            and codex_fallback_auth_path is None
+        )
+        self._codex_excluded_accounts: set[str] = set()
+        self._codex_current_selection: dict[str, Any] = {}
+        self._codex_current_binding: dict[str, Any] = {}
+        self._codex_current_model = ""
         # Optional Codex-only endpoint POOL (molt-boundary shuffle). When this
         # carries 2+ valid entries, ``create_chat`` chooses one at request time
         # by (stable per-agent offset + current molt_count) so the endpoint is
@@ -4920,6 +5002,172 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         self._codex_pool_offset = int(
             hashlib.sha256(offset_seed.encode("utf-8")).hexdigest(), 16
         )
+
+    def _new_codex_token_manager(self, auth_path: str | None = None):
+        factory = self._codex_token_manager_factory
+        if factory is None:
+            from lingtai.auth.codex import CodexTokenManager
+            factory = CodexTokenManager
+        if auth_path:
+            return factory(token_path=auth_path)
+        return factory()
+
+    def _select_codex_account(self, model: str) -> dict[str, Any]:
+        """Bind one live account to this ordinary Codex adapter.
+
+        AccountSource supplies only a candidate. Token refresh, quota lookup,
+        request-client binding, usage-limit exclusion, and the existing Codex
+        session/stream machinery remain here at the provider boundary.
+        """
+        source = self._codex_account_source
+        if (
+            source is None
+            and self._codex_fallback_auth_path is None
+            and self._codex_token_manager_factory is None
+        ):
+            # Direct/test construction predates host auth wiring. Preserve its
+            # existing client credential path without reading a token file.
+            return {
+                "api_key": self._client_kwargs.get("api_key"),
+                "account_id": self.codex_account_id,
+                "auth_path_sha8": self.codex_auth_path_sha8,
+                "auth_path_source": self.codex_auth_path_source,
+                "selection": dict(self._codex_current_selection),
+            }
+        if source is None:
+            from lingtai.auth.codex_account_source import FixedAccountSource
+            source = FixedAccountSource(self._codex_fallback_auth_path or "")
+            self._codex_account_source = source
+
+        quota_left: dict[str, float] | None = None
+        zero_accounts: set[str] = set()
+        snapshot = None
+        if callable(getattr(source, "snapshot", None)):
+            snapshot = source.snapshot()
+            targets = source.quota_targets(
+                exclude=self._codex_excluded_accounts,
+                snapshot=snapshot,
+            )
+            complete = bool(targets)
+            quota_left = {}
+            try:
+                from lingtai.llm.openai.codex_quota import read_remaining_percent
+                for auth_ref, auth_sha8 in targets:
+                    try:
+                        percent = read_remaining_percent(auth_ref)
+                    except Exception:
+                        percent = None
+                    valid = (
+                        isinstance(percent, (int, float))
+                        and not isinstance(percent, bool)
+                        and percent == percent
+                        and 0.0 <= float(percent) <= 100.0
+                    )
+                    if not valid:
+                        complete = False
+                    else:
+                        fraction = float(percent) / 100.0
+                        quota_left[auth_sha8] = fraction
+                        if fraction <= 0.0:
+                            zero_accounts.add(auth_sha8)
+            except Exception:
+                complete = False
+            if not complete:
+                quota_left = None
+
+        excluded = self._codex_excluded_accounts | zero_accounts
+        try:
+            if snapshot is None:
+                candidate = source.select(exclude=excluded or None)
+                pool_size = 1
+            else:
+                candidate = source.select(
+                    exclude=excluded or None,
+                    quota_left_snapshot=quota_left,
+                    snapshot=snapshot,
+                )
+                pool_size = len(snapshot)
+        except Exception:
+            # Only a truly empty configured pool falls back to the ordinary
+            # legacy account. A non-empty but exhausted/excluded pool must fail
+            # closed so AED can preserve its account-exclusion semantics.
+            if self._codex_fallback_auth_path is None or snapshot != []:
+                raise
+            from lingtai.auth.codex_account_source import FixedAccountSource
+            fallback = FixedAccountSource(self._codex_fallback_auth_path)
+            candidate = fallback.select()
+            pool_size = 1
+            quota_left = None
+            selection_fallback = "legacy_default"
+        else:
+            selection_fallback = None
+
+        manager = self._new_codex_token_manager(candidate.auth_ref)
+        access_token = manager.get_access_token()
+        self._client.api_key = access_token
+        self._client_kwargs["api_key"] = access_token
+        self.codex_account_id = manager.get_account_id()
+        self.codex_auth_path_sha8 = candidate.auth_path_sha8
+        self.codex_auth_path_source = "configured" if selection_fallback is None else selection_fallback
+        selection: dict[str, Any] = {
+            "source_ref": candidate.source_ref,
+            "source_index": candidate.source_index,
+            "pool_size": pool_size,
+            "weight": candidate.weight,
+            "auth_path_sha8": candidate.auth_path_sha8,
+            "model_scope": model if pool_size > 1 else None,
+        }
+        if quota_left is not None:
+            fraction = quota_left.get(candidate.auth_path_sha8)
+            if fraction is not None:
+                selection["quota_left"] = round(fraction * 100.0, 3)
+        if selection_fallback is not None:
+            selection["fallback"] = selection_fallback
+        self._codex_current_selection = selection
+        self._codex_current_binding = {
+            "api_key": access_token,
+            "account_id": self.codex_account_id,
+            "auth_path_sha8": self.codex_auth_path_sha8,
+            "auth_path_source": self.codex_auth_path_source,
+            "selection": dict(selection),
+        }
+        return dict(self._codex_current_binding)
+
+    def _codex_account_request(self) -> dict[str, Any]:
+        return self._select_codex_account(self._codex_current_model)
+
+    def _codex_account_error(self, exc: Exception, partial_output: bool) -> None:
+        if partial_output:
+            # The caller has already observed output from this request. Mark the
+            # propagated exception so the generic AED loop terminates instead
+            # of replaying the turn against any account.
+            try:
+                setattr(exc, "_lingtai_partial_stream", True)
+            except Exception:
+                pass
+            return
+        from lingtai.auth.codex import _is_usage_limit_reached_error
+        if _is_usage_limit_reached_error(exc):
+            identity = self._codex_current_selection.get("auth_path_sha8")
+            if identity:
+                self._codex_excluded_accounts.add(str(identity))
+
+    def _codex_account_success(self) -> None:
+        # A later independent request begins a fresh AED exclusion chain and
+        # performs its own live selection at request time.
+        self._codex_excluded_accounts.clear()
+
+    def generate(self, *args, **kwargs) -> LLMResponse:
+        model = kwargs.get("model") or (args[0] if args else "")
+        self._codex_current_model = str(model)
+        self._select_codex_account(self._codex_current_model)
+        try:
+            result = super().generate(*args, **kwargs)
+        except Exception as exc:
+            self._codex_account_error(exc, False)
+            raise
+        self._codex_account_success()
+        return result
 
     def _current_molt_count(self) -> int:
         """Current molt_count: explicit override, else ``.agent.json``, else 0."""
@@ -4981,10 +5229,11 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         self._client = openai.OpenAI(**new_kwargs)
 
     def create_chat(self, *args, **kwargs) -> ChatSession:
-        # Select the molt-stable endpoint and re-point the client BEFORE the
-        # session is built, so the new ``CodexResponsesSession`` (and its
-        # ``_ws_base_url`` / client) use the selected endpoint. With an empty
-        # pool this is a no-op and the PR #495 single-endpoint path is unchanged.
+        # Chat construction owns only the ordinary Codex session/interface and
+        # endpoint. AccountSource is consulted later, immediately before each
+        # actual provider request.
+        model = kwargs.get("model") or (args[0] if args else "")
+        self._codex_current_model = str(model)
         self._repoint_client_if_needed(self._select_codex_endpoint())
         return super().create_chat(*args, **kwargs)
 
@@ -5126,6 +5375,16 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             account_id=self.codex_account_id,
             codex_auth_path_sha8=self.codex_auth_path_sha8,
             codex_auth_path_source=self.codex_auth_path_source,
+            codex_pool_selection=self._codex_current_selection,
+            codex_account_error_callback=(
+                self._codex_account_error if self._codex_account_resolution_enabled else None
+            ),
+            codex_account_success_callback=(
+                self._codex_account_success if self._codex_account_resolution_enabled else None
+            ),
+            codex_account_request_callback=(
+                self._codex_account_request if self._codex_account_resolution_enabled else None
+            ),
             installation_id=self._codex_installation_id,
             base_url=self.base_url,
             api_key=self._client_kwargs.get("api_key"),

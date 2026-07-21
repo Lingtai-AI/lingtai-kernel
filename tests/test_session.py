@@ -1,7 +1,7 @@
 """Tests for SessionManager — LLM session, token tracking, context pressure."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -25,6 +25,7 @@ def make_session_manager(**kw):
             extra={
                 "codex_account_id_sha8": "abc12345",
                 "codex_auth_path_sha8": "def67890",
+                "codex_pool_source_index": 1,
                 "unsafe_provider_blob": "should-not-log",
             },
         ),
@@ -120,8 +121,8 @@ def test_send_tracks_usage():
     assert latest["api_call_id"].startswith("api_")
 
 
-def test_send_logs_codex_pool_selection_when_present():
-    """A codex-pool chat's non-secret selection breadcrumb lands on llm_call."""
+def test_send_does_not_log_stale_pre_request_codex_selection():
+    """llm_call precedes native selection, so an old chat breadcrumb is omitted."""
     events = []
 
     def log_fn(event_type, **fields):
@@ -139,7 +140,7 @@ def test_send_logs_codex_pool_selection_when_present():
     sm.send("hello")
 
     llm_call = next(fields for event, fields in events if event == "llm_call")
-    assert llm_call["codex_pool"] == selection
+    assert "codex_pool" not in llm_call
 
 
 def test_send_llm_call_omits_codex_pool_for_other_providers():
@@ -226,6 +227,7 @@ def test_send_logs_llm_call_with_api_call_id():
     assert llm_response["usage_extra"] == {
         "codex_account_id_sha8": "abc12345",
         "codex_auth_path_sha8": "def67890",
+        "codex_pool_source_index": "1",
     }
     for field in (
         "prompt_build_ms",

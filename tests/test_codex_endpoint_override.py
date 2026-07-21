@@ -134,8 +134,11 @@ def test_codex_configured_base_url_preserves_auth_path_selection():
         )
         adapter = svc.get_adapter("codex", pool_url)
 
-        # base_url reached the adapter and the per-agent token file is still used.
+        # Endpoint construction consumes no credential draw.  The configured
+        # token file is still selected at the first real request boundary.
         assert _client_base_url(adapter) == pool_url
+        mgr_cls.assert_not_called()
+        adapter._select_codex_account("gpt-5.5")
         mgr_cls.assert_called_once_with(token_path=auth_path)
 
 

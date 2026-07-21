@@ -20,6 +20,7 @@ related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/CONTRACT.md
   - tests/test_codex_prompt_cache_key.py
+  - tests/test_codex_native_multiaccount.py
   - tests/test_codex_standalone_compaction.py
   - tests/test_mimo_responses_compaction.py
   - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
@@ -53,8 +54,8 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `OpenAIResponsesSession` | `adapter.py:1782` | Responses API session. Official OpenAI mode is server-stateful via `previous_response_id`; custom/OpenAI-compatible mode can be internally stateless (`stateless_replay=True`) and replays full canonical history via `to_responses_input` while recording assistant turns and exposing no resume id (`adapter.py:1806-1807`, `adapter.py:1974-1975`, `adapter.py:1985-1986`, `adapter.py:2092-2103`). |
 | `OpenAIAdapter` | `adapter.py:2126` | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key`; carries the internal `_responses_stateless_replay` constructor mode into Responses sessions (`adapter.py:2184`, `adapter.py:2189`, `adapter.py:2282-2334`). |
 | `_StandaloneCompactionMixin` | `adapter.py:2561` | Shared standalone `/responses/compact` machinery extracted from `CodexResponsesSession`: projected-token trigger, turn-aware boundary selection (`_prepare_compact_request`, `adapter.py:2736`), opaque compacted-prefix-plus-delta replay. Mixed into both `CodexResponsesSession` (non-fatal failure policy) and MiMo's `MimoResponsesSession` (`src/lingtai/llm/mimo/adapter.py`, hard-failure policy) — see "Standalone Codex compaction" below. |
-| `CodexResponsesSession` | `adapter.py:2801` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, honest Codex metadata envelope, and standalone daemon-task-triggered compaction via `POST /responses/compact` (mixes in `_StandaloneCompactionMixin`; Codex-specific wire-shaping + non-fatal `_compact_now` at `adapter.py:3647`; see "Standalone Codex compaction" below). |
-| `CodexOpenAIAdapter` | `adapter.py:4776` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. Maps an omitted/`default` thinking level to an explicit `reasoning.effort = "xhigh"` in its `_create_responses_session` (Codex-only default — omitting the field would fall back to the backend's lower default; explicit levels pass through unchanged, and the generic `OpenAIAdapter` keeps omit-on-default). `codex-pool` reuses this adapter, so it inherits the same default. |
+| `CodexResponsesSession` | `adapter.py:2801` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): every real send first asks its adapter for one fresh credential, account switches reset the wire epoch, `store=false` always, encrypted reasoning include/replay and self-heal remain native, and standalone daemon-task compaction uses `POST /responses/compact`. |
+| `CodexOpenAIAdapter` | `adapter.py:4867` | The one Codex provider specialization shared by `codex`/`codex-pool` aliases. It owns fixed-or-weighted AccountSource selection, per-request OAuth token/account binding, quota/exclusion state, safe `codex_pool_selection` attribution, cache/session ids, installation id, endpoint/service-tier settings, and Codex's explicit default `reasoning.effort = "xhigh"`; no pool-specific session or retry adapter exists. |
 
 ### adapter.py helpers
 
@@ -131,6 +132,8 @@ constructor kwarg.
 
 Flow:
 
+Before staging input, `send_stream` calls `_codex_refresh_account_for_request()` (`adapter.py:4232-4265`). Host-wired sessions therefore consume exactly one fresh AccountSource draw per real send; direct/test sessions with no resolver preserve their existing credential. A changed account SHA resets the WebSocket epoch before rebinding, closing authenticated transport plus response/compaction continuation state so no wire state crosses accounts.
+
 1. Record message into canonical `ChatInterface`.
 2. `_frozen_responses_input(interface)` — the full conversation as input items
    (with per-`call_id` output freezing for stable replay). Full-history
@@ -166,8 +169,11 @@ Flow:
    in the canonical interface; only the opaque provider blob is dropped.
 6. After success: record the assistant response into the interface and recompute
    the converter-stable delta baseline (`_ws_record_baseline_from_interface`) so the
-   next turn can strict-prefix-match and stay incremental.
-**Usage metadata axes:** `UsageMetadata.extra` carries `codex_transport`
+   next turn can strict-prefix-match and stay incremental; the adapter clears the current exclusion chain without preselecting the next credential (`adapter.py:4859-4863`).
+
+Only the final exception escaping all built-in fallback/self-heal paths reaches the adapter account-error callback (`adapter.py:4736-4745`). A structural `usage_limit_reached` excludes that safe account identity for the existing AED rebuild; if any text delta was already delivered, the exception is marked `_lingtai_partial_stream` so BaseAgent terminates rather than replaying visible output (`adapter.py:4670-4674`, `adapter.py:5139-5148`).
+
+**Usage metadata axes:** the session's `codex_pool_selection` records only safe selection fields; `_usage_extra` maps them to the stable `codex_pool_source_ref` / source-index / pool-size / weight / quota / model-scope / failover / fallback fields plus `codex_auth_path_sha8` (`adapter.py:3135-3145`) — never tokens or raw absolute auth paths. `UsageMetadata.extra` also carries `codex_transport`
 (`rest`/`websocket`), `codex_transfer_mode` (`full`/`incremental`), and the
 transport-qualified `codex_request_mode` (`rest_full` / `rest_incremental` /
 `ws_full` / `ws_incremental` / `rest_full_fallback` / `rest_full_self_heal` / `stateless_full_self_heal`), plus the safe delta-decision

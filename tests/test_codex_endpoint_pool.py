@@ -421,22 +421,27 @@ def test_live_switch_repoints_client_and_drops_old(tmp_path):
 
 
 def test_live_switch_preserves_refreshed_api_key(tmp_path):
-    """A switch must keep the live (refreshed) token, not revert to boot token.
-
-    The factory's OAuth refresh hook mutates ``adapter._client.api_key`` in
-    place before each call. Rebuilding the client on an endpoint switch must
-    carry that live token forward.
-    """
+    """An endpoint switch preserves the token bound at the request boundary."""
     mgr, cls = _mock_mgr()
     try:
         anchor = _write_agent_json(tmp_path, 0)
-        adapter = _adapter_with(tmp_path, anchor=anchor, codex_base_urls=list(_POOL))
+        auth_path = str(tmp_path / "codex-auth.json")
+        adapter = _adapter_with(
+            tmp_path,
+            anchor=anchor,
+            codex_auth_path=auth_path,
+            codex_base_urls=list(_POOL),
+        )
 
         first = _session_base_url(adapter)
-        # Simulate the OAuth token having rotated on disk: the factory's
-        # pre-call refresh hook (``get_access_token``) now returns a new value,
-        # which it writes onto the live client before each create_chat.
         cls.return_value.get_access_token.return_value = "refreshed-token"
+
+        # Native Codex now refreshes/binds OAuth on every actual request, not
+        # at adapter/chat construction.  Model that boundary directly before
+        # the endpoint-pool rebuild exercised below.
+        cls.assert_not_called()
+        adapter._select_codex_account("gpt-5.5")
+        cls.assert_called_once_with(token_path=auth_path)
 
         changed = False
         for mc in range(1, len(_POOL) + 1):

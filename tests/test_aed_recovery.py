@@ -212,6 +212,34 @@ def _make_run_loop_agent(tmp_path):
     return agent
 
 
+def test_partial_stream_marker_stops_before_transient_or_aed_retry(tmp_path, monkeypatch):
+    agent = _make_run_loop_agent(tmp_path)
+    agent.saves = 0
+    agent._save_chat_history = lambda *a, **kw: setattr(agent, "saves", agent.saves + 1)
+    calls = {"n": 0}
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        _agent._shutdown.set()
+        exc = RuntimeError("usage_limit_reached after visible output")
+        exc._lingtai_partial_stream = True
+        raise exc
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    assert calls["n"] == 1
+    assert getattr(agent, "rebuilds", 0) == 0
+    assert agent.saves == 0
+    assert any(name == "llm_partial_stream_terminal" for name, _ in agent._logs)
+    assert not any(name == "aed_transient_retry" for name, _ in agent._logs)
+    assert not any(name == "aed_attempt" for name, _ in agent._logs)
+
+
 def test_transient_provider_error_retries_before_aed_count(tmp_path, monkeypatch):
     agent = _make_run_loop_agent(tmp_path)
     calls = {"n": 0}

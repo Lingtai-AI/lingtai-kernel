@@ -1,11 +1,10 @@
-"""Thin AccountSource seam for Codex — one engine, two source types.
+"""AccountSource seam for the one native Codex adapter.
 
-``codex = CodexEngine(FixedAccountSource)``
-``codex-pool = CodexEngine(WeightedAccountSource)``
-
-The source owns ONLY candidate selection; Codex core owns everything else
-(token refresh, quota, REST/WS, retry, AED, ledger).  See the approved
-codex-pool thin-wrapper v3 spec for the full contract.
+An explicit ``codex_auth_path`` supplies ``FixedAccountSource``; otherwise the
+same adapter uses ``WeightedAccountSource`` for every accepted Codex provider
+spelling.  Sources own only candidate selection.  The adapter owns OAuth token
+refresh, quota, REST/WS transport, safe attribution, and failure classification;
+the kernel owns AED rebuild/replay.
 """
 
 from __future__ import annotations
