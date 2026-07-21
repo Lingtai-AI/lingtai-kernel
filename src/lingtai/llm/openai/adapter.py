@@ -5357,7 +5357,12 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                     "strict": True,
                 }
             }
-        return self._gated_call(lambda: session.send(contents))
+        one_shot_input = (
+            [{"role": "user", "content": contents}]
+            if isinstance(contents, list)
+            else contents
+        )
+        return self._gated_call(lambda: session.send(one_shot_input))
 
     def _current_molt_count(self) -> int:
         """Current molt_count: explicit override, else ``.agent.json``, else 0."""

@@ -379,6 +379,19 @@ def test_native_codex_one_shot_uses_native_request_shape_and_safe_metadata():
     assert "secret-one.json" not in repr(request)
 
 
+def test_native_codex_one_shot_preserves_list_content_user_envelope():
+    source = _SequenceSource("one.json")
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, _managers("one.json"), responses)
+    contents = [{"type": "input_text", "text": "list-content"}]
+
+    adapter.generate("gpt-5.5", contents, system_prompt="system")
+
+    assert responses.calls[0]["input"] == [
+        {"role": "user", "content": contents}
+    ]
+
+
 def test_native_codex_usage_limit_marks_account_for_aed_rebuild_without_pool_retry():
     source = _SequenceSource("one.json", "two.json")
     responses = _Responses([_UsageLimit(), _success_events])
