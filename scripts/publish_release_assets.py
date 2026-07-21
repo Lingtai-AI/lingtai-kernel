@@ -455,9 +455,13 @@ def main(argv: list[str] | None = None) -> int:
                      "--title", manifest.kernel_tag, "--notes", f"Kernel release {manifest.kernel_tag}"],
                     check=True,
                 )
+                github_files = plan_github_uploads(manifest, args.assets_dir, args.manifest, args.github_repo, manifest.kernel_tag)
             else:
                 print(f"  [github] DRY RUN: would create release {manifest.kernel_tag}")
-        github_files = plan_github_uploads(manifest, args.assets_dir, args.manifest, args.github_repo, manifest.kernel_tag)
+                print("  [github] DRY RUN: cannot plan attachment uploads without a release object (would create first)")
+                github_files = []
+        else:
+            github_files = plan_github_uploads(manifest, args.assets_dir, args.manifest, args.github_repo, manifest.kernel_tag)
         if args.execute:
             execute_github_upload(manifest.kernel_tag, args.github_repo, github_files)
         else:
@@ -473,10 +477,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print(f"\n[gitee] target: {args.gitee_owner}/{args.gitee_repo} tag {manifest.kernel_tag}")
-    gitee_verify_tag_synchronized(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, manifest.commit, gitee_token)
-    print(f"  [gitee] tag {manifest.kernel_tag} is synchronized to {manifest.commit[:12]}")
-
-    release = gitee_find_release_by_tag(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, gitee_token)
+    if args.execute:
+        gitee_verify_tag_synchronized(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, manifest.commit, gitee_token)
+        print(f"  [gitee] tag {manifest.kernel_tag} is synchronized to {manifest.commit[:12]}")
+        release = gitee_find_release_by_tag(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, gitee_token)
+    else:
+        release = gitee_find_release_by_tag(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, gitee_token)
+        if release is not None:
+            gitee_verify_tag_synchronized(args.gitee_owner, args.gitee_repo, manifest.kernel_tag, manifest.commit, gitee_token)
+            print(f"  [gitee] tag {manifest.kernel_tag} is synchronized to {manifest.commit[:12]}")
     if release is None:
         print(f"  [gitee] release {manifest.kernel_tag} does not exist yet")
         if args.execute:
