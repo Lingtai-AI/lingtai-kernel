@@ -51,10 +51,10 @@ flags and before the task prompt:
 // argv: --model opus
 ```
 
-The flag and model vocabulary belong to the installed CLI — LingTai does not
-validate, enumerate, or simulate them. Confirm `--model` and its accepted values
-in your installed `agent --help` before relying on this; an unknown flag or value
-is the CLI's error, not the daemon's.
+The flag and model vocabulary belong to the installed CLI — LingTai does
+not validate, enumerate, or simulate them. Confirm `--model` and its
+accepted values in your installed `agent --help` before relying on this; an
+unknown flag or value is the CLI's error, not the daemon's.
 
 ## Source-pinned stream-json usage
 For installed `agent-cli@2026.05.28-a70ca7c`, accept usage only from `type=result`, `subtype=success`, `is_error=false` with all four non-negative integer fields: `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`.
