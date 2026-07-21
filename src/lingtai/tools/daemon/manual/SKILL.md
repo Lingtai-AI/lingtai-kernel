@@ -7,7 +7,7 @@ description: >
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
 version: 0.9.0
-last_changed_at: 2026-07-19T00:00:00Z
+last_changed_at: 2026-07-21T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
@@ -169,18 +169,28 @@ files, not standalone top-level skills.
   `compact(action="run", _reason="...")` as the sole tool call in a batch with
   a non-empty complete self-contained handoff. All previous provider-visible
   history is removed; only the compact assistant call/result pair and rebuilt
-  system prompt survive. The surviving result is stamped from the fresh retained
-  context, so a pre-reset >=90% warning clears when fresh usage is below 90%.
-  The result includes exact run/state/history/event paths. It is repeatable and
-  non-terminal.
+  system prompt survive. The surviving result is stamped from the fresh
+  retained context, so a pre-reset >=90% warning/countdown clears. The result
+  includes exact run/state/history/event paths. It is repeatable and non-terminal.
 - `compact(action="manual")`: read-only procedures for compaction. It never
   resets context, requires no `_reason`, and may be called to inspect the
-  procedure before deciding whether to compact. When the daemon reports
-  `context warning, consider compact! see compact.manual for procedures`, prepare
-  the complete handoff first, then call
-  `compact(action="run", _reason="...")` alone in its assistant batch. Resume
-  from the surviving call/result pair after the result;
-  do not rely on erased history or treat the reset as terminal.
+  procedure before deciding whether to compact. The daemon runtime starts a
+  deterministic nine-round countdown on the first provider round at or above
+  90%, starting at visible value `9` and decrementing through `1`. The `warning`
+  and `compact_countdown_warning` fields carry one self-contained sentence for
+  the current value: `Daemon context is at or above 90%. {N} proactive round(s)
+  remain before runtime mechanical compact; call compact(action="run",
+  _reason="...") now to compact with your own handoff.` Values decrement only
+  while above `1`; value `1` remains visible through one ordinary provider
+  response. On the next high response, the runtime latches expiry while
+  preserving visible `1`; if that response does not issue a valid sole-call
+  proactive compact, mechanical compaction occurs before the next provider
+  continuation. On any drop below 90%, the countdown and warning reset/disappear.
+  Mechanical compaction retains the system prompt and latest assistant/tool-result
+  pair, then sends an explicit recovery message. Before continuing, re-read the
+  task, inspect that preserved pair and durable run state/history/event paths,
+  verify state, and only then resume; never silently continue after context loss.
+  Mechanical compaction failures propagate as daemon failures.
 - Every LingTai daemon tool batch ends with a canonical `_meta.agent_meta`
   snapshot on its newest final `ToolResultBlock`. Read `agent_state.daemon` for
   run/round identity, `agent_state.token_usage` for current-call and cumulative
@@ -188,9 +198,11 @@ files, not standalone top-level skills.
   This is daemon-local state: parent notifications and communication context are
   intentionally absent, and no main-agent resident-guidance reference is invented.
   Only the latest `agent_meta` is current; older snapshots are historical traces.
-  While current context usage is at or above 90%, every daemon round carries exactly
-  `context warning, consider compact! see compact.manual for procedures`; after a
-  successful compact or any other drop below 90%, the warning disappears.
+  While current context usage is at or above 90%, every daemon round carries the
+  self-contained warning sentence plus the visible countdown fields; after a
+  successful compact or any other drop below 90%, the warning and countdown
+  disappear. Provider-specific automatic standalone
+  compaction remains independent of this daemon-owned countdown.
 
 - Treat `task` as the parent's behavioral contract for **all** tools
   and selected skills/MCP context, not only for communication. If a daemon receives `shell`,

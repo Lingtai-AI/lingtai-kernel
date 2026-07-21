@@ -7,8 +7,8 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 5
-last_changed_at: "2026-07-19"
+contract_version: 6
+last_changed_at: "2026-07-21"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
@@ -316,7 +316,7 @@ exact run/state/history/event paths. It is repeatable and non-terminal. The
 explicit `manual` action returns read-only procedures, does not compact, and may
 be used without `_reason`. External CLI backends never receive `compact`.
 
-### 8. Daemon agent metadata and context warning
+### 8. Daemon agent metadata and context countdown
 
 The LingTai daemon's final model-visible `ToolResultBlock` in each tool batch
 carries the canonical `_meta.agent_meta` sidecar. Its `agent_state` contains only
@@ -324,12 +324,37 @@ that daemon's runtime identity/round counters, current-call and session token
 counters, and provider-context token/window/ratio state. It deliberately omits
 the parent agent's notification and communication state; only the latest
 `agent_meta` snapshot is current and older snapshots are historical traces.
-Once daemon context usage reaches or exceeds 90%, every subsequent daemon round
-carries the exact sentence `context warning, consider compact! see compact.manual for procedures`
-in `agent_state.context.warning`. Use `compact(action="manual")` for the
-read-only procedures and explicit `compact(action="run", _reason="...")` as the
-sole-call reset. The surviving successful reset result is stamped from the fresh
-retained context, so the pre-reset warning is absent when usage falls below 90%.
+
+The daemon-owned runtime state uses provider-reported input tokens when available
+(and the session estimate only when provider usage is unavailable) against the
+resolved context window. On the first round at or above 90%, it starts a fixed
+nine-round countdown and emits visible value `9`. Every subsequent high round
+decrements the visible `agent_state.context.compact_countdown` while its value is
+greater than `1`, exposing values `9` through `1` on the per-round
+`_meta.agent_meta` carrier. The `warning` and `compact_countdown_warning` fields
+carry one self-contained sentence for the current value:
+`Daemon context is at or above 90%. {N} proactive round(s) remain before runtime
+mechanical compact; call compact(action="run", _reason="...") now to compact
+with your own handoff.`
+
+A provider-context drop below 90% clears the countdown and warning sentence; a
+successful proactive compact also clears both from the fresh retained context.
+Value `1` remains visible for one ordinary provider response. When a further high
+response arrives while the visible value is already `1`, the runtime latches
+mechanical compaction due but preserves that value while processing the response.
+If that response did not issue a valid sole-call proactive compact, the runtime
+mechanically compacts before the next provider continuation if the current
+response has tool results to continue. Mechanical compaction retains the rebuilt
+system prompt plus the latest assistant `ToolCallBlock`/tool-result pair, then
+sends a fresh user recovery instruction that says context was compacted and
+requires the daemon to re-read its task, inspect the preserved pair and durable
+run artifacts, verify state, and only then continue. It is not silent
+continuation. Compaction construction/send failures propagate through the
+existing daemon failure path; they are not swallowed.
+
+Provider-specific standalone compaction (including Codex/native-MiMo's
+`context_token_limit` path) remains independent: this countdown is daemon-owned,
+provider-independent safety state and adds no user configuration or flag.
 
 ### 9. Per-task `context_token_limit` is Codex/native-mimo-only and lingtai-backend-only
 
