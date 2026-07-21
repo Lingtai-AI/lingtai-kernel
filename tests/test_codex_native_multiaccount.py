@@ -193,6 +193,59 @@ def test_native_codex_keeps_one_account_sticky_within_context_epoch():
         assert "secret-two.json" not in repr(call)
 
 
+def test_native_codex_rebuild_is_scoped_to_its_chat_context():
+    source = _SequenceSource("one.json", "two.json")
+    responses = _Responses([_success_events, _success_events])
+    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    main = adapter.create_chat("gpt-5.5", "main")
+    other = adapter.create_chat("gpt-5.5", "other")
+
+    main.send("before other rebuild")
+    assert main._client is not other._client
+    assert other.request_history_rebuild() is True
+    main.send("ordinary main request")
+
+    assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
+    assert [call["extra_headers"]["ChatGPT-Account-ID"] for call in responses.calls] == [
+        "acct-one.json",
+        "acct-one.json",
+    ]
+
+
+def test_native_codex_adapter_owner_forces_fresh_shared_interface_context():
+    shared = ChatInterface()
+    shared.add_system("system")
+
+    source_a = _SequenceSource("one.json")
+    responses_a = _Responses([_success_events])
+    adapter_a = _adapter(source_a, _managers("one.json"), responses_a)
+    chat_a = adapter_a.create_chat("gpt-5.5", "system", interface=shared)
+    context_a = shared._lingtai_codex_account_context
+    chat_a.send("from A")
+
+    source_b = _SequenceSource("two.json")
+    responses_b = _Responses([_success_events, _success_events])
+    adapter_b = _adapter(source_b, _managers("two.json"), responses_b)
+    chat_b = adapter_b.create_chat("gpt-5.5", "system", interface=shared)
+    context_b = shared._lingtai_codex_account_context
+    chat_b.send("first from B")
+    chat_b.send("ordinary B request")
+
+    assert context_a is not context_b
+    assert context_a.owner is adapter_a._codex_context_owner
+    assert context_b.owner is adapter_b._codex_context_owner
+    assert chat_a._client is not chat_b._client
+    assert [candidate.auth_ref for candidate in source_a.calls] == ["one.json"]
+    assert [candidate.auth_ref for candidate in source_b.calls] == ["two.json"]
+    assert [call["extra_headers"]["ChatGPT-Account-ID"] for call in responses_a.calls] == [
+        "acct-one.json"
+    ]
+    assert [call["extra_headers"]["ChatGPT-Account-ID"] for call in responses_b.calls] == [
+        "acct-two.json",
+        "acct-two.json",
+    ]
+
+
 def test_native_codex_rebuild_starts_one_fresh_account_epoch():
     source = _SequenceSource("one.json", "two.json")
     responses = _Responses([_success_events, _success_events])
@@ -207,6 +260,27 @@ def test_native_codex_rebuild_starts_one_fresh_account_epoch():
     assert [candidate.auth_ref for candidate in source.calls] == [
         "one.json",
         "two.json",
+    ]
+
+
+def test_native_codex_no_summary_hard_boundary_redraws_once_then_sticks():
+    source = _SequenceSource("one.json", "two.json")
+    responses = _Responses([_success_events, _success_events, _success_events])
+    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    chat = adapter.create_chat("gpt-5.5", "system", context_window=10)
+
+    chat.send("first")
+    chat.send("100% forced rebuild without a summary")
+    chat.send("ordinary request after rebuild")
+
+    assert [candidate.auth_ref for candidate in source.calls] == [
+        "one.json",
+        "two.json",
+    ]
+    assert [call["extra_headers"]["ChatGPT-Account-ID"] for call in responses.calls] == [
+        "acct-one.json",
+        "acct-two.json",
+        "acct-two.json",
     ]
 
 
@@ -273,6 +347,36 @@ def test_native_codex_service_tier_fast_reaches_provider_request():
     chat = adapter.create_chat("gpt-5.5", "system")
     chat.send("hello")
     assert responses.calls[0]["service_tier"] == "priority"
+
+
+def test_native_codex_one_shot_uses_native_request_shape_and_safe_metadata():
+    source = _SequenceSource("one.json")
+    responses = _Responses([_success_events])
+    adapter = _adapter(
+        source,
+        _managers("one.json"),
+        responses,
+        codex_service_tier="priority",
+    )
+
+    result = adapter.generate(
+        "gpt-5.5",
+        "one-shot",
+        temperature=0.2,
+        max_output_tokens=12,
+    )
+    request = responses.calls[0]
+
+    assert result.text == "ok"
+    assert request["service_tier"] == "priority"
+    assert request["store"] is False
+    assert request["temperature"] == 0.2
+    assert request["max_output_tokens"] == 12
+    assert request["extra_headers"]["ChatGPT-Account-ID"] == "acct-one.json"
+    assert request["extra_headers"]["originator"] == "lingtai"
+    assert result.usage.extra["codex_pool_source_index"] == "0"
+    assert result.usage.extra["codex_auth_path_sha8"] == source._candidates[0].auth_path_sha8
+    assert "secret-one.json" not in repr(request)
 
 
 def test_native_codex_usage_limit_marks_account_for_aed_rebuild_without_pool_retry():
