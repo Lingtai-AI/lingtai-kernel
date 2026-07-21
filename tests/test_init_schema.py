@@ -265,6 +265,7 @@ def test_unknown_manifest_soul_field_warns():
         ("codex_auth_path", "/tokens/alice/codex-auth.json"),
         ("codex_auth_pool_path", "/tokens/codex-pool.json"),
         ("codex_base_urls", ["https://codex-a.example.test/v1"]),
+        ("service_tier", "fast"),
     ],
 )
 def test_known_manifest_llm_pass_through_fields_do_not_warn(key, value):

@@ -162,6 +162,8 @@ LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # ``chat_completions``/``responses`` force the respective wire path even
     # for custom base URLs. Scoped to OpenAI-compatible providers.
     "wire_api": str,
+    # Common Codex service tier; the factory validates supported values.
+    "service_tier": str,
 }
 LLM_SPECIAL_KNOWN: set[str] = {"thinking"}
 LLM_PASS_THROUGH_KNOWN: set[str] = {
@@ -172,6 +174,7 @@ LLM_PASS_THROUGH_KNOWN: set[str] = {
     "codex_auth_pool_path",
     "codex_base_urls",
     "default_headers",
+    "service_tier",
     "wire_api",
 }
 LLM_KNOWN: set[str] = (

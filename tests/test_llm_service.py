@@ -65,6 +65,21 @@ def test_build_provider_defaults_propagates_api_compat():
     assert out == {"custom": {"max_rpm": 60, "api_compat": "anthropic"}}
 
 
+def test_build_provider_defaults_propagates_service_tier():
+    """The real manifest path must not silently drop Codex fast mode."""
+    out = build_provider_defaults_from_manifest_llm(
+        {
+            "provider": "codex-pool",
+            "model": "gpt-5.6-sol",
+            "service_tier": "fast",
+        },
+        max_rpm=60,
+    )
+    assert out == {
+        "codex-pool": {"max_rpm": 60, "service_tier": "fast"},
+    }
+
+
 def test_build_provider_defaults_returns_none_when_nothing_set():
     """Preserve historical: empty defaults pass through as None, not {}."""
     out = build_provider_defaults_from_manifest_llm(

@@ -973,8 +973,8 @@ def test_codex_auth_path_passes_through_to_provider_defaults():
     )
 
 
-def test_codex_factory_passes_token_path_when_auth_path_set():
-    """The codex factory wires ``codex_auth_path`` into ``CodexTokenManager``."""
+def test_codex_factory_defers_and_passes_token_path_when_auth_path_set():
+    """An explicit auth path is bound lazily at the first real request draw."""
     from unittest import mock
 
     import lingtai  # noqa: F401
@@ -990,39 +990,57 @@ def test_codex_factory_passes_token_path_when_auth_path_set():
             model="gpt-5.5",
             provider_defaults={"codex": {"codex_auth_path": auth_path}},
         )
-        svc.get_adapter("codex")
+        adapter = svc.get_adapter("codex")
 
-        # The token file path is forwarded verbatim as ``token_path``.
+        # Adapter/chat construction consumes no account draw.  The path reaches
+        # the token manager only when the request boundary selects an account.
+        mgr_cls.assert_not_called()
+        adapter._select_codex_account("gpt-5.5")
         mgr_cls.assert_called_once_with(token_path=auth_path)
 
 
-def test_codex_factory_uses_legacy_default_when_auth_path_absent():
-    """No ``codex_auth_path`` -> no ``token_path`` override (legacy default path)."""
+def test_codex_factory_empty_pool_falls_back_to_legacy_default_lazily():
+    """No auth path and an empty pool bind the legacy default at request time."""
     from unittest import mock
 
     import lingtai  # noqa: F401
+    from lingtai.auth.codex_pool import legacy_codex_token_path
     from lingtai.llm.service import LLMService
 
-    with mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls:
+    with (
+        mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls,
+        mock.patch(
+            "lingtai.auth.codex_account_source.WeightedAccountSource.snapshot",
+            return_value=[],
+        ),
+    ):
         mgr_cls.return_value.get_access_token.return_value = "fake-token"
         mgr_cls.return_value.get_account_id.return_value = None
 
         svc = LLMService(provider="codex", model="gpt-5.5")
-        svc.get_adapter("codex")
+        adapter = svc.get_adapter("codex")
 
-        # Constructed with no token_path so it falls back to the default file.
-        mgr_cls.assert_called_once_with()
+        mgr_cls.assert_not_called()
+        adapter._select_codex_account("gpt-5.5")
+        mgr_cls.assert_called_once_with(token_path=str(legacy_codex_token_path()))
 
 
 def test_codex_factory_treats_blank_auth_path_as_omitted():
-    """Blank/whitespace ``codex_auth_path`` is ignored -> legacy default path."""
+    """Blank auth paths use the same lazy empty-pool legacy fallback."""
     from unittest import mock
 
     import lingtai  # noqa: F401
+    from lingtai.auth.codex_pool import legacy_codex_token_path
     from lingtai.llm.service import LLMService
 
     for blank in ("", "   ", "\t\n"):
-        with mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls:
+        with (
+            mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls,
+            mock.patch(
+                "lingtai.auth.codex_account_source.WeightedAccountSource.snapshot",
+                return_value=[],
+            ),
+        ):
             mgr_cls.return_value.get_access_token.return_value = "fake-token"
             mgr_cls.return_value.get_account_id.return_value = None
 
@@ -1031,10 +1049,11 @@ def test_codex_factory_treats_blank_auth_path_as_omitted():
                 model="gpt-5.5",
                 provider_defaults={"codex": {"codex_auth_path": blank}},
             )
-            svc.get_adapter("codex")
+            adapter = svc.get_adapter("codex")
 
-            # Blank path must not become a token_path override.
-            mgr_cls.assert_called_once_with()
+            mgr_cls.assert_not_called()
+            adapter._select_codex_account("gpt-5.5")
+            mgr_cls.assert_called_once_with(token_path=str(legacy_codex_token_path()))
 
 
 # ---------------------------------------------------------------------------

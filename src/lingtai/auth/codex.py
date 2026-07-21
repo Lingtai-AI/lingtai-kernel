@@ -218,3 +218,55 @@ class CodexTokenManager:
             # Invalidate cache so next _read() picks up the new file.
             self._cache = None
             self._cache_mtime = 0.0
+
+
+# ===========================================================================
+# STRUCTURAL error classification — Codex-owned switch/failover helpers
+# ===========================================================================
+
+# The exact structured provider error code that triggers a request-scoped Codex
+# account switch. Recognized STRUCTURALLY only (never from the message string).
+_USAGE_LIMIT_CODE = "usage_limit_reached"
+
+
+def _structured_status_code(exc: BaseException) -> int | None:
+    """Best-effort STRUCTURAL HTTP status extraction, or ``None``."""
+    for attr in ("status_code", "status"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+    response = getattr(exc, "response", None)
+    if response is not None:
+        value = getattr(response, "status_code", None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def _structured_error_codes(exc: BaseException) -> tuple[str, ...]:
+    """Collect machine error codes from trusted structured locations."""
+    candidates: list[object] = []
+    code_attr = getattr(exc, "code", None)
+    if isinstance(code_attr, str):
+        candidates.append(code_attr)
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            candidates.append(err.get("code"))
+            candidates.append(err.get("type"))
+        candidates.append(body.get("code"))
+    return tuple(c for c in candidates if isinstance(c, str) and c)
+
+
+def _is_usage_limit_reached_error(exc: BaseException) -> bool:
+    """``True`` iff ``exc`` is structurally a ``429`` whose structured
+    error code is exactly ``usage_limit_reached``.
+
+    Both facts are extracted STRUCTURALLY — never from the message string.
+    """
+    if _structured_status_code(exc) != 429:
+        return False
+    return _USAGE_LIMIT_CODE in _structured_error_codes(exc)

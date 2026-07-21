@@ -688,6 +688,20 @@ def _run_loop(agent) -> None:
 
                     err_desc = str(e) or repr(e)
 
+                    if getattr(e, "_lingtai_partial_stream", False):
+                        # Provider output has already reached the human-facing
+                        # stream. Replaying this turn through transient retry or
+                        # AED would duplicate/mix visible content, so terminate
+                        # the turn without mutating or resaving the rolled-back
+                        # provider interface.
+                        agent._log(
+                            "llm_partial_stream_terminal",
+                            error=err_desc[:300],
+                            exception=type(e).__name__,
+                        )
+                        skip_post_turn_save = True
+                        break
+
                     if isinstance(e, WorkerStillRunningError):
                         # Worker future is still alive — ChatInterface is
                         # unsafe to mutate from this thread. Mark it poisoned,

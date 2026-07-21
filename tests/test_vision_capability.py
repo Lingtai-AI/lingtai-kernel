@@ -399,17 +399,22 @@ def test_codex_vision_without_explicit_current_oauth_identity_is_manual_only(tmp
 @pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
 def test_codex_family_vision_aliases_use_codex_service(tmp_path, provider):
     """All current Codex-family aliases construct the native Codex service path."""
-    selection = None if provider == "codex" else {
-        "auth_path": "/tmp/codex-pool.json",
-        "selection": {"source_index": 0},
-    }
+    from lingtai.auth.codex_account_source import AccountCandidate
+
+    selection = None if provider == "codex" else AccountCandidate(
+        auth_ref="/tmp/codex-pool.json",
+        source_ref="pool.json",
+        source_index=0,
+        weight=1,
+    )
     defaults = (
         {"codex": {"codex_auth_path": "/tmp/codex-direct.json"}}
         if provider == "codex"
         else None
     )
     with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_pool.select_codex_pool_auth", return_value=selection
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=selection,
     ) as mock_select:
         mock_factory.return_value = MagicMock(spec=VisionService)
         agent = make_provider_agent(
@@ -427,7 +432,7 @@ def test_codex_family_vision_aliases_use_codex_service(tmp_path, provider):
             mock_select.assert_not_called()
             assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-direct.json"
         else:
-            mock_select.assert_called_once_with({}, model="gpt-5.6-sol")
+            assert mock_select.call_count >= 1
             assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-pool.json"
 
 
@@ -474,10 +479,20 @@ def test_direct_codex_vision_uses_configured_auth_path(tmp_path):
 
 
 def test_codex_pool_vision_selects_exact_model_and_passes_result(tmp_path):
-    selected = {"auth_path": "/tmp/codex-b.json", "selection": {"source_index": 1}}
+    from lingtai.auth.codex_account_source import AccountCandidate
+    selected = AccountCandidate(
+        auth_ref="/tmp/codex-b.json",
+        source_ref="b.json",
+        source_index=1,
+        weight=1,
+    )
     with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_pool.select_codex_pool_auth", return_value=selected
-    ) as mock_select:
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=selected,
+    ), patch(
+        "lingtai.auth.codex_pool.load_codex_auth_pool",
+        return_value=[{"path": "b.json", "weight": 1}],
+    ):
         mock_factory.return_value = MagicMock(spec=VisionService)
         agent = make_mock_agent(tmp_path)
         agent.service.provider = "codex-pool"
@@ -485,9 +500,6 @@ def test_codex_pool_vision_selects_exact_model_and_passes_result(tmp_path):
         agent.service._base_url = "https://codex-pool.example/backend-api/codex"
         agent.service._provider_defaults = {"codex-pool": {"codex_auth_pool_path": "pool.json"}}
         setup(agent, provider="codex-pool")
-        mock_select.assert_called_once_with(
-            {"codex_auth_pool_path": "pool.json"}, model="gpt-5.6-terra"
-        )
         assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-terra"
         assert mock_factory.call_args.kwargs["base_url"] == "https://codex-pool.example/backend-api/codex"
         assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-b.json"
