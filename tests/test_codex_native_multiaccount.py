@@ -159,7 +159,7 @@ def test_native_codex_single_account_uses_normal_chat_path():
     assert "secret-one.json" not in repr(chat.codex_pool_selection)
 
 
-def test_native_codex_selects_fresh_account_on_consecutive_successes_and_keeps_interface_hook():
+def test_native_codex_keeps_one_account_sticky_within_context_epoch():
     source = _SequenceSource("one.json", "two.json")
     responses = _Responses([_success_events, _success_events])
     adapter = _adapter(source, _managers("one.json", "two.json"), responses)
@@ -179,21 +179,89 @@ def test_native_codex_selects_fresh_account_on_consecutive_successes_and_keeps_i
     first_entries = len(interface.entries)
 
     chat.send("two")
-    assert [candidate.auth_ref for candidate in source.calls] == [
-        "one.json",
-        "two.json",
-    ]
-    assert ws_resets == ["codex_account_switch"]
+    assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
+    assert ws_resets == []
 
     assert len(responses.calls) == 2
     assert responses.calls[0]["extra_headers"]["ChatGPT-Account-ID"] == "acct-one.json"
-    assert responses.calls[1]["extra_headers"]["ChatGPT-Account-ID"] == "acct-two.json"
+    assert responses.calls[1]["extra_headers"]["ChatGPT-Account-ID"] == "acct-one.json"
     assert len(hook_calls) == 2  # exactly once per actual provider request
     assert chat.interface is interface
     assert len(interface.entries) > first_entries
     for call in responses.calls:
         assert "secret-one.json" not in repr(call)
         assert "secret-two.json" not in repr(call)
+
+
+def test_native_codex_rebuild_starts_one_fresh_account_epoch():
+    source = _SequenceSource("one.json", "two.json")
+    responses = _Responses([_success_events, _success_events])
+    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    chat.send("before rebuild")
+    assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
+
+    assert chat.request_history_rebuild() is True
+    chat.send("after rebuild")
+    assert [candidate.auth_ref for candidate in source.calls] == [
+        "one.json",
+        "two.json",
+    ]
+
+
+def test_native_codex_technical_epoch_reset_keeps_account_sticky():
+    source = _SequenceSource("one.json", "two.json")
+    responses = _Responses([_success_events, _success_events])
+    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    chat.send("before technical reset")
+    chat._reset_ws_epoch("encrypted_reasoning_self_heal")
+    chat.send("after technical reset")
+
+    assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
+
+
+def test_native_codex_molt_starts_one_fresh_account_epoch():
+    source = _SequenceSource("one.json", "two.json")
+    responses = _Responses([_success_events, _success_events])
+    adapter = _adapter(
+        source,
+        _managers("one.json", "two.json"),
+        responses,
+        codex_molt_count=0,
+    )
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    chat.send("before molt")
+    adapter._codex_molt_count_override = 1
+    chat.send("after molt")
+
+    assert [candidate.auth_ref for candidate in source.calls] == [
+        "one.json",
+        "two.json",
+    ]
+
+
+def test_native_codex_refreshes_bound_quota_without_redrawing(monkeypatch):
+    source = _SequenceSource("one.json", "two.json")
+    responses = _Responses([_success_events, _success_events])
+    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    quota_reads = iter([70.0, 30.0, None])
+    monkeypatch.setattr(
+        "lingtai.llm.openai.codex_quota.read_remaining_percent",
+        lambda _auth_ref: next(quota_reads),
+    )
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    chat.send("first")
+    assert chat.codex_pool_selection["quota_left"] == 70.0
+    chat.send("second")
+
+    assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
+    assert "quota_left" not in chat.codex_pool_selection
+    assert chat.codex_pool_selection.get("quota_left") != 0
 
 
 def test_native_codex_service_tier_fast_reaches_provider_request():
