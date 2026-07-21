@@ -119,7 +119,24 @@ def _kill_process_group(proc, *, term_timeout: float = 5.0, kill_timeout: float 
 # Agents may request a smaller per-batch value via daemon(max_turns=...), but
 # larger values are capped here.
 DEFAULT_MAX_TURNS = 1000
-DAEMON_CONTEXT_WARNING = "context warning, consider compact! see compact.manual for procedures"
+DAEMON_CONTEXT_COUNTDOWN_ROUNDS = 9
+DAEMON_CONTEXT_WARNING = (
+    "Daemon context is at or above 90%. {remaining} proactive round(s) remain "
+    "before runtime mechanical compact; call compact(action=\"run\", "
+    "_reason=\"...\") now to compact with your own handoff."
+)
+# Kept as a named alias for the visible countdown carrier; both fields carry
+# the same self-contained per-round warning sentence.
+DAEMON_CONTEXT_COUNTDOWN_WARNING = DAEMON_CONTEXT_WARNING
+DAEMON_MECHANICAL_COMPACT_RECOVERY = (
+    "The runtime mechanically compacted your provider context after the 90% "
+    "nine-round countdown expired. Recovery is required. Before continuing, "
+    "recover deliberately: "
+    "re-read the complete task above; inspect the preserved latest tool-call "
+    "and tool-result pair and the durable run state/history/event paths; then "
+    "resume from that verified state. Do not assume erased context or repeat "
+    "side effects without verification."
+)
 _DAEMON_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 
 
@@ -185,6 +202,8 @@ class _DaemonMetaState:
         self.total_thinking_tokens = 0
         self.total_cached_tokens = 0
         self.warning_active = False
+        self.compact_countdown: int | None = None
+        self.compact_due = False
 
     @staticmethod
     def _count(value) -> int:
@@ -206,10 +225,25 @@ class _DaemonMetaState:
         if window > 0:
             self.context_window = window
         context_tokens = self._context_tokens(session)
-        self.warning_active = (
+        context_high = (
             self.context_window > 0
             and context_tokens * 10 >= self.context_window * 9
         )
+        self.warning_active = context_high
+        if context_high:
+            if self.compact_countdown is None:
+                self.compact_countdown = DAEMON_CONTEXT_COUNTDOWN_ROUNDS
+            elif not self.compact_due:
+                if self.compact_countdown > 1:
+                    self.compact_countdown -= 1
+                else:
+                    # Keep the final warning visible for the response that sees
+                    # it.  The following high response is the force boundary,
+                    # giving that response one ordinary chance to compact.
+                    self.compact_due = True
+        else:
+            self.compact_countdown = None
+            self.compact_due = False
 
     def note_compact_reset(self, session) -> None:
         """Project the surviving compact result from the fresh context."""
@@ -221,6 +255,8 @@ class _DaemonMetaState:
         if window > 0:
             self.context_window = window
         self.warning_active = False
+        self.compact_countdown = None
+        self.compact_due = False
 
     def note_tool_batch(self, tool_calls) -> None:
         self.tool_calls_this_round = len(tool_calls or [])
@@ -256,7 +292,13 @@ class _DaemonMetaState:
             context["context_window"] = self.context_window
             context["context_usage"] = round(context_tokens / self.context_window, 5)
         if self.warning_active:
-            context["warning"] = DAEMON_CONTEXT_WARNING
+            remaining = self.compact_countdown or DAEMON_CONTEXT_COUNTDOWN_ROUNDS
+            context["warning"] = DAEMON_CONTEXT_WARNING.format(remaining=remaining)
+        if self.compact_countdown is not None:
+            context["compact_countdown"] = self.compact_countdown
+            context["compact_countdown_warning"] = DAEMON_CONTEXT_COUNTDOWN_WARNING.format(
+                remaining=self.compact_countdown,
+            )
 
         current_call = {
             "input": self.last_input_tokens,
@@ -300,9 +342,11 @@ class _DaemonMetaState:
 
 _DAEMON_COMPACT_MANUAL_PROCEDURES = (
     "Read-only manual: this action never compacts or changes daemon state.",
-    f"When context usage reaches 90% or more, the daemon receives: {DAEMON_CONTEXT_WARNING}",
+    f"When context usage reaches 90% or more, the daemon receives: {DAEMON_CONTEXT_WARNING.format(remaining=DAEMON_CONTEXT_COUNTDOWN_ROUNDS)}",
+    f"A deterministic {DAEMON_CONTEXT_COUNTDOWN_ROUNDS}-round countdown is visible in _meta.agent_meta.agent_state.context.compact_countdown; each value carries the same self-contained warning sentence.",
     "Prepare a complete self-contained handoff.",
     "Call compact with action='run' as the sole tool call in its assistant batch; include only action and _reason, and make _reason the handoff and resume instruction.",
+    "If the countdown expires first, the runtime mechanically compacts before the next provider call and sends an explicit recovery instruction; re-read the task, inspect the preserved latest tool-call/result pair and durable run artifacts, verify state, then continue.",
     "After the successful non-terminal reset, resume from that surviving call/result pair; the run, state, history, and event paths in the result remain available.",
 )
 
@@ -2833,6 +2877,62 @@ class DaemonManager:
                 usage_extra=getattr(u, "extra", None),
             )
 
+        def _mechanically_compact(tool_results=None):
+            """Reset expired daemon context without hiding the recovery step."""
+            nonlocal session
+            from lingtai.kernel.llm.interface import ChatInterface
+
+            # Close the current assistant/tool-result pair before selecting the
+            # retained tail.  This pair is the durable evidence the fresh model
+            # context is allowed to rely on after the reset.
+            if tool_results:
+                session.interface.add_tool_results(tool_results)
+                run_dir.record_user_send(
+                    json.dumps([str(r) for r in tool_results], ensure_ascii=False),
+                    kind="tool_results",
+                )
+            history = session.interface.to_dict()
+            system_entries = [entry for entry in history if entry.get("role") == "system"]
+            pair = None
+            for index in range(len(history) - 2, -1, -1):
+                assistant_entry = history[index]
+                result_entry = history[index + 1] if index + 1 < len(history) else None
+                if (
+                    assistant_entry.get("role") == "assistant"
+                    and result_entry
+                    and result_entry.get("role") == "user"
+                    and result_entry.get("content")
+                    and all(block.get("type") == "tool_result" for block in result_entry["content"])
+                ):
+                    pair = [assistant_entry, result_entry]
+                    break
+            if pair is None or not system_entries:
+                raise RuntimeError(
+                    "mechanical compact requires the latest assistant/tool-result pair"
+                )
+            retained = ChatInterface.from_dict(
+                [system_entries[-1], *pair]
+            )
+            session = service.create_session(
+                system_prompt=system_prompt,
+                tools=schemas or None,
+                model=effective_model,
+                thinking="default",
+                tracked=False,
+                interface=retained,
+            )
+            daemon_meta_state.note_compact_reset(session)
+            recovery = (
+                f"{DAEMON_MECHANICAL_COMPACT_RECOVERY} Durable artifacts: "
+                f"state={run_dir.daemon_json_path}; history={run_dir.chat_path}; "
+                f"events={run_dir.events_path}."
+            )
+            run_dir.record_user_send(recovery, kind="mechanical_compact_recovery")
+            response = session.send(recovery)
+            daemon_meta_state.note_response(response, session)
+            _accum(response)
+            return response
+
         try:
             kickoff = prompt or "Begin the assigned daemon task."
             run_dir.record_user_send(kickoff, kind="kickoff")
@@ -2845,9 +2945,12 @@ class DaemonManager:
             if cancel_event.is_set():
                 return _mark_cancelled_or_timeout(run_dir, timeout_event)
             turns = 0
+            recovery_tool_batch_pending = False
             run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
 
-            while response.tool_calls and turns < effective_max_turns:
+            while response.tool_calls and (
+                turns < effective_max_turns or recovery_tool_batch_pending
+            ):
                 if cancel_event.is_set():
                     return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
@@ -2942,22 +3045,45 @@ class DaemonManager:
                     run_dir.mark_done(text)
                     return text
 
-                # Tool results are written to chat_history before sending.
-                run_dir.record_user_send(
-                    json.dumps([str(r) for r in tool_results], ensure_ascii=False),
-                    kind="tool_results",
-                )
-                response = session.send(tool_results)
-                daemon_meta_state.note_response(response, session)
-                _accum(response)
+                mechanically_compacted = False
+                if daemon_meta_state.compact_due:
+                    if cancel_event.is_set():
+                        return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                    response = _mechanically_compact(tool_results)
+                    mechanically_compacted = True
+                if not mechanically_compacted:
+                    # Tool results are written to chat_history before sending.
+                    run_dir.record_user_send(
+                        json.dumps([str(r) for r in tool_results], ensure_ascii=False),
+                        kind="tool_results",
+                    )
+                    response = session.send(tool_results)
+                    daemon_meta_state.note_response(response, session)
+                    _accum(response)
                 turns += 1
                 run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
+                recovery_tool_batch_pending = mechanically_compacted and bool(
+                    response.tool_calls
+                )
 
                 # Inject follow-up as a separate user message — only safe when
                 # the response is text-only. If it carries new tool_calls, the
                 # canonical interface tail is assistant[tool_calls] and a user
                 # message here would violate the pairing invariant.
                 if not response.tool_calls:
+                    if not mechanically_compacted and daemon_meta_state.compact_due:
+                        if cancel_event.is_set():
+                            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                        response = _mechanically_compact()
+                        turns += 1
+                        run_dir.bump_turn(
+                            turn=turns + 1, response_text=response.text or ""
+                        )
+                        recovery_tool_batch_pending = bool(response.tool_calls)
+                        if response.tool_calls:
+                            # Recovery tool calls must complete before the
+                            # buffered follow-up is drained or sent.
+                            continue
                     followup = self._drain_followup(em_id)
                     if followup:
                         run_dir.record_user_send(followup, kind="followup")
@@ -2967,6 +3093,10 @@ class DaemonManager:
                         turns += 1
                         run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
 
+            if response.tool_calls and turns >= effective_max_turns:
+                raise RuntimeError(
+                    "max_turns exhausted before the daemon completed its tool chain"
+                )
             text = response.text or "[no output]"
             # The final terminal transition is serialized with cancellation:
             # a reclaim/deadline racing the last provider response wins over a
