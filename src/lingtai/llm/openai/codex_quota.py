@@ -9,6 +9,7 @@ response, send the ``initialized`` notification, send
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import os
@@ -19,6 +20,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -31,31 +33,113 @@ class _Unavailable(Exception):
     """Internal fail-soft signal; never escapes :func:`read_remaining_percent`."""
 
 
-def _prepare_temp_codex_home(auth_path: Path) -> tuple[Path, tempfile.TemporaryDirectory]:
-    """Build a process-owned, mode-0700 temp ``$CODEX_HOME`` with a 0600 auth copy.
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    """Decode an already-local JWT payload without verifying or logging it."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+    except (IndexError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise _Unavailable("auth_access_token_invalid") from exc
+    if not isinstance(decoded, dict):
+        raise _Unavailable("auth_access_token_invalid")
+    return decoded
+
+
+def _native_codex_auth_payload(auth_path: Path) -> dict[str, Any]:
+    """Translate LingTai's flat OAuth file into Codex CLI's native auth envelope."""
+    try:
+        source = json.loads(auth_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise _Unavailable(f"auth_read_failed:{type(exc).__name__}") from exc
+    if not isinstance(source, dict):
+        raise _Unavailable("auth_malformed")
+
+    access_token = source.get("access_token")
+    refresh_token = source.get("refresh_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise _Unavailable("auth_access_token_missing")
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise _Unavailable("auth_refresh_token_missing")
+
+    access_claims = _decode_jwt_payload(access_token)
+    openai_auth = access_claims.get("https://api.openai.com/auth")
+    claimed_account_id = (
+        openai_auth.get("chatgpt_account_id") if isinstance(openai_auth, dict) else None
+    )
+    account_id = (
+        source.get("chatgpt_account_id")
+        or source.get("account_id")
+        or claimed_account_id
+    )
+    if not isinstance(account_id, str) or not account_id:
+        raise _Unavailable("auth_account_id_missing")
+
+    issued_at = access_claims.get("iat")
+    try:
+        last_refresh = datetime.fromtimestamp(
+            float(issued_at), timezone.utc
+        ).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        last_refresh = datetime.now(timezone.utc).isoformat()
+
+    id_token = source.get("id_token")
+    if not isinstance(id_token, str) or not id_token:
+        # LingTai's flat OAuth files historically omitted the separate ID token.
+        # Codex CLI requires a JWT-shaped value to enter its authenticated state;
+        # for this read-only call, the access JWT carries the same account claim.
+        id_token = access_token
+
+    return {
+        "OPENAI_API_KEY": None,
+        "auth_mode": "chatgpt",
+        "last_refresh": last_refresh,
+        "tokens": {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "account_id": account_id,
+            "id_token": id_token,
+        },
+    }
+
+
+def _prepare_temp_codex_home(
+    auth_path: Path,
+) -> tuple[Path, tempfile.TemporaryDirectory]:
+    """Build a mode-0700 temp ``$CODEX_HOME`` with native mode-0600 CLI auth.
 
     Never mutates the real auth file. Raises :class:`_Unavailable` if the
-    source auth file cannot be read/copied.
+    source auth file cannot be read or translated.
     """
     tmpdir = tempfile.TemporaryDirectory(prefix="lingtai-codex-quota-")
     try:
         home = Path(tmpdir.name)
         os.chmod(home, stat.S_IRWXU)
         dest = home / "auth.json"
-        shutil.copyfile(str(auth_path), str(dest))
-        os.chmod(dest, stat.S_IRUSR | stat.S_IWUSR)
+        native_auth = _native_codex_auth_payload(auth_path)
+        fd = os.open(
+            dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IRUSR | stat.S_IWUSR
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(native_auth, handle, separators=(",", ":"))
         return home, tmpdir
-    except OSError as exc:
+    except _Unavailable:
         tmpdir.cleanup()
-        raise _Unavailable(f"auth_copy_failed:{type(exc).__name__}") from exc
+        raise
+    except (OSError, TypeError, ValueError) as exc:
+        tmpdir.cleanup()
+        raise _Unavailable(f"auth_materialization_failed:{type(exc).__name__}") from exc
 
 
-def _stdout_reader_thread(proc: subprocess.Popen, line_queue: "queue.Queue[str | None]") -> None:
+def _stdout_reader_thread(
+    proc: subprocess.Popen, line_queue: "queue.Queue[str | None]"
+) -> None:
     """Push each stdout line onto ``line_queue`` from a daemon thread; ``None`` marks EOF.
 
     Keeps the blocking ``readline()`` off the caller's bounded read loop, so a
     hung/silent child can never block past the read deadline.
     """
+
     def _run() -> None:
         try:
             if proc.stdout is not None:
@@ -146,14 +230,23 @@ def _run_app_server_read(codex_home: Path, timeout_seconds: float) -> dict[str, 
     _stdout_reader_thread(proc, line_queue)
     try:
         assert proc.stdin is not None
-        proc.stdin.write(json.dumps({
-            "id": 1,
-            "method": "initialize",
-            "params": {"clientInfo": {"name": "lingtai-kernel", "version": "1.0"}},
-        }) + "\n")
+        proc.stdin.write(
+            json.dumps(
+                {
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "clientInfo": {"name": "lingtai-kernel", "version": "1.0"}
+                    },
+                }
+            )
+            + "\n"
+        )
         proc.stdin.flush()
 
-        init_response = _read_line_until(line_queue, lambda o: o.get("id") == 1, deadline)
+        init_response = _read_line_until(
+            line_queue, lambda o: o.get("id") == 1, deadline
+        )
         if init_response is None:
             raise _Unavailable("initialize_timeout_or_eof")
         if "error" in init_response:
@@ -162,10 +255,15 @@ def _run_app_server_read(codex_home: Path, timeout_seconds: float) -> dict[str, 
         proc.stdin.write(json.dumps({"method": "initialized"}) + "\n")
         proc.stdin.flush()
 
-        proc.stdin.write(json.dumps({"id": 2, "method": "account/rateLimits/read", "params": None}) + "\n")
+        proc.stdin.write(
+            json.dumps({"id": 2, "method": "account/rateLimits/read", "params": None})
+            + "\n"
+        )
         proc.stdin.flush()
 
-        read_response = _read_line_until(line_queue, lambda o: o.get("id") == 2, deadline)
+        read_response = _read_line_until(
+            line_queue, lambda o: o.get("id") == 2, deadline
+        )
         if read_response is None:
             raise _Unavailable("read_timeout_or_eof")
         if "error" in read_response:
@@ -204,8 +302,9 @@ def read_remaining_percent(auth_path: str | Path) -> float | None:
     """Return the main Codex rate-limit window's remaining percent for ``auth_path``.
 
     Spawns a throwaway ``codex app-server`` process with ``$CODEX_HOME``
-    pointed at a process-owned mode-0700 temp dir holding a mode-0600 copy of
-    ``auth_path`` (the real auth file is never written to). Returns ``None``
+    pointed at a process-owned mode-0700 temp dir holding a mode-0600 native
+    Codex CLI auth envelope translated from ``auth_path`` (the real auth file
+    is never written to). Returns ``None``
     for a query failure or a malformed/non-finite/missing field — never
     raises, never logs token/auth contents or raw paths.
     """
