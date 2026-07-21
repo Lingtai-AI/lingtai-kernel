@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from . import updates as tg_updates
+
 logger = logging.getLogger(__name__)
 
 # httpx is lazy-imported to keep the module importable without the optional dep.
@@ -291,6 +293,17 @@ class TelegramAccount:
                     json={
                         "offset": self._last_update_id + 1,
                         "timeout": 30,
+                        # Subscribe to every catalogued Update branch at the
+                        # acquisition boundary. Bot API semantics: an omitted
+                        # allowed_updates reuses the previous server-side
+                        # setting, and the default set excludes branches like
+                        # chat_member / message_reaction / message_reaction_count
+                        # — so without this explicit list those audited
+                        # branches would never reach the lossless envelope.
+                        # Unknown *future* branches are still preserved when
+                        # delivered (open fallback); Telegram only sends
+                        # branches it knows this list requested.
+                        "allowed_updates": list(tg_updates.KNOWN_UPDATE_BRANCHES),
                     },
                 )
                 for update in updates:
@@ -312,10 +325,7 @@ class TelegramAccount:
             self._last_update_id = update_id
             self._save_state()
 
-        # Determine the user who triggered this update
-        user_id = None
         if "message" in update:
-            user_id = update["message"].get("from", {}).get("id")
             # A plain message is a new bottom message in the chat; record it so a
             # resident Task Card sent earlier is now known to be superseded. Done
             # before allow-list filtering because the message exists in the chat
@@ -326,7 +336,6 @@ class TelegramAccount:
             self._note_chat_message_id(
                 msg.get("chat", {}).get("id"), msg.get("message_id"))
         elif "callback_query" in update:
-            user_id = update["callback_query"].get("from", {}).get("id")
             # Auto-answer callback query to dismiss spinner
             cq_id = update["callback_query"].get("id")
             if cq_id:
@@ -334,11 +343,14 @@ class TelegramAccount:
                     self._request("answerCallbackQuery", json={"callback_query_id": cq_id})
                 except Exception:
                     pass
-        elif "edited_message" in update:
-            user_id = update["edited_message"].get("from", {}).get("id")
 
-        # Filter by allowed users
-        if self._allowed_users is not None and user_id not in self._allowed_users:
+        # Admission policy: every Update branch resolves an explicit actor
+        # (see lingtai.mcp_servers.telegram.updates). A resolvable triggering
+        # user is enforced against allowed_users; chat-actor / actorless /
+        # unknown-branch events are admitted under the bot-placement trust
+        # boundary with their uncertainty recorded on the envelope.
+        actor = tg_updates.resolve_update_actor(update)
+        if not tg_updates.is_admitted(actor, self._allowed_users):
             return
 
         # Intercept slash commands before they reach the agent
@@ -350,12 +362,16 @@ class TelegramAccount:
 
     def _handle_slash_command(self, update: dict) -> bool:
         """Handle slash commands locally (no LLM call). Returns True if handled."""
-        # Extract text from message
+        # Extract text from any non-edit human Message-typed branch (message,
+        # business_message, guest_message) via the shared classification, so
+        # local commands stay local on every admitted human-content branch.
+        # Runs strictly after the allowlist gate in _process_update.
         text = ""
         chat_id = None
-        if "message" in update:
-            text = (update["message"].get("text") or "").strip()
-            chat_id = update["message"]["chat"]["id"]
+        branch, branch_obj = tg_updates.classify_update(update)
+        if branch in tg_updates.LOCAL_COMMAND_BRANCHES and isinstance(branch_obj, dict):
+            text = (branch_obj.get("text") or "").strip()
+            chat_id = (branch_obj.get("chat") or {}).get("id")
         elif "callback_query" in update:
             text = (update["callback_query"].get("data") or "").strip()
             cq_msg = update["callback_query"].get("message", {})

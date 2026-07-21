@@ -27,6 +27,7 @@ import logging
 import threading
 
 from .. import _skill
+from . import updates as tg_updates
 from .task_card.resident import TaskCardResident
 
 if TYPE_CHECKING:
@@ -63,6 +64,13 @@ _COMPOUND_ID_RE = re.compile(r"#([^\s:#]+:-?\d+:\d+)\b")
 _CONVERSATION_PREVIEW_MESSAGES = 20
 # Keep 20 structured Telegram messages below the MCP inbox structured metadata cap.
 _STRUCTURED_MESSAGE_TEXT_CAP = 500
+# Max serialized chars for a full raw envelope attached to a structured
+# message (current/referenced only — older window entries carry a compact
+# telegram_ref). Leaves headroom under the 20k LICC structured-family cap so
+# attaching the envelope cannot knock out the whole recent_messages family.
+# Oversize envelopes degrade to an exact recoverable reference (event id +
+# read instructions); the durable inbox record always keeps the full raw.
+_STRUCTURED_ENVELOPE_JSON_CAP = 12_000
 _DOCUMENT_DOWNLOAD_REASON_CAP = 200
 _TASK_CARD_BACKEND_REASON_CAP = 200
 _TELEGRAM_API_ERROR_PREFIX = "Telegram API error: "
@@ -191,6 +199,35 @@ def _looks_like_compound_id(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _mirror_identity_account(value: str) -> str | None:
+    """Read-state-only identity validator for notification-mirror clearing.
+
+    Accepts a normal numeric Telegram compound ID ``account:chat:message`` or
+    exactly the reserved synthetic events-bucket form
+    ``account:updates:<update_id>`` and returns the account segment needed to
+    look up ``read.json``; returns ``None`` for malformed/arbitrary strings.
+    Deliberately separate from the strict ``_parse_compound_id``, which keeps
+    rejecting the reserved bucket for reply/edit/delete/outbound targeting —
+    clearing a mirror after a documented read is read-state bookkeeping, not
+    an outbound operation.
+    """
+    if not isinstance(value, str):
+        return None
+    parts = value.split(":")
+    if len(parts) != 3 or not parts[0]:
+        return None
+    if parts[1] != tg_updates.SYNTHETIC_EVENTS_CHAT_ID:
+        try:
+            int(parts[1])
+        except ValueError:
+            return None
+    try:
+        int(parts[2])
+    except ValueError:
+        return None
+    return parts[0]
 
 
 # Emoji reactions for different states (Bot API 7.0+)
@@ -345,8 +382,20 @@ SCHEMA = {
             "description": "Bot account alias (optional — defaults to first configured account)",
         },
         "chat_id": {
-            "type": "integer",
-            "description": "Telegram chat ID",
+            # Integer Telegram chat ID, or exactly the one reserved synthetic
+            # events-bucket identifier for read/search recovery of non-chat
+            # updates. Arbitrary strings remain schema-invalid.
+            "anyOf": [
+                {"type": "integer"},
+                {"type": "string", "enum": [tg_updates.SYNTHETIC_EVENTS_CHAT_ID]},
+            ],
+            "description": (
+                "Telegram chat ID (integer). read/search also accept the "
+                f"reserved '{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}' bucket, "
+                "which holds non-chat update events (reactions, polls, "
+                "member/boost/business events, inline-only callbacks, unknown "
+                "branches); send requires a real numeric chat ID."
+            ),
         },
         "text": {
             "type": "string",
@@ -574,6 +623,11 @@ class TelegramManager:
         parts = compound_id.split(":")
         if len(parts) != 3:
             raise ValueError(f"Invalid message ID format: {compound_id}")
+        if parts[1] == tg_updates.SYNTHETIC_EVENTS_CHAT_ID:
+            raise ValueError(
+                f"{compound_id!r} is a synthetic events-bucket record; it has "
+                "no real chat to reply/edit/delete into (read/search-only)"
+            )
         return parts[0], int(parts[1]), int(parts[2])
 
     # ------------------------------------------------------------------
@@ -647,6 +701,24 @@ class TelegramManager:
         chat_id = None
         tg_message_id = None
 
+        # Classify the update once. The raw envelope built here is the
+        # authoritative lossless record for the whole inbound path: it rides
+        # on the persisted payload, the structured persistent lane, and the
+        # read/search projections. The normalized keys below stay the
+        # backward-compatible concise view.
+        branch, branch_obj = tg_updates.classify_update(update)
+        if branch is None:
+            try:
+                msg_dir.rmdir()
+            except OSError:
+                pass
+            return  # nothing but an update_id — no branch object to record
+        actor = tg_updates.resolve_update_actor(update)
+        envelope = tg_updates.build_envelope(
+            account_alias, update, branch=branch, actor=actor,
+        )
+        persist_dir = msg_dir
+
         # Extract message data based on update type
         if "message" in update:
             tg_msg = update["message"]
@@ -714,6 +786,22 @@ class TelegramManager:
             chat_id = chat.get("id", 0)
             tg_message_id = tg_msg.get("message_id", 0)
             compound_id = f"{account_alias}:{chat_id}:{tg_message_id}"
+            if not tg_msg:
+                # Inline-mode callback (inline_message_id only, no chat
+                # message): give it a real discoverable identity in the
+                # synthetic events bucket instead of the degenerate
+                # "<alias>:0:0". Full seven-field CallbackQuery is in the
+                # envelope either way.
+                compound_id = (
+                    f"{account_alias}:{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}:"
+                    f"{update.get('update_id')}"
+                )
+                chat = {
+                    "id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
+                    "type": "synthetic",
+                    "synthetic": True,
+                }
+                chat_id = None
             payload = {
                 "id": compound_id,
                 "from": sender,
@@ -730,55 +818,168 @@ class TelegramManager:
             if chat_id and account:
                 _typing_manager.start_typing(account, chat_id)
 
-        elif "edited_message" in update:
-            tg_msg = update["edited_message"]
-            compound_id = f"{account_alias}:{tg_msg['chat']['id']}:{tg_msg['message_id']}"
-            sender = tg_msg.get("from", {})
+        elif branch in tg_updates.EDIT_BRANCHES:
+            tg_msg = branch_obj if isinstance(branch_obj, dict) else {}
+            chat = tg_msg.get("chat", {}) or {}
+            compound_id = f"{account_alias}:{chat.get('id')}:{tg_msg.get('message_id')}"
+            sender = tg_msg.get("from", {}) or {}
+            username = sender.get("username") or sender.get("first_name") or "unknown"
+            edited_text = tg_msg.get("text") or tg_msg.get("caption") or ""
+            edit_date_iso = datetime.fromtimestamp(
+                tg_msg.get("edit_date", tg_msg.get("date", 0)), tz=timezone.utc,
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            existing: dict | None = None
+            existing_dir = self._find_inbox_by_compound_id(account_alias, compound_id)
+            if existing_dir is not None:
+                try:
+                    existing = json.loads(
+                        (existing_dir / "message.json").read_text(encoding="utf-8"),
+                    )
+                except (json.JSONDecodeError, OSError):
+                    existing = None
+
+            if existing is not None:
+                # Merge the edit into the original record: the normalized
+                # text/date track the latest version (legacy behavior) while
+                # previously stored media/reply/callback context is preserved
+                # and the raw edit event is appended to the original
+                # envelope's append-only history — the original raw update is
+                # never destroyed by an edit.
+                payload = existing
+                payload.pop("_dir", None)
+                payload.pop("_folder", None)
+                payload["text"] = edited_text
+                payload["date"] = edit_date_iso
+                env = payload.get("telegram")
+                if isinstance(env, dict):
+                    env.setdefault("edits", []).append({
+                        "event_id": envelope["event_id"],
+                        "update_id": envelope["update_id"],
+                        "branch": branch,
+                        "update": envelope["update"],
+                    })
+                    # The merged record's last-applied inbound event is now
+                    # this edit: advance the additive current identity so a
+                    # warm persistent lane (original already delivered)
+                    # re-delivers the record with its raw edit evidence. The
+                    # immutable root event_id stays untouched.
+                    env["current_event_id"] = envelope["event_id"]
+                else:
+                    # Original stored before envelope support — this edit's
+                    # own envelope becomes the record's root; envelope.branch
+                    # says it is an edit event.
+                    payload["telegram"] = envelope
+                persist_dir = existing_dir
+                try:
+                    msg_dir.rmdir()
+                except OSError as exc:
+                    log.debug(
+                        "failed to remove unused %s dir %s: %s", branch, msg_dir, exc,
+                    )
+            else:
+                # Unmatched edit: keep the event visible as its own record
+                # instead of silently dropping it (still no wake).
+                log.info(
+                    "telegram unmatched %s account=%s id=%s; recording standalone edit record",
+                    branch, account_alias, compound_id,
+                )
+                payload = {
+                    "id": compound_id,
+                    "from": sender,
+                    "chat": chat,
+                    "date": edit_date_iso,
+                    "text": edited_text,
+                    "media": None,
+                    "reply_to_message_id": None,
+                    "callback_query": None,
+                    "unmatched_edit": True,
+                }
+            if branch != "edited_message":
+                payload["update_type"] = branch
+        elif branch in tg_updates.MESSAGE_TYPED_BRANCHES:
+            # Non-edit Message-typed branches beyond plain "message":
+            # channel_post, business_message, guest_message. Normalized like a
+            # message (real chat/message identity, media download convenience)
+            # with the branch recorded in update_type.
+            tg_msg = branch_obj if isinstance(branch_obj, dict) else {}
+            chat = tg_msg.get("chat", {}) or {}
+            chat_id = chat.get("id")
+            tg_message_id = tg_msg.get("message_id")
+            compound_id = f"{account_alias}:{chat_id}:{tg_message_id}"
+            sender = tg_msg.get("from", {}) or {}
             payload = {
                 "id": compound_id,
                 "from": sender,
-                "chat": tg_msg.get("chat", {}),
+                "chat": chat,
                 "date": datetime.fromtimestamp(
-                    tg_msg.get("edit_date", tg_msg.get("date", 0)), tz=timezone.utc,
+                    tg_msg.get("date", 0), tz=timezone.utc,
                 ).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "text": tg_msg.get("text") or tg_msg.get("caption") or "",
                 "media": None,
                 "reply_to_message_id": None,
                 "callback_query": None,
+                "update_type": branch,
             }
-            username = sender.get("username") or sender.get("first_name", "unknown")
-
-            # Update existing inbox entry in-place if found
-            existing_dir = self._find_inbox_by_compound_id(account_alias, compound_id)
-            if existing_dir is not None:
-                (existing_dir / "message.json").write_text(
-                    json.dumps(payload, indent=2, default=str), encoding="utf-8",
-                )
-                # Clean up the unused new dir
-                msg_dir.rmdir()
-            else:
-                log.info(
-                    "telegram unmatched edited_message account=%s id=%s; skipping orphan inbox write",
-                    account_alias,
-                    compound_id,
-                )
-                try:
-                    msg_dir.rmdir()
-                except OSError as exc:
-                    log.debug(
-                        "failed to remove unused edited_message dir %s: %s",
-                        msg_dir,
-                        exc,
-                    )
-                return
-        else:
-            return  # unsupported update type
-
-        # Persist (for message and callback_query types)
-        if "edited_message" not in update:
-            (msg_dir / "message.json").write_text(
-                json.dumps(payload, indent=2, default=str), encoding="utf-8",
+            if tg_msg.get("reply_to_message"):
+                payload["reply_to_message_id"] = tg_msg["reply_to_message"]["message_id"]
+            self._download_media(account_alias, tg_msg, msg_dir, payload)
+            username = (
+                sender.get("username") or sender.get("first_name")
+                or chat.get("title") or f"telegram:{branch}"
             )
+        else:
+            # Every other current branch (reactions, polls, member/boost/
+            # business/payment events, …) plus unknown future branches: the
+            # open fallback. The complete raw update is the envelope; the
+            # normalized view is a synthetic events-bucket record, explicitly
+            # flagged so derived routing is never mistaken for Telegram data.
+            obj = branch_obj if isinstance(branch_obj, dict) else {}
+            sender = {}
+            for key in ("from", "user"):
+                candidate = obj.get(key)
+                if isinstance(candidate, dict):
+                    sender = candidate
+                    break
+            date_raw = obj.get("date")
+            if isinstance(date_raw, (int, float)) and not isinstance(date_raw, bool):
+                date_iso = datetime.fromtimestamp(
+                    date_raw, tz=timezone.utc,
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            else:
+                date_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            compound_id = (
+                f"{account_alias}:{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}:"
+                f"{update.get('update_id')}"
+            )
+            payload = {
+                "id": compound_id,
+                "from": sender,
+                "chat": {
+                    "id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
+                    "type": "synthetic",
+                    "synthetic": True,
+                },
+                "date": date_iso,
+                "text": "",
+                "media": None,
+                "reply_to_message_id": None,
+                "callback_query": None,
+                "update_type": branch,
+                "synthetic": True,
+            }
+            username = (
+                sender.get("username") or sender.get("first_name")
+                or f"telegram:{branch}"
+            )
+
+        # The authoritative raw envelope rides on every persisted record.
+        # (Matched edits already carry their original envelope + history.)
+        payload.setdefault("telegram", envelope)
+
+        (persist_dir / "message.json").write_text(
+            json.dumps(payload, indent=2, default=str), encoding="utf-8",
+        )
 
         # Forward to host via LICC. Body is a conversation preview showing the
         # last 20 messages. The agent uses telegram(action="check"|"read") to
@@ -808,18 +1009,18 @@ class TelegramManager:
         )
 
         # Update type lets agents dispatch (e.g. button press vs free text).
-        if "callback_query" in update:
-            update_type = "callback_query"
-        elif "edited_message" in update:
-            update_type = "edited_message"
-        else:
-            update_type = "message"
+        # It is now the exact Update branch name (open set: unknown future
+        # branches carry their own name).
+        update_type = branch
 
         # Issue #5: Don't wake the agent for edited messages — they are
         # typically trivial corrections (typo fixes) and not worth a wake.
         # The inbox entry is still updated in-place so the agent sees the
-        # latest content on next read.
-        should_wake = update_type != "edited_message"
+        # latest content on next read. Generalized: only new human message
+        # content and button presses wake (see updates.WAKE_BRANCHES);
+        # edits, channel broadcasts, and service/aggregate events are
+        # recorded without a wake.
+        should_wake = branch in tg_updates.WAKE_BRANCHES
 
         # A real inbound message establishes the account+chat resident before
         # the first provider round.  This is intentionally the only route input
@@ -852,6 +1053,12 @@ class TelegramManager:
                 "body": preview if preview else "(no text — see media or callback)",
                 "metadata": {
                     "type": update_type,
+                    # Stable per-update event identity (account + update_id),
+                    # valid even for events with no chat/message, plus the
+                    # actor-policy classification for auditability.
+                    "event_id": envelope["event_id"],
+                    "update_id": envelope["update_id"],
+                    "actor_kind": actor.get("kind"),
                     "message_id": payload.get("id"),
                     "account": account_alias,
                     "chat_id": payload.get("chat", {}).get("id"),
@@ -1018,9 +1225,11 @@ class TelegramManager:
         if chat_id is None:
             return []
         try:
-            target_chat_id = int(chat_id)
+            target_chat_id: int | str = int(chat_id)
         except (TypeError, ValueError):
-            return []
+            # Synthetic buckets (e.g. "updates" for non-chat events) use
+            # non-numeric conversation ids.
+            target_chat_id = str(chat_id)
 
         acct_dir = self._account_dir(account_alias)
         messages: list[dict] = []
@@ -1036,7 +1245,7 @@ class TelegramManager:
                     data = json.loads(msg_file.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError):
                     continue
-                msg_chat_id = None
+                msg_chat_id: int | str | None = None
                 msg_id = data.get("id", "")
                 if msg_id:
                     parts = msg_id.split(":")
@@ -1044,7 +1253,7 @@ class TelegramManager:
                         try:
                             msg_chat_id = int(parts[1])
                         except ValueError:
-                            pass
+                            msg_chat_id = parts[1]
                 if msg_chat_id != target_chat_id:
                     continue
                 data["_folder"] = folder
@@ -1156,6 +1365,10 @@ class TelegramManager:
         if message.get("media"):
             media_type = message["media"].get("type", "media")
             text = text or f"[{media_type}]"
+        if not text and message.get("update_type") not in (None, "message"):
+            # Generic update events (reactions, polls, member changes, …)
+            # have no text; label them by branch for previews.
+            text = f"[{message['update_type']}]"
         return str(text).replace("\n", " ")
 
     @staticmethod
@@ -1209,6 +1422,60 @@ class TelegramManager:
                 item["reply_to"] = f"{id_parts[0]}:{id_parts[1]}:{reply_id_raw}"
         if message.get("callback_query"):
             item["has_callback"] = True
+        for flag in ("update_type", "synthetic", "unmatched_edit"):
+            if message.get(flag):
+                item[flag] = message[flag]
+        env = message.get("telegram")
+        if isinstance(env, dict):
+            # Additive per-update identity beside the legacy compound id, so
+            # downstream persistent dedup/delivery can distinguish events
+            # (e.g. repeated callbacks) that share one compound message id.
+            # For merged edited records the *current* (last-applied edit)
+            # identity is used so a warm persistent lane re-delivers the
+            # record with its appended raw edit evidence; the immutable root
+            # event_id remains inside the envelope.
+            env_event_id = env.get("current_event_id") or env.get("event_id")
+            if isinstance(env_event_id, str) and env_event_id:
+                item["event_id"] = env_event_id
+            ref = {
+                "event_id": env.get("event_id"),
+                "branch": env.get("branch"),
+                "update_id": env.get("update_id"),
+            }
+            include_full = (not truncate_text) or bool(
+                current_compound_id and cid == current_compound_id
+            )
+            env_chars: int | None = None
+            if include_full:
+                try:
+                    env_chars = len(
+                        json.dumps(env, ensure_ascii=False, separators=(",", ":")),
+                    )
+                except (TypeError, ValueError):
+                    env_chars = None
+            if include_full and env_chars is not None and (
+                env_chars <= _STRUCTURED_ENVELOPE_JSON_CAP
+            ):
+                # Current/referenced message: the full authoritative raw
+                # envelope rides in the persistent structured lane.
+                item["telegram"] = env
+            elif include_full:
+                # Exact recoverable representation instead of silent loss:
+                # the durable inbox record keeps the full envelope and
+                # telegram.read returns it verbatim.
+                item["telegram_ref"] = {
+                    **ref,
+                    "oversize": True,
+                    "json_chars": env_chars,
+                    "recovery": (
+                        "telegram(action='read', chat_id=<this chat>) returns "
+                        "the full raw envelope from the durable inbox record"
+                    ),
+                }
+            else:
+                # Older window entries stay compact; the envelope is one
+                # read away via the same durable record.
+                item["telegram_ref"] = ref
         return item
 
     def _render_conversation_preview(
@@ -1407,7 +1674,10 @@ class TelegramManager:
                 return None
 
             ref = preview.get("message_ref")
-            if isinstance(ref, str) and _looks_like_compound_id(ref):
+            # Accepts numeric compound IDs and the reserved synthetic
+            # events-bucket form, so admitted actorless/service/unknown
+            # updates can complete the documented read → clear lifecycle.
+            if isinstance(ref, str) and _mirror_identity_account(ref) is not None:
                 ids.add(ref)
                 continue
 
@@ -1442,9 +1712,11 @@ class TelegramManager:
             if notification_ids is None:
                 return current_payload, False, ()
             for compound_id in notification_ids:
-                try:
-                    account, _chat_id, _msg_id = self._parse_compound_id(compound_id)
-                except ValueError:
+                # Read-state-only validation: unlike the strict outbound
+                # _parse_compound_id, this accepts the reserved synthetic
+                # events bucket so reading it can clear its mirror.
+                account = _mirror_identity_account(compound_id)
+                if account is None:
                     return current_payload, False, ()
                 read_ids = next(
                     (ids for alias, ids in read_by_account if alias == account),
@@ -3179,6 +3451,16 @@ class TelegramManager:
 
         if not chat_id:
             return {"error": "chat_id is required"}
+        if not isinstance(chat_id, int) or isinstance(chat_id, bool):
+            # The reserved synthetic events bucket is read/search-only; there
+            # is no real chat behind it to deliver a message to.
+            return {
+                "error": (
+                    "chat_id must be a numeric Telegram chat ID for send; the "
+                    f"reserved '{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}' events "
+                    "bucket is read/search-only"
+                ),
+            }
 
         # Chat action shortcut: when chat_action is set and no text/media is
         # provided, send the typing indicator instead of a message. Skips
@@ -3396,7 +3678,7 @@ class TelegramManager:
         taskcard = self._taskcard_enabled()
         cleaned = []
         for m in recent:
-            cleaned.append({
+            entry = {
                 "id": m.get("id"),
                 "from": m.get("from"),
                 "to": m.get("to"),
@@ -3408,7 +3690,16 @@ class TelegramManager:
                 "reply_to_message_id": m.get("reply_to_message_id"),
                 "_direction": "outgoing" if m.get("to") else "incoming",
                 "taskcard": taskcard,
-            })
+                # Authoritative lossless raw Update envelope (None for
+                # outgoing/pre-envelope records).
+                "telegram": m.get("telegram"),
+            }
+            for extra in (
+                "update_type", "synthetic", "unmatched_edit", "voice_transcript",
+            ):
+                if m.get(extra) is not None:
+                    entry[extra] = m[extra]
+            cleaned.append(entry)
 
         return {"status": "ok", "taskcard": taskcard, "messages": cleaned}
 
@@ -3461,16 +3752,25 @@ class TelegramManager:
             searchable = " ".join([
                 str(msg.get("from", {}).get("username", "")),
                 str(msg.get("from", {}).get("first_name", "")),
-                msg.get("text", ""),
+                msg.get("text", "") or "",
+                str(msg.get("update_type") or ""),
             ])
             if pattern.search(searchable):
-                matches.append({
+                match = {
                     "id": msg.get("id"),
                     "from": msg.get("from"),
+                    "chat": msg.get("chat"),
                     "date": msg.get("date"),
                     "text": msg.get("text"),
                     "taskcard": taskcard,
-                })
+                    # Authoritative lossless raw Update envelope for the
+                    # matched message.
+                    "telegram": msg.get("telegram"),
+                }
+                for extra in ("update_type", "synthetic", "unmatched_edit"):
+                    if msg.get(extra) is not None:
+                        match[extra] = msg[extra]
+                matches.append(match)
 
         return {
             "status": "ok",

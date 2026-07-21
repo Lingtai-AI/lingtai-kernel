@@ -207,6 +207,20 @@ uses compound message IDs; after PR #705 the transient hook carries them as
 `data.message_ids` and nothing else. Email migration should use the analogous
 `data.email_ids` shape when email content moves to a persistent lane.
 
+Curated producers may additionally attach an additive per-update `event_id`
+(Telegram: `<account>:update:<update_id>`) in LICC event metadata. The consumer
+copies it into `data.previews[*]` alongside the other scalar routing refs, and
+the kernel carries it into persistent `events[]` and uses it (falling back to
+the compound `id`) for persistent message de-duplication and delivery
+tracking — so repeated events that share one compound message id (e.g. two
+callback presses on the same inline keyboard) never collapse into one
+persistent entry. For a merged edited record the structured `event_id` is the
+producer envelope's additive `current_event_id` (the last-applied edit's
+identity, advanced on every matched edit while the immutable root `event_id`
+stays inside `telegram`) — so an edit arriving after the original was already
+delivered into a warm persistent context is re-delivered together with its
+append-only raw edit evidence instead of being delta-filtered away.
+
 ### 2. Content has one model-visible home
 
 When a producer has a persistent context lane, message content and routing context
@@ -258,6 +272,13 @@ specific human-message producer has a persistent lane, the model-visible
 transient projection MUST sanitize those previews away. For producers that have
 not yet been migrated, bounded previews are tolerated as a transitional triage
 surface; adding a persistent lane turns on the move-not-duplicate rule.
+
+When the LICC consumer replaces an oversize/unserializable curated structured
+family with an explicit `licc_structured_omitted` marker (reason, size, and the
+producer's recovery handle), the kernel MUST carry that marker into the
+persistent lane under `structured_omitted: [...]` rather than treating it as a
+message candidate or silently dropping it; the bounded preview fallback message
+still applies when no structured messages survive.
 
 ### 4. Persistent blocks are context, not unread state
 
@@ -315,7 +336,8 @@ In-memory state involved in this contract:
   `_notification_persistent_wechat_last_tool_id`, and the Feishu counterparts
   `agent._notification_persistent_feishu_message_ids` /
   `_notification_persistent_feishu_last_tool_id` track per-channel delivery into
-  the current provider context (reset on molt). WhatsApp is snapshot-only and
+  the current provider context (reset on molt), keyed by per-update
+  `event_id` when present and by compound message id otherwise. WhatsApp is snapshot-only and
   keeps no agent-side delivery tracker.
 
 ## Review triggers

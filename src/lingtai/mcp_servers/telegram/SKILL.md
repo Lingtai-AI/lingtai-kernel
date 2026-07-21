@@ -94,8 +94,22 @@ setup readiness checklist are **not** here — they belong to `mcp-manual`
 - `check`: list recent conversations with unread counts.
 - `read`: read messages from one chat (`chat_id`; optional `limit`). Reading
   marks messages read and clears the wake notification mirror.
-- `search`: regex search over message text/sender (`query`; optional `chat_id`,
-  `account`).
+- `search`: regex search over message text/sender/update type (`query`;
+  optional `chat_id`, `account`).
+- Every inbound record from `read`/`search` carries an additive `telegram`
+  envelope: the complete raw Bot API Update (`update_id`, branch name, actor
+  policy result, every nested/unknown field) plus, for edited messages, an
+  append-only `edits` history of the raw edit events; `current_event_id`
+  tracks the last-applied edit while `event_id` stays the immutable root
+  event. Use it for selected-text
+  reply quotes (`update.message.quote`), entities, forwards, topics, callback
+  identity, etc. The concise top-level fields stay the quick view.
+- Non-message updates (reactions, polls, member/boost/business events,
+  inline-only callbacks, unknown future branches) land in the synthetic
+  conversation bucket with `synthetic: true`; the raw event is in their
+  `telegram` envelope. Pass `chat_id='updates'` (the one reserved
+  non-numeric value the schema accepts) to `read`/`search` to recover them;
+  `send`/`reply` still require a real numeric chat ID.
 
 ## RICH TEXT: parse_mode / entities
 
