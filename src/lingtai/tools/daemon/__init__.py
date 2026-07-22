@@ -1872,8 +1872,9 @@ class DaemonManager:
             "clarification from the parent or human, call `ask_human(question, "
             "choices?, default?, reason?)` instead of asking only in final prose. "
             "Then stop the current CLI turn without calling `finish`; LingTai "
-            "will record `waiting_input` and the parent can answer through "
-            "`daemon(action=\"ask\")`."
+            "will record `waiting_input`. On resumable CLI backends, the parent "
+            "can send an answer through `daemon(action=\"ask\")`; automatic "
+            "paused-state reconciliation remains deferred."
         )
 
     @staticmethod
@@ -1980,15 +1981,26 @@ class DaemonManager:
         choices = data.get("choices")
         if choices is not None and (
             not isinstance(choices, list)
+            or not choices
             or not all(isinstance(item, str) and item.strip() for item in choices)
         ):
             raise RuntimeError("daemon input request choices are invalid")
+        default = data.get("default")
+        reason = data.get("reason")
+        if default is not None and not isinstance(default, str):
+            raise RuntimeError("daemon input request default must be a string")
+        if reason is not None and not isinstance(reason, str):
+            raise RuntimeError("daemon input request reason must be a string")
         return data
 
     def _require_done_completion(self, run_dir: DaemonRunDir, final_text: str) -> bool:
         if not self._run_has_daemon_common_mcp(run_dir):
             return True
-        request = self._read_daemon_input_request(run_dir)
+        try:
+            request = self._read_daemon_input_request(run_dir)
+        except RuntimeError as exc:
+            run_dir.mark_failed(exc)
+            raise
         if request is not None:
             run_dir.mark_waiting_input(request)
             return False
@@ -4672,6 +4684,19 @@ class DaemonManager:
             "context_token_limit": call_params.get("context_token_limit"),
         }
         visible_call_params = {k: v for k, v in visible_call_params.items() if v not in (None, [], "")}
+        input_request = state.get("input_request")
+        input_request_preview = None
+        if isinstance(input_request, dict):
+            input_request_preview = {
+                key: self._truncate_list_string(input_request.get(key))
+                for key in ("question", "default", "reason")
+                if input_request.get(key) is not None
+            }
+            choices = input_request.get("choices")
+            if isinstance(choices, list):
+                input_request_preview["choices"] = [
+                    self._truncate_list_string(choice) for choice in choices[:10]
+                ]
         info = {
             "id": state.get("handle"),
             "task": self._truncate_list_string(state.get("task", ""), 120),
@@ -4687,7 +4712,7 @@ class DaemonManager:
             "path": str(run_path),
             "result_preview": state.get("result_preview"),
             "result_path": state.get("result_path"),
-            "input_request": state.get("input_request"),
+            "input_request": input_request_preview,
             "call_parameters": visible_call_params,
         }
         if prompt_preview is not None:
