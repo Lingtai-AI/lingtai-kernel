@@ -108,6 +108,7 @@ def test_build_agent_constructs_correctly(mock_mail, mock_agent, mock_llm, tmp_p
     mock_agent.assert_called_once()
     call_kwargs = mock_agent.call_args
     assert call_kwargs.kwargs["agent_name"] == "test-agent"
+    assert call_kwargs.kwargs["admin"] == {"karma": True}
     assert call_kwargs.kwargs["working_dir"] == tmp_path
     assert call_kwargs.kwargs["streaming"] is False
     # covenant, memory, capabilities, addons no longer passed to constructor —
@@ -585,6 +586,22 @@ def test_check_duplicate_process_ignores_shell_wrapper(tmp_path):
     wrapper = f"67192 /bin/zsh -ic 'lingtai run {codex.resolve()} && echo done'"
     with _posix_scan_pinned(), patch("subprocess.check_output", return_value=wrapper + "\n"):
         _check_duplicate_process(codex)
+
+
+@patch("lingtai.cli.LLMService")
+@patch("lingtai.cli.Agent")
+@patch("lingtai.cli.PosixFilesystemMailAdapter")
+def test_build_agent_forwards_empty_admin(mock_mail, mock_agent, mock_llm, tmp_path):
+    """Empty admin {} from manifest must reach Agent, not be promoted to karma."""
+    from lingtai.cli import load_init, build_agent
+
+    _write_init(tmp_path, overrides={"manifest": {"admin": {}}})
+    data = load_init(tmp_path)
+    build_agent(data, tmp_path)
+
+    call_kwargs = mock_agent.call_args.kwargs
+    assert "admin" in call_kwargs, "admin must be forwarded to Agent constructor"
+    assert call_kwargs["admin"] == {}
 
 
 def test_check_duplicate_process_excludes_own_pid(tmp_path):

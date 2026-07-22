@@ -108,6 +108,7 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
     agent = Agent(
         service,
         agent_name=m.get("agent_name"),
+        admin=m.get("admin", {}),
         working_dir=working_dir,
         workdir_lease=select_workdir_lease(working_dir),
         notification_store=PosixNotificationStoreAdapter(working_dir),
