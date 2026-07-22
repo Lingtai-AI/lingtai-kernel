@@ -42,6 +42,25 @@ Direct routes inherit identity only from the same current provider (including th
 explicit GLM/Zhipu and codex-pool spelling pairs); a different provider must supply
 its own model and credential. Missing identity fails closed to `manual` instead of
 using a service default model, a default OAuth path, or an SDK environment key.
+Codex provider spelling (`codex`, `codex-pool`, `codex_pool`) is only a
+Codex-family compatibility gate: all three resolve to the one native Codex service,
+and the spelling never selects the fixed/direct vs weighted/pool route. Within an
+active Codex-family service, the route follows the active provider-default bucket
+exactly as the canonical Codex factory does — it is the fixed/direct route iff the
+active bucket carries a nonblank `codex_auth_path` (whose trimmed value is used as
+the `token_path`), otherwise the weighted/pool route, which passes the exact pool-selected
+credential reference (the selected candidate's token path) to the native Codex
+vision service and never borrows the direct auth path. This holds regardless of the
+requested spelling: an active `codex-pool`/`codex_pool` service that configures a
+`codex_auth_path` is a direct route even when a pool path is also present, and an
+active direct `codex` service stays direct even for an explicit `codex-pool`
+request. Codex vision may inherit only the same active Codex-family service's model
+and endpoint; a Codex request over an unrelated provider fails closed on the missing
+current model without borrowing that provider's model, endpoint, or credential. When
+no `base_url` is resolved, the native Codex service uses its existing official
+default Codex endpoint (`https://chatgpt.com/backend-api/codex`) rather than failing
+closed on base. A pool route that yields no selected candidate fails closed to
+`manual` without manufacturing a direct or legacy-default identity.
 OpenAI preserves current default headers, endpoint, model, and `wire_api`.
 A missing, blank/whitespace-only, or `auto` selector means automatic selection:
 the current route uses Responses only when it explicitly prefers Responses and

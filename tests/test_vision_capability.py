@@ -381,8 +381,17 @@ def test_vision_setup_resolves_api_key_env(tmp_path, monkeypatch):
 
 
 def test_codex_vision_without_explicit_current_oauth_identity_is_manual_only(tmp_path):
-    """Codex must not silently open the legacy default OAuth account."""
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+    """Codex must not silently open the legacy default OAuth account.
+
+    An active ``codex`` service whose bucket configures neither ``codex_auth_path``
+    nor a populated pool resolves to the bucket-driven pool route (no nonblank
+    ``codex_auth_path``); with an empty pool it must fail closed to manual rather
+    than fall back to the legacy single-token default. The pool loader is mocked
+    empty so no real pool file on the host is consulted."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_pool.load_codex_auth_pool",
+        return_value=[],
+    ):
         agent = make_provider_agent(
             tmp_path,
             provider="codex",
@@ -393,7 +402,9 @@ def test_codex_vision_without_explicit_current_oauth_identity_is_manual_only(tmp
 
     mock_factory.assert_not_called()
     assert mgr._vision_service is None
-    assert "no explicit current OAuth identity" in mgr._manual_reason
+    assert "no selected current OAuth identity" in mgr._manual_reason
+    # The legacy single-token default must never be silently opened.
+    assert "codex-auth.json" not in mgr._manual_reason
 
 
 @pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
@@ -503,6 +514,318 @@ def test_codex_pool_vision_selects_exact_model_and_passes_result(tmp_path):
         assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-terra"
         assert mock_factory.call_args.kwargs["base_url"] == "https://codex-pool.example/backend-api/codex"
         assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-b.json"
+
+
+@pytest.mark.parametrize("active_provider", ["codex-pool", "codex_pool"])
+def test_generic_codex_over_active_pool_follows_active_pool_route(tmp_path, active_provider):
+    """Live mixed-name repro: generic ``codex`` over an active ``codex-pool``/
+    ``codex_pool`` service must take the active pool route — preserving the active
+    pool model/base and passing the exact pool-selected credential reference
+    (the selected candidate's ``auth_ref`` token path) to the native Codex vision
+    service, never a direct ``codex_auth_path``."""
+    from lingtai.auth.codex_account_source import AccountCandidate
+    selected = AccountCandidate(
+        auth_ref="/tmp/codex-pool-selected.json",
+        source_ref="pool.json",
+        source_index=0,
+        weight=1,
+    )
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=selected,
+    ) as mock_select, patch(
+        "lingtai.auth.codex_pool.load_codex_auth_pool",
+        return_value=[{"path": "pool.json", "weight": 1}],
+    ):
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = active_provider
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
+        agent.service._provider_defaults = {
+            active_provider: {"codex_auth_pool_path": "pool.json"}
+        }
+        setup(agent, provider="codex")
+
+    assert mock_factory.call_args.args == ("codex",)
+    assert mock_factory.call_args.kwargs["api_key"] is None
+    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
+    assert mock_factory.call_args.kwargs["base_url"] == "https://codex-pool.example/backend-api/codex"
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-pool-selected.json"
+    mock_select.assert_called()
+
+
+def test_explicit_pool_request_over_active_direct_codex_follows_bucket_direct(tmp_path):
+    """Spelling is only a Codex-family gate, not a route selector. An explicit
+    ``codex-pool`` request over an active *direct* Codex service (bucket carries a
+    nonblank ``codex_auth_path``) resolves to the bucket-driven direct route,
+    exactly as the canonical Codex factory does — the pool selector is never
+    consulted and the configured direct ``codex_auth_path`` is used."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=None,
+    ) as mock_select:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex"
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = None
+        agent.service._provider_defaults = {"codex": {"codex_auth_path": "/tmp/codex-direct.json"}}
+        setup(agent, provider="codex-pool")
+
+    mock_select.assert_not_called()
+    assert mock_factory.call_args.args == ("codex",)
+    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-direct.json"
+
+
+# ---------------------------------------------------------------------------
+# PR #1012 — bucket-driven Codex vision route matrix
+#
+# The fixed/direct vs weighted/pool choice is determined SOLELY by whether the
+# active provider-default bucket carries a nonblank trimmed ``codex_auth_path``,
+# mirroring the canonical Codex factory in ``lingtai/llm/_register.py`` — never
+# by the ``codex`` / ``codex-pool`` / ``codex_pool`` provider spelling.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("active_provider", ["codex-pool", "codex_pool"])
+def test_active_pool_spelling_with_auth_path_takes_direct_route(tmp_path, active_provider):
+    """Matrix (a) — the core regression. An active ``codex-pool``/``codex_pool``
+    service that ALSO configures a nonblank ``codex_auth_path`` is a direct/Fixed
+    route: the pool selector must not be called even though a pool path is present,
+    and the direct ``codex_auth_path`` is propagated. This is the case the old
+    spelling-driven code got wrong (it saw ``codex-pool`` and forced the pool).
+
+    The bucket path is space-padded to prove canonical parity: like the factory's
+    ``FixedAccountSource``, the route uses the *trimmed* value, and that same
+    trimmed value — not the raw padded string — reaches ``create_vision_service``."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=None,
+    ) as mock_select:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = active_provider
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
+        agent.service._provider_defaults = {
+            active_provider: {
+                "codex_auth_path": "  /tmp/codex-direct.json  ",
+                "codex_auth_pool_path": "pool.json",
+            }
+        }
+        setup(agent, provider=active_provider)
+
+    mock_select.assert_not_called()
+    assert mock_factory.call_args.args == ("codex",)
+    assert mock_factory.call_args.kwargs["api_key"] is None
+    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
+    assert mock_factory.call_args.kwargs["base_url"] == "https://codex-pool.example/backend-api/codex"
+    # The trimmed value is used as token_path, never the raw space-padded string.
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-direct.json"
+
+
+def test_whitespace_only_bucket_auth_path_does_not_route_direct(tmp_path):
+    """Canonical parity — a whitespace-only bucket ``codex_auth_path`` is not a
+    fixed identity (the factory would trim it to empty and fall to Weighted), so
+    vision must not route direct. With an empty pool it fails closed to manual
+    rather than forwarding the blank path as a direct ``token_path``."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_pool.load_codex_auth_pool",
+        return_value=[],
+    ):
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex"
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = None
+        agent.service._provider_defaults = {"codex": {"codex_auth_path": "   "}}
+        mgr = setup(agent, provider="codex")
+
+    mock_factory.assert_not_called()
+    assert mgr._vision_service is None
+    # Fails on the pool identity (blank fixed path never counts as a direct one).
+    assert "no selected current OAuth identity" in mgr._manual_reason
+
+
+def test_whitespace_only_explicit_token_path_falls_back_to_bucket_identity(tmp_path):
+    """A whitespace-only explicit capability ``token_path`` is not an identity: it
+    must not be forwarded as a direct credential. Over an active direct bucket the
+    blank explicit value is dropped and the trimmed bucket path is used instead."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex"
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = None
+        agent.service._provider_defaults = {"codex": {"codex_auth_path": "/tmp/codex-bucket.json"}}
+        setup(agent, provider="codex", token_path="   ")
+
+    # The blank explicit token_path is normalized away; the trimmed bucket path wins.
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-bucket.json"
+
+
+def test_active_codex_pool_path_only_selects_pool_candidate(tmp_path):
+    """Matrix (b) — active ``codex`` with only a pool path (no ``codex_auth_path``)
+    takes the pool route: the pool selector is called and its selected candidate's
+    ``auth_ref`` token path is propagated to the native Codex vision service."""
+    from lingtai.auth.codex_account_source import AccountCandidate
+    selected = AccountCandidate(
+        auth_ref="/tmp/codex-pool-b.json",
+        source_ref="pool.json",
+        source_index=0,
+        weight=1,
+    )
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=selected,
+    ) as mock_select, patch(
+        "lingtai.auth.codex_pool.load_codex_auth_pool",
+        return_value=[{"path": "pool.json", "weight": 1}],
+    ):
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex"
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = "https://codex.example/backend-api/codex"
+        agent.service._provider_defaults = {"codex": {"codex_auth_pool_path": "pool.json"}}
+        setup(agent, provider="codex")
+
+    mock_select.assert_called()
+    assert mock_factory.call_args.args == ("codex",)
+    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
+    assert mock_factory.call_args.kwargs["base_url"] == "https://codex.example/backend-api/codex"
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-pool-b.json"
+
+
+def test_active_codex_fixed_path_takes_direct_route(tmp_path):
+    """Matrix (c) — active ``codex`` with a nonblank ``codex_auth_path`` is the
+    direct/Fixed route: no pool selection, the configured auth path is used."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=None,
+    ) as mock_select:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex"
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = None
+        agent.service._provider_defaults = {"codex": {"codex_auth_path": "/tmp/codex-c.json"}}
+        setup(agent, provider="codex")
+
+    mock_select.assert_not_called()
+    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-c.json"
+
+
+@pytest.mark.parametrize("active_provider", ["codex-pool", "codex_pool"])
+def test_active_pool_path_only_takes_pool_route(tmp_path, active_provider):
+    """Matrix (d) — active ``codex-pool``/``codex_pool`` with only a pool path
+    (no ``codex_auth_path``) takes the pool route and uses the selected candidate."""
+    from lingtai.auth.codex_account_source import AccountCandidate
+    selected = AccountCandidate(
+        auth_ref="/tmp/codex-pool-d.json",
+        source_ref="pool.json",
+        source_index=0,
+        weight=1,
+    )
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=selected,
+    ) as mock_select, patch(
+        "lingtai.auth.codex_pool.load_codex_auth_pool",
+        return_value=[{"path": "pool.json", "weight": 1}],
+    ):
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = active_provider
+        agent.service._model = "gpt-5.6-terra"
+        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
+        agent.service._provider_defaults = {active_provider: {"codex_auth_pool_path": "pool.json"}}
+        setup(agent, provider=active_provider)
+
+    mock_select.assert_called()
+    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-terra"
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-pool-d.json"
+
+
+@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
+def test_codex_request_over_unrelated_active_provider_fails_closed(tmp_path, provider):
+    """Matrix (e) — any Codex-family request over an unrelated active provider
+    must fail closed to manual, never borrowing the unrelated provider's model,
+    base URL, or credential and never calling the pool selector."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=None,
+    ) as mock_select:
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "gemini"
+        agent.service._model = "gemini-2.5-pro"
+        agent.service._base_url = "https://generativelanguage.example"
+        agent.service._provider_defaults = {"gemini": {"codex_auth_path": "/tmp/should-not-be-used.json"}}
+        mgr = setup(agent, provider=provider)
+
+    mock_factory.assert_not_called()
+    mock_select.assert_not_called()
+    assert mgr._vision_service is None
+    assert "no resolved current model" in mgr._manual_reason
+    assert "gemini-2.5-pro" not in mgr._manual_reason
+    assert "/tmp/should-not-be-used.json" not in mgr._manual_reason
+
+
+@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
+def test_codex_request_over_unrelated_provider_with_explicit_model_never_reads_pool(
+    tmp_path, provider
+):
+    """Matrix (e), explicit-model variant — even when the request supplies its own
+    ``model`` (clearing the missing-model guard) and a whitespace-only explicit
+    ``token_path``, an unrelated active provider must NOT treat that blank value as
+    an identity, run the pool selector, or read any default pool file; the request
+    fails closed on the missing pool identity instead. Proves both normalization
+    and the ``same_provider`` gate, not merely the model guard."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        return_value=None,
+    ) as mock_select, patch(
+        "lingtai.auth.codex_pool.load_codex_auth_pool",
+        return_value=[{"path": "pool.json", "weight": 1}],
+    ) as mock_pool_load:
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "gemini"
+        agent.service._model = "gemini-2.5-pro"
+        agent.service._base_url = "https://generativelanguage.example"
+        agent.service._provider_defaults = {"gemini": {}}
+        mgr = setup(agent, provider=provider, model="gpt-5.6-sol", token_path="   ")
+
+    mock_factory.assert_not_called()
+    mock_select.assert_not_called()
+    mock_pool_load.assert_not_called()
+    assert mgr._vision_service is None
+    assert "no selected current OAuth identity" in mgr._manual_reason
+
+
+def test_generic_codex_over_active_pool_without_candidate_fails_closed(tmp_path):
+    """Generic ``codex`` over an active pool whose source yields no candidate must
+    stay manual-only rather than manufacture a direct/default identity."""
+    from lingtai.auth.codex_account_source import NoCandidateError
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
+        side_effect=NoCandidateError("empty pool"),
+    ), patch(
+        "lingtai.auth.codex_pool.load_codex_auth_pool",
+        return_value=[],
+    ):
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex-pool"
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
+        agent.service._provider_defaults = {"codex-pool": {"codex_auth_pool_path": "pool.json"}}
+        mgr = setup(agent, provider="codex")
+
+    mock_factory.assert_not_called()
+    assert mgr._vision_service is None
+    assert "no selected current OAuth identity" in mgr._manual_reason
+    assert "Exception" not in mgr._manual_reason
 
 
 @pytest.mark.parametrize(
@@ -864,8 +1187,17 @@ def test_create_vision_service_codex_uses_explicit_path_and_filters_extra_kwargs
 
 def test_codex_vision_service_streams_responses_api(monkeypatch, tmp_path):
     """CodexVisionService should parse streaming output_text deltas without network calls."""
+    import base64
+
+    # A genuinely valid 1x1 truecolor PNG (stdlib base64 decode; no external
+    # dependency, file fixture, or network). This exercises the direct Codex
+    # request seam with real image bytes rather than a non-PNG placeholder.
+    valid_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+    )
+    assert valid_png.startswith(b"\x89PNG\r\n\x1a\n")
     img_path = tmp_path / "chart.png"
-    img_path.write_bytes(b"fake png bytes")
+    img_path.write_bytes(valid_png)
 
     events = [
         SimpleNamespace(type="response.created"),
@@ -902,7 +1234,10 @@ def test_codex_vision_service_streams_responses_api(monkeypatch, tmp_path):
     content = kwargs["input"][0]["content"]
     assert content[0] == {"type": "input_text", "text": "What is shown?"}
     assert content[1]["type"] == "input_image"
-    assert content[1]["image_url"].startswith("data:image/png;base64,")
+    image_url = content[1]["image_url"]
+    assert image_url.startswith("data:image/png;base64,")
+    # The direct seam must carry the exact valid PNG, not a mangled placeholder.
+    assert base64.b64decode(image_url.split(",", 1)[1]) == valid_png
 
 
 def test_openai_responses_vision_sends_exact_request_shape(monkeypatch, tmp_path):

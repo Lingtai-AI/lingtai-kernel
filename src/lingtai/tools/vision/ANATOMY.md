@@ -20,11 +20,11 @@ provider-neutral manual route when direct setup is unavailable.
 
 ## Components
 
-- `__init__.py:34-41` — exact same-provider alias check; only GLM/Zhipu and codex-pool spelling pairs share current identity.
-- `__init__.py:44-52` — exact advertised provider registry; the local pseudo-provider remains explicit opt-in and intentionally excluded.
-- `__init__.py:58-76` — compatible tool schema; neither action requires an image path at schema level.
-- `__init__.py:80-128` — `VisionManager`; `manual` reads bundled guidance without a backend, while `analyze` validates and reads the image.
-- `__init__.py:131-379` — `setup`; resolves only the same current model/endpoint/credential/headers/wire, creates supported services, fails closed to manual guidance when identity is incomplete, and always registers the tool.
+- `__init__.py:34-88` — Codex-family gate and bucket-driven route resolution plus the same-provider alias check; GLM/Zhipu and Codex spelling pairs share current identity, provider spelling is only a Codex-family compatibility gate, `_normalize_codex_auth_path` trims the bucket `codex_auth_path` once, and `_codex_bucket_route` picks direct (nonblank trimmed `codex_auth_path` in the active bucket) vs pool exactly as the canonical Codex factory does.
+- `__init__.py:108-125` — exact advertised provider registry; the local pseudo-provider remains explicit opt-in and intentionally excluded.
+- `__init__.py:127-152` — compatible tool schema; neither action requires an image path at schema level.
+- `__init__.py:154-203` — `VisionManager`; `manual` reads bundled guidance without a backend, while `analyze` validates and reads the image.
+- `__init__.py:205-494` — `setup`; resolves only the same current model/endpoint/credential/headers/wire, routes active Codex-family services by the bucket-driven direct (trimmed `codex_auth_path`) vs pool (pool-selected candidate token path) rule, creates supported services, fails closed to manual guidance when identity is incomplete, and always registers the tool.
 
 ## Connections
 
