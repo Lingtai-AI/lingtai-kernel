@@ -1031,6 +1031,84 @@ def test_fresh_manager_terminal_cli_ask_has_one_detached_resume_owner(
     assert check["followup_result_path"] == state["followup_result_path"]
 
 
+@pytest.mark.parametrize(
+    ("finish_status", "expected_followup"),
+    [("done", "done"), ("failed", "failed")],
+)
+def test_detached_codex_resume_publishes_one_direct_followup_notification(
+    tmp_path, monkeypatch, finish_status, expected_followup,
+):
+    """The supervisor alone publishes one direct success or failure event."""
+    from tests._daemon_helpers import make_daemon_agent
+    from lingtai.tools.daemon import DaemonManager
+
+    monkeypatch.setenv("PATH", str(Path(__file__).parent) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("FAKE_DAEMON_RESUME_CALLS", str(tmp_path / "resume-calls.jsonl"))
+    monkeypatch.setenv("FAKE_DAEMON_FINISH_STATUS", finish_status)
+    run_dir = _make_run_dir(tmp_path, task="terminal primary")
+    common = {
+        "name": "daemon_common",
+        "transport": "stdio",
+        "command": sys.executable,
+        "args": ["-m", "lingtai.mcp_servers.daemon_common"],
+        "env": {
+            "LINGTAI_DAEMON_COMPLETION_FILE": str(run_dir.path / "daemon_completion.json"),
+            "LINGTAI_DAEMON_RUN_ID": run_dir.run_id,
+        },
+    }
+    run_dir.update_state(
+        backend="codex", owner="supervisor", state="done", supervisor_pid=None,
+        codex_session_id="fake-codex-session",
+        call_parameters={"task": "terminal primary", "tools": [], "mcp": [common]},
+    )
+    write_manifest(
+        run_dir.path,
+        build_manifest(
+            run_id=run_dir.run_id, backend="codex",
+            parent_working_dir=str(run_dir.path.parent.parent),
+            run_dir=str(run_dir.path), task="terminal primary", tools=[],
+            max_turns=1, timeout_s=30, group_id=None, backend_argv=[],
+            mcp=[common],
+        ),
+    )
+    agent = make_daemon_agent(tmp_path, working_dir_name="agent")
+    manager = DaemonManager(agent)
+
+    result = manager.handle({
+        "action": "ask", "id": run_dir.run_id, "message": "follow up",
+    })
+    assert result["status"] == "sent"
+    assert result.get("generation")
+
+    state = _poll_until(
+        lambda: (
+            current if (current := _disk_state(run_dir)).get("followup_status")
+            in {"done", "failed", "timeout"} else None
+        ),
+        timeout=20,
+    )
+    assert state["state"] == "done"
+    assert state["followup_status"] == expected_followup
+
+    store = PosixNotificationStoreAdapter(run_dir.path.parent.parent)
+
+    def matching_events():
+        events = store.snapshot(lambda channel: channel == "system")             .get("system", {}).get("data", {}).get("events", [])
+        matching = [
+            event for event in events
+            if event.get("ref_id") == run_dir.handle
+            and f"follow-up {expected_followup}" in event.get("body", "")
+        ]
+        return matching or None
+
+    matching = _poll_until(matching_events, timeout=5)
+    assert len(matching) == 1
+    assert f"follow-up {expected_followup}" in matching[0]["body"]
+    event_log = run_dir.events_path.read_text(encoding="utf-8")
+    assert "DaemonSupervisorAgentStub" not in event_log
+    assert "daemon_notification_error" not in event_log
+
+
 def test_detached_execution_composes_inherited_process_and_terminal_ports(tmp_path):
     """Detached initial/resume composition supplies both inherited Ports."""
     from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
@@ -1584,6 +1662,227 @@ def test_detached_interactive_resume_production_host_publishes_followup_done_aft
     assert signal_seen["signal"] == signal.SIGTERM
     _wait_exact_process_gone(state["child_pid"], state["child_start_identity"])
     _wait_exact_process_gone(state["execution_pid"], state["execution_start_identity"])
+
+def _seed_pending_detached_followup(agent, *, status: str):
+    from lingtai.adapters.posix.process_identity import process_identity
+    from tests._daemon_helpers import make_daemon_run_dir
+
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle=f"em-followup-{status}",
+        task=f"detached {status} follow-up",
+        tools=[],
+        backend="codex",
+    )
+    run_dir.update_state(
+        owner="supervisor",
+        supervisor_pid=os.getpid(),
+        supervisor_start_identity=process_identity(os.getpid()),
+    )
+    resume = run_dir.claim_resume_generation()
+    generation = resume["generation"]
+    assert run_dir.activate_resume_generation(generation, resume["launch_nonce"])
+    if status == "done":
+        run_dir.record_followup(generation, status=status, output="detached success")
+    else:
+        run_dir.record_followup(generation, status=status, error="detached failure")
+    key = run_dir.claim_followup_notification(generation, status)
+    assert key == run_dir.followup_notification_idempotency_key(
+        run_dir.run_id, generation,
+    )
+    assert run_dir.release_resume_generation(
+        generation,
+        resume["launch_nonce"],
+        owner_pid=os.getpid(),
+        owner_identity=process_identity(os.getpid()),
+        result_status=status,
+    )
+    return run_dir, generation, key
+
+
+@pytest.mark.parametrize("status", ["done", "failed"])
+def test_detached_followup_notification_store_failure_recovers_exactly_once(
+    tmp_path, monkeypatch, status,
+):
+    from lingtai.tools.daemon import DaemonManager
+    from tests._daemon_helpers import make_daemon_agent
+
+    agent = make_daemon_agent(tmp_path)
+    run_dir, generation, key = _seed_pending_detached_followup(agent, status=status)
+    # An earlier event with the same public ref_id is unrelated; only the
+    # generation-specific idempotency key may satisfy this publication.
+    agent._enqueue_system_notification(
+        source="unrelated", ref_id=run_dir.handle, body="prior event",
+    )
+    real_compare_update = PosixNotificationStoreAdapter.compare_update_channel
+    failed = {"once": True}
+
+    def fail_once(self, *args, **kwargs):
+        if failed["once"]:
+            failed["once"] = False
+            raise OSError("injected notification-store failure")
+        return real_compare_update(self, *args, **kwargs)
+
+    monkeypatch.setattr(PosixNotificationStoreAdapter, "compare_update_channel", fail_once)
+    fresh = DaemonManager(agent)
+    # __init__ attempted recovery once and retained the pending claim.
+    pending = json.loads(
+        (run_dir.path / "resume-claims" / f"resume-{generation}.json").read_text()
+    )
+    assert pending["followup_notification_claim"]["idempotency_key"] == key
+    assert pending.get("followup_notification_receipt") is None
+
+    monkeypatch.setattr(PosixNotificationStoreAdapter, "compare_update_channel", real_compare_update)
+    fresh._reconcile_followup_notifications()
+    fresh._reconcile_followup_notifications()
+    events = json.loads(
+        (agent._working_dir / ".notification" / "system.json").read_text()
+    )["data"]["events"]
+    matching = [event for event in events if event.get("idempotency_key") == key]
+    assert len(matching) == 1
+    assert any(event.get("body") == "prior event" for event in events)
+    receipt = json.loads(
+        (run_dir.path / "resume-claims" / f"resume-{generation}.json").read_text()
+    )["followup_notification_receipt"]
+    assert receipt["idempotency_key"] == key
+
+
+@pytest.mark.parametrize("status", ["done", "failed"])
+def test_detached_followup_notification_crash_window_recovers_existing_event(
+    tmp_path, monkeypatch, status,
+):
+    from lingtai.tools.daemon import DaemonManager
+    from tests._daemon_helpers import make_daemon_agent
+
+    agent = make_daemon_agent(tmp_path)
+    run_dir, generation, key = _seed_pending_detached_followup(agent, status=status)
+    agent._enqueue_system_notification(
+        source="unrelated", ref_id=run_dir.handle, body="prior event",
+    )
+    real_mark = DaemonRunDir.mark_followup_notification_published
+    crashed = {"once": True}
+
+    def crash_after_sink(self, generation_arg, key_arg):
+        if crashed["once"]:
+            crashed["once"] = False
+            raise RuntimeError("injected receipt crash window")
+        return real_mark(self, generation_arg, key_arg)
+
+    monkeypatch.setattr(DaemonRunDir, "mark_followup_notification_published", crash_after_sink)
+    fresh = DaemonManager(agent)
+    monkeypatch.setattr(DaemonRunDir, "mark_followup_notification_published", real_mark)
+    # The first recovery already reached the sink; this retry recognizes the
+    # existing key instead of appending a second event, then records the receipt.
+    fresh._reconcile_followup_notifications()
+    fresh._reconcile_followup_notifications()
+    events = json.loads(
+        (agent._working_dir / ".notification" / "system.json").read_text()
+    )["data"]["events"]
+    assert len([event for event in events if event.get("idempotency_key") == key]) == 1
+    receipt = json.loads(
+        (run_dir.path / "resume-claims" / f"resume-{generation}.json").read_text()
+    )["followup_notification_receipt"]
+    assert receipt["idempotency_key"] == key
+
+
+def test_followup_notification_reconciliation_waits_for_release(tmp_path):
+    from lingtai.adapters.posix.process_identity import process_identity
+    from lingtai.tools.daemon import DaemonManager
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir
+
+    agent = make_daemon_agent(tmp_path)
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-followup-active",
+        task="active detached follow-up",
+        tools=[],
+        backend="codex",
+    )
+    run_dir.update_state(
+        owner="supervisor",
+        supervisor_pid=os.getpid(),
+        supervisor_start_identity=process_identity(os.getpid()),
+    )
+    resume = run_dir.claim_resume_generation()
+    generation = resume["generation"]
+    assert run_dir.activate_resume_generation(generation, resume["launch_nonce"])
+    run_dir.record_followup(generation, status="done", output="not released yet")
+    key = run_dir.claim_followup_notification(generation, "done")
+    assert key
+    agent._enqueue_system_notification(
+        source="unrelated", ref_id=run_dir.handle, body="prior event",
+    )
+
+    manager = DaemonManager(agent)
+    events = json.loads(
+        (agent._working_dir / ".notification" / "system.json").read_text()
+    )["data"]["events"]
+    assert not any(event.get("idempotency_key") == key for event in events)
+
+    assert run_dir.release_resume_generation(
+        generation,
+        resume["launch_nonce"],
+        owner_pid=os.getpid(),
+        owner_identity=process_identity(os.getpid()),
+        result_status="done",
+    )
+    manager._reconcile_followup_notifications()
+    events = json.loads(
+        (agent._working_dir / ".notification" / "system.json").read_text()
+    )["data"]["events"]
+    assert len([event for event in events if event.get("idempotency_key") == key]) == 1
+
+
+def test_followup_notification_reconciliation_skips_legacy_released_claim(
+    tmp_path,
+):
+    from lingtai.adapters.posix.process_identity import process_identity
+    from lingtai.tools.daemon import DaemonManager
+    from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir
+
+    agent = make_daemon_agent(tmp_path)
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-followup-legacy",
+        task="legacy detached follow-up",
+        tools=[],
+        backend="codex",
+    )
+    run_dir.update_state(
+        owner="supervisor",
+        supervisor_pid=os.getpid(),
+        supervisor_start_identity=process_identity(os.getpid()),
+    )
+    resume = run_dir.claim_resume_generation()
+    generation = resume["generation"]
+    assert run_dir.activate_resume_generation(generation, resume["launch_nonce"])
+    run_dir.record_followup(generation, status="done", output="historical result")
+    assert run_dir.release_resume_generation(
+        generation,
+        resume["launch_nonce"],
+        owner_pid=os.getpid(),
+        owner_identity=process_identity(os.getpid()),
+        result_status="done",
+    )
+    claim_path = run_dir.path / "resume-claims" / f"resume-{generation}.json"
+    claim = json.loads(claim_path.read_text())
+    claim.pop("followup_notification_required", None)
+    claim_path.write_text(json.dumps(claim), encoding="utf-8")
+
+    agent._enqueue_system_notification(
+        source="unrelated", ref_id=run_dir.handle, body="prior event",
+    )
+    DaemonManager(agent)
+
+    events = json.loads(
+        (agent._working_dir / ".notification" / "system.json").read_text()
+    )["data"]["events"]
+    key = run_dir.followup_notification_idempotency_key(run_dir.run_id, generation)
+    assert not any(event.get("idempotency_key") == key for event in events)
+    persisted = json.loads(claim_path.read_text())
+    assert "followup_notification_claim" not in persisted
+    assert "followup_notification_receipt" not in persisted
+
 
 def test_headless_observation_failure_reaps_child_and_clears_registry():
     result = _run_isolated_port_probe(r'''

@@ -146,6 +146,22 @@ files, not standalone top-level skills.
     the hard terminal-success contract: only `finish(status="done")` permits
     `done`; `failed`/`incomplete`, missing finish, or invalid completion prevents
     silent success. Secret `env`/`headers` values are redacted in prompts.
+    For Codex `daemon(action="ask")`, every ask gets a fresh completion
+    generation. The live manager allocates a safe unique
+    `followups/<generation>.completion.json` path before spawning; a detached
+    supervisor passes its already-claimed durable generation/path through the
+    execution host. The fresh `daemon_common` registration writes that receipt.
+    The initial completion file and `turn.completed` event are
+    stale/insufficient; missing, invalid, failed, or incomplete fresh finish
+    fails the follow-up. Fresh validation also rejects unknown keys, present
+    null optional values, non-string summary/reason values, and non-string
+    artifact members; historical initial receipts remain identity-optional.
+    Live workers publish that structured failure or success; detached workers
+    defer both outcomes to the supervisor's single direct notification, backed
+    by a per-generation durable claim/receipt. A store failure leaves the claim
+    pending for fresh-manager reconciliation, which retries the same
+    generation-specific idempotency key and records a receipt only after
+    successful or idempotently observed publication.
   - `preset`: optional body/model/tool-shape override for this daemon — an
     explicit `.json`/`.jsonc` path. On the LingTai backend it must already be
     a member of the parent agent's resolved `manifest.preset.allowed` set

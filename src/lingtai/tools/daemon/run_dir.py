@@ -487,6 +487,10 @@ class DaemonRunDir:
                 "owner_start_identity": process_identity(owner_pid),
                 "launch_nonce": nonce, "claimed_at": self._now_iso(),
                 "pending_until": now + self.PENDING_LAUNCH_LEASE_S,
+                # Opt in only generations created by a notification-aware
+                # runtime.  Startup recovery must never replay historical
+                # released claims that predate per-generation receipts.
+                "followup_notification_required": True,
             }
             claim_path = claims_dir / f"resume-{generation}.json"
             self._atomic_write_json(claim_path, claim)
@@ -571,6 +575,74 @@ class DaemonRunDir:
             self._atomic_write_json(self.daemon_json_path, self._state)
             return True
 
+    @staticmethod
+    def followup_notification_idempotency_key(run_id: str, generation: str) -> str:
+        """Return the stable event identity for one detached follow-up generation."""
+        return f"daemon-followup:{run_id}:{generation}"
+
+    def claim_followup_notification(self, generation: str, status: str) -> str | None:
+        """Durably claim publication of one detached follow-up result.
+
+        The claim lives in the append-only per-generation resume claim rather
+        than in process memory.  A pending claim is deliberately returned again
+        so a fresh manager can recover a supervisor crash between sink
+        publication and receipt persistence; the sink's idempotency key makes
+        that retry safe.  A recorded receipt is the only terminal no-op.
+        """
+        path = self.path / "resume-claims" / f"resume-{generation}.json"
+        key = self.followup_notification_idempotency_key(self._run_id, generation)
+        with self._terminal_notification_lock:
+            with self._state_transaction():
+                try:
+                    row = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                    return None
+                if not isinstance(row, dict) or row.get("generation") != generation:
+                    return None
+                if row.get("followup_notification_required") is not True:
+                    return None
+                receipt = row.get("followup_notification_receipt")
+                if isinstance(receipt, dict):
+                    return None
+                claim = row.get("followup_notification_claim")
+                if isinstance(claim, dict):
+                    return key if claim.get("idempotency_key") == key else None
+                row["followup_notification_claim"] = {
+                    "status": "pending",
+                    "followup_status": status,
+                    "idempotency_key": key,
+                    "claimed_at": self._now_iso(),
+                }
+                self._atomic_write_json(path, row)
+                return key
+
+    def mark_followup_notification_published(
+        self, generation: str, idempotency_key: str,
+    ) -> bool:
+        """Persist the follow-up publication receipt after the sink succeeds."""
+        path = self.path / "resume-claims" / f"resume-{generation}.json"
+        with self._terminal_notification_lock:
+            with self._state_transaction():
+                try:
+                    row = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                    return False
+                if not isinstance(row, dict) or row.get("generation") != generation:
+                    return False
+                receipt = row.get("followup_notification_receipt")
+                if isinstance(receipt, dict):
+                    return receipt.get("idempotency_key") == idempotency_key
+                claim = row.get("followup_notification_claim")
+                if not isinstance(claim, dict) or claim.get("idempotency_key") != idempotency_key:
+                    return False
+                row["followup_notification_claim"] = None
+                row["followup_notification_receipt"] = {
+                    "idempotency_key": idempotency_key,
+                    "published_at": self._now_iso(),
+                }
+                self._atomic_write_json(path, row)
+                return True
+
     def record_followup(self, generation: str, *, status: str,
                         output: str = "", error: str | None = None) -> None:
         """Persist the latest detached follow-up result for ``daemon(check)``."""
@@ -587,6 +659,24 @@ class DaemonRunDir:
         except OSError:
             pass
         preview = text[:500]
+        # Keep the generation's own result beside its notification claim.  The
+        # daemon.json fields remain the convenient latest-result view, while
+        # recovery of an older unpublished generation never has to guess from a
+        # newer follow-up's state.
+        claim_path = self.path / "resume-claims" / f"resume-{generation}.json"
+        with self._state_transaction():
+            try:
+                claim = json.loads(claim_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                claim = None
+            if isinstance(claim, dict) and claim.get("generation") == generation:
+                claim.update({
+                    "result_status": status,
+                    "followup_result_path": str(result_path),
+                    "followup_result_preview": preview,
+                    "followup_error": error,
+                })
+                self._atomic_write_json(claim_path, claim)
         self.update_state(
             followup_status=status,
             followup_result_path=str(result_path),

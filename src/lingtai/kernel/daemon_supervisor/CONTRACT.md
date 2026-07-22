@@ -77,8 +77,15 @@ terminal truth, and publishes one idempotent notification. Supported terminal
 CLI ask/resume creates one durable generation claim whose owner is identified
 by PID plus stable process-incarnation identity; a bounded pending-launch lease
 also blocks a successor until the exact generation/nonce promotes or the lease
-expires. The resume owner persists follow-up result state and releases exactly
-that generation. Parent stop/refresh is not a cancellation operation.
+expires. The resume owner persists follow-up result state, gives Codex a fresh
+per-generation completion MCP identity when required, and releases exactly that
+generation. Before release it durably claims the generation's direct follow-up
+notification; the claim remains recoverable on sink failure or a
+publish-before-receipt crash, and fresh-manager reconciliation retries the same
+idempotency key before recording the receipt. Success and failure use this same
+path. The supervisor publishes the resulting follow-up notification once; the
+manager-shaped execution child never uses the parent BaseAgent notification
+path. Parent stop/refresh is not a cancellation operation.
 
 ## Durable and secret boundary
 

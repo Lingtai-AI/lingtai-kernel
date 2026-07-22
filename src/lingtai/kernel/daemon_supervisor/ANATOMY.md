@@ -45,7 +45,7 @@ Core schemas depend only on standard-library value types. Concrete process launc
 
 ## State
 
-Persistent state is the per-run manifest, restrictive supervisor logs, control request/ack files, `daemon.json`, result/artifact files, and terminal notification receipt. Ephemeral state is one watcher, one host, and exact backend child groups per run.
+Persistent state is the per-run manifest, restrictive supervisor logs, control request/ack files, `daemon.json`, result/artifact files, per-generation follow-up result/completion receipts, and terminal/follow-up notification receipts. Detached follow-up claims live with each `resume-claims/resume-<generation>.json`; the supervisor claims before release, retains the claim on sink failure or a receipt crash, and fresh-manager reconciliation retries the same generation-specific idempotency key. Ephemeral state is one watcher, one host, and exact backend child groups per run.
 
 ## Notes
 

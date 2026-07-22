@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -1415,6 +1416,7 @@ class DaemonManager:
         )
         self._reap_dead_parent_daemon_records()
         self._reconcile_terminal_notifications()
+        self._reconcile_followup_notifications()
 
     def _reap_dead_parent_daemon_records(self) -> None:
         """Mark stale running daemon.json records failed after a restart.
@@ -1550,6 +1552,122 @@ class DaemonManager:
                 DaemonRunDir.mark_terminal_notification_published_on_disk(
                     daemon_json_path, idempotency_key=key,
                 )
+
+    def _reconcile_followup_notifications(self) -> None:
+        """Retry detached follow-up claims that lack a durable receipt.
+
+        Each resume generation owns its claim file and idempotency key.  Recovery
+        therefore does not infer completion from the latest daemon state alone,
+        and an earlier unrelated event with the same ``ref_id`` cannot satisfy
+        this generation's publication.
+        """
+        daemons_dir = self._agent._working_dir / "daemons"
+        if not daemons_dir.is_dir():
+            return
+        for claim_path in daemons_dir.glob("*/resume-claims/resume-*.json"):
+            try:
+                claim = json.loads(claim_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if not isinstance(claim, dict):
+                continue
+            # Only generations created by a notification-aware runtime are
+            # replay candidates.  Legacy released claims also carry
+            # ``result_status`` but must not emit surprise notifications after
+            # an upgrade.
+            if claim.get("followup_notification_required") is not True:
+                continue
+            pending = claim.get("followup_notification_claim")
+            if isinstance(claim.get("followup_notification_receipt"), dict):
+                continue
+            generation = claim.get("generation")
+            run_path = claim_path.parent.parent
+            if not isinstance(generation, str) or not generation:
+                continue
+            # A result is parent-visible only after the exact owner has
+            # durably released its generation.  A pending claim on an active
+            # or stale generation is evidence for diagnosis, not permission
+            # to publish an uncommitted outcome.
+            if claim.get("status") != "released":
+                continue
+            result_status = claim.get("result_status")
+            if result_status not in {"done", "failed", "cancelled", "timeout"}:
+                continue
+            # If the detached owner died after recording/releasing its result
+            # but before its claim transaction, recovery creates the same
+            # per-generation claim instead of silently dropping that result.
+            if not isinstance(pending, dict):
+                if claim.get("status") != "released":
+                    continue
+                try:
+                    pending_key = DaemonRunDir.attach(run_path).claim_followup_notification(
+                        generation, result_status,
+                    )
+                    claim = json.loads(claim_path.read_text(encoding="utf-8"))
+                    pending = claim.get("followup_notification_claim")
+                except Exception:
+                    continue
+                if not isinstance(pending, dict) or not pending_key:
+                    continue
+            run_json = run_path / "daemon.json"
+            try:
+                state = json.loads(run_json.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if not isinstance(state, dict):
+                continue
+            run_id = state.get("run_id")
+            key = DaemonRunDir.followup_notification_idempotency_key(
+                str(run_id or run_path.name), generation,
+            )
+            if pending.get("idempotency_key") != key:
+                continue
+            notification_state = dict(state)
+            result_path = claim.get("followup_result_path")
+            if isinstance(result_path, str) and result_path:
+                notification_state["result_path"] = result_path
+            followup_error = claim.get("followup_error")
+            if isinstance(followup_error, str) and followup_error:
+                notification_state["error"] = {
+                    "type": "follow-up",
+                    "message": followup_error,
+                }
+            try:
+                published = self._publish_daemon_notification(
+                    str(run_id or run_path.name),
+                    status=f"follow-up {result_status}",
+                    text=self._followup_notification_text_from_claim(claim),
+                    run_state=notification_state,
+                    run_path=run_path,
+                    idempotency_key=key,
+                )
+            except Exception:
+                published = False
+            if published:
+                try:
+                    DaemonRunDir.attach(run_path).mark_followup_notification_published(
+                        generation, key,
+                    )
+                except Exception:
+                    # The pending claim remains durable and the next manager
+                    # startup will retry receipt reconciliation idempotently,
+                    # including a crash in the receipt-write window.
+                    continue
+
+    @staticmethod
+    def _followup_notification_text_from_claim(claim: dict) -> str:
+        result_path = claim.get("followup_result_path")
+        if isinstance(result_path, str) and result_path:
+            try:
+                with open(result_path, encoding="utf-8") as f:
+                    return f.read(2000)
+            except (OSError, UnicodeDecodeError):
+                pass
+        preview = claim.get("followup_result_preview")
+        if isinstance(preview, str) and preview:
+            return preview
+        error = claim.get("followup_error")
+        return error if isinstance(error, str) else ""
 
     def _terminal_notification_text_from_state(
         self, state: dict, run_path: Path
@@ -1899,8 +2017,17 @@ class DaemonManager:
         return path
 
     @staticmethod
-    def _read_daemon_completion(run_dir: DaemonRunDir) -> _DaemonCompletion:
-        path = DaemonManager._completion_file(run_dir)
+    def _followup_completion_file(run_dir: DaemonRunDir, generation: str) -> Path:
+        """Return the one-shot completion identity for one resume generation."""
+        return run_dir.path / "followups" / f"{generation}.completion.json"
+
+    @staticmethod
+    def _read_daemon_completion_file(
+        path: Path,
+        run_id: str,
+        *,
+        require_identity: bool = False,
+    ) -> _DaemonCompletion:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -1909,6 +2036,23 @@ class DaemonManager:
             return _DaemonCompletion(None, error=f"invalid completion signal: {e}")
         if not isinstance(data, dict):
             return _DaemonCompletion(None, error="completion signal must be a JSON object")
+
+        # ``daemon_common.finish`` writes the finish payload together with its
+        # two transport identity fields.  The initial-run reader intentionally
+        # remains compatible with historical receipts that omitted those fields;
+        # a fresh follow-up, however, must accept exactly this envelope and the
+        # payload schema (including its additionalProperties=false boundary).
+        if require_identity:
+            allowed_keys = {
+                "schema", "status", "run_id", "summary", "reason", "artifacts",
+            }
+            unknown = sorted(set(data) - allowed_keys)
+            if unknown:
+                return _DaemonCompletion(
+                    None,
+                    error=f"completion signal has unknown key(s): {', '.join(unknown)}",
+                )
+
         status = data.get("status")
         if status not in _DAEMON_COMPLETION_STATUSES:
             return _DaemonCompletion(
@@ -1918,27 +2062,44 @@ class DaemonManager:
                     f"{sorted(_DAEMON_COMPLETION_STATUSES)}"
                 ),
             )
-        run_id = data.get("run_id")
-        if run_id is not None and run_id != run_dir.run_id:
+        if require_identity and data.get("schema") != "lingtai.daemon_completion.v1":
+            return _DaemonCompletion(
+                None, error="completion signal schema is missing or invalid"
+            )
+        completion_run_id = data.get("run_id")
+        if (
+            (require_identity and completion_run_id != run_id)
+            or (not require_identity and completion_run_id is not None and completion_run_id != run_id)
+        ):
             return _DaemonCompletion(
                 None,
-                error=f"completion run_id mismatch: {run_id!r} != {run_dir.run_id!r}",
+                error=f"completion run_id mismatch: {completion_run_id!r} != {run_id!r}",
             )
         summary = data.get("summary")
         reason = data.get("reason")
         artifacts = data.get("artifacts")
-        if summary is not None and not isinstance(summary, str):
+        if (summary is not None and not isinstance(summary, str)) or (
+            require_identity and "summary" in data and not isinstance(summary, str)
+        ):
             return _DaemonCompletion(None, error="completion summary must be a string")
-        if reason is not None and not isinstance(reason, str):
+        if (reason is not None and not isinstance(reason, str)) or (
+            require_identity and "reason" in data and not isinstance(reason, str)
+        ):
             return _DaemonCompletion(None, error="completion reason must be a string")
-        if artifacts is not None and (
+        if (artifacts is not None and (
             not isinstance(artifacts, list)
             or not all(isinstance(item, str) for item in artifacts)
-        ):
+        )) or (require_identity and "artifacts" in data and not isinstance(artifacts, list)):
             return _DaemonCompletion(
                 None, error="completion artifacts must be an array of strings"
             )
         return _DaemonCompletion(status, summary, reason, artifacts)
+
+    @staticmethod
+    def _read_daemon_completion(run_dir: DaemonRunDir) -> _DaemonCompletion:
+        return DaemonManager._read_daemon_completion_file(
+            DaemonManager._completion_file(run_dir), run_dir.run_id
+        )
 
     @staticmethod
     def _run_has_daemon_common_mcp(run_dir: DaemonRunDir) -> bool:
@@ -1959,6 +2120,25 @@ class DaemonManager:
         completion = self._read_daemon_completion(run_dir)
         if not completion.is_done:
             raise self._fail_missing_or_bad_completion(run_dir, completion, final_text)
+
+    def _require_fresh_followup_completion(
+        self, run_dir: DaemonRunDir, completion_path: str | Path, final_text: str,
+    ) -> None:
+        """Require this resume's own MCP finish receipt without mutating primary state."""
+        completion = self._read_daemon_completion_file(
+            Path(completion_path), run_dir.run_id, require_identity=True,
+        )
+        if completion.is_done:
+            return
+        detail = completion.error or f"finish status was {completion.status!r}"
+        if completion.reason:
+            detail += f"; reason: {completion.reason}"
+        if completion.summary:
+            detail += f"; summary: {completion.summary}"
+        raise RuntimeError(
+            "daemon follow-up completion MCP contract did not permit success: "
+            f"{detail}. Final text: {final_text[:500]}"
+        )
 
     def _fail_missing_or_bad_completion(
         self,
@@ -3773,7 +3953,7 @@ class DaemonManager:
             parts.append(f"Preview:\n{preview}")
         body = "\n".join(parts)
         try:
-            self._agent._enqueue_system_notification(
+            publication_result = self._agent._enqueue_system_notification(
                 source="daemon",
                 ref_id=em_id,
                 body=body,
@@ -3788,7 +3968,27 @@ class DaemonManager:
                 error=str(e)[:200],
             )
             return False
-        return True
+        if publication_result:
+            return True
+        # An idempotent sink may return an empty result both when it observed
+        # an existing event and when a compare/update failed.  Only the former
+        # is a successful recovery; inspect the store before recording a
+        # durable receipt for the latter.
+        if idempotency_key:
+            try:
+                snapshot = self._agent._notification_store.snapshot(
+                    lambda channel: channel == "system",
+                )
+                events = snapshot.get("system", {}).get("data", {}).get("events", [])
+                if any(
+                    isinstance(event, dict)
+                    and event.get("idempotency_key") == idempotency_key
+                    for event in events
+                ):
+                    return True
+            except Exception:
+                pass
+        return False
 
     def _publish_followup_if_live(
         self,
@@ -3809,6 +4009,12 @@ class DaemonManager:
         if entry is None or entry.get("shutdown_in_progress"):
             self._log(
                 "daemon_ask_post_reclaim",
+                em_id=em_id, status=status, text_length=len(text or ""),
+            )
+            return
+        if entry.get("followup_notification_owner") == "detached_supervisor":
+            self._log(
+                "daemon_ask_notification_deferred",
                 em_id=em_id, status=status, text_length=len(text or ""),
             )
             return
@@ -5578,6 +5784,26 @@ class DaemonManager:
                                    f"daemon(action='check', id='{em_id}')"}
             entry["ask_in_flight"] = True
 
+        # A live manager entry may serve multiple sequential asks.  Allocate
+        # the completion identity while the single-writer guard is held so a
+        # receipt from an earlier ask can never satisfy this generation.  A
+        # detached supervisor entry already owns a durable claimed generation;
+        # preserve that path and let the supervisor publish its result.
+        completion_path = entry.get("followup_completion_path")
+        if self._run_has_daemon_common_mcp(run_dir):
+            if entry.get("followup_notification_owner") != "detached_supervisor":
+                generation = f"live-{secrets.token_hex(16)}"
+                completion_path = str(
+                    self._followup_completion_file(run_dir, generation)
+                )
+                entry["followup_completion_path"] = completion_path
+            elif not completion_path:
+                with entry["followup_lock"]:
+                    entry["ask_in_flight"] = False
+                return {
+                    "status": "error", "id": em_id,
+                    "message": "detached Codex follow-up completion identity was not provisioned",
+                }
         cmd = [
             "codex",
             "exec",
@@ -5585,8 +5811,12 @@ class DaemonManager:
             session_id,
             "--json",
             "--dangerously-bypass-approvals-and-sandbox",
-            message,
         ]
+        if completion_path and self._run_has_daemon_common_mcp(run_dir):
+            common = DaemonManager._daemon_common_mcp_registration(run_dir)
+            common["env"]["LINGTAI_DAEMON_COMPLETION_FILE"] = str(completion_path)
+            cmd.extend(_codex_mcp_argv([common]))
+        cmd.append(message)
         self._log("daemon_codex_ask", em_id=em_id,
                   session_id=session_id, message_length=len(message))
 
@@ -5616,6 +5846,7 @@ class DaemonManager:
 
         ask_future = self._ask_pool.submit(
             self._run_ask_codex_stream, em_id, entry, handle, run_dir,
+            completion_path,
         )
         ask_future.add_done_callback(
             lambda f, eid=em_id: self._on_ask_done(eid, f)
@@ -5632,6 +5863,7 @@ class DaemonManager:
         entry: dict,
         handle: DaemonProcessHandle,
         run_dir: DaemonRunDir,
+        completion_path: str | None = None,
     ) -> dict:
         """Background worker: stream a ``codex exec resume`` subprocess.
 
@@ -5648,6 +5880,7 @@ class DaemonManager:
 
         agent_message_texts: list[str] = []
         turn_completed = False
+        usage_candidate: tuple[dict, dict | None] | None = None
         timed_out = False
 
         try:
@@ -5675,20 +5908,14 @@ class DaemonManager:
                 elif etype == "turn.completed":
                     # Resume streams should also account one terminal usage
                     # object at most; a repeated terminal line is not a new
-                    # provider call.
+                    # provider call. Buffer it until the fresh completion MCP
+                    # receipt passes, so turn.completed alone cannot leave an
+                    # accepted usage record behind.
                     if not turn_completed:
                         turn_completed = True
                         usage = _normalize_codex_usage(event.get("usage"))
                         if usage is not None:
-                            try:
-                                run_dir.record_cli_tokens(
-                                    input=usage["input"],
-                                    output=usage["output"],
-                                    cached=usage["cached"],
-                                    raw=event.get("usage"),
-                                )
-                            except Exception:
-                                pass
+                            usage_candidate = (usage, event.get("usage"))
 
             if time.monotonic() >= deadline:
                 timed_out = True
@@ -5736,10 +5963,38 @@ class DaemonManager:
             return {"status": "error", "id": em_id, "message": err}
 
         output = "\n".join(agent_message_texts).strip()
-        if output:
-            self._publish_followup_if_live(
-                em_id, status="follow-up completed", text=output, run_dir=run_dir,
-            )
+        if self._run_has_daemon_common_mcp(run_dir):
+            try:
+                if not completion_path:
+                    raise RuntimeError(
+                        "codex follow-up completion MCP identity was not provisioned"
+                    )
+                self._require_fresh_followup_completion(run_dir, completion_path, output)
+            except RuntimeError as exc:
+                # A fresh-finish rejection is an ordinary follow-up failure,
+                # not an uncaught worker exception.  This keeps live asks
+                # fail-loud and lets detached hosts record the failed
+                # generation without entering the manager notification path.
+                err = str(exc)
+                self._publish_followup_if_live(
+                    em_id, status="follow-up failed", text=err, run_dir=run_dir,
+                )
+                return {"status": "error", "id": em_id, "message": err}
+        if usage_candidate is not None:
+            usage, raw = usage_candidate
+            try:
+                run_dir.record_cli_tokens(
+                    input=usage["input"], output=usage["output"],
+                    cached=usage["cached"], thinking=usage.get("thinking", 0), raw=raw,
+                )
+            except Exception:
+                pass
+        self._publish_followup_if_live(
+            em_id,
+            status="follow-up completed",
+            text=output or "follow-up completed",
+            run_dir=run_dir,
+        )
         return {"status": "sent", "id": em_id, "output": output}
 
     # ------------------------------------------------------------------

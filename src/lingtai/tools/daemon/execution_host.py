@@ -541,11 +541,20 @@ class DetachedDaemonExecutionHost:
                 f"detached resume is unsupported for backend {backend!r}"
             )
         state = self._run_dir.read_state_from_disk(self._run_dir.path)
+        followup_completion_path = self._manager_type._followup_completion_file(
+            self._run_dir, generation
+        )
         entry = {
             "detached": True, "run_dir": self._run_dir,
             "backend": backend, "task": state.get("task", ""),
             "followup_lock": threading.Lock(), "ask_in_flight": False,
             "ask_future": None, "cancel_event": threading.Event(),
+            "followup_completion_path": str(followup_completion_path),
+            # The detached supervisor publishes the durable follow-up event
+            # after this child records its generation result.  The parser keeps
+            # stream/error handling, while this ownership marker prevents it
+            # from entering the parent Agent notification path.
+            "followup_notification_owner": "detached_supervisor",
         }
         self._cancel_event = entry["cancel_event"]
         self._timeout_event = threading.Event()
