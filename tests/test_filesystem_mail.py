@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 
 import pytest
@@ -90,8 +91,11 @@ class TestSend:
         assert result is not None  # error string
         assert "no agent" in result.lower()
 
-    def test_send_fails_stale_heartbeat(self, tmp_path):
+    def test_send_fails_stale_heartbeat(self, tmp_path, monkeypatch):
+        import lingtai.adapters.posix.mail as mail_mod
         from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+        monkeypatch.setattr(mail_mod, "MAIL_DELIVERY_LIVENESS_GRACE_SECONDS", 0.0)
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = _make_agent_dir(tmp_path, "recip01")
@@ -102,7 +106,41 @@ class TestSend:
         svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
         result = svc.send(str(recip_dir), {"message": "hello"})
         assert result is not None
-        assert "not running" in result.lower()
+        assert "not currently deliverable" in result.lower()
+        assert "heartbeat" in result.lower()
+
+    def test_send_retries_transient_stale_heartbeat(self, tmp_path, monkeypatch):
+        """A heartbeat that becomes fresh during the grace window should deliver."""
+        import lingtai.adapters.posix.mail as mail_mod
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+        monkeypatch.setattr(mail_mod, "MAIL_DELIVERY_LIVENESS_GRACE_SECONDS", 0.5)
+        monkeypatch.setattr(mail_mod, "MAIL_DELIVERY_LIVENESS_RETRY_INTERVAL_SECONDS", 0.01)
+
+        sender_dir = _make_agent_dir(tmp_path, "sender01")
+        recip_dir = _make_agent_dir(tmp_path, "recip01")
+        (recip_dir / "mailbox" / "inbox").mkdir(parents=True)
+        heartbeat = recip_dir / ".agent.heartbeat"
+        heartbeat.write_text(str(time.time() - 10))
+
+        def _refresh_heartbeat():
+            time.sleep(0.05)
+            heartbeat.write_text(str(time.time()))
+
+        thread = threading.Thread(target=_refresh_heartbeat)
+        thread.start()
+        try:
+            svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
+            result = svc.send(str(recip_dir), {"message": "hello after lag"})
+        finally:
+            thread.join(timeout=1.0)
+
+        assert result is None
+        inbox = recip_dir / "mailbox" / "inbox"
+        msgs = list(inbox.iterdir())
+        assert len(msgs) == 1
+        data = json.loads((msgs[0] / "message.json").read_text())
+        assert data["message"] == "hello after lag"
 
     def test_send_self(self, tmp_path):
         """Send to own address should work (self-send)."""
@@ -160,8 +198,11 @@ class TestSend:
         msg = json.loads((entries[0] / "message.json").read_text())
         assert msg["message"] == "hello human"
 
-    def test_send_fails_no_heartbeat_file(self, tmp_path):
+    def test_send_fails_no_heartbeat_file(self, tmp_path, monkeypatch):
+        import lingtai.adapters.posix.mail as mail_mod
         from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+        monkeypatch.setattr(mail_mod, "MAIL_DELIVERY_LIVENESS_GRACE_SECONDS", 0.0)
 
         sender_dir = _make_agent_dir(tmp_path, "sender01")
         recip_dir = tmp_path / "recip01"
@@ -175,7 +216,8 @@ class TestSend:
         svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
         result = svc.send(str(recip_dir), {"message": "hello"})
         assert result is not None
-        assert "not running" in result.lower()
+        assert "not currently deliverable" in result.lower()
+        assert "heartbeat" in result.lower()
 
     def test_send_atomic_write(self, tmp_path):
         """Verify no .tmp file is left behind after successful send."""
