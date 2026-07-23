@@ -23,6 +23,7 @@ from lingtai.kernel.llm.base import UsageMetadata
 from lingtai.kernel.llm_utils import WorkerStillRunningError
 from lingtai.kernel.message import _make_message, MSG_REQUEST
 from lingtai.kernel.state import AgentState
+from lingtai.auth.codex_account_source import NoCandidateError
 
 
 @dataclass
@@ -238,6 +239,60 @@ def test_partial_stream_marker_stops_before_transient_or_aed_retry(tmp_path, mon
     assert any(name == "llm_partial_stream_terminal" for name, _ in agent._logs)
     assert not any(name == "aed_transient_retry" for name, _ in agent._logs)
     assert not any(name == "aed_attempt" for name, _ in agent._logs)
+
+
+def test_no_candidate_error_is_terminal_without_aed_retry(tmp_path, monkeypatch):
+    agent = _make_run_loop_agent(tmp_path)
+    agent.reports = []
+    agent._report_task_card_api_error = lambda exc, **kw: agent.reports.append((exc, kw))
+    calls = {"n": 0}
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        _agent._shutdown.set()
+        raise NoCandidateError("No eligible account remaining")
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    assert calls["n"] == 1
+    assert getattr(agent, "rebuilds", 0) == 0
+    assert agent._asleep.is_set()
+    assert [name for name, _ in agent._logs].count("no_candidate_terminal") == 1
+    assert not any(name == "aed_attempt" for name, _ in agent._logs)
+    assert len(agent.reports) == 1
+    assert agent.reports[0][0].args == ("No eligible account remaining",)
+    assert agent.reports[0][1] == {
+        "attempt": None,
+        "max_attempts": None,
+        "terminal": True,
+    }
+
+
+def test_ordinary_exception_keeps_aed_rebuild_behavior(tmp_path, monkeypatch):
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 3
+    calls = {"n": 0}
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            _agent._shutdown.set()
+            return
+        raise ValueError("ordinary failure")
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
+
+    turn._run_loop(agent)
+
+    assert calls["n"] == 3
+    assert getattr(agent, "rebuilds", 0) == 2
+    assert [name for name, _ in agent._logs].count("aed_attempt") == 2
 
 
 def test_transient_provider_error_retries_before_aed_count(tmp_path, monkeypatch):
