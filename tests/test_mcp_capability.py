@@ -186,6 +186,77 @@ def test_expand_agent_placeholders_scopes_workbench_root(tmp_path):
     assert agent._expand_agent_placeholders(None) is None
 
 
+class _FakeConnectionClient:
+    """Capture transport inputs without opening a subprocess or connection."""
+
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.started = False
+        type(self).instances.append(self)
+
+    def start(self):
+        self.started = True
+
+    def list_tools(self):
+        return []
+
+
+def test_connect_mcp_http_expands_url_and_header_values(tmp_path, monkeypatch):
+    from lingtai.services import mcp
+
+    class FakeHTTPMCPClient(_FakeConnectionClient):
+        instances = []
+
+    monkeypatch.setattr(mcp, "HTTPMCPClient", FakeHTTPMCPClient)
+    agent, workdir = _mk_agent(tmp_path)
+
+    agent.connect_mcp_http(
+        "https://example.test/agents/{agent_id}/mcp",
+        {
+            "X-Agent-Dir": "{agent_dir}",
+            "X-{agent_id}": "unchanged",
+            "X-Literal": "no-placeholders",
+        },
+    )
+
+    client = FakeHTTPMCPClient.instances[-1]
+    assert client.started
+    assert client.kwargs == {
+        "url": "https://example.test/agents/agent/mcp",
+        "headers": {
+            "X-Agent-Dir": str(workdir),
+            "X-{agent_id}": "unchanged",
+            "X-Literal": "no-placeholders",
+        },
+    }
+
+
+def test_connect_mcp_stdio_placeholder_expansion_is_unchanged(tmp_path, monkeypatch):
+    from lingtai.services import mcp
+
+    class FakeMCPClient(_FakeConnectionClient):
+        instances = []
+
+    monkeypatch.setattr(mcp, "MCPClient", FakeMCPClient)
+    agent, workdir = _mk_agent(tmp_path)
+
+    agent.connect_mcp(
+        "bin/{agent_id}",
+        args=["--root", "{agent_dir}", "literal"],
+        env={"AGENT": "{agent_id}", "LITERAL": "unchanged"},
+    )
+
+    client = FakeMCPClient.instances[-1]
+    assert client.started
+    assert client.kwargs == {
+        "command": "bin/agent",
+        "args": ["--root", str(workdir), "literal"],
+        "env": {"AGENT": "agent", "LITERAL": "unchanged"},
+    }
+
+
 # ---------------------------------------------------------------------------
 # Decompression
 # ---------------------------------------------------------------------------

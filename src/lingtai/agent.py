@@ -1116,6 +1116,13 @@ class Agent(BaseAgent):
         """
         from .services.mcp import HTTPMCPClient
 
+        url = self._expand_agent_placeholders(url)
+        if headers:
+            headers = {
+                name: self._expand_agent_placeholders(value)
+                for name, value in headers.items()
+            }
+
         client = HTTPMCPClient(url=url, headers=headers)
         client.start()
 
