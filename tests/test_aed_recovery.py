@@ -285,9 +285,12 @@ def test_no_candidate_error_terminal_log_includes_safe_diagnostics(tmp_path, mon
             "No eligible account remaining",
             reason="all_zero_quota",
             diagnostics={
+                "codex_account_source": "weighted",
                 "codex_account_pool_size": 2,
                 "codex_account_zero_quota_count": 2,
                 "secret_path": "/tmp/token.json",
+                "codex_account_auth_ref": "/tmp/token.json",
+                "no_candidate_token": "secret-token-value",
             },
         )
 
@@ -301,10 +304,16 @@ def test_no_candidate_error_terminal_log_includes_safe_diagnostics(tmp_path, mon
     logs = [fields for name, fields in agent._logs if name == "no_candidate_terminal"]
     assert len(logs) == 1
     assert logs[0]["no_candidate_reason"] == "all_zero_quota"
+    assert logs[0]["codex_account_source"] == "weighted"
     assert logs[0]["codex_account_pool_size"] == 2
     assert logs[0]["codex_account_zero_quota_count"] == 2
     assert "secret_path" not in logs[0]
+    assert "codex_account_auth_ref" not in logs[0]
+    assert "no_candidate_token" not in logs[0]
+    assert "source=weighted" in logs[0]["error"]
     assert "zero_quota=2" in logs[0]["error"]
+    assert "/tmp/token.json" not in logs[0]["error"]
+    assert "secret-token-value" not in logs[0]["error"]
     assert len(agent.reports) == 1
     assert agent.reports[0][0].diagnostic_fields()["codex_account_pool_size"] == 2
     assert agent.reports[0][1]["terminal"] is True

@@ -643,21 +643,56 @@ def test_no_candidate_error_diagnostic_fields_are_safe_and_structured():
         "No eligible account remaining",
         reason="all_zero_quota",
         diagnostics={
+            "codex_account_source": "weighted",
             "codex_account_pool_size": 2,
             "codex_account_zero_quota_count": 2,
             "secret_path": "/tmp/token.json",
+            "codex_account_auth_ref": "/tmp/token.json",
+            "codex_account_freeform": "token-value",
+            "no_candidate_token": "secret-token-value",
         },
     )
 
     fields = exc.diagnostic_fields()
     assert fields == {
         "no_candidate_reason": "all_zero_quota",
+        "codex_account_source": "weighted",
         "codex_account_pool_size": 2,
         "codex_account_zero_quota_count": 2,
     }
-    assert "secret_path" not in str(exc)
+    assert "source=weighted" in str(exc)
     assert "pool=2" in str(exc)
     assert "zero_quota=2" in str(exc)
+    for leaked in (
+        "secret_path",
+        "auth_ref",
+        "/tmp/token.json",
+        "freeform",
+        "token-value",
+        "no_candidate_token",
+        "secret-token-value",
+    ):
+        assert leaked not in str(exc)
+        assert leaked not in repr(fields)
+
+
+def test_no_candidate_error_rejects_freeform_reason_and_source_text():
+    exc = NoCandidateError(
+        "No eligible account remaining",
+        reason="/tmp/token.json",
+        diagnostics={
+            "codex_account_source": "/tmp/token.json",
+            "codex_account_pool_size": 1,
+        },
+    )
+
+    fields = exc.diagnostic_fields()
+    assert fields == {
+        "no_candidate_reason": "unknown",
+        "codex_account_pool_size": 1,
+    }
+    assert "/tmp/token.json" not in str(exc)
+    assert "/tmp/token.json" not in repr(fields)
 
 
 def test_weighted_no_candidate_error_reports_empty_pool(tui_dir):

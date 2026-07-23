@@ -54,26 +54,74 @@ class AccountCandidate:
 # ---------------------------------------------------------------------------
 
 
+_ALLOWED_NO_CANDIDATE_REASONS = frozenset(
+    {
+        "all_zero_quota",
+        "fixed_account_excluded",
+        "no_eligible_after_exclude",
+        "unknown",
+        "zero_effective_weight",
+    }
+)
+_ALLOWED_CODEX_ACCOUNT_SOURCES = frozenset({"fixed", "weighted"})
+_ALLOWED_NO_CANDIDATE_COUNT_FIELDS = frozenset(
+    {
+        "codex_account_combined_excluded_count",
+        "codex_account_eligible_count",
+        "codex_account_exclude_key_count",
+        "codex_account_excluded_count",
+        "codex_account_existing_excluded_count",
+        "codex_account_pool_size",
+        "codex_account_quota_invalid_count",
+        "codex_account_quota_observed_count",
+        "codex_account_quota_read_error_count",
+        "codex_account_quota_snapshot_count",
+        "codex_account_quota_target_count",
+        "codex_account_zero_effective_weight_count",
+        "codex_account_zero_quota_count",
+    }
+)
+_ALLOWED_NO_CANDIDATE_BOOL_FIELDS = frozenset(
+    {
+        "codex_account_legacy_fallback_allowed",
+        "codex_account_quota_snapshot_complete",
+        "codex_account_quota_snapshot_present",
+    }
+)
+_ALLOWED_NO_CANDIDATE_STRING_ENUMS = {
+    "codex_account_source": _ALLOWED_CODEX_ACCOUNT_SOURCES,
+}
+
+
+def _safe_no_candidate_reason(reason: str | None) -> str | None:
+    """Return a fixed diagnostic reason enum, never caller-supplied text."""
+    if not reason:
+        return None
+    text = str(reason)
+    if text in _ALLOWED_NO_CANDIDATE_REASONS:
+        return text
+    return "unknown"
+
+
 def _safe_no_candidate_diagnostics(
     diagnostics: dict[str, Any] | None,
 ) -> dict[str, object]:
-    """Return a non-secret, JSON-like diagnostic subset for selection failure."""
+    """Return the exact non-secret diagnostic subset for selection failure."""
     safe: dict[str, object] = {}
     if not diagnostics:
         return safe
-    allowed_prefixes = ("codex_account_", "no_candidate_")
     for key, value in diagnostics.items():
-        if not isinstance(key, str) or not key.startswith(allowed_prefixes):
+        if not isinstance(key, str):
             continue
-        if value is None or isinstance(value, (bool, int)):
-            safe[key] = value
-        elif isinstance(value, float):
-            # Quota diagnostics should normally be counts/bools.  Keep only
-            # finite scalar floats if a future caller supplies one.
-            if value == value and value not in (float("inf"), float("-inf")):
+        if key in _ALLOWED_NO_CANDIDATE_COUNT_FIELDS:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 safe[key] = value
-        elif isinstance(value, str):
-            safe[key] = value[:120]
+        elif key in _ALLOWED_NO_CANDIDATE_BOOL_FIELDS:
+            if isinstance(value, bool):
+                safe[key] = value
+        elif key in _ALLOWED_NO_CANDIDATE_STRING_ENUMS:
+            if isinstance(value, str) and value in _ALLOWED_NO_CANDIDATE_STRING_ENUMS[key]:
+                safe[key] = value
     return safe
 
 
@@ -93,7 +141,10 @@ def _format_no_candidate_diagnostics(fields: dict[str, object]) -> str:
         "codex_account_quota_read_error_count": "quota_read_errors",
         "codex_account_quota_invalid_count": "quota_invalid",
         "codex_account_quota_snapshot_complete": "quota_complete",
+        "codex_account_quota_snapshot_present": "quota_present",
+        "codex_account_quota_snapshot_count": "quota_snapshot",
         "codex_account_zero_effective_weight_count": "zero_weight",
+        "codex_account_exclude_key_count": "exclude_keys",
         "codex_account_legacy_fallback_allowed": "legacy_fallback_allowed",
     }
     ordered = [key for key in short_names if key in fields]
@@ -128,7 +179,7 @@ class NoCandidateError(Exception):
         diagnostics: dict[str, Any] | None = None,
     ) -> None:
         self.base_message = str(message)
-        self.reason = str(reason)[:120] if reason else None
+        self.reason = _safe_no_candidate_reason(reason)
         self.diagnostics = _safe_no_candidate_diagnostics(diagnostics)
         fields = self.diagnostic_fields()
         suffix = _format_no_candidate_diagnostics(fields)
