@@ -5302,7 +5302,34 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 if not complete:
                     quota_left = None
 
-            excluded = context.excluded_accounts | zero_accounts
+            quota_excluded_accounts = set(zero_accounts)
+            quota_left_for_selection = quota_left
+            if (
+                zero_accounts
+                and isinstance(snapshot, (list, tuple))
+                and snapshot
+            ):
+                existing_excluded = self._codex_count_excluded(
+                    snapshot, context.excluded_accounts
+                )
+                combined_excluded = self._codex_count_excluded(
+                    snapshot, context.excluded_accounts | zero_accounts
+                )
+                if existing_excluded < len(snapshot) <= combined_excluded:
+                    # The quota reader is an advisory preflight.  When every
+                    # otherwise-available configured account reports 0%, treating
+                    # that as a hard pre-request exclusion produces a turn-0
+                    # NoCandidate false negative and prevents the real request
+                    # path from adjudicating the account's current usability.
+                    # Keep quota-zero exclusion for mixed snapshots, but degrade
+                    # all-zero snapshots to static pool selection.  If the account
+                    # is genuinely exhausted, the provider's structured
+                    # usage_limit_reached error will mark it excluded through the
+                    # normal fail-closed path.
+                    quota_excluded_accounts = set()
+                    quota_left_for_selection = None
+
+            excluded = context.excluded_accounts | quota_excluded_accounts
             try:
                 if snapshot is None:
                     candidate = source.select(exclude=excluded or None)
@@ -5310,7 +5337,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 else:
                     candidate = source.select(
                         exclude=excluded or None,
-                        quota_left_snapshot=quota_left,
+                        quota_left_snapshot=quota_left_for_selection,
                         snapshot=snapshot,
                     )
                     pool_size = len(snapshot)
