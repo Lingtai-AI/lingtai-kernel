@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lingtai.auth.codex_account_source import AccountCandidate
+from lingtai.auth.codex_account_source import AccountCandidate, WeightedAccountSource
 from lingtai.kernel.llm.interface import ChatInterface
 from lingtai.llm.openai.adapter import CodexOpenAIAdapter
 
@@ -453,6 +453,20 @@ def test_native_codex_empty_pool_falls_back_to_legacy_account():
 
     assert response.text == "ok"
     assert source.calls == []
+    assert responses.calls[0]["extra_headers"]["ChatGPT-Account-ID"] == "acct-a.json"
+    assert chat.codex_pool_selection["fallback"] == "legacy_default"
+
+
+def test_native_codex_weighted_empty_tuple_falls_back_to_legacy_account(tmp_path):
+    source = WeightedAccountSource(tmp_path / "codex-auth-pool.json", tmp_path)
+    assert source.snapshot() == ()
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, _managers("a.json"), responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    response = chat.send("hello")
+
+    assert response.text == "ok"
     assert responses.calls[0]["extra_headers"]["ChatGPT-Account-ID"] == "acct-a.json"
     assert chat.codex_pool_selection["fallback"] == "legacy_default"
 
