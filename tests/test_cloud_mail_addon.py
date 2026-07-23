@@ -424,6 +424,51 @@ def test_allowed_senders_filter_case_insensitive(tmp_path):
     mgr.stop()
 
 
+def test_failed_allowed_delivery_blocks_higher_filtered_watermark(tmp_path):
+    rows = [
+        _row(3, sender="stranger@x.com"),
+        _row(2, sender="allowed@x.com"),
+        _row(1, sender="allowed@x.com"),
+    ]
+    transport, _ = make_router(rows=rows)
+    attempts = []
+    fail_email_id = 2
+
+    def on_inbound(event):
+        email_id = event["metadata"]["email_id"]
+        attempts.append(email_id)
+        if email_id == fail_email_id:
+            raise RuntimeError("temporary LICC failure")
+
+    mgr = CloudMailManager(
+        accounts=[{
+            "alias": "cloudmail",
+            "base_url": "https://mail.example.com",
+            "admin_email": "admin@example.com",
+            "admin_password": "adminpw",
+            "allowed_senders": ["allowed@x.com"],
+            "notify_existing": True,
+        }],
+        working_dir=tmp_path,
+        on_inbound=on_inbound,
+        transport=transport,
+    )
+    acct = mgr.default_account
+
+    assert mgr.poll_once(acct) == 1
+    assert attempts == [1, 2]
+    assert acct.watermark.last_email_id == 1
+
+    fail_email_id = None
+    assert mgr.poll_once(acct) == 1
+    assert attempts == [1, 2, 2]
+    assert acct.watermark.last_email_id == 3
+
+    assert mgr.poll_once(acct) == 0
+    assert attempts == [1, 2, 2]
+    mgr.stop()
+
+
 def test_add_user_uses_cloud_mail_batch_contract(tmp_path):
     mgr, captured = make_manager(tmp_path)
     out = mgr.handle({
