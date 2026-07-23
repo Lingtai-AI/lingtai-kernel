@@ -215,7 +215,7 @@ run-scoped native MCP config or client path. The LingTai backend starts
 task-scoped MCP clients directly. CLI backends must not claim native MCP
 availability from the prompt catalog alone.
 
-### 3. daemon_common is the completion capability for MCP-capable backends
+### 3. daemon_common owns completion and input-request signals
 
 MCP-capable daemon backends receive the built-in `daemon_common` MCP before any
 parent registrations. The oneshot context tells the model to call `finish`
@@ -228,6 +228,17 @@ When `daemon_common` is loaded, a conversational final answer is not enough.
 Success requires a validated `finish(status="done")`; missing completion,
 invalid JSON, invalid status, run-id mismatch, `failed`, or `incomplete` must
 prevent terminal `done`.
+
+When clarification is required, the model calls `ask_human` instead of placing
+the question only in final prose. That tool writes the separate internal
+`daemon_input_request.json` artifact; the daemon runtime validates it and owns
+the `daemon.json` transition to `waiting_input`. The one-shot CLI exits rather
+than blocking on stdin, and the parent receives a waiting-input notification.
+The request remains visible in list/check state and is not classified as done,
+failed, cancelled, or timeout. Answer-to-resume terminal reconciliation is a
+separate follow-up; resumable CLI backends may already receive an answer through
+`daemon(action="ask")`, but this contract does not yet clear or complete the
+paused lifecycle automatically.
 
 ### 4. Artifacts separate review evidence from secret-bearing config
 

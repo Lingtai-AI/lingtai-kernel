@@ -353,6 +353,7 @@ _DAEMON_COMPACT_MANUAL_PROCEDURES = (
 
 _DAEMON_COMMON_MCP_NAME = "daemon_common"
 _DAEMON_COMPLETION_FILE = "daemon_completion.json"
+_DAEMON_INPUT_REQUEST_FILE = "daemon_input_request.json"
 _DAEMON_CLAUDE_MCP_CONFIG_FILE = "claude-mcp-config.json"
 _DAEMON_COMPLETION_STATUSES = {"done", "failed", "incomplete"}
 _SOURCE_ROOT = Path(__file__).resolve().parents[3]
@@ -1181,7 +1182,7 @@ def get_schema(lang: str = "en") -> dict:
             },
             "status": {
                 "type": "string",
-                "description": "For 'list': optional status filter such as running, done, failed, cancelled, timeout, or all.",
+                "description": "For 'list': optional status filter such as running, waiting_input, done, failed, cancelled, timeout, or all.",
             },
             "include_done": {
                 "type": "boolean",
@@ -1255,7 +1256,7 @@ def _classify_terminal_state(
 ) -> str:
     """Classify the true terminal state of a *successfully-returned* emanation.
 
-    Returns one of ``"timeout"``, ``"cancelled"``, ``"failed"``, ``"done"``.
+    Returns a recorded lifecycle state, including ``"waiting_input"``.
 
     Called only when ``future.result()`` succeeded (no exception). When the
     future raises, ``_on_emanation_done`` sets ``status="failed"`` directly and
@@ -1291,7 +1292,7 @@ def _classify_terminal_state(
             recorded = run_dir.state_snapshot().get("state")
         except Exception:
             recorded = None
-        if recorded in ("timeout", "cancelled", "failed"):
+        if recorded in ("timeout", "cancelled", "failed", "waiting_input"):
             return recorded
         if recorded == "done":
             return "done"
@@ -1836,6 +1837,9 @@ class DaemonManager:
                     DaemonManager._completion_file(run_dir)
                 ),
                 "LINGTAI_DAEMON_RUN_ID": run_dir.run_id,
+                "LINGTAI_DAEMON_INPUT_REQUEST_FILE": str(
+                    run_dir.path / _DAEMON_INPUT_REQUEST_FILE
+                ),
                 "PYTHONPATH": _dev_pythonpath_with_source_root(),
             },
         }
@@ -1855,7 +1859,7 @@ class DaemonManager:
     @staticmethod
     def _daemon_common_context() -> str:
         return (
-            "LingTai daemon completion contract: before ending this run, call "
+            "LingTai daemon lifecycle contract: before ending this run, call "
             "the MCP tool `finish` exactly once with status `done`, `failed`, "
             "or `incomplete`. Use `done` only after the task is actually "
             "complete. If blocked, timed out, uncertain, or unable to validate "
@@ -1864,7 +1868,13 @@ class DaemonManager:
             "contract, background-and-wait is invalid: do not start a background "
             "job and end your turn expecting a later notification or re-entry. "
             "Run required validation synchronously with an explicit timeout, "
-            "inspect its result in this run, then call `finish`."
+            "inspect its result in this run, then call `finish`. If you need "
+            "clarification from the parent or human, call `ask_human(question, "
+            "choices?, default?, reason?)` instead of asking only in final prose. "
+            "Then stop the current CLI turn without calling `finish`; LingTai "
+            "will record `waiting_input`. On resumable CLI backends, the parent "
+            "can send an answer through `daemon(action=\"ask\")`; automatic "
+            "paused-state reconciliation remains deferred."
         )
 
     @staticmethod
@@ -1953,12 +1963,51 @@ class DaemonManager:
             for reg in registrations
         )
 
-    def _require_done_completion(self, run_dir: DaemonRunDir, final_text: str) -> None:
+    def _read_daemon_input_request(self, run_dir: DaemonRunDir) -> dict | None:
+        path = run_dir.path / _DAEMON_INPUT_REQUEST_FILE
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise RuntimeError(f"invalid daemon input request: {exc}") from exc
+        if not isinstance(data, dict) or data.get("schema") != "lingtai.daemon_input_request.v1":
+            raise RuntimeError("invalid daemon input request schema")
+        if data.get("run_id") not in (None, run_dir.run_id):
+            raise RuntimeError("daemon input request run_id mismatch")
+        question = data.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise RuntimeError("daemon input request question must be non-empty")
+        choices = data.get("choices")
+        if choices is not None and (
+            not isinstance(choices, list)
+            or not choices
+            or not all(isinstance(item, str) and item.strip() for item in choices)
+        ):
+            raise RuntimeError("daemon input request choices are invalid")
+        default = data.get("default")
+        reason = data.get("reason")
+        if default is not None and not isinstance(default, str):
+            raise RuntimeError("daemon input request default must be a string")
+        if reason is not None and not isinstance(reason, str):
+            raise RuntimeError("daemon input request reason must be a string")
+        return data
+
+    def _require_done_completion(self, run_dir: DaemonRunDir, final_text: str) -> bool:
         if not self._run_has_daemon_common_mcp(run_dir):
-            return
+            return True
+        try:
+            request = self._read_daemon_input_request(run_dir)
+        except RuntimeError as exc:
+            run_dir.mark_failed(exc)
+            raise
+        if request is not None:
+            run_dir.mark_waiting_input(request)
+            return False
         completion = self._read_daemon_completion(run_dir)
         if not completion.is_done:
             raise self._fail_missing_or_bad_completion(run_dir, completion, final_text)
+        return True
 
     def _fail_missing_or_bad_completion(
         self,
@@ -3041,7 +3090,8 @@ class DaemonManager:
                         kind="tool_results",
                     )
                     text = intercept_text or "[intercepted]"
-                    self._require_done_completion(run_dir, text)
+                    if not self._require_done_completion(run_dir, text):
+                        return "[waiting_input]"
                     run_dir.mark_done(text)
                     return text
 
@@ -3103,7 +3153,8 @@ class DaemonManager:
             # late natural ``done`` commit.
             if cancel_event.is_set() or run_dir.read_state_from_disk(run_dir.path).get("state") not in {"running", "active"}:
                 return _mark_cancelled_or_timeout(run_dir, timeout_event)
-            self._require_done_completion(run_dir, text)
+            if not self._require_done_completion(run_dir, text):
+                return "[waiting_input]"
             if cancel_event.is_set():
                 return _mark_cancelled_or_timeout(run_dir, timeout_event)
             run_dir.mark_done(text)
@@ -3431,8 +3482,10 @@ class DaemonManager:
         # _require_done_completion is itself a terminal acceptance gate:
         # when the run loaded daemon_common MCP, a missing/bad finish()
         # call marks the run failed and raises here, before any usage is
-        # persisted or the run is marked done.
-        self._require_done_completion(run_dir, text)
+        # persisted or the run is marked done. A structured input request
+        # marks the run waiting_input and returns False instead.
+        if not self._require_done_completion(run_dir, text):
+            return "[waiting_input]"
 
         # Final re-check: the classification above (including
         # _require_done_completion, which reads a completion file and can
@@ -3702,7 +3755,8 @@ class DaemonManager:
             raise exc
 
         text = "\n".join(agent_message_texts).strip() or "[no output]"
-        self._require_done_completion(run_dir, text)
+        if not self._require_done_completion(run_dir, text):
+            return "[waiting_input]"
         run_dir.mark_done(text)
         return text
 
@@ -3764,6 +3818,14 @@ class DaemonManager:
             result_path = snapshot.get("result_path")
             if result_path:
                 parts.append(f"Result file: {result_path}")
+            input_request = snapshot.get("input_request")
+            if status == "waiting_input" and isinstance(input_request, dict):
+                question = str(input_request.get("question") or "")
+                if question:
+                    parts.append(
+                        "Question: "
+                        + question[:self._NOTIFICATION_PREVIEW_MAX]
+                    )
             recorded_error = snapshot.get("error")
         if recorded_error:
             err_type = recorded_error.get("type", "error")
@@ -4608,7 +4670,7 @@ class DaemonManager:
         active_elapsed: int | None = None,
         active_error: BaseException | None = None,
     ) -> dict:
-        status = active_status or state.get("state") or "unknown"
+        status = state.get("state") or active_status or "unknown"
         call_params = state.get("call_parameters")
         if not isinstance(call_params, dict):
             call_params = {}
@@ -4622,6 +4684,19 @@ class DaemonManager:
             "context_token_limit": call_params.get("context_token_limit"),
         }
         visible_call_params = {k: v for k, v in visible_call_params.items() if v not in (None, [], "")}
+        input_request = state.get("input_request")
+        input_request_preview = None
+        if isinstance(input_request, dict):
+            input_request_preview = {
+                key: self._truncate_list_string(input_request.get(key))
+                for key in ("question", "default", "reason")
+                if input_request.get(key) is not None
+            }
+            choices = input_request.get("choices")
+            if isinstance(choices, list):
+                input_request_preview["choices"] = [
+                    self._truncate_list_string(choice) for choice in choices[:10]
+                ]
         info = {
             "id": state.get("handle"),
             "task": self._truncate_list_string(state.get("task", ""), 120),
@@ -4637,6 +4712,7 @@ class DaemonManager:
             "path": str(run_path),
             "result_preview": state.get("result_preview"),
             "result_path": state.get("result_path"),
+            "input_request": input_request_preview,
             "call_parameters": visible_call_params,
         }
         if prompt_preview is not None:
@@ -6210,7 +6286,8 @@ class DaemonManager:
         if not any_event and not stderr_tail:
             text = "[no output]"
 
-        self._require_done_completion(run_dir, text)
+        if not self._require_done_completion(run_dir, text):
+            return "[waiting_input]"
         run_dir.mark_done(text)
         return text
 
@@ -6395,7 +6472,8 @@ class DaemonManager:
             raise exc
 
         text = output or (f"[no stdout; stderr tail follows]\n{stderr_tail[-500:]}" if stderr_tail else "[no output]")
-        self._require_done_completion(run_dir, text)
+        if not self._require_done_completion(run_dir, text):
+            return "[waiting_input]"
         run_dir.mark_done(text)
         return text
 
@@ -6568,7 +6646,8 @@ class DaemonManager:
             raise exc
 
         text = output or (f"[no stdout; stderr tail follows]\n{stderr_tail[-500:]}" if stderr_tail else "[no output]")
-        self._require_done_completion(run_dir, text)
+        if not self._require_done_completion(run_dir, text):
+            return "[waiting_input]"
         run_dir.mark_done(text)
         return text
 
@@ -7842,6 +7921,13 @@ class DaemonManager:
         # run directory owns the once-only claim, decoupled from the system
         # channel's ref_id dedup so an earlier follow-up (``ask``) event sharing
         # this run's ref_id cannot suppress the terminal notification.
+        if status == "waiting_input":
+            # This is a pause, not a terminal outcome. Do not consume the
+            # terminal notification claim needed by a later done/failure path.
+            self._publish_daemon_notification(
+                em_id, status=status, text=text, run_dir=run_dir,
+            )
+            return
         idempotency_key = None
         if run_dir is not None:
             idempotency_key = run_dir.claim_terminal_notification(status)

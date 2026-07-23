@@ -66,9 +66,11 @@ the Claude print/Codex/OpenCode/Qwen CLI backends, and mounted through native
 stdio/HTTP MCP config for Kimi Code via a run-private `$KIMI_CODE_HOME/mcp.json`.
 The maintained unified daemon
 contract lives in `CONTRACT.md`. MCP-capable backends also get the built-in
-`daemon_common` MCP (`src/lingtai/mcp_servers/daemon_common/server.py:1-151`);
+`daemon_common` MCP (`src/lingtai/mcp_servers/daemon_common/server.py:1-236`);
 its `finish` tool writes `daemon_completion.json`, and only a validated
-`finish(status="done")` allows terminal `done`. Parent MCP tools are not
+`finish(status="done")` allows terminal `done`; `ask_human` writes a separate
+input-request signal that the runtime converts to non-terminal `waiting_input`
+state and a parent notification. Parent MCP tools are not
 auto-inherited. The daemon-eligible `email` intrinsic is available only when explicitly requested in a task's `tools` list, and daemon tool
 calls still pass through the kernel `ToolExecutor`/`ToolCallGuard` path before
 any handler runs. Each `daemon.emanate` batch gets a stable `group_id` shared by
@@ -98,7 +100,8 @@ policy. Results are persisted in per-run daemon folders; **every** terminal outc
 `daemon.json.terminal_notified` is written only after publication succeeds (or
 an idempotent retry observes the same published event), so a parent that
 dispatched a daemon can safely go idle and be woken when the run ends, without
-polling.
+polling. A structured `waiting_input` pause also wakes the parent without
+consuming the once-only terminal notification slot.
 
 ## Components
 
