@@ -40,6 +40,7 @@ related_files:
   - tests/test_daemon_cursor_backend.py
   - tests/test_daemon_claude_interactive_backend.py
   - tests/test_daemon_run_dir.py
+  - tests/test_daemon_checkpoint.py
   - tests/test_daemon_codex_usage.py
   - tests/test_codex_standalone_compaction.py
   - tests/test_daemon_windows_lock.py
@@ -61,6 +62,7 @@ review_triggers:
   - tests/test_daemon_cursor_backend.py
   - tests/test_daemon_claude_interactive_backend.py
   - tests/test_daemon_run_dir.py
+  - tests/test_daemon_checkpoint.py
   - tests/test_daemon_codex_usage.py
   - tests/test_codex_standalone_compaction.py
 maintenance: |
@@ -170,12 +172,33 @@ differs by provider:** a standalone-compaction failure is non-fatal for Codex
 HARD failure for native `mimo` (propagates to the caller; never silently
 continues on full history and never falls back to a different wire).
 
+LingTai-backend runs also receive a private run-scoped internal `checkpoint`
+tool after their exact `DaemonRunDir` exists. It is not part of the public
+`daemon` action schema, not requestable through `tasks[].tools`, not inherited
+from `_daemon_intrinsic_surface`, and not exposed to external CLI backends. A
+daemon calls it only at meaningful semantic phase boundaries. Accepted calls
+persist schema `lingtai.daemon.checkpoint.v1` in
+`daemon.json.latest_checkpoint`, then best-effort append a bounded `checkpoint`
+event and touch the heartbeat. The atomic state commit is the sole authority;
+a secondary event/heartbeat write failure does not turn an already-committed
+checkpoint into a retryable tool error. Each accepted call increments a
+monotonic run-local sequence under the run-dir state transaction. Validated
+fields are `phase_id` (1-96 UTF-8 bytes), `phase_status` (`complete`, `blocked`,
+or `failed`), at most 8 completed rows (`id` <= 128 bytes, `outcome` <= 256
+bytes), optional advisory `next_action` (<= 512 bytes), and at most 8 evidence
+refs (`event` narrow identifier or non-escaping run-relative `artifact` path,
+ref <= 256 bytes). Model-supplied checkpoint text is passed through the kernel
+trajectory redactor before persistence. A secret-bearing evidence ref is
+rejected rather than persisted as either raw text or a broken redaction
+placeholder; validation remains the authority for shape, bounds, and path
+safety.
+
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
 | `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `prompt` (LingTai only), `skills`/`mcp`/`preset`/`backend_options`/`context_token_limit` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — obsolete `system_prompt` migration, CLI `prompt`, bad limits, or tool-surface/preset failure |
 | `list` | — | `contains`, `status`, `include_done` (default true), `last` | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
 | `ask` | `id`, `message` | — | `{status: "sent", id, output}` (CLI ask returns immediately; `{status: "sent", id, async: true, ...}`) | `{status: "error", id, message}` — unknown/absent id, backend `ask` unsupported, or busy |
-| `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, events: [...]}` | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
+| `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, events: [...], checkpoint?}` where `checkpoint` is present only when `daemon.json.latest_checkpoint` exists | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
 | `reclaim` | — | — | `{status: "reclaimed", cancelled: <n>}` (or `{status: "shutdown", ...}` on lifecycle shutdown) | — |
 
 `emanate` returns immediately after dispatch; terminal state (`done` /
@@ -430,7 +453,7 @@ All paths are relative to the parent agent working directory (`<parent>/`):
   .heartbeat                   # mtime-touched on activity
   history/chat_history.jsonl   # session transcript
   logs/token_ledger.jsonl      # per-call tokens, daemon-scoped (source="daemon")
-  logs/events.jsonl            # tool_call / tool_result / cli_output / cli_usage / daemon_*
+  logs/events.jsonl            # tool_call / tool_result / checkpoint / cli_output / cli_usage / daemon_*
   result.txt                   # full terminal result when available
 
 <parent>/logs/token_ledger.jsonl   # ALSO receives each daemon token row, tagged
@@ -443,6 +466,12 @@ rows tagged `source="daemon"` so `sum_token_ledger(scope="main_agent")`
 excludes daemon spend while `scope="all"` includes it. On daemon-manager startup,
 stale `running`/`active` `daemon.json` records whose `parent_pid` is dead are
 reaped to `failed`.
+
+`daemon.json.latest_checkpoint` is optional for backward compatibility. Old and
+ordinary runs without it remain readable and `daemon(action="check")` omits the
+`checkpoint` key. For live and historical runs that contain it, `check` projects
+the stored checkpoint from disk; `events.jsonl` is supporting evidence, not a
+second persistence authority.
 
 ## Process and Terminal Boundaries
 
@@ -622,6 +651,10 @@ Re-check this contract when touching:
   daemon_common completion, OpenCode-family routing, Qwen settings, Claude print
   MCP config, run-dir artifacts, prompt redaction, selected-skill catalog
   preservation, prompt mapping, or compact context reset behavior.
+- `tests/test_daemon_checkpoint.py` coverage that proves the LingTai-only
+  run-scoped checkpoint surface, validation bounds, redaction, atomic sequence
+  persistence, old-run compatibility, `check` projection, and compact-reset
+  reconstruction.
 - `tests/test_codex_standalone_compaction.py` for per-task
   `context_token_limit` wiring/pre-flight validation.
 
@@ -639,6 +672,7 @@ Re-check this contract when touching:
 | LingTai daemon tool results carry daemon-local `_meta.agent_meta`, omit parent notifications/guidance, and carry the exact warning only while current usage is >=90% | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_agent_meta_is_local_and_warning_tracks_current_usage` |
 | `compact.action` is required; `manual` is read-only, omission is refused, and explicit `run` resets with fresh post-compact metadata | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_compact_schema_requires_explicit_run_or_manual_action`, `::test_compact_missing_action_is_refused_without_reset`, `::test_compact_success_prunes_to_system_call_and_result` |
 | `reclaim` cancels running emanations; agent stop shuts the daemon down first | `src/lingtai/tools/daemon/__init__.py` | `tests/test_lifecycle_daemon_shutdown.py::test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock` |
+| LingTai daemon checkpoints are run-scoped, bounded, persisted atomically, and projected by `check` | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/run_dir.py` | `tests/test_daemon_checkpoint.py` |
 
 ## Verification Matrix
 
@@ -655,7 +689,7 @@ Re-check this contract when touching:
 Run before merging daemon tool-surface changes:
 
 ```bash
-python -m pytest tests/test_daemon.py tests/test_daemon_check.py tests/test_daemon_backend_options.py tests/test_daemon_run_dir.py tests/test_lifecycle_daemon_shutdown.py tests/test_codex_standalone_compaction.py tests/test_mimo_responses_compaction.py -q
+python -m pytest tests/test_daemon.py tests/test_daemon_check.py tests/test_daemon_backend_options.py tests/test_daemon_run_dir.py tests/test_daemon_checkpoint.py tests/test_lifecycle_daemon_shutdown.py tests/test_codex_standalone_compaction.py tests/test_mimo_responses_compaction.py -q
 ```
 
 ## Schema and Glossary Ownership

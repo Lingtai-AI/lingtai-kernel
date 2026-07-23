@@ -102,13 +102,23 @@ class DaemonRunDir:
             .heartbeat                   # mtime-touched on activity
             history/chat_history.jsonl   # session transcript
             logs/token_ledger.jsonl      # per-call tokens, daemon-scoped
-            logs/events.jsonl            # tool_call, tool_result, cli_output, cli_usage, daemon_*
+            logs/events.jsonl            # tool_call, tool_result, checkpoint, cli_output, cli_usage, daemon_*
             result.txt                   # full terminal result when available
     """
 
     DATA_VERSION = 1
     PENDING_LAUNCH_LEASE_S = 5.0
     _TERMINAL_STATES = frozenset({"done", "failed", "cancelled", "timeout"})
+    CHECKPOINT_SCHEMA = "lingtai.daemon.checkpoint.v1"
+    CHECKPOINT_PHASE_ID_MAX_BYTES = 96
+    CHECKPOINT_COMPLETED_MAX_ROWS = 8
+    CHECKPOINT_EVIDENCE_MAX_ROWS = 8
+    CHECKPOINT_COMPLETED_ID_MAX_BYTES = 128
+    CHECKPOINT_COMPLETED_OUTCOME_MAX_BYTES = 256
+    CHECKPOINT_NEXT_ACTION_MAX_BYTES = 512
+    CHECKPOINT_EVIDENCE_REF_MAX_BYTES = 256
+    _CHECKPOINT_STATUSES = frozenset({"complete", "blocked", "failed"})
+    _CHECKPOINT_EVIDENCE_KINDS = frozenset({"event", "artifact"})
 
     def __init__(
         self,
@@ -653,6 +663,199 @@ class DaemonRunDir:
             self._state[key] = value
             self._atomic_write_json(self.daemon_json_path, self._state)
             return True
+
+    def record_checkpoint(self, payload: dict) -> dict:
+        """Validate and persist one run-scoped semantic checkpoint."""
+        checkpoint = self._validate_checkpoint_payload(payload)
+        with self._state_transaction():
+            current = self._state.get("latest_checkpoint")
+            current_sequence = 0
+            if isinstance(current, dict):
+                raw_sequence = current.get("sequence")
+                if isinstance(raw_sequence, int) and not isinstance(raw_sequence, bool):
+                    current_sequence = raw_sequence
+            sequence = current_sequence + 1
+            checkpoint = {
+                "schema": self.CHECKPOINT_SCHEMA,
+                "run_id": self._run_id,
+                "checkpoint_id": f"{self._run_id}:{sequence}",
+                "sequence": sequence,
+                **checkpoint,
+                "created_at": self._now_iso(),
+            }
+            next_state = dict(self._state)
+            next_state["latest_checkpoint"] = checkpoint
+            self._atomic_write_json(self.daemon_json_path, next_state)
+            self._state = next_state
+            # daemon.json is the sole checkpoint authority.  Evidence and the
+            # heartbeat are best-effort after that atomic commit so a transient
+            # append/touch failure cannot make the model retry an already-saved
+            # checkpoint and create an ambiguous extra sequence.
+            self._safe(
+                "checkpoint_event",
+                lambda: self._append_jsonl(
+                    self.events_path,
+                    {
+                        "event": "checkpoint",
+                        "checkpoint": checkpoint,
+                        "turn": self._state.get("turn"),
+                        "ts": checkpoint["created_at"],
+                    },
+                ),
+            )
+            self._safe("checkpoint_heartbeat", self.heartbeat_path.touch)
+            return dict(checkpoint)
+
+    def _validate_checkpoint_payload(self, payload: dict) -> dict:
+        from lingtai.kernel.trace_redaction import redact_for_trajectory
+
+        if not isinstance(payload, dict):
+            raise ValueError("checkpoint payload must be an object")
+        allowed = {
+            "phase_id",
+            "phase_status",
+            "completed",
+            "next_action",
+            "evidence_refs",
+        }
+        unknown = set(payload) - allowed
+        if unknown:
+            raise ValueError(f"unknown checkpoint fields: {sorted(unknown)}")
+
+        phase_id = self._checkpoint_text(
+            payload.get("phase_id"),
+            field="phase_id",
+            max_bytes=self.CHECKPOINT_PHASE_ID_MAX_BYTES,
+        )
+        phase_status = payload.get("phase_status")
+        if (
+            not isinstance(phase_status, str)
+            or phase_status not in self._CHECKPOINT_STATUSES
+        ):
+            raise ValueError("phase_status must be complete, blocked, or failed")
+
+        completed = payload.get("completed", [])
+        if not isinstance(completed, list):
+            raise ValueError("completed must be a list")
+        if len(completed) > self.CHECKPOINT_COMPLETED_MAX_ROWS:
+            raise ValueError("completed has too many rows")
+        clean_completed = []
+        for row in completed:
+            if not isinstance(row, dict) or set(row) != {"id", "outcome"}:
+                raise ValueError("completed rows must contain id and outcome")
+            clean_completed.append(
+                {
+                    "id": self._checkpoint_text(
+                        redact_for_trajectory(row.get("id")),
+                        field="completed.id",
+                        max_bytes=self.CHECKPOINT_COMPLETED_ID_MAX_BYTES,
+                    ),
+                    "outcome": self._checkpoint_text(
+                        redact_for_trajectory(row.get("outcome")),
+                        field="completed.outcome",
+                        max_bytes=self.CHECKPOINT_COMPLETED_OUTCOME_MAX_BYTES,
+                    ),
+                }
+            )
+
+        record = {
+            "phase_id": self._checkpoint_text(
+                redact_for_trajectory(phase_id),
+                field="phase_id",
+                max_bytes=self.CHECKPOINT_PHASE_ID_MAX_BYTES,
+            ),
+            "phase_status": phase_status,
+            "completed": clean_completed,
+            "evidence_refs": self._validate_checkpoint_evidence_refs(
+                payload.get("evidence_refs", [])
+            ),
+        }
+
+        if "next_action" in payload:
+            record["next_action"] = self._checkpoint_text(
+                redact_for_trajectory(payload.get("next_action")),
+                field="next_action",
+                max_bytes=self.CHECKPOINT_NEXT_ACTION_MAX_BYTES,
+                allow_empty=True,
+            )
+        return record
+
+    @staticmethod
+    def _checkpoint_text(
+        value, *, field: str, max_bytes: int, allow_empty: bool = False
+    ) -> str:
+        if not isinstance(value, str):
+            raise ValueError(f"{field} must be a string")
+        if "\x00" in value:
+            raise ValueError(f"{field} must not contain NUL")
+        if not allow_empty and not value:
+            raise ValueError(f"{field} must not be empty")
+        if len(value.encode("utf-8")) > max_bytes:
+            raise ValueError(f"{field} exceeds {max_bytes} UTF-8 bytes")
+        return value
+
+    def _validate_checkpoint_evidence_refs(self, refs) -> list[dict]:
+        from lingtai.kernel.trace_redaction import redact_for_trajectory
+
+        if not isinstance(refs, list):
+            raise ValueError("evidence_refs must be a list")
+        if len(refs) > self.CHECKPOINT_EVIDENCE_MAX_ROWS:
+            raise ValueError("evidence_refs has too many rows")
+        clean = []
+        for row in refs:
+            if not isinstance(row, dict) or set(row) != {"kind", "ref"}:
+                raise ValueError("evidence_refs rows must contain kind and ref")
+            kind = row.get("kind")
+            if not isinstance(kind, str) or kind not in self._CHECKPOINT_EVIDENCE_KINDS:
+                raise ValueError("evidence_refs.kind must be event or artifact")
+            raw_ref = self._checkpoint_text(
+                row.get("ref"),
+                field="evidence_refs.ref",
+                max_bytes=self.CHECKPOINT_EVIDENCE_REF_MAX_BYTES,
+            )
+            ref = redact_for_trajectory(raw_ref)
+            if ref != raw_ref:
+                # Redacting a path/id would destroy its referential meaning.  A
+                # secret-bearing evidence reference is therefore rejected rather
+                # than persisted either raw or as a non-resolving placeholder.
+                raise ValueError("evidence_refs.ref must not contain secret material")
+            ref = self._checkpoint_text(
+                ref,
+                field="evidence_refs.ref",
+                max_bytes=self.CHECKPOINT_EVIDENCE_REF_MAX_BYTES,
+            )
+            if kind == "event":
+                self._validate_checkpoint_event_ref(ref)
+            else:
+                self._validate_checkpoint_artifact_ref(ref)
+            clean.append({"kind": kind, "ref": ref})
+        return clean
+
+    @staticmethod
+    def _validate_checkpoint_event_ref(ref: str) -> None:
+        allowed = set(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-"
+        )
+        if any(ch not in allowed for ch in ref):
+            raise ValueError("event evidence ref must be a narrow event identifier")
+
+    def _validate_checkpoint_artifact_ref(self, ref: str) -> None:
+        candidate = Path(ref)
+        if candidate.is_absolute():
+            raise ValueError("artifact evidence ref must be run-relative")
+        if any(part in ("", ".", "..") for part in candidate.parts):
+            raise ValueError("artifact evidence ref must not traverse")
+        target = self.path / candidate
+        try:
+            resolved_target = target.resolve(strict=target.exists())
+            resolved_root = self.path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"artifact evidence ref is invalid: {exc}") from exc
+        if (
+            resolved_target != resolved_root
+            and resolved_root not in resolved_target.parents
+        ):
+            raise ValueError("artifact evidence ref escapes the daemon run directory")
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -2742,9 +2742,89 @@ class DaemonManager:
             service_kwargs["context_window"] = effective_preset_llm["context_window"]
         service = LLMService(**service_kwargs)
 
+        checkpoint_schema = FunctionSchema(
+            name="checkpoint",
+            description=(
+                "Record a bounded semantic checkpoint for this exact daemon "
+                "run after a meaningful phase boundary. Use this only when a "
+                "phase is complete, blocked, or failed; ordinary turns should "
+                "not call it. Persist only concise phase status, completed "
+                "outcomes, optional advisory next action, and run-local "
+                "evidence references."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "phase_id": {
+                        "type": "string",
+                        "description": "Non-empty phase identifier, max 96 UTF-8 bytes.",
+                    },
+                    "phase_status": {
+                        "type": "string",
+                        "enum": ["complete", "blocked", "failed"],
+                    },
+                    "completed": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "description": "Completed item id, max 128 UTF-8 bytes.",
+                                },
+                                "outcome": {
+                                    "type": "string",
+                                    "description": "Bounded outcome, max 256 UTF-8 bytes.",
+                                },
+                            },
+                            "required": ["id", "outcome"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "next_action": {
+                        "type": "string",
+                        "description": "Optional advisory text only, max 512 UTF-8 bytes.",
+                    },
+                    "evidence_refs": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "kind": {
+                                    "type": "string",
+                                    "enum": ["event", "artifact"],
+                                },
+                                "ref": {
+                                    "type": "string",
+                                    "description": "Run-relative artifact path or narrow event id, max 256 UTF-8 bytes.",
+                                },
+                            },
+                            "required": ["kind", "ref"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["phase_id", "phase_status"],
+                "additionalProperties": False,
+            },
+        )
+        # ``checkpoint`` is a private, run-scoped daemon tool.  Reserve the
+        # exact name here so an externally supplied schema cannot be paired
+        # with the internal handler below.
+        run_schemas = [
+            schema
+            for schema in list(schemas or [])
+            if schema.name != checkpoint_schema.name
+        ]
+        run_schemas.append(checkpoint_schema)
+        run_dispatch = dict(dispatch)
+        run_dispatch["checkpoint"] = run_dir.record_checkpoint
+
         session = service.create_session(
             system_prompt=run_dir.prompt_path.read_text(encoding="utf-8"),
-            tools=schemas or None,
+            tools=run_schemas or None,
             model=effective_model,
             thinking="default",
             tracked=False,
@@ -2781,8 +2861,7 @@ class DaemonManager:
             service, run_dir, provider=provider, model=effective_model, endpoint=endpoint,
         )
 
-        if "compact" in {schema.name for schema in schemas}:
-            dispatch = dict(dispatch)
+        if "compact" in {schema.name for schema in run_schemas}:
 
             def _compact_daemon_context(_args: dict) -> dict:
                 nonlocal compact_reset_accepted
@@ -2797,10 +2876,16 @@ class DaemonManager:
                 if action != "run":
                     return {"status": "error", "message": "action is required and must be 'run' or 'manual'; context was not reset"}
                 if not compact_batch_allowed:
-                    return {"status": "error", "message": "compact must be the only tool call in its batch"}
+                    return {
+                        "status": "error",
+                        "message": "compact must be the only tool call in its batch",
+                    }
                 reason = _args.get("_reason")
                 if not isinstance(reason, str) or not reason.strip():
-                    return {"status": "error", "message": "_reason must be a non-empty string; context was not reset"}
+                    return {
+                        "status": "error",
+                        "message": "_reason must be a non-empty string; context was not reset",
+                    }
                 compact_reset_accepted = True
                 return {
                     "status": "success",
@@ -2813,14 +2898,15 @@ class DaemonManager:
                     },
                 }
 
-            dispatch["compact"] = _compact_daemon_context
+            run_dispatch["compact"] = _compact_daemon_context
 
         intrinsic_tool_names = set(self._daemon_intrinsic_surface()[1])
 
         def _dispatch_daemon_tool(tc):
-            handler = dispatch.get(tc.name)
+            handler = run_dispatch.get(tc.name)
             if handler is None:
                 from lingtai.kernel.types import UnknownToolError
+
                 raise UnknownToolError(tc.name)
             args = dict(tc.args or {})
             if tc.name in intrinsic_tool_names:
@@ -2828,17 +2914,21 @@ class DaemonManager:
             return handler(args)
 
         def _daemon_tool_logger(event_type: str, **fields) -> None:
-            tool_name = fields.get("tool_name") or fields.get("tool")
+            safe_fields = dict(fields)
+            tool_name = safe_fields.get("tool_name") or safe_fields.get("tool")
+            if tool_name == "checkpoint" and "tool_args" in safe_fields:
+                safe_fields["tool_args"] = {}
             if event_type == "tool_call_normalized" and tool_name:
-                run_dir.set_current_tool(tool_name, fields.get("tool_args") or {})
+                tool_args = safe_fields.get("tool_args") or {}
+                run_dir.set_current_tool(tool_name, tool_args)
             elif event_type == "tool_result" and tool_name:
-                status = "error" if fields.get("status") == "error" else "ok"
+                status = "error" if safe_fields.get("status") == "error" else "ok"
                 run_dir.clear_current_tool(result_status=status)
             self._log(
                 f"daemon_{event_type}",
                 em_id=em_id,
                 run_id=getattr(run_dir, "run_id", None),
-                **fields,
+                **safe_fields,
             )
 
         executor = ToolExecutor(
@@ -2847,7 +2937,7 @@ class DaemonManager:
                 name, result, **kw
             ),
             guard=LoopGuard(),
-            known_tools=set(dispatch),
+            known_tools=set(run_dispatch),
             parallel_safe_tools=set(),
             logger_fn=_daemon_tool_logger,
             # Daemons receive a daemon-local agent_meta projection plus universal
@@ -3013,7 +3103,7 @@ class DaemonManager:
                     )
                     session = service.create_session(
                         system_prompt=system_prompt,
-                        tools=schemas or None,
+                        tools=run_schemas or None,
                         model=effective_model,
                         thinking="default",
                         tracked=False,
@@ -7446,7 +7536,7 @@ class DaemonManager:
                           for k, v in ev.items()}
                 events.append(ev)
 
-        return {
+        out = {
             "id": em_id,
             "run_id": state.get("run_id"),
             "state": state.get("state"),
@@ -7472,6 +7562,10 @@ class DaemonManager:
             "events_total": events_total,
             "events_returned": len(events),
         }
+        checkpoint = state.get("latest_checkpoint")
+        if isinstance(checkpoint, dict):
+            out["checkpoint"] = checkpoint
+        return out
 
     def _artifacts_summary(self, run_path: Path) -> dict:
         """Compact artifact-manifest block for a `check` response.
