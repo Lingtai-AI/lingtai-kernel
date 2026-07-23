@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lingtai.auth.codex_account_source import AccountCandidate
+from lingtai.auth.codex_account_source import AccountCandidate, WeightedAccountSource
 from lingtai.kernel.llm.interface import ChatInterface
 from lingtai.llm.openai.adapter import CodexOpenAIAdapter
 
@@ -80,6 +80,11 @@ class _SequenceSource:
             for c in candidates
             if c.auth_path_sha8 not in excluded
         ]
+
+
+class _NoneSnapshotSource(_SequenceSource):
+    def snapshot(self):
+        return None
 
 
 class _Responses:
@@ -452,11 +457,56 @@ def test_native_codex_empty_pool_falls_back_to_legacy_account():
     assert chat.codex_pool_selection["fallback"] == "legacy_default"
 
 
+def test_native_codex_weighted_empty_tuple_falls_back_to_legacy_account(tmp_path):
+    source = WeightedAccountSource(tmp_path / "codex-auth-pool.json", tmp_path)
+    assert source.snapshot() == ()
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, _managers("a.json"), responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    response = chat.send("hello")
+
+    assert response.text == "ok"
+    assert responses.calls[0]["extra_headers"]["ChatGPT-Account-ID"] == "acct-a.json"
+    assert chat.codex_pool_selection["fallback"] == "legacy_default"
+
+
 def test_native_codex_nonempty_exhausted_pool_never_falls_back():
     source = _SequenceSource("one.json")
     responses = _Responses([_success_events])
     adapter = _adapter(source, _managers("one.json", "a.json"), responses)
     adapter._codex_excluded_accounts.add(source._candidates[0].auth_path_sha8)
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    with pytest.raises(RuntimeError, match="no candidate"):
+        chat.send("hello")
+
+    assert source.calls == []
+    assert responses.calls == []
+
+
+def test_native_codex_none_snapshot_never_falls_back():
+    source = _NoneSnapshotSource()
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, _managers("a.json"), responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    with pytest.raises(RuntimeError, match="no candidate"):
+        chat.send("hello")
+
+    assert source.calls == []
+    assert responses.calls == []
+
+
+@pytest.mark.parametrize("snapshot", ["", {}])
+def test_native_codex_non_collection_falsy_snapshot_never_falls_back(snapshot):
+    class _FalsySnapshotSource(_SequenceSource):
+        def snapshot(self):
+            return snapshot
+
+    source = _FalsySnapshotSource()
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, _managers("a.json"), responses)
     chat = adapter.create_chat("gpt-5.5", "system")
 
     with pytest.raises(RuntimeError, match="no candidate"):
