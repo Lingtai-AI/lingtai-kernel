@@ -688,6 +688,28 @@ def _run_loop(agent) -> None:
 
                     err_desc = str(e) or repr(e)
 
+                    # Account selection has already exhausted the configured
+                    # Codex candidates. This is deterministic for this turn,
+                    # so do not rebuild/replay the session or spend AED
+                    # attempts on the same selection failure.
+                    from ...auth.codex_account_source import NoCandidateError
+
+                    if isinstance(e, NoCandidateError):
+                        agent._log(
+                            "no_candidate_terminal",
+                            error=err_desc[:300],
+                            exception=type(e).__name__,
+                        )
+                        logger.warning(
+                            f"[{agent.agent_name}] No Codex account candidate: {err_desc}"
+                        )
+                        _report_api_error_to_task_card(
+                            agent, e, terminal=True
+                        )
+                        sleep_state = AgentState.ASLEEP
+                        agent._asleep.set()
+                        break
+
                     if getattr(e, "_lingtai_partial_stream", False):
                         # Provider output has already reached the human-facing
                         # stream. Replaying this turn through transient retry or
