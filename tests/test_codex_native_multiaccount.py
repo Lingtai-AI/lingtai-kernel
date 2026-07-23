@@ -82,6 +82,11 @@ class _SequenceSource:
         ]
 
 
+class _NoneSnapshotSource(_SequenceSource):
+    def snapshot(self):
+        return None
+
+
 class _Responses:
     def __init__(self, events_or_errors):
         self.events_or_errors = list(events_or_errors)
@@ -457,6 +462,37 @@ def test_native_codex_nonempty_exhausted_pool_never_falls_back():
     responses = _Responses([_success_events])
     adapter = _adapter(source, _managers("one.json", "a.json"), responses)
     adapter._codex_excluded_accounts.add(source._candidates[0].auth_path_sha8)
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    with pytest.raises(RuntimeError, match="no candidate"):
+        chat.send("hello")
+
+    assert source.calls == []
+    assert responses.calls == []
+
+
+def test_native_codex_none_snapshot_never_falls_back():
+    source = _NoneSnapshotSource()
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, _managers("a.json"), responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    with pytest.raises(RuntimeError, match="no candidate"):
+        chat.send("hello")
+
+    assert source.calls == []
+    assert responses.calls == []
+
+
+@pytest.mark.parametrize("snapshot", ["", {}])
+def test_native_codex_non_collection_falsy_snapshot_never_falls_back(snapshot):
+    class _FalsySnapshotSource(_SequenceSource):
+        def snapshot(self):
+            return snapshot
+
+    source = _FalsySnapshotSource()
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, _managers("a.json"), responses)
     chat = adapter.create_chat("gpt-5.5", "system")
 
     with pytest.raises(RuntimeError, match="no candidate"):

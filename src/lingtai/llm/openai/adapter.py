@@ -5246,7 +5246,12 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                     pool_size = len(snapshot)
             except Exception:
                 # Only a truly empty configured pool may use the legacy account.
-                if self._codex_fallback_auth_path is None or snapshot != []:
+                if (
+                    self._codex_fallback_auth_path is None
+                    or snapshot is None
+                    or not isinstance(snapshot, (list, tuple))
+                    or snapshot
+                ):
                     raise
                 from lingtai.auth.codex_account_source import FixedAccountSource
                 fallback = FixedAccountSource(self._codex_fallback_auth_path)
