@@ -14,7 +14,7 @@ import os
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 
 # ---------------------------------------------------------------------------
@@ -54,8 +54,111 @@ class AccountCandidate:
 # ---------------------------------------------------------------------------
 
 
+def _safe_no_candidate_diagnostics(
+    diagnostics: dict[str, Any] | None,
+) -> dict[str, object]:
+    """Return a non-secret, JSON-like diagnostic subset for selection failure."""
+    safe: dict[str, object] = {}
+    if not diagnostics:
+        return safe
+    allowed_prefixes = ("codex_account_", "no_candidate_")
+    for key, value in diagnostics.items():
+        if not isinstance(key, str) or not key.startswith(allowed_prefixes):
+            continue
+        if value is None or isinstance(value, (bool, int)):
+            safe[key] = value
+        elif isinstance(value, float):
+            # Quota diagnostics should normally be counts/bools.  Keep only
+            # finite scalar floats if a future caller supplies one.
+            if value == value and value not in (float("inf"), float("-inf")):
+                safe[key] = value
+        elif isinstance(value, str):
+            safe[key] = value[:120]
+    return safe
+
+
+def _format_no_candidate_diagnostics(fields: dict[str, object]) -> str:
+    """Compact, safe suffix for logs that only preserve ``str(exc)``."""
+    short_names = {
+        "no_candidate_reason": "reason",
+        "codex_account_source": "source",
+        "codex_account_pool_size": "pool",
+        "codex_account_existing_excluded_count": "pre_excluded",
+        "codex_account_excluded_count": "excluded",
+        "codex_account_combined_excluded_count": "combined_excluded",
+        "codex_account_zero_quota_count": "zero_quota",
+        "codex_account_eligible_count": "eligible",
+        "codex_account_quota_target_count": "quota_targets",
+        "codex_account_quota_observed_count": "quota_observed",
+        "codex_account_quota_read_error_count": "quota_read_errors",
+        "codex_account_quota_invalid_count": "quota_invalid",
+        "codex_account_quota_snapshot_complete": "quota_complete",
+        "codex_account_zero_effective_weight_count": "zero_weight",
+        "codex_account_legacy_fallback_allowed": "legacy_fallback_allowed",
+    }
+    ordered = [key for key in short_names if key in fields]
+    ordered.extend(sorted(key for key in fields if key not in short_names))
+    parts: list[str] = []
+    for key in ordered:
+        value = fields[key]
+        label = short_names.get(key, key)
+        if isinstance(value, bool):
+            rendered = "true" if value else "false"
+        else:
+            rendered = str(value)
+        parts.append(f"{label}={rendered}")
+        if len(", ".join(parts)) >= 240:
+            break
+    return ", ".join(parts)
+
+
 class NoCandidateError(Exception):
-    """Every validated, non-excluded account is unavailable."""
+    """Every validated, non-excluded account is unavailable.
+
+    The exception may carry non-secret diagnostic counts.  The base message
+    remains unchanged when no diagnostics are supplied, preserving existing
+    callers/tests that construct ``NoCandidateError("...")`` manually.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str | None = None,
+        diagnostics: dict[str, Any] | None = None,
+    ) -> None:
+        self.base_message = str(message)
+        self.reason = str(reason)[:120] if reason else None
+        self.diagnostics = _safe_no_candidate_diagnostics(diagnostics)
+        fields = self.diagnostic_fields()
+        suffix = _format_no_candidate_diagnostics(fields)
+        rendered = f"{self.base_message} ({suffix})" if suffix else self.base_message
+        super().__init__(rendered)
+
+    def diagnostic_fields(self) -> dict[str, object]:
+        fields: dict[str, object] = {}
+        if self.reason:
+            fields["no_candidate_reason"] = self.reason
+        fields.update(self.diagnostics)
+        return fields
+
+    def with_diagnostics(
+        self,
+        *,
+        reason: str | None = None,
+        diagnostics: dict[str, Any] | None = None,
+        **extra: Any,
+    ) -> "NoCandidateError":
+        merged = dict(self.diagnostics)
+        if diagnostics:
+            merged.update(diagnostics)
+        if extra:
+            merged.update(extra)
+        return NoCandidateError(
+            self.base_message,
+            reason=reason or self.reason,
+            diagnostics=merged,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +213,17 @@ class FixedAccountSource:
         quota_left_snapshot: dict[str, float] | None = None,
     ) -> AccountCandidate:
         if exclude and self._candidate.auth_path_sha8 in exclude:
-            raise NoCandidateError("Fixed account is excluded")
+            raise NoCandidateError(
+                "Fixed account is excluded",
+                reason="fixed_account_excluded",
+                diagnostics={
+                    "codex_account_source": "fixed",
+                    "codex_account_pool_size": 1,
+                    "codex_account_excluded_count": 1,
+                    "codex_account_eligible_count": 0,
+                    "codex_account_exclude_key_count": len(exclude),
+                },
+            )
         return self._candidate
 
     def quota_targets(
@@ -250,13 +363,32 @@ class WeightedAccountSource:
         # equal by value, so anchoring to a re-derived ``.index()`` lookup
         # would always resolve to the FIRST matching path rather than the
         # actual occurrence drawn.
+        excluded_accounts = [
+            a for a in accounts
+            if a.sha8 in exclude or a.resolved_path in exclude
+        ]
         eligible = [
             (i, a) for i, a in enumerate(accounts)
             if a.sha8 not in exclude and a.resolved_path not in exclude
         ]
+        base_diagnostics = {
+            "codex_account_source": "weighted",
+            "codex_account_pool_size": len(accounts),
+            "codex_account_excluded_count": len(excluded_accounts),
+            "codex_account_eligible_count": len(eligible),
+            "codex_account_exclude_key_count": len(exclude),
+            "codex_account_quota_snapshot_present": quota_left_snapshot is not None,
+            "codex_account_quota_snapshot_count": (
+                len(quota_left_snapshot) if quota_left_snapshot is not None else 0
+            ),
+        }
 
         if not eligible:
-            raise NoCandidateError("No eligible account remaining")
+            raise NoCandidateError(
+                "No eligible account remaining",
+                reason="no_eligible_after_exclude",
+                diagnostics=base_diagnostics,
+            )
 
         # -- compute raw weights ---------------------------------------------
         raw_weights = self._compute_raw_weights(eligible, quota_left_snapshot)
@@ -264,7 +396,15 @@ class WeightedAccountSource:
         # -- normalize & sample ----------------------------------------------
         total = sum(raw_weights)
         if total <= 0:
-            raise NoCandidateError("Total effective weight is zero")
+            zero_weight_count = sum(1 for weight in raw_weights if weight <= 0)
+            raise NoCandidateError(
+                "Total effective weight is zero",
+                reason="zero_effective_weight",
+                diagnostics={
+                    **base_diagnostics,
+                    "codex_account_zero_effective_weight_count": zero_weight_count,
+                },
+            )
 
         # Unbiased draw using cryptographic randomness.
         point = _uniform_float() * total

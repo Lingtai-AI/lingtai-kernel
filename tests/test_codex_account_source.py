@@ -633,3 +633,82 @@ def test_service_tier_invalid_fails_loud():
     """Unsupported service_tier values fail at the common factory boundary."""
     with pytest.raises(ValueError, match="auto"):
         _normalize_service_tier("auto")
+
+def test_no_candidate_error_diagnostic_fields_are_safe_and_structured():
+    plain = NoCandidateError("No eligible account remaining")
+    assert plain.args == ("No eligible account remaining",)
+    assert plain.diagnostic_fields() == {}
+
+    exc = NoCandidateError(
+        "No eligible account remaining",
+        reason="all_zero_quota",
+        diagnostics={
+            "codex_account_pool_size": 2,
+            "codex_account_zero_quota_count": 2,
+            "secret_path": "/tmp/token.json",
+        },
+    )
+
+    fields = exc.diagnostic_fields()
+    assert fields == {
+        "no_candidate_reason": "all_zero_quota",
+        "codex_account_pool_size": 2,
+        "codex_account_zero_quota_count": 2,
+    }
+    assert "secret_path" not in str(exc)
+    assert "pool=2" in str(exc)
+    assert "zero_quota=2" in str(exc)
+
+
+def test_weighted_no_candidate_error_reports_empty_pool(tui_dir):
+    pool = _write_pool(tui_dir, [])
+    source = WeightedAccountSource(pool, tui_dir)
+
+    with pytest.raises(NoCandidateError) as excinfo:
+        source.select()
+
+    fields = excinfo.value.diagnostic_fields()
+    assert fields["no_candidate_reason"] == "no_eligible_after_exclude"
+    assert fields["codex_account_source"] == "weighted"
+    assert fields["codex_account_pool_size"] == 0
+    assert fields["codex_account_excluded_count"] == 0
+    assert fields["codex_account_eligible_count"] == 0
+
+
+def test_weighted_no_candidate_error_reports_all_excluded(tui_dir):
+    pool = _write_pool(tui_dir, [{"path": "one.json", "weight": 1}])
+    source = WeightedAccountSource(pool, tui_dir)
+    snapshot = source.snapshot()
+
+    with pytest.raises(NoCandidateError) as excinfo:
+        source.select(exclude={snapshot[0].sha8}, snapshot=snapshot)
+
+    fields = excinfo.value.diagnostic_fields()
+    assert fields["no_candidate_reason"] == "no_eligible_after_exclude"
+    assert fields["codex_account_pool_size"] == 1
+    assert fields["codex_account_excluded_count"] == 1
+    assert fields["codex_account_eligible_count"] == 0
+
+
+def test_weighted_no_candidate_error_reports_all_zero_quota(tui_dir):
+    pool = _write_pool(
+        tui_dir,
+        [
+            {"path": "one.json", "weight": 1},
+            {"path": "two.json", "weight": 1},
+        ],
+    )
+    source = WeightedAccountSource(pool, tui_dir)
+    snapshot = source.snapshot()
+    quota = {account.sha8: 0.0 for account in snapshot}
+
+    with pytest.raises(NoCandidateError) as excinfo:
+        source.select(quota_left_snapshot=quota, snapshot=snapshot)
+
+    fields = excinfo.value.diagnostic_fields()
+    assert fields["no_candidate_reason"] == "zero_effective_weight"
+    assert fields["codex_account_pool_size"] == 2
+    assert fields["codex_account_eligible_count"] == 2
+    assert fields["codex_account_quota_snapshot_present"] is True
+    assert fields["codex_account_quota_snapshot_count"] == 2
+    assert fields["codex_account_zero_effective_weight_count"] == 2
