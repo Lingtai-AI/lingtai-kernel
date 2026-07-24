@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -350,9 +351,14 @@ def collect_lifecycle(report: Report) -> dict[str, Any]:
 
     if agent_err:
         sec.add("FAIL", ".agent.json unavailable", f"Could not read .agent.json: {agent_err}")
+    elif not isinstance(agent_json, dict):
+        sec.add(
+            "FAIL",
+            ".agent.json malformed",
+            f".agent.json parsed as {type(agent_json).__name__}, expected a JSON object.",
+        )
     else:
         fields = {}
-        assert isinstance(agent_json, dict)
         for key in (
             "name",
             "id",
@@ -371,8 +377,13 @@ def collect_lifecycle(report: Report) -> dict[str, Any]:
 
     if status_err:
         sec.add("WARN", ".status.json unavailable", f"Could not read .status.json: {status_err}")
+    elif not isinstance(status_json, dict):
+        sec.add(
+            "WARN",
+            ".status.json malformed",
+            f".status.json parsed as {type(status_json).__name__}, expected a JSON object.",
+        )
     else:
-        assert isinstance(status_json, dict)
         fields = {
             k: status_json.get(k)
             for k in ("state", "status", "current_time", "no_progress_seconds", "context", "context_usage")
@@ -767,14 +778,35 @@ def try_addon_imports(sec: Section, python_commands: list[str], modules: set[str
     python = next((cmd for cmd in python_commands if Path(cmd).exists() and os.access(cmd, os.X_OK)), sys.executable)
     results: list[dict[str, Any]] = []
     for module in sorted(modules):
-        proc = subprocess.run(
-            [python, "-c", f"import {module}; print('ok')"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=10,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                [python, "-c", f"import {module}; print('ok')"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            results.append(
+                {
+                    "module": module,
+                    "ok": False,
+                    "python": python,
+                    "error": ["import probe timed out after 10s"],
+                }
+            )
+            continue
+        except OSError as exc:
+            results.append(
+                {
+                    "module": module,
+                    "ok": False,
+                    "python": python,
+                    "error": [f"{type(exc).__name__}: {exc}"],
+                }
+            )
+            continue
         ok = proc.returncode == 0
         results.append({"module": module, "ok": ok, "python": python, "error": "" if ok else proc.stderr.strip().splitlines()[-1:]})
     severity = "OK" if all(item["ok"] for item in results) else "WARN"
