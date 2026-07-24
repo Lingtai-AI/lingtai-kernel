@@ -974,11 +974,50 @@ def _build_http_timeout(request_timeout: float | None):
 # ---------------------------------------------------------------------------
 
 
+def _scrub_openai_schema(node: Any) -> Any:
+    """Recursively normalize a JSON schema for OpenAI-compat Chat Completions.
+
+    Moonshot/Kimi's "flavored JSON Schema" enforces three constraints:
+
+      1. ``oneOf`` is not accepted — rewrite to ``anyOf``.
+      2. ``not`` is not accepted — drop it entirely.
+      3. When a node contains both ``anyOf`` and ``type``, the ``type`` must
+         live inside each ``anyOf`` child, not on the parent. Push ``type``
+         down into children that lack one, and remove it from the parent.
+
+    Pure function — returns a new object, never mutates the input.
+    """
+    if isinstance(node, dict):
+        out: dict = {}
+        for key, value in node.items():
+            if key == "oneOf":
+                out["anyOf"] = [_scrub_openai_schema(v) for v in value]
+            elif key == "not":
+                continue  # no accepted equivalent — drop
+            else:
+                out[key] = _scrub_openai_schema(value)
+        # Core fix: anyOf + type coexistence — push type into children
+        if "anyOf" in out and "type" in out:
+            parent_type = out.pop("type")
+            out["anyOf"] = [
+                {**child, "type": parent_type}
+                if isinstance(child, dict) and "type" not in child
+                else child
+                for child in out["anyOf"]
+            ]
+        return out
+    if isinstance(node, list):
+        return [_scrub_openai_schema(v) for v in node]
+    return node
+
+
 def _build_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
     """Convert FunctionSchema list to OpenAI tool format.
 
     The wire description is the constant ``WIRE_TOOL_DESCRIPTION``; the full
-    prose stays in the system prompt's ``## tools`` section.
+    prose stays in the system prompt's ``## tools`` section. Schemas are
+    scrubbed for OpenAI-compat provider requirements (e.g. Moonshot/Kimi
+    rejects oneOf and requires type inside anyOf items).
     """
     if not schemas:
         return None
@@ -988,7 +1027,7 @@ def _build_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
             "function": {
                 "name": s.name,
                 "description": WIRE_TOOL_DESCRIPTION,
-                "parameters": s.parameters,
+                "parameters": _scrub_openai_schema(s.parameters),
             },
         }
         for s in schemas
