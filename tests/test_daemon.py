@@ -1869,6 +1869,152 @@ def test_in_run_mechanical_compact_does_not_reset_recovery_latch(tmp_path, monke
     assert _chat_kinds(run_dir2).count("completion_recovery") == 1
 
 
+def _fake_finish_mcp_surface(mgr, run_dir):
+    """Build a tool surface whose task-MCP ``finish`` mirrors daemon_common.
+
+    The handler writes the same ``lingtai.daemon_completion.v1`` payload the
+    real ``daemon_common`` server writes, but only when the daemon loop
+    actually dispatches the call through ``ToolExecutor`` — nothing else in
+    the test writes the completion file. Returns ``(schemas, dispatch,
+    finish_calls)`` where ``finish_calls`` records each dispatched args dict.
+    """
+    finish_calls = []
+
+    def _finish(args):
+        finish_calls.append(dict(args))
+        extra = {}
+        if isinstance(args.get("summary"), str):
+            extra["summary"] = args["summary"]
+        _write_native_completion(run_dir, args["status"], **extra)
+        return {
+            "status": "ok",
+            "completion_status": args["status"],
+            "message": "daemon completion recorded",
+        }
+
+    finish_schema = FunctionSchema(
+        name="finish",
+        description="Finish this LingTai daemon run.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "summary": {"type": "string"},
+            },
+            "required": ["status"],
+        },
+    )
+    schemas, dispatch = mgr._build_tool_surface(
+        ["file"],
+        mcp_surface=({"finish": finish_schema}, {"finish": _finish}),
+    )
+    return schemas, dispatch, finish_calls
+
+
+def test_in_budget_recovery_tool_batch_dispatches_once_to_done(tmp_path, monkeypatch):
+    """A recovery response carrying a finish tool batch, received while turn
+    budget remains, re-enters the real executor loop: the batch dispatches
+    exactly once, the earlier successful probe call is not replayed, and the
+    completion artifact the tool itself wrote passes the unchanged strict
+    gate to a valid done."""
+    em_id = "em-recovery-tool-batch"
+    agent, mgr, run_dir, service, hooks, run = _completion_recovery_fixture(
+        tmp_path, monkeypatch, em_id,
+        [[
+            _resp("", tool_calls=[ToolCall(name="read", args={"file_path": "/tmp/x"}, id="tc-probe")]),
+            _resp("Milestone reached; the finish call was omitted."),
+            _resp("", tool_calls=[ToolCall(name="finish", args={"status": "done", "summary": "ok"}, id="tc-finish")]),
+            _resp("All work is committed."),
+        ]],
+    )
+    probe = MagicMock(return_value={"content": "probe data"})
+    agent._tool_handlers["read"] = probe
+    schemas, dispatch, finish_calls = _fake_finish_mcp_surface(mgr, run_dir)
+
+    result = mgr._run_emanation(
+        em_id, run_dir, schemas, dispatch, "task", threading.Event(), max_turns=5,
+    )
+
+    assert result == "All work is committed."
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "done"
+    # Same session, exact send sequence: kickoff, probe tool results, one
+    # recovery prompt, finish-batch tool results — and no fifth send.
+    assert len(service.sessions) == 1
+    session = service.sessions[0]
+    assert len(session.sent_messages) == 4
+    assert isinstance(session.sent_messages[1], list)
+    recovery_message = session.sent_messages[2]
+    assert isinstance(recovery_message, str)
+    assert recovery_message.startswith("The previous assistant response")
+    assert run_dir.run_id in recovery_message
+    assert isinstance(session.sent_messages[3], list)
+    assert sum(
+        1 for m in session.sent_messages
+        if isinstance(m, str) and m.startswith("The previous assistant response")
+    ) == 1
+    # The recovery tool batch went through the real dispatch path exactly
+    # once, after the recovery prompt; the successful probe was not replayed.
+    assert probe.call_count == 1
+    assert finish_calls == [{"status": "done", "summary": "ok"}]
+    assert [c[0] for c in service.make_tool_result_calls] == ["read", "finish"]
+    assert [k for k in _chat_kinds(run_dir) if k is not None] == [
+        "kickoff", "tool_results", "completion_recovery", "tool_results",
+    ]
+    events = _run_events(run_dir)
+    assert sum(1 for e in events if e.get("event") == "daemon_completion_recovery") == 1
+    # The one completion artifact is the tool handler's own current-run done
+    # payload — no duplicate or synthesized completion exists.
+    completion = json.loads(
+        (run_dir.path / "daemon_completion.json").read_text(encoding="utf-8")
+    )
+    assert completion["status"] == "done"
+    assert completion["run_id"] == run_dir.run_id
+
+
+def test_final_slot_recovery_tool_call_is_fail_closed_at_max_turns(tmp_path, monkeypatch):
+    """Text-only at ``turns == max_turns - 1`` is still recovery-eligible, but
+    a tool call in the recovery response lands exactly at the ceiling: it is
+    never dispatched, no continuation send follows, and the pre-existing
+    max-turn failure wins. Completion recovery consumes an ordinary
+    continuation slot — unlike mechanical-compact recovery it never sets
+    ``recovery_tool_batch_pending``, so no over-ceiling tool budget exists."""
+    em_id = "em-recovery-final-slot"
+    agent, mgr, run_dir, service, hooks, run = _completion_recovery_fixture(
+        tmp_path, monkeypatch, em_id,
+        [[
+            _resp("Milestone text without finish."),
+            _resp("", tool_calls=[ToolCall(name="finish", args={"status": "done"}, id="tc-late-finish")]),
+        ]],
+    )
+    schemas, dispatch, finish_calls = _fake_finish_mcp_surface(mgr, run_dir)
+
+    with pytest.raises(RuntimeError, match="max_turns exhausted"):
+        mgr._run_emanation(
+            em_id, run_dir, schemas, dispatch, "task", threading.Event(), max_turns=1,
+        )
+
+    # Exactly one recovery prompt was sent, and nothing was sent after the
+    # recovery response — the tool batch got no tool-result continuation.
+    session = service.sessions[0]
+    assert len(session.sent_messages) == 2
+    assert session.sent_messages[1].startswith("The previous assistant response")
+    assert [k for k in _chat_kinds(run_dir) if k is not None] == [
+        "kickoff", "completion_recovery",
+    ]
+    events = _run_events(run_dir)
+    assert sum(1 for e in events if e.get("event") == "daemon_completion_recovery") == 1
+    # The final-slot recovery tool call was never dispatched: zero handler
+    # executions, no tool result built, no completion artifact.
+    assert finish_calls == []
+    assert service.make_tool_result_calls == []
+    assert not (run_dir.path / "daemon_completion.json").exists()
+    # The existing max-turn failure taxonomy wins; the run is never done.
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    assert state["state"] == "failed"
+    assert state["error"]["type"] == "RuntimeError"
+    assert "max_turns exhausted" in state["error"]["message"]
+
+
 def test_compact_blank_reason_does_not_reset_context(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["daemon"])
     compact_call = ToolCall(name="compact", args={"action": "run", "_reason": "   "}, id="compact-blank")
