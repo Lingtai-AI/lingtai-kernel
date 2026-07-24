@@ -11,6 +11,7 @@ related_files:
   - src/lingtai/kernel/nudge/prompts.py
   - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
   - src/lingtai/kernel/notifications.py
+  - src/lingtai/kernel/workdir.py
   - src/lingtai/CONTRACT.md
   - tests/test_nudge_prompts.py
   - tests/test_kernel_version_nudge.py
@@ -33,9 +34,23 @@ the ordinary Notification Store channel; it does not create a second transport.
 - `__init__.py` — `run_checks`, `upsert`, `remove`, `effective_policy`, and
   `record_dismissal` provide the shared policy, finding identity, dismissal mute,
   and `.notification/nudge.json` mutation (`src/lingtai/kernel/nudge/__init__.py:1-360`).
+  `upsert` also enforces the hard `INLINE_MAX_CHARS=10_000` inline-payload cap
+  via `_cap_inline_payload`: at or below the cap the assembled entry (producer
+  body plus shared policy fields and `kind`) is unchanged; above it, the full
+  entry is written verbatim to a content-addressed sidecar file under
+  `WorkdirLayout.nudge_findings_dir` (an ordinary agent temp path,
+  `<working_dir>/tmp/nudge-findings/`) and the wire entry is replaced with a
+  compact summary plus the sidecar's absolute path, exact char/byte counts,
+  and SHA-256. `kind` is validated against a bounded filesystem-safe pattern
+  before any file naming; an invalid `kind` or a sidecar write that does not
+  durably succeed raises `NudgeExternalizationError` (bounded static message,
+  never producer content) instead of ever persisting the oversized body or a
+  compact placeholder — `upsert` calls this before its `.notification/nudge.json`
+  mutation, so a raise leaves prior notification state untouched for retry on
+  a later heartbeat (`src/lingtai/kernel/nudge/__init__.py:295-488`).
 - `init_config.py` — consumes the last structured real-reader outcome and
   publishes/clears the typed configuration-shape finding; it never reads
-  `init.json` independently (`src/lingtai/kernel/nudge/init_config.py:1-80`).
+  `init.json` independently (`src/lingtai/kernel/nudge/init_config.py:1-74`).
 - `kernel_version.py` — read-only installed/running observation plus bounded
   GitHub/Gitee release-manifest comparison; it does not own a product repeat
   cadence (`src/lingtai/kernel/nudge/kernel_version.py:91-229`).
@@ -76,6 +91,18 @@ bounded implementation cost only; global enabled/repeat values are product
 semantics. Goal source state remains protected `.notification/goal.json` and its
 reminder remains in `system.json`.
 
+Findings that exceed `INLINE_MAX_CHARS` also persist their complete original
+body to `<working_dir>/tmp/nudge-findings/<kind>-<sha256>.json`
+(`WorkdirLayout.nudge_findings_dir`, `src/lingtai/kernel/workdir.py`) — the
+ordinary agent temp namespace, not `.notification/`, matching the existing
+`tmp/tool-results/` spill convention exactly. Owner-only (`0o700` dir, `0o600`
+file) is (re-)enforced on every write, including when the directory
+pre-existed with looser permissions, and the write is atomic
+sibling-temp-then-replace. The filename is content-addressed by the SHA-256
+of the exact persisted UTF-8 bytes, so re-upserting the same finding on a
+later heartbeat reuses the file instead of writing a new one every cycle.
+These sidecar files are local to one agent run and are not auto-cleaned.
+
 ## Notes
 
 Every emitted entry includes the effective `LINGTAI_NUDGE_ENABLED` and
@@ -93,3 +120,28 @@ artifact-hash digest must agree before an update version is considered. A local
 mismatch recommends refresh only when the installed PEP 440 version is
 semantically newer than the running version; reverse, invalid, and unknown pairs
 remain local diagnostics for interpreter/import-path inspection.
+
+Dismissal-fingerprint identity is computed once in `upsert`, before capping,
+from the full pre-cap entry facts (`title`/`detail`/`source`/etc.), then
+stamped onto a capped entry as `_dismiss_fingerprint` so `record_dismissal`
+recovers the same identity from the persisted compact shape rather than
+re-deriving it from the rewritten compact `title`/`detail`. An uncapped small
+entry never carries `_dismiss_fingerprint` — the wire shape for the common
+case is unchanged from before the cap existed.
+
+Externalization is fail-loud, not fail-open: an invalid `kind` (bounded
+filesystem-safe pattern, checked before any file naming) or a sidecar write
+that does not durably succeed raises `NudgeExternalizationError` from inside
+`upsert`, before either persistent side effect of a successful upsert runs —
+its `.notification/nudge.json` mutation and its `.notification/.nudge_state.json`
+dismissal-clear (`_clear_dismissal`) both happen only after externalization
+has completed (or determined no externalization is needed). The oversized
+body is never persisted inline as a fallback, and no compact placeholder with
+a null path is written either — prior state in both files is left completely
+untouched so a later heartbeat can retry. The exception message is a bounded
+static string; it never includes the producer's `kind`, title, detail, or any
+finding content, so a caller that logs `str(exc)` cannot leak the oversized
+body or an escape-heavy `kind`. `run_checks`' existing per-producer
+`_run_one` try/except already catches, bounds (`str(e)[:200]`), and logs any
+producer exception, so this raise surfaces as the existing
+`nudge_check_error` diagnostic rather than crashing the heartbeat.
