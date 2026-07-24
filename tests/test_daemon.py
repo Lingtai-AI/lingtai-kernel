@@ -1545,6 +1545,330 @@ def test_run_emanation_uses_prompt_as_first_user_without_task_duplication(tmp_pa
     assert all("system objective" not in e["content"][0]["text"] for e in user_entries)
 
 
+# ---------------------------------------------------------------------------
+# Bounded one-shot completion recovery: a nonempty text-only response with a
+# missing/invalid current-run completion gets exactly one same-session
+# recovery user message before the unchanged strict finish(done) gate.
+# ---------------------------------------------------------------------------
+
+
+def _mark_native_common_mcp_loaded(run_dir) -> None:
+    run_dir._state.setdefault("call_parameters", {})["mcp"] = [
+        {"name": "daemon_common", "transport": "stdio"}
+    ]
+    run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+
+
+def _write_native_completion(run_dir, status: str, **extra) -> None:
+    payload = {
+        "schema": "lingtai.daemon_completion.v1",
+        "status": status,
+        "run_id": run_dir.run_id,
+    }
+    payload.update(extra)
+    (run_dir.path / "daemon_completion.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+
+
+def _completion_recovery_fixture(tmp_path, monkeypatch, em_id, session_responses, *, tools=()):
+    """LingTai-loop fixture with daemon_common loaded and run-local logging.
+
+    Returns (agent, mgr, run_dir, service, hooks, run). Before calling
+    ``run()``, tests may set ``hooks["wrap_send"]`` to intercept each
+    ``session.send`` and ``hooks["on_session"]`` to decorate each fresh
+    session (e.g. context-window seams for mechanical compact).
+    """
+    agent = _make_agent(tmp_path, ["file", "daemon"], working_dir_name=f"daemon-agent-{em_id}")
+    service = _CanonicalFakeService(session_responses)
+    hooks = {"wrap_send": None, "on_session": None}
+    original_create = service.create_session
+
+    def create_session(**kwargs):
+        session = original_create(**kwargs)
+        if hooks["on_session"] is not None:
+            hooks["on_session"](session)
+        if hooks["wrap_send"] is not None:
+            original_send = session.send
+
+            def send(message, _send=original_send):
+                return hooks["wrap_send"](_send, message)
+
+            session.send = send
+        return session
+
+    service.create_session = create_session
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+    mgr = agent.get_capability("daemon")
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    _mark_native_common_mcp_loaded(run_dir)
+    monkeypatch.setattr(agent, "_log", run_dir.append_event)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "", "followup_lock": threading.Lock(), "run_dir": run_dir,
+    }
+
+    def run(max_turns=5):
+        return mgr._run_emanation(
+            em_id, run_dir, *mgr._build_tool_surface(list(tools)),
+            "task", threading.Event(), max_turns=max_turns,
+        )
+
+    return agent, mgr, run_dir, service, hooks, run
+
+
+def _chat_kinds(run_dir) -> list:
+    return [
+        json.loads(line).get("kind")
+        for line in run_dir.chat_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def _run_events(run_dir) -> list:
+    return [
+        json.loads(line)
+        for line in run_dir.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def test_text_only_missing_finish_gets_one_recovery_then_done(tmp_path, monkeypatch):
+    """First eligible text-only response triggers exactly one same-session
+    recovery; a valid current-run finish written during the recovery turn
+    then succeeds through the unchanged strict gate."""
+    agent, mgr, run_dir, service, hooks, run = _completion_recovery_fixture(
+        tmp_path, monkeypatch, "em-recovery-done",
+        [[_resp("Milestone reached; I will write the result."),
+          _resp("Completed the work.")]],
+    )
+
+    def wrap_send(original_send, message):
+        response = original_send(message)
+        if isinstance(message, str) and message.startswith("The previous assistant response"):
+            # The daemon calls finish during the recovery turn: the artifact
+            # exists by the time the terminal gate reads it.
+            _write_native_completion(run_dir, "done", summary="ok")
+        return response
+
+    hooks["wrap_send"] = wrap_send
+
+    result = run()
+
+    assert result == "Completed the work."
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "done"
+    assert len(service.sessions) == 1  # same session throughout
+    session = service.sessions[0]
+    assert len(session.sent_messages) == 2
+    recovery_message = session.sent_messages[1]
+    assert isinstance(recovery_message, str)
+    assert run_dir.run_id in recovery_message
+    assert _chat_kinds(run_dir).count("completion_recovery") == 1
+    events = _run_events(run_dir)
+    assert sum(1 for e in events if e.get("event") == "daemon_completion_recovery") == 1
+
+
+def test_second_text_only_gets_no_second_recovery_and_fails_closed(tmp_path, monkeypatch):
+    """After the one recovery, a second nonempty text-only response is not
+    recovered again; the existing completion-contract failure evidence
+    (result.txt + daemon_completion_contract_failed) is preserved."""
+    agent, mgr, run_dir, service, hooks, run = _completion_recovery_fixture(
+        tmp_path, monkeypatch, "em-recovery-once",
+        [[_resp("Milestone one."), _resp("Milestone two."),
+          _resp("Must never be requested.")]],
+    )
+
+    with pytest.raises(RuntimeError, match="did not permit success"):
+        run()
+
+    session = service.sessions[0]
+    assert len(session.sent_messages) == 2  # kickoff + one recovery, no third send
+    assert len(session._responses) == 1  # the third queued response was never consumed
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "failed"
+    assert run_dir.result_path.read_text(encoding="utf-8") == "Milestone two."
+    assert _chat_kinds(run_dir).count("completion_recovery") == 1
+    events = _run_events(run_dir)
+    assert sum(1 for e in events if e.get("event") == "daemon_completion_recovery") == 1
+    assert any(e.get("event") == "daemon_completion_contract_failed" for e in events)
+
+
+def test_text_only_at_max_turns_no_recovery_preserves_failure_evidence(tmp_path, monkeypatch):
+    """At the max-turn boundary no recovery is injected, and the text-only
+    candidate falls through to the unchanged completion gate: result.txt and
+    daemon_completion_contract_failed are preserved (no bare max-turns error
+    replaces the contract failure evidence)."""
+    agent, mgr, run_dir, service, hooks, run = _completion_recovery_fixture(
+        tmp_path, monkeypatch, "em-recovery-ceiling",
+        [[
+            _resp("", tool_calls=[ToolCall(name="read", args={"file_path": "/tmp/x"}, id="tc-ceiling")]),
+            _resp("Work done but finish was never called."),
+        ]],
+        tools=("file",),
+    )
+    agent._tool_handlers["read"] = MagicMock(return_value={"content": "data"})
+
+    with pytest.raises(RuntimeError, match="did not permit success"):
+        run(max_turns=1)
+
+    session = service.sessions[0]
+    assert len(session.sent_messages) == 2  # kickoff + tool results only
+    assert "completion_recovery" not in _chat_kinds(run_dir)
+    events = _run_events(run_dir)
+    assert not any(e.get("event") == "daemon_completion_recovery" for e in events)
+    assert any(e.get("event") == "daemon_completion_contract_failed" for e in events)
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "failed"
+    assert run_dir.result_path.read_text(encoding="utf-8") == (
+        "Work done but finish was never called."
+    )
+
+
+def test_stale_run_id_completion_rejected_and_fail_closed(tmp_path, monkeypatch):
+    """A valid-shape done artifact with a mismatched run_id is invalid: it is
+    recovery-eligible (one attempt), and without a fresh current-run finish
+    the run still fails closed — a stale success can never leak through."""
+    agent, mgr, run_dir, service, hooks, run = _completion_recovery_fixture(
+        tmp_path, monkeypatch, "em-recovery-stale",
+        [[_resp("A prior run left an artifact behind."),
+          _resp("Still no fresh finish.")]],
+    )
+    _write_native_completion(
+        run_dir, "done",
+        run_id="em-other-run-20260101-000000-aaaaaa", summary="stale",
+    )
+
+    completion = daemon_tool.DaemonManager._read_daemon_completion(run_dir)
+    assert completion.status is None
+    assert "run_id mismatch" in completion.error
+
+    with pytest.raises(RuntimeError, match="run_id mismatch"):
+        run()
+
+    session = service.sessions[0]
+    assert len(session.sent_messages) == 2  # stale artifact is invalid → one recovery
+    assert _chat_kinds(run_dir).count("completion_recovery") == 1
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "failed"
+    assert run_dir.result_path.read_text(encoding="utf-8") == "Still no fresh finish."
+
+
+def test_completion_recovery_prompt_guides_continuation_not_repetition(tmp_path, monkeypatch):
+    """The recovery prompt names the current run, requires finish for this
+    run if complete, and instructs continuation from existing state without
+    repeating already-successful tool calls."""
+    agent, mgr, run_dir, service, hooks, run = _completion_recovery_fixture(
+        tmp_path, monkeypatch, "em-recovery-prompt",
+        [[_resp("Milestone."), _resp("Second milestone.")]],
+    )
+
+    with pytest.raises(RuntimeError, match="did not permit success"):
+        run()
+
+    prompt = service.sessions[0].sent_messages[1]
+    assert f"run {run_dir.run_id}" in prompt
+    assert "daemon_common.finish" in prompt
+    assert "`finish` exactly once" in prompt
+    assert "do not repeat tool calls that already succeeded" in prompt
+    assert "continue the task now in this same session from the existing durable state" in prompt.lower()
+    assert "must not be treated as success" in prompt
+
+
+def test_valid_done_completion_before_text_gets_no_recovery(tmp_path, monkeypatch):
+    """A valid current-run finish(done) remains the direct terminal path;
+    the recovery branch never fires."""
+    agent, mgr, run_dir, service, hooks, run = _completion_recovery_fixture(
+        tmp_path, monkeypatch, "em-recovery-predone",
+        [[_resp("The finish tool already committed the result.")]],
+    )
+    _write_native_completion(run_dir, "done", summary="committed")
+
+    result = run()
+
+    assert result == "The finish tool already committed the result."
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "done"
+    assert len(service.sessions[0].sent_messages) == 1
+    assert "completion_recovery" not in _chat_kinds(run_dir)
+
+
+def test_valid_failed_completion_is_not_reinterpreted_as_recoverable(tmp_path, monkeypatch):
+    """A valid explicit failed artifact is a model-visible terminal decision:
+    no recovery second-guesses it, and it can never become done."""
+    agent, mgr, run_dir, service, hooks, run = _completion_recovery_fixture(
+        tmp_path, monkeypatch, "em-recovery-explicit-failed",
+        [[_resp("I could not complete the task.")]],
+    )
+    _write_native_completion(run_dir, "failed", reason="blocked on review")
+
+    with pytest.raises(RuntimeError, match="blocked on review"):
+        run()
+
+    assert len(service.sessions[0].sent_messages) == 1
+    assert "completion_recovery" not in _chat_kinds(run_dir)
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "failed"
+
+
+def test_provider_error_during_recovery_is_not_retried(tmp_path, monkeypatch):
+    """The latch is set before the recovery send, so a provider exception on
+    the recovery call propagates through the existing failure path without a
+    second recovery attempt."""
+    agent, mgr, run_dir, service, hooks, run = _completion_recovery_fixture(
+        tmp_path, monkeypatch, "em-recovery-provider-error",
+        [[_resp("A transition sentence.")]],
+    )
+
+    def wrap_send(original_send, message):
+        if isinstance(message, str) and message.startswith("The previous assistant response"):
+            raise RuntimeError("provider unavailable")
+        return original_send(message)
+
+    hooks["wrap_send"] = wrap_send
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        run()
+
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "failed"
+    # The one recovery attempt is durably recorded; nothing retried it.
+    assert _chat_kinds(run_dir).count("completion_recovery") == 1
+    events = _run_events(run_dir)
+    assert sum(1 for e in events if e.get("event") == "daemon_completion_recovery") == 1
+
+
+def test_in_run_mechanical_compact_does_not_reset_recovery_latch(tmp_path, monkeypatch):
+    """The latch is local to one _run_emanation invocation: a mechanical
+    compact inside the same run replaces the session but cannot re-arm the
+    one recovery; a fresh run starts with a fresh latch."""
+    session_one = [_resp("Planning milestone.")]
+    session_one.extend(_manual_compact_responses(10))
+    agent, mgr, run_dir, service, hooks, run = _completion_recovery_fixture(
+        tmp_path, monkeypatch, "em-recovery-compact",
+        [session_one, [_resp("Text after mechanical compact.")]],
+    )
+
+    def on_session(session):
+        session.context_window = lambda: 100
+        session.interface.estimate_context_tokens = lambda: 20
+
+    hooks["on_session"] = on_session
+
+    with pytest.raises(RuntimeError, match="did not permit success"):
+        run(max_turns=30)
+
+    # One recovery before the compact, none after: the fresh session got only
+    # the mechanical-compact recovery message.
+    assert _chat_kinds(run_dir).count("completion_recovery") == 1
+    assert len(service.sessions) == 2
+    fresh_session = service.sessions[1]
+    assert len(fresh_session.sent_messages) == 1
+    assert fresh_session.sent_messages[0].startswith("The runtime mechanically compacted")
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "failed"
+    assert run_dir.result_path.read_text(encoding="utf-8") == "Text after mechanical compact."
+
+    # A fresh run/invocation starts with a fresh latch.
+    agent2, mgr2, run_dir2, service2, hooks2, run2 = _completion_recovery_fixture(
+        tmp_path, monkeypatch, "em-recovery-fresh",
+        [[_resp("Fresh milestone."), _resp("Fresh second milestone.")]],
+    )
+    with pytest.raises(RuntimeError, match="did not permit success"):
+        run2()
+    assert _chat_kinds(run_dir2).count("completion_recovery") == 1
+
+
 def test_compact_blank_reason_does_not_reset_context(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["daemon"])
     compact_call = ToolCall(name="compact", args={"action": "run", "_reason": "   "}, id="compact-blank")
