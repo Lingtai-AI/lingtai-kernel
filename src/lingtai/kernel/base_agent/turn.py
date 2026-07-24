@@ -695,11 +695,14 @@ def _run_loop(agent) -> None:
                     from ...auth.codex_account_source import NoCandidateError
 
                     if isinstance(e, NoCandidateError):
-                        agent._log(
-                            "no_candidate_terminal",
-                            error=err_desc[:300],
-                            exception=type(e).__name__,
-                        )
+                        fields = {
+                            "error": err_desc[:300],
+                            "exception": type(e).__name__,
+                        }
+                        diagnostic_fields = getattr(e, "diagnostic_fields", None)
+                        if callable(diagnostic_fields):
+                            fields.update(diagnostic_fields())
+                        agent._log("no_candidate_terminal", **fields)
                         logger.warning(
                             f"[{agent.agent_name}] No Codex account candidate: {err_desc}"
                         )

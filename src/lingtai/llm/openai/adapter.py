@@ -5126,6 +5126,70 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             and 0.0 <= float(value) <= 100.0
         )
 
+    @staticmethod
+    def _codex_account_identifier(candidate: object) -> tuple[str | None, str | None]:
+        """Return safe comparison identifiers without exposing auth paths."""
+        sha8 = getattr(candidate, "sha8", None)
+        if not isinstance(sha8, str):
+            sha8 = getattr(candidate, "auth_path_sha8", None)
+        path_ref = getattr(candidate, "resolved_path", None)
+        if not isinstance(path_ref, str):
+            path_ref = getattr(candidate, "auth_ref", None)
+        return (sha8 if isinstance(sha8, str) else None, path_ref if isinstance(path_ref, str) else None)
+
+    @classmethod
+    def _codex_count_excluded(
+        cls,
+        snapshot: object,
+        exclude: set[str],
+    ) -> int:
+        if not isinstance(snapshot, (list, tuple)):
+            return 0
+        count = 0
+        for candidate in snapshot:
+            sha8, path_ref = cls._codex_account_identifier(candidate)
+            if (sha8 and sha8 in exclude) or (path_ref and path_ref in exclude):
+                count += 1
+        return count
+
+    @classmethod
+    def _codex_no_candidate_diagnostics(
+        cls,
+        *,
+        snapshot: object,
+        context: _CodexAccountContext,
+        zero_accounts: set[str],
+        quota_target_count: int,
+        observed_quota: dict[str, float],
+        quota_read_error_count: int,
+        quota_invalid_count: int,
+        quota_left: dict[str, float] | None,
+        fallback_auth_path: str | None,
+    ) -> dict[str, Any]:
+        pool_size = len(snapshot) if isinstance(snapshot, (list, tuple)) else 0
+        existing_excluded = cls._codex_count_excluded(snapshot, context.excluded_accounts)
+        zero_quota = cls._codex_count_excluded(snapshot, zero_accounts)
+        combined = context.excluded_accounts | zero_accounts
+        combined_excluded = cls._codex_count_excluded(snapshot, combined)
+        eligible = max(pool_size - combined_excluded, 0)
+        return {
+            "codex_account_pool_size": pool_size,
+            "codex_account_existing_excluded_count": existing_excluded,
+            "codex_account_zero_quota_count": zero_quota,
+            "codex_account_combined_excluded_count": combined_excluded,
+            "codex_account_eligible_count": eligible,
+            "codex_account_quota_target_count": quota_target_count,
+            "codex_account_quota_observed_count": len(observed_quota),
+            "codex_account_quota_read_error_count": quota_read_error_count,
+            "codex_account_quota_invalid_count": quota_invalid_count,
+            "codex_account_quota_snapshot_complete": quota_left is not None,
+            "codex_account_legacy_fallback_allowed": (
+                fallback_auth_path is not None
+                and isinstance(snapshot, (list, tuple))
+                and not snapshot
+            ),
+        }
+
     def _refresh_codex_bound_quota(
         self, context: _CodexAccountContext
     ) -> dict[str, Any]:
@@ -5202,6 +5266,9 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             quota_left: dict[str, float] | None = None
             observed_quota: dict[str, float] = {}
             zero_accounts: set[str] = set()
+            quota_target_count = 0
+            quota_read_error_count = 0
+            quota_invalid_count = 0
             snapshot = None
             if callable(getattr(source, "snapshot", None)):
                 snapshot = source.snapshot()
@@ -5209,6 +5276,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                     exclude=context.excluded_accounts,
                     snapshot=snapshot,
                 )
+                quota_target_count = len(targets)
                 complete = bool(targets)
                 quota_left = {}
                 try:
@@ -5217,9 +5285,11 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                         try:
                             percent = read_remaining_percent(auth_ref)
                         except Exception:
+                            quota_read_error_count += 1
                             percent = None
                         valid = self._valid_codex_quota_percent(percent)
                         if not valid:
+                            quota_invalid_count += 1
                             complete = False
                         else:
                             fraction = float(percent) / 100.0
@@ -5232,7 +5302,34 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 if not complete:
                     quota_left = None
 
-            excluded = context.excluded_accounts | zero_accounts
+            quota_excluded_accounts = set(zero_accounts)
+            quota_left_for_selection = quota_left
+            if (
+                zero_accounts
+                and isinstance(snapshot, (list, tuple))
+                and snapshot
+            ):
+                existing_excluded = self._codex_count_excluded(
+                    snapshot, context.excluded_accounts
+                )
+                combined_excluded = self._codex_count_excluded(
+                    snapshot, context.excluded_accounts | zero_accounts
+                )
+                if existing_excluded < len(snapshot) <= combined_excluded:
+                    # The quota reader is an advisory preflight.  When every
+                    # otherwise-available configured account reports 0%, treating
+                    # that as a hard pre-request exclusion produces a turn-0
+                    # NoCandidate false negative and prevents the real request
+                    # path from adjudicating the account's current usability.
+                    # Keep quota-zero exclusion for mixed snapshots, but degrade
+                    # all-zero snapshots to static pool selection.  If the account
+                    # is genuinely exhausted, the provider's structured
+                    # usage_limit_reached error will mark it excluded through the
+                    # normal fail-closed path.
+                    quota_excluded_accounts = set()
+                    quota_left_for_selection = None
+
+            excluded = context.excluded_accounts | quota_excluded_accounts
             try:
                 if snapshot is None:
                     candidate = source.select(exclude=excluded or None)
@@ -5240,11 +5337,11 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 else:
                     candidate = source.select(
                         exclude=excluded or None,
-                        quota_left_snapshot=quota_left,
+                        quota_left_snapshot=quota_left_for_selection,
                         snapshot=snapshot,
                     )
                     pool_size = len(snapshot)
-            except Exception:
+            except Exception as exc:
                 # Only a truly empty configured pool may use the legacy account.
                 if (
                     self._codex_fallback_auth_path is None
@@ -5252,6 +5349,20 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                     or not isinstance(snapshot, (list, tuple))
                     or snapshot
                 ):
+                    from lingtai.auth.codex_account_source import NoCandidateError
+                    if isinstance(exc, NoCandidateError):
+                        diagnostics = self._codex_no_candidate_diagnostics(
+                            snapshot=snapshot,
+                            context=context,
+                            zero_accounts=zero_accounts,
+                            quota_target_count=quota_target_count,
+                            observed_quota=observed_quota,
+                            quota_read_error_count=quota_read_error_count,
+                            quota_invalid_count=quota_invalid_count,
+                            quota_left=quota_left,
+                            fallback_auth_path=self._codex_fallback_auth_path,
+                        )
+                        raise exc.with_diagnostics(diagnostics=diagnostics) from exc
                     raise
                 from lingtai.auth.codex_account_source import FixedAccountSource
                 fallback = FixedAccountSource(self._codex_fallback_auth_path)

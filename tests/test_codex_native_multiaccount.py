@@ -7,11 +7,16 @@ the same factory; there is no pool chat wrapper or SessionManager selection hook
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
-from lingtai.auth.codex_account_source import AccountCandidate, WeightedAccountSource
+from lingtai.auth.codex_account_source import (
+    AccountCandidate,
+    NoCandidateError,
+    WeightedAccountSource,
+)
 from lingtai.kernel.llm.interface import ChatInterface
 from lingtai.llm.openai.adapter import CodexOpenAIAdapter
 
@@ -110,6 +115,7 @@ def _adapter(source, managers, responses, **kwargs):
     def manager_factory(*, token_path=None):
         return managers[token_path]
 
+    fallback_auth_path = kwargs.pop("codex_fallback_auth_path", "a.json")
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
@@ -117,7 +123,7 @@ def _adapter(source, managers, responses, **kwargs):
         force_responses=True,
         codex_account_source=source,
         codex_token_manager_factory=manager_factory,
-        codex_fallback_auth_path="a.json",
+        codex_fallback_auth_path=fallback_auth_path,
         **kwargs,
     )
     adapter._client = _Client(responses)
@@ -132,6 +138,23 @@ def _managers(*paths):
         )
         for path in paths
     }
+
+
+def _write_weighted_pool(tmp_path, *paths: str):
+    pool = tmp_path / "codex-auth-pool.json"
+    pool.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "accounts": [
+                    {"path": path, "weight": 1}
+                    for path in paths
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return pool
 
 
 def test_codex_pool_spellings_are_only_aliases_for_native_codex_factory():
@@ -483,6 +506,80 @@ def test_native_codex_nonempty_exhausted_pool_never_falls_back():
 
     assert source.calls == []
     assert responses.calls == []
+
+
+def test_native_codex_empty_pool_without_fallback_reports_diagnostics(tmp_path):
+    source = WeightedAccountSource(tmp_path / "missing-pool.json", tmp_path)
+    responses = _Responses([_success_events])
+    adapter = _adapter(
+        source,
+        _managers(),
+        responses,
+        codex_fallback_auth_path=None,
+    )
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    with pytest.raises(NoCandidateError) as excinfo:
+        chat.send("hello")
+
+    fields = excinfo.value.diagnostic_fields()
+    assert fields["codex_account_pool_size"] == 0
+    assert fields["codex_account_existing_excluded_count"] == 0
+    assert fields["codex_account_zero_quota_count"] == 0
+    assert fields["codex_account_eligible_count"] == 0
+    assert fields["codex_account_legacy_fallback_allowed"] is False
+    assert responses.calls == []
+
+
+def test_native_codex_all_preexcluded_reports_diagnostics(tmp_path):
+    pool = _write_weighted_pool(tmp_path, "one.json", "two.json")
+    source = WeightedAccountSource(pool, tmp_path)
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, _managers("one.json", "two.json", "a.json"), responses)
+    adapter._codex_excluded_accounts.update(account.sha8 for account in source.snapshot())
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    with pytest.raises(NoCandidateError) as excinfo:
+        chat.send("hello")
+
+    fields = excinfo.value.diagnostic_fields()
+    assert fields["codex_account_pool_size"] == 2
+    assert fields["codex_account_existing_excluded_count"] == 2
+    assert fields["codex_account_zero_quota_count"] == 0
+    assert fields["codex_account_combined_excluded_count"] == 2
+    assert fields["codex_account_eligible_count"] == 0
+    assert fields["codex_account_quota_target_count"] == 0
+    assert fields["codex_account_legacy_fallback_allowed"] is False
+    assert "pre_excluded=2" in str(excinfo.value)
+    assert responses.calls == []
+
+
+def test_native_codex_all_zero_quota_preflight_does_not_hide_available_pool(
+    tmp_path, monkeypatch
+):
+    auth_refs = [str(tmp_path / "one.json"), str(tmp_path / "two.json")]
+    pool = _write_weighted_pool(tmp_path, *auth_refs)
+    source = WeightedAccountSource(pool, tmp_path)
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, _managers(*auth_refs, "a.json"), responses)
+    monkeypatch.setattr(
+        "lingtai.llm.openai.codex_quota.read_remaining_percent",
+        lambda _auth_ref: 0.0,
+    )
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    response = chat.send("hello")
+    assert response.text == "ok"
+
+    # The local quota preflight can be stale or more conservative than the real
+    # request path.  It may shape weighting/exclusion, but when it would erase
+    # every otherwise-available configured candidate, the adapter must still let
+    # the provider adjudicate rather than producing a turn-0 NoCandidate false
+    # negative before any request is made.
+    assert len(responses.calls) == 1
+    assert chat.codex_pool_selection["auth_path_sha8"] in {
+        candidate.sha8 for candidate in source.snapshot()
+    }
 
 
 def test_native_codex_none_snapshot_never_falls_back():

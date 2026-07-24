@@ -272,6 +272,53 @@ def test_no_candidate_error_is_terminal_without_aed_retry(tmp_path, monkeypatch)
     }
 
 
+def test_no_candidate_error_terminal_log_includes_safe_diagnostics(tmp_path, monkeypatch):
+    agent = _make_run_loop_agent(tmp_path)
+    agent.reports = []
+    agent._report_task_card_api_error = lambda exc, **kw: agent.reports.append((exc, kw))
+    calls = {"n": 0}
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        _agent._shutdown.set()
+        raise NoCandidateError(
+            "No eligible account remaining",
+            reason="all_zero_quota",
+            diagnostics={
+                "codex_account_source": "weighted",
+                "codex_account_pool_size": 2,
+                "codex_account_zero_quota_count": 2,
+                "secret_path": "/tmp/token.json",
+                "codex_account_auth_ref": "/tmp/token.json",
+                "no_candidate_token": "secret-token-value",
+            },
+        )
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    assert calls["n"] == 1
+    logs = [fields for name, fields in agent._logs if name == "no_candidate_terminal"]
+    assert len(logs) == 1
+    assert logs[0]["no_candidate_reason"] == "all_zero_quota"
+    assert logs[0]["codex_account_source"] == "weighted"
+    assert logs[0]["codex_account_pool_size"] == 2
+    assert logs[0]["codex_account_zero_quota_count"] == 2
+    assert "secret_path" not in logs[0]
+    assert "codex_account_auth_ref" not in logs[0]
+    assert "no_candidate_token" not in logs[0]
+    assert "source=weighted" in logs[0]["error"]
+    assert "zero_quota=2" in logs[0]["error"]
+    assert "/tmp/token.json" not in logs[0]["error"]
+    assert "secret-token-value" not in logs[0]["error"]
+    assert len(agent.reports) == 1
+    assert agent.reports[0][0].diagnostic_fields()["codex_account_pool_size"] == 2
+    assert agent.reports[0][1]["terminal"] is True
+
+
 def test_ordinary_exception_keeps_aed_rebuild_behavior(tmp_path, monkeypatch):
     agent = _make_run_loop_agent(tmp_path)
     agent._config.max_aed_attempts = 3
