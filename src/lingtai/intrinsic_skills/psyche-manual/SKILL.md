@@ -38,6 +38,19 @@ For `lingtai` and `knowledge`, tending happens *once* per task, at the end — n
 
 Pad has a different rhythm — see §5 "Tending the Pad" below.
 
+### Identity mode
+
+`lingtai` supports two intentional modes. The recommended self-evolve mode
+omits the configured identity (or sets it empty), so boot, refresh, and
+post-molt reconstruction leave `system/lingtai.md` untouched and psyche-authored
+identity changes persist. Forced identity mode uses a nonempty resolved
+`lingtai` value, either inline or from `lingtai_file`; that value is authoritative
+and is materialized into `system/lingtai.md` on each reconstruction. A
+`psyche(lingtai, update)` still writes and auto-loads immediately, but a forced
+configured value replaces it at the next reconstruction. Keep `lingtai` distinct
+from the operator `covenant`, the third-party `base_prompt`, and the mechanical
+`identity` section.
+
 ## 3. Step 1 — Tend the Four Durable Stores and Session Journal
 
 - **lingtai** — `psyche(lingtai, update, content=<full identity>)`. Each update is a full rewrite, so include your whole identity, not just the delta. Carry forward who you have become.

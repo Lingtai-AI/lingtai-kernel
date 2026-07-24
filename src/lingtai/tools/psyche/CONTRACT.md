@@ -14,7 +14,7 @@ maintenance: |
 # Psyche capability contract
 
 `psyche` is the bare essentials of agent self: the working `pad`, the
-self-authored `lingtai` identity, the true `name`/nickname, and `context` molt
+configured-or-self-authored `lingtai` identity, the true `name`/nickname, and `context` molt
 (shed history, keep a briefing). It is dispatched on an `(object, action)`
 matrix, not a flat action enum. The implementation lives in `src/lingtai/tools/psyche/`;
 the code is the source of truth.
@@ -22,7 +22,7 @@ the code is the source of truth.
 ## Routing Card
 
 **Use this when:**
-- You are editing the pad (`system/pad.md`), the self-authored identity
+- You are editing the pad (`system/pad.md`), the configured-or-self-authored identity
   (`system/lingtai.md` → `character` prompt section), or the true-name/nickname
   handlers.
 - You are reviewing the context molt machinery — snapshotting, history archive,
@@ -45,6 +45,17 @@ paths -> §State & storage.
 - Schema requires both `object` and `action`.
 - Non-goals: notification verbs, summarize/rebuild, mailbox actions.
 - Former name `anima` is not a compatibility alias.
+
+## Identity modes
+
+`lingtai` has two supported modes. In forced identity mode, a nonempty resolved
+`lingtai` value—inline or loaded from `lingtai_file`—is authoritative and is
+materialized into `system/lingtai.md` during boot, refresh, and post-molt prompt
+reconstruction. `psyche(lingtai, update)` still writes and auto-loads
+immediately in the current cycle, but the configured forced value replaces it at
+the next reconstruction. In self-evolve identity mode, the configured identity
+is absent or empty; reconstruction leaves `system/lingtai.md` untouched, so
+psyche-authored changes persist across refresh and molt.
 
 ## Tool surface
 

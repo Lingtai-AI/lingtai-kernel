@@ -1352,9 +1352,9 @@ class Agent(BaseAgent):
 
         # Resolve *_file fields for active top-level text content.
         # The externally changeable prompt surface is exactly `base_prompt`,
-        # `covenant`, and `comment` (plus the required agent seed/state fields
-        # `lingtai` and `pad`). `lingtai` is the agent's initial 灵台 / character
-        # seed (system/lingtai.md → `character` section), distinct from
+        # `covenant`, and `comment` (plus the agent identity/state fields
+        # `lingtai` and `pad`). `lingtai` is the agent's configured 灵台 /
+        # character value (system/lingtai.md → `character` section), distinct from
         # `base_prompt` (third-party injection point); it was renamed from
         # `prompt` with no legacy alias. Retired prompt-override `_file` fields
         # (principle_file / procedures_file / substrate_file / brief_file) are
@@ -1649,18 +1649,17 @@ class Agent(BaseAgent):
         if covenant:
             self._prompt_manager.write_section("covenant", covenant, protected=True)
 
-        # --- Character (self-authored identity — system/lingtai.md alone) ---
-        # `lingtai` is the agent's initial 灵台 / character seed: the inline
-        # init.json value (already merged with `lingtai_file` by _setup_from_init)
-        # seeds system/lingtai.md, then the canonical composer loads it into the
-        # `character` section. This mirrors the covenant/base_prompt disk pattern
-        # so the seed survives a post-molt reload that re-reads init.json. It is
-        # the agent's OWN voice — distinct from `covenant` above, from the
+        # --- Character (configured or self-authored identity — system/lingtai.md alone) ---
+        # `lingtai` is the configured 灵台 / character value: a value supplied inline or
+        # resolved from `lingtai_file` before this point is authoritative when nonempty and replaces
+        # system/lingtai.md during boot, refresh, and post-molt reconstruction.
+        # An absent or empty resolved value selects self-evolve mode and leaves
+        # the existing system/lingtai.md untouched. In either mode the
+        # canonical composer loads that file into `character`. This is the
+        # agent's OWN voice — distinct from `covenant` above, from the
         # third-party `base_prompt` injection point, and from the mechanical
         # `identity` section written by BaseAgent. (Renamed from `prompt`; no
-        # legacy alias.) Once the agent self-authors lingtai.md, the on-disk file
-        # wins on every boot/refresh — an empty/absent init `lingtai` does NOT
-        # blank it, exactly like covenant.
+        # legacy alias.)
         lingtai_seed = data.get("lingtai", "")
         if lingtai_seed:
             (system_dir / "lingtai.md").write_text(lingtai_seed)
