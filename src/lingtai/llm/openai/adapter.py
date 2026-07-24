@@ -1025,7 +1025,7 @@ def _scrub_responses_schema(node: Any) -> Any:
          "string"`. This covers the nested `secondary.args.*` fields LingTai
          emits with only a description.
       3. `{"type": "object"}` with no `properties` key (a free-form object,
-         e.g. `daemon`'s `tasks[].backend_options`) -> an empty
+         e.g. entries in `daemon`'s `tasks[].mcp` array) -> an empty
          `properties: {}` is added. An empty `properties` map is accepted.
 
     `enum`/`anyOf`/`allOf` are left untouched (the backend accepts them
