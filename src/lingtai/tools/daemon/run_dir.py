@@ -728,9 +728,11 @@ class DaemonRunDir:
     def record_user_send(self, text: str, kind: str) -> None:
         """Append a user-role entry to chat_history.jsonl before session.send.
 
-        kind ∈ {"task", "tool_results", "followup"}. Tool result payloads are
-        written verbatim — no truncation. Chat history is forensic; we want
-        full fidelity. Single-writer per file (only the run thread).
+        kind ∈ {"kickoff", "tool_results", "followup",
+        "mechanical_compact_recovery", "completion_recovery"}. Tool result
+        payloads are written verbatim — no truncation. Chat history is
+        forensic; we want full fidelity. Single-writer per file (only the
+        run thread).
         """
         def _write():
             self._append_jsonl(

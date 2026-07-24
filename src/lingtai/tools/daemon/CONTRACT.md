@@ -229,6 +229,19 @@ Success requires a validated `finish(status="done")`; missing completion,
 invalid JSON, invalid status, run-id mismatch, `failed`, or `incomplete` must
 prevent terminal `done`.
 
+When a LingTai-backend worker receives one nonempty text-only response (no
+tool calls) while the current run's completion signal is still missing or
+invalid, it sends exactly one bounded same-session recovery user message
+(`kind="completion_recovery"`), only while a further provider call remains
+within the existing `max_turns` ceiling; the recovery consumes one ordinary
+continuation slot and is auditable in chat history and the run event log.
+The recovery never infers completion from text and never synthesizes a
+completion artifact: the validated `finish(status="done")` gate above remains
+mandatory afterward. A second text-only response in the same run, a valid
+explicit `failed`/`incomplete` artifact, an empty/whitespace-only response,
+provider errors, cancellation, and max-turn exhaustion all remain fail-closed
+outcomes on the unchanged completion-gate failure path.
+
 ### 4. Artifacts separate review evidence from secret-bearing config
 
 Run artifacts must make the daemon contract reviewable without leaking secrets.
