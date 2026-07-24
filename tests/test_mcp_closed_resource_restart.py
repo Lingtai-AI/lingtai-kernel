@@ -1,26 +1,21 @@
-"""Stale-resource recovery for stdio MCPClient — regression for Lingtai-AI/lingtai#104.
+"""Stale-resource recovery for stdio MCPClient — regressions for issue #104.
 
 A revived agent kept a Telegram MCP tool registered, but every call returned
 ``{"status": "error", "message": ""}``. The underlying exception was anyio's
 ``ClosedResourceError`` (empty ``str(e)``) raised against a dead stdio stream
-whose session object still looked "connected". ``refresh``/``clear`` could not
-repair it because ``call_tool`` never tore down and re-spawned the subprocess.
+whose session object still looked "connected".
 
-These tests use fakes/monkeypatching only — no real MCP subprocess, no Telegram
-credentials. They exercise:
-  - empty-message exceptions surface the class name (no blank errors)
-  - a stale ``ClosedResourceError`` triggers exactly one restart + retry
-  - a successful retry returns the normal tool result
-  - a failed retry returns a helpful error mentioning the class and that
-    restart/retry failed (never blank)
-  - non-stale exceptions surface a useful error, no restart attempted
-  - ``restart()`` resets startup state so ``start()`` cannot lie
+These tests use fakes/monkeypatching only — no real MCP subprocess, network, or
+credentials. They cover issue-104 transport recovery while requiring opaque
+calls to fail closed when the first attempt's remote commit point is ambiguous.
 """
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
-from lingtai.services.mcp import MCPClient
+from lingtai.services.mcp import HTTPMCPClient, MCPClient
 
 
 # ---------------------------------------------------------------------------
@@ -28,25 +23,29 @@ from lingtai.services.mcp import MCPClient
 # ---------------------------------------------------------------------------
 
 class ClosedResourceError(Exception):
-    """Stand-in for anyio.ClosedResourceError — same class name, empty str()."""
+    """Stand-in for anyio.ClosedResourceError — same name, empty ``str()``."""
 
 
 class _FakeFuture:
-    """Mimics concurrent.futures.Future enough for call_tool: result() either
-    returns a value or raises the staged exception."""
+    """Minimal ``concurrent.futures.Future`` stand-in used by ``call_tool``."""
 
     def __init__(self, value=None, exc=None):
         self._value = value
         self._exc = exc
+        self.cancelled = False
 
     def result(self, timeout=None):
         if self._exc is not None:
             raise self._exc
         return self._value
 
+    def cancel(self):
+        self.cancelled = True
+        return True
 
-def _install_fake_loop(client: MCPClient):
-    """Make the client look connected without a real subprocess/event loop."""
+
+def _install_fake_loop(client):
+    """Make either MCP client look connected without a subprocess or network."""
     client._session = object()
 
     class _Loop:
@@ -58,24 +57,18 @@ def _install_fake_loop(client: MCPClient):
 
 
 # ---------------------------------------------------------------------------
-# Exception formatting
+# Exception formatting and stale detection
 # ---------------------------------------------------------------------------
 
 def test_format_exception_empty_message_uses_class_name():
-    """An exception whose str() is empty must surface its class name."""
     msg = MCPClient._format_exception(ClosedResourceError())
     assert msg == "ClosedResourceError"
     assert msg.strip() != ""
 
 
 def test_format_exception_with_message_includes_class_and_message():
-    msg = MCPClient._format_exception(ValueError("boom"))
-    assert msg == "ValueError: boom"
+    assert MCPClient._format_exception(ValueError("boom")) == "ValueError: boom"
 
-
-# ---------------------------------------------------------------------------
-# Stale-resource detection
-# ---------------------------------------------------------------------------
 
 def test_is_stale_resource_error_detects_closed_resource_by_class_name():
     assert MCPClient._is_stale_resource_error(ClosedResourceError()) is True
@@ -83,7 +76,8 @@ def test_is_stale_resource_error_detects_closed_resource_by_class_name():
 
 def test_is_stale_resource_error_detects_closed_substrings():
     assert MCPClient._is_stale_resource_error(
-        RuntimeError("the stream was closed")) is True
+        RuntimeError("the stream was closed")
+    ) is True
 
 
 def test_is_stale_resource_error_false_for_unrelated_errors():
@@ -95,12 +89,7 @@ def test_is_stale_resource_error_false_for_unrelated_errors():
 # ---------------------------------------------------------------------------
 
 def test_restart_resets_startup_state_so_start_cannot_lie(monkeypatch):
-    """After a first start, _ready is set and _error may linger. restart()
-    must clear _ready/_error, reset _closed, drop stale session/loop/thread/cm
-    so the next start() actually reconnects instead of early-returning."""
     client = MCPClient(command="/bin/true")
-
-    # Simulate a prior (now-dead) start: ready latched, error latched, closed.
     client._ready.set()
     client._error = "old startup error"
     client._closed = True
@@ -111,20 +100,17 @@ def test_restart_resets_startup_state_so_start_cannot_lie(monkeypatch):
     closed = {"n": 0}
     started = {"n": 0}
 
-    def fake_close():
-        closed["n"] += 1
-
-    def fake_start():
-        started["n"] += 1
-
-    monkeypatch.setattr(client, "close", fake_close)
-    monkeypatch.setattr(client, "start", fake_start)
+    monkeypatch.setattr(
+        client, "close", lambda: closed.__setitem__("n", closed["n"] + 1)
+    )
+    monkeypatch.setattr(
+        client, "start", lambda: started.__setitem__("n", started["n"] + 1)
+    )
 
     client.restart()
 
     assert closed["n"] == 1
     assert started["n"] == 1
-    # State reset so a real start() would not early-return or raise on stale error.
     assert not client._ready.is_set()
     assert client._error is None
     assert client._closed is False
@@ -134,67 +120,254 @@ def test_restart_resets_startup_state_so_start_cannot_lie(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# call_tool: stale ClosedResourceError → restart + retry once
+# call_tool: stale outcome is fail-closed unless replay is explicitly safe
 # ---------------------------------------------------------------------------
 
-def test_call_tool_restarts_and_retries_once_on_stale_error(monkeypatch):
-    """First attempt raises stale ClosedResourceError → client restarts and
-    retries exactly once → retry succeeds → normal result returned."""
+def test_call_tool_fails_closed_on_stale_error_by_default(monkeypatch):
+    """Recover the transport, but never replay an opaque default call."""
     client = MCPClient(command="/bin/true")
     _install_fake_loop(client)
-
     attempts = {"n": 0}
     restarts = {"n": 0}
 
     def fake_run(coro, loop):
-        # The coroutine is created but never awaited in this fake; close it to
-        # avoid "coroutine was never awaited" warnings.
+        coro.close()
+        attempts["n"] += 1
+        return _FakeFuture(exc=ClosedResourceError())
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(
+        client,
+        "restart",
+        lambda: restarts.__setitem__("n", restarts["n"] + 1),
+    )
+
+    result = client.call_tool("wechat", {"action": "send"})
+
+    assert attempts["n"] == 1
+    assert restarts["n"] == 1
+    assert result["status"] == "error"
+    assert result["outcome"] == "ambiguous"
+    assert result["retryable"] is False
+    assert "not retried" in result["message"]
+    assert "future call" in result["message"]
+
+
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("wechat", {"action": "send"}),
+        ("wechat", {"action": "get_unread"}),
+        ("get_messages", {"action": "send"}),
+        ("send_message", {"action": "get"}),
+    ],
+)
+def test_default_policy_does_not_infer_safety_from_name_or_action(
+    monkeypatch, name, args
+):
+    """Names and ``args.action`` values never enable replay implicitly."""
+    client = MCPClient(command="/bin/true")
+    _install_fake_loop(client)
+    attempts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        attempts["n"] += 1
+        return _FakeFuture(exc=ClosedResourceError())
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(client, "restart", lambda: None)
+
+    result = client.call_tool(name, args)
+
+    assert attempts["n"] == 1
+    assert result["outcome"] == "ambiguous"
+    assert result["retryable"] is False
+
+
+def test_explicit_safe_policy_restarts_and_retries_once(monkeypatch):
+    """A trusted caller can retain issue-104 one-restart/one-retry recovery."""
+    client = MCPClient(command="/bin/true")
+    _install_fake_loop(client)
+    attempts = {"n": 0}
+    restarts = {"n": 0}
+
+    def fake_run(coro, loop):
         coro.close()
         attempts["n"] += 1
         if attempts["n"] == 1:
             return _FakeFuture(exc=ClosedResourceError())
         return _FakeFuture(value={"status": "success", "text": "pong"})
 
-    monkeypatch.setattr(
-        "asyncio.run_coroutine_threadsafe", fake_run)
-
     def fake_restart():
         restarts["n"] += 1
         _install_fake_loop(client)
 
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
     monkeypatch.setattr(client, "restart", fake_restart)
 
-    result = client.call_tool("send_message", {"text": "hi"})
+    result = client.call_tool(
+        "known_read_only_operation", {}, retry_policy="safe"
+    )
 
-    assert attempts["n"] == 2          # original + one retry
-    assert restarts["n"] == 1          # restarted exactly once
+    assert attempts["n"] == 2
+    assert restarts["n"] == 1
     assert result == {"status": "success", "text": "pong"}
 
 
-def test_call_tool_failed_retry_returns_helpful_error_not_blank(monkeypatch):
-    """If the retry also fails, return a helpful error mentioning the class
-    name and that restart/retry failed — never a blank message."""
+def test_default_stale_restart_failure_is_ambiguous_without_replay(monkeypatch):
     client = MCPClient(command="/bin/true")
     _install_fake_loop(client)
+    attempts = {"n": 0}
 
     def fake_run(coro, loop):
         coro.close()
-        return _FakeFuture(exc=ClosedResourceError())  # always stale
+        attempts["n"] += 1
+        return _FakeFuture(exc=ClosedResourceError())
+
+    def failed_restart():
+        raise RuntimeError("cannot reconnect")
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(client, "restart", failed_restart)
+
+    result = client.call_tool("opaque_write", {"value": 1})
+
+    assert attempts["n"] == 1
+    assert result["status"] == "error"
+    assert result["outcome"] == "ambiguous"
+    assert result["retryable"] is False
+    assert "restart failed" in result["message"]
+    assert "RuntimeError: cannot reconnect" in result["message"]
+
+
+def test_explicit_safe_retry_failure_is_ambiguous_and_non_retryable(monkeypatch):
+    client = MCPClient(command="/bin/true")
+    _install_fake_loop(client)
+    attempts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        attempts["n"] += 1
+        return _FakeFuture(exc=ClosedResourceError())
 
     monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
     monkeypatch.setattr(client, "restart", lambda: _install_fake_loop(client))
 
+    result = client.call_tool("known_safe_read", {}, retry_policy="safe")
+
+    assert attempts["n"] == 2
+    assert result["status"] == "error"
+    assert result["outcome"] == "ambiguous"
+    assert result["retryable"] is False
+    assert "ClosedResourceError" in result["message"]
+    assert "retry failed" in result["message"]
+
+
+def test_explicit_safe_restart_failure_never_attempts_replay(monkeypatch):
+    client = MCPClient(command="/bin/true")
+    _install_fake_loop(client)
+    attempts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        attempts["n"] += 1
+        return _FakeFuture(exc=ClosedResourceError())
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(
+        client,
+        "restart",
+        lambda: (_ for _ in ()).throw(RuntimeError("restart unavailable")),
+    )
+
+    result = client.call_tool("known_safe_read", {}, retry_policy="safe")
+
+    assert attempts["n"] == 1
+    assert result["outcome"] == "ambiguous"
+    assert result["retryable"] is False
+    assert "restart failed" in result["message"]
+
+
+@pytest.mark.parametrize("invalid_policy", ["", "blind", "idempotent"])
+def test_call_tool_rejects_unsupported_retry_policy_before_call(
+    monkeypatch, invalid_policy
+):
+    """No unverifiable generic idempotency label or misspelling is accepted."""
+    client = MCPClient(command="/bin/true")
+    starts = {"n": 0}
+    monkeypatch.setattr(
+        client, "start", lambda: starts.__setitem__("n", starts["n"] + 1)
+    )
+
+    with pytest.raises(ValueError, match="retry_policy"):
+        client.call_tool("read_message", {}, retry_policy=invalid_policy)
+
+    assert starts["n"] == 0
+    assert client.get_activity_log() == []
+
+
+def test_call_tool_timeout_before_submission_is_not_marked_ambiguous(monkeypatch):
+    """An exception raised before a Future exists cannot be a remote outcome."""
+    client = MCPClient(command="/bin/true")
+    _install_fake_loop(client)
+    restarts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        raise TimeoutError("submission rejected")
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(
+        client,
+        "restart",
+        lambda: restarts.__setitem__("n", restarts["n"] + 1),
+    )
+
     result = client.call_tool("send_message", {"text": "hi"})
 
+    assert result == {"status": "error", "message": "TimeoutError: submission rejected"}
+    assert "outcome" not in result
+    assert "retryable" not in result
+    assert restarts["n"] == 0
+
+
+def test_call_tool_timeout_after_submission_is_ambiguous_and_non_retryable(
+    monkeypatch,
+):
+    """A Future timeout can hide a committed remote side effect."""
+    client = MCPClient(command="/bin/true")
+    _install_fake_loop(client)
+    future = _FakeFuture(exc=TimeoutError("response deadline"))
+    attempts = {"n": 0}
+    restarts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        attempts["n"] += 1
+        return future
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(
+        client,
+        "restart",
+        lambda: restarts.__setitem__("n", restarts["n"] + 1),
+    )
+
+    result = client.call_tool("send_message", {"text": "hi"})
+
+    assert attempts["n"] == 1
+    assert future.cancelled is True
+    assert restarts["n"] == 0
     assert result["status"] == "error"
-    assert result["message"]                       # not blank
-    assert "ClosedResourceError" in result["message"]
-    assert "retry" in result["message"].lower()
+    assert result["outcome"] == "ambiguous"
+    assert result["retryable"] is False
+    assert "submitted" in result["message"]
+    assert "timed out" in result["message"]
+    assert "not retried" in result["message"]
 
 
-def test_call_tool_non_stale_empty_error_surfaces_class_name(monkeypatch):
-    """A non-stale exception with an empty str() must surface the class name,
-    not a blank message, and must NOT trigger a restart."""
+def test_call_tool_non_stale_empty_error_surfaces_class_without_restart(monkeypatch):
     client = MCPClient(command="/bin/true")
     _install_fake_loop(client)
 
@@ -209,21 +382,20 @@ def test_call_tool_non_stale_empty_error_surfaces_class_name(monkeypatch):
 
     monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
     monkeypatch.setattr(
-        client, "restart", lambda: restarts.__setitem__("n", restarts["n"] + 1))
+        client,
+        "restart",
+        lambda: restarts.__setitem__("n", restarts["n"] + 1),
+    )
 
     result = client.call_tool("send_message", {"text": "hi"})
 
-    assert result["status"] == "error"
-    assert "WeirdEmptyError" in result["message"]
-    assert restarts["n"] == 0           # non-stale → no restart
+    assert result == {"status": "error", "message": "WeirdEmptyError"}
+    assert restarts["n"] == 0
 
 
 def test_call_tool_success_passes_through_unchanged(monkeypatch):
-    """The happy path is untouched: a successful call returns its result and
-    never restarts."""
     client = MCPClient(command="/bin/true")
     _install_fake_loop(client)
-
     restarts = {"n": 0}
 
     def fake_run(coro, loop):
@@ -232,9 +404,30 @@ def test_call_tool_success_passes_through_unchanged(monkeypatch):
 
     monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
     monkeypatch.setattr(
-        client, "restart", lambda: restarts.__setitem__("n", restarts["n"] + 1))
+        client,
+        "restart",
+        lambda: restarts.__setitem__("n", restarts["n"] + 1),
+    )
 
     result = client.call_tool("send_message", {"text": "hi"})
 
     assert result == {"status": "success", "text": "ok"}
     assert restarts["n"] == 0
+
+
+def test_http_call_tool_signature_and_success_path_are_unchanged(monkeypatch):
+    """WB-01 is stdio-only; HTTP gets no inert replay-policy parameter."""
+    assert "retry_policy" not in inspect.signature(HTTPMCPClient.call_tool).parameters
+
+    client = HTTPMCPClient(url="https://invalid.example.test/mcp")
+    _install_fake_loop(client)
+
+    def fake_run(coro, loop):
+        coro.close()
+        return _FakeFuture(value={"status": "success", "text": "http-ok"})
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+
+    result = client.call_tool("read", {})
+
+    assert result == {"status": "success", "text": "http-ok"}
