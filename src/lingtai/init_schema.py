@@ -212,11 +212,12 @@ def validate_init(data: dict) -> list[str]:
 
     # Required text fields: inline value OR _file path (at least one required).
     #
-    # `lingtai` is intentionally NOT required: it is only the initial seed
-    # character / self-authored identity written to system/lingtai.md and rendered
-    # as the `character` prompt section (via psyche._lingtai_load). If omitted,
-    # runtime setup already treats it as an empty seed and the agent controls its
-    # own character thereafter. The field was renamed from `prompt` /
+    # `lingtai` is intentionally NOT required. It selects one of two modes:
+    # a nonempty resolved value (inline or from `lingtai_file`) is a forced
+    # identity value written to system/lingtai.md during each reconstruction;
+    # an absent or empty value selects self-evolve mode and leaves that file
+    # untouched. In both cases psyche._lingtai_load renders the file as the
+    # `character` prompt section. The field was renamed from `prompt` /
     # `prompt_file`; there is still NO legacy alias — a stale `prompt` remains an
     # unknown-field warning rather than being reintroduced.
     #

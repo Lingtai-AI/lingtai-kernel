@@ -40,7 +40,7 @@ from .._manual import load_installed_manual
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Identity, pad, and context management — three objects, all molt-surviving. lingtai: your 灵台 (character) — update after significant work or before molt. pad: system-prompt sketchboard (system/pad.md) — plans, tasks, notes. context: molt (凝蜕) — shed conversation, keep stores. name: set true name (once) or change nickname. Call psyche(action="manual") to return the installed psyche-manual skill.'
+    return 'Identity, pad, name, and context management — lingtai: your 灵台 (character); psyche updates it immediately, while a nonempty configured lingtai value is authoritative on reconstruction and an absent or empty value enables self-evolution. pad: system-prompt sketchboard (system/pad.md) — plans, tasks, notes. context: molt (凝蜕) — shed conversation, keep stores. name: set true name (once) or change nickname. Call psyche(action="manual") to return the installed psyche-manual skill.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -50,11 +50,11 @@ def get_schema(lang: str = "en") -> dict:
             "object": {
                 "type": "string",
                 "enum": ["pad", "context", "name", "lingtai"],
-                "description": 'lingtai: your 灵台 — what distinguishes you from every other agent.\npad: your sketchboard in your system prompt (system/pad.md).\ncontext: your conversation context window.\nname: your true name (set once) and nickname (mutable).',
+                "description": 'lingtai: your 灵台 — what distinguishes you from every other agent; configured nonempty values force it on reconstruction, while absent/empty configuration lets it self-evolve.\npad: your sketchboard in your system prompt (system/pad.md).\ncontext: your conversation context window.\nname: your true name (set once) and nickname (mutable).',
             },
             "action": {
                 "type": "string",
-                "description": 'lingtai: update | load. update auto-loads.\npad: edit | load | append. edit auto-loads. append pins files as read-only reference.\ncontext: molt. Requires `summary` — tend the four stores BEFORE molting. See psyche-manual.\nname: set (true name, once) | nickname (display name, mutable).\nmanual: return the installed psyche-manual skill; object is omitted.',
+                "description": 'lingtai: update | load. update writes and auto-loads immediately; a nonempty init `lingtai` value (inline or resolved from `lingtai_file`) replaces it on boot, refresh, and post-molt reconstruction, while absent/empty configuration preserves it.\npad: edit | load | append. edit auto-loads. append pins files as read-only reference.\ncontext: molt. Requires `summary` — tend the four stores BEFORE molting. See psyche-manual.\nname: set (true name, once) | nickname (display name, mutable).\nmanual: return the installed psyche-manual skill; object is omitted.',
             },
             "content": {
                 "type": "string",
