@@ -11,9 +11,6 @@ import json
 import re
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
-
-import pytest
 
 from lingtai.agent import Agent
 from lingtai.services.mcp_registry import (
@@ -172,6 +169,44 @@ def test_nokv_workbench_registry_example_is_valid():
     assert spec["args"] == record["args"]
 
 
+def test_nokv_workbench_skill_documents_strict_restore_contract():
+    skill_root = Path("src/lingtai/intrinsic_skills/nokv-workbench")
+    skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+    preflight = (skill_root / "assets" / "PREFLIGHT.md").read_text(encoding="utf-8")
+
+    assert "version: 0.4.0" in skill
+    assert "workbench_restore" in skill
+    assert '"destination_id"' in skill
+    assert "restore-to-fork" in skill
+    assert "Retry the exact restore-to-fork request" in skill
+    assert "metadata/restore_manifest.json" in skill
+    assert "`restored_from` object" in skill
+    assert "expired checkpoints cannot be renewed" in skill
+    assert "grace window" not in skill
+    assert "temporarily fences writes" not in skill
+    assert "invalidates the entire target subtree" not in skill
+    assert "blocked write after the operator restore" not in skill
+    assert "lifecycle `state` (`alive`, `expired`, or `reaped`)" in skill
+    assert "lifecycle `status`" not in skill
+    assert "17-tool surface" in preflight
+    assert "workbench_restore" in preflight
+    assert "--profile full --require-all" in preflight
+    assert "Agent MCP registration/retry handler" in preflight
+    assert "resolved per-agent launch config" in preflight
+    for code in (
+        "SnapshotLeaseExpired",
+        "SnapshotRootMismatch",
+        "SnapshotBindingChanged",
+        "SnapshotRenewContended",
+        "RestoreInProgress",
+        "RestoreDestinationConflict",
+        "RestoreResourceLimit",
+    ):
+        assert code in skill
+    assert "must reject `null`" in preflight
+    assert "Branch on `code`" in skill
+
+
 def test_expand_agent_placeholders_scopes_workbench_root(tmp_path):
     # Per-agent root injection: a shared registry template resolves to a root
     # unique to each agent, so agents cannot address each other's workbenches.
@@ -184,6 +219,67 @@ def test_expand_agent_placeholders_scopes_workbench_root(tmp_path):
     # Strings without a placeholder and non-strings pass through untouched.
     assert agent._expand_agent_placeholders("--profile") == "--profile"
     assert agent._expand_agent_placeholders(None) is None
+
+
+def test_nokv_workbench_root_stays_resolved_after_mcp_retry(tmp_path, monkeypatch):
+    from lingtai.services import mcp as mcp_service
+
+    workdir = tmp_path / "agent"
+    workdir.mkdir(parents=True)
+    (workdir / "mcp_registry.jsonl").write_text(json.dumps({
+        "name": "nokv-workbench",
+        "summary": "test",
+        "transport": "stdio",
+        "command": "/bin/true",
+        "args": [],
+        "source": "test",
+    }) + "\n")
+    (workdir / "init.json").write_text(json.dumps({
+        "mcp": {
+            "nokv-workbench": {
+                "type": "stdio",
+                "command": "/bin/true",
+                "args": ["--workbench-root", "/agents/{agent_id}/wb"],
+            },
+        },
+    }))
+
+    created = []
+
+    class CapturingMCPClient:
+        def __init__(self, command, args=None, env=None):
+            self.command = command
+            self.args = list(args or [])
+            self.env = dict(env or {})
+            self.closed = False
+            self.connected = bool(created)
+            created.append(self)
+
+        def start(self):
+            return None
+
+        def list_tools(self, timeout=10):
+            return []
+
+        def is_connected(self):
+            return self.connected and not self.closed
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(mcp_service, "MCPClient", CapturingMCPClient)
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"mcp": {}},
+    )
+    assert created[0].args == ["--workbench-root", "/agents/agent/wb"]
+
+    report = agent._retry_failed_mcps()
+    assert report["recovered"] == ["nokv-workbench"]
+    assert created[1].args == ["--workbench-root", "/agents/agent/wb"]
 
 
 # ---------------------------------------------------------------------------

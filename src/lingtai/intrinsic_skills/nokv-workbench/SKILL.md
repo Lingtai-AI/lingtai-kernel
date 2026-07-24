@@ -7,10 +7,10 @@ description: >
   manifests through the `workbench_*` MCP tools instead of ordinary local
   file writes. Covers MCP registration, directory layout, append and edit
   discipline, conditional reads, cross-workbench queries, commit discipline,
-  and leased checkpoint snapshots with naming, renewal, discovery, and
-  point-in-time history reads.
-version: 0.3.0
-tags: [nokv, mcp, workbench, artifacts, provenance, snapshots, checkpoints, leases]
+  leased checkpoint snapshots with naming, renewal, discovery, point-in-time
+  reads, and safe restore-to-fork recovery.
+version: 0.4.0
+tags: [nokv, mcp, workbench, artifacts, provenance, snapshots, checkpoints, leases, restore]
 related_files:
 - src/lingtai/intrinsic_skills/nokv-workbench/assets/PREFLIGHT.md
 - src/lingtai/intrinsic_skills/nokv-workbench/assets/init-snippet.json
@@ -166,9 +166,10 @@ The response adds `name`, `lease_expires_at` (the reap deadline), and an
 gets only the 1-hour default lease** — never hand a raw-CLI snapshot to a
 handoff.
 
-**Name your checkpoints.** `name` is a stable alias you can renew, list, and
-read by, instead of memorizing an opaque `snapshot_id`. The name is the durable
-handle; the id is for pinning an exact version.
+**Name your checkpoints.** `name` is a workbench-scoped alias you can renew,
+list, read, and restore by instead of memorizing an opaque `snapshot_id`. The
+alias remains useful only while the checkpoint lease is live; it is not an
+archive or an independent durability guarantee.
 
 In final reports or handoff notes, cite the checkpoint `name`, its
 `snapshot_id`, and the returned `lease_expires_at` so a later reader knows both
@@ -188,7 +189,7 @@ the checkpoint by `name` or `snapshot_id`.
 Do not rely on a `snapshot_id` you remembered in a note — that note is exactly
 what goes stale. `workbench_snapshot_list {"id":"spedas-task-001"}` enumerates
 every checkpoint of the workbench with its `name`, `snapshot_id`,
-`lease_expires_at`, and lifecycle `status` (`alive`, `expired`, or `reaped`).
+`lease_expires_at`, and lifecycle `state` (`alive`, `expired`, or `reaped`).
 Use it to see what is still restorable before you try to read history.
 
 ### Read history with at_snapshot
@@ -202,13 +203,69 @@ that checkpoint** instead of its current state:
 ```
 
 Historical `workbench_read` serves the checkpoint's bytes/text-lines. Reading a
-checkpoint whose lease has expired now fails **loudly** — an explicit error that
-tells you to `workbench_snapshot_renew` (if a grace window remains) or re-mint —
-rather than silently returning current state or empty data.
+checkpoint whose lease has expired fails **loudly**. Expiry is terminal:
+expired checkpoints cannot be renewed, even if the background collector has not
+yet removed the pin. Re-mint from the current committed state when that is still
+useful; NoKV never revives a checkpoint whose historical records may already
+have been reclaimed.
+
+## Restore to a new workbench
+
+Use `workbench_restore` when you need to continue from a live checkpoint. The
+safe default is **restore-to-fork**: it creates a new workbench and never
+overwrites the source workbench.
+
+```json
+{
+  "id": "spedas-task-001",
+  "at_snapshot": "final-v1",
+  "destination_id": "spedas-task-001-restored"
+}
+```
+
+The destination must not already contain unrelated work. A successful response
+identifies the source checkpoint, destination path, and deterministic restore
+operation. Repeating the same source, checkpoint, and destination is idempotent:
+it returns the existing restored workbench instead of creating a second fork.
+Using the same destination with a different checkpoint is a conflict.
+
+The restored workbench contains the files visible at the checkpoint, is
+independently writable, and writes `metadata/restore_manifest.json`. Its
+`restored_from` object binds `workbench_id`, absolute source `path`, and
+`snapshot_id`; the manifest also records the deterministic `operation_id`. The
+destination does not inherit the source's checkpoint aliases. After success,
+read this manifest and the required outputs before handing work to another
+agent. The source workbench remains at its current state throughout the
+restore.
+
+Do not request an in-place rollback from normal agent workflows. The Workbench
+contract exposed to agents supports restore-to-fork only; operator recovery
+APIs are outside this skill.
+
+### Handle structured checkpoint errors
+
+Checkpoint and restore failures use a structured MCP error with `code`,
+`message`, `retryable`, and `details`. Branch on `code`; do not parse the human
+message:
+
+| Code | Agent action |
+|---|---|
+| `SnapshotLeaseExpired` | Do not retry or attempt revival. Mint a new checkpoint from current state when appropriate. |
+| `SnapshotRootMismatch` | Stop. The checkpoint belongs to another workbench root; never substitute or copy its id. |
+| `SnapshotBindingChanged` | Refresh the MCP/workbench resolution and retry once because the root binding changed during the operation. |
+| `SnapshotRenewContended` | Retry renewal with bounded backoff; the lease in the error response is not authoritative. |
+| `RestoreInProgress` | Retry the exact restore-to-fork request with bounded backoff; the same operation is still preparing or cleaning staged state. |
+| `RestoreDestinationConflict` | Choose a new empty `destination_id`, unless this was an exact retry of the same restore operation. |
+| `RestoreResourceLimit` | Do not retry unchanged. Reduce the restore subtree or metadata payload reported in `details`, then create a new checkpoint and destination if needed. |
+
+Honor the returned `retryable` flag when it is stricter than this table. A
+failed renew never changes the locally recorded expiry; use the authoritative
+pin returned by a successful renew or refresh with `workbench_snapshot_list`.
 
 ### Expired is not the same as data lost
 
-An expired checkpoint loses only the **point-in-time view**, not your work. The
+An expired checkpoint loses only the **point-in-time view**, not your current
+work. The
 workbench's committed files stay put: after `workbench_commit`, the current
 artifacts remain reachable with `workbench_read`, `workbench_list`, and
 `workbench_stat` (no `at_snapshot`). Only the frozen historical view needs a

@@ -38,13 +38,29 @@ Tool-surface note: parts of the SKILL.md surface depend on the NoKV build. An
 older server still works with this skill — the newer tools and parameters are
 simply absent from tools/list, and the SKILL sections about them do not apply.
 
-- **16-tool workbench MCP** (workbench_append / workbench_edit /
-  workbench_search / workbench_aggregate / workbench_catalog and conditional
-  reads) requires a build shipping the specialized workbench MCP; older 9-tool
-  NoKV servers lack it.
+- **17-tool surface** (workbench_append / workbench_edit /
+  workbench_search / workbench_aggregate / workbench_catalog, conditional
+  reads, and workbench_restore) requires a build shipping the specialized
+  workbench MCP; older 9-tool NoKV servers lack it.
 - **Checkpoint lifecycle** (workbench_snapshot_renew, workbench_snapshot_list,
   the workbench_snapshot `name`/`ttl_days` parameters and its
   `lease_expires_at`/`expiry_warning` output, and the `at_snapshot` parameter
   on workbench_read / workbench_list / workbench_stat) requires a build
   shipping Phase 1 snapshot leasing. Without it, snapshots fall back to the
   legacy 1-hour lease with no renewal path.
+- **Restore-to-fork** (workbench_restore) requires a build with strict
+  terminal expiry and root-bound snapshot operations. Treat a missing
+  `workbench_restore` tool or schema field as a failed preflight — do not run
+  the restore workflow against an older surface and silently downgrade
+  checkpoint guarantees. Verify that `workbench_restore` requires `id`,
+  `at_snapshot`, and `destination_id`; its `at_snapshot` schema must accept
+  only a checkpoint name or non-negative numeric snapshot id and must reject `null`.
+  Expired checkpoints must return a structured error and must not be
+  described as renewable within a grace period.
+
+Run the checked-in NoKV/LingTai live acceptance harness with `--profile full --require-all`
+before deploying a new pair of builds that includes workbench_restore. It must
+exercise the real RustFS service, NoKV metadata server, workbench MCP subprocess,
+LingTai Agent MCP registration/retry handler, and the MCPClient created from the
+resolved per-agent launch config; unit-only schema checks are not a deployment
+acceptance substitute.
