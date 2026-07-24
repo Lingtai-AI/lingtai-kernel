@@ -42,7 +42,8 @@ the ordinary Notification Store channel; it does not create a second transport.
 - `source_drift.py` — read-only runtime/source comparison, skipped for editable
   or source runtimes (`src/lingtai/kernel/nudge/source_drift.py:21-111`).
 - `goal.py` — IDLE-only protected-goal reminder projected into the ordinary
-  `system` notification channel (`src/lingtai/kernel/nudge/goal.py:20-75`).
+  `system` notification channel, gated by an in-memory 10-second check
+  cadence (`src/lingtai/kernel/nudge/goal.py:20-75`).
 - `prompts.py` — typed producer-fact to agent-facing payload renderer, including
   installer and mirror-mismatch guidance (`src/lingtai/kernel/nudge/prompts.py:17-154`).
 - `notifications.py` — ordinary Notification transport invokes Nudge's dismissal
