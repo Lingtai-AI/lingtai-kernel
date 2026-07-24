@@ -51,6 +51,30 @@ ENABLED_ENV = "LINGTAI_NUDGE_ENABLED"
 REPEAT_INTERVAL_ENV = "LINGTAI_NUDGE_REPEAT_INTERVAL"
 ENVIRONMENT_MANUAL = "system-manual/reference/environment-variables/SKILL.md"
 
+# Hard maximum for one nudge entry's inline, model-visible JSON serialization.
+# Entries at or below this size are unchanged; entries above it are
+# externalized to a sidecar file under the agent's working directory and
+# replaced on the wire by a compact summary (see `_cap_inline_payload`).
+INLINE_MAX_CHARS = 10_000
+
+# Bounded shape a `kind` must satisfy before it can participate in
+# externalization filename construction. Current built-in kinds
+# ("kernel_version", "source_drift", "init_config_shape", …) are short
+# identifiers well within this bound; only a pathological/programming-error
+# `kind` would ever trip it.
+_MAX_KIND_LEN = 100
+_KIND_RE = re.compile(r"^[A-Za-z0-9_.-]{1,%d}$" % _MAX_KIND_LEN)
+
+
+class NudgeExternalizationError(RuntimeError):
+    """Raised when an oversized finding cannot be safely externalized.
+
+    Carries a bounded, static message only — never the producer's `kind`,
+    title, detail, or any oversized payload content — so a caller that logs
+    ``str(exc)`` cannot leak the finding body or an escape-heavy producer
+    string.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class NudgePolicy:
@@ -150,6 +174,8 @@ __all__ = [
     "DEFAULT_REPEAT_INTERVAL_SECONDS",
     "ENABLED_ENV",
     "ENVIRONMENT_MANUAL",
+    "INLINE_MAX_CHARS",
+    "NudgeExternalizationError",
     "NudgePolicy",
     "REPEAT_INTERVAL_ENV",
     "effective_policy",
@@ -207,14 +233,23 @@ def upsert(agent, kind: str, body: dict) -> None:
         return
 
     entry = dict(body)
+    entry["kind"] = kind
     entry["policy"] = policy.payload()
     entry["policy_message"] = policy.message()
     entry["detail"] = (
         f"{entry.get('detail', '')}\n\n{policy.message()}".strip()
     )
+    # Fingerprint identity is computed on the full pre-cap entry so dismissal
+    # muting is a property of the finding's facts, not of whether the wire
+    # copy happened to be externalized this heartbeat.
     fingerprint = _finding_fingerprint(kind, entry)
     if _dismissed_until(agent, fingerprint) > time.time():
         return
+    # Externalization must complete (or return the entry unchanged) before
+    # ANY state mutates. If it raises, neither `.notification/nudge.json`
+    # nor `.notification/.nudge_state.json` may be touched, so a later
+    # heartbeat retry sees byte-for-byte the same prior state.
+    entry = _cap_inline_payload(agent, kind, entry, fingerprint=fingerprint)
     _clear_dismissal(agent, fingerprint)
     _modify(agent, lambda entries: _replace_kind(entries, kind, entry))
 
@@ -266,7 +301,20 @@ _STATE_FILE = Path(".notification") / ".nudge_state.json"
 
 
 def _finding_fingerprint(kind: str, body: dict) -> str:
-    """Hash stable finding facts, excluding policy display bookkeeping."""
+    """Hash stable finding facts, excluding policy display bookkeeping.
+
+    When an entry carries a stamped ``_dismiss_fingerprint`` (written by
+    :func:`upsert` before inline-cap externalization may rewrite ``title``/
+    ``detail``/``source``), that stamped value is authoritative — it is the
+    fingerprint of the complete original finding. This keeps dismissal
+    identity a property of the finding's facts, not of the persisted
+    (possibly capped) wire shape, so a capped finding's dismiss/repeat
+    semantics stay correct whether recomputed at upsert time or read back
+    from a persisted compact entry.
+    """
+    stamped = body.get("_dismiss_fingerprint")
+    if isinstance(stamped, str) and stamped:
+        return stamped
     stable = {
         "kind": kind,
         "title": body.get("title"),
@@ -279,6 +327,189 @@ def _finding_fingerprint(kind: str, body: dict) -> str:
     }
     raw = json.dumps(stable, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _entry_inline_chars(entry: dict) -> tuple[str, int]:
+    """Return the canonical wire serialization and its character count.
+
+    This is the exact JSON text that would be persisted into
+    ``.notification/nudge.json`` for this one entry, measured *after* the
+    shared policy fields (``policy``, ``policy_message``, policy-appended
+    ``detail``) are already present — so cap enforcement sees what a reader
+    actually receives, not the producer's raw pre-policy body.
+    """
+    text = json.dumps(entry, ensure_ascii=False, sort_keys=True, default=str)
+    return text, len(text)
+
+
+def _findings_dir(agent) -> Path | None:
+    working_dir = getattr(agent, "_working_dir", None)
+    if working_dir is None:
+        return None
+    from .. import workdir
+
+    return workdir.workdir_layout(Path(working_dir)).nudge_findings_dir
+
+
+def _write_sidecar_atomic(target: Path, text: str) -> None:
+    """Write ``text`` to a sibling temp file and atomically replace ``target``.
+
+    Narrow, private I/O seam so a test can inject a write failure without
+    manipulating real filesystem permissions (which production's own
+    directory-permission repair, ``os.chmod(findings_dir, 0o700)``, would
+    otherwise undo before the write is attempted).
+
+    The temp file is created owner-only (``0o600``) from the moment it is
+    opened — via ``os.open`` with an explicit ``mode``, not ``open()`` at the
+    process umask followed by a later ``chmod`` — so the oversized finding
+    body is never briefly readable at a broader mode. Content is written as
+    exact UTF-8 bytes and flushed/fsynced before the atomic ``os.replace``,
+    so a crash between write and replace cannot leave a target that looks
+    complete but is actually truncated.
+
+    On any failure the caller is responsible for translating the raised
+    ``OSError`` into a bounded ``NudgeExternalizationError``; this helper
+    itself never logs or otherwise persists ``text``. No temp-file cleanup is
+    performed here — a failed write's partial temp file, already owner-only,
+    is left on disk as forensic evidence rather than being deleted.
+    """
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(str(tmp), str(target))
+
+
+def _cap_inline_payload(agent, kind: str, entry: dict, *, fingerprint: str) -> dict:
+    """Enforce the hard inline-payload cap for one fully-assembled entry.
+
+    At or below :data:`INLINE_MAX_CHARS`, ``entry`` is returned completely
+    unchanged — no ``_dismiss_fingerprint`` or other cap bookkeeping is
+    added, so the ordinary small-finding wire shape is byte-for-byte the
+    same as before this cap existed.
+
+    Above the cap, the complete original entry (including policy fields) is
+    persisted verbatim as UTF-8 JSON to a content-addressed sidecar file
+    under ``<working_dir>/tmp/nudge-findings/`` (an ordinary agent temp
+    location, consistent with ``tmp/tool-results/``), and this function
+    returns a small compact entry: a bounded ``title``, a short bounded
+    ``detail``, the policy fields (so policy display stays intact), and an
+    ``externalized`` block naming the absolute file path, its exact
+    character/byte counts, and its SHA-256. The caller (``upsert``) stamps
+    ``kind`` back onto whatever this returns via ``_replace_kind``.
+
+    Content addressing (filename = ``sha256(bytes)``) means an unchanged
+    finding does not create a new sidecar file every heartbeat — the same
+    bytes hash to the same path and the write is a cheap no-op check.
+
+    Fail LOUD, not fail-open: if ``kind`` is not a bounded, filesystem-safe
+    identifier, or the sidecar write does not durably succeed, this raises
+    :class:`NudgeExternalizationError` with a bounded static message. The
+    caller (``upsert``) has not yet mutated ``.notification/nudge.json`` at
+    the point this is called, so a raise here leaves prior notification
+    state completely untouched for a later heartbeat retry. The oversized
+    body is never persisted inline as a fallback.
+    """
+    if not _KIND_RE.match(kind):
+        raise NudgeExternalizationError(
+            "nudge finding kind failed bounded validation "
+            f"(must match {_KIND_RE.pattern!r}); refusing to externalize or "
+            "persist this finding"
+        )
+
+    text, char_count = _entry_inline_chars(entry)
+    if char_count <= INLINE_MAX_CHARS:
+        return entry
+
+    raw_bytes = text.encode("utf-8")
+    digest = hashlib.sha256(raw_bytes).hexdigest()
+    byte_count = len(raw_bytes)
+
+    findings_dir = _findings_dir(agent)
+    if findings_dir is None:
+        raise NudgeExternalizationError(
+            "no working_dir configured; cannot durably externalize an "
+            "oversized nudge finding"
+        )
+
+    target = findings_dir / f"{kind}-{digest}.json"
+    if not target.is_file():
+        try:
+            findings_dir.mkdir(parents=True, exist_ok=True)
+            # Always enforce owner-only, even when the directory pre-existed
+            # with looser permissions (e.g. created before this cap existed,
+            # or by an external process) — a sidecar containing the full
+            # oversized finding must never be group/world-readable.
+            os.chmod(findings_dir, 0o700)
+            _write_sidecar_atomic(target, text)
+        except OSError as exc:
+            raise NudgeExternalizationError(
+                f"failed to durably write nudge finding sidecar file: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+    # Bound every field sourced from producer-controlled text (title, source)
+    # so a pathological producer value cannot itself blow the compact entry
+    # past the cap; the fixed-shape fields below (policy, sha256, counts) are
+    # small by construction.
+    title = str(entry.get("title") or kind)[:200]
+    source = entry.get("source")
+    if isinstance(source, str):
+        source = source[:200]
+    file_path = str(target)
+    compact: dict[str, Any] = {
+        "kind": kind,
+        "title": title,
+        "source": source,
+        "policy": entry.get("policy"),
+        "policy_message": entry.get("policy_message"),
+        # Stamped only on the capped/compact shape, never on an ordinary
+        # unchanged small entry, so `record_dismissal` can recover the exact
+        # pre-cap fingerprint later without recomputing it from the
+        # (necessarily different) compact title/detail/source.
+        "_dismiss_fingerprint": fingerprint,
+        "externalized": {
+            "reason": (
+                f"Full finding is {char_count} chars, over the "
+                f"{INLINE_MAX_CHARS}-char inline Nudge cap."
+            ),
+            "path": file_path,
+            "original_char_count": char_count,
+            "original_byte_count": byte_count,
+            "sha256": digest,
+        },
+        "detail": (
+            f"{title} — full finding exceeds the {INLINE_MAX_CHARS}-char inline "
+            f"cap ({char_count} chars). The complete original is at {file_path} "
+            f"(SHA-256 {digest}); read that file directly for full detail."
+        ),
+    }
+
+    # Defensive: even the bounded fields above could combine to exceed the
+    # cap in a degenerate case. Shrink detail/title first — this is
+    # defence-in-depth, not a routine path, so a small bounded loop suffices.
+    for _ in range(4):
+        _, compact_chars = _entry_inline_chars(compact)
+        if compact_chars <= INLINE_MAX_CHARS:
+            break
+        if len(compact.get("detail", "")) > 100:
+            compact["detail"] = compact["detail"][:100] + "…"
+        elif len(compact.get("title", "")) > 50:
+            compact["title"] = compact["title"][:50] + "…"
+        else:
+            break
+
+    _safe_log(
+        agent,
+        "nudge_finding_externalized",
+        kind=kind,
+        original_char_count=char_count,
+        cap_chars=INLINE_MAX_CHARS,
+        sha256=digest,
+    )
+    return compact
 
 
 def _state_path(agent) -> Path | None:

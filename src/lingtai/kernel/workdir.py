@@ -39,8 +39,9 @@ class WorkdirLayout:
     (agent-presence adapters/policy, ``notifications.validate_allowed_channel``, …).
     The point is a single discoverable surface for the agent workdir
     filesystem protocol (``.agent.json``, ``.agent.heartbeat``,
-    ``.notification/<channel>.json``, ``tmp/tool-results/``, …) so the same
-    relative names are not retyped across runtime modules and tests.
+    ``.notification/<channel>.json``, ``tmp/tool-results/``,
+    ``tmp/nudge-findings/``, …) so the same relative names are not retyped
+    across runtime modules and tests.
 
     Internal by convention: import from ``lingtai.kernel.workdir``; not
     re-exported from ``lingtai.kernel.__init__``.
@@ -95,6 +96,10 @@ class WorkdirLayout:
     @property
     def tool_results_dir(self) -> Path:
         return self.root / "tmp" / "tool-results"
+
+    @property
+    def nudge_findings_dir(self) -> Path:
+        return self.root / "tmp" / "nudge-findings"
 
     @property
     def resolved_manifest(self) -> Path:

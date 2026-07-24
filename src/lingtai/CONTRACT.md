@@ -12,11 +12,13 @@ related_files:
   - src/lingtai/agent.py
   - src/lingtai/kernel/workdir.py
   - src/lingtai/kernel/nudge/ANATOMY.md
+  - src/lingtai/kernel/nudge/__init__.py
   - src/lingtai/kernel/nudge/init_config.py
   - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
   - tests/test_init_reader.py
   - tests/test_cli.py
   - tests/test_deep_refresh.py
+  - tests/test_nudge_inline_cap.py
 maintenance: |
   Keep related_files complete and repo-relative: the paired ANATOMY.md, the
   canonical init.jsonc, real reader/writer/validator code, affected composition
@@ -100,6 +102,28 @@ constructs a migration workspace, or performs a second notification path.
    `LINGTAI_NUDGE_ENABLED` / `LINGTAI_NUDGE_REPEAT_INTERVAL` policy. The goal
    reminder is explicitly a separate protected-goal system notification, not a
    declared Nudge kind, and is therefore not part of Nudge dispatch/docs.
+7. Every declared Nudge kind is additionally bound by the shared
+   `nudge.upsert` hard inline cap: the fully assembled entry (producer body
+   plus `kind` and the policy fields from rule 6) may be at most
+   `INLINE_MAX_CHARS=10_000` characters on the wire. A finding that would
+   exceed this — including the init/config-shape finding's
+   `effective_outcome` payload on a large or non-canonical `init.json` — is
+   never truncated and never left inline oversized; the complete original is
+   persisted verbatim to a content-addressed, owner-only sidecar file under
+   `<working_dir>/tmp/nudge-findings/` (the ordinary agent temp namespace,
+   consistent with `tmp/tool-results/` — not `.notification/`), and the wire
+   entry is replaced with a compact summary carrying the sidecar's absolute
+   path, exact character/byte counts, and a SHA-256 of the exact persisted
+   bytes. `kind` is validated against a bounded filesystem-safe shape before
+   any file naming. Externalization is fail-loud: if `kind` is invalid or the
+   sidecar write does not durably succeed, `upsert` raises
+   `NudgeExternalizationError` (a bounded static message that never echoes
+   producer content) instead of writing any compact placeholder, and does
+   not mutate `.notification/nudge.json` or `.notification/.nudge_state.json`
+   at all — both are left completely untouched for a later heartbeat retry.
+   This is a Nudge-transport concern, not an `init_reader` concern: no
+   producer, including `nudge/init_config.py`, individually re-implements
+   truncation, externalization, or kind validation.
 
 ## Contract tests
 
@@ -108,6 +132,16 @@ outcomes, ignored-path reporting, structured parse/validation failure evidence,
 secret-redacted effective-manifest use, and the no-auto-mutation invariant.
 Focused Nudge tests prove defaults, invalid-value fallback, self-describing
 messages, global suppression, and dismiss/repeat semantics.
+`tests/test_nudge_inline_cap.py` proves the exact 10,000/10,001-char boundary,
+Unicode character-vs-byte counting, exact sidecar content/hash/path/
+permissions under `tmp/nudge-findings/`, directory-permission enforcement even
+when the directory pre-existed with looser permissions, stable
+content-addressed reuse across repeated upserts of the same finding, no
+cap-bookkeeping leakage into an ordinary uncapped entry, fail-loud
+`NudgeExternalizationError` (bounded message, no mutation of either
+`.notification/nudge.json` or `.notification/.nudge_state.json`) both when
+the sidecar write fails and when `kind` is oversized or escape-heavy, and
+dismissal/repeat semantics for a capped finding.
 
 ## Maintenance
 
