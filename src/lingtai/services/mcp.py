@@ -18,6 +18,69 @@ from lingtai.kernel.logging import get_logger
 
 logger = get_logger()
 
+_JSON_PARSE_FAILED = object()
+
+
+def _first_text_content(result: Any) -> str | None:
+    """Return the first text block carried by an MCP tool result."""
+    for block in getattr(result, "content", None) or []:
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            return text
+    return None
+
+
+def _error_payload(payload: dict[str, Any], fallback_message: str) -> dict[str, Any]:
+    """Keep a structured MCP error while retaining the legacy envelope."""
+    error = dict(payload)
+    # The protocol's isError bit is authoritative. Do not let a malformed or
+    # hostile payload disguise a failed tool call as success.
+    error["status"] = "error"
+    message = error.get("message")
+    if not isinstance(message, str) or not message:
+        error["message"] = fallback_message
+    return error
+
+
+def _decode_tool_result(result: Any) -> Any:
+    """Decode an MCP result without flattening structured tool errors.
+
+    MCP transports may return the same object in ``structuredContent`` and in
+    a JSON text block. Prefer the structured form, then a JSON object in text.
+    Plain-text errors retain the historical ``status``/``message`` envelope.
+    This decoder is intentionally protocol-generic and is shared by stdio and
+    HTTP clients.
+    """
+    text = _first_text_content(result)
+    structured = getattr(result, "structuredContent", None)
+
+    if isinstance(structured, dict):
+        if getattr(result, "isError", False):
+            return _error_payload(
+                structured,
+                text if text else "Unknown MCP error",
+            )
+        return dict(structured)
+
+    if text is not None:
+        try:
+            decoded = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            decoded = _JSON_PARSE_FAILED
+        if isinstance(decoded, dict):
+            if getattr(result, "isError", False):
+                return _error_payload(decoded, text)
+            return decoded
+        if not getattr(result, "isError", False) and decoded is not _JSON_PARSE_FAILED:
+            # Preserve the pre-existing behavior for successful JSON values,
+            # even though MCP tool handlers conventionally return objects.
+            return decoded
+
+    if getattr(result, "isError", False):
+        return {"status": "error", "message": text or "Unknown MCP error"}
+    return {"status": "success", "text": text or ""}
+
+
 # A stale stdio response has an unknowable remote commit point. Replay is
 # therefore opt-in and limited to callers that can justify that it is safe.
 _STALE_RETRY_POLICIES = frozenset({"never", "safe"})
@@ -180,7 +243,7 @@ class MCPClient:
         timeout: float = 120,
         *,
         retry_policy: str = "never",
-    ) -> dict:
+    ) -> Any:
         """Call an MCP tool synchronously.
 
         Starts the connection lazily if not yet connected.
@@ -196,12 +259,14 @@ class MCPClient:
                 This client does not infer safety from tool names or arguments.
 
         Returns:
-            Parsed dict from the tool's JSON response. A default-policy stale
-            failure returns an error with ``outcome="ambiguous"`` and
-            ``retryable=False`` after attempting transport recovery without
-            replaying the call. A timeout after the call has been submitted is
-            also returned as ambiguous and non-retryable; the remote may have
-            committed even though no response reached this caller.
+            Decoded MCP result. JSON scalars, arrays, and ``null`` retain
+            their protocol value; structured objects remain dictionaries.
+            A default-policy stale failure returns an error with
+            ``outcome="ambiguous"`` and ``retryable=False`` after attempting
+            transport recovery without replaying the call. A timeout after the
+            call has been submitted is also returned as ambiguous and
+            non-retryable; the remote may have committed even though no
+            response reached this caller.
 
         Raises:
             RuntimeError: If the client is closed or connection fails.
@@ -221,30 +286,14 @@ class MCPClient:
         if self._session is None or self._loop is None:
             raise RuntimeError("MCP client not connected")
 
-        def _attempt() -> dict:
+        def _attempt() -> Any:
             async def _call():
                 result = await self._session.call_tool(
                     name=name,
                     arguments=args,
                     read_timeout_seconds=timedelta(seconds=timeout),
                 )
-                if result.isError:
-                    error_text = (
-                        result.content[0].text
-                        if result.content
-                        else "Unknown MCP error"
-                    )
-                    return {"status": "error", "message": error_text}
-
-                if result.content:
-                    for block in result.content:
-                        if hasattr(block, "text"):
-                            try:
-                                return json.loads(block.text)
-                            except (json.JSONDecodeError, TypeError):
-                                return {"status": "success", "text": block.text}
-
-                return {"status": "success", "text": ""}
+                return _decode_tool_result(result)
 
             future = asyncio.run_coroutine_threadsafe(_call(), self._loop)
             try:
@@ -497,7 +546,7 @@ class HTTPMCPClient:
             and not self._closed
         )
 
-    def call_tool(self, name: str, args: dict, timeout: float = 120) -> dict:
+    def call_tool(self, name: str, args: dict, timeout: float = 120) -> Any:
         """Call an MCP tool synchronously. Same interface as MCPClient."""
         import asyncio
 
@@ -514,19 +563,7 @@ class HTTPMCPClient:
                 arguments=args,
                 read_timeout_seconds=timedelta(seconds=timeout),
             )
-            if result.isError:
-                error_text = (
-                    result.content[0].text if result.content else "Unknown MCP error"
-                )
-                return {"status": "error", "message": error_text}
-            if result.content:
-                for block in result.content:
-                    if hasattr(block, "text"):
-                        try:
-                            return json.loads(block.text)
-                        except (json.JSONDecodeError, TypeError):
-                            return {"status": "success", "text": block.text}
-            return {"status": "success", "text": ""}
+            return _decode_tool_result(result)
 
         future = asyncio.run_coroutine_threadsafe(_call(), self._loop)
         result = future.result(timeout=timeout)
