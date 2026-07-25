@@ -73,7 +73,13 @@ class MiniMaxSearchService(SearchService):
     def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
         try:
             client = self._ensure_client()
-            result = client.call_tool("web_search", {"query": query})
+            # web_search is read-only/replay-safe: a stale-transport replay
+            # repeats a query, never a write or send.
+            result = client.call_tool(
+                "web_search",
+                {"query": query},
+                retry_policy="safe",
+            )
         except Exception as e:
             logger.warning("MiniMax MCP web search failed: %s", e)
             return []

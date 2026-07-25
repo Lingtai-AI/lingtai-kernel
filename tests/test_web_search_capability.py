@@ -101,6 +101,32 @@ def test_create_search_service_minimax_passes_api_host():
     mock_cls.assert_called_once_with(api_key="sk-test", api_host="https://mini.example")
 
 
+def test_minimax_search_calls_web_search_with_safe_retry_policy():
+    """The production web_search call opts in to stale-resource replay.
+
+    MiniMax web_search is read-only/replay-safe, so search() must pass
+    exactly ``retry_policy="safe"`` (issue #924 follow-up). Uses a fake
+    client — no uvx subprocess, no real MiniMax.
+    """
+    from lingtai.services.websearch.minimax import MiniMaxSearchService
+
+    svc = MiniMaxSearchService(api_key="sk-test", api_host="https://mini.example")
+    fake = MagicMock()
+    fake.is_connected.return_value = True
+    fake.call_tool.return_value = {"text": "Python is a programming language"}
+    svc._client = fake
+
+    results = svc.search("python")
+
+    fake.call_tool.assert_called_once_with(
+        "web_search",
+        {"query": "python"},
+        retry_policy="safe",
+    )
+    assert len(results) == 1
+    assert "Python is a programming language" in results[0].snippet
+
+
 def test_create_search_service_zhipu_passes_explicit_mode():
     """Factory should pass the explicit Zhipu endpoint mode."""
     with patch("lingtai.services.websearch.zhipu.ZhipuSearchService") as mock_cls:
