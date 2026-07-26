@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import tempfile
 import threading
 from datetime import datetime, timezone
@@ -28,6 +29,23 @@ lark: Any = None
 # SDK keeps its own module-level ``loop`` attribute that ``Client.start()`` uses
 # directly — see ``_ThreadLocalLoop`` and ``_ws_loop`` for why that matters.
 _sdk_ws_client_module: Any = None
+_sdk_logging_lock = threading.Lock()
+
+
+def _configure_lark_sdk_logging() -> None:
+    """Keep Lark SDK diagnostics off the MCP protocol's stdout stream."""
+    with _sdk_logging_lock:
+        sdk_logger = logging.getLogger("Lark")
+        stdout_streams = (sys.stdout, sys.__stdout__)
+        for handler in sdk_logger.handlers:
+            if not isinstance(handler, logging.StreamHandler):
+                continue
+            stream = getattr(handler, "stream", None)
+            if stream is not None and any(
+                stream is item for item in stdout_streams
+            ):
+                handler.setStream(sys.stderr)
+        sdk_logger.propagate = False
 
 
 def _import_lark() -> Any:
@@ -35,6 +53,7 @@ def _import_lark() -> Any:
     if lark is None:
         import lark_oapi as _lark
         lark = _lark
+    _configure_lark_sdk_logging()
     return lark
 
 
