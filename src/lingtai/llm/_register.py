@@ -112,9 +112,9 @@ def register_all_adapters() -> None:
         d = defaults or {}
         compat = d.get("api_compat", "openai")
         adapter_kw = {k: v for k, v in kw.items() if v is not None}
-        if "compact_threshold" in d:
-            # Preserve explicit None so custom Responses users can disable
-            # generic context management just like openai users.
+        if compat == "openai" and "compact_threshold" in d:
+            # Preserve explicit None so custom OpenAI Responses users can disable
+            # generic context management just like official OpenAI users.
             adapter_kw["compact_threshold"] = d["compact_threshold"]
         # Canonical ``wire_api`` and the legacy ``use_responses_api`` preference
         # are independent and both may be present. Pass each when present — do NOT

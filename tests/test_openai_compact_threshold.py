@@ -182,6 +182,37 @@ def test_custom_factory_passes_compact_threshold_from_defaults(value):
     assert adapter._compact_threshold == value
 
 
+@pytest.mark.parametrize("api_compat", ["anthropic", "gemini"])
+@pytest.mark.parametrize("value", [250, None])
+def test_custom_non_openai_factory_does_not_pass_compact_threshold(
+    monkeypatch, api_compat, value
+):
+    import lingtai.llm.custom.adapter as custom_adapter_module
+
+    captured = {}
+
+    def fake_create_custom_adapter(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        custom_adapter_module,
+        "create_custom_adapter",
+        fake_create_custom_adapter,
+    )
+    register_all_adapters()
+    factory = LLMService._adapter_registry["custom"]
+    factory(
+        model="provider-model",
+        defaults={"api_compat": api_compat, "compact_threshold": value},
+        api_key="fake",
+        base_url="https://provider.example/v1",
+    )
+
+    assert captured["api_compat"] == api_compat
+    assert "compact_threshold" not in captured
+
+
 def test_llm_service_threads_compact_threshold_via_provider_defaults():
     register_all_adapters()
     service = LLMService(
