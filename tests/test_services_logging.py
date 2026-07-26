@@ -1,6 +1,7 @@
 """Tests for lingtai.services.logging."""
 import json
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
+import os
 import sqlite3
 import threading
 from pathlib import Path
@@ -468,6 +469,68 @@ class TestSQLiteEventIndex:
             ]
         finally:
             reader.close()
+
+    def test_read_only_query_works_in_read_only_directory_without_sidecars(self, tmp_path):
+        """Checkpointed sidecars stay inspectable where SQLite cannot write anything.
+
+        POSIX-only: it depends on directory mode bits actually denying writes, which
+        is not true on Windows and is not true for root.
+        """
+        if os.name != "posix":
+            pytest.skip("directory mode bits only deny writes on POSIX")
+        if os.geteuid() == 0:
+            pytest.skip("root bypasses directory mode bits")
+
+        logs = tmp_path / "logs"
+        sqlite_file = logs / "log.sqlite"
+        seed = SQLiteEventIndex(sqlite_file)
+        seed.log_event({"type": "offline", "ts": 1})
+        seed.close()
+        # Closing the last writer checkpoints and removes the WAL sidecars, which is
+        # the offline/archived shape that read-only inspection has to keep serving.
+        assert not (logs / "log.sqlite-wal").exists()
+        assert not (logs / "log.sqlite-shm").exists()
+
+        logs.chmod(0o555)
+        try:
+            assert query_sqlite_event_index(tmp_path, "SELECT type FROM events") == [{"type": "offline"}]
+            assert doctor_sqlite_event_index(tmp_path)["status"] == "ok"
+            assert not (logs / "log.sqlite-wal").exists()
+            assert not (logs / "log.sqlite-shm").exists()
+        finally:
+            # Restore write access, otherwise pytest cannot garbage-collect this
+            # tmp_path tree on a later session.
+            logs.chmod(0o755)
+
+    def test_read_only_open_does_not_fall_back_to_immutable_while_wal_exists(self, tmp_path, monkeypatch):
+        """A WAL may hold uncheckpointed rows, so immutable reads must not paper over failures."""
+        sqlite_file = tmp_path / "logs" / "log.sqlite"
+        writer = SQLiteEventIndex(sqlite_file)
+        try:
+            writer.log_event({"type": "uncheckpointed", "ts": 1})
+            assert sqlite_file.with_name(sqlite_file.name + "-wal").exists()
+
+            attempted: list[str] = []
+            real_connect = sqlite3.connect
+
+            def fake_connect(target, *args, **kwargs):
+                if isinstance(target, str) and target.startswith("file:"):
+                    attempted.append(target)
+                    raise sqlite3.OperationalError("attempt to write a readonly database")
+                return real_connect(target, *args, **kwargs)
+
+            monkeypatch.setattr(sqlite3, "connect", fake_connect)
+
+            reader = SQLiteEventIndex(sqlite_file, ensure=False)
+            try:
+                with pytest.raises(sqlite3.OperationalError, match="readonly database"):
+                    reader.query("SELECT type FROM events")
+            finally:
+                reader.close()
+
+            assert attempted == [f"{sqlite_file.resolve().as_uri()}?mode=ro"]
+        finally:
+            writer.close()
 
     def test_query_accepts_read_only_cte_and_explain(self, tmp_path):
         index = SQLiteEventIndex(tmp_path / "logs" / "log.sqlite")

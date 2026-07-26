@@ -210,8 +210,7 @@ class SQLiteEventIndex:
             raise sqlite3.Error(self._disabled_reason)
         if self._conn is None:
             if read_only:
-                uri = f"{self.path.resolve().as_uri()}?mode=ro"
-                conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+                conn = self._connect_read_only()
             else:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 conn = sqlite3.connect(self.path, check_same_thread=False)
@@ -222,6 +221,31 @@ class SQLiteEventIndex:
             if ensure_schema:
                 self._ensure_schema(conn)
         return self._conn
+
+    def _connect_read_only(self) -> sqlite3.Connection:
+        """Open a reader, preferring live-safe ``mode=ro`` over immutable reads.
+
+        ``mode=ro`` never writes database content, but SQLite still needs WAL/SHM
+        sidecars to read a WAL-mode store, so it can materialize ``-wal``/``-shm``
+        files and it fails outright on a genuinely read-only store (archived logs,
+        read-only mount).  ``sqlite3.connect()`` is lazy and both real read-only
+        callers skip schema creation, so probe the schema here instead of letting
+        the error surface mid-query.  Fall back to ``immutable=1`` only when no
+        ``-wal`` sidecar exists: with a WAL present, immutable reads would silently
+        hide uncheckpointed rows, so the original failure has to stay visible.
+        """
+        base = self.path.resolve().as_uri()
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(f"{base}?mode=ro", uri=True, check_same_thread=False)
+            conn.execute("PRAGMA schema_version").fetchall()
+            return conn
+        except sqlite3.OperationalError:
+            if conn is not None:
+                conn.close()
+            if self.path.with_name(self.path.name + "-wal").exists():
+                raise
+        return sqlite3.connect(f"{base}?mode=ro&immutable=1", uri=True, check_same_thread=False)
 
     @staticmethod
     def _configure(conn: sqlite3.Connection) -> None:
