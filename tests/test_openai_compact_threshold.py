@@ -165,6 +165,23 @@ def test_openai_factory_preserves_explicit_none_disable():
     assert adapter._compact_threshold is None
 
 
+@pytest.mark.parametrize("value", [250, None])
+def test_custom_factory_passes_compact_threshold_from_defaults(value):
+    register_all_adapters()
+    factory = LLMService._adapter_registry["custom"]
+    adapter = factory(
+        model="gpt-5.5",
+        defaults={
+            "api_compat": "openai",
+            "wire_api": "responses",
+            "compact_threshold": value,
+        },
+        api_key="fake",
+        base_url="https://sub2api.example/v1",
+    )
+    assert adapter._compact_threshold == value
+
+
 def test_llm_service_threads_compact_threshold_via_provider_defaults():
     register_all_adapters()
     service = LLMService(
