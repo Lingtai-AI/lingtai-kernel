@@ -110,8 +110,8 @@ def build_manager() -> tuple[CloudMailManager, Path]:
     working_dir = Path(agent_dir_raw) if agent_dir_raw else Path.cwd()
     working_dir.mkdir(parents=True, exist_ok=True)
 
-    def _on_inbound(event: dict) -> None:
-        push_inbox_event(
+    def _on_inbound(event: dict) -> bool:
+        return push_inbox_event(
             sender=event["from"],
             subject=event["subject"],
             body=event["body"],

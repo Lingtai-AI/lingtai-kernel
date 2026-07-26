@@ -424,6 +424,114 @@ def test_allowed_senders_filter_case_insensitive(tmp_path):
     mgr.stop()
 
 
+def test_explicit_false_callback_is_delivery_failure(tmp_path):
+    transport, _ = make_router(rows=[])
+    mgr = CloudMailManager(
+        accounts=[{
+            "alias": "cloudmail",
+            "base_url": "https://mail.example.com",
+            "admin_email": "admin@example.com",
+            "admin_password": "adminpw",
+        }],
+        working_dir=tmp_path,
+        on_inbound=lambda _event: False,
+        transport=transport,
+    )
+
+    assert mgr._push_licc(mgr.default_account, _row(1)) is False
+    mgr.stop()
+
+
+def test_push_licc_truncates_subject_to_licc_limit(tmp_path):
+    events = []
+    transport, _ = make_router(rows=[])
+    mgr = CloudMailManager(
+        accounts=[{
+            "alias": "cloudmail",
+            "base_url": "https://mail.example.com",
+            "admin_email": "admin@example.com",
+            "admin_password": "adminpw",
+        }],
+        working_dir=tmp_path,
+        on_inbound=events.append,
+        transport=transport,
+    )
+    row = _row(1)
+    row["subject"] = "x" * 250
+
+    assert mgr._push_licc(mgr.default_account, row) is True
+    assert events[0]["subject"] == "x" * 200
+    mgr.stop()
+
+
+def test_failed_allowed_row_stops_batch_and_retries_next_poll(tmp_path, caplog):
+    rows = [_row(1, sender="allowed@x.com")]
+    delivered = []
+    outcomes = {2: True, 4: False, 5: True}
+
+    def sink(event):
+        email_id = event["metadata"]["email_id"]
+        delivered.append(email_id)
+        return outcomes[email_id]
+
+    transport, _ = make_router(rows=rows)
+    mgr = CloudMailManager(
+        accounts=[{
+            "alias": "cloudmail",
+            "base_url": "https://mail.example.com",
+            "admin_email": "admin@example.com",
+            "admin_password": "adminpw",
+            "allowed_senders": ["allowed@x.com"],
+        }],
+        working_dir=tmp_path,
+        on_inbound=sink,
+        transport=transport,
+    )
+    acct = mgr.default_account
+    mgr.poll_once(acct)  # seed at 1
+    rows[:0] = [
+        _row(5, sender="allowed@x.com"),
+        _row(4, sender="allowed@x.com"),
+        _row(3, sender="disallowed@x.com"),
+        _row(2, sender="allowed@x.com"),
+    ]
+
+    assert mgr.poll_once(acct) == 1
+    assert delivered == [2, 4]
+    assert acct.watermark.last_email_id == 3
+    assert "delivery paused at cloudmail:4" in caplog.text
+
+    outcomes[4] = True
+    assert mgr.poll_once(acct) == 2
+    assert delivered == [2, 4, 4, 5]
+    assert acct.watermark.last_email_id == 5
+    mgr.stop()
+
+
+def test_build_manager_propagates_false_inbox_result(tmp_path, monkeypatch):
+    monkeypatch.setenv("LINGTAI_AGENT_DIR", str(tmp_path))
+    monkeypatch.setattr(cm_server, "load_config", lambda: {
+        "accounts": [{
+            "alias": "cloudmail",
+            "base_url": "https://mail.example.com",
+            "admin_email": "admin@example.com",
+            "admin_password": "adminpw",
+        }],
+    })
+    monkeypatch.setattr(cm_server, "push_inbox_event", lambda **_kwargs: False)
+
+    mgr, _ = cm_server.build_manager()
+    event = {
+        "from": "sender@example.com",
+        "subject": "subject",
+        "body": "body",
+        "metadata": {"email_id": 1},
+        "wake": True,
+    }
+    assert mgr._on_inbound(event) is False
+    mgr.stop()
+
+
 def test_add_user_uses_cloud_mail_batch_contract(tmp_path):
     mgr, captured = make_manager(tmp_path)
     out = mgr.handle({

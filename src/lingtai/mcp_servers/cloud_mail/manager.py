@@ -151,7 +151,7 @@ class CloudMailManager:
         accounts: list[dict],
         *,
         working_dir: Path | str | None = None,
-        on_inbound: Callable[[dict], None] | None = None,
+        on_inbound: Callable[[dict], bool | None] | None = None,
         transport=None,
     ) -> None:
         self._working_dir = Path(working_dir) if working_dir else None
@@ -440,15 +440,25 @@ class CloudMailManager:
             key=_eid,
         )
         pushed = 0
+        safe_id = last_id
         for r in new_rows:
+            email_id = _eid(r)
             if not acct.sender_allowed(r.get("sendEmail")):
+                safe_id = email_id
                 continue
-            if self._push_licc(acct, r):
-                pushed += 1
-        # Advance watermark to the max we observed regardless of allow-list,
-        # so filtered-out senders don't replay forever.
-        if max_id > last_id:
-            acct.watermark.set_last_email_id(max_id, seeded=True)
+            if not self._push_licc(acct, r):
+                # Do not deliver or advance past a failed allowed row. The next
+                # poll retries it before any later rows in this page.
+                log.warning(
+                    "cloud_mail delivery paused at %s:%s; retrying next poll",
+                    acct.alias,
+                    email_id,
+                )
+                break
+            pushed += 1
+            safe_id = email_id
+        if safe_id > last_id:
+            acct.watermark.set_last_email_id(safe_id, seeded=True)
         return pushed
 
     def _push_licc(self, acct: CloudMailAccount, row: dict) -> bool:
@@ -457,7 +467,7 @@ class CloudMailManager:
         email_id = row.get("emailId")
         compound = f"{acct.alias}:{email_id}"
         sender = row.get("sendEmail") or row.get("sendName") or "unknown"
-        subject = row.get("subject") or "(no subject)"
+        subject = str(row.get("subject") or "(no subject)")[:200]
         body = row.get("text") or _strip_to_text(row.get("content")) or ""
         event = {
             "from": sender,
@@ -477,8 +487,7 @@ class CloudMailManager:
             },
         }
         try:
-            self._on_inbound(event)
-            return True
+            return self._on_inbound(event) is not False
         except Exception:
             log.exception("cloud_mail LICC push failed for %s", compound)
             return False
