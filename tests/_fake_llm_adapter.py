@@ -16,7 +16,9 @@ deadline/reclaim watcher can interrupt an in-flight "LLM call".
 """
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 import time
 
 from lingtai.kernel.llm.base import ChatSession, LLMResponse, ToolCall, UsageMetadata
@@ -35,6 +37,17 @@ class _FakeChatSession(ChatSession):
         # This proves the runtime received a value without persisting/printing it.
         self._has_runtime_key = has_runtime_key
 
+    def _record_send(self) -> None:
+        path = os.environ.get("LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_REPORT")
+        if not path:
+            return
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "session_id": id(self),
+                "send_count": self._send_count,
+            }) + "\n")
+
     @property
     def interface(self):
         return self._interface
@@ -44,6 +57,7 @@ class _FakeChatSession(ChatSession):
         if sleep_s:
             time.sleep(float(sleep_s))
         self._send_count += 1
+        self._record_send()
         usage_extra = {
             "codex_auth_path_sha8": "a1b2c3d4",
             "codex_pool_source_index": 1,
@@ -79,6 +93,53 @@ class _FakeChatSession(ChatSession):
                                     thinking_tokens=3, cached_tokens=5,
                                     extra=usage_extra),
             )
+        if os.environ.get(
+            "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SCENARIO"
+        ) == "text-only-completion-recovery":
+            if self._send_count == 1:
+                return LLMResponse(text="Task done in words only.", tool_calls=[])
+            if self._send_count == 2:
+                sleep_s = os.environ.get(
+                    "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_RECOVERY_SLEEP"
+                )
+                if sleep_s:
+                    time.sleep(float(sleep_s))
+                return LLMResponse(
+                    text="Calling finish after recovery prompt.",
+                    tool_calls=[ToolCall(
+                        name="finish",
+                        args={"status": "done", "summary": "recovered completion"},
+                        id="fake-recovery-finish",
+                    )],
+                )
+            return LLMResponse(text="Recovered task done.", tool_calls=[])
+        if os.environ.get(
+            "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SCENARIO"
+        ) == "side-effect-completion-recovery":
+            if self._send_count == 1:
+                return LLMResponse(
+                    text="Writing side-effect probe.",
+                    tool_calls=[ToolCall(
+                        name="write",
+                        args={
+                            "file_path": "recovery-side-effect.txt",
+                            "content": "side-effect once\n",
+                        },
+                        id="fake-write-once",
+                    )],
+                )
+            if self._send_count == 2:
+                return LLMResponse(text="Done in text after side effect.", tool_calls=[])
+            if self._send_count == 3:
+                return LLMResponse(
+                    text="Calling finish after side-effect recovery.",
+                    tool_calls=[ToolCall(
+                        name="finish",
+                        args={"status": "done", "summary": "side effect recovered"},
+                        id="fake-side-effect-finish",
+                    )],
+                )
+            return LLMResponse(text="Side-effect recovery done.", tool_calls=[])
         if (
             os.environ.get("LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_FINISH") == "1"
             and self._has_runtime_key

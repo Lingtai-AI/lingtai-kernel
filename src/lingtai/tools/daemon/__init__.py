@@ -141,6 +141,13 @@ DAEMON_MECHANICAL_COMPACT_RECOVERY = (
     "resume from that verified state. Do not assume erased context or repeat "
     "side effects without verification."
 )
+DAEMON_COMPLETION_RECOVERY_PROMPT = (
+    "Your last response was ordinary text, but this daemon run still has no "
+    "valid completion signal. Do not repeat tool calls that already succeeded. "
+    "If the task is complete, call finish(status=\"done\", summary=...). If it "
+    "is blocked, incomplete, or failed, call finish with the truthful terminal "
+    "status and required reason. Text alone cannot complete this daemon."
+)
 _DAEMON_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 
 
@@ -3003,157 +3010,197 @@ class DaemonManager:
                 return _mark_cancelled_or_timeout(run_dir, timeout_event)
             turns = 0
             recovery_tool_batch_pending = False
+            completion_recovery_used = False
             run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
 
-            while response.tool_calls and (
-                turns < effective_max_turns or recovery_tool_batch_pending
-            ):
-                if cancel_event.is_set():
-                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
+            while True:
+                while response.tool_calls and (
+                    turns < effective_max_turns or recovery_tool_batch_pending
+                ):
+                    if cancel_event.is_set():
+                        return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
-                # Intermediate text is already persisted in chat_history via
-                # bump_turn(); do not inject daemon progress as parent requests.
+                    # Intermediate text is already persisted in chat_history via
+                    # bump_turn(); do not inject daemon progress as parent requests.
 
-                daemon_meta_state.note_tool_batch(response.tool_calls)
-                compact_execution_calls = [
-                    tc for tc in response.tool_calls
-                    if tc.name == "compact" and (tc.args or {}).get("action") == "run"
-                ]
-                has_compact_call = bool(compact_execution_calls)
-                compact_batch_allowed = (
-                    len(compact_execution_calls) == 1
-                    and len(response.tool_calls) == 1
-                )
-                executor.guard.record_calls(len(response.tool_calls))
-                compact_reset_accepted = False
-                if has_compact_call and not compact_batch_allowed:
-                    result_payload = {
-                        "status": "error",
-                        "message": (
-                            "compact must be the only tool call in its assistant "
-                            "batch; no tools in this batch were executed"
-                        ),
-                    }
-                    tool_results = [
-                        service.make_tool_result(
-                            tc.name,
-                            dict(result_payload),
-                            tool_call_id=getattr(tc, "id", None),
-                        )
-                        for tc in response.tool_calls
+                    daemon_meta_state.note_tool_batch(response.tool_calls)
+                    compact_execution_calls = [
+                        tc for tc in response.tool_calls
+                        if tc.name == "compact" and (tc.args or {}).get("action") == "run"
                     ]
-                    intercepted = False
-                    intercept_text = ""
-                    executor.guard.clear_progress_notice()
-                else:
-                    tool_results, intercepted, intercept_text = executor.execute(
-                        response.tool_calls,
-                        api_call_id=getattr(response, "api_call_id", None),
+                    has_compact_call = bool(compact_execution_calls)
+                    compact_batch_allowed = (
+                        len(compact_execution_calls) == 1
+                        and len(response.tool_calls) == 1
                     )
-                    executor.guard.clear_progress_notice()
+                    executor.guard.record_calls(len(response.tool_calls))
+                    compact_reset_accepted = False
+                    if has_compact_call and not compact_batch_allowed:
+                        result_payload = {
+                            "status": "error",
+                            "message": (
+                                "compact must be the only tool call in its assistant "
+                                "batch; no tools in this batch were executed"
+                            ),
+                        }
+                        tool_results = [
+                            service.make_tool_result(
+                                tc.name,
+                                dict(result_payload),
+                                tool_call_id=getattr(tc, "id", None),
+                            )
+                            for tc in response.tool_calls
+                        ]
+                        intercepted = False
+                        intercept_text = ""
+                        executor.guard.clear_progress_notice()
+                    else:
+                        tool_results, intercepted, intercept_text = executor.execute(
+                            response.tool_calls,
+                            api_call_id=getattr(response, "api_call_id", None),
+                        )
+                        executor.guard.clear_progress_notice()
 
-                if not intercepted and compact_batch_allowed and compact_reset_accepted:
-                    if cancel_event.is_set():
-                        return _mark_cancelled_or_timeout(run_dir, timeout_event)
-                    from lingtai.kernel.llm.interface import ChatInterface
-                    history = session.interface.to_dict()
-                    compact_assistant = history[-1] if history else None
-                    if not (
-                        isinstance(compact_assistant, dict)
-                        and compact_assistant.get("role") == "assistant"
-                    ):
-                        raise RuntimeError("compact context reset requires an intact assistant compact call")
-                    system_entries = [e for e in history if e.get("role") == "system"]
-                    retained = ChatInterface.from_dict(
-                        ([system_entries[-1]] if system_entries else [])
-                        + [compact_assistant]
-                    )
-                    session = service.create_session(
-                        system_prompt=system_prompt,
-                        tools=schemas or None,
-                        model=effective_model,
-                        thinking="default",
-                        tracked=False,
-                        interface=retained,
-                    )
-                    # The compact result is the first carrier in the fresh context.
-                    # Clear pre-reset current-call state before stamping that carrier,
-                    # while preserving cumulative daemon totals and round identity.
-                    daemon_meta_state.note_compact_reset(session)
-
-                # Promote the daemon-local snapshot to the canonical final
-                # ToolResultBlock sidecar. The helper deliberately omits the
-                # parent-only notifications/communication axis. For an accepted
-                # compact reset, this now describes the fresh retained context.
-                attach_daemon_agent_meta(
-                    tool_results,
-                    agent_state=daemon_meta_state.snapshot(session),
-                )
-
-                if intercepted:
-                    # Preserve provider pairing by recording the synthesized tool
-                    # results, then terminate the daemon with the intercept text.
-                    run_dir.record_user_send(
-                        json.dumps([str(r) for r in tool_results], ensure_ascii=False),
-                        kind="tool_results",
-                    )
-                    text = intercept_text or "[intercepted]"
-                    self._require_done_completion(run_dir, text)
-                    run_dir.mark_done(text)
-                    return text
-
-                mechanically_compacted = False
-                if daemon_meta_state.compact_due:
-                    if cancel_event.is_set():
-                        return _mark_cancelled_or_timeout(run_dir, timeout_event)
-                    response = _mechanically_compact(tool_results)
-                    mechanically_compacted = True
-                if not mechanically_compacted:
-                    # Tool results are written to chat_history before sending.
-                    run_dir.record_user_send(
-                        json.dumps([str(r) for r in tool_results], ensure_ascii=False),
-                        kind="tool_results",
-                    )
-                    response = session.send(tool_results)
-                    daemon_meta_state.note_response(response, session)
-                    _accum(response)
-                turns += 1
-                run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
-                recovery_tool_batch_pending = mechanically_compacted and bool(
-                    response.tool_calls
-                )
-
-                # Inject follow-up as a separate user message — only safe when
-                # the response is text-only. If it carries new tool_calls, the
-                # canonical interface tail is assistant[tool_calls] and a user
-                # message here would violate the pairing invariant.
-                if not response.tool_calls:
-                    if not mechanically_compacted and daemon_meta_state.compact_due:
+                    if not intercepted and compact_batch_allowed and compact_reset_accepted:
                         if cancel_event.is_set():
                             return _mark_cancelled_or_timeout(run_dir, timeout_event)
-                        response = _mechanically_compact()
-                        turns += 1
-                        run_dir.bump_turn(
-                            turn=turns + 1, response_text=response.text or ""
+                        from lingtai.kernel.llm.interface import ChatInterface
+                        history = session.interface.to_dict()
+                        compact_assistant = history[-1] if history else None
+                        if not (
+                            isinstance(compact_assistant, dict)
+                            and compact_assistant.get("role") == "assistant"
+                        ):
+                            raise RuntimeError("compact context reset requires an intact assistant compact call")
+                        system_entries = [e for e in history if e.get("role") == "system"]
+                        retained = ChatInterface.from_dict(
+                            ([system_entries[-1]] if system_entries else [])
+                            + [compact_assistant]
                         )
-                        recovery_tool_batch_pending = bool(response.tool_calls)
-                        if response.tool_calls:
-                            # Recovery tool calls must complete before the
-                            # buffered follow-up is drained or sent.
-                            continue
-                    followup = self._drain_followup(em_id)
-                    if followup:
-                        run_dir.record_user_send(followup, kind="followup")
-                        response = session.send(followup)
+                        session = service.create_session(
+                            system_prompt=system_prompt,
+                            tools=schemas or None,
+                            model=effective_model,
+                            thinking="default",
+                            tracked=False,
+                            interface=retained,
+                        )
+                        # The compact result is the first carrier in the fresh context.
+                        # Clear pre-reset current-call state before stamping that carrier,
+                        # while preserving cumulative daemon totals and round identity.
+                        daemon_meta_state.note_compact_reset(session)
+
+                    # Promote the daemon-local snapshot to the canonical final
+                    # ToolResultBlock sidecar. The helper deliberately omits the
+                    # parent-only notifications/communication axis. For an accepted
+                    # compact reset, this now describes the fresh retained context.
+                    attach_daemon_agent_meta(
+                        tool_results,
+                        agent_state=daemon_meta_state.snapshot(session),
+                    )
+
+                    if intercepted:
+                        # Preserve provider pairing by recording the synthesized tool
+                        # results, then terminate the daemon with the intercept text.
+                        run_dir.record_user_send(
+                            json.dumps([str(r) for r in tool_results], ensure_ascii=False),
+                            kind="tool_results",
+                        )
+                        text = intercept_text or "[intercepted]"
+                        self._require_done_completion(run_dir, text)
+                        run_dir.mark_done(text)
+                        return text
+
+                    mechanically_compacted = False
+                    if daemon_meta_state.compact_due:
+                        if cancel_event.is_set():
+                            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                        response = _mechanically_compact(tool_results)
+                        mechanically_compacted = True
+                    if not mechanically_compacted:
+                        # Tool results are written to chat_history before sending.
+                        run_dir.record_user_send(
+                            json.dumps([str(r) for r in tool_results], ensure_ascii=False),
+                            kind="tool_results",
+                        )
+                        response = session.send(tool_results)
                         daemon_meta_state.note_response(response, session)
                         _accum(response)
-                        turns += 1
-                        run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
+                    turns += 1
+                    run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
+                    recovery_tool_batch_pending = mechanically_compacted and bool(
+                        response.tool_calls
+                    )
 
-            if response.tool_calls and turns >= effective_max_turns:
-                raise RuntimeError(
-                    "max_turns exhausted before the daemon completed its tool chain"
-                )
+                    # Inject follow-up as a separate user message — only safe when
+                    # the response is text-only. If it carries new tool_calls, the
+                    # canonical interface tail is assistant[tool_calls] and a user
+                    # message here would violate the pairing invariant.
+                    if not response.tool_calls:
+                        if not mechanically_compacted and daemon_meta_state.compact_due:
+                            if cancel_event.is_set():
+                                return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                            response = _mechanically_compact()
+                            turns += 1
+                            run_dir.bump_turn(
+                                turn=turns + 1, response_text=response.text or ""
+                            )
+                            recovery_tool_batch_pending = bool(response.tool_calls)
+                            if response.tool_calls:
+                                # Recovery tool calls must complete before the
+                                # buffered follow-up is drained or sent.
+                                continue
+                        followup = self._drain_followup(em_id)
+                        if followup:
+                            run_dir.record_user_send(followup, kind="followup")
+                            response = session.send(followup)
+                            daemon_meta_state.note_response(response, session)
+                            _accum(response)
+                            turns += 1
+                            run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
+
+                if response.tool_calls and turns >= effective_max_turns:
+                    raise RuntimeError(
+                        "max_turns exhausted before the daemon completed its tool chain"
+                    )
+
+                text = response.text or "[no output]"
+                completion = self._read_daemon_completion(run_dir)
+                if (
+                    not completion_recovery_used
+                    and self._run_has_daemon_common_mcp(run_dir)
+                    and isinstance(response.text, str)
+                    and response.text.strip()
+                    and not completion.status
+                    and turns + 1 < effective_max_turns
+                ):
+                    if cancel_event.is_set():
+                        return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                    completion_recovery_used = True
+                    run_dir.append_event(
+                        "daemon_completion_recovery",
+                        em_id=em_id,
+                        run_id=getattr(run_dir, "run_id", None),
+                        completion_error=completion.error,
+                    )
+                    run_dir.record_user_send(
+                        DAEMON_COMPLETION_RECOVERY_PROMPT,
+                        kind="completion_recovery",
+                    )
+                    response = session.send(DAEMON_COMPLETION_RECOVERY_PROMPT)
+                    daemon_meta_state.note_response(response, session)
+                    _accum(response)
+                    turns += 1
+                    run_dir.bump_turn(
+                        turn=turns + 1,
+                        response_text=response.text or "",
+                    )
+                    if cancel_event.is_set():
+                        return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                    recovery_tool_batch_pending = bool(response.tool_calls)
+                    continue
+                break
+
             text = response.text or "[no output]"
             # The final terminal transition is serialized with cancellation:
             # a reclaim/deadline racing the last provider response wins over a

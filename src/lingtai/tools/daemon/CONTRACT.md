@@ -8,7 +8,7 @@ description: >
   terminal notifications, and compaction boundaries.
 status: active
 contract_version: 6
-last_changed_at: "2026-07-24"
+last_changed_at: "2026-07-26"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
@@ -42,6 +42,7 @@ related_files:
   - tests/test_daemon_run_dir.py
   - tests/test_daemon_codex_usage.py
   - tests/test_codex_standalone_compaction.py
+  - tests/test_daemon_detached_supervisor.py
   - tests/test_daemon_windows_lock.py
   - tests/test_daemon_windows_process_port.py
   - tests/test_daemon_windows_supervisor.py
@@ -228,6 +229,14 @@ When `daemon_common` is loaded, a conversational final answer is not enough.
 Success requires a validated `finish(status="done")`; missing completion,
 invalid JSON, invalid status, run-id mismatch, `failed`, or `incomplete` must
 prevent terminal `done`.
+
+For LingTai-backend runs only, a nonblank text-only response with no valid
+completion may receive one same-session recovery prompt when enough turn budget
+remains to dispatch a returned tool batch. Recovery never synthesizes
+`daemon_completion.json`, never turns text into success, never reinterprets
+`failed`/`incomplete` as success, and does not change the detached execution
+host's local canonical `finish` surface or its filtering of the reserved
+external `daemon_common` registration.
 
 ### 4. Artifacts separate review evidence from secret-bearing config
 
