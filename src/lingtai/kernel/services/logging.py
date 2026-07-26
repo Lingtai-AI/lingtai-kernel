@@ -225,24 +225,30 @@ class SQLiteEventIndex:
 
     @staticmethod
     def _is_read_only_sidecar_error(exc: sqlite3.OperationalError) -> bool:
-        """Whether ``exc`` is SQLite refusing to create the read sidecars it needs.
+        """Whether SQLite specifically refused to create read sidecars in a directory.
 
-        That specific failure is the only one the offline retry answers.  Any other
-        ``OperationalError`` (a lock, a missing table, corruption) says nothing about
-        the storage being read-only, so it must stay visible.  Real errors carry
-        ``sqlite_errorname`` (``SQLITE_READONLY_DIRECTORY`` in practice); the message
-        check keeps older builds and re-raised errors working.
+        Other extended ``SQLITE_READONLY_*`` errors have different recovery contracts:
+        notably ``SQLITE_READONLY_ROLLBACK`` means a hot rollback journal must be
+        applied, and immutable mode would expose uncommitted main-file bytes.  Prefer
+        the exact extended name/code whenever SQLite supplies it; only older errors
+        without either attribute fall back to the legacy message.
         """
-        name = getattr(exc, "sqlite_errorname", "") or ""
-        return name.startswith("SQLITE_READONLY") or "readonly database" in str(exc)
+        name = getattr(exc, "sqlite_errorname", None)
+        code = getattr(exc, "sqlite_errorcode", None)
+        if name is not None or code is not None:
+            return name == "SQLITE_READONLY_DIRECTORY" or code == getattr(
+                sqlite3, "SQLITE_READONLY_DIRECTORY", None
+            )
+        return "readonly database" in str(exc)
 
     @staticmethod
     def _is_quiescent_offline_store(db: Path) -> bool:
         """Whether ``db`` currently looks like archived storage no writer can touch.
 
-        Both halves are checked against the *resolved* database: a ``-wal`` beside it
-        may hold uncheckpointed rows an immutable read would silently drop, and a
-        parent that ordinary writers can still write to may grow one at any moment.
+        Both halves are checked against the *resolved* database: a ``-wal`` may hold
+        uncheckpointed commits and a hot ``-journal`` may be the only copy of committed
+        pages.  Immutable mode ignores both.  A parent ordinary writers can still write
+        to may also grow either sidecar at any moment.
         Read-only means no write bits at all, or a filesystem mounted read-only where
         the platform reports it -- ``statvfs``/``ST_RDONLY`` are absent on some
         platforms, where the answer is simply "not known to be read-only".
@@ -250,7 +256,7 @@ class SQLiteEventIndex:
         This is a best-effort snapshot, not a lock: root and ACLs can write anyway,
         and a mount can be flipped, which is why the caller re-checks after opening.
         """
-        if db.with_name(db.name + "-wal").exists():
+        if any(db.with_name(db.name + suffix).exists() for suffix in ("-wal", "-journal")):
             return False
         parent = db.parent
         try:

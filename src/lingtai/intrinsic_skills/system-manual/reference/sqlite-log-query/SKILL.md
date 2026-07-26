@@ -12,7 +12,7 @@ description: >
   digest output, or log redaction pitfalls. This is a nested skill-reference
   under `system-manual`, not a standalone catalog skill; its folder may carry
   companion scripts and assets as SQLite trace tooling grows.
-version: 1.2.2
+version: 1.2.3
 tags: [lingtai, system-manual, sqlite, log.sqlite, runtime-logs, trace, jsonl, daemon, trajectory, mining, event-log, improvement, pitfalls, observability, cheap-model]
 last_changed_at: 2026-07-25T00:00:00Z
 related_files:
@@ -60,8 +60,9 @@ SQL queries as the primary data access layer.
 - **Offline stores get one immutable retry.** If SQLite cannot create those read
   sidecars — archived logs, a read-only mount — the reader retries once in
   immutable mode, but only for storage that currently denies ordinary writers and
-  has no `-wal` beside the database. Immutable reads skip the WAL, so this is an
-  offline escape hatch and not a guarantee against a concurrent writer; on a
+  has neither a `-wal` nor a rollback `-journal` beside the database. Immutable reads
+  skip both recovery sources, so this is an offline escape hatch and not a guarantee
+  against a concurrent writer; on a
   writable store the error is surfaced rather than risking a silently stale answer.
 - **Never paste secrets.** Logs and chat history can contain URLs, tokens,
   prompts, and user data. Redact before sharing.

@@ -3,6 +3,8 @@ import json
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 import os
 import sqlite3
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -637,6 +639,71 @@ class TestSQLiteEventIndex:
             # Restore writes before closing, so the writer can checkpoint and clean up.
             store.chmod(0o755)
             writer.close()
+
+    def test_read_only_open_does_not_treat_hot_rollback_journal_as_offline(self, tmp_path):
+        """A hot rollback journal may be the only copy of the committed database.
+
+        POSIX-only: the production failure requires directory mode bits that deny the
+        rollback write.  The child deliberately exits with an open transaction after
+        dirty pages spill, leaving uncommitted main-file bytes plus the recovery journal.
+        """
+        if os.name != "posix":
+            pytest.skip("directory mode bits only deny writes on POSIX")
+        if os.geteuid() == 0:
+            pytest.skip("root bypasses directory mode bits")
+
+        logs = tmp_path / "logs"
+        sqlite_file = logs / "log.sqlite"
+        seed = SQLiteEventIndex(sqlite_file)
+        try:
+            for i in range(200):
+                seed.log_event(
+                    {
+                        "type": f"COMMITTED-{i}",
+                        "ts": i,
+                        "payload": "x" * 4000,
+                    }
+                )
+        finally:
+            seed.close()
+
+        with sqlite3.connect(sqlite_file) as conn:
+            assert conn.execute("PRAGMA journal_mode=DELETE").fetchone() == ("delete",)
+            conn.execute("PRAGMA synchronous=FULL")
+
+        crash_writer = """
+import os
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("PRAGMA journal_mode=DELETE")
+conn.execute("PRAGMA synchronous=FULL")
+conn.execute("PRAGMA cache_size=1")
+conn.execute("BEGIN IMMEDIATE")
+conn.execute(
+    "UPDATE events SET type='UNCOMMITTED', fields_json=?",
+    ('{"type":"UNCOMMITTED","payload":"' + 'y' * 4000 + '"}',),
+)
+os._exit(0)
+"""
+        subprocess.run([sys.executable, "-c", crash_writer, str(sqlite_file)], check=True)
+
+        journal = sqlite_file.with_name(sqlite_file.name + "-journal")
+        assert journal.exists()
+        assert not sqlite_file.with_name(sqlite_file.name + "-wal").exists()
+
+        logs.chmod(0o555)
+        try:
+            reader = SQLiteEventIndex(sqlite_file, ensure=False)
+            try:
+                with pytest.raises(sqlite3.OperationalError, match="readonly database") as exc_info:
+                    reader.query("SELECT DISTINCT type FROM events")
+            finally:
+                reader.close()
+            assert getattr(exc_info.value, "sqlite_errorname", None) == "SQLITE_READONLY_ROLLBACK"
+        finally:
+            logs.chmod(0o755)
 
     def test_read_only_open_does_not_fall_back_for_unrelated_operational_errors(self, tmp_path, monkeypatch):
         """Only the read-only-sidecar failure earns the offline escape hatch.
