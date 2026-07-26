@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -563,6 +564,69 @@ class TestSQLiteEventIndex:
 
         monkeypatch.setattr(sqlite3, "connect", fake_connect)
         return attempted, opened
+
+    @pytest.mark.parametrize("failure_stage", ["connect", "probe"])
+    def test_read_only_open_preserves_original_error_when_immutable_retry_fails(
+        self, tmp_path, monkeypatch, failure_stage
+    ):
+        """A failed escape hatch closes its reader and preserves the live-mode error."""
+        sqlite_file = tmp_path / "logs" / "log.sqlite"
+        original = sqlite3.OperationalError("attempt to write a readonly database")
+        retry_error = sqlite3.DatabaseError(f"immutable {failure_stage} failed")
+        attempted: list[str] = []
+        fallback = Mock()
+        fallback.execute.side_effect = retry_error
+
+        def fake_connect(target, *args, **kwargs):
+            attempted.append(target)
+            if "immutable=1" not in target:
+                raise original
+            if failure_stage == "connect":
+                raise retry_error
+            return fallback
+
+        monkeypatch.setattr(sqlite3, "connect", fake_connect)
+        monkeypatch.setattr(
+            SQLiteEventIndex,
+            "_is_quiescent_offline_store",
+            staticmethod(lambda _db: True),
+        )
+
+        reader = SQLiteEventIndex(sqlite_file, ensure=False)
+        try:
+            with pytest.raises(sqlite3.OperationalError) as exc_info:
+                reader.query("SELECT type FROM events")
+        finally:
+            reader.close()
+
+        base = sqlite_file.resolve().as_uri()
+        assert attempted == [f"{base}?mode=ro", f"{base}?mode=ro&immutable=1"]
+        assert exc_info.value is original
+        assert exc_info.value.__cause__ is retry_error
+        if failure_stage == "probe":
+            fallback.close.assert_called_once_with()
+        else:
+            fallback.close.assert_not_called()
+
+    def test_read_only_open_closes_primary_connection_when_probe_raises_database_error(
+        self, tmp_path, monkeypatch
+    ):
+        """Every unsuccessful primary schema probe closes its provisional connection."""
+        sqlite_file = tmp_path / "logs" / "log.sqlite"
+        original = sqlite3.DatabaseError("file is not a database")
+        primary = Mock()
+        primary.execute.side_effect = original
+        monkeypatch.setattr(sqlite3, "connect", lambda *_args, **_kwargs: primary)
+
+        reader = SQLiteEventIndex(sqlite_file, ensure=False)
+        try:
+            with pytest.raises(sqlite3.DatabaseError) as exc_info:
+                reader.query("SELECT type FROM events")
+        finally:
+            reader.close()
+
+        primary.close.assert_called_once_with()
+        assert exc_info.value is original
 
     def test_read_only_open_does_not_fall_back_to_immutable_when_parent_is_writable(self, tmp_path, monkeypatch):
         """A writable parent can grow a WAL at any moment, so immutable must stay out.

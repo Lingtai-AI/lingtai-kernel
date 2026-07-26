@@ -297,23 +297,39 @@ class SQLiteEventIndex:
             conn = sqlite3.connect(f"{base}?mode=ro", uri=True, check_same_thread=False)
             conn.execute("PRAGMA schema_version").fetchall()
             return conn
-        except sqlite3.OperationalError as exc:
+        except BaseException as exc:
             if conn is not None:
-                conn.close()
+                try:
+                    conn.close()
+                except BaseException as close_error:
+                    raise exc from close_error
+            if not isinstance(exc, sqlite3.OperationalError):
+                raise
             if not self._is_read_only_sidecar_error(exc) or not self._is_quiescent_offline_store(resolved):
                 raise
-            fallback = sqlite3.connect(f"{base}?mode=ro&immutable=1", uri=True, check_same_thread=False)
+
+            fallback: sqlite3.Connection | None = None
             try:
+                fallback = sqlite3.connect(
+                    f"{base}?mode=ro&immutable=1", uri=True, check_same_thread=False
+                )
                 fallback.execute("PRAGMA schema_version").fetchall()
                 still_offline = self._is_quiescent_offline_store(resolved)
-            except BaseException:
-                fallback.close()
-                raise
+            except BaseException as retry_error:
+                if fallback is not None:
+                    try:
+                        fallback.close()
+                    except BaseException as close_error:
+                        raise exc from close_error
+                raise exc from retry_error
             if not still_offline:
                 # A WAL appeared or the storage became writable while we were opening,
                 # so this snapshot may already be stale.  Narrower than a single
                 # pre-check, still not a lock: prefer the visible failure.
-                fallback.close()
+                try:
+                    fallback.close()
+                except BaseException as close_error:
+                    raise exc from close_error
                 raise
             return fallback
 
