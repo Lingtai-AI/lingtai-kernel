@@ -115,6 +115,31 @@ class _FakeChatSession(ChatSession):
             return LLMResponse(text="Recovered task done.", tool_calls=[])
         if os.environ.get(
             "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SCENARIO"
+        ) == "text-only-recovery-still-text":
+            if self._send_count == 1:
+                return LLMResponse(text="Task done in words only.", tool_calls=[])
+            return LLMResponse(text="Still only text after recovery.", tool_calls=[])
+        if os.environ.get(
+            "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SCENARIO"
+        ) == "completion-recovery-terminal-status":
+            status = os.environ.get(
+                "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_COMPLETION_STATUS",
+                "failed",
+            )
+            if self._send_count == 1:
+                return LLMResponse(text="Task done in words only.", tool_calls=[])
+            if self._send_count == 2:
+                return LLMResponse(
+                    text=f"Calling finish({status}) after recovery prompt.",
+                    tool_calls=[ToolCall(
+                        name="finish",
+                        args={"status": status, "reason": f"truthful {status}"},
+                        id=f"fake-recovery-{status}",
+                    )],
+                )
+            return LLMResponse(text=f"Recovered task reported {status}.", tool_calls=[])
+        if os.environ.get(
+            "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SCENARIO"
         ) == "side-effect-completion-recovery":
             if self._send_count == 1:
                 return LLMResponse(

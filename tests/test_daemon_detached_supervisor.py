@@ -210,6 +210,69 @@ def _spawn_lingtai_supervisor(
     return proc
 
 
+def _spawn_lingtai_supervisor_via_adapter(
+    run_dir: DaemonRunDir,
+    *,
+    task="say hi",
+    timeout_s=30.0,
+    max_turns=5,
+    tools=None,
+    mcp=None,
+    extra_env=None,
+) -> None:
+    tools = list(tools or [])
+    manifest = build_manifest(
+        run_id=run_dir.run_id,
+        backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent),
+        run_dir=str(run_dir.path),
+        task=task,
+        tools=tools,
+        max_turns=max_turns,
+        timeout_s=timeout_s,
+        group_id=None,
+        llm={
+            "provider": "lingtai-supervisor-test-fake",
+            "model": "fake-model",
+            "api_key": None,
+            "base_url": None,
+            "context_window": None,
+            "provider_defaults": None,
+        },
+        mcp=list(mcp or []),
+    )
+    write_manifest(run_dir.path, manifest)
+    request = DaemonSupervisorRequest(
+        run_id=run_dir.run_id,
+        manifest_path=str(manifest_path_for(run_dir.path)),
+        python_executable=sys.executable,
+    )
+    capsule = {"mcp": list(mcp or [])} if mcp else None
+    tests_dir = str(Path(__file__).parent)
+    repo_src = str(Path(__file__).parent.parent / "src")
+    existing_pp = os.environ.get("PYTHONPATH", "")
+    env_updates = {
+        FAKE_LLM_ENV: "1",
+        "PYTHONPATH": os.pathsep.join(
+            dict.fromkeys(
+                [tests_dir, repo_src]
+                + [p for p in existing_pp.split(os.pathsep) if p]
+            )
+        ),
+        **(extra_env or {}),
+    }
+    old_env = {name: os.environ.get(name) for name in env_updates}
+    try:
+        os.environ.update(env_updates)
+        PosixDaemonSupervisorAdapter().spawn_detached(request, capsule=capsule)
+    finally:
+        for name, value in old_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def test_posix_adapter_spawns_real_detached_process(tmp_path):
     """The production Port/adapter actually launches a real OS process."""
     run_dir = _make_run_dir(tmp_path, task="say hi", timeout_s=30.0)
@@ -686,7 +749,7 @@ def test_detached_lingtai_surface_keeps_one_local_finish_without_external_common
     assert [registration["name"] for registration in connected] == ["parent-docs"]
 
 
-def test_detached_text_only_completion_recovery_uses_real_local_finish_once(tmp_path):
+def test_detached_text_only_completion_recovery_uses_production_adapter_and_real_local_finish_once(tmp_path):
     """Text-only LingTai output gets one same-session recovery and real finish."""
     report = tmp_path / "fake-send-report.jsonl"
     run_dir = _make_run_dir(tmp_path, task="text-only recovery", max_turns=4)
@@ -696,7 +759,7 @@ def test_detached_text_only_completion_recovery_uses_real_local_finish_once(tmp_
     })
     assert not (run_dir.path / "daemon_completion.json").exists()
 
-    proc = _spawn_lingtai_supervisor(
+    _spawn_lingtai_supervisor_via_adapter(
         run_dir,
         task="text-only recovery",
         max_turns=4,
@@ -706,13 +769,7 @@ def test_detached_text_only_completion_recovery_uses_real_local_finish_once(tmp_
             "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_REPORT": str(report),
         },
     )
-    try:
-        _poll_until(lambda: _disk_state(run_dir).get("state") == "done", timeout=20)
-        proc.wait(timeout=5)
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
-            proc.wait(timeout=5)
+    _poll_until(lambda: _disk_state(run_dir).get("state") == "done", timeout=20)
 
     completion = json.loads(
         (run_dir.path / "daemon_completion.json").read_text(encoding="utf-8")
@@ -750,6 +807,16 @@ def test_detached_text_only_completion_recovery_uses_real_local_finish_once(tmp_
     ]
     assert len(recovery_chat) == 1
     assert "Text alone cannot complete this daemon." in recovery_chat[0]["text"]
+    assert [(entry["role"], entry.get("kind")) for entry in chat] == [
+        ("user", "kickoff"),
+        ("assistant", None),
+        ("user", "completion_recovery"),
+        ("assistant", None),
+        ("user", "tool_results"),
+        ("assistant", None),
+    ]
+    assert chat[2]["text"] == recovery_chat[0]["text"]
+    assert "fake-recovery-finish" in chat[4]["text"]
 
     sends = [
         json.loads(line)
@@ -757,6 +824,172 @@ def test_detached_text_only_completion_recovery_uses_real_local_finish_once(tmp_
     ]
     assert [row["send_count"] for row in sends] == [1, 2, 3]
     assert len({row["session_id"] for row in sends}) == 1
+
+
+def test_detached_preexisting_malformed_completion_fails_closed(tmp_path):
+    """A malformed completion artifact cannot satisfy the final gate."""
+    run_dir = _make_run_dir(
+        tmp_path,
+        task="pre-existing malformed completion",
+        max_turns=1,
+    )
+    common = _daemon_common_registration(run_dir)
+    run_dir.update_state(call_parameters={
+        "task": "pre-existing malformed completion", "tools": [], "mcp": [common],
+    })
+    completion_path = run_dir.path / "daemon_completion.json"
+    completion_path.write_text("{malformed", encoding="utf-8")
+
+    _spawn_lingtai_supervisor_via_adapter(
+        run_dir,
+        task="pre-existing malformed completion",
+        max_turns=1,
+        mcp=[common],
+    )
+    _poll_until(lambda: _disk_state(run_dir).get("state") == "failed", timeout=20)
+
+    assert completion_path.read_text(encoding="utf-8") == "{malformed"
+    state = _disk_state(run_dir)
+    assert "invalid completion signal" in state["error"]["message"]
+    assert "fake-response: task complete" in run_dir.result_path.read_text(
+        encoding="utf-8"
+    )
+    events = [
+        json.loads(line)
+        for line in run_dir.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    contract_failures = [
+        event for event in events
+        if event.get("event") == "daemon_completion_contract_failed"
+    ]
+    assert len(contract_failures) == 1
+    assert "invalid completion signal" in contract_failures[0]["error"]
+    assert not [
+        event for event in events
+        if event.get("event") == "daemon_completion_recovery"
+    ]
+
+
+def test_detached_text_only_completion_recovery_is_one_shot(tmp_path):
+    """A second text-only response after recovery fails without another prompt."""
+    report = tmp_path / "fake-send-report.jsonl"
+    run_dir = _make_run_dir(tmp_path, task="second text-only recovery", max_turns=4)
+    common = _daemon_common_registration(run_dir)
+    run_dir.update_state(call_parameters={
+        "task": "second text-only recovery", "tools": [], "mcp": [common],
+    })
+
+    _spawn_lingtai_supervisor_via_adapter(
+        run_dir,
+        task="second text-only recovery",
+        max_turns=4,
+        mcp=[common],
+        extra_env={
+            "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SCENARIO": "text-only-recovery-still-text",
+            "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_REPORT": str(report),
+        },
+    )
+    _poll_until(lambda: _disk_state(run_dir).get("state") == "failed", timeout=20)
+
+    assert not (run_dir.path / "daemon_completion.json").exists()
+    assert "Still only text after recovery." in run_dir.result_path.read_text(
+        encoding="utf-8"
+    )
+    events = [
+        json.loads(line)
+        for line in run_dir.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len([
+        event for event in events
+        if event.get("event") == "daemon_completion_recovery"
+    ]) == 1
+    chat = [
+        json.loads(line)
+        for line in run_dir.chat_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len([
+        entry for entry in chat
+        if entry.get("role") == "user" and entry.get("kind") == "completion_recovery"
+    ]) == 1
+    sends = [
+        json.loads(line)
+        for line in report.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["send_count"] for row in sends] == [1, 2]
+
+
+@pytest.mark.parametrize("status", ["failed", "incomplete"])
+def test_detached_completion_recovery_rejects_non_done_finish_status(tmp_path, status):
+    """Recovery may record truthful non-done completion, but cannot mark done."""
+    run_dir = _make_run_dir(tmp_path, task=f"{status} recovery", max_turns=4)
+    common = _daemon_common_registration(run_dir)
+    run_dir.update_state(call_parameters={
+        "task": f"{status} recovery", "tools": [], "mcp": [common],
+    })
+
+    _spawn_lingtai_supervisor_via_adapter(
+        run_dir,
+        task=f"{status} recovery",
+        max_turns=4,
+        mcp=[common],
+        extra_env={
+            "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SCENARIO": "completion-recovery-terminal-status",
+            "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_COMPLETION_STATUS": status,
+        },
+    )
+    _poll_until(lambda: _disk_state(run_dir).get("state") == "failed", timeout=20)
+
+    completion = json.loads(
+        (run_dir.path / "daemon_completion.json").read_text(encoding="utf-8")
+    )
+    assert completion["status"] == status
+    assert completion["run_id"] == run_dir.run_id
+    assert completion["reason"] == f"truthful {status}"
+    state = _disk_state(run_dir)
+    assert state["state"] == "failed"
+    assert f"finish status was {status!r}" in state["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("max_turns", "expected_state", "expected_recoveries"),
+    [(1, "failed", 0), (2, "done", 1)],
+)
+def test_detached_completion_recovery_respects_max_turn_headroom(
+    tmp_path, max_turns, expected_state, expected_recoveries
+):
+    """Recovery needs one counted turn for the returned finish batch."""
+    run_dir = _make_run_dir(
+        tmp_path,
+        task=f"max-turn recovery {max_turns}",
+        max_turns=max_turns,
+    )
+    common = _daemon_common_registration(run_dir)
+    run_dir.update_state(call_parameters={
+        "task": f"max-turn recovery {max_turns}", "tools": [], "mcp": [common],
+    })
+
+    _spawn_lingtai_supervisor_via_adapter(
+        run_dir,
+        task=f"max-turn recovery {max_turns}",
+        max_turns=max_turns,
+        mcp=[common],
+        extra_env={
+            "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SCENARIO": "text-only-completion-recovery",
+        },
+    )
+    _poll_until(lambda: _disk_state(run_dir).get("state") == expected_state, timeout=20)
+
+    events = [
+        json.loads(line)
+        for line in run_dir.events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len([
+        event for event in events
+        if event.get("event") == "daemon_completion_recovery"
+    ]) == expected_recoveries
+    assert (run_dir.path / "daemon_completion.json").exists() is (
+        expected_state == "done"
+    )
 
 
 def test_detached_recovery_after_side_effect_does_not_replay_tool(tmp_path):
@@ -773,7 +1006,7 @@ def test_detached_recovery_after_side_effect_does_not_replay_tool(tmp_path):
             "task": "side-effect recovery", "tools": ["file"], "mcp": [common],
         }
     )
-    proc = _spawn_lingtai_supervisor(
+    _spawn_lingtai_supervisor_via_adapter(
         run_dir,
         task="side-effect recovery",
         tools=["file"],
@@ -783,13 +1016,7 @@ def test_detached_recovery_after_side_effect_does_not_replay_tool(tmp_path):
             "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SCENARIO": "side-effect-completion-recovery",
         },
     )
-    try:
-        _poll_until(lambda: _disk_state(run_dir).get("state") == "done", timeout=20)
-        proc.wait(timeout=5)
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
-            proc.wait(timeout=5)
+    _poll_until(lambda: _disk_state(run_dir).get("state") == "done", timeout=20)
 
     assert (
         run_dir.path.parent.parent / "recovery-side-effect.txt"
@@ -822,7 +1049,7 @@ def test_detached_reclaim_during_completion_recovery_cancels_without_done(tmp_pa
     run_dir.update_state(call_parameters={
         "task": "cancel recovery", "tools": [], "mcp": [common],
     })
-    proc = _spawn_lingtai_supervisor(
+    _spawn_lingtai_supervisor_via_adapter(
         run_dir,
         task="cancel recovery",
         max_turns=4,
@@ -834,18 +1061,13 @@ def test_detached_reclaim_during_completion_recovery_cancels_without_done(tmp_pa
             "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_REPORT": str(report),
         },
     )
-    try:
-        _poll_until(
-            lambda: report.exists()
-            and len(report.read_text(encoding="utf-8").splitlines()) >= 2,
-            timeout=10,
-        )
-        control.submit_request(run_dir.path, "reclaim", {})
-        _poll_until(lambda: _disk_state(run_dir).get("state") == "cancelled", timeout=15)
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
-            proc.wait(timeout=5)
+    _poll_until(
+        lambda: report.exists()
+        and len(report.read_text(encoding="utf-8").splitlines()) >= 2,
+        timeout=10,
+    )
+    control.submit_request(run_dir.path, "reclaim", {})
+    _poll_until(lambda: _disk_state(run_dir).get("state") == "cancelled", timeout=15)
 
     state = _disk_state(run_dir)
     assert state["state"] == "cancelled"
