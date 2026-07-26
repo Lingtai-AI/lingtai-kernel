@@ -532,6 +532,188 @@ class TestSQLiteEventIndex:
         finally:
             writer.close()
 
+    @staticmethod
+    def _fail_live_read_only_connect(monkeypatch, *, message="attempt to write a readonly database", on_immutable=None):
+        """Force the live ``mode=ro`` open to fail while leaving immutable opens real.
+
+        Returns ``(attempted, opened)``: every ``file:`` URI the reader tried, and the
+        real connections an ``immutable=1`` retry actually obtained.  Keeping the
+        immutable branch real is what makes these tests bite — a fallback that should
+        not happen otherwise returns plausible stale rows instead of raising.
+        ``on_immutable`` runs just before that retry connects, to simulate a writer
+        winning the race between the offline gate and the immutable open.
+        """
+        attempted: list[str] = []
+        opened: list[sqlite3.Connection] = []
+        real_connect = sqlite3.connect
+
+        def fake_connect(target, *args, **kwargs):
+            if not (isinstance(target, str) and target.startswith("file:")):
+                return real_connect(target, *args, **kwargs)
+            attempted.append(target)
+            if "immutable=1" not in target:
+                raise sqlite3.OperationalError(message)
+            if on_immutable is not None:
+                on_immutable()
+            conn = real_connect(target, *args, **kwargs)
+            opened.append(conn)
+            return conn
+
+        monkeypatch.setattr(sqlite3, "connect", fake_connect)
+        return attempted, opened
+
+    def test_read_only_open_does_not_fall_back_to_immutable_when_parent_is_writable(self, tmp_path, monkeypatch):
+        """A writable parent can grow a WAL at any moment, so immutable must stay out.
+
+        This is the live time-of-check/time-of-use route: a pre-check sees no WAL, yet
+        nothing stops a writer from committing one before the immutable open lands.
+        """
+        logs = tmp_path / "logs"
+        sqlite_file = logs / "log.sqlite"
+        seed = SQLiteEventIndex(sqlite_file)
+        seed.log_event({"type": "checkpointed", "ts": 1})
+        seed.close()
+        assert not sqlite_file.with_name(sqlite_file.name + "-wal").exists()
+        assert os.access(logs, os.W_OK)
+
+        attempted, opened = self._fail_live_read_only_connect(monkeypatch)
+
+        reader = SQLiteEventIndex(sqlite_file, ensure=False)
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="readonly database"):
+                reader.query("SELECT type FROM events")
+        finally:
+            reader.close()
+
+        assert attempted == [f"{sqlite_file.resolve().as_uri()}?mode=ro"]
+        assert opened == []
+
+    def test_read_only_open_resolves_symlinks_before_checking_for_a_wal(self, tmp_path, monkeypatch):
+        """The WAL guard has to look beside the database SQLite actually opens.
+
+        POSIX-only: it needs symlinks plus directory mode bits that really deny writes,
+        which is not true on Windows and is not true for root.
+        """
+        if os.name != "posix":
+            pytest.skip("directory mode bits only deny writes on POSIX")
+        if os.geteuid() == 0:
+            pytest.skip("root bypasses directory mode bits")
+
+        store = tmp_path / "store"
+        store.mkdir()
+        real = store / "real.sqlite"
+        link = store / "link.sqlite"
+        link.symlink_to(real.name)
+
+        seed = SQLiteEventIndex(real)
+        seed.log_event({"type": "checkpointed", "ts": 1})
+        seed.close()
+        assert not real.with_name(real.name + "-wal").exists()
+
+        writer = SQLiteEventIndex(real)
+        try:
+            # One row is checkpointed into the database and one is live in the WAL, so
+            # an immutable read looks like an ordinary success while silently dropping
+            # the second row.  The open writer keeps that real WAL beside the resolved
+            # database while the unresolved input name has none: the confusion under
+            # test.  The directory is read-only, so the offline gate alone cannot
+            # decide this case and only the resolved WAL path can.
+            writer.log_event({"type": "uncheckpointed", "ts": 2})
+            assert real.with_name(real.name + "-wal").exists()
+            assert not link.with_name(link.name + "-wal").exists()
+            store.chmod(0o555)
+
+            attempted, opened = self._fail_live_read_only_connect(monkeypatch)
+            reader = SQLiteEventIndex(link, ensure=False)
+            try:
+                with pytest.raises(sqlite3.OperationalError, match="readonly database"):
+                    reader.query("SELECT type FROM events")
+            finally:
+                reader.close()
+
+            assert attempted == [f"{real.resolve().as_uri()}?mode=ro"]
+            assert opened == []
+        finally:
+            # Restore writes before closing, so the writer can checkpoint and clean up.
+            store.chmod(0o755)
+            writer.close()
+
+    def test_read_only_open_does_not_fall_back_for_unrelated_operational_errors(self, tmp_path, monkeypatch):
+        """Only the read-only-sidecar failure earns the offline escape hatch.
+
+        POSIX-only for the same directory-mode-bit reason as the other offline tests.
+        """
+        if os.name != "posix":
+            pytest.skip("directory mode bits only deny writes on POSIX")
+        if os.geteuid() == 0:
+            pytest.skip("root bypasses directory mode bits")
+
+        logs = tmp_path / "logs"
+        sqlite_file = logs / "log.sqlite"
+        seed = SQLiteEventIndex(sqlite_file)
+        seed.log_event({"type": "offline", "ts": 1})
+        seed.close()
+        assert not sqlite_file.with_name(sqlite_file.name + "-wal").exists()
+
+        logs.chmod(0o555)
+        try:
+            attempted, opened = self._fail_live_read_only_connect(monkeypatch, message="database is locked")
+            reader = SQLiteEventIndex(sqlite_file, ensure=False)
+            try:
+                with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                    reader.query("SELECT type FROM events")
+            finally:
+                reader.close()
+
+            assert attempted == [f"{sqlite_file.resolve().as_uri()}?mode=ro"]
+            assert opened == []
+        finally:
+            logs.chmod(0o755)
+
+    def test_read_only_open_rejects_immutable_when_the_store_stops_looking_offline(self, tmp_path, monkeypatch):
+        """State changing during the retry must close the reader, not serve a snapshot.
+
+        POSIX-only for the same directory-mode-bit reason as the other offline tests.
+        """
+        if os.name != "posix":
+            pytest.skip("directory mode bits only deny writes on POSIX")
+        if os.geteuid() == 0:
+            pytest.skip("root bypasses directory mode bits")
+
+        logs = tmp_path / "logs"
+        sqlite_file = logs / "log.sqlite"
+        wal_file = sqlite_file.with_name(sqlite_file.name + "-wal")
+        seed = SQLiteEventIndex(sqlite_file)
+        seed.log_event({"type": "checkpointed", "ts": 1})
+        seed.close()
+        assert not wal_file.exists()
+
+        logs.chmod(0o555)
+        try:
+            def writer_wins_the_race():
+                # Between the offline gate and the immutable open the store becomes
+                # writable and grows a WAL, so the snapshot may already be stale.
+                logs.chmod(0o755)
+                wal_file.touch()
+
+            attempted, opened = self._fail_live_read_only_connect(
+                monkeypatch, on_immutable=writer_wins_the_race
+            )
+            reader = SQLiteEventIndex(sqlite_file, ensure=False)
+            try:
+                with pytest.raises(sqlite3.OperationalError, match="readonly database"):
+                    reader.query("SELECT type FROM events")
+            finally:
+                reader.close()
+
+            base = sqlite_file.resolve().as_uri()
+            assert attempted == [f"{base}?mode=ro", f"{base}?mode=ro&immutable=1"]
+            assert len(opened) == 1
+            with pytest.raises(sqlite3.ProgrammingError):
+                opened[0].execute("SELECT 1")
+        finally:
+            logs.chmod(0o755)
+
     def test_query_accepts_read_only_cte_and_explain(self, tmp_path):
         index = SQLiteEventIndex(tmp_path / "logs" / "log.sqlite")
         try:

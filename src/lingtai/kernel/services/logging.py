@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -222,6 +223,50 @@ class SQLiteEventIndex:
                 self._ensure_schema(conn)
         return self._conn
 
+    @staticmethod
+    def _is_read_only_sidecar_error(exc: sqlite3.OperationalError) -> bool:
+        """Whether ``exc`` is SQLite refusing to create the read sidecars it needs.
+
+        That specific failure is the only one the offline retry answers.  Any other
+        ``OperationalError`` (a lock, a missing table, corruption) says nothing about
+        the storage being read-only, so it must stay visible.  Real errors carry
+        ``sqlite_errorname`` (``SQLITE_READONLY_DIRECTORY`` in practice); the message
+        check keeps older builds and re-raised errors working.
+        """
+        name = getattr(exc, "sqlite_errorname", "") or ""
+        return name.startswith("SQLITE_READONLY") or "readonly database" in str(exc)
+
+    @staticmethod
+    def _is_quiescent_offline_store(db: Path) -> bool:
+        """Whether ``db`` currently looks like archived storage no writer can touch.
+
+        Both halves are checked against the *resolved* database: a ``-wal`` beside it
+        may hold uncheckpointed rows an immutable read would silently drop, and a
+        parent that ordinary writers can still write to may grow one at any moment.
+        Read-only means no write bits at all, or a filesystem mounted read-only where
+        the platform reports it -- ``statvfs``/``ST_RDONLY`` are absent on some
+        platforms, where the answer is simply "not known to be read-only".
+
+        This is a best-effort snapshot, not a lock: root and ACLs can write anyway,
+        and a mount can be flipped, which is why the caller re-checks after opening.
+        """
+        if db.with_name(db.name + "-wal").exists():
+            return False
+        parent = db.parent
+        try:
+            if not parent.stat().st_mode & 0o222:
+                return True
+        except OSError:
+            return False
+        statvfs = getattr(os, "statvfs", None)
+        st_rdonly = getattr(os, "ST_RDONLY", None)
+        if statvfs is None or st_rdonly is None:
+            return False
+        try:
+            return bool(statvfs(parent).f_flag & st_rdonly)
+        except OSError:
+            return False
+
     def _connect_read_only(self) -> sqlite3.Connection:
         """Open a reader, preferring live-safe ``mode=ro`` over immutable reads.
 
@@ -230,22 +275,41 @@ class SQLiteEventIndex:
         files and it fails outright on a genuinely read-only store (archived logs,
         read-only mount).  ``sqlite3.connect()`` is lazy and both real read-only
         callers skip schema creation, so probe the schema here instead of letting
-        the error surface mid-query.  Fall back to ``immutable=1`` only when no
-        ``-wal`` sidecar exists: with a WAL present, immutable reads would silently
-        hide uncheckpointed rows, so the original failure has to stay visible.
+        the error surface mid-query.
+
+        ``immutable=1`` tells SQLite the file cannot change, so it skips the WAL
+        entirely and a stale read looks exactly like a successful one.  It is
+        therefore an escape hatch for quiescent offline storage only, never a way to
+        read a live store: it is reached only when SQLite refused for the read-only
+        sidecar reason *and* the resolved store looks offline both before and after
+        the retry opens.  Anything else keeps the original failure visible.
         """
-        base = self.path.resolve().as_uri()
+        resolved = self.path.resolve()
+        base = resolved.as_uri()
         conn: sqlite3.Connection | None = None
         try:
             conn = sqlite3.connect(f"{base}?mode=ro", uri=True, check_same_thread=False)
             conn.execute("PRAGMA schema_version").fetchall()
             return conn
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
             if conn is not None:
                 conn.close()
-            if self.path.with_name(self.path.name + "-wal").exists():
+            if not self._is_read_only_sidecar_error(exc) or not self._is_quiescent_offline_store(resolved):
                 raise
-        return sqlite3.connect(f"{base}?mode=ro&immutable=1", uri=True, check_same_thread=False)
+            fallback = sqlite3.connect(f"{base}?mode=ro&immutable=1", uri=True, check_same_thread=False)
+            try:
+                fallback.execute("PRAGMA schema_version").fetchall()
+                still_offline = self._is_quiescent_offline_store(resolved)
+            except BaseException:
+                fallback.close()
+                raise
+            if not still_offline:
+                # A WAL appeared or the storage became writable while we were opening,
+                # so this snapshot may already be stale.  Narrower than a single
+                # pre-check, still not a lock: prefer the visible failure.
+                fallback.close()
+                raise
+            return fallback
 
     @staticmethod
     def _configure(conn: sqlite3.Connection) -> None:

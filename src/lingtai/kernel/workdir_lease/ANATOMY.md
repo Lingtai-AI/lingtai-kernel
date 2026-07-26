@@ -39,7 +39,7 @@ defined in the paired [`CONTRACT.md`](CONTRACT.md).
 - The SQLite event-index rebuild receives a `WorkdirLeasePort`, acquires it with
   `timeout=0`, and releases it in a single outer `finally` that covers every
   post-acquire step (temp-dir creation and the rebuild itself)
-  (`src/lingtai/kernel/services/logging.py:851-977`).
+  (`src/lingtai/kernel/services/logging.py:915-1041`).
 - The production adapters are `PosixWorkdirLeaseAdapter`
   (`src/lingtai/adapters/posix/workdir_lease.py`), mapped structurally by
   [`src/lingtai/adapters/posix/ANATOMY.md`](../../adapters/posix/ANATOMY.md),

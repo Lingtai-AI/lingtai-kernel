@@ -12,9 +12,9 @@ description: >
   digest output, or log redaction pitfalls. This is a nested skill-reference
   under `system-manual`, not a standalone catalog skill; its folder may carry
   companion scripts and assets as SQLite trace tooling grows.
-version: 1.2.1
+version: 1.2.2
 tags: [lingtai, system-manual, sqlite, log.sqlite, runtime-logs, trace, jsonl, daemon, trajectory, mining, event-log, improvement, pitfalls, observability, cheap-model]
-last_changed_at: 2026-07-19T00:00:00Z
+last_changed_at: 2026-07-25T00:00:00Z
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts/event_summary.py
@@ -53,8 +53,16 @@ SQL queries as the primary data access layer.
   target agent sidecar by explicit offline rebuild so normal turns and daemon
   runs do not pay recursive scan or live-rewrite costs.
 - **Live queries are snapshots.** Runtime writes use SQLite WAL mode. The query
-  path is intentionally non-mutating, so for a complete historical snapshot stop
-  the agent and run `log rebuild` before querying.
+  path never writes database content, but reading a live store can leave
+  persistent `-wal`/`-shm` sidecar files behind, so it is not filesystem-inert.
+  For a complete historical snapshot stop the agent and run `log rebuild` before
+  querying.
+- **Offline stores get one immutable retry.** If SQLite cannot create those read
+  sidecars — archived logs, a read-only mount — the reader retries once in
+  immutable mode, but only for storage that currently denies ordinary writers and
+  has no `-wal` beside the database. Immutable reads skip the WAL, so this is an
+  offline escape hatch and not a guarantee against a concurrent writer; on a
+  writable store the error is surfaced rather than risking a silently stale answer.
 - **Never paste secrets.** Logs and chat history can contain URLs, tokens,
   prompts, and user data. Redact before sharing.
 
