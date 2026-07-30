@@ -250,7 +250,15 @@ def test_no_candidate_error_is_terminal_without_aed_retry(tmp_path, monkeypatch)
     def fake_handle(_agent, _msg):
         calls["n"] += 1
         _agent._shutdown.set()
-        raise NoCandidateError("No eligible account remaining")
+        raise NoCandidateError(
+            "No eligible account remaining",
+            diagnostics={
+                "codex_account_pool_size": 2,
+                "codex_account_quota_read_error_count": 1,
+                "secret_path": "/tmp/token.json",
+                "no_candidate_token": "secret-token-value",
+            },
+        )
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     import lingtai.tools.soul.flow as soul_flow
@@ -261,7 +269,12 @@ def test_no_candidate_error_is_terminal_without_aed_retry(tmp_path, monkeypatch)
     assert calls["n"] == 1
     assert getattr(agent, "rebuilds", 0) == 0
     assert agent._asleep.is_set()
-    assert [name for name, _ in agent._logs].count("no_candidate_terminal") == 1
+    logs = [fields for name, fields in agent._logs if name == "no_candidate_terminal"]
+    assert len(logs) == 1
+    assert logs[0]["codex_account_pool_size"] == 2
+    assert logs[0]["codex_account_quota_read_error_count"] == 1
+    assert "/tmp/token.json" not in repr(logs[0])
+    assert "secret-token-value" not in repr(logs[0])
     assert not any(name == "aed_attempt" for name, _ in agent._logs)
     assert len(agent.reports) == 1
     assert agent.reports[0][0].args == ("No eligible account remaining",)

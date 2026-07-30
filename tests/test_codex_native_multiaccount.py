@@ -11,7 +11,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from lingtai.auth.codex_account_source import AccountCandidate, WeightedAccountSource
+from lingtai.auth.codex_account_source import (
+    AccountCandidate,
+    NoCandidateError,
+    WeightedAccountSource,
+)
 from lingtai.kernel.llm.interface import ChatInterface
 from lingtai.llm.openai.adapter import CodexOpenAIAdapter
 
@@ -482,6 +486,43 @@ def test_native_codex_nonempty_exhausted_pool_never_falls_back():
         chat.send("hello")
 
     assert source.calls == []
+    assert responses.calls == []
+
+
+def test_native_codex_no_candidate_reports_safe_quota_scan_counts(monkeypatch):
+    source = _SequenceSource("one.json", "two.json")
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, _managers("one.json", "two.json", "a.json"), responses)
+
+    def read_quota(auth_ref):
+        if auth_ref == "one.json":
+            raise OSError("quota unavailable")
+        return "invalid"
+
+    def no_candidate(**_kwargs):
+        raise NoCandidateError("No eligible account remaining")
+
+    monkeypatch.setattr(
+        "lingtai.llm.openai.codex_quota.read_remaining_percent", read_quota
+    )
+    monkeypatch.setattr(source, "select", no_candidate)
+
+    chat = adapter.create_chat("gpt-5.5", "system")
+    with pytest.raises(NoCandidateError) as excinfo:
+        chat.send("hello")
+
+    assert excinfo.value.diagnostic_fields() == {
+        "codex_account_pool_size": 2,
+        "codex_account_excluded_count": 0,
+        "codex_account_zero_quota_count": 0,
+        "codex_account_eligible_count": 2,
+        "codex_account_quota_target_count": 2,
+        "codex_account_quota_observed_count": 0,
+        "codex_account_quota_read_error_count": 1,
+        "codex_account_quota_invalid_count": 1,
+        "codex_account_quota_snapshot_complete": False,
+        "codex_account_legacy_fallback_allowed": False,
+    }
     assert responses.calls == []
 
 

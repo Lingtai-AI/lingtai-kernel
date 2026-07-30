@@ -14,7 +14,7 @@ import os
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 
 # ---------------------------------------------------------------------------
@@ -54,8 +54,61 @@ class AccountCandidate:
 # ---------------------------------------------------------------------------
 
 
+_NO_CANDIDATE_COUNT_FIELDS = frozenset(
+    {
+        "codex_account_pool_size",
+        "codex_account_excluded_count",
+        "codex_account_zero_quota_count",
+        "codex_account_eligible_count",
+        "codex_account_quota_target_count",
+        "codex_account_quota_observed_count",
+        "codex_account_quota_read_error_count",
+        "codex_account_quota_invalid_count",
+    }
+)
+_NO_CANDIDATE_BOOL_FIELDS = frozenset(
+    {
+        "codex_account_quota_snapshot_complete",
+        "codex_account_legacy_fallback_allowed",
+    }
+)
+
+
+def _safe_no_candidate_diagnostics(
+    diagnostics: dict[str, Any] | None,
+) -> dict[str, int | bool]:
+    safe: dict[str, int | bool] = {}
+    for key, value in (diagnostics or {}).items():
+        if key in _NO_CANDIDATE_COUNT_FIELDS:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                safe[key] = value
+        elif key in _NO_CANDIDATE_BOOL_FIELDS and isinstance(value, bool):
+            safe[key] = value
+    return safe
+
+
 class NoCandidateError(Exception):
-    """Every validated, non-excluded account is unavailable."""
+    """No usable account remains, with optional non-secret diagnostic fields."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostics: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self._diagnostics = _safe_no_candidate_diagnostics(diagnostics)
+
+    def diagnostic_fields(self) -> dict[str, int | bool]:
+        return dict(self._diagnostics)
+
+    def with_diagnostics(
+        self,
+        diagnostics: dict[str, Any] | None,
+    ) -> "NoCandidateError":
+        merged = dict(self._diagnostics)
+        merged.update(diagnostics or {})
+        return NoCandidateError(str(self), diagnostics=merged)
 
 
 # ---------------------------------------------------------------------------
