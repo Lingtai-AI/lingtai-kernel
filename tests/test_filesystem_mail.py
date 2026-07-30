@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 
 import pytest
@@ -203,8 +204,14 @@ class TestListen:
         (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
 
         received = []
+        received_event = threading.Event()
         svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
-        svc.listen(on_message=lambda p: received.append(p))
+
+        def on_message(payload):
+            received.append(payload)
+            received_event.set()
+
+        svc.listen(on_message=on_message)
 
         # Simulate incoming mail (another agent writes to our inbox)
         msg_dir = agent_dir / "mailbox" / "inbox" / "test-uuid-1"
@@ -214,8 +221,10 @@ class TestListen:
             "message": "hi",
         }))
 
-        time.sleep(1.0)
-        svc.stop()
+        try:
+            assert received_event.wait(timeout=3.0)
+        finally:
+            svc.stop()
         assert len(received) == 1
         assert received[0]["message"] == "hi"
 
@@ -866,6 +875,72 @@ def test_own_inbox_slice_rechecks_pseudo_outbox_between_chunks(tmp_path):
     # One more slice observes iterator exhaustion and resets the cursor.
     assert svc._poll_own_inbox_slice(on_message) is False
     assert received == ["own-1", "human-between-slices", "own-2"]
+
+
+def test_own_inbox_slice_time_budget_applies_to_seen_entries(tmp_path, monkeypatch):
+    """Seen-entry skips must not bypass the slice's wall-clock budget."""
+    import lingtai.adapters.posix.mail as mail_module
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for name in ["seen-1", "seen-2"]:
+        entry = inbox / name
+        entry.mkdir()
+        entries.append(entry)
+
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc._seen.update(entry.name for entry in entries)
+    svc._own_inbox_iter = iter(entries)
+
+    # start=0, the next loop boundary is already past deadline=0.1, and the
+    # final sample feeds slow-phase telemetry. The second entry must remain.
+    clock = iter([0.0, 1.0, 2.0])
+    monkeypatch.setattr(mail_module.time, "monotonic", lambda: next(clock))
+
+    assert svc._poll_own_inbox_slice(
+        lambda _payload: None,
+        budget_seconds=0.1,
+        max_entries=200,
+    ) is True
+    assert next(svc._own_inbox_iter) == entries[1]
+
+
+def test_poll_loop_rechecks_pseudo_only_after_active_own_inbox_slice(
+    tmp_path,
+    monkeypatch,
+):
+    """An idle own-inbox slice must not double the pseudo-outbox baseline I/O."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    for did_work, expected_pseudo_calls in [(False, 1), (True, 2)]:
+        agent_dir = _make_agent_dir(tmp_path, f"agent-{did_work}")
+        calls = {"pseudo": 0, "own": 0}
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+
+        def poll_pseudo(_on_message):
+            calls["pseudo"] += 1
+
+        def poll_own(_on_message):
+            calls["own"] += 1
+            svc._poll_stop.set()
+            return did_work
+
+        monkeypatch.setattr(svc, "_poll_pseudo_outboxes", poll_pseudo)
+        monkeypatch.setattr(svc, "_poll_own_inbox_slice", poll_own)
+
+        svc.listen(on_message=lambda _payload: None)
+        thread = svc._poll_thread
+        assert thread is not None
+        try:
+            thread.join(timeout=2.0)
+            assert not thread.is_alive()
+        finally:
+            svc.stop()
+
+        assert calls == {"pseudo": expected_pseudo_calls, "own": 1}
 
 
 def test_mail_poll_slow_phase_telemetry_is_body_free(tmp_path, caplog):

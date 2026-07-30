@@ -215,10 +215,11 @@ class PosixFilesystemMailAdapter(MailTransportPort):
 
                 # Phase 2 — own inbox, sliced. A large historical inbox on a
                 # slow external volume must not monopolize the poll thread for
-                # minutes; after every bounded slice we immediately check
-                # pseudo outboxes again before sleeping.
-                self._poll_own_inbox_slice(on_message)
-                self._poll_pseudo_outboxes(on_message)
+                # minutes. Recheck pseudo outboxes only after this slice
+                # examined entries; an idle slice must not double the baseline
+                # external-volume scan.
+                if self._poll_own_inbox_slice(on_message):
+                    self._poll_pseudo_outboxes(on_message)
 
                 self._poll_stop.wait(0.5)
 
@@ -254,10 +255,10 @@ class PosixFilesystemMailAdapter(MailTransportPort):
     ) -> bool:
         """Poll a bounded slice of own inbox entries.
 
-        Returns True when there is more iterator work to continue in a later
-        poll tick. Keeping iterator progress turns the historical own-inbox
-        scan into small slices, letting pseudo-agent outboxes be checked
-        between chunks.
+        Returns True when this slice examined at least one directory entry.
+        Keeping iterator progress turns the historical own-inbox scan into
+        small slices, letting pseudo-agent outboxes be checked between chunks
+        without scanning them twice on an idle tick.
         """
         budget = self._own_inbox_slice_seconds if budget_seconds is None else budget_seconds
         limit = self._own_inbox_slice_entries if max_entries is None else max_entries
@@ -280,11 +281,16 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                 self._own_inbox_iter = iter(self._inbox_dir.iterdir())
 
             while not self._poll_stop.is_set() and visited < limit:
+                # Every branch below—including cheap `_seen` skips—must pay
+                # the time budget before another directory entry is fetched.
+                # One entry is always allowed so the cursor can make progress.
+                if visited and time.monotonic() >= deadline:
+                    break
                 try:
                     entry = next(self._own_inbox_iter)
                 except StopIteration:
                     self._reset_own_inbox_iter()
-                    return False
+                    return visited > 0
 
                 visited += 1
                 # _seen only holds handled directory names or pseudo-claim
@@ -304,11 +310,9 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                         pass
                     self._seen.add(entry.name)
 
-                if time.monotonic() >= deadline:
-                    break
         except OSError:
             self._reset_own_inbox_iter()
-            return False
+            return visited > 0
         finally:
             self._log_slow_mail_phase(
                 "own_inbox_slice",
@@ -319,7 +323,7 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                 has_more=self._own_inbox_iter is not None,
             )
 
-        return self._own_inbox_iter is not None
+        return visited > 0
 
     def _reset_own_inbox_iter(self) -> None:
         iterator = self._own_inbox_iter
