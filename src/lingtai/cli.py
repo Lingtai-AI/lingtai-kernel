@@ -204,6 +204,22 @@ def _check_duplicate_process(working_dir: Path) -> None:
     but still visible. The concrete process-table mechanism lives behind the
     platform-selected ``AgentProcessScanPort``; an unavailable scan falls
     through to the lease, which is the exclusion authority.
+
+    Both this process and its launcher parent are excluded. On Windows a venv's
+    ``Scripts\\python.exe`` is a launcher stub that runs the base interpreter as
+    a CHILD process carrying a byte-identical command line, so the agent code
+    runs in the child while the stub stays visible in the process table:
+
+        PID 45676  ppid=23408  "…\\venv\\Scripts\\python.exe" -m lingtai run <dir>
+        PID 36624  ppid=45676  "…\\Python311\\python.exe"     -m lingtai run <dir>
+
+    Skipping only ``os.getpid()`` left the stub matching, so the guard reported
+    its own launcher and refused to boot — deterministically, for every agent
+    launched as ``<venv python> -m lingtai run <dir>``. Excluding the parent
+    cannot mask a genuine duplicate: a real second agent is not this process's
+    own parent, and the workdir lease remains the exclusion authority either
+    way. Only the immediate parent is excluded because the Port observes
+    ``(pid, command)`` and deliberately exposes no parent links to walk.
     """
     from lingtai.adapters.process_scan import select_agent_process_scan
 
@@ -211,9 +227,9 @@ def _check_duplicate_process(working_dir: Path) -> None:
     if scan is None:
         return  # no scan mechanism on this platform — the lease is the guard
     abs_dir = str(working_dir.resolve())
-    my_pid = os.getpid()
+    own_pids = {os.getpid(), os.getppid()}
     for pid, command in scan.iter_process_commands():
-        if pid == my_pid:
+        if pid in own_pids:
             continue
         if match_agent_run(command, abs_dir) is None:
             continue

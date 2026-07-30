@@ -614,3 +614,72 @@ def test_check_duplicate_process_excludes_own_pid(tmp_path):
     ps_out = _ps_line(os.getpid(), codex.resolve()) + "\n"
     with _posix_scan_pinned(), patch("subprocess.check_output", return_value=ps_out):
         _check_duplicate_process(codex)
+
+
+def test_check_duplicate_process_excludes_launcher_parent_pid(tmp_path):
+    """This process's own launcher parent must never count as a duplicate.
+
+    Regression: a venv launcher stub runs the real interpreter as a child with a
+    byte-identical command line, so the stub is our parent AND matches the run
+    line. Excluding only `os.getpid()` made the guard report its own launcher.
+    """
+    from lingtai.cli import _check_duplicate_process
+
+    codex = tmp_path / "codex"
+    codex.mkdir()
+
+    ps_out = _ps_line(os.getppid(), codex.resolve()) + "\n"
+    with _posix_scan_pinned(), patch("subprocess.check_output", return_value=ps_out):
+        _check_duplicate_process(codex)
+
+
+def test_check_duplicate_process_still_detects_third_party_beside_own_chain(tmp_path):
+    """Excluding self+parent must not blind the guard to a real duplicate."""
+    from lingtai.cli import _check_duplicate_process
+
+    codex = tmp_path / "codex"
+    codex.mkdir()
+
+    ps_out = (
+        _ps_line(os.getpid(), codex.resolve())
+        + "\n"
+        + _ps_line(os.getppid(), codex.resolve())
+        + "\n"
+        + _ps_line(99999, codex.resolve())
+        + "\n"
+    )
+    with _posix_scan_pinned(), patch("subprocess.check_output", return_value=ps_out):
+        with pytest.raises(SystemExit):
+            _check_duplicate_process(codex)
+
+
+def test_windows_venv_launcher_stub_is_not_a_duplicate(tmp_path, monkeypatch):
+    """The real Windows failure: venv stub (our parent) + base interpreter (us).
+
+    Both carry an identical `-m lingtai run <dir>` command line. Observed as
+    PID 45676 (stub, ppid 23408) launching PID 36624 (base interpreter), which
+    is where the agent code runs -- so the guard saw 45676 and refused to boot.
+    """
+    import json
+
+    import lingtai.adapters.process_scan as selector
+    import lingtai.adapters.windows.process_scan as win_module
+    from lingtai.cli import _check_duplicate_process
+
+    working_dir = tmp_path / "agent"
+    working_dir.mkdir()
+    resolved = working_dir.resolve()
+    stub = f'"C:\\venv\\Scripts\\python.exe" -m lingtai run {resolved}'
+    base = f'"C:\\Python311\\python.exe" -m lingtai run {resolved}'
+    payload = json.dumps(
+        [
+            {"ProcessId": os.getppid(), "CommandLine": stub},
+            {"ProcessId": os.getpid(), "CommandLine": base},
+        ]
+    )
+
+    monkeypatch.setattr(selector.sys, "platform", "win32")
+    monkeypatch.setattr(win_module.shutil, "which", lambda name: "pwsh")
+    monkeypatch.setattr(win_module.subprocess, "check_output", lambda *a, **k: payload)
+    # Must NOT raise: every match belongs to this process's own launch chain.
+    _check_duplicate_process(working_dir)
