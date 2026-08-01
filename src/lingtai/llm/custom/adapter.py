@@ -34,10 +34,15 @@ def create_custom_adapter(
     for Anthropic or Gemini backends.
     """
     wire_api = kwargs.pop("wire_api", None)
+    responses_transport = kwargs.pop("responses_transport", None)
     use_responses = kwargs.pop("use_responses", None)
     force_responses = kwargs.pop("force_responses", None)
 
     if api_compat == "gemini":
+        if responses_transport is not None:
+            raise ValueError(
+                "responses_transport is scoped to custom OpenAI-compatible Responses"
+            )
         if wire_api is not None and wire_api != "auto":
             raise ValueError(
                 "wire_api is scoped to OpenAI-compatible providers; "
@@ -48,6 +53,10 @@ def create_custom_adapter(
             kwargs["default_headers"] = default_headers
         return GeminiAdapter(api_key=api_key, **kwargs)
     elif api_compat == "anthropic":
+        if responses_transport is not None:
+            raise ValueError(
+                "responses_transport is scoped to custom OpenAI-compatible Responses"
+            )
         if wire_api is not None and wire_api != "auto":
             raise ValueError(
                 "wire_api is scoped to OpenAI-compatible providers; "
@@ -68,6 +77,8 @@ def create_custom_adapter(
             oa_kwargs["default_headers"] = default_headers
         if wire_api is not None:
             oa_kwargs["wire_api"] = wire_api
+        if responses_transport is not None:
+            oa_kwargs["responses_transport"] = responses_transport
         if use_responses is not None:
             oa_kwargs["use_responses"] = use_responses
         if force_responses is not None:

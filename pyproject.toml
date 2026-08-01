@@ -19,7 +19,9 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.27",
-    "openai>=1.0",
+    # Responses WebSocket v2 uses ``client.responses.connect()``, introduced
+    # in openai 2.22. The realtime extra supplies its direct websockets runtime.
+    "openai[realtime]>=2.22.0",
     "anthropic>=0.40",
     "google-genai>=1.0",
     # Official MCP Python SDK v2 (protocol 2026-07-28). The supported range is

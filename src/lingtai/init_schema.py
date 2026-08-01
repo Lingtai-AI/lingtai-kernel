@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import logging
 
-from lingtai.kernel.config import THINKING_LEVELS, THINKING_PROVIDERS
+from lingtai.kernel.config import (
+    RESPONSES_TRANSPORTS,
+    THINKING_LEVELS,
+    THINKING_PROVIDERS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +166,9 @@ LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # ``chat_completions``/``responses`` force the respective wire path even
     # for custom base URLs. Scoped to OpenAI-compatible providers.
     "wire_api": str,
+    # Transport for custom OpenAI-compatible Responses. HTTP is the default;
+    # WebSocket v2 is an explicit opt-in.
+    "responses_transport": str,
     # Common Codex service tier; the factory validates supported values.
     "service_tier": str,
 }
@@ -176,6 +183,7 @@ LLM_PASS_THROUGH_KNOWN: set[str] = {
     "default_headers",
     "service_tier",
     "wire_api",
+    "responses_transport",
 }
 LLM_KNOWN: set[str] = (
     set(LLM_REQUIRED) | set(LLM_OPTIONAL) | LLM_SPECIAL_KNOWN | LLM_PASS_THROUGH_KNOWN
@@ -407,6 +415,25 @@ def validate_init(data: dict) -> list[str]:
                     f"provider={llm.get('provider')!r}"
                     + (f" api_compat={llm.get('api_compat')!r}" if llm.get("api_compat") else "")
                 )
+    if "responses_transport" in llm:
+        transport = llm["responses_transport"]
+        if transport not in RESPONSES_TRANSPORTS:
+            raise ValueError(
+                "manifest.llm.responses_transport: expected one of "
+                f"{', '.join(RESPONSES_TRANSPORTS)}, got {transport!r}"
+            )
+        provider = str(llm.get("provider") or "").lower()
+        api_compat = str(llm.get("api_compat") or "").lower()
+        wire_api = str(llm.get("wire_api") or "").lower()
+        if not (
+            provider == "custom"
+            and api_compat == "openai"
+            and wire_api == "responses"
+        ):
+            raise ValueError(
+                "manifest.llm.responses_transport is supported only for "
+                "provider='custom', api_compat='openai', wire_api='responses'"
+            )
     if "thinking" in llm:
         if llm["provider"].lower() not in THINKING_PROVIDERS:
             raise ValueError(

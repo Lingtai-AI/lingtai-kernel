@@ -39,7 +39,7 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from .config import THINKING_LEVELS, THINKING_PROVIDERS
+from .config import RESPONSES_TRANSPORTS, THINKING_LEVELS, THINKING_PROVIDERS
 
 log = logging.getLogger(__name__)
 
@@ -370,6 +370,22 @@ def load_preset(
             raise ValueError(
                 f"preset {name!r} ({p}): manifest.llm.thinking must be one of "
                 f"{', '.join(THINKING_LEVELS)}"
+            )
+    if "responses_transport" in llm:
+        transport = llm["responses_transport"]
+        if transport not in RESPONSES_TRANSPORTS:
+            raise ValueError(
+                f"preset {name!r} ({p}): manifest.llm.responses_transport "
+                f"must be one of {', '.join(RESPONSES_TRANSPORTS)}"
+            )
+        if not (
+            str(llm.get("provider") or "").lower() == "custom"
+            and str(llm.get("api_compat") or "").lower() == "openai"
+            and str(llm.get("wire_api") or "").lower() == "responses"
+        ):
+            raise ValueError(
+                f"preset {name!r} ({p}): manifest.llm.responses_transport "
+                "requires custom OpenAI-compatible Responses"
             )
 
     caps = manifest.get("capabilities", {})

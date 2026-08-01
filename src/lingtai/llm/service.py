@@ -117,6 +117,9 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     # ``chat_completions``/``responses`` explicitly select the wire path even
     # for custom base URLs. Scoped to OpenAI-compatible adapters.
     "wire_api",
+    # Explicit HTTP vs Responses WebSocket v2 selection for custom OpenAI
+    # Responses providers.
+    "responses_transport",
 )
 _PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS = ("compact_threshold",)
 

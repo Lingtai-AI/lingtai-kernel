@@ -19,6 +19,10 @@ THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 # preset validator and init-schema validator share one source of truth.
 THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 
+# Explicit transport choices for custom OpenAI-compatible Responses sessions.
+# HTTP remains the absence/default behavior; WebSocket v2 is opt-in.
+RESPONSES_TRANSPORTS = ("http", "websocket")
+
 # Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
 # agent-configurable. An agent must not be able to raise its own molt
 # thresholds (or defeat them entirely) to avoid molting under pressure, so the

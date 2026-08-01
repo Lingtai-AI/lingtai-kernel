@@ -51,6 +51,21 @@ from lingtai.kernel.token_counter import count_tokens
 logger = get_logger()
 
 
+_RESPONSES_WEBSOCKET_BETA_HEADER = "responses_websockets=2026-02-06"
+
+
+class ResponsesWebSocketUnsupportedError(RuntimeError):
+    """The configured upstream rejected the Responses WebSocket handshake."""
+
+
+class ResponsesWebSocketRequestError(RuntimeError):
+    """A Responses WebSocket request failed after transport selection."""
+
+
+class ResponsesWebSocketConfigurationError(RuntimeError):
+    """The local OpenAI SDK/runtime cannot provide Responses WebSocket v2."""
+
+
 class _OpenAIToolPairingError(ValueError):
     """Sanitized structural failure at the Chat Completions wire boundary."""
 
@@ -1910,6 +1925,8 @@ class OpenAIResponsesSession(ChatSession):
         prompt_cache_key: str | None = None,
         context_window: int = 0,
         stateless_replay: bool = False,
+        websocket_v2: bool = False,
+        upstream_base_url: str | None = None,
     ):
         self._client = client
         self._model = model
@@ -1919,6 +1936,19 @@ class OpenAIResponsesSession(ChatSession):
         self._extra_kwargs = extra_kwargs
         self._response_id: str | None = previous_response_id
         self._stateless_replay = bool(stateless_replay)
+        self._websocket_v2 = bool(websocket_v2)
+        if self._websocket_v2 and not self._stateless_replay:
+            raise ValueError("Responses WebSocket v2 requires stateless replay support")
+        self._ws_connection = None
+        self._remote_entry_count = 0
+        self._remote_prefix: list[dict] = []
+        parsed_upstream = urlsplit(str(upstream_base_url or ""))
+        try:
+            self._upstream_host = parsed_upstream.hostname or "configured upstream"
+            if parsed_upstream.port is not None:
+                self._upstream_host += f":{parsed_upstream.port}"
+        except ValueError:
+            self._upstream_host = "configured upstream"
         self._compact_threshold = _validate_compact_threshold(compact_threshold)
         self._interface = interface or ChatInterface()
         # Optional OpenAI Responses ``prompt_cache_key`` — opts the request
@@ -2061,6 +2091,314 @@ class OpenAIResponsesSession(ChatSession):
         """
         return to_responses_input(self._interface)
 
+    def _websocket_wire_plan(self) -> tuple[list[dict], str | None]:
+        """Choose full replay or a strict-additive continuation frame."""
+        if not self._response_id or self._remote_entry_count == 0:
+            return self._replay_input_items(), None
+        current = self._interface.to_dict()
+        if (
+            len(current) < self._remote_entry_count
+            or current[: self._remote_entry_count] != self._remote_prefix
+        ):
+            return self._replay_input_items(), None
+        delta = ChatInterface.from_dict(current[self._remote_entry_count :])
+        return to_responses_input(delta), self._response_id
+
+    def _mark_websocket_synced(self, response_id: str) -> None:
+        # Snapshot first, then publish the continuation tuple together. If
+        # canonical serialization fails after the provider completed, retain
+        # the previous known-good chain instead of exposing a half-updated id.
+        remote_prefix = self._interface.to_dict()
+        remote_entry_count = len(remote_prefix)
+        self._response_id = response_id
+        self._remote_prefix = remote_prefix
+        self._remote_entry_count = remote_entry_count
+
+    def _clear_websocket_chain(self) -> None:
+        self._response_id = None
+        self._remote_entry_count = 0
+        self._remote_prefix = []
+
+    def _close_websocket(self) -> None:
+        connection = self._ws_connection
+        self._ws_connection = None
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+    def _unsupported_websocket_error(self) -> ResponsesWebSocketUnsupportedError:
+        return ResponsesWebSocketUnsupportedError(
+            f"Upstream {self._upstream_host} does not support Responses WebSocket v2 "
+            "or rejected the WebSocket handshake. Set responses_transport to 'http'."
+        )
+
+    @staticmethod
+    def _websocket_handshake_status(exc: BaseException) -> int | None:
+        status = getattr(exc, "status_code", None)
+        response = getattr(exc, "response", None)
+        if status is None and response is not None:
+            status = getattr(response, "status_code", None)
+            if status is None:
+                status = getattr(response, "status", None)
+        try:
+            return int(status) if status is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _is_websocket_handshake_rejection(cls, exc: BaseException) -> bool:
+        return cls._websocket_handshake_status(exc) in {
+            400,
+            403,
+            404,
+            405,
+            406,
+            410,
+            426,
+            501,
+        }
+
+    @staticmethod
+    def _is_websocket_runtime_missing(exc: BaseException) -> bool:
+        current: BaseException | None = exc
+        for _ in range(4):
+            if current is None:
+                break
+            message = str(current).lower()
+            if "openai[realtime]" in message or "no module named 'websockets'" in message:
+                return True
+            current = current.__cause__
+        return False
+
+    def _ensure_websocket(self):
+        if self._ws_connection is not None:
+            return self._ws_connection
+        connect = getattr(self._client.responses, "connect", None)
+        if not callable(connect):
+            raise ResponsesWebSocketConfigurationError(
+                "Responses WebSocket v2 requires openai[realtime]>=2.22.0"
+            )
+        try:
+            manager = connect(
+                extra_headers={"OpenAI-Beta": _RESPONSES_WEBSOCKET_BETA_HEADER},
+                websocket_connection_options={"ping_interval": None},
+            )
+            connection = manager.enter()
+        except Exception as exc:
+            self._close_websocket()
+            if self._is_websocket_runtime_missing(exc):
+                raise ResponsesWebSocketConfigurationError(
+                    "Responses WebSocket v2 requires openai[realtime]>=2.22.0"
+                ) from exc
+            if self._is_websocket_handshake_rejection(exc):
+                raise self._unsupported_websocket_error() from exc
+            raise ResponsesWebSocketRequestError(
+                f"Could not connect Responses WebSocket to {self._upstream_host}; "
+                "check the network and credentials, then retry."
+            ) from exc
+        self._ws_connection = connection
+        return connection
+
+    @staticmethod
+    def _websocket_error_text(event) -> str:
+        response = getattr(event, "response", None)
+        error = getattr(event, "error", None)
+        response_error = getattr(response, "error", None)
+        incomplete_details = getattr(response, "incomplete_details", None)
+        parts = [str(getattr(event, "type", ""))]
+        for source in (
+            event,
+            error,
+            response,
+            response_error,
+            incomplete_details,
+        ):
+            if source is None:
+                continue
+            for key in ("code", "type", "param", "message"):
+                value = getattr(source, key, None)
+                if value is not None:
+                    parts.append(str(value))
+        return " ".join(parts).replace("\n", " ")[:500]
+
+    @classmethod
+    def _websocket_previous_response_missing(cls, event) -> bool:
+        message = cls._websocket_error_text(event).lower()
+        return (
+            any(
+                marker in message
+                for marker in (
+                    "previous_response_id",
+                    "previous response",
+                    "response id",
+                    "response_id",
+                    "response_not_found",
+                )
+            )
+            and any(
+                marker in message
+                for marker in (
+                    "not found",
+                    "does not exist",
+                    "missing",
+                    "expired",
+                    "invalid",
+                    "unknown",
+                )
+            )
+        )
+
+    def _websocket_frame(
+        self, input_items: list[dict], previous_response_id: str | None
+    ) -> dict[str, Any]:
+        frame: dict[str, Any] = {
+            "type": "response.create",
+            "model": self._model,
+            "input": input_items,
+            "stream": True,
+            **self._extra_kwargs,
+        }
+        if self._instructions:
+            frame["instructions"] = self._instructions
+        if self._tools:
+            frame["tools"] = self._tools
+            if self._tool_choice:
+                frame["tool_choice"] = self._tool_choice
+        if previous_response_id:
+            frame["previous_response_id"] = previous_response_id
+        if self._compact_threshold:
+            frame["context_management"] = [
+                {"type": "compaction", "compact_threshold": self._compact_threshold}
+            ]
+        if self._prompt_cache_key:
+            frame["prompt_cache_key"] = self._prompt_cache_key
+        return frame
+
+    def _open_websocket_turn(
+        self, input_items: list[dict], previous_response_id: str | None
+    ):
+        try:
+            connection = self._ensure_websocket()
+            connection.send_raw(
+                json.dumps(self._websocket_frame(input_items, previous_response_id))
+            )
+            return connection, connection.recv()
+        except (
+            ResponsesWebSocketConfigurationError,
+            ResponsesWebSocketUnsupportedError,
+            ResponsesWebSocketRequestError,
+        ):
+            raise
+        except Exception as exc:
+            self._close_websocket()
+            raise ResponsesWebSocketRequestError(
+                f"Responses WebSocket connection to {self._upstream_host} failed; "
+                "the connection will be retried on the next request."
+            ) from exc
+
+    @staticmethod
+    def _mark_partial_websocket_stream(exc: Exception, delivered_text: bool) -> None:
+        if delivered_text:
+            setattr(exc, "_lingtai_partial_stream", True)
+
+    def _send_websocket(self, on_chunk=None) -> tuple[LLMResponse, str]:
+        input_items, previous_response_id = self._websocket_wire_plan()
+        try:
+            connection, first_event = self._open_websocket_turn(
+                input_items, previous_response_id
+            )
+        except ResponsesWebSocketRequestError:
+            # Retry once only before any remote response chain exists. Replaying
+            # an established continuation could duplicate a processed request.
+            if previous_response_id is not None:
+                raise
+            connection, first_event = self._open_websocket_turn(input_items, None)
+
+        if (
+            previous_response_id
+            and getattr(first_event, "type", None) in {"error", "response.failed"}
+            and self._websocket_previous_response_missing(first_event)
+        ):
+            self._clear_websocket_chain()
+            self._close_websocket()
+            connection, first_event = self._open_websocket_turn(
+                self._replay_input_items(), None
+            )
+
+        acc = StreamingAccumulator()
+        response_id = None
+        usage = UsageMetadata()
+        seen_reasoning_summary_items: set[str] = set()
+        event = first_event
+        delivered_text = False
+        try:
+            while True:
+                event_type = getattr(event, "type", None)
+                if event_type in {"error", "response.failed", "response.incomplete"}:
+                    raise ResponsesWebSocketRequestError(
+                        "Responses WebSocket request failed: "
+                        + self._websocket_error_text(event)
+                    )
+                if _handle_responses_reasoning_event(
+                    event, acc, seen_reasoning_summary_items
+                ):
+                    pass
+                elif event_type == "response.output_text.delta":
+                    acc.add_text(event.delta)
+                    if on_chunk:
+                        delivered_text = bool(event.delta) or delivered_text
+                        on_chunk(event.delta)
+                elif event_type == "response.function_call_arguments.delta":
+                    acc.add_tool_args(event.delta)
+                elif event_type == "response.function_call_arguments.done":
+                    acc.set_tool_args_if_empty(getattr(event, "arguments", None))
+                elif event_type == "response.output_item.added":
+                    if getattr(event.item, "type", None) == "function_call":
+                        acc.start_tool(id=event.item.call_id, name=event.item.name)
+                elif event_type == "response.output_item.done":
+                    if getattr(event.item, "type", None) == "function_call":
+                        acc.set_tool_args_if_empty(
+                            getattr(event.item, "arguments", None)
+                        )
+                        acc.finish_tool()
+                elif event_type == "response.completed":
+                    response_id = event.response.id
+                    raw_usage = getattr(event.response, "usage", None)
+                    if raw_usage:
+                        details = getattr(raw_usage, "input_tokens_details", None)
+                        usage = UsageMetadata(
+                            input_tokens=getattr(raw_usage, "input_tokens", 0) or 0,
+                            output_tokens=getattr(raw_usage, "output_tokens", 0) or 0,
+                            thinking_tokens=getattr(
+                                getattr(raw_usage, "output_tokens_details", None),
+                                "reasoning_tokens",
+                                0,
+                            )
+                            or 0,
+                            cached_tokens=getattr(details, "cached_tokens", 0) or 0,
+                        )
+                    break
+                try:
+                    event = connection.recv()
+                except Exception as exc:
+                    self._close_websocket()
+                    request_error = ResponsesWebSocketRequestError(
+                        f"Responses WebSocket stream from {self._upstream_host} "
+                        "disconnected; the connection will be retried on the next request."
+                    )
+                    self._mark_partial_websocket_stream(request_error, delivered_text)
+                    raise request_error from exc
+            if not response_id:
+                raise ResponsesWebSocketRequestError(
+                    "Responses WebSocket completed without a response id"
+                )
+            return acc.finalize(usage=usage), response_id
+        except Exception as exc:
+            self._mark_partial_websocket_stream(exc, delivered_text)
+            raise
+
     def _request_input(self, message) -> list[dict]:
         if not self._stateless_replay:
             return self._convert_input(message)
@@ -2085,6 +2423,12 @@ class OpenAIResponsesSession(ChatSession):
                 if self._stateless_replay:
                     self._interface.enforce_tool_pairing()
                     input_items = self._replay_input_items()
+
+            if self._websocket_v2:
+                response, response_id = self._send_websocket()
+                self._record_assistant_response(response)
+                self._mark_websocket_synced(response_id)
+                return response
 
             kwargs: dict[str, Any] = {
                 "model": self._model,
@@ -2126,6 +2470,14 @@ class OpenAIResponsesSession(ChatSession):
         seen_reasoning_summary_items: set[str] = set()
 
         rollback_snapshot: list[dict] | None = None
+        websocket_text_delivered = False
+
+        def _websocket_chunk(chunk: str) -> None:
+            nonlocal websocket_text_delivered
+            websocket_text_delivered = bool(chunk) or websocket_text_delivered
+            if on_chunk:
+                on_chunk(chunk)
+
         try:
             if self._stateless_replay:
                 rollback_snapshot = self._snapshot_interface(message)
@@ -2137,6 +2489,14 @@ class OpenAIResponsesSession(ChatSession):
                 if self._stateless_replay:
                     self._interface.enforce_tool_pairing()
                     input_items = self._replay_input_items()
+
+            if self._websocket_v2:
+                response, response_id = self._send_websocket(
+                    on_chunk=_websocket_chunk if on_chunk else None
+                )
+                self._record_assistant_response(response)
+                self._mark_websocket_synced(response_id)
+                return response
 
             kwargs: dict[str, Any] = {
                 "model": self._model,
@@ -2210,9 +2570,11 @@ class OpenAIResponsesSession(ChatSession):
             else:
                 self._response_id = response_id
             return response
-        except Exception:
+        except Exception as exc:
             if self._stateless_replay:
                 self._rollback_staged(rollback_snapshot)
+            if self._websocket_v2 and websocket_text_delivered:
+                self._mark_partial_websocket_stream(exc, True)
             raise
 
     def get_history(self) -> list[dict]:
@@ -2220,6 +2582,12 @@ class OpenAIResponsesSession(ChatSession):
         if self._stateless_replay:
             return self._interface.to_dict()
         return [{"_response_id": self._response_id}]
+
+    def reset(self) -> None:
+        """Drop WebSocket transport state while preserving canonical history."""
+        if self._websocket_v2:
+            self._close_websocket()
+            self._clear_websocket_chain()
 
     @property
     def session_resume_id(self) -> str | None:
@@ -2273,6 +2641,7 @@ class OpenAIAdapter(LLMAdapter):
         compact_threshold: int | None = 100_000,
         prompt_cache_key: str | bool | None = None,
         responses_stateless_replay: bool = False,
+        responses_transport: str = "http",
     ):
         self.base_url = base_url
         self._use_responses = use_responses
@@ -2308,6 +2677,20 @@ class OpenAIAdapter(LLMAdapter):
         # read from a global module — see lingtai.kernel.config's contract.
         self._compact_threshold = _validate_compact_threshold(compact_threshold)
         self._responses_stateless_replay = bool(responses_stateless_replay)
+        if responses_transport not in {"http", "websocket"}:
+            raise ValueError(
+                "responses_transport must be one of http/websocket, "
+                f"got {responses_transport!r}"
+            )
+        if responses_transport == "websocket" and self._wire_api != "responses":
+            raise ValueError(
+                "responses_transport='websocket' requires wire_api='responses'"
+            )
+        if responses_transport == "websocket" and not self._responses_stateless_replay:
+            raise ValueError(
+                "responses_transport='websocket' requires stateless replay support"
+            )
+        self._responses_transport = responses_transport
         kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
@@ -2457,6 +2840,8 @@ class OpenAIAdapter(LLMAdapter):
             prompt_cache_key=self._resolve_prompt_cache_key(model),
             context_window=context_window,
             stateless_replay=self._responses_stateless_replay,
+            websocket_v2=self._responses_transport == "websocket",
+            upstream_base_url=self.base_url,
         )
 
     def _create_completions_session(

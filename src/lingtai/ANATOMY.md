@@ -42,6 +42,7 @@ related_files:
   - tests/test_cli.py
   - tests/test_deep_refresh.py
   - tests/test_kernel_migrate.py
+  - tests/test_responses_websocket_v2.py
   - tests/test_venv_resolve.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -83,7 +84,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **`presets.py`**: compatibility re-export shim (`presets.py:1-21`); implementation lives in `lingtai.kernel.presets` (`discover_presets_in_dirs` :177 · `load_preset` :232 · `materialize_active_preset` :360 · `expand_inherit` :580).
 
-**`init_reader.py` / `init_schema.py`**: `read_init` is the shared parse → compatibility classify → materialize → prepare → validate → resolve path; `InitReadOutcome` reports `FULLY_EFFECTIVE`, `READ_OK_WITH_IGNORED_FIELDS`, or `READ_FAILED` plus typed `PASS`/`NUDGE`/`BLOCKED`/`UNKNOWN` shape evidence without rewriting user-owned init.json. `manifest.capabilities.bash` is mapped in memory to canonical `shell` and differing dual values fail closed. `validate_init` remains the strict schema validator; legacy/deprecated fields are diagnosed as ignored paths rather than stripped. `manifest.llm.compact_threshold` and positive `manifest.cache_miss_budget` remain validated in `init_schema.py`.
+**`init_reader.py` / `init_schema.py`**: `read_init` is the shared parse → compatibility classify → materialize → prepare → validate → resolve path; `InitReadOutcome` reports `FULLY_EFFECTIVE`, `READ_OK_WITH_IGNORED_FIELDS`, or `READ_FAILED` plus typed `PASS`/`NUDGE`/`BLOCKED`/`UNKNOWN` shape evidence without rewriting user-owned init.json. `manifest.capabilities.bash` is mapped in memory to canonical `shell` and differing dual values fail closed. `validate_init` remains the strict schema validator; legacy/deprecated fields are diagnosed as ignored paths rather than stripped. `manifest.llm.compact_threshold`, positive `manifest.cache_miss_budget`, and the exact custom OpenAI Responses scope of `manifest.llm.responses_transport` remain validated in `init_schema.py`.
 
 **`network.py`**: `build_network` :310 · `_discover_agents` :147 · `_build_avatar_edges` :172
 

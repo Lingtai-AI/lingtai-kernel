@@ -50,6 +50,15 @@
       // Base URL for the provider's API.
       // MiniMax China endpoint with Anthropic-compatible protocol.
       // Set to null to use the provider's default.
+      //
+      // Custom OpenAI-compatible Responses can opt into WebSocket v2 by
+      // adding all three commented fields below. Omit responses_transport
+      // (or use "http") for ordinary HTTP. "websocket" never silently falls
+      // back to HTTP: an unsupported/rejected handshake reports an actionable
+      // error so the operator can select HTTP explicitly.
+      // "api_compat": "openai",
+      // "wire_api": "responses",
+      // "responses_transport": "websocket",
       "base_url": "https://api.minimaxi.com/anthropic"
     },
 

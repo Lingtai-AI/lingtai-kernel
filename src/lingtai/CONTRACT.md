@@ -19,6 +19,7 @@ related_files:
   - tests/test_cli.py
   - tests/test_deep_refresh.py
   - tests/test_nudge_inline_cap.py
+  - tests/test_responses_websocket_v2.py
 maintenance: |
   Keep related_files complete and repo-relative: the paired ANATOMY.md, the
   canonical init.jsonc, real reader/writer/validator code, affected composition
@@ -124,6 +125,11 @@ constructs a migration workspace, or performs a second notification path.
    This is a Nudge-transport concern, not an `init_reader` concern: no
    producer, including `nudge/init_config.py`, individually re-implements
    truncation, externalization, or kind validation.
+8. `manifest.llm.responses_transport` accepts only `http` or `websocket`, and
+   only when `provider="custom"`, `api_compat="openai"`, and
+   `wire_api="responses"`. Omission is the ordinary HTTP default. Any other
+   value or scope fails validation; an explicit WebSocket selection never
+   silently changes the requested transport to HTTP.
 
 ## Contract tests
 
@@ -142,6 +148,9 @@ cap-bookkeeping leakage into an ordinary uncapped entry, fail-loud
 `.notification/nudge.json` or `.notification/.nudge_state.json`) both when
 the sidecar write fails and when `kind` is oversized or escape-heavy, and
 dismissal/repeat semantics for a capped finding.
+`tests/test_responses_websocket_v2.py` proves the Responses transport field's
+exact validation scope, provider-default materialization, custom-adapter
+wiring, HTTP omission/default, and fail-loud WebSocket behavior.
 
 ## Maintenance
 

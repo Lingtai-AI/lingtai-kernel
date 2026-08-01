@@ -122,6 +122,8 @@ def register_all_adapters() -> None:
         # explicit value wins over it inside ``_should_use_responses()``.
         if "wire_api" in d:
             adapter_kw["wire_api"] = d["wire_api"]
+        if "responses_transport" in d:
+            adapter_kw["responses_transport"] = d["responses_transport"]
         if "use_responses_api" in d:
             adapter_kw["use_responses"] = d["use_responses_api"]
         return create_custom_adapter(api_compat=compat, **adapter_kw)

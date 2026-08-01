@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/llm/custom/__init__.py
   - src/lingtai/llm/custom/adapter.py
   - src/lingtai/llm/custom/defaults.py
+  - tests/test_responses_websocket_v2.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -49,9 +50,10 @@ Parameters:
 - `base_url: str | None` — provider endpoint URL.
 - `default_headers: dict | None` — forwarded to all compat paths that expose SDK HTTP header configuration (OpenAI-, Anthropic-, and Gemini-compatible).
 - `wire_api: str | None` — scoped to `api_compat="openai"`; selects the OpenAI wire path (`auto`/`chat_completions`/`responses`). Explicit non-`auto` values raise for non-OpenAI backends; `auto` is ignored there.
+- `responses_transport: str | None` — scoped to explicit custom OpenAI Responses. Omitted/`http` keeps ordinary HTTP; `websocket` selects Responses WebSocket v2 and is rejected on Anthropic/Gemini compatibility paths.
 - `**kwargs` — forwarded to adapter constructor (`timeout_ms`, `max_rpm`, etc.).
 
-For `api_compat="openai"`, the factory always injects the internal `responses_stateless_replay=True` adapter mode (`adapter.py:65-76`). This does not force Responses by itself: `wire_api` / legacy `use_responses` + `force_responses` still decide whether the Responses path is used. When it is used, the resulting `OpenAIResponsesSession` replays full canonical history and never relies on provider-side `previous_response_id` chaining; official `openai` and Codex factories do not receive this mode.
+For `api_compat="openai"`, the factory always injects the internal `responses_stateless_replay=True` adapter mode (`adapter.py`). This does not force Responses by itself: `wire_api` / legacy `use_responses` + `force_responses` still decide whether the Responses path is used. HTTP Responses replays full canonical history without provider-side chaining. Explicit WebSocket v2 starts with the same full replay, then uses strict-additive deltas plus `previous_response_id` while retaining the full canonical interface for rollback and restart; official `openai` and Codex factories do not receive this custom transport setting.
 
 ### No class of its own
 
