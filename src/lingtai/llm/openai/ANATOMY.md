@@ -22,6 +22,7 @@ related_files:
   - tests/test_codex_prompt_cache_key.py
   - tests/test_codex_native_multiaccount.py
   - tests/test_codex_standalone_compaction.py
+  - tests/test_custom_responses_stateless.py
   - tests/test_mimo_responses_compaction.py
   - ENVIRONMENT_VARIABLES.md
 maintenance: |
@@ -75,6 +76,8 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `_parse_response()` | `adapter.py:1104` | ChatCompletion → `LLMResponse` (extracts reasoning from `reasoning_content` or `reasoning`) |
 | `_handle_responses_reasoning_event()` | `adapter.py:1171` | Responses stream reasoning-summary event handler; accumulates `summary_text` deltas/done fallback without raw reasoning text |
 | `_parse_responses_api_response()` | `adapter.py:1217` | Responses API output → `LLMResponse` (handles `message`, `function_call`, `reasoning` output items) |
+| `_decode_responses_sse_text()` | `adapter.py:1370` | Strictly decodes a completed SSE body when a compatible gateway ignores a non-streaming Responses request and the SDK exposes the body as `str`; malformed/non-SSE strings fail loud. |
+| `_consume_responses_stream()` | `adapter.py:1431` | Shared Responses event accumulator for normal SDK streams and locally decoded forced-SSE bodies; returns the finalized response plus response id without a second provider request. |
 
 ## Connections
 
@@ -111,6 +114,13 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting. Ca
 Two modes share one session class:
 1. **Official/stateful** — `_convert_input(message)` builds only the new Responses input items (`adapter.py:1829-1884`), `previous_response_id` is sent when available (`adapter.py:1974-1975`, `adapter.py:2027-2028`), and the returned id becomes the next resume id (`adapter.py:1988`, `adapter.py:2085`). `_convert_input` maps a canonical `ToolResultBlock` continuation to the `function_call_output` wire item (`adapter.py:1835-1845`) using the same shape as `to_responses_input`, so a plain (non-Codex) Responses session serializes tool-result turns correctly instead of forwarding the dataclass unconverted; prebuilt Responses-wire `function_call_output` dicts pass through unchanged, while legacy `role=tool` dicts are converted to the same Responses shape (`adapter.py:1856-1868`).
 2. **Custom/stateless** — `_snapshot_interface` captures the pre-stage snapshot before `_stage_input`, `_request_input` records string/tool-result input (or leaves `send(None)` pre-staged entries alone), enforces tool pairing, and serializes full canonical history through `to_responses_input`; no `previous_response_id` is sent (`adapter.py:1886-1889`, `adapter.py:1891-1900`, `adapter.py:1974-1975`, `adapter.py:1938-1943`). On success `_record_assistant_response` persists reasoning/text/tool calls plus usage, including cached tokens, into canonical history (`adapter.py:1915-1936`, `adapter.py:1985-1986`, `adapter.py:2082-2083`). On transport/stream/enforce/serialization/parse/finalize/callback/record failure, `_rollback_staged` restores the pre-send canonical snapshot in place while preserving the recovery lookup (`adapter.py:1902-1913`, `adapter.py:1990-1992`, `adapter.py:2087-2089`).
+
+If a compatible gateway ignores the non-streaming request shape and returns a
+complete SSE body, the OpenAI SDK may expose it as a plain string. `send()`
+validates and decodes that already-returned body, then feeds its events through
+the same accumulator as `send_stream()`; it never retries or issues a second
+potentially billable provider request. A plain non-SSE or malformed SSE string
+still fails loud and follows the ordinary stateless rollback path.
 
 ### Codex continuation flow (`CodexResponsesSession.send_stream`)
 
@@ -484,7 +494,7 @@ In-flight official/stateful Responses and Codex sessions keep no-op prompt/tool 
 ### Streaming
 
 - **CC streaming** (`adapter.py:1712`) — `stream=True, stream_options={include_usage: True}`. Uses `StreamingAccumulator` for text + tool deltas. Reasoning deltas captured from `delta.reasoning` or `delta.reasoning_content`. The post-build pairing validator runs before stream open, matching the non-streaming path. Overflow recovery wraps stream open + first chunk in the Chat Completions send-stream path.
-- **Responses streaming** (`adapter.py:1995`) — event types: `response.reasoning_summary_text.delta/done` (summary thoughts only), `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.added/done`, `response.completed`. Custom/stateless mode snapshots before staging, replays full canonical history, records the finalized assistant turn, and restores the pre-send snapshot on enforce, serialization, stream-open, iteration, callback, finalize, or record failure (`adapter.py:2002-2089`).
+- **Responses streaming** (`adapter.py:1995`) — event types: `response.reasoning_summary_text.delta/done` (summary thoughts only), `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.added/done`, `response.completed`. The event consumer is shared with the non-streaming forced-SSE compatibility path. Custom/stateless mode snapshots before staging, replays full canonical history, records the finalized assistant turn, and restores the pre-send snapshot on enforce, serialization, stream-open, iteration, callback, finalize, or record failure (`adapter.py:2002-2089`).
 - **Codex streaming** — forces `stream=True` even on `send()`. Runs the `full`/`incremental` planner per request over the selected transport (REST default / WebSocket opt-in): REST carries the whole converted interface in both modes; WebSocket carries the whole interface for `full` and delta + `previous_response_id` for `incremental`. Captured summary thoughts and raw encrypted reasoning items are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls; if Codex later rejects a raw encrypted item as unverifiable, the adapter strips only that opaque replay state and retries once with summary/plain transcript. Optional diagnostics (`LINGTAI_CODEX_RESPONSES_TRACE=1`) append safe per-event metadata to `logs/codex_responses_trace.jsonl` without changing accumulator/persistence behavior.
 
 ### Authentication paths

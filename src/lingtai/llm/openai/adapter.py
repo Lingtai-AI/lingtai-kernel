@@ -19,6 +19,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -1356,6 +1357,134 @@ def _parse_responses_api_response(raw) -> LLMResponse:
     )
 
 
+def _responses_json_namespace(value: Any) -> Any:
+    """Convert decoded Responses SSE JSON into attribute-style event objects."""
+    if isinstance(value, dict):
+        return SimpleNamespace(
+            **{key: _responses_json_namespace(item) for key, item in value.items()}
+        )
+    if isinstance(value, list):
+        return [_responses_json_namespace(item) for item in value]
+    return value
+
+
+def _decode_responses_sse_text(raw: str) -> list[Any]:
+    """Decode an SSE body returned unexpectedly to a non-streaming request.
+
+    Some OpenAI-compatible gateways ignore ``stream=false`` and return a
+    complete ``text/event-stream`` body.  The OpenAI SDK exposes that body as a
+    plain string, so recover the already-completed response locally instead of
+    issuing a second (potentially billable) request.
+    """
+    events: list[Any] = []
+    data_lines: list[str] = []
+    event_name: str | None = None
+    saw_sse_field = False
+
+    def flush() -> None:
+        nonlocal data_lines, event_name
+        if not data_lines:
+            event_name = None
+            return
+        payload = "\n".join(data_lines).strip()
+        data_lines = []
+        if not payload or payload == "[DONE]":
+            event_name = None
+            return
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise TypeError(
+                "Responses API returned malformed SSE data to a non-streaming request"
+            ) from exc
+        if not isinstance(decoded, dict):
+            raise TypeError(
+                "Responses API returned non-object SSE data to a non-streaming request"
+            )
+        if not decoded.get("type") and event_name:
+            decoded["type"] = event_name
+        if not decoded.get("type"):
+            raise TypeError(
+                "Responses API returned an SSE event without a type"
+            )
+        events.append(_responses_json_namespace(decoded))
+        event_name = None
+
+    for line in raw.splitlines():
+        if not line:
+            flush()
+        elif line.startswith("event:"):
+            saw_sse_field = True
+            event_name = line[6:].strip() or None
+        elif line.startswith("data:"):
+            saw_sse_field = True
+            data_lines.append(line[5:].lstrip())
+        elif line.startswith(":"):
+            saw_sse_field = True
+    flush()
+
+    if not saw_sse_field or not events:
+        raise TypeError(
+            "Responses API returned a string instead of a Response object or SSE events"
+        )
+    return events
+
+
+def _consume_responses_stream(
+    stream: Any,
+    on_chunk: Callable[[str], None] | None = None,
+) -> tuple[LLMResponse, str | None]:
+    """Consume typed SDK events or locally decoded Responses SSE events."""
+    acc = StreamingAccumulator()
+    response_id = None
+    usage = UsageMetadata()
+    seen_reasoning_summary_items: set[str] = set()
+
+    for event in stream:
+        if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
+            continue
+        if event.type == "response.output_text.delta":
+            acc.add_text(event.delta)
+            if on_chunk:
+                on_chunk(event.delta)
+        elif event.type == "response.function_call_arguments.delta":
+            acc.add_tool_args(event.delta)
+        elif event.type == "response.function_call_arguments.done":
+            # Spark may emit complete args without any deltas.
+            acc.set_tool_args_if_empty(getattr(event, "arguments", None))
+        elif event.type == "response.output_item.added":
+            if getattr(event.item, "type", None) == "function_call":
+                acc.start_tool(id=event.item.call_id, name=event.item.name)
+        elif event.type == "response.output_item.done":
+            if getattr(event.item, "type", None) == "function_call":
+                # Use the final item as a second complete-args fallback.
+                acc.set_tool_args_if_empty(getattr(event.item, "arguments", None))
+                acc.finish_tool()
+        elif event.type == "response.completed":
+            response_id = event.response.id
+            if event.response.usage:
+                cached = getattr(event.response.usage, "input_tokens_details", None)
+                cached_tokens = (
+                    (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
+                )
+                usage = UsageMetadata(
+                    input_tokens=getattr(event.response.usage, "input_tokens", 0) or 0,
+                    output_tokens=getattr(event.response.usage, "output_tokens", 0) or 0,
+                    thinking_tokens=getattr(
+                        event.response.usage, "output_tokens_details", None
+                    )
+                    and getattr(
+                        event.response.usage.output_tokens_details,
+                        "reasoning_tokens",
+                        0,
+                    )
+                    or 0,
+                    cached_tokens=cached_tokens,
+                )
+
+    return acc.finalize(usage=usage), response_id
+
+
 # ---------------------------------------------------------------------------
 # OpenAIChatSession
 # ---------------------------------------------------------------------------
@@ -2107,11 +2236,21 @@ class OpenAIResponsesSession(ChatSession):
                 kwargs["prompt_cache_key"] = self._prompt_cache_key
 
             raw = self._client.responses.create(**kwargs)
-            response = _parse_responses_api_response(raw)
+            if isinstance(raw, str):
+                logger.warning(
+                    "Responses endpoint returned SSE text to a non-streaming request; "
+                    "parsing the completed stream locally"
+                )
+                response, response_id = _consume_responses_stream(
+                    _decode_responses_sse_text(raw)
+                )
+            else:
+                response = _parse_responses_api_response(raw)
+                response_id = raw.id
             if self._stateless_replay:
                 self._record_assistant_response(response)
             else:
-                self._response_id = raw.id
+                self._response_id = response_id
             return response
         except Exception:
             if self._stateless_replay:
@@ -2120,11 +2259,6 @@ class OpenAIResponsesSession(ChatSession):
 
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
         """Send a streaming request."""
-        acc = StreamingAccumulator()
-        response_id = None
-        usage = UsageMetadata()
-        seen_reasoning_summary_items: set[str] = set()
-
         rollback_snapshot: list[dict] | None = None
         try:
             if self._stateless_replay:
@@ -2160,51 +2294,7 @@ class OpenAIResponsesSession(ChatSession):
                 kwargs["prompt_cache_key"] = self._prompt_cache_key
 
             stream = self._client.responses.create(**kwargs)
-            for event in stream:
-                if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
-                    continue
-                if event.type == "response.output_text.delta":
-                    acc.add_text(event.delta)
-                    if on_chunk:
-                        on_chunk(event.delta)
-                elif event.type == "response.function_call_arguments.delta":
-                    acc.add_tool_args(event.delta)
-                elif event.type == "response.function_call_arguments.done":
-                    # Spark may emit complete args without any deltas.
-                    acc.set_tool_args_if_empty(getattr(event, "arguments", None))
-                elif event.type == "response.output_item.added":
-                    if getattr(event.item, "type", None) == "function_call":
-                        acc.start_tool(id=event.item.call_id, name=event.item.name)
-                elif event.type == "response.output_item.done":
-                    if getattr(event.item, "type", None) == "function_call":
-                        # Use the final item as a second complete-args fallback.
-                        acc.set_tool_args_if_empty(
-                            getattr(event.item, "arguments", None)
-                        )
-                        acc.finish_tool()
-                elif event.type == "response.completed":
-                    response_id = event.response.id
-                    if event.response.usage:
-                        cached = getattr(event.response.usage, "input_tokens_details", None)
-                        cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
-                        usage = UsageMetadata(
-                            input_tokens=getattr(event.response.usage, "input_tokens", 0)
-                            or 0,
-                            output_tokens=getattr(event.response.usage, "output_tokens", 0)
-                            or 0,
-                            thinking_tokens=getattr(
-                                event.response.usage, "output_tokens_details", None
-                            )
-                            and getattr(
-                                event.response.usage.output_tokens_details,
-                                "reasoning_tokens",
-                                0,
-                            )
-                            or 0,
-                            cached_tokens=cached_tokens,
-                        )
-
-            response = acc.finalize(usage=usage)
+            response, response_id = _consume_responses_stream(stream, on_chunk)
             if self._stateless_replay:
                 self._record_assistant_response(response)
             else:

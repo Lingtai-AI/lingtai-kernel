@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -157,6 +158,60 @@ def _stream_tool_events(response_id: str):
     ]
 
 
+def _forced_sse_tool_response(response_id: str) -> str:
+    """SSE body from a provider that ignored a non-streaming request."""
+    events = [
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Need forced stream.",
+            "item_id": "rs_forced",
+        },
+        {
+            "type": "response.reasoning_summary_text.done",
+            "text": "Need forced stream.",
+            "item_id": "rs_forced",
+        },
+        {"type": "response.output_text.delta", "delta": "Checking forced stream."},
+        {
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "call_id": "call_forced",
+                "name": "lookup",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "arguments": '{"query":"forced"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "call_id": "call_forced",
+                "name": "lookup",
+                "arguments": '{"query":"forced"}',
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": response_id,
+                "usage": {
+                    "input_tokens": 21,
+                    "output_tokens": 9,
+                    "input_tokens_details": {"cached_tokens": 4},
+                    "output_tokens_details": {"reasoning_tokens": 3},
+                },
+            },
+        },
+    ]
+    return "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+        for event in events
+    )
+
+
 def _broken_stream():
     yield SimpleNamespace(type="response.output_text.delta", delta="partial")
     raise RuntimeError("stream")
@@ -241,6 +296,39 @@ def test_custom_responses_nonstreaming_replays_full_history_and_records_assistan
         "output_tokens": 5,
         "thinking_tokens": 0,
         "cached_tokens": 1,
+    }
+
+
+def test_custom_responses_nonstreaming_parses_provider_forced_sse_without_retry():
+    adapter = create_custom_adapter(
+        api_key="fake",
+        api_compat="openai",
+        base_url="https://sub2api.example/v1",
+        wire_api="responses",
+    )
+    adapter._client = _Client(_Responses([_forced_sse_tool_response("resp_forced")]))
+    session = adapter.create_chat("gpt-test", "system", tools=[_tool()])
+
+    result = session.send("start")
+
+    assert result.text == "Checking forced stream."
+    assert result.thoughts == ["Need forced stream."]
+    assert [(call.id, call.name, call.args) for call in result.tool_calls] == [
+        ("call_forced", "lookup", {"query": "forced"}),
+    ]
+    assert result.usage.input_tokens == 21
+    assert result.usage.output_tokens == 9
+    assert result.usage.thinking_tokens == 3
+    assert result.usage.cached_tokens == 4
+    assert len(adapter._client.responses.kwargs) == 1
+    assert "stream" not in adapter._client.responses.kwargs[0]
+
+    assistant = session.interface.entries[-1]
+    assert assistant.usage == {
+        "input_tokens": 21,
+        "output_tokens": 9,
+        "thinking_tokens": 3,
+        "cached_tokens": 4,
     }
 
 
