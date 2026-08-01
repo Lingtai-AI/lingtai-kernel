@@ -1193,8 +1193,8 @@ class Agent(BaseAgent):
         """Substitute per-agent placeholders in an MCP launch string.
 
         Lets a single shared MCP registry template scope each agent to its own
-        namespace without per-agent hand-editing — e.g. a NoKV workbench root
-        ``--workbench-root /agents/{agent_id}/wb``. ``{agent_id}`` and
+        namespace without per-agent hand-editing — e.g. per-agent data roots
+        ``--data-root /agents/{agent_id}/data``. ``{agent_id}`` and
         ``{agent_address}`` resolve to the agent's stable working-dir name (its
         address); ``{agent_dir}`` resolves to the absolute working directory.
         Non-string values and strings without a placeholder pass through
