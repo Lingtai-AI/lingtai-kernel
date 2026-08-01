@@ -1,4 +1,9 @@
 ---
+name: task_card-manual
+description: >
+  Manual for the intrinsic `task_card` capability: the declarative Task Card
+  artifact, its renderer watch lifecycle, and the one-card-per-agent contract.
+last_changed_at: 2026-08-01T00:00:00Z
 related_files:
 - src/lingtai/tools/task_card/__init__.py
 - src/lingtai/tools/task_card/ANATOMY.md

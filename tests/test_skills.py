@@ -130,7 +130,7 @@ def test_the_skills_manual_is_reachable_through_psyche(tmp_path):
         )
         assert result["status"] == "ok"
         assert result["manual"].strip()
-        assert result["manual_path"].endswith(
+        assert result["manual_path"] and Path(result["manual_path"]).as_posix().endswith(
             ".library/intrinsic/capabilities/skills/SKILL.md"
         )
     finally:
@@ -672,6 +672,7 @@ def test_skills_expands_tilde(tmp_path, monkeypatch):
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))  # Windows expanduser uses USERPROFILE
     utils = fake_home / "my-utils"
     _write_skill(utils / "util-skill", "util-skill")
 
@@ -937,12 +938,14 @@ def test_web_manual_is_one_top_level_catalog_entry_matching_the_tool(tmp_path):
         installed_manual_path = (
             workdir / ".library" / "intrinsic" / "capabilities" / "web" / "SKILL.md"
         )
-        installed_bytes = installed_manual_path.read_bytes()
-        assert b"name: web-manual" in installed_bytes
+        installed_text = installed_manual_path.read_text(encoding="utf-8")
+        assert "name: web-manual" in installed_text
 
         tool_result = agent._tool_handlers["web"]({"action": "manual", "input": {}})
         assert tool_result["status"] == "ok"
-        assert tool_result["manual"].encode("utf-8") == installed_bytes
+        # Compare decoded text (the tool returns universal-newline text; the
+        # checked-out file may carry CRLF on Windows via git autocrlf).
+        assert tool_result["manual"] == installed_text
         assert tool_result["manual_path"] == str(installed_manual_path)
 
         # Nested reference SKILL.md files exist and are parent-owned — they

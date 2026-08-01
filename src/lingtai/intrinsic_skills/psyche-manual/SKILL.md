@@ -1,5 +1,6 @@
 ---
 name: psyche-manual
+last_changed_at: 2026-08-01T00:00:00Z
 description: >
   Routing table for the `psyche` tool — the one public root for your four
   durable domains: pad + lingtai + knowledge + skills = psyche. Read this to
