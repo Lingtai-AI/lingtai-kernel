@@ -19,6 +19,10 @@ related_files:
   - tests/test_cli.py
   - tests/test_deep_refresh.py
   - tests/test_nudge_inline_cap.py
+  - tests/test_agent_config_hydration.py
+  - tests/test_init_schema.py
+  - tests/test_preset_materialization.py
+  - tests/test_presets.py
 maintenance: |
   Keep related_files complete and repo-relative: the paired ANATOMY.md, the
   canonical init.jsonc, real reader/writer/validator code, affected composition
@@ -124,6 +128,12 @@ constructs a migration workspace, or performs a second notification path.
    This is a Nudge-transport concern, not an `init_reader` concern: no
    producer, including `nudge/init_config.py`, individually re-implements
    truncation, externalization, or kind validation.
+8. `manifest.llm.thinking` accepts explicit
+   `none|minimal|low|medium|high|xhigh` only for Codex-family providers or for
+   `provider="custom"`, `api_compat="openai"`, `wire_api="responses"`.
+   Custom omission keeps the existing `high` runtime default; Codex omission
+   keeps its existing adapter-owned `xhigh` default. Invalid values or scopes
+   fail validation rather than being normalized silently.
 
 ## Contract tests
 
@@ -142,6 +152,11 @@ cap-bookkeeping leakage into an ordinary uncapped entry, fail-loud
 `.notification/nudge.json` or `.notification/.nudge_state.json`) both when
 the sidecar write fails and when `kind` is oversized or escape-heavy, and
 dismissal/repeat semantics for a capped finding.
+`tests/test_init_schema.py`, `tests/test_presets.py`,
+`tests/test_agent_config_hydration.py`, and
+`tests/test_preset_materialization.py` prove the accepted custom Responses
+scope, rejected out-of-scope values, and the distinct custom/Codex omission
+defaults through real config and session materialization.
 
 ## Maintenance
 

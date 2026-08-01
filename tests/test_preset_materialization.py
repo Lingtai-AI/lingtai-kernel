@@ -237,6 +237,61 @@ def test_refresh_preset_omitted_thinking_defaults_to_xhigh(tmp_path, monkeypatch
     assert chat._extra_kwargs.get("reasoning") == {"effort": "xhigh"}
 
 
+@pytest.mark.parametrize(
+    ("manifest_thinking", "expected_thinking"),
+    [(None, "high"), ("minimal", "minimal")],
+)
+def test_refresh_custom_responses_thinking_reaches_session_path(
+    tmp_path, monkeypatch, manifest_thinking, expected_thinking
+):
+    """Custom Responses keeps high on omission and forwards explicit effort."""
+    from unittest.mock import MagicMock
+
+    from lingtai.agent import Agent
+    from lingtai.kernel.config import AgentConfig
+
+    monkeypatch.setenv("CUSTOM_RESPONSES_API_KEY", "fake-key")
+    llm = {
+        "provider": "custom",
+        "model": "custom-model",
+        "api_compat": "openai",
+        "base_url": "https://gateway.example.test/v1",
+        "api_key_env": "CUSTOM_RESPONSES_API_KEY",
+        "wire_api": "responses",
+    }
+    if manifest_thinking is not None:
+        llm["thinking"] = manifest_thinking
+
+    plib = _make_preset_lib(tmp_path, {
+        "custom-responses": {
+            "name": "custom-responses",
+            "description": {"summary": "Custom Responses"},
+            "manifest": {
+                "llm": llm,
+                "capabilities": {"file": {}},
+            },
+        },
+    })
+    wd = _make_workdir(
+        tmp_path, active_preset=str(plib / "custom-responses.json")
+    )
+
+    svc = MagicMock()
+    svc.provider = "deepseek"
+    svc.model = "deepseek-v4-flash"
+    svc._base_url = None
+    svc._provider_defaults = {"deepseek": {"max_rpm": 60}}
+    svc.create_session.return_value = MagicMock()
+    svc.make_tool_result = MagicMock()
+    agent = Agent(svc, working_dir=wd, config=AgentConfig())
+
+    agent._setup_from_init()
+    chat = agent._session.ensure_session()
+
+    assert agent._config.thinking == expected_thinking
+    assert chat._extra_kwargs.get("reasoning") == {"effort": expected_thinking}
+
+
 def test_materialize_unknown_preset_returns_none_and_logs(tmp_path):
     """Active preset that doesn't exist → _read_init returns None and logs."""
     plib = _make_preset_lib(tmp_path, {})

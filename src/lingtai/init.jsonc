@@ -50,6 +50,14 @@
       // Base URL for the provider's API.
       // MiniMax China endpoint with Anthropic-compatible protocol.
       // Set to null to use the provider's default.
+      //
+      // Custom OpenAI-compatible Responses may add an explicit reasoning
+      // effort after setting api_compat="openai" and wire_api="responses".
+      // Allowed values are none/minimal/low/medium/high/xhigh. Omit thinking
+      // for "default"; custom then keeps the existing high default.
+      // "api_compat": "openai",
+      // "wire_api": "responses",
+      // "thinking": "minimal",
       "base_url": "https://api.minimaxi.com/anthropic"
     },
 

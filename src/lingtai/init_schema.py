@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import logging
 
-from lingtai.kernel.config import THINKING_LEVELS, THINKING_PROVIDERS
+from lingtai.kernel.config import (
+    THINKING_LEVELS,
+    THINKING_PROVIDERS,
+    llm_supports_thinking,
+)
 
 log = logging.getLogger(__name__)
 
@@ -408,11 +412,12 @@ def validate_init(data: dict) -> list[str]:
                     + (f" api_compat={llm.get('api_compat')!r}" if llm.get("api_compat") else "")
                 )
     if "thinking" in llm:
-        if llm["provider"].lower() not in THINKING_PROVIDERS:
+        if not llm_supports_thinking(llm):
             raise ValueError(
                 "manifest.llm.thinking is currently supported only for "
                 "the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)})"
+                f"({', '.join(THINKING_PROVIDERS)}) or custom "
+                "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
         if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:

@@ -39,7 +39,7 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from .config import THINKING_LEVELS, THINKING_PROVIDERS
+from .config import THINKING_LEVELS, THINKING_PROVIDERS, llm_supports_thinking
 
 log = logging.getLogger(__name__)
 
@@ -358,12 +358,12 @@ def load_preset(
             f"preset {name!r} ({p}): context_limit must be an integer (got {type(ctx_limit).__name__})"
         )
     if "thinking" in llm:
-        provider = llm.get("provider")
-        if not isinstance(provider, str) or provider.lower() not in THINKING_PROVIDERS:
+        if not llm_supports_thinking(llm):
             raise ValueError(
                 f"preset {name!r} ({p}): manifest.llm.thinking is currently "
                 "supported only for the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)})"
+                f"({', '.join(THINKING_PROVIDERS)}) or custom "
+                "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
         if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:

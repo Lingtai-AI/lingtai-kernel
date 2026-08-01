@@ -13,11 +13,23 @@ from dataclasses import dataclass
 # adapter maps it to ``"xhigh"``.
 THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 
-# Providers that accept manifest.llm.thinking. ``codex-pool`` reuses the Codex
-# adapter (both dash/underscore spellings), so it is thinking-compatible; every
-# other provider rejects the field. Kept here next to THINKING_LEVELS so the
-# preset validator and init-schema validator share one source of truth.
+# Codex-family providers that accept manifest.llm.thinking. ``codex-pool``
+# reuses the Codex adapter (both dash/underscore spellings). Custom
+# OpenAI-compatible Responses is the other supported scope; use
+# ``llm_supports_thinking`` so validators share the complete rule.
 THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
+
+
+def llm_supports_thinking(llm: dict) -> bool:
+    """Return whether a manifest LLM block accepts explicit thinking effort."""
+    provider = str(llm.get("provider") or "").lower()
+    if provider in THINKING_PROVIDERS:
+        return True
+    return (
+        provider == "custom"
+        and str(llm.get("api_compat") or "").lower() == "openai"
+        and str(llm.get("wire_api") or "").lower() == "responses"
+    )
 
 # Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
 # agent-configurable. An agent must not be able to raise its own molt

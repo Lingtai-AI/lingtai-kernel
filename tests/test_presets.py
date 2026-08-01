@@ -351,6 +351,53 @@ def test_load_preset_accepts_thinking_values(tmp_path, value):
     assert loaded["manifest"]["llm"]["thinking"] == value
 
 
+@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh"])
+def test_load_preset_accepts_thinking_for_custom_openai_responses(tmp_path, value):
+    p = {
+        "name": "custom-thinking",
+        "description": _DESC,
+        "manifest": {
+            "llm": {
+                "provider": "custom",
+                "model": "custom-model",
+                "api_compat": "openai",
+                "wire_api": "responses",
+                "thinking": value,
+            },
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "custom-thinking.json"
+    f.write_text(json.dumps(p))
+
+    loaded = load_preset(str(f))
+
+    assert loaded["manifest"]["llm"]["thinking"] == value
+
+
+@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
+def test_load_preset_rejects_invalid_custom_responses_thinking(tmp_path, value):
+    p = {
+        "name": "bad-custom-thinking",
+        "description": _DESC,
+        "manifest": {
+            "llm": {
+                "provider": "custom",
+                "model": "custom-model",
+                "api_compat": "openai",
+                "wire_api": "responses",
+                "thinking": value,
+            },
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad-custom-thinking.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
+        load_preset(str(f))
+
+
 @pytest.mark.parametrize("value", ["default", "ultra", 1, None])
 def test_load_preset_rejects_invalid_thinking(tmp_path, value):
     p = {
@@ -382,6 +429,39 @@ def test_load_preset_rejects_thinking_for_non_codex_provider(tmp_path, value):
     f.write_text(json.dumps(p))
 
     with pytest.raises(ValueError, match=r"manifest\.llm\.thinking.*Codex"):
+        load_preset(str(f))
+
+
+@pytest.mark.parametrize(
+    "llm",
+    [
+        {"provider": "custom", "model": "m", "api_compat": "openai"},
+        {
+            "provider": "custom",
+            "model": "m",
+            "api_compat": "openai",
+            "wire_api": "chat_completions",
+        },
+        {
+            "provider": "custom",
+            "model": "m",
+            "api_compat": "anthropic",
+            "wire_api": "auto",
+        },
+        {"provider": "openai", "model": "m", "wire_api": "responses"},
+    ],
+)
+def test_load_preset_rejects_thinking_outside_custom_responses_scope(tmp_path, llm):
+    llm["thinking"] = "high"
+    p = {
+        "name": "bad-scope",
+        "description": _DESC,
+        "manifest": {"llm": llm, "capabilities": {}},
+    }
+    f = tmp_path / "bad-scope.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match="custom OpenAI-compatible Responses"):
         load_preset(str(f))
 
 

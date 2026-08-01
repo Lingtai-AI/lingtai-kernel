@@ -211,6 +211,38 @@ def test_build_agent_config_codex_explicit_thinking_preserved(value):
     assert cfg.thinking == value
 
 
+@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh"])
+def test_build_agent_config_custom_responses_explicit_thinking_preserved(value):
+    manifest = _init_data({
+        "llm": {
+            "provider": "custom",
+            "model": "custom-model",
+            "api_compat": "openai",
+            "wire_api": "responses",
+            "thinking": value,
+        },
+    })["manifest"]
+
+    cfg = build_agent_config(manifest, max_rpm=0)
+
+    assert cfg.thinking == value
+
+
+def test_build_agent_config_custom_responses_omitted_thinking_keeps_high():
+    manifest = _init_data({
+        "llm": {
+            "provider": "custom",
+            "model": "custom-model",
+            "api_compat": "openai",
+            "wire_api": "responses",
+        },
+    })["manifest"]
+
+    cfg = build_agent_config(manifest, max_rpm=0)
+
+    assert cfg.thinking == "high"
+
+
 def test_build_agent_config_non_codex_omitted_thinking_keeps_legacy_high():
     """Non-Codex providers keep the legacy "high" main-session default."""
     manifest = _init_data()["manifest"]  # provider "openai", no thinking
