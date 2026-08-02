@@ -6,10 +6,10 @@ description: |
   receive_id_type (open_id/chat_id), send vs reply, check/read/search, placeholder
   + edit for long responses, contacts/accounts basics, the notification
   transient-hook vs persistent-context split, normalized inbound conversations,
-  group @Bot routing, and side-effect caveats.
+  preserved inbound media, group @Bot routing, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.4.0
+version: 1.5.0
 last_changed_at: 2026-08-02T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
@@ -77,7 +77,18 @@ maintenance: |
   this admission rule.
 - `read` preserves the legacy fields and adds `thread_id`, `root_id`,
   `reply_to`, resolved `mentions`, the SDK-normalized `content` union, normalized
-  sender identity fields, and the complete raw event under `feishu`.
+  sender identity fields, downloaded `attachments`, and the complete raw event
+  under `feishu`.
+- Image, file, audio, video, sticker, video-cover, and rich-post resources are
+  stored under the message's `attachments/` directory. Each attachment keeps
+  its Feishu `type` and `file_key`; `status='downloaded'` adds the safe local
+  `filename`, absolute `path`, and byte `size`, while `status='failed'` keeps
+  the original descriptor plus a bounded `error` instead of discarding it.
+- Audio messages continue through local Whisper transcription after download.
+  A successful transcript remains in `voice_transcript` and becomes the message
+  text. Download or transcription failure stays attached to the resource
+  record, while the normalized content/raw envelope remain available for
+  diagnosis; failure is not collapsed into a text-only message.
 - For group commands, the normalized `text` removes this bot's own mention;
   other resolved mentions remain visible. `content.kind` identifies the
   original Feishu content family.

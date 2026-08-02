@@ -552,7 +552,10 @@ class FeishuAccount:
         Args:
             message_id: Feishu message ID (om_xxx).
             file_key: The file_key from the message content.
-            resource_type: "file", "image", or "video".
+            resource_type: Logical resource type: ``image``, ``file``,
+                ``audio``, ``video``, or ``sticker``. Feishu's download API
+                accepts only ``image`` and ``file``; the adapter maps the
+                logical type without changing the persisted descriptor.
 
         Returns:
             (filename, content_bytes) tuple.
@@ -561,11 +564,14 @@ class FeishuAccount:
             GetMessageResourceRequest,
         )
 
+        api_resource_type = (
+            "image" if resource_type in {"image", "sticker"} else "file"
+        )
         request = (
             GetMessageResourceRequest.builder()
             .message_id(message_id)
             .file_key(file_key)
-            .type(resource_type)
+            .type(api_resource_type)
             .build()
         )
         response = self._rest_client.im.v1.message_resource.get(request)
@@ -574,7 +580,7 @@ class FeishuAccount:
                 f"Feishu get_message_resource failed: "
                 f"code={response.code} msg={response.msg}"
             )
-        filename = response.file_name or f"{file_key}.ogg"
+        filename = response.file_name or ""
         content = response.file.read()
         return filename, content
 

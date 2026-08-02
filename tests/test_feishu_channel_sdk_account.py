@@ -106,6 +106,14 @@ def test_outbound_methods_use_channel_sdk_generated_models() -> None:
     assert resource.message_id == "om_original"
     assert resource.file_key == "file-key"
     assert resource.type == "file"
+    for logical_type, api_type in (
+        ("image", "image"),
+        ("sticker", "image"),
+        ("audio", "file"),
+        ("video", "file"),
+    ):
+        account.get_message_resource("om_original", "file-key", logical_type)
+        assert requests["resource"].type == api_type
 
     reaction = requests["reaction"]
     assert reaction.message_id == "om_original"

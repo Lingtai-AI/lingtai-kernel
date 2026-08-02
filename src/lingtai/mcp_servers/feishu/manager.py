@@ -70,6 +70,16 @@ _CONVERSATION_PREVIEW_MESSAGES = 10
 _STRUCTURED_MESSAGE_TEXT_CAP = 500
 _STRUCTURED_MESSAGE_MENTION_CAP = 20
 
+_ATTACHMENT_TYPES = {"image", "file", "audio", "video", "sticker"}
+_ATTACHMENT_SUFFIXES = {
+    "image": ".jpg",
+    "file": ".bin",
+    "audio": ".ogg",
+    "video": ".mp4",
+    "sticker": ".png",
+}
+_UNSAFE_ATTACHMENT_CHARS = re.compile(r'[\x00-\x1f<>:"/\\|?*]+')
+
 
 def _normalized_content_payload(content: object, message_type: str) -> dict:
     """Project one SDK content union without duplicating its raw wire body."""
@@ -123,6 +133,171 @@ def _legacy_envelope_payload(value: object) -> object:
             if not key.startswith("_")
         }
     return str(value)
+
+
+def _resource_descriptor_payload(resource: object) -> dict[str, Any] | None:
+    """Project one SDK resource descriptor into a stable JSON shape."""
+    if is_dataclass(resource):
+        value = asdict(resource)
+    elif isinstance(resource, dict):
+        value = dict(resource)
+    else:
+        value = {
+            key: getattr(resource, key, None)
+            for key in (
+                "type",
+                "file_key",
+                "file_name",
+                "duration_ms",
+                "cover_image_key",
+            )
+        }
+
+    resource_type = str(value.get("type") or "").lower()
+    if resource_type == "media":
+        resource_type = "video"
+    file_key = value.get("file_key")
+    if resource_type not in _ATTACHMENT_TYPES or not isinstance(file_key, str):
+        return None
+    if not file_key:
+        return None
+
+    result: dict[str, Any] = {
+        "type": resource_type,
+        "file_key": file_key,
+    }
+    for key in ("file_name", "duration_ms", "cover_image_key"):
+        if value.get(key) is not None:
+            result[key] = value[key]
+    return result
+
+
+def _message_resource_descriptors(
+    resources: object,
+    message_type: str,
+    content: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return downloadable resources, retaining a legacy-content fallback."""
+    descriptors: list[dict[str, Any]] = []
+    if isinstance(resources, (list, tuple)):
+        for resource in resources:
+            projected = _resource_descriptor_payload(resource)
+            if projected is not None:
+                descriptors.append(projected)
+
+    if not descriptors:
+        logical_type = "video" if message_type == "media" else message_type
+        if logical_type in _ATTACHMENT_TYPES:
+            if logical_type == "image":
+                file_key = content.get("image_key") or content.get("file_key")
+            else:
+                file_key = content.get("file_key")
+            if isinstance(file_key, str) and file_key:
+                fallback: dict[str, Any] = {
+                    "type": logical_type,
+                    "file_key": file_key,
+                }
+                if content.get("file_name") is not None:
+                    fallback["file_name"] = content["file_name"]
+                duration_ms = content.get("duration_ms", content.get("duration"))
+                if duration_ms is not None:
+                    fallback["duration_ms"] = duration_ms
+                if logical_type == "video" and content.get("image_key"):
+                    fallback["cover_image_key"] = content["image_key"]
+                descriptors.append(fallback)
+
+    expanded: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for descriptor in descriptors:
+        key = (descriptor["type"], descriptor["file_key"])
+        if key not in seen:
+            seen.add(key)
+            expanded.append(descriptor)
+        cover_key = descriptor.get("cover_image_key")
+        cover_identity = ("image", cover_key)
+        if isinstance(cover_key, str) and cover_key and cover_identity not in seen:
+            seen.add(cover_identity)
+            expanded.append({
+                "type": "image",
+                "file_key": cover_key,
+                "role": "cover",
+                "parent_file_key": descriptor["file_key"],
+            })
+    return expanded
+
+
+def _safe_attachment_filename(
+    candidate: object,
+    *,
+    resource_type: str,
+    index: int,
+) -> str:
+    """Make a provider filename safe under one message's attachments dir."""
+    value = str(candidate or "").replace("\\", "/").rsplit("/", 1)[-1]
+    value = _UNSAFE_ATTACHMENT_CHARS.sub("_", value).strip().rstrip(" .")
+    if value in {"", ".", ".."}:
+        value = f"{resource_type}-{index}{_ATTACHMENT_SUFFIXES[resource_type]}"
+    if resource_type in {"image", "audio", "video", "sticker"}:
+        if not Path(value).suffix:
+            value += _ATTACHMENT_SUFFIXES[resource_type]
+    if len(value) > 180:
+        suffix = Path(value).suffix[:16]
+        stem_budget = max(1, 180 - len(suffix))
+        value = f"{Path(value).stem[:stem_budget]}{suffix}"
+    return value
+
+
+def _unique_attachment_path(directory: Path, filename: str) -> Path:
+    candidate = directory / filename
+    counter = 2
+    while candidate.exists():
+        suffix = Path(filename).suffix
+        stem = Path(filename).stem
+        candidate = directory / f"{stem}-{counter}{suffix}"
+        counter += 1
+    return candidate
+
+
+def _write_attachment_atomic(path: Path, content: bytes) -> None:
+    fd, temporary = tempfile.mkstemp(prefix=".attachment-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def _safe_attachment_error(error: object) -> str:
+    if isinstance(error, BaseException):
+        fallback = type(error).__name__
+        value = str(error)
+    else:
+        fallback = "unknown"
+        value = str(error or "")
+    normalized = " ".join(value.split())
+    return (normalized or fallback)[:200]
+
+
+def _legacy_media_from_attachments(attachments: list[dict[str, Any]]) -> dict | None:
+    primary = next(
+        (item for item in attachments if item.get("role") != "cover"),
+        attachments[0] if attachments else None,
+    )
+    if primary is None:
+        return None
+    result = {
+        key: primary[key]
+        for key in ("type", "filename", "path", "size", "file_key")
+        if primary.get(key) is not None
+    }
+    if primary.get("status") == "failed":
+        result["download_error"] = primary.get("error", "download failed")
+    return result
 
 
 class TypingIndicatorManager:
@@ -366,6 +541,61 @@ class FeishuManager:
             raise ValueError(f"Invalid Feishu message ID format: {compound_id!r}")
         return parts[0], parts[1], parts[2]
 
+    @staticmethod
+    def _download_inbound_attachments(
+        account: Any,
+        message_id: str,
+        message_dir: Path,
+        resources: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Download all declared message resources without losing failures."""
+        if not resources:
+            return []
+
+        attachment_dir = message_dir / "attachments"
+        results: list[dict[str, Any]] = []
+        for index, resource in enumerate(resources, start=1):
+            result = dict(resource)
+            if account is None:
+                result.update({"status": "failed", "error": "account unavailable"})
+                results.append(result)
+                continue
+            try:
+                response_name, content = account.get_message_resource(
+                    message_id,
+                    resource["file_key"],
+                    resource["type"],
+                )
+                if not isinstance(content, (bytes, bytearray)):
+                    raise TypeError("resource response is not bytes")
+                attachment_dir.mkdir(parents=True, exist_ok=True)
+                filename = _safe_attachment_filename(
+                    response_name or resource.get("file_name"),
+                    resource_type=resource["type"],
+                    index=index,
+                )
+                path = _unique_attachment_path(attachment_dir, filename)
+                body = bytes(content)
+                _write_attachment_atomic(path, body)
+                result.update({
+                    "status": "downloaded",
+                    "filename": path.name,
+                    "path": str(path),
+                    "size": len(body),
+                })
+            except Exception as exc:
+                result.update({
+                    "status": "failed",
+                    "error": _safe_attachment_error(exc),
+                })
+                log.warning(
+                    "Failed to download inbound Feishu %s resource: %s",
+                    resource.get("type", "unknown"),
+                    _safe_attachment_error(exc),
+                )
+            results.append(result)
+        return results
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -504,6 +734,7 @@ class FeishuManager:
                     if isinstance(body_text, str)
                     else (getattr(inbound, "content_text", "") or "")
                 )
+                resource_source = getattr(inbound, "resources", None)
                 raw_envelope = data.feishu
             else:
                 # Backward-compatible callback shape used by older callers and
@@ -544,6 +775,7 @@ class FeishuManager:
                 mentions = _normalized_mentions_payload(
                     getattr(message, "mentions", None)
                 )
+                resource_source = []
                 raw_envelope = _legacy_envelope_payload(data)
 
                 if msg_type == "text":
@@ -585,7 +817,11 @@ class FeishuManager:
                     feishu_msg_id, account_alias,
                 )
                 return
-            media_info: dict | None = None
+            resource_descriptors = _message_resource_descriptors(
+                resource_source,
+                msg_type,
+                content_data,
+            )
 
             if create_time:
                 try:
@@ -624,6 +860,7 @@ class FeishuManager:
                 ),
                 "mentions": mentions,
                 "content": normalized_content,
+                "attachments": [],
                 "media": None,
                 "voice_transcript": None,
                 "feishu": raw_envelope,
@@ -661,61 +898,49 @@ class FeishuManager:
                     account, chat_id, typing_receive_id, typing_receive_id_type,
                 )
 
-            # Handle audio/voice messages: download and transcribe
-            if msg_type == "audio":
-                file_key = content_data.get("file_key", "")
-                if file_key and account:
-                    try:
-                        log.info("Downloading audio message %s (file_key=%s)",
-                                 feishu_msg_id, file_key)
-                        filename, audio_data = account.get_message_resource(
-                            feishu_msg_id, file_key, "file",
-                        )
-                        # Save to attachments directory
-                        att_dir = msg_dir / "attachments"
-                        att_dir.mkdir(parents=True, exist_ok=True)
-                        # Ensure proper audio extension
-                        if not any(filename.endswith(ext) for ext in
-                                   (".ogg", ".opus", ".mp3", ".wav", ".m4a")):
-                            filename = filename + ".ogg"
-                        filepath = att_dir / filename
-                        filepath.write_bytes(audio_data)
-                        media_info = {
-                            "type": "audio",
-                            "filename": filename,
-                            "path": str(filepath),
-                            "size": len(audio_data),
-                            "file_key": file_key,
-                        }
-                        payload["media"] = media_info
+            attachments = self._download_inbound_attachments(
+                account,
+                feishu_msg_id,
+                msg_dir,
+                resource_descriptors,
+            )
+            payload["attachments"] = attachments
+            payload["media"] = _legacy_media_from_attachments(attachments)
 
-                        # Transcribe with Whisper
-                        log.info("Transcribing voice message from %s (%s)",
-                                 account_alias, open_id)
-                        transcript = _transcribe_voice(str(filepath))
-                        if "error" not in transcript:
-                            text = transcript.get("text", "")
-                            payload["text"] = text
-                            payload["voice_transcript"] = {
-                                "text": text,
-                                "language": transcript.get("language"),
-                                "duration": transcript.get("duration"),
-                                "segments": transcript.get("segments"),
-                            }
-                            log.info("Voice transcription successful: %s chars",
-                                     len(text))
-                        else:
-                            text = (
-                                f"[Voice message received — transcription "
-                                f"failed: {transcript.get('error', 'unknown')}]"
-                            )
-                            payload["text"] = text
-                            log.warning("Voice transcription failed: %s",
-                                        transcript.get("error"))
-                    except Exception as e:
-                        log.warning("Audio download/transcription failed: %s", e)
-                        text = f"[Voice message received — processing failed: {e}]"
+            # Preserve the established local voice transcription path, but
+            # keep the downloadable resource descriptor when either stage
+            # fails instead of replacing it with an untraceable error string.
+            if msg_type == "audio":
+                audio = next(
+                    (item for item in attachments if item.get("type") == "audio"),
+                    None,
+                )
+                if audio and audio.get("status") == "downloaded":
+                    log.info("Transcribing Feishu voice message on %s", account_alias)
+                    transcript = _transcribe_voice(str(audio["path"]))
+                    if "error" not in transcript:
+                        text = transcript.get("text", "")
                         payload["text"] = text
+                        payload["voice_transcript"] = {
+                            "text": text,
+                            "language": transcript.get("language"),
+                            "duration": transcript.get("duration"),
+                            "segments": transcript.get("segments"),
+                        }
+                        audio["transcription_status"] = "completed"
+                        log.info(
+                            "Feishu voice transcription successful: %s chars",
+                            len(text),
+                        )
+                    else:
+                        error = _safe_attachment_error(transcript.get("error"))
+                        audio.update({
+                            "transcription_status": "failed",
+                            "transcription_error": error,
+                        })
+                        log.warning("Feishu voice transcription failed: %s", error)
+                elif audio:
+                    audio["transcription_status"] = "skipped"
 
             # Persist to disk
             (msg_dir / "message.json").write_text(
@@ -1332,6 +1557,7 @@ class FeishuManager:
                 "reply_to": m.get("reply_to"),
                 "mentions": m.get("mentions", []),
                 "content": m.get("content"),
+                "attachments": m.get("attachments", []),
                 "media": m.get("media"),
                 "voice_transcript": m.get("voice_transcript"),
                 "feishu": m.get("feishu"),
@@ -1439,6 +1665,9 @@ class FeishuManager:
                     "reply_to": msg.get("reply_to"),
                     "mentions": msg.get("mentions", []),
                     "content": msg.get("content"),
+                    "attachments": msg.get("attachments", []),
+                    "media": msg.get("media"),
+                    "voice_transcript": msg.get("voice_transcript"),
                 })
 
         return {"status": "ok", "total": len(matches), "messages": matches}
