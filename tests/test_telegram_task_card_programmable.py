@@ -117,6 +117,31 @@ def test_active_intrinsic_body_projects_onto_existing_resident(tmp_path):
     assert "- first" in text
 
 
+def test_active_intrinsic_body_uses_shared_public_sanitizer(tmp_path):
+    manager, acct, _service = _manager(tmp_path)
+    _auto(manager)
+    private_values = (
+        "synthetic-secret-value",
+        "https://example.invalid/private",
+        "/Users/synthetic/private/file.txt",
+        "ou_abcdefghijklmnopqrstuvwxyz012345",
+    )
+    body = (
+        f"secret={private_values[0]} url {private_values[1]} "
+        f"path {private_values[2]} actor {private_values[3]}"
+    )
+    _write_intrinsic_taskcard(tmp_path, status="active", body=body)
+
+    manager._broadcast_programmable_task_card_file()
+
+    text = _current(acct)
+    assert all(value not in text for value in private_values)
+    assert "<REDACTED:secret>" in text
+    assert "<REDACTED:url>" in text
+    assert "<REDACTED:path>" in text
+    assert "<REDACTED:provider_id>" in text
+
+
 def test_projection_is_diff_only_against_last_programmable_frame(tmp_path):
     manager, acct, _service = _manager(tmp_path)
     _auto(manager)

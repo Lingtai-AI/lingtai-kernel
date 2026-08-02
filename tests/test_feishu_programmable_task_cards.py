@@ -134,6 +134,37 @@ def test_active_body_composes_with_automatic_and_updates_diff_only(
     assert manager._resident.frames[route.key]["programmable"] == ("one truthful frame")
 
 
+def test_programmable_body_uses_shared_public_sanitizer(tmp_path: Path) -> None:
+    frames: list[str] = []
+    private_values = (
+        "synthetic-secret-value",
+        "https://example.invalid/private",
+        "/Users/synthetic/private/file.txt",
+        "ou_abcdefghijklmnopqrstuvwxyz012345",
+    )
+    _write_artifact(
+        tmp_path,
+        "active",
+        (
+            f"secret={private_values[0]} url {private_values[1]} "
+            f"path {private_values[2]} actor {private_values[3]}"
+        ),
+    )
+    poller = FeishuProgrammableTaskCardPoller(
+        tmp_path,
+        on_active=frames.append,
+        on_inactive=lambda: None,
+    )
+
+    assert poller.poll_once() is True
+    assert len(frames) == 1
+    assert all(value not in frames[0] for value in private_values)
+    assert "<REDACTED:secret>" in frames[0]
+    assert "<REDACTED:url>" in frames[0]
+    assert "<REDACTED:path>" in frames[0]
+    assert "<REDACTED:provider_id>" in frames[0]
+
+
 def test_exact_inactive_clears_only_programmable_slot_idempotently(
     tmp_path: Path,
 ) -> None:

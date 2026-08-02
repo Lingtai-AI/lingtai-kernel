@@ -367,6 +367,7 @@ class FeishuProgrammableTaskCardPoller:
             body = self._body_path.read_text(encoding="utf-8")
         except OSError:
             return None
+        body = TaskCardEventProjection.sanitize_public_text(body)
         if not body.strip():
             return None
         return body[: self.TEXT_LIMIT]

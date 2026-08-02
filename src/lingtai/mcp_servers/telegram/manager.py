@@ -2108,20 +2108,28 @@ class TelegramManager:
         neither channel's timestamp is derived from or advances the other's.
         ``now`` is the render instant (injectable for deterministic tests).
         """
-        from lingtai.kernel.trace_redaction import redact_text
-
         parts: list[str] = []
         title = str(card.get("title", "")).strip()
         if title:
-            parts.append(redact_text(title)[:cls._TASK_CARD_REASONING_CAP])
+            parts.append(
+                TaskCardEventProjection.sanitize_public_text(title)[
+                    :cls._TASK_CARD_REASONING_CAP
+                ]
+            )
         for line in card.get("lines", []) or []:
             if not isinstance(line, str):
                 continue
-            rendered = redact_text(line)[:cls._TASK_CARD_REASONING_CAP]
+            rendered = TaskCardEventProjection.sanitize_public_text(line)[
+                :cls._TASK_CARD_REASONING_CAP
+            ]
             parts.append(f"• {rendered}")
         footer = str(card.get("footer", "")).strip()
         if footer:
-            parts.append(redact_text(footer)[:cls._TASK_CARD_REASONING_CAP])
+            parts.append(
+                TaskCardEventProjection.sanitize_public_text(footer)[
+                    :cls._TASK_CARD_REASONING_CAP
+                ]
+            )
         if not parts:
             return ""
         parts.append(f"{_TASK_CARD_TIME_PREFIX}{cls._task_card_render_time(now)}")
@@ -2617,6 +2625,7 @@ class TelegramManager:
             body = self._taskcard_body_path().read_text(encoding="utf-8")
         except OSError:
             return None
+        body = TaskCardEventProjection.sanitize_public_text(body)
         if not body.strip():
             return None
         if len(body) > self._TASK_CARD_TEXT_LIMIT:

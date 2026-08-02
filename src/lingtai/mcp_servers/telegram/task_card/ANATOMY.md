@@ -41,7 +41,8 @@ onto its one tracked resident Task Card target per account+chat.
   high-water supersession, Telegram API classification, real transport,
   resident persistence, and programmable file projection callbacks.
 - `../../task_card/event_projection.py` — the channel-neutral pure core for safe
-  event allowlisting, redaction, API-call grouping, budgets, metadata, and text
+  event allowlisting, credential/URL/local-path/provider-ID sanitization,
+  machine-label validation, API-call grouping, budgets, metadata, and text
   rendering. It owns no journal I/O, route, resident, or transport state.
 - `SKILL.md` — packaged Telegram-facing manual/procedure material for this
   component.
@@ -61,8 +62,9 @@ onto its one tracked resident Task Card target per account+chat.
   callbacks. The shared core never imports Telegram, reads its state file, or
   classifies Bot API errors.
 - `TelegramManager._broadcast_programmable_task_card_file()` reads
-  `taskcard/status` first: exact `active` reads the body and projects it
-  (diff-only against the last committed programmable frame); exact `inactive`
+  `taskcard/status` first: exact `active` reads the body, applies the shared
+  public sanitizer, and projects it (diff-only against the last committed
+  sanitized programmable frame); exact `inactive`
   calls `_clear_programmable_task_card_frame()` to exclude only the
   programmable frame from the resident, idempotently; any other status is
   unchanged.

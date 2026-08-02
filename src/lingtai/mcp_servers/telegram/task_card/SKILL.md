@@ -44,11 +44,14 @@ Current contract summary:
 - At most one intrinsic-owned watch may be active per agent.
 - Telegram is a read-only projector for the intrinsic artifact. It polls
   `taskcard/status` and `taskcard/taskcard.md`, projects exact active +
-  nonempty bodies into the resident programmable slot, and preserves the
-  automatic event-journal slot. Exact `inactive` idempotently excludes only the
+  nonempty bodies into the resident programmable slot after replacing
+  credential shapes, URLs, recognized local absolute paths, and high-confidence
+  provider identifiers with typed placeholders. Sanitization happens before
+  the length ceiling and diff comparison and preserves the automatic
+  event-journal slot. Exact `inactive` idempotently excludes only the
   programmable slot from the resident (the message, automatic content, and
   local body are never touched); missing/unreadable status, or active with a
-  missing/blank body, or an unchanged body, remain a no-op.
+  missing/blank body, or an unchanged sanitized body, remain a no-op.
 
 Do not use this retained Telegram package as an active schema, endpoint,
 controller lifecycle, JSON-card renderer contract, private reverse-MCP route, or

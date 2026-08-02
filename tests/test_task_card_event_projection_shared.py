@@ -49,6 +49,64 @@ def test_shared_projection_matches_telegram_safe_group_shape() -> None:
     assert "ghp_" not in str(shared_groups)
 
 
+def test_shared_projection_sanitizes_cross_route_private_locators() -> None:
+    private_values = (
+        "synthetic-secret-value",
+        "https://example.invalid/private?id=1",
+        "/Users/synthetic/private/file.txt",
+        r"C:\Users\synthetic\private\file.txt",
+        "ou_abcdefghijklmnopqrstuvwxyz012345",
+    )
+    source = (
+        f"secret={private_values[0]} url {private_values[1]} "
+        f"paths {private_values[2]} {private_values[3]} actor {private_values[4]}"
+    )
+    diary = TaskCardEventProjection.project_agent_text_event({
+        "type": "diary",
+        "visibility": "public",
+        "text": source,
+    })
+    tool = TaskCardEventProjection.project_tool_call_row({
+        "type": "tool_call",
+        "tool_name": "bash",
+        "tool_args": {"action": "run", "_reasoning": source},
+    })
+
+    assert diary is not None
+    assert tool is not None
+    for rendered in (diary["text"], tool["reasoning"]):
+        assert all(value not in rendered for value in private_values)
+        assert "<REDACTED:secret>" in rendered
+        assert "<REDACTED:url>" in rendered
+        assert "<REDACTED:path>" in rendered
+        assert "<REDACTED:provider_id>" in rendered
+
+
+def test_shared_projection_rejects_private_or_malformed_machine_labels() -> None:
+    assert TaskCardEventProjection.project_tool_call_row({
+        "type": "tool_call",
+        "tool_name": "bad label with spaces",
+        "tool_args": {"action": "run", "_reasoning": "safe"},
+    }) is None
+    assert TaskCardEventProjection.project_tool_call_row({
+        "type": "tool_call",
+        "tool_name": "x" * 65,
+        "tool_args": {"action": "run", "_reasoning": "safe"},
+    }) is None
+
+    row = TaskCardEventProjection.project_tool_call_row({
+        "type": "tool_call",
+        "tool_name": "bash",
+        "tool_args": {
+            "action": "https://example.invalid/private",
+            "_reasoning": "safe",
+        },
+    })
+    assert row is not None
+    assert row["tool"] == "bash"
+    assert "tool_action" not in row
+
+
 def test_shared_result_projection_updates_only_matching_safe_rows() -> None:
     groups = [
         {

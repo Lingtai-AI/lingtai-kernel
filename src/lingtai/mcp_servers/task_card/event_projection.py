@@ -4,11 +4,38 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import datetime
 from typing import Any
 
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.trace_redaction import redact_text
+
+
+_PUBLIC_URL_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:https?|wss?|ftp)://[^\s<>{}\[\]()\"'`]+"
+)
+_QUOTED_LOCAL_PATH_RE = re.compile(
+    r"(?i)(?P<quote>[`\"'])(?:[A-Z]:[\\/]|~/|"
+    r"/(?:Users|home|root|tmp|private|var|etc|usr|opt|Volumes|mnt|srv|"
+    r"workspace|app)(?:/|(?=[`\"']))|\\\\)[^`\"'\r\n]+(?P=quote)"
+)
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/]|"
+    r"\\\\[^\\/\s]+[\\/][^\\/\s]+[\\]?)[^\s<>{}\[\]()\"'`]*"
+)
+_POSIX_ABSOLUTE_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:~/[^\s<>{}\[\]()\"'`]+|"
+    r"/(?:Users|home|root|tmp|private|var|etc|usr|opt|Volumes|mnt|srv|"
+    r"workspace|app)(?:/[^\s<>{}\[\]()\"'`]*)?)"
+)
+_PROVIDER_IDENTIFIER_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_-])(?:"
+    r"(?:ou|oc|om|omt|cli)_[A-Za-z0-9_-]{8,}|"
+    r"(?:img|file)_v\d+_[A-Za-z0-9_-]{8,}|"
+    r"(?:resp|msg|call|thread|run|req)_[A-Za-z0-9_-]{16,}"
+    r")(?![A-Za-z0-9_-])"
+)
 
 
 class TaskCardEventProjection:
@@ -32,6 +59,16 @@ class TaskCardEventProjection:
     EVENT_TEXT_CAP = 500
     MAX_EVENTS_PER_CALL = 24
     API_CALL_DIVIDER = "──────────"
+
+    @staticmethod
+    def sanitize_public_text(value: object) -> str:
+        """Remove private locator classes from a cross-route public frame."""
+        text = redact_text(str(value))
+        text = _PUBLIC_URL_RE.sub("<REDACTED:url>", text)
+        text = _QUOTED_LOCAL_PATH_RE.sub("<REDACTED:path>", text)
+        text = _WINDOWS_ABSOLUTE_PATH_RE.sub("<REDACTED:path>", text)
+        text = _POSIX_ABSOLUTE_PATH_RE.sub("<REDACTED:path>", text)
+        return _PROVIDER_IDENTIFIER_RE.sub("<REDACTED:provider_id>", text)
 
     @classmethod
     def footer(cls, normal_rows: int) -> str:
@@ -79,7 +116,7 @@ class TaskCardEventProjection:
         text = event.get("text")
         if not isinstance(text, str) or not text.strip():
             return None
-        text = redact_text(text).strip()
+        text = cls.sanitize_public_text(text).strip()
         cap = cls.EVENT_TEXT_CAP if text_cap is None else text_cap
         if len(text) > cap:
             text = text[: cap - 1] + "…"
@@ -95,8 +132,8 @@ class TaskCardEventProjection:
         """Extract the fixed safe-field allowlist from one tool call."""
         if event.get("type") != "tool_call":
             return None
-        tool_name = event.get("tool_name")
-        if not isinstance(tool_name, str) or not tool_name:
+        tool_name = cls.machine_identifier(event.get("tool_name"), limit=64)
+        if tool_name is None:
             return None
         tool_args = event.get("tool_args")
         if not isinstance(tool_args, dict):
@@ -104,7 +141,7 @@ class TaskCardEventProjection:
         reasoning = tool_args.get("_reasoning", "")
         if not isinstance(reasoning, str):
             reasoning = ""
-        reasoning = redact_text(reasoning)
+        reasoning = cls.sanitize_public_text(reasoning)
         cap = cls.EVENT_REASONING_CAP if reasoning_cap is None else reasoning_cap
         if len(reasoning) > cap:
             reasoning = reasoning[: cap - 1] + "…"
@@ -112,8 +149,8 @@ class TaskCardEventProjection:
         call_id = event.get("tool_call_id")
         if isinstance(call_id, str) and call_id:
             row.update({"_tool_call_id": call_id, "status": "???"})
-        action = tool_args.get("action")
-        if isinstance(action, str) and action:
+        action = cls.machine_identifier(tool_args.get("action"), limit=64)
+        if action is not None:
             row["tool_action"] = action
         started_at = cls.format_row_timestamp(event.get("ts"))
         if started_at:
@@ -314,11 +351,13 @@ class TaskCardEventProjection:
         action: str,
         reasoning: str,
     ) -> str:
-        redacted = redact_text(reasoning)
+        redacted = cls.sanitize_public_text(reasoning)
         if len(redacted) > cls.REASONING_CAP:
             excerpt = redacted[: cls.REASONING_CAP] + "…"
         else:
             excerpt = redacted
+        tool = cls.machine_identifier(tool, limit=64) or ""
+        action = cls.machine_identifier(action, limit=64) if tool else None
         label = f"{tool}.{action}" if action else tool
         if label:
             return f"{cls.HEADER}\n{label}: {excerpt}"
@@ -432,17 +471,21 @@ class TaskCardEventProjection:
                 api_prepared.append((idx, cls.API_CALL_DIVIDER))
                 continue
             if kind == "text":
-                text = redact_text(str(row.get("text", ""))).strip()
+                text = cls.sanitize_public_text(row.get("text", "")).strip()
                 if text:
                     text_prepared.append((idx, text[: cls.EVENT_TEXT_CAP]))
                 continue
             if kind == "api_error":
                 api_prepared.append((idx, cls.format_api_error_line(row)))
                 continue
-            tool = str(row.get("tool", ""))
-            action = str(row.get("tool_action", ""))
+            tool = cls.machine_identifier(row.get("tool"), limit=64) or ""
+            action = (
+                cls.machine_identifier(row.get("tool_action"), limit=64)
+                if tool
+                else None
+            )
             label = f"{tool}.{action}" if action else tool
-            redacted = redact_text(str(row.get("reasoning", "")))
+            redacted = cls.sanitize_public_text(row.get("reasoning", ""))
             elapsed = cls.format_elapsed(row.get("elapsed_s", 0))
             done = bool(row.get("done", False))
             started_at = row.get("started_at", "")
@@ -531,12 +574,14 @@ class TaskCardEventProjection:
             now = datetime.now().astimezone()
         return cls.format_current_time(now)
 
-    @staticmethod
-    def machine_identifier(value: object, *, limit: int) -> str | None:
+    @classmethod
+    def machine_identifier(cls, value: object, *, limit: int) -> str | None:
         if not isinstance(value, str):
             return None
         value = value.strip()
         if not value or len(value) > limit:
+            return None
+        if cls.sanitize_public_text(value) != value:
             return None
         safe_punctuation = frozenset("._:/-")
         if not all(
@@ -561,8 +606,8 @@ class TaskCardEventProjection:
         status = row.get("status")
         if type(status) is int and 100 <= status <= 599:
             parts.append(f"HTTP {status}")
-        code = row.get("code")
-        if isinstance(code, str) and code:
+        code = cls.machine_identifier(row.get("code"), limit=64)
+        if code is not None:
             parts.append(code)
         summary = " · ".join(parts)
 

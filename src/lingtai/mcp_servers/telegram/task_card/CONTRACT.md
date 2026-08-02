@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 6
+contract_version: 7
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -42,7 +42,10 @@ semantics live here. The public producer contract lives in
 2. The programmable channel is read-only with respect to the intrinsic
    producer. It reads `<workdir>/taskcard/status` and `<workdir>/taskcard/taskcard.md`.
 3. Telegram reads and composes the programmable body only when `taskcard/status`
-   is exactly `active` and the body is nonempty. Exact `inactive` instead
+   is exactly `active` and the body is nonempty. Before comparison or delivery,
+   the shared public sanitizer replaces credential shapes, URLs, recognized
+   local absolute paths, and high-confidence provider identifiers; the card
+   ceiling is applied only after sanitization. Exact `inactive` instead
    excludes only the programmable frame from composition and updates the same
    resident using Telegram's own automatic content. Missing status, unreadable
    status content that is neither exactly `active` nor exactly `inactive`, or
@@ -52,8 +55,8 @@ semantics live here. The public producer contract lives in
    once the programmable frame is already excluded, repeated `inactive` delivers
    nothing further. Neither case ever deletes/hides the resident message,
    deletes the local producer body, or pauses Telegram's own automatic updates.
-5. Projection is diff-only. If the body bytes match the committed programmable
-   frame, Telegram performs no transport update.
+5. Projection is diff-only. If the sanitized body matches the committed
+   programmable frame, Telegram performs no transport update.
 6. When the Telegram `/taskcard` setting is off, presentation is suppressed.
    Automatic mechanics continue, and hidden programmable finalize still clears
    the committed programmable slot internally so a stale frame cannot resurface
@@ -98,6 +101,10 @@ There is no public MCP `task_card` family in this component.
    provider authorization and exact route binding stay adapter responsibilities.
 8. This package's manual and governed docs remain explicitly packaged through
    `pyproject.toml`.
+9. Automatic public diary/reasoning rows and programmable bodies must use the
+   same shared sanitizer before excerpting. Automatic tool/action labels must
+   pass bounded ASCII machine-identifier validation; malformed labels cannot
+   become rendered card text.
 
 ## Tests
 

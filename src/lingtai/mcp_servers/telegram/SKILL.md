@@ -224,9 +224,11 @@ adapter:
 1. `TelegramManager` owns one tail worker for its lifetime and reads
    `<workdir>/logs/events.jsonl`. The transport-free
    `TaskCardEventProjection` core accepts only canonical public `diary` text
-   plus validated `tool_call` name and redacted/bounded `_reasoning`. Hidden
+   plus bounded ASCII-validated `tool_call` name/action and sanitized/bounded
+   `_reasoning`. Credential shapes, URLs, recognized local absolute paths, and
+   high-confidence provider identifiers become typed placeholders. Hidden
    thinking, aliases, raw action/arguments/results, external response bodies,
-   URLs, tokens, prompts, paths, tracebacks, auth material, and private runtime
+   raw URLs/tokens/paths, prompts, tracebacks, auth material, and private runtime
    diagnostics are never projected. `tool_result`, completion, elapsed,
    heartbeat, API-error, and provider-error rows are not rendered either.
 2. A provider/API call is identified by its `api_call_id`. All public text and
@@ -331,11 +333,12 @@ chat-history cardinality. Normative source:
 - Telegram owns the resident message, automatic/mechanical event-journal slot,
   composition, persistence, and message updates. It reads
   `taskcard/status` and `taskcard/taskcard.md` only for the agent-owned
-  programmable frame: exact `active` plus a nonempty body includes or updates
-  `— WATCH —`; exact `inactive` idempotently excludes only that programmable
+  programmable frame: exact `active` plus a nonempty body is sanitized before
+  the ceiling/diff comparison, then includes or updates `— WATCH —`; exact
+  `inactive` idempotently excludes only that programmable
   frame while preserving the resident, automatic content, and local body.
   Missing/unreadable/other status, active with a missing/blank body, or
-  unchanged bytes remain a no-op at the Telegram boundary.
+  an unchanged sanitized body remain a no-op at the Telegram boundary.
 - Skipping unchanged bytes is not a rate-limit exemption. Every time your
   renderer's output actually changes, Telegram performs a real message
   edit/send, subject to the same Bot API flood-control limits as any other
