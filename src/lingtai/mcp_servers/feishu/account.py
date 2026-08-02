@@ -164,6 +164,14 @@ class FeishuInboundEvent:
     feishu: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class FeishuInboundChannelEvent:
+    """One normalized non-message channel event with its raw envelope."""
+
+    event_type: str
+    event: Any
+
+
 class FeishuAccount:
     """Manages a single Feishu (Lark) app credential — WS polling + REST sending."""
 
@@ -174,6 +182,7 @@ class FeishuAccount:
         app_secret: str,
         allowed_users: list[str] | None,
         on_message: Callable[[str, Any], None] | None = None,
+        on_event: Callable[[str, Any], None] | None = None,
         state_dir: Path | None = None,
     ) -> None:
         self.alias = alias
@@ -183,6 +192,7 @@ class FeishuAccount:
             set(allowed_users) if allowed_users else None
         )
         self._on_message = on_message
+        self._on_event = on_event
         self._state_dir = state_dir
 
         self._ws_thread: threading.Thread | None = None
@@ -225,6 +235,7 @@ class FeishuAccount:
                 fetch_interactive_card=False,
                 include_raw=True,
                 emit_raw_events=True,
+                reaction_notifications="all",
             ),
             # The account-level gate below owns LingTai's legacy allowlist and
             # exact DM/group routing semantics. Let ordinary group events reach
@@ -266,6 +277,18 @@ class FeishuAccount:
 
         self._channel.on(_lark.Events.RAW, self._capture_raw_envelope)
         self._channel.on(_lark.Events.MESSAGE, _handle_message)
+        for sdk_event, event_type in (
+            (_lark.Events.REACTION, "reaction"),
+            (_lark.Events.MESSAGE_READ, "message_read"),
+            (_lark.Events.BOT_ADDED, "bot_added"),
+            (_lark.Events.BOT_LEAVE, "bot_leave"),
+        ):
+            self._channel.on(
+                sdk_event,
+                lambda event, event_type=event_type: self._process_channel_event(
+                    event_type, event
+                ),
+            )
         event_handler = self._channel.dispatcher
 
         # WebSocket client — start() blocks, run in daemon thread
@@ -462,6 +485,25 @@ class FeishuAccount:
                     message=message,
                     feishu=raw_envelope,
                 ),
+            )
+
+    def _process_channel_event(self, event_type: str, event: Any) -> None:
+        """Apply the account allowlist before projecting a passive event."""
+        actor = (
+            getattr(event, "reader", None)
+            if event_type == "message_read"
+            else getattr(event, "operator", None)
+        )
+        actor_open_id = getattr(actor, "open_id", "") if actor else ""
+        if (
+            self._allowed_users is not None
+            and actor_open_id not in self._allowed_users
+        ):
+            return
+        if self._on_event:
+            self._on_event(
+                self.alias,
+                FeishuInboundChannelEvent(event_type=event_type, event=event),
             )
 
     # ------------------------------------------------------------------

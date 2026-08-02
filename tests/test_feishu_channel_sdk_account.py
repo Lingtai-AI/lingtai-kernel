@@ -11,7 +11,11 @@ from types import SimpleNamespace
 import lark_channel as lark_channel_sdk
 
 from lingtai.mcp_servers.feishu import account as account_module
-from lingtai.mcp_servers.feishu.account import FeishuAccount, FeishuInboundEvent
+from lingtai.mcp_servers.feishu.account import (
+    FeishuAccount,
+    FeishuInboundChannelEvent,
+    FeishuInboundEvent,
+)
 
 
 class _Success:
@@ -189,6 +193,7 @@ def test_start_keeps_routing_in_account_and_disables_sdk_text_merging(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
+    registered: list[object] = []
 
     class _Channel:
         def __init__(self, **kwargs: object) -> None:
@@ -196,8 +201,8 @@ def test_start_keeps_routing_in_account_and_disables_sdk_text_merging(
             self.client = object()
             self.dispatcher = object()
 
-        def on(self, _event: str, _handler: object) -> None:
-            pass
+        def on(self, event: str, _handler: object) -> None:
+            registered.append(event)
 
         def stop(self) -> None:
             pass
@@ -227,9 +232,58 @@ def test_start_keeps_routing_in_account_and_disables_sdk_text_merging(
     assert policy.respond_to_mention_all is False
     safety = captured["safety"]
     assert safety.text_batch.max_messages == 1
+    assert captured["inbound"].reaction_notifications == "all"
     outbound = captured["outbound"]
     assert outbound.retry.max_attempts == 1
     assert captured["security"].mode == "compat"
+    assert {
+        lark_channel_sdk.Events.RAW,
+        lark_channel_sdk.Events.MESSAGE,
+        lark_channel_sdk.Events.REACTION,
+        lark_channel_sdk.Events.MESSAGE_READ,
+        lark_channel_sdk.Events.BOT_ADDED,
+        lark_channel_sdk.Events.BOT_LEAVE,
+    }.issubset(set(registered))
+
+
+def test_passive_channel_events_reuse_account_allowlist() -> None:
+    seen: list[tuple[str, FeishuInboundChannelEvent]] = []
+    account = FeishuAccount(
+        "main",
+        "app",
+        "secret",
+        ["ou_allowed"],
+        on_event=lambda alias, event: seen.append((alias, event)),
+    )
+
+    account._process_channel_event(
+        "reaction",
+        SimpleNamespace(operator=SimpleNamespace(open_id="ou_denied")),
+    )
+    account._process_channel_event(
+        "reaction",
+        SimpleNamespace(operator=SimpleNamespace(open_id="ou_allowed")),
+    )
+    account._process_channel_event(
+        "message_read",
+        SimpleNamespace(reader=SimpleNamespace(open_id="ou_allowed")),
+    )
+    account._process_channel_event(
+        "bot_added",
+        SimpleNamespace(operator=SimpleNamespace(open_id="ou_allowed")),
+    )
+    account._process_channel_event(
+        "bot_leave",
+        SimpleNamespace(operator=SimpleNamespace(open_id="ou_allowed")),
+    )
+
+    assert [event.event_type for _alias, event in seen] == [
+        "reaction",
+        "message_read",
+        "bot_added",
+        "bot_leave",
+    ]
+    assert all(alias == "main" for alias, _event in seen)
 
 
 def test_normalized_routing_preserves_allowlist_and_requires_group_mention() -> None:

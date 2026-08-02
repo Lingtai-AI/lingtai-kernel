@@ -26,6 +26,7 @@ class FeishuService:
         accounts_config: list[dict],
         on_message: Callable[[str, object], None],
         config_source: str | None = None,
+        on_event: Callable[[str, object], None] | None = None,
     ) -> None:
         self._working_dir = Path(working_dir)
         self._on_message = on_message
@@ -42,6 +43,7 @@ class FeishuService:
                 app_secret=cfg["app_secret"],
                 allowed_users=cfg.get("allowed_users"),
                 on_message=on_message,
+                on_event=on_event,
                 state_dir=state_dir,
             )
             self._accounts[alias] = acct

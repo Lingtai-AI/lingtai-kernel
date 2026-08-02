@@ -6,10 +6,11 @@ description: |
   receive_id_type (open_id/chat_id), send vs reply, check/read/search, placeholder
   + edit for long responses, contacts/accounts basics, the notification
   transient-hook vs persistent-context split, normalized inbound conversations,
-  preserved inbound media, group @Bot routing, and side-effect caveats.
+  preserved inbound media, passive channel events, group @Bot routing, and
+  side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.5.1
+version: 1.6.0
 last_changed_at: 2026-08-02T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
@@ -45,6 +46,14 @@ maintenance: |
 - `read`: read messages from one chat (`chat_id`; optional `limit`, `account`).
 - `search`: regex search over inbox messages (`query`; optional `account`,
   `chat_id`).
+- Reactions, read receipts, and Bot join/leave events are retained in the
+  reserved `chat_id='events'` conversation. They do not enter the LICC
+  notification mirror and never wake the agent; use `read` or `search` when
+  the event history is relevant. Each record carries a concise `event`
+  projection plus the complete raw envelope under `feishu`.
+- Channel-event actors pass through the same account `allowed_users` gate.
+  The reserved events conversation is read-only: do not use it as a `send`
+  recipient.
 
 ## PLACEHOLDER / PROGRESS
 

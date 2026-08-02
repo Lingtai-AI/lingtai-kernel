@@ -142,7 +142,9 @@ where they share the `.notification/` filesystem protocol.
    (`src/lingtai/mcp_servers/wechat/manager.py:835-956`); Feishu supplies the
    same bounded structured fields from its merged inbox+sent preview window,
    adding normalized message type, topic `thread_id`, and a capped resolved
-   mention list when present; and
+   mention list when present. Its reserved `events` conversation also retains
+   reactions, read receipts, and Bot join/leave records directly in the
+   producer store without publishing them through LICC; and
    WhatsApp supplies a bounded current snapshot from its local inbox/sent store
    without raw Cloud API payloads. Each delta lane's seed/delta boundary matches
    its producer preview window (Telegram 20, WeChat 10, Feishu 10).
@@ -388,7 +390,9 @@ Re-check this contract whenever a change touches any of these areas:
 - **Feishu:** compliant with the content split. The producer attaches bounded
   `recent_messages`/`latest_incoming` plus generic routing keys. Its structured
   items preserve additive topic/reply/mention context without copying the full
-  raw Feishu envelope; transient
+  raw Feishu envelope. Passive channel events are retained only under
+  `chat_id='events'`; they do not update the LICC notification mirror or wake
+  the agent. Transient
   `_meta.agent_meta.notifications.attention.mcp.feishu` is identity-only; content/context lives in
   the Feishu delta lane at `_meta.agent_meta.notifications.persistent.mcp.feishu`.
 - **WhatsApp:** compliant with the content split. The producer attaches bounded

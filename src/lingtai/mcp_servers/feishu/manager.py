@@ -11,6 +11,7 @@ Compound message ID format: {alias}:{chat_id}:{feishu_message_id}
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -27,7 +28,7 @@ from uuid import uuid4
 
 from .. import _skill
 from . import _family
-from .account import FeishuInboundEvent
+from .account import FeishuInboundChannelEvent, FeishuInboundEvent
 from lingtai.kernel._frontmatter import strip_frontmatter
 
 if TYPE_CHECKING:
@@ -71,6 +72,7 @@ _STRUCTURED_MESSAGE_TEXT_CAP = 500
 _STRUCTURED_MESSAGE_MENTION_CAP = 20
 _STRUCTURED_MESSAGE_ATTACHMENT_CAP = 8
 _STRUCTURED_ATTACHMENT_PATH_CAP = 1024
+SYNTHETIC_EVENTS_CHAT_ID = "events"
 
 _ATTACHMENT_TYPES = {"image", "file", "audio", "video", "sticker"}
 _ATTACHMENT_SUFFIXES = {
@@ -575,6 +577,7 @@ class FeishuManager:
         # feishu_message_id values. Protects against Feishu SDK WS
         # reconnect redelivery (issue #5). Bounded; oldest evicted first.
         self._seen_msg_ids: dict[str, OrderedDict[str, None]] = {}
+        self._seen_channel_event_ids: dict[str, OrderedDict[str, None]] = {}
         self._dedupe_lock = threading.Lock()
         self._dedupe_limit = 1000
 
@@ -739,6 +742,156 @@ class FeishuManager:
             while len(seen) > self._dedupe_limit:
                 seen.popitem(last=False)
             return False
+
+    def _is_duplicate_channel_event(
+        self, account_alias: str, event_id: str
+    ) -> bool:
+        with self._dedupe_lock:
+            seen = self._seen_channel_event_ids.get(account_alias)
+            if seen is None:
+                seen = OrderedDict()
+                self._seen_channel_event_ids[account_alias] = seen
+            if event_id in seen:
+                return True
+            seen[event_id] = None
+            while len(seen) > self._dedupe_limit:
+                seen.popitem(last=False)
+            return False
+
+    @staticmethod
+    def _event_operator_payload(operator: object) -> dict[str, Any]:
+        return {
+            key: value
+            for key in ("open_id", "user_id", "name")
+            if (value := getattr(operator, key, None)) is not None
+        }
+
+    @classmethod
+    def _channel_event_projection(
+        cls, event_type: str, event: object
+    ) -> dict[str, Any]:
+        if event_type == "reaction":
+            return {
+                "message_id": getattr(event, "message_id", "") or "",
+                "operator": cls._event_operator_payload(
+                    getattr(event, "operator", None)
+                ),
+                "emoji_type": getattr(event, "emoji_type", "") or "",
+                "action": getattr(event, "action", "") or "",
+                "chat_id": getattr(event, "chat_id", None),
+                "chat_type": getattr(event, "chat_type", None),
+                "action_time": getattr(event, "action_time", None),
+            }
+        if event_type == "message_read":
+            return {
+                "reader": cls._event_operator_payload(
+                    getattr(event, "reader", None)
+                ),
+                "message_ids": list(getattr(event, "message_ids", None) or []),
+            }
+        result: dict[str, Any] = {
+            "chat_id": getattr(event, "chat_id", "") or "",
+            "operator": cls._event_operator_payload(
+                getattr(event, "operator", None)
+            ),
+        }
+        if event_type == "bot_added":
+            result["chat_name"] = getattr(event, "chat_name", None)
+            result["external"] = getattr(event, "external", None)
+        return result
+
+    @staticmethod
+    def _channel_event_id(
+        raw: dict[str, Any], event_type: str, projection: dict[str, Any]
+    ) -> str:
+        header = raw.get("header")
+        if isinstance(header, dict):
+            value = header.get("event_id")
+            if isinstance(value, str) and value:
+                return value
+        for key in ("uuid", "event_id"):
+            value = raw.get(key)
+            if isinstance(value, str) and value:
+                return value
+        canonical = json.dumps(
+            {"event_type": event_type, "event": projection, "feishu": raw},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return f"derived-{hashlib.sha256(canonical).hexdigest()[:24]}"
+
+    @staticmethod
+    def _channel_event_date(raw: dict[str, Any], event: object) -> str:
+        header = raw.get("header")
+        candidates = [getattr(event, "action_time", None)]
+        if isinstance(header, dict):
+            candidates.append(header.get("create_time"))
+        candidates.append(raw.get("ts"))
+        for candidate in candidates:
+            try:
+                timestamp = float(candidate)
+                while timestamp > 10_000_000_000:
+                    timestamp /= 1000
+                return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                )
+            except (TypeError, ValueError, OSError, OverflowError):
+                continue
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def on_channel_event(
+        self, account_alias: str, data: FeishuInboundChannelEvent
+    ) -> None:
+        """Persist a passive channel event in the reserved events conversation."""
+        try:
+            if not isinstance(data, FeishuInboundChannelEvent):
+                return
+            event_type = data.event_type
+            event = data.event
+            raw_value = _legacy_envelope_payload(getattr(event, "raw", {}))
+            raw = raw_value if isinstance(raw_value, dict) else {}
+            projection = self._channel_event_projection(event_type, event)
+            event_id = self._channel_event_id(raw, event_type, projection)
+            if self._is_duplicate_channel_event(account_alias, event_id):
+                return
+
+            actor_key = "reader" if event_type == "message_read" else "operator"
+            actor = projection.get(actor_key) or {}
+            actor_open_id = actor.get("open_id", "")
+            source_chat_id = projection.get("chat_id")
+            date_str = self._channel_event_date(raw, event)
+            compound_id = f"{account_alias}:{SYNTHETIC_EVENTS_CHAT_ID}:{event_id}"
+            payload = {
+                "id": compound_id,
+                "feishu_event_id": event_id,
+                "chat_id": SYNTHETIC_EVENTS_CHAT_ID,
+                "chat_type": "synthetic",
+                "thread_id": None,
+                "message_type": "event",
+                "event_type": event_type,
+                "from_open_id": actor_open_id,
+                "from_name": actor.get("name"),
+                "text": f"[{event_type}]",
+                "date": date_str,
+                "synthetic": True,
+                "source_chat_id": source_chat_id,
+                "event": projection,
+                "feishu": raw,
+            }
+            msg_dir = (
+                self._account_dir(account_alias) / "inbox" / str(uuid4())
+            )
+            msg_dir.mkdir(parents=True, exist_ok=True)
+            (msg_dir / "message.json").write_text(
+                json.dumps(payload, indent=2, default=str), encoding="utf-8"
+            )
+        except Exception as exc:
+            log.warning(
+                "Feishu channel event projection failed (%s): %s",
+                account_alias,
+                exc,
+            )
 
     def on_incoming(self, account_alias: str, data: object) -> None:
         """Persist an incoming Feishu message event to disk and notify agent."""
@@ -1643,6 +1796,10 @@ class FeishuManager:
                 "attachments": m.get("attachments", []),
                 "media": m.get("media"),
                 "voice_transcript": m.get("voice_transcript"),
+                "event_type": m.get("event_type"),
+                "synthetic": m.get("synthetic", False),
+                "source_chat_id": m.get("source_chat_id"),
+                "event": m.get("event"),
                 "feishu": m.get("feishu"),
                 "_direction": "outgoing" if outgoing else "incoming",
             })
@@ -1733,6 +1890,8 @@ class FeishuManager:
                 msg.get("from_open_id", ""),
                 name,
                 msg.get("text", ""),
+                msg.get("event_type", ""),
+                json.dumps(msg.get("event") or {}, ensure_ascii=False, default=str),
             ])
             if pattern.search(searchable):
                 matches.append({
@@ -1751,6 +1910,11 @@ class FeishuManager:
                     "attachments": msg.get("attachments", []),
                     "media": msg.get("media"),
                     "voice_transcript": msg.get("voice_transcript"),
+                    "event_type": msg.get("event_type"),
+                    "synthetic": msg.get("synthetic", False),
+                    "source_chat_id": msg.get("source_chat_id"),
+                    "event": msg.get("event"),
+                    "feishu": msg.get("feishu"),
                 })
 
         return {"status": "ok", "total": len(matches), "messages": matches}
