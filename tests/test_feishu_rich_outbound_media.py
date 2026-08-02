@@ -330,6 +330,68 @@ def test_account_reuses_sdk_media_materialization(
     assert [call["msg_type"] for call in calls] == [expected_msg_type]
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        lark.FeishuChannelErrorCode.UPLOAD_FAILED,
+        lark.FeishuChannelErrorCode.SSRF_BLOCKED,
+    ],
+)
+def test_typed_materialization_failure_reaches_public_result_without_transport(
+    tmp_path: Path,
+    monkeypatch: Any,
+    code: lark.FeishuChannelErrorCode,
+) -> None:
+    transport_calls: list[dict[str, Any]] = []
+
+    def create_message(**kwargs: Any) -> dict[str, Any]:
+        transport_calls.append(kwargs)
+        return {"code": 0, "data": {"message_id": "om_unexpected"}}
+
+    account = _account_with_driver(create_message=create_message)
+
+    async def fail_materialization(*_args: Any, **_kwargs: Any) -> None:
+        raise lark.FeishuChannelError(
+            code,
+            "synthetic typed preparation failure",
+        )
+
+    monkeypatch.setattr(
+        account._channel.sender,
+        "_materialize",
+        fail_materialization,
+    )
+    manager = FeishuManager(
+        _FakeService(account),
+        working_dir=tmp_path,
+        on_inbound=lambda _payload: None,
+    )
+
+    result = _call(manager, "send", {
+        "receive_id": "ou_user",
+        "content": {
+            "type": "image",
+            "source": {"type": "key", "key": "synthetic-media-key"},
+        },
+    })
+
+    assert result == {
+        "status": "failed",
+        "error": (
+            f"Feishu outbound failed: code={code.value} "
+            "msg=synthetic typed preparation failure"
+        ),
+        "message": (
+            f"Feishu outbound failed: code={code.value} "
+            "msg=synthetic typed preparation failure"
+        ),
+        "error_code": code.value.upper(),
+        "retryable": False,
+        "retry_after_seconds": None,
+    }
+    assert transport_calls == []
+
+
 def test_format_error_is_reported_without_plaintext_fallback() -> None:
     calls: list[dict[str, Any]] = []
 

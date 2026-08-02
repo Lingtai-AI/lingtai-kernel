@@ -174,6 +174,10 @@ needed; do not load all three for an ordinary message send.
   filename, and size — never provider keys or the local source path.
 - Each materialized wire chunk is attempted exactly once. A rejected post or
   caption is returned as a failure; it is never silently resent as plain text.
+- SDK media preparation failures retain their typed public classification:
+  upload/materialization failures use `error_code='UPLOAD_FAILED'`, and blocked
+  URL resolution uses `error_code='SSRF_BLOCKED'`. Neither path reaches the
+  Feishu message endpoint or triggers an automatic retry.
 - Feishu conversation state and downloaded media are stored beneath an
   owner-only channel tree. Startup also tightens permissions on records left by
   earlier versions before the listener begins accepting events.

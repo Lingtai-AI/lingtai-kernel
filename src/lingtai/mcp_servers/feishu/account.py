@@ -265,11 +265,25 @@ class _SingleAttemptOutboundAdapter:
         reply_to: str | None = None,
         reply_in_thread: bool | None = None,
     ) -> Any:
-        bodies = await self._sender._materialize(
-            outbound,
-            chat_id=receive_id,
-            receive_id_type=receive_id_type,
-        )
+        try:
+            bodies = await self._sender._materialize(
+                outbound,
+                chat_id=receive_id,
+                receive_id_type=receive_id_type,
+            )
+        except Exception as exc:
+            sdk = _import_lark()
+            if not isinstance(exc, sdk.FeishuChannelError):
+                raise
+            logger.warning(
+                "Feishu outbound materialization failed (code=%s)",
+                getattr(exc.code, "value", exc.code),
+            )
+            return sdk.SendResult.fail(sdk.SendError(
+                code=exc.code,
+                retryable=False,
+                hint=str(exc),
+            ))
         if not bodies:
             raise RuntimeError("Feishu outbound materialized an empty body")
 
