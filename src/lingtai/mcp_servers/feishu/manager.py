@@ -28,6 +28,7 @@ from uuid import uuid4
 
 from .. import _skill
 from . import _family
+from ._errors import failure_result
 from .account import (
     FeishuInboundCardAction,
     FeishuInboundChannelEvent,
@@ -787,6 +788,7 @@ DESCRIPTION = (
     "'read' to read messages from a specific chat (returns compound message IDs). "
     "'reply' to respond to a message and follow its topic by default "
     "(use compound ID from read results). "
+    "'react' to add or remove a reaction on a message. "
     "'search' to find messages by keyword or regex. "
     "'delete' to delete a bot message (message_id). "
     "'edit' to edit a sent text/post/card message (message_id, text or content; "
@@ -940,6 +942,8 @@ class FeishuManager:
                 return self._read(args)
             elif action == "reply":
                 return self._reply(args)
+            elif action == "react":
+                return self._react(args)
             elif action == "search":
                 return self._search(args)
             elif action == "delete":
@@ -957,9 +961,12 @@ class FeishuManager:
             elif action == "manual":
                 return self._manual()
             else:
-                return {"error": f"Unknown feishu action: {action!r}"}
+                return failure_result(
+                    f"Unknown feishu action: {action!r}",
+                    error_code="ACTION_REQUIRED",
+                )
         except Exception as e:
-            return {"error": str(e)}
+            return failure_result(e)
 
     def _manual(self) -> dict:
         # The manual lives in this package's bundled SKILL.md (standard skill
@@ -2114,10 +2121,15 @@ class FeishuManager:
         placeholder = bool(args.get("placeholder", False))
 
         if not receive_id:
-            return {"error": "receive_id is required"}
+            return failure_result(
+                "receive_id is required", error_code="INVALID_ARGUMENT",
+            )
         content, sdk_message, text, message_type = _normalize_outbound_content(args)
         if placeholder and content["type"] not in _PLACEHOLDER_CONTENT_TYPES:
-            return {"error": "placeholder only supports text, markdown, or post"}
+            return failure_result(
+                "placeholder only supports text, markdown, or post",
+                error_code="INVALID_ARGUMENT",
+            )
         if placeholder:
             card, text = _native_progress_card(content, text)
             content = {"type": "card", "card": card}
@@ -2128,10 +2140,12 @@ class FeishuManager:
         dup_key = (account, receive_id, content_key)
         count = self._last_sent.get(dup_key, 0)
         if count >= self._dup_free_passes:
-            return {
-                "status": "blocked",
-                "warning": "Identical message already sent. Think twice before repeating.",
-            }
+            result = failure_result(
+                "Identical message already sent. Think twice before repeating.",
+                error_code="DUPLICATE_BLOCKED",
+            )
+            result["warning"] = result["error"]
+            return result
 
         acct = self._service.get_account(account)
         # chat_id for typing cleanup — resolved after send, but if
@@ -2236,7 +2250,9 @@ class FeishuManager:
         limit = args.get("limit", 10)
 
         if not chat_id:
-            return {"error": "chat_id is required"}
+            return failure_result(
+                "chat_id is required", error_code="INVALID_ARGUMENT",
+            )
 
         # Merge inbox + sent so post-molt agents see their own outgoing
         # replies and avoid duplicate sends.
@@ -2309,7 +2325,9 @@ class FeishuManager:
     def _reply(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")
         if not compound_id:
-            return {"error": "message_id is required"}
+            return failure_result(
+                "message_id is required", error_code="INVALID_ARGUMENT",
+            )
         content, sdk_message, text, message_type = _normalize_outbound_content(args)
 
         alias, _chat_id, feishu_msg_id = self._parse_compound_id(compound_id)
@@ -2368,17 +2386,63 @@ class FeishuManager:
                     alias, _chat_id, feishu_msg_id,
                 )
 
+    def _react(self, args: dict) -> dict:
+        compound_id = args.get("message_id", "")
+        operation = args.get("operation", "")
+        if not compound_id:
+            return failure_result(
+                "message_id is required", error_code="INVALID_ARGUMENT",
+            )
+        alias, _chat_id, feishu_msg_id = self._parse_compound_id(compound_id)
+        acct = self._service.get_account(alias)
+        if operation == "add":
+            emoji_type = args.get("emoji_type", "")
+            if not emoji_type:
+                return failure_result(
+                    "emoji_type is required for reaction add",
+                    error_code="INVALID_ARGUMENT",
+                )
+            reaction_id = acct.add_reaction_with_id(
+                feishu_msg_id, emoji_type,
+            )
+            return {
+                "status": "added",
+                "message_id": compound_id,
+                "reaction_id": reaction_id,
+                "emoji_type": emoji_type,
+            }
+        if operation == "remove":
+            reaction_id = args.get("reaction_id", "")
+            if not reaction_id:
+                return failure_result(
+                    "reaction_id is required for reaction remove",
+                    error_code="INVALID_ARGUMENT",
+                )
+            acct.remove_reaction(feishu_msg_id, reaction_id)
+            return {
+                "status": "removed",
+                "message_id": compound_id,
+                "reaction_id": reaction_id,
+            }
+        return failure_result(
+            "operation must be add or remove", error_code="INVALID_ARGUMENT",
+        )
+
     def _search(self, args: dict) -> dict:
         query = args.get("query", "")
         if not query:
-            return {"error": "query is required"}
+            return failure_result(
+                "query is required", error_code="INVALID_ARGUMENT",
+            )
         account = self._resolve_account(args)
         target_chat = args.get("chat_id", "")
 
         try:
             pattern = re.compile(query, re.IGNORECASE)
         except re.error as e:
-            return {"error": f"Invalid regex: {e}"}
+            return failure_result(
+                f"Invalid regex: {e}", error_code="INVALID_ARGUMENT",
+            )
 
         messages = self._list_messages(account, "inbox")
         matches = []
@@ -2425,7 +2489,9 @@ class FeishuManager:
     def _delete(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")
         if not compound_id:
-            return {"error": "message_id is required"}
+            return failure_result(
+                "message_id is required", error_code="INVALID_ARGUMENT",
+            )
         alias, _chat_id, feishu_msg_id = self._parse_compound_id(compound_id)
         acct = self._service.get_account(alias)
         acct.delete_message(feishu_msg_id)
@@ -2434,7 +2500,9 @@ class FeishuManager:
     def _edit(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")
         if not compound_id:
-            return {"error": "message_id is required"}
+            return failure_result(
+                "message_id is required", error_code="INVALID_ARGUMENT",
+            )
         alias, _chat_id, feishu_msg_id = self._parse_compound_id(compound_id)
         record = self._find_message_record(alias, compound_id)
         is_progress = bool(
@@ -2497,9 +2565,13 @@ class FeishuManager:
         open_id = args.get("open_id", "")
         alias = args.get("alias", "")
         if not open_id:
-            return {"error": "open_id is required"}
+            return failure_result(
+                "open_id is required", error_code="INVALID_ARGUMENT",
+            )
         if not alias:
-            return {"error": "alias is required"}
+            return failure_result(
+                "alias is required", error_code="INVALID_ARGUMENT",
+            )
         contacts = self._load_contacts(account)
         contacts[open_id] = {
             "alias": alias,
@@ -2528,7 +2600,7 @@ class FeishuManager:
             if to_remove:
                 self._save_contacts(account, contacts)
                 return {"status": "removed", "open_ids": to_remove}
-        return {"error": "Contact not found"}
+        return failure_result("Contact not found", error_code="NOT_FOUND")
 
     def _accounts(self) -> dict:
         return {

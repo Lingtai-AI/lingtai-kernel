@@ -5,14 +5,14 @@ description: |
   when you need detail beyond the one-line action descriptions: receive_id vs
   receive_id_type (open_id/chat_id), send vs reply, check/read/search, placeholder
   + edit for native progress cards, text/markdown/post/card outbound content,
-  topic-aware replies, Typing/seen/done reactions, interactive card callbacks,
-  outbound media/share/sticker sources, contacts/accounts basics, the notification
+  topic-aware replies, public and automatic reactions, retryable error results,
+  interactive card callbacks, outbound media/share/sticker sources, contacts/accounts basics, the notification
   transient-hook vs persistent-context split, normalized inbound conversations,
   preserved inbound media, passive channel events, group @Bot routing, and
   side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.10.0
+version: 1.11.0
 last_changed_at: 2026-08-03T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
@@ -20,6 +20,7 @@ related_files:
 - src/lingtai/mcp_servers/feishu/server.py
 - src/lingtai/mcp_servers/feishu/service.py
 - src/lingtai/mcp_servers/feishu/_family.py
+- src/lingtai/mcp_servers/feishu/_errors.py
 maintenance: |
   Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
@@ -148,6 +149,17 @@ maintenance: |
   it is removed when the first response/progress card is sent. Existing `OK`
   (seen) and `THUMBSUP` (done after reply) reactions continue independently.
 
+## REACTIONS
+
+- `react` adds or removes one Feishu reaction on a compound `message_id`.
+  Adding requires `operation='add'` plus Feishu's symbolic `emoji_type` (for
+  example `SMILE`) and returns the provider `reaction_id`. Removing requires
+  `operation='remove'` plus that exact `reaction_id`; do not substitute an
+  emoji glyph or `emoji_type` for removal.
+- Add and remove are each attempted exactly once. A missing or revoked target
+  returns `error_code='TARGET_REVOKED'` and is never converted into a new
+  message or another reaction.
+
 ## CONTACTS / ACCOUNTS
 
 - `contacts`: list saved contacts (optional `account`).
@@ -221,12 +233,15 @@ rules live in
 
 ## SIDE EFFECTS & ERROR SURFACING
 
-- `send`, `reply`, and `edit` deliver to real users — they are external
+- `send`, `reply`, `edit`, `delete`, and `react` affect real Feishu state — they are external
   side effects, so confirm recipient and content before sending unsolicited
   messages.
-- Actions return a result dict on success or `{'error': <message>}` on failure
-  (e.g. missing `receive_id`, bad `message_id`). Check for the `'error'` key and
-  surface or act on it rather than assuming delivery.
+- Every action failure has the stable fields `status='failed'`, compatible
+  `error` text, identical `message`, `error_code`, `retryable`, and
+  `retry_after_seconds` (number or null). Permission, format, target-revoked,
+  and rate-limit failures retain their channel classification. Start a new
+  attempt only when `retryable=true`, and honor a non-null
+  `retry_after_seconds`; the Bot never hides an automatic outbound retry.
 
 ## PUBLIC TOOL FAMILY: strict LTP-v2
 
@@ -234,7 +249,7 @@ Raw MCP discovery exposes exactly one public tool, `feishu`. It is an
 independent strict LTP-v2 family with the closed root
 `{action, input, reasoning, summarize?}` (`action`, `input`, and `reasoning`
 required) and a closed action-owned input branch. `feishu` actions are exactly
-`send`, `check`, `read`, `reply`, `search`, `delete`, `edit`, `contacts`,
-`add_contact`, `remove_contact`, `accounts`, and `manual`. The `manual` action
+`send`, `check`, `read`, `reply`, `react`, `search`, `delete`, `edit`,
+`contacts`, `add_contact`, `remove_contact`, `accounts`, and `manual`. The `manual` action
 is the discovery path for this packaged doc. Do not use the retired flat/legacy
 shape, `_reasoning`, aliases, or a generic dispatcher.

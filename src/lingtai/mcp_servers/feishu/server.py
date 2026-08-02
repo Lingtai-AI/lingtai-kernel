@@ -1,8 +1,8 @@
 """LingTai Feishu MCP server.
 
 Exposes a single omnibus ``feishu`` MCP tool that dispatches to
-FeishuManager for all 9 actions (send, check, read, reply, search,
-contacts, add_contact, remove_contact, accounts). Inbound Feishu events
+FeishuManager for all 13 actions (send, check, read, reply, react, search,
+delete, edit, contacts, add_contact, remove_contact, accounts, manual). Inbound Feishu events
 flow into the host agent's inbox via LICC.
 
 Configuration:
@@ -228,10 +228,11 @@ def _profile_manifest(manager: FeishuManager | None) -> dict[str, Any]:
         "tools": [
             {
                 "name": "feishu",
-                "description": "Omnibus Feishu tool for send/check/read/reply/search/delete/edit/contacts/accounts.",
+                "description": "Omnibus Feishu tool for messages, reactions, contacts, accounts, and its manual.",
                 "actions": [
-                    "send", "check", "read", "reply", "search", "delete", "edit",
-                    "contacts", "add_contact", "remove_contact", "accounts",
+                    "send", "check", "read", "reply", "react", "search",
+                    "delete", "edit", "contacts", "add_contact",
+                    "remove_contact", "accounts", "manual",
                 ],
             }
         ],
@@ -314,8 +315,9 @@ Common optional fields:
 
 ## Tool entrypoint
 
-Use the `feishu` tool with actions: `send`, `check`, `read`, `reply`, `search`,
-`delete`, `edit`, `contacts`, `add_contact`, `remove_contact`, and `accounts`.
+Use the `feishu` tool with actions: `send`, `check`, `read`, `reply`, `react`,
+`search`, `delete`, `edit`, `contacts`, `add_contact`, `remove_contact`,
+`accounts`, and `manual`.
 Compound message IDs have the form `account_alias:chat_id:feishu_message_id`.
 
 Voice messages received from Feishu are downloaded and transcribed locally with

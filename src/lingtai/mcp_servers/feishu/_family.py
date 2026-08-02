@@ -12,6 +12,7 @@ from typing import Any
 from lingtai.tools.tool_family import ChildTool, ToolFamily
 
 from .. import _skill
+from ._errors import failure_result
 
 # Kept local to avoid importing the manager (which consumes this schema).
 _SKILL_NAME = "feishu-mcp-manual"
@@ -20,7 +21,7 @@ _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(
 )
 
 _ACTIONS = (
-    "send", "check", "read", "reply", "search", "delete", "edit",
+    "send", "check", "read", "reply", "react", "search", "delete", "edit",
     "contacts", "add_contact", "remove_contact", "accounts", "manual",
 )
 
@@ -222,6 +223,33 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
             required=["message_id"],
             one_of=[{"required": ["text"]}, {"required": ["content"]}],
         ),
+        "react": _object(
+            {
+                "message_id": {"type": "string", "minLength": 1},
+                "operation": {
+                    "type": "string", "enum": ["add", "remove"],
+                },
+                "emoji_type": {"type": "string", "minLength": 1},
+                "reaction_id": {"type": "string", "minLength": 1},
+            },
+            required=["message_id", "operation"],
+            one_of=[
+                {
+                    "properties": {
+                        "operation": {"type": "string", "enum": ["add"]},
+                    },
+                    "required": ["emoji_type"],
+                    "not": {"required": ["reaction_id"]},
+                },
+                {
+                    "properties": {
+                        "operation": {"type": "string", "enum": ["remove"]},
+                    },
+                    "required": ["reaction_id"],
+                    "not": {"required": ["emoji_type"]},
+                },
+            ],
+        ),
         "search": _object(
             {
                 "query": {"type": "string"},
@@ -303,6 +331,9 @@ def feishu_schema() -> dict[str, Any]:
         "media, share, or sticker content "
         "(message_id from read results, exactly one of text/content; "
         "optional reply_in_thread). "
+        "react: add or remove a reaction on a message "
+        "(message_id, operation='add' + emoji_type, or "
+        "operation='remove' + reaction_id). "
         "search: search inbox messages by regex "
         "(query; optional account, chat_id). "
         "delete: delete a bot message (message_id). "
@@ -409,19 +440,47 @@ def build_feishu_family(manager: Any | None) -> ToolFamily:
 def handle_feishu(manager: Any | None, args: Mapping[str, Any] | None) -> dict[str, Any]:
     raw = dict(args or {})
     if set(raw) - {"action", "input", "reasoning", "summarize"}:
-        return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "unsupported feishu argument"}
+        return failure_result(
+            "unsupported feishu argument", error_code="INVALID_ARGUMENT",
+        )
     action = raw.get("action")
     if type(action) is not str or action not in _ACTIONS:
-        return {"status": "failed", "error_code": "ACTION_REQUIRED", "message": "invalid feishu action"}
+        return failure_result(
+            "invalid feishu action", error_code="ACTION_REQUIRED",
+        )
     if "input" not in raw or not isinstance(raw.get("input"), Mapping):
-        return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "input must be an object"}
+        return failure_result(
+            "input must be an object", error_code="INVALID_ARGUMENT",
+        )
     if type(raw.get("reasoning")) is not str:
-        return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "reasoning is required"}
+        return failure_result(
+            "reasoning is required", error_code="INVALID_ARGUMENT",
+        )
     if "summarize" in raw and type(raw["summarize"]) is not bool:
-        return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "summarize must be a boolean"}
+        return failure_result(
+            "summarize must be a boolean", error_code="INVALID_ARGUMENT",
+        )
     schema = _feishu_input_schemas()[action]
     if not _basic_validate(raw["input"], schema):
-        return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "invalid feishu input"}
+        return failure_result(
+            "invalid feishu input", error_code="INVALID_ARGUMENT",
+        )
+    if action == "react":
+        input_ = raw["input"]
+        operation = input_.get("operation")
+        expected = "emoji_type" if operation == "add" else "reaction_id"
+        unexpected = "reaction_id" if operation == "add" else "emoji_type"
+        if operation not in {"add", "remove"} or not input_.get(expected) or input_.get(
+            unexpected
+        ):
+            return failure_result(
+                "invalid feishu input", error_code="INVALID_ARGUMENT",
+            )
+    if manager is None and action != "manual":
+        return failure_result(
+            "Feishu manager is not initialized",
+            error_code="NOT_CONNECTED",
+        )
     return build_feishu_family(manager).handle(raw)
 
 

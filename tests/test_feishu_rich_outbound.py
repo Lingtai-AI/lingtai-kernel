@@ -259,7 +259,14 @@ def test_progress_edit_stays_a_card_and_persists_only_after_transport_success(
         "edit",
         {"message_id": sent["message_id"], "text": "must not persist"},
     )
-    assert failed == {"error": "edit rejected"}
+    assert failed == {
+        "status": "failed",
+        "error": "edit rejected",
+        "message": "edit rejected",
+        "error_code": "UNKNOWN",
+        "retryable": False,
+        "retry_after_seconds": None,
+    }
     assert path.read_text(encoding="utf-8") == before_failure
 
 

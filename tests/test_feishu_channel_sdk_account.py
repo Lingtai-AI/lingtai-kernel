@@ -97,6 +97,7 @@ def test_outbound_methods_use_channel_sdk_generated_models() -> None:
         b"audio",
     )
     assert account.add_reaction("om_original", "OK") is True
+    assert account.add_reaction_with_id("om_original", "SMILE") == "reaction-1"
     assert account.add_typing_reaction("om_original") == "reaction-1"
     assert account.remove_reaction("om_original", "reaction-1") is True
     assert account.update_message("om_reply", "edited") == {}

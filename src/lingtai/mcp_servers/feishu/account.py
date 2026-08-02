@@ -22,6 +22,12 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
+from ._errors import (
+    FeishuOperationError,
+    operation_error_from_response,
+    operation_error_from_send_result,
+)
+
 logger = logging.getLogger(__name__)
 
 # lark_channel is lazy-imported so the module stays importable without
@@ -746,9 +752,7 @@ class FeishuAccount:
         )
         response = self._rest_client.im.v1.message.create(request)
         if not response.success():
-            raise RuntimeError(
-                f"Feishu send_text failed: code={response.code} msg={response.msg}"
-            )
+            raise operation_error_from_response("send_text", response)
         data = response.data
         return {
             "message_id": getattr(data, "message_id", ""),
@@ -760,10 +764,7 @@ class FeishuAccount:
     def _channel_send_result(result: Any, *, fallback_chat_id: str = "") -> dict:
         """Project the SDK's typed ``SendResult`` into the account boundary."""
         if not getattr(result, "success", False):
-            error = getattr(result, "error", None)
-            code = getattr(getattr(error, "code", None), "value", None) or "unknown"
-            hint = getattr(error, "hint", None) or "Feishu outbound send failed"
-            raise RuntimeError(f"Feishu outbound failed: code={code} msg={hint}")
+            raise operation_error_from_send_result("outbound", result)
 
         raw = getattr(result, "raw", None)
         raw_data = raw.get("data") if isinstance(raw, dict) else None
@@ -821,9 +822,7 @@ class FeishuAccount:
         )
         response = self._rest_client.im.v1.message.reply(request)
         if not response.success():
-            raise RuntimeError(
-                f"Feishu reply_text failed: code={response.code} msg={response.msg}"
-            )
+            raise operation_error_from_response("reply_text", response)
         data = response.data
         return {
             "message_id": getattr(data, "message_id", ""),
@@ -890,10 +889,7 @@ class FeishuAccount:
         )
         response = self._rest_client.im.v1.message_resource.get(request)
         if not response.success():
-            raise RuntimeError(
-                f"Feishu get_message_resource failed: "
-                f"code={response.code} msg={response.msg}"
-            )
+            raise operation_error_from_response("get_message_resource", response)
         filename = response.file_name or ""
         content = response.file.read()
         return filename, content
@@ -934,10 +930,7 @@ class FeishuAccount:
         )
         response = self._rest_client.im.v1.message_reaction.create(request)
         if not response.success():
-            raise RuntimeError(
-                f"Feishu add_reaction failed: "
-                f"code={response.code} msg={response.msg}"
-            )
+            raise operation_error_from_response("add_reaction", response)
         data = getattr(response, "data", None)
         reaction_id = getattr(data, "reaction_id", None) if data else None
         return reaction_id if isinstance(reaction_id, str) and reaction_id else None
@@ -954,6 +947,17 @@ class FeishuAccount:
         """
         self._create_reaction(message_id, emoji_type)
         return True
+
+    def add_reaction_with_id(self, message_id: str, emoji_type: str) -> str:
+        """Add a public reaction and require its removable provider id."""
+        reaction_id = self._create_reaction(message_id, emoji_type)
+        if not reaction_id:
+            raise FeishuOperationError(
+                "Feishu add_reaction succeeded without a reaction_id",
+                error_code="UNKNOWN",
+                retryable=False,
+            )
+        return reaction_id
 
     def add_typing_reaction(self, message_id: str) -> str | None:
         """Add Feishu's native Typing reaction for best-effort presence."""
@@ -973,10 +977,7 @@ class FeishuAccount:
         )
         response = self._rest_client.im.v1.message_reaction.delete(request)
         if not response.success():
-            raise RuntimeError(
-                f"Feishu remove_reaction failed: "
-                f"code={response.code} msg={response.msg}"
-            )
+            raise operation_error_from_response("remove_reaction", response)
         return True
 
     # ------------------------------------------------------------------
@@ -1015,10 +1016,7 @@ class FeishuAccount:
         )
         response = self._rest_client.im.v1.message.patch(request)
         if not response.success():
-            raise RuntimeError(
-                f"Feishu update_message failed: "
-                f"code={response.code} msg={response.msg}"
-            )
+            raise operation_error_from_response("update_message", response)
         return {}
 
     def update_content(self, message_id: str, message: dict[str, Any]) -> dict:
@@ -1055,10 +1053,7 @@ class FeishuAccount:
         )
         response = self._rest_client.im.v1.message.delete(request)
         if not response.success():
-            raise RuntimeError(
-                f"Feishu delete_message failed: "
-                f"code={response.code} msg={response.msg}"
-            )
+            raise operation_error_from_response("delete_message", response)
         return True
 
     @property
