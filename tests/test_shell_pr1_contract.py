@@ -7,7 +7,11 @@ from unittest.mock import MagicMock
 import pytest
 
 import lingtai.adapters.shell as shell_adapter
-from lingtai.adapters.windows.powershell import PowerShellDialect, _ASCII_BOOTSTRAP
+from lingtai.adapters.windows.powershell import (
+    PowerShellDialect,
+    _ASCII_BOOTSTRAP,
+    _commands,
+)
 from lingtai.adapters.windows.powershell_process import _Owned, WindowsShellAsyncProcessAdapter
 from lingtai.tools.bash import ShellManager, ShellPolicy, setup
 from lingtai.tools.bash._async_process import ProcessRef
@@ -353,3 +357,40 @@ def test_non_posix_legacy_state_is_not_reinterpreted(monkeypatch):
     monkeypatch.setattr(supervisor.os, "name", "nt")
     with pytest.raises(ValueError, match="refusing to reinterpret"):
         _invocation_from_state({"command": "echo old"}, "echo old")
+
+
+# These two assert on ``_commands`` rather than ``PowerShellDialect.extract_commands``
+# because PR-5's quote-aware scanner now fails the whole script closed on ``|``
+# before extraction ever runs, which would mask the brace-depth behaviour under
+# test.  ``_commands`` is the recursive extractor these cases are about.
+def test_powershell_script_block_semicolons_do_not_split_statements():
+    """Semicolons inside a { ... } script block must not split statements."""
+    commands = _commands(
+        "Get-Process | Where-Object { $_.Name -eq 'pwsh'; $_.CPU -gt 10 }"
+    )
+    assert "Get-Process" in commands
+    assert "Where-Object" in commands
+    # The variable references inside the script block are not commands.
+    assert "$_" not in commands
+
+
+def test_powershell_unbalanced_brace_fails_closed():
+    """An unterminated script block is malformed and must fail closed."""
+    commands = _commands("Get-Process | Where-Object { $_.Name -eq 'pwsh'")
+    assert commands == ("__powershell_unsupported__",)
+
+
+def test_powershell_dynamic_unsupported_message_is_actionable(tmp_path):
+    """The unsupported-syntax error keeps the original wording and adds options."""
+    policy = ShellPolicy(deny=["Remove-Item"])
+    manager = ShellManager(
+        policy=policy,
+        working_dir=str(tmp_path),
+        agent=SimpleNamespace(),
+        dialect=PowerShellDialect(executable="pwsh"),
+    )
+    denied = manager.handle({"command": "& $command victim"})
+    assert denied["status"] == "error"
+    assert "does not support this syntax" in denied["message"]
+    assert "refusing to run" in denied["message"]
+    assert "yolo=true" in denied["message"]
