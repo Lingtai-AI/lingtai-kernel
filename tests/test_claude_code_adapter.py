@@ -18,7 +18,7 @@ from lingtai.llm.claude_code.adapter import (
     _extract_json_object,
 )
 from lingtai.kernel.llm.base import FunctionSchema
-from lingtai.kernel.llm.interface import TextBlock
+from lingtai.kernel.llm.interface import TextBlock, ToolResultBlock
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +291,112 @@ def test_session_resume_keeps_system_block_stable_and_sends_only_new_history():
     assert "second message" in stdins[1] and "first message" not in stdins[1]
     assert "third message" in stdins[2] and "second message" not in stdins[2]
     assert all("# CONVERSATION" in stdin for stdin in stdins)
+
+
+def test_per_turn_resync_with_identical_content_keeps_resuming():
+    """Regression: the per-turn system/tool resync must not drop the CLI session.
+
+    ``SessionManager.send`` rebuilds the system prompt and tools before *every*
+    turn because they may have changed. When the rebuilt content is identical
+    that resync must stay inert; an unconditional reset here cleared
+    ``_remote_session_id`` before each call, so ``--resume`` was never sent and
+    every turn replayed the whole conversation into a cold cache.
+    """
+    ad = ClaudeCodeAdapter(model="sonnet")
+    sess = ad.create_chat("sonnet", "sys", [_weather_tool()])
+    captured = []
+
+    def fake_run(cmd, **kw):
+        captured.append((cmd, kw))
+        return _FakeProc(stdout=_envelope('{"action":"final","text":"ok"}'))
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+        for i in range(4):
+            # Exactly what SessionManager.send does each turn, same content.
+            sess.update_system_prompt("sys")
+            sess.update_tools([_weather_tool()])
+            sess.send(f"message {i}")
+
+    assert "--resume" not in captured[0][0]
+    for cmd, _kw in captured[1:]:
+        assert cmd[cmd.index("--resume") + 1] == "sess-123"
+
+    # The cached system block stays byte-identical across the resyncs.
+    contents = []
+    for cmd, _kw in captured:
+        with open(cmd[cmd.index("--append-system-prompt-file") + 1], encoding="utf-8") as f:
+            contents.append(f.read())
+    assert len(set(contents)) == 1
+
+
+def test_changed_system_prompt_or_tools_resets_remote_session():
+    """A real content change must still invalidate the CLI session.
+
+    The resumed conversation carries the old system block, so continuing it
+    after a genuine change would run the turn against stale context.
+    """
+    ad = ClaudeCodeAdapter(model="sonnet")
+    sess = ad.create_chat("sonnet", "sys", [_weather_tool()])
+    captured = []
+
+    def fake_run(cmd, **kw):
+        captured.append((cmd, kw))
+        return _FakeProc(stdout=_envelope('{"action":"final","text":"ok"}'))
+
+    other_tool = FunctionSchema(
+        name="other", description="o", parameters={"type": "object", "properties": {}}
+    )
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+        sess.update_system_prompt("sys")
+        sess.send("m0")
+        sess.update_system_prompt("sys")
+        sess.send("m1")
+        sess.update_system_prompt("CHANGED")  # real system-prompt change
+        sess.send("m2")
+        sess.update_system_prompt("CHANGED")
+        sess.send("m3")
+        sess.update_tools([other_tool])  # real tool change
+        sess.send("m4")
+
+    resumed = ["--resume" in cmd for cmd, _kw in captured]
+    assert resumed == [False, True, False, True, False]
+
+
+def test_resume_survives_a_tool_call_round_trip():
+    """The tool-result turn shape must resume like any other turn.
+
+    Real agent turns are ``send(user) -> tool_call -> send(tool_results)``; the
+    prior resume tests only exercised plain string sends.
+    """
+    ad = ClaudeCodeAdapter(model="sonnet")
+    sess = ad.create_chat("sonnet", "sys", [_weather_tool()])
+    captured = []
+    replies = [
+        '{"action":"tool_call","name":"get_weather","arguments":{"city":"SF"}}',
+        '{"action":"final","text":"sunny"}',
+    ]
+
+    def fake_run(cmd, **kw):
+        captured.append((cmd, kw))
+        return _FakeProc(stdout=_envelope(replies[len(captured) - 1]))
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+        resp = sess.send("what is the weather in SF?")
+        assert resp.tool_calls
+        sess.update_system_prompt("sys")
+        sess.update_tools([_weather_tool()])
+        sess.send([
+            ToolResultBlock(
+                id=resp.tool_calls[0].id, name="get_weather", content="sunny, 20C"
+            ),
+        ])
+
+    assert "--resume" not in captured[0][0]
+    assert captured[1][0][captured[1][0].index("--resume") + 1] == "sess-123"
+    # The resumed turn carries only the new tool result, not the original ask.
+    assert "sunny, 20C" in captured[1][1]["input"]
+    assert "what is the weather in SF?" not in captured[1][1]["input"]
 
 
 def test_generate_omits_system_prompt_file():

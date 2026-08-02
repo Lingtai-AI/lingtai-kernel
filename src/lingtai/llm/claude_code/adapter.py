@@ -7,6 +7,7 @@ json`` once per turn and parsing a single JSON *action* out of the result.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -208,6 +209,9 @@ class ClaudeCodeChatSession(ChatSession):
         # the recovery source whenever this continuation cannot be trusted.
         self._remote_session_id: str | None = None
         self._remote_entry_count = 0
+        # Seeded from the constructor content so the first per-turn resync in
+        # ``SessionManager.send`` is already recognised as a no-op.
+        self._stable_context_digest = self._system_block_digest()
         # Persist the stable system context to the adapter's prompt-cache file
         # so the first ``send`` already has it in the cached system block.
         self._write_system_file()
@@ -311,23 +315,49 @@ class ClaudeCodeChatSession(ChatSession):
         else:
             self._reset_remote_session()
 
-    def update_tools(self, tools: list[FunctionSchema] | None) -> None:
-        self._tools = list(tools) if tools else []
-        self._reset_remote_session()
+    def _system_block_digest(self) -> str:
+        """Digest of the stable context that backs the cached system block.
+
+        Exactly the pair ``_write_system_file`` renders: system prompt + tool
+        schemas. Two calls with identical content produce identical digests, so
+        the per-turn resync in ``SessionManager.send`` stays inert.
+        """
+        payload = json.dumps(
+            {
+                "system_prompt": self._system_prompt,
+                "tools": [t.to_dict() for t in self._tools],
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _resync_stable_context(self) -> None:
+        """Re-publish the system block, dropping the CLI session only on change.
+
+        ``SessionManager.send`` rebuilds the system prompt and tools on *every*
+        turn because they may have changed. Resetting unconditionally here would
+        clear ``_remote_session_id`` before each call, so ``--resume`` would
+        never be sent and every turn would replay the whole conversation into a
+        cold cache. Only a real content change invalidates the CLI session.
+        """
+        digest = self._system_block_digest()
         self._interface.add_system(
             self._system_prompt,
             tools=[t.to_dict() for t in self._tools] if self._tools else None,
         )
-        self._write_system_file()
+        if digest != self._stable_context_digest:
+            self._stable_context_digest = digest
+            self._reset_remote_session()
+            self._write_system_file()
+
+    def update_tools(self, tools: list[FunctionSchema] | None) -> None:
+        self._tools = list(tools) if tools else []
+        self._resync_stable_context()
 
     def update_system_prompt(self, system_prompt: str) -> None:
         self._system_prompt = system_prompt
-        self._reset_remote_session()
-        self._interface.add_system(
-            system_prompt,
-            tools=[t.to_dict() for t in self._tools] if self._tools else None,
-        )
-        self._write_system_file()
+        self._resync_stable_context()
 
     def commit_tool_results(self, tool_results: list) -> None:
         self._interface.add_tool_results(tool_results)
