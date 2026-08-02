@@ -290,7 +290,9 @@ needed; do not load all three for an ordinary message send.
   A successful transcript remains in `voice_transcript` and becomes the message
   text. Download or transcription failure stays attached to the resource
   record, while the normalized content/raw envelope remain available for
-  diagnosis; failure is not collapsed into a text-only message.
+  diagnosis; retained and logged failure details are credential-redacted and
+  bounded before persistence or notification, and failure is not collapsed
+  into a text-only message.
 - For group commands, the normalized `text` removes this bot's own mention;
   other resolved mentions remain visible. `content.kind` identifies the
   original Feishu content family.

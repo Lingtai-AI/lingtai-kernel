@@ -214,9 +214,12 @@ def test_normalized_resources_download_and_surface_in_read_and_search(
 
 
 def test_download_failure_retains_the_original_resource_descriptor(
-    tmp_path: Path, monkeypatch: Any
+    tmp_path: Path, monkeypatch: Any, caplog: Any
 ) -> None:
-    account = _FakeAccount({"file-key": RuntimeError("download unavailable")})
+    secret = "synthetic-download-secret"
+    account = _FakeAccount({
+        "file-key": RuntimeError(f"app_secret={secret}"),
+    })
     manager = _manager(tmp_path, account, monkeypatch)
     incoming = _incoming(
         message_id="om_failure",
@@ -229,9 +232,11 @@ def test_download_failure_retains_the_original_resource_descriptor(
         ],
     )
 
-    manager.on_incoming("main", incoming)
+    with caplog.at_level("WARNING", logger=manager_module.__name__):
+        manager.on_incoming("main", incoming)
 
     payload, message_dir = _only_payload(tmp_path)
+    redacted_error = "app_secret=<REDACTED:secret>"
     assert payload["text"] == "file placeholder"
     assert payload["content"] == {
         "kind": "file",
@@ -244,10 +249,12 @@ def test_download_failure_retains_the_original_resource_descriptor(
         "file_key": "file-key",
         "file_name": "report.txt",
         "status": "failed",
-        "error": "download unavailable",
+        "error": redacted_error,
     }]
-    assert payload["media"]["download_error"] == "download unavailable"
+    assert payload["media"]["download_error"] == redacted_error
     assert not (message_dir / "attachments").exists()
+    assert secret not in json.dumps(payload)
+    assert secret not in caplog.text
 
     _preview, metadata = manager._build_conversation_preview_and_metadata(
         "main", "oc_media", payload["id"]
@@ -257,10 +264,28 @@ def test_download_failure_retains_the_original_resource_descriptor(
         "type": "file",
         "status": "failed",
         "filename": "report.txt",
-        "error": "download unavailable",
+        "error": redacted_error,
     }]
+    assert secret not in json.dumps(metadata)
     assert "file_key" not in current["attachments"][0]
     assert "feishu.read" in current["comment"]
+
+
+def test_transcription_exception_redacts_return_and_log(
+    monkeypatch: Any, caplog: Any
+) -> None:
+    secret = "synthetic-transcription-secret"
+
+    def fail_model(_model_name: str) -> None:
+        raise RuntimeError(f"token={secret}")
+
+    monkeypatch.setattr(manager_module, "_get_whisper_model", fail_model)
+    with caplog.at_level("WARNING", logger=manager_module.__name__):
+        result = manager_module._transcribe_voice("synthetic-audio.ogg")
+
+    assert result == {"error": "token=<REDACTED:secret>"}
+    assert secret not in caplog.text
+    assert "token=<REDACTED:secret>" in caplog.text
 
 
 def test_audio_transcription_failure_keeps_download_and_normalized_text(

@@ -27,6 +27,7 @@ from typing import Any, Callable, TYPE_CHECKING
 from uuid import uuid4
 
 from lingtai.kernel._frontmatter import strip_frontmatter
+from lingtai.kernel.trace_redaction import redact_text
 from lingtai.mcp_servers.local_commands import (
     LocalCommandCore,
     TaskCardSettingsPort,
@@ -612,7 +613,7 @@ def _safe_attachment_error(error: object) -> str:
     else:
         fallback = "unknown"
         value = str(error or "")
-    normalized = " ".join(value.split())
+    normalized = " ".join(redact_text(value).split())
     return (normalized or fallback)[:200]
 
 
@@ -864,8 +865,9 @@ def _transcribe_voice(audio_path: str, model_name: str = "base") -> dict:
             "segments": transcript_segments,
         }
     except Exception as e:
-        log.warning("Voice transcription failed: %s", e)
-        return {"error": str(e)}
+        error = _safe_attachment_error(e)
+        log.warning("Voice transcription failed: %s", error)
+        return {"error": error}
 
 DESCRIPTION = (
     "Feishu (Lark) bot client — interact with Feishu users and group chats. "
@@ -1043,14 +1045,15 @@ class FeishuManager:
                     "size": len(body),
                 })
             except Exception as exc:
+                error = _safe_attachment_error(exc)
                 result.update({
                     "status": "failed",
-                    "error": _safe_attachment_error(exc),
+                    "error": error,
                 })
                 log.warning(
                     "Failed to download inbound Feishu %s resource: %s",
                     resource.get("type", "unknown"),
-                    _safe_attachment_error(exc),
+                    error,
                 )
             results.append(result)
         return results
