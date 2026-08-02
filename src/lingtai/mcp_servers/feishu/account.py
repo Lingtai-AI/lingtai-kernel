@@ -14,6 +14,8 @@ import os
 import sys
 import tempfile
 import threading
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -127,6 +129,14 @@ def _install_thread_local_sdk_loop(sdk: Any) -> _ThreadLocalLoop:
         return proxy
 
 
+@dataclass(frozen=True)
+class FeishuInboundEvent:
+    """SDK-normalized message paired with its complete Feishu event envelope."""
+
+    message: Any
+    feishu: dict[str, Any]
+
+
 class FeishuAccount:
     """Manages a single Feishu (Lark) app credential — WS polling + REST sending."""
 
@@ -152,10 +162,15 @@ class FeishuAccount:
         self._ws_client: Any = None
         self._ws_event_loop: asyncio.AbstractEventLoop | None = None
         self._ws_loop_lock = threading.Lock()
+        self._channel: Any = None
         self._rest_client: Any = None
         self._stop_event = threading.Event()
         self._bot_info: dict | None = None
+        self._bot_open_id: str | None = None
         self._last_verified_at: str | None = None
+        self._raw_envelopes: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._raw_envelopes_lock = threading.Lock()
+        self._raw_envelopes_limit = 1000
 
         self._load_state()
 
@@ -170,34 +185,61 @@ class FeishuAccount:
 
         _lark = _import_lark()
 
-        # REST client (for sending)
-        self._rest_client = (
-            _lark.Client.builder()
-            .app_id(self._app_id)
-            .app_secret(self._app_secret)
-            .build()
+        # Use the SDK channel facade for inbound normalization while retaining
+        # the established low-level WS thread and generated REST actions. The
+        # facade owns the dispatcher/normalizer; its transport is deliberately
+        # not started here.
+        security = _lark.SecurityConfig(mode="compat")
+        self._channel = _lark.FeishuChannel(
+            app_id=self._app_id,
+            app_secret=self._app_secret,
+            inbound=_lark.InboundConfig(
+                expand_merge_forward=False,
+                fetch_interactive_card=False,
+                include_raw=True,
+                emit_raw_events=True,
+            ),
+            # The account-level gate below owns LingTai's legacy allowlist and
+            # exact DM/group routing semantics. Let ordinary group events reach
+            # it after normalization so a cached bot identity still works when
+            # the live identity lookup is temporarily unavailable. The SDK
+            # continues to reject @all-only messages before this boundary.
+            policy=_lark.PolicyConfig(
+                require_mention=False,
+                respond_to_mention_all=False,
+            ),
+            outbound=_lark.OutboundConfig(
+                retry=_lark.RetryConfig(max_attempts=1),
+            ),
+            # LingTai persists one durable record per Feishu event. Disable the
+            # SDK's default 600 ms text merge while retaining its per-chat
+            # serialization queue; otherwise rapid messages lose their own
+            # compound IDs and raw envelopes before manager persistence.
+            safety=_lark.SafetyConfig(
+                text_batch=_lark.TextBatchConfig(max_messages=1),
+            ),
+            security=security,
         )
+        self._rest_client = self._channel.client
 
-        # Store minimal bot info — full bot info API path varies by SDK version
-        self._bot_info = {"app_id": self._app_id}
+        # Preserve a previously resolved open_id for conservative group
+        # mention gating if the identity endpoint is temporarily unavailable.
+        self._bot_info = dict(self._bot_info or {})
+        self._bot_info["app_id"] = self._app_id
         self._last_verified_at = datetime.now(timezone.utc).isoformat()
         self._save_state()
 
-        # Event handler
-        def _handle_message(data: Any) -> None:
+        def _handle_message(message: Any) -> None:
             try:
-                self._process_event(data)
+                self._process_event(message)
             except Exception as exc:
                 logger.warning(
                     "Feishu event processing error (%s): %s", self.alias, exc
                 )
 
-        security = _lark.SecurityConfig(mode="compat")
-        event_handler = (
-            _lark.EventDispatcherHandler.builder("", "", security=security)
-            .register_p2_im_message_receive_v1(_handle_message)
-            .build()
-        )
+        self._channel.on(_lark.Events.RAW, self._capture_raw_envelope)
+        self._channel.on(_lark.Events.MESSAGE, _handle_message)
+        event_handler = self._channel.dispatcher
 
         # WebSocket client — start() blocks, run in daemon thread
         self._stop_event.clear()
@@ -254,6 +296,7 @@ class FeishuAccount:
         try:
             if self._stop_event.is_set():
                 return
+            self._resolve_bot_identity(loop)
             self._ws_client.start()
         except Exception as e:
             if not self._stop_event.is_set():
@@ -296,26 +339,103 @@ class FeishuAccount:
             self._ws_thread.join(timeout=5.0)
             if not self._ws_thread.is_alive():
                 self._ws_thread = None
+        if self._channel is not None:
+            try:
+                # The facade owns a normalization background loop but not this
+                # account's WS client, so stopping it cannot duplicate the
+                # transport shutdown above.
+                self._channel.stop()
+            except Exception as exc:
+                logger.debug("Feishu channel cleanup failed (%s): %s", self.alias, exc)
 
     # ------------------------------------------------------------------
     # Event processing
     # ------------------------------------------------------------------
 
-    def _process_event(self, data: Any) -> None:
-        """Filter by allowed_users and dispatch to on_message callback."""
-        event = getattr(data, "event", None)
-        if event is None:
+    def _resolve_bot_identity(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Resolve the bot open_id before WS delivery enables group @ gating."""
+        if self._channel is None:
             return
+        try:
+            identity = loop.run_until_complete(self._channel.resolve_bot_identity())
+        except Exception as exc:
+            logger.warning(
+                "Feishu bot identity resolution failed (%s); group messages "
+                "remain mention-gated using cached identity when available: %s",
+                self.alias,
+                exc,
+            )
+            identity = None
+        if identity is None:
+            return
+        self._bot_open_id = identity.open_id
+        self._bot_info = {
+            "app_id": identity.app_id or self._app_id,
+            "open_id": identity.open_id,
+            "user_id": identity.user_id,
+            "name": identity.name,
+        }
+        self._last_verified_at = datetime.now(timezone.utc).isoformat()
+        self._save_state()
 
-        sender = getattr(event, "sender", None)
-        sender_id = getattr(sender, "sender_id", None) if sender else None
-        open_id: str = getattr(sender_id, "open_id", "") if sender_id else ""
+    @staticmethod
+    def _raw_message_id(envelope: dict[str, Any]) -> str:
+        event = envelope.get("event")
+        if not isinstance(event, dict):
+            return ""
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return ""
+        value = message.get("message_id")
+        return value if isinstance(value, str) else ""
+
+    def _capture_raw_envelope(self, envelope: dict[str, Any]) -> None:
+        """Retain the SDK raw envelope until its normalized message is emitted."""
+        if not isinstance(envelope, dict):
+            return
+        message_id = self._raw_message_id(envelope)
+        if not message_id:
+            return
+        with self._raw_envelopes_lock:
+            self._raw_envelopes[message_id] = envelope
+            self._raw_envelopes.move_to_end(message_id)
+            while len(self._raw_envelopes) > self._raw_envelopes_limit:
+                self._raw_envelopes.popitem(last=False)
+
+    def _take_raw_envelope(self, message_id: str) -> dict[str, Any]:
+        with self._raw_envelopes_lock:
+            return self._raw_envelopes.pop(message_id, {})
+
+    def _process_event(self, message: Any) -> None:
+        """Apply legacy allowlist + DM/group routing to one normalized message."""
+        message_id = getattr(message, "id", "") or ""
+        raw_envelope = self._take_raw_envelope(message_id)
+        sender = getattr(message, "sender", None)
+        open_id = getattr(sender, "open_id", "") if sender else ""
 
         if self._allowed_users is not None and open_id not in self._allowed_users:
             return
 
+        conversation = getattr(message, "conversation", None)
+        chat_type = getattr(conversation, "chat_type", "unknown")
+        if chat_type != "p2p":
+            mentioned_bot = bool(getattr(message, "mentioned_bot", False))
+            if not mentioned_bot and self._bot_open_id:
+                mentioned_bot = any(
+                    getattr(mention, "open_id", None) == self._bot_open_id
+                    for mention in (getattr(message, "mentions", None) or [])
+                )
+            if not mentioned_bot:
+                return
+
         if self._on_message:
-            self._on_message(self.alias, data)
+            self._on_message(
+                self.alias,
+                FeishuInboundEvent(
+                    message=message,
+                    feishu=raw_envelope,
+                ),
+            )
 
     # ------------------------------------------------------------------
     # Sending
@@ -581,6 +701,9 @@ class FeishuAccount:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             self._bot_info = data.get("bot_info")
+            if isinstance(self._bot_info, dict):
+                open_id = self._bot_info.get("open_id")
+                self._bot_open_id = open_id if isinstance(open_id, str) else None
             self._last_verified_at = data.get("last_verified_at")
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to load Feishu state: %s", e)

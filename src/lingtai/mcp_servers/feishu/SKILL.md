@@ -5,12 +5,14 @@ description: |
   when you need detail beyond the one-line action descriptions: receive_id vs
   receive_id_type (open_id/chat_id), send vs reply, check/read/search, placeholder
   + edit for long responses, contacts/accounts basics, the notification
-  transient-hook vs persistent-context split, and side-effect caveats.
+  transient-hook vs persistent-context split, normalized inbound conversations,
+  group @Bot routing, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.3.0
-last_changed_at: 2026-07-29T00:00:00Z
+version: 1.4.0
+last_changed_at: 2026-08-02T00:00:00Z
 related_files:
+- src/lingtai/mcp_servers/feishu/account.py
 - src/lingtai/mcp_servers/feishu/manager.py
 - src/lingtai/mcp_servers/feishu/server.py
 - src/lingtai/mcp_servers/feishu/service.py
@@ -64,6 +66,24 @@ maintenance: |
 - `message_id` is the compound id returned by read/check
   (`{alias}:{chat_id}:{feishu_message_id}`); pass it back verbatim to
   `reply`/`edit`/`delete`.
+
+## INBOUND CONVERSATIONS
+
+- Direct messages are admitted without an `@Bot` mention. Group and topic
+  messages are admitted only when they explicitly mention this bot; `@all`
+  alone does not wake it.
+- `allowed_users`, when configured for an account, still filters the sender's
+  `open_id` in both direct and group chats. Saving a contact does not change
+  this admission rule.
+- `read` preserves the legacy fields and adds `thread_id`, `root_id`,
+  `reply_to`, resolved `mentions`, the SDK-normalized `content` union, normalized
+  sender identity fields, and the complete raw event under `feishu`.
+- For group commands, the normalized `text` removes this bot's own mention;
+  other resolved mentions remain visible. `content.kind` identifies the
+  original Feishu content family.
+- Topic/thread routing metadata is observational in this slice. Thread-aware
+  outbound reply behavior is introduced with rich outbound content; until then,
+  pass the compound message ID to `reply` as before.
 
 ## NOTIFICATIONS: TRANSIENT HOOK vs PERSISTENT CONTEXT
 

@@ -5,7 +5,7 @@ description: >
   into _meta.agent_meta.notifications.attention and _meta.agent_meta.notifications.persistent.
 status: active
 contract_version: 2
-last_changed_at: "2026-07-15"
+last_changed_at: "2026-08-02"
 related_files:
   - docs/references/licc-notification-wake-runbook.md
   - src/lingtai/tools/mcp/ANATOMY.md
@@ -13,6 +13,7 @@ related_files:
   - src/lingtai/services/mcp_licc.py
   - src/lingtai/mcp_servers/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/manager.py
+  - src/lingtai/mcp_servers/feishu/account.py
   - src/lingtai/mcp_servers/feishu/manager.py
   - src/lingtai/mcp_servers/wechat/manager.py
   - src/lingtai/mcp_servers/whatsapp/manager.py
@@ -38,6 +39,7 @@ review_triggers:
   - src/lingtai/services/mcp_licc.py
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/imap/manager.py
+  - src/lingtai/mcp_servers/feishu/account.py
   - src/lingtai/mcp_servers/feishu/manager.py
   - src/lingtai/mcp_servers/wechat/manager.py
   - src/lingtai/mcp_servers/whatsapp/manager.py
@@ -138,7 +140,9 @@ where they share the `.notification/` filesystem protocol.
    MCP supplies `recent_messages` and `latest_incoming` built from its merged
    inbox+sent preview window with per-message text bounded at 500 chars
    (`src/lingtai/mcp_servers/wechat/manager.py:835-956`); Feishu supplies the
-   same bounded structured fields from its merged inbox+sent preview window; and
+   same bounded structured fields from its merged inbox+sent preview window,
+   adding normalized message type, topic `thread_id`, and a capped resolved
+   mention list when present; and
    WhatsApp supplies a bounded current snapshot from its local inbox/sent store
    without raw Cloud API payloads. Each delta lane's seed/delta boundary matches
    its producer preview window (Telegram 20, WeChat 10, Feishu 10).
@@ -311,6 +315,12 @@ includes the non-secret boolean `taskcard` on every item in `recent_messages`,
 persistent lane preserve that field without moving it into the transient identity
 hook.
 
+Feishu's structured items may additionally carry `type`, `thread_id`, resolved
+`mentions` (at most 20 per message), and `mentions_truncated=true` when that cap
+is exceeded. The complete raw Feishu event and normalized content union remain
+in the producer's durable message record/read surface; they MUST NOT be copied
+into bounded LICC preview metadata or the transient attention hook.
+
 ## State
 
 Persistent/on-disk state involved in this contract:
@@ -371,7 +381,9 @@ Re-check this contract whenever a change touches any of these areas:
   `_meta.agent_meta.notifications.persistent.mcp.wechat`. WeChat inbox/sent records and
   `wechat.read` remain source of truth.
 - **Feishu:** compliant with the content split. The producer attaches bounded
-  `recent_messages`/`latest_incoming` plus generic routing keys; transient
+  `recent_messages`/`latest_incoming` plus generic routing keys. Its structured
+  items preserve additive topic/reply/mention context without copying the full
+  raw Feishu envelope; transient
   `_meta.agent_meta.notifications.attention.mcp.feishu` is identity-only; content/context lives in
   the Feishu delta lane at `_meta.agent_meta.notifications.persistent.mcp.feishu`.
 - **WhatsApp:** compliant with the content split. The producer attaches bounded

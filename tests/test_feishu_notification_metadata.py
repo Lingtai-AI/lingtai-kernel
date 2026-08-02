@@ -14,8 +14,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from lark_channel import Conversation, Identity, InboundMessage, Mention, TextContent
+
+from lingtai.mcp_servers.feishu.account import FeishuInboundEvent
 from lingtai.mcp_servers.feishu.manager import (
     _CONVERSATION_PREVIEW_MESSAGES,
+    _STRUCTURED_MESSAGE_MENTION_CAP,
     _STRUCTURED_MESSAGE_TEXT_CAP,
     FeishuManager,
 )
@@ -47,6 +51,9 @@ def _write_message(
     text: str,
     date: str,
     parent_id: str = "",
+    thread_id: str | None = None,
+    message_type: str = "text",
+    mentions: list[dict] | None = None,
     media: dict | None = None,
 ) -> str:
     compound_id = f"{account}:{chat_id}:{msg_id}"
@@ -57,10 +64,12 @@ def _write_message(
         "feishu_message_id": msg_id,
         "chat_id": chat_id,
         "chat_type": "p2p",
-        "message_type": "text",
+        "thread_id": thread_id,
+        "message_type": message_type,
         "from_open_id": "ou_jason",
         "text": text,
         "parent_id": parent_id,
+        "mentions": mentions or [],
         "media": media,
         "voice_transcript": None,
     }
@@ -229,3 +238,121 @@ def test_on_incoming_licc_event_carries_routing_and_structured_context(tmp_path)
     assert metadata["message_id"] == "main:oc_chat:om_new"
     assert metadata["chat_id"] == "oc_chat"
     assert metadata["account"] == "main"
+
+
+def _sdk_incoming_event(*, body_text: str) -> FeishuInboundEvent:
+    inbound = InboundMessage(
+        id="om_normalized",
+        create_time=0,
+        conversation=Conversation(
+            chat_id="oc_topic",
+            chat_type="topic",
+            thread_id="omt_thread",
+        ),
+        sender=Identity(
+            open_id="ou_sender",
+            union_id="on_sender",
+            user_id="user_sender",
+            display_name="Sender",
+            sender_type="user",
+        ),
+        mentions=[
+            Mention(key="@_user_1", open_id="ou_bot", name="Mac PA", is_bot=True),
+            Mention(key="@_user_2", open_id="ou_other", name="Other"),
+        ],
+        content=TextContent(raw={"text": "@_user_1 hello"}, text="@Mac PA hello"),
+        raw={"parent_id": "om_parent", "root_id": "om_root"},
+        content_text="@Mac PA hello",
+        body_text=body_text,
+        mentioned_bot=True,
+        raw_content_type="text",
+    )
+    envelope = {
+        "schema": "2.0",
+        "header": {"event_id": "event-normalized"},
+        "event": {"message": {"message_id": "om_normalized"}},
+    }
+    return FeishuInboundEvent(message=inbound, feishu=envelope)
+
+
+def test_sdk_incoming_persists_normalized_context_without_licc_raw_copy(tmp_path):
+    events: list[dict] = []
+    mgr = _manager(tmp_path, events)
+
+    incoming = _sdk_incoming_event(body_text="hello")
+    mgr.on_incoming("main", incoming)
+
+    message_path = next((tmp_path / "feishu" / "main" / "inbox").glob("*/message.json"))
+    payload = json.loads(message_path.read_text(encoding="utf-8"))
+    assert payload["id"] == "main:oc_topic:om_normalized"
+    assert payload["thread_id"] == "omt_thread"
+    assert payload["root_id"] == "om_root"
+    assert payload["reply_to"] == "main:oc_topic:om_parent"
+    assert payload["text"] == "hello"
+    assert payload["content"] == {"kind": "text", "text": "@Mac PA hello"}
+    assert payload["mentions"][0]["is_bot"] is True
+    assert payload["from_name"] == "Sender"
+    assert payload["sender_type"] == "user"
+    assert payload["feishu"] == incoming.feishu
+
+    read_result = mgr.handle({"action": "read", "account": "main", "chat_id": "oc_topic"})
+    read_message = read_result["messages"][0]
+    assert read_message["from_name"] == "Sender"
+    assert read_message["thread_id"] == "omt_thread"
+    assert read_message["content"] == payload["content"]
+    assert read_message["feishu"] == incoming.feishu
+
+    search_result = mgr.handle({
+        "action": "search",
+        "account": "main",
+        "chat_id": "oc_topic",
+        "query": "Sender",
+    })
+    assert search_result["total"] == 1
+    assert search_result["messages"][0]["from_name"] == "Sender"
+
+    metadata = events[0]["metadata"]
+    assert metadata["thread_id"] == "omt_thread"
+    structured = metadata["latest_incoming"]
+    assert structured["type"] == "text"
+    assert structured["thread_id"] == "omt_thread"
+    assert len(structured["mentions"]) == 2
+    assert "feishu" not in structured
+    assert "content" not in structured
+
+
+def test_sdk_bare_bot_mention_keeps_empty_normalized_body(tmp_path):
+    mgr = _manager(tmp_path)
+
+    mgr.on_incoming("main", _sdk_incoming_event(body_text=""))
+
+    message_path = next((tmp_path / "feishu" / "main" / "inbox").glob("*/message.json"))
+    payload = json.loads(message_path.read_text(encoding="utf-8"))
+    assert payload["text"] == ""
+
+
+def test_structured_metadata_caps_mentions(tmp_path):
+    mgr = _manager(tmp_path)
+    mentions = [
+        {"key": f"@_user_{index}", "open_id": f"ou_{index}"}
+        for index in range(_STRUCTURED_MESSAGE_MENTION_CAP + 1)
+    ]
+    current = _write_message(
+        tmp_path,
+        msg_id="om_mentions",
+        text="mentions",
+        date="2026-07-06T09:00:01Z",
+        thread_id="omt_thread",
+        message_type="post",
+        mentions=mentions,
+    )
+
+    _preview, metadata = mgr._build_conversation_preview_and_metadata(
+        "main", "oc_chat", current
+    )
+
+    item = metadata["latest_incoming"]
+    assert item["type"] == "post"
+    assert item["thread_id"] == "omt_thread"
+    assert item["mentions"] == mentions[:_STRUCTURED_MESSAGE_MENTION_CAP]
+    assert item["mentions_truncated"] is True

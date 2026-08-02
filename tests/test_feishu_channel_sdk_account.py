@@ -8,8 +8,10 @@ import json
 import threading
 from types import SimpleNamespace
 
+import lark_channel as lark_channel_sdk
+
 from lingtai.mcp_servers.feishu import account as account_module
-from lingtai.mcp_servers.feishu.account import FeishuAccount
+from lingtai.mcp_servers.feishu.account import FeishuAccount, FeishuInboundEvent
 
 
 class _Success:
@@ -156,3 +158,117 @@ def test_ws_loop_stops_channel_sdk_client_without_public_stop(monkeypatch) -> No
     finally:
         account.stop()
         fallback_loop.close()
+
+
+def _normalized_message(
+    message_id: str,
+    *,
+    open_id: str = "ou_allowed",
+    chat_type: str = "p2p",
+    mentioned_bot: bool = False,
+    mentions: list[SimpleNamespace] | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=message_id,
+        sender=SimpleNamespace(open_id=open_id),
+        conversation=SimpleNamespace(chat_id="oc_chat", chat_type=chat_type),
+        mentioned_bot=mentioned_bot,
+        mentions=mentions or [],
+    )
+
+
+def test_start_keeps_routing_in_account_and_disables_sdk_text_merging(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Channel:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+            self.client = object()
+            self.dispatcher = object()
+
+        def on(self, _event: str, _handler: object) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+    fake_lark = SimpleNamespace(
+        FeishuChannel=_Channel,
+        InboundConfig=lark_channel_sdk.InboundConfig,
+        LogLevel=lark_channel_sdk.LogLevel,
+        OutboundConfig=lark_channel_sdk.OutboundConfig,
+        PolicyConfig=lark_channel_sdk.PolicyConfig,
+        RetryConfig=lark_channel_sdk.RetryConfig,
+        SafetyConfig=lark_channel_sdk.SafetyConfig,
+        SecurityConfig=lark_channel_sdk.SecurityConfig,
+        TextBatchConfig=lark_channel_sdk.TextBatchConfig,
+        Events=lark_channel_sdk.Events,
+        ws=SimpleNamespace(Client=lambda *_args, **_kwargs: object()),
+    )
+    monkeypatch.setattr(account_module, "_import_lark", lambda: fake_lark)
+
+    account = FeishuAccount("main", "app", "secret", ["ou_allowed"])
+    monkeypatch.setattr(account, "_ws_loop", lambda: None)
+    account.start()
+    account.stop()
+
+    policy = captured["policy"]
+    assert policy.require_mention is False
+    assert policy.respond_to_mention_all is False
+    safety = captured["safety"]
+    assert safety.text_batch.max_messages == 1
+    outbound = captured["outbound"]
+    assert outbound.retry.max_attempts == 1
+    assert captured["security"].mode == "compat"
+
+
+def test_normalized_routing_preserves_allowlist_and_requires_group_mention() -> None:
+    seen: list[tuple[str, FeishuInboundEvent]] = []
+    account = FeishuAccount(
+        "main",
+        "app",
+        "secret",
+        ["ou_allowed"],
+        on_message=lambda alias, event: seen.append((alias, event)),
+    )
+    account._bot_open_id = "ou_bot"
+
+    envelopes = {
+        message_id: {
+            "schema": "2.0",
+            "header": {"event_id": f"event-{message_id}"},
+            "event": {"message": {"message_id": message_id}},
+        }
+        for message_id in ("om_dm", "om_plain_group", "om_group", "om_cached")
+    }
+    for envelope in envelopes.values():
+        account._capture_raw_envelope(envelope)
+
+    # Legacy allowlist semantics still apply to direct messages.
+    account._process_event(_normalized_message("om_denied", open_id="ou_denied"))
+    account._process_event(_normalized_message("om_dm"))
+    # Groups do not wake without an explicit @Bot.
+    account._process_event(_normalized_message("om_plain_group", chat_type="group"))
+    account._process_event(
+        _normalized_message("om_group", chat_type="group", mentioned_bot=True)
+    )
+    # A resolved mention also supports conservative cached-identity gating.
+    account._process_event(
+        _normalized_message(
+            "om_cached",
+            chat_type="topic",
+            mentions=[SimpleNamespace(open_id="ou_bot")],
+        )
+    )
+
+    assert [event.message.id for _alias, event in seen] == [
+        "om_dm",
+        "om_group",
+        "om_cached",
+    ]
+    assert all(alias == "main" for alias, _event in seen)
+    assert seen[0][1].feishu == envelopes["om_dm"]
+    assert seen[1][1].feishu == envelopes["om_group"]
+    assert seen[2][1].feishu == envelopes["om_cached"]

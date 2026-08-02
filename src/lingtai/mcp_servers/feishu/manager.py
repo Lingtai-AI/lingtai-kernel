@@ -18,6 +18,7 @@ import re
 import tempfile
 import threading
 from collections import OrderedDict
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
@@ -26,6 +27,7 @@ from uuid import uuid4
 
 from .. import _skill
 from . import _family
+from .account import FeishuInboundEvent
 from lingtai.kernel._frontmatter import strip_frontmatter
 
 if TYPE_CHECKING:
@@ -66,6 +68,61 @@ _CONVERSATION_PREVIEW_MESSAGES = 10
 # messages carry text_truncated=true so the agent knows to feishu.read for the
 # exact producer state.
 _STRUCTURED_MESSAGE_TEXT_CAP = 500
+_STRUCTURED_MESSAGE_MENTION_CAP = 20
+
+
+def _normalized_content_payload(content: object, message_type: str) -> dict:
+    """Project one SDK content union without duplicating its raw wire body."""
+    if is_dataclass(content):
+        value = asdict(content)
+    elif isinstance(content, dict):
+        value = dict(content)
+    else:
+        value = {}
+    value.pop("raw", None)
+    value.setdefault("kind", message_type or "unknown")
+    return value
+
+
+def _normalized_mentions_payload(mentions: object) -> list[dict]:
+    result: list[dict] = []
+    if not isinstance(mentions, (list, tuple)):
+        return result
+    for mention in mentions:
+        if is_dataclass(mention):
+            item = asdict(mention)
+        elif isinstance(mention, dict):
+            item = dict(mention)
+        else:
+            item = {
+                key: getattr(mention, key, None)
+                for key in (
+                    "key", "open_id", "union_id", "user_id", "name",
+                    "is_bot", "tenant_key",
+                )
+            }
+        result.append({key: value for key, value in item.items() if value is not None})
+    return result
+
+
+def _legacy_envelope_payload(value: object) -> object:
+    """JSON-safe fallback for pre-normalized callback fixtures/callers."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _legacy_envelope_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_legacy_envelope_payload(item) for item in value]
+    if is_dataclass(value):
+        return _legacy_envelope_payload(asdict(value))
+    fields = getattr(value, "__dict__", None)
+    if isinstance(fields, dict):
+        return {
+            key: _legacy_envelope_payload(item)
+            for key, item in fields.items()
+            if not key.startswith("_")
+        }
+    return str(value)
 
 
 class TypingIndicatorManager:
@@ -405,15 +462,121 @@ class FeishuManager:
     def on_incoming(self, account_alias: str, data: object) -> None:
         """Persist an incoming Feishu message event to disk and notify agent."""
         try:
-            event = getattr(data, "event", None)
-            if event is None:
-                return
-            message = getattr(event, "message", None)
-            sender = getattr(event, "sender", None)
-            if message is None or sender is None:
-                return
+            if isinstance(data, FeishuInboundEvent):
+                inbound = data.message
+                conversation = getattr(inbound, "conversation", None)
+                sender = getattr(inbound, "sender", None)
+                if conversation is None or sender is None:
+                    return
+                feishu_msg_id = getattr(inbound, "id", "") or ""
+                chat_id = getattr(conversation, "chat_id", "") or ""
+                chat_type = getattr(conversation, "chat_type", "unknown") or "unknown"
+                thread_id = getattr(conversation, "thread_id", None) or ""
+                msg_type = (
+                    getattr(inbound, "raw_content_type", "")
+                    or getattr(getattr(inbound, "content", None), "kind", "")
+                    or "unknown"
+                )
+                create_time = str(getattr(inbound, "create_time", 0) or "")
+                raw_message = getattr(inbound, "raw", None)
+                raw_message = raw_message if isinstance(raw_message, dict) else {}
+                parent_id = raw_message.get("parent_id") or ""
+                root_id = raw_message.get("root_id") or ""
+                if not parent_id:
+                    reply = getattr(inbound, "reply", None)
+                    parent_id = getattr(reply, "message_id", "") if reply else ""
+                open_id = getattr(sender, "open_id", "") or ""
+                user_id = getattr(sender, "user_id", None)
+                union_id = getattr(sender, "union_id", None)
+                sender_name = getattr(sender, "display_name", None)
+                sender_type = getattr(sender, "sender_type", None)
+                sender_is_bot = bool(getattr(sender, "is_bot", False))
+                content_obj = getattr(inbound, "content", None)
+                content_data = getattr(content_obj, "raw", None)
+                content_data = content_data if isinstance(content_data, dict) else {}
+                normalized_content = _normalized_content_payload(content_obj, msg_type)
+                mentions = _normalized_mentions_payload(
+                    getattr(inbound, "mentions", None)
+                )
+                body_text = getattr(inbound, "body_text", None)
+                text = (
+                    body_text
+                    if isinstance(body_text, str)
+                    else (getattr(inbound, "content_text", "") or "")
+                )
+                raw_envelope = data.feishu
+            else:
+                # Backward-compatible callback shape used by older callers and
+                # fixtures. Live SDK delivery uses FeishuInboundEvent above.
+                event = getattr(data, "event", None)
+                if event is None:
+                    return
+                message = getattr(event, "message", None)
+                sender = getattr(event, "sender", None)
+                if message is None or sender is None:
+                    return
+                feishu_msg_id = getattr(message, "message_id", "") or ""
+                chat_id = getattr(message, "chat_id", "") or ""
+                chat_type = getattr(message, "chat_type", "p2p") or "p2p"
+                thread_id = getattr(message, "thread_id", "") or ""
+                msg_type = getattr(message, "message_type", "text") or "text"
+                content_str = getattr(message, "content", "{}") or "{}"
+                create_time = getattr(message, "create_time", "") or ""
+                parent_id = getattr(message, "parent_id", "") or ""
+                root_id = getattr(message, "root_id", "") or ""
+                sender_id = getattr(sender, "sender_id", None)
+                open_id = (
+                    (getattr(sender_id, "open_id", "") or "") if sender_id else ""
+                )
+                user_id = getattr(sender_id, "user_id", None) if sender_id else None
+                union_id = getattr(sender_id, "union_id", None) if sender_id else None
+                sender_name = None
+                sender_type = getattr(sender, "sender_type", None)
+                sender_is_bot = sender_type in {"bot", "app"}
+                try:
+                    content_data = json.loads(content_str)
+                except (json.JSONDecodeError, AttributeError):
+                    content_data = {}
+                normalized_content = {
+                    "kind": msg_type,
+                    **content_data,
+                }
+                mentions = _normalized_mentions_payload(
+                    getattr(message, "mentions", None)
+                )
+                raw_envelope = _legacy_envelope_payload(data)
 
-            feishu_msg_id: str = getattr(message, "message_id", "") or ""
+                if msg_type == "text":
+                    text = content_data.get("text", "")
+                elif msg_type == "audio":
+                    text = ""
+                elif msg_type == "image":
+                    text = content_data.get("text", "") or "[Image]"
+                elif msg_type == "file":
+                    text = content_data.get("text", "") or "[File]"
+                elif msg_type == "sticker":
+                    text = "[Sticker]"
+                elif msg_type == "interactive":
+                    text = content_data.get("text", "") or "[Interactive card]"
+                elif msg_type == "post":
+                    post_content = content_data.get("content", {})
+                    title = content_data.get("title", "")
+                    text_parts = [title] if title else []
+                    if isinstance(post_content, dict):
+                        for paragraphs in post_content.values():
+                            if isinstance(paragraphs, list):
+                                for para in paragraphs:
+                                    if isinstance(para, list):
+                                        for elem in para:
+                                            if (
+                                                isinstance(elem, dict)
+                                                and elem.get("tag") == "text"
+                                            ):
+                                                text_parts.append(elem.get("text", ""))
+                    text = " ".join(text_parts).strip() or "[Rich text message]"
+                else:
+                    text = content_data.get("text", "") or f"[{msg_type} message]"
+
             if feishu_msg_id and self._is_duplicate_event(
                 account_alias, feishu_msg_id,
             ):
@@ -422,59 +585,7 @@ class FeishuManager:
                     feishu_msg_id, account_alias,
                 )
                 return
-            chat_id: str = getattr(message, "chat_id", "") or ""
-            chat_type: str = getattr(message, "chat_type", "p2p") or "p2p"
-            msg_type: str = getattr(message, "message_type", "text") or "text"
-            content_str: str = getattr(message, "content", "{}") or "{}"
-            create_time: str = getattr(message, "create_time", "") or ""
-            parent_id: str = getattr(message, "parent_id", "") or ""
-
-            sender_id = getattr(sender, "sender_id", None)
-            open_id: str = (
-                (getattr(sender_id, "open_id", "") or "") if sender_id else ""
-            )
-
-            # Parse content based on message type
-            text = ""
             media_info: dict | None = None
-            content_data: dict = {}
-            try:
-                content_data = json.loads(content_str)
-            except (json.JSONDecodeError, AttributeError):
-                content_data = {}
-
-            if msg_type == "text":
-                text = content_data.get("text", "")
-            elif msg_type == "audio":
-                # Audio/voice message — will be transcribed below
-                text = ""
-            elif msg_type == "image":
-                text = content_data.get("text", "") or "[Image]"
-            elif msg_type == "file":
-                text = content_data.get("text", "") or "[File]"
-            elif msg_type == "sticker":
-                text = "[Sticker]"
-            elif msg_type == "interactive":
-                text = content_data.get("text", "") or "[Interactive card]"
-            elif msg_type == "post":
-                # Rich text — extract plain text from the post content
-                post_content = content_data.get("content", {})
-                title = content_data.get("title", "")
-                # Flatten the post content to extract text
-                text_parts = []
-                if title:
-                    text_parts.append(title)
-                if isinstance(post_content, dict):
-                    for _lang, paragraphs in post_content.items():
-                        if isinstance(paragraphs, list):
-                            for para in paragraphs:
-                                if isinstance(para, list):
-                                    for elem in para:
-                                        if isinstance(elem, dict) and elem.get("tag") == "text":
-                                            text_parts.append(elem.get("text", ""))
-                text = " ".join(text_parts).strip() or "[Rich text message]"
-            else:
-                text = content_data.get("text", "") or f"[{msg_type} message]"
 
             if create_time:
                 try:
@@ -496,13 +607,26 @@ class FeishuManager:
                 "feishu_message_id": feishu_msg_id,
                 "chat_id": chat_id,
                 "chat_type": chat_type,
+                "thread_id": thread_id or None,
                 "message_type": msg_type,
                 "from_open_id": open_id,
+                "from_user_id": user_id,
+                "from_union_id": union_id,
+                "from_name": sender_name,
+                "sender_type": sender_type,
+                "sender_is_bot": sender_is_bot,
                 "text": text,
                 "date": date_str,
                 "parent_id": parent_id,
+                "root_id": root_id,
+                "reply_to": (
+                    f"{account_alias}:{chat_id}:{parent_id}" if parent_id else None
+                ),
+                "mentions": mentions,
+                "content": normalized_content,
                 "media": None,
                 "voice_transcript": None,
+                "feishu": raw_envelope,
             }
 
             msg_uuid = str(uuid4())
@@ -615,7 +739,11 @@ class FeishuManager:
         # carries routing keys plus the structured recent_messages /
         # latest_incoming context the kernel moves into the persistent
         # notification lane.
-        display_name = self._get_contact_name(account_alias, open_id) or open_id
+        display_name = (
+            payload.get("from_name")
+            or self._get_contact_name(account_alias, open_id)
+            or open_id
+        )
         try:
             preview, preview_metadata = self._build_conversation_preview_and_metadata(
                 account_alias, chat_id, compound_id,
@@ -647,6 +775,7 @@ class FeishuManager:
                     "account": account_alias,
                     "chat_id": chat_id,
                     "chat_type": chat_type,
+                    "thread_id": thread_id or None,
                     "from_open_id": open_id,
                     # Generic LICC preview metadata copied into
                     # .notification/mcp.feishu.json.  Keep both the legacy
@@ -754,7 +883,12 @@ class FeishuManager:
         if message.get("_folder") == "sent":
             return "me"
         open_id = message.get("from_open_id", "") or ""
-        return self._get_contact_name(account_alias, open_id) or open_id or "unknown"
+        return (
+            message.get("from_name")
+            or self._get_contact_name(account_alias, open_id)
+            or open_id
+            or "unknown"
+        )
 
     @staticmethod
     def _message_display_text(message: dict) -> str:
@@ -796,6 +930,17 @@ class FeishuManager:
             "text": text,
             "text_truncated": text_truncated,
         }
+        message_type = message.get("message_type")
+        if message_type:
+            item["type"] = message_type
+        thread_id = message.get("thread_id")
+        if thread_id:
+            item["thread_id"] = thread_id
+        mentions = message.get("mentions")
+        if isinstance(mentions, list) and mentions:
+            item["mentions"] = mentions[:_STRUCTURED_MESSAGE_MENTION_CAP]
+            if len(mentions) > _STRUCTURED_MESSAGE_MENTION_CAP:
+                item["mentions_truncated"] = True
         if current_compound_id and cid == current_compound_id:
             item["is_current"] = True
         if message.get("media"):
@@ -1109,6 +1254,7 @@ class FeishuManager:
                 conversations[cid] = {
                     "chat_id": cid,
                     "chat_type": msg.get("chat_type", "p2p"),
+                    "last_thread_id": msg.get("thread_id"),
                     "last_from_open_id": last_from_open_id,
                     "last_from_name": name,
                     "last_text": (msg.get("text") or "")[:100],
@@ -1160,22 +1306,35 @@ class FeishuManager:
             outgoing = self._is_outgoing_record(m)
             name = (
                 "me" if outgoing
-                else self._get_contact_name(account, m.get("from_open_id", ""))
+                else (
+                    m.get("from_name")
+                    or self._get_contact_name(account, m.get("from_open_id", ""))
+                )
             )
             cleaned.append({
                 "id": m.get("id"),
                 "feishu_message_id": m.get("feishu_message_id"),
                 "chat_id": m.get("chat_id"),
                 "chat_type": m.get("chat_type"),
+                "thread_id": m.get("thread_id"),
                 "from_open_id": m.get("from_open_id"),
+                "from_user_id": m.get("from_user_id"),
+                "from_union_id": m.get("from_union_id"),
                 "from_name": name,
+                "sender_type": m.get("sender_type"),
+                "sender_is_bot": m.get("sender_is_bot"),
                 "to": m.get("to"),
                 "message_type": m.get("message_type"),
                 "text": m.get("text"),
                 "date": m.get("date"),
                 "parent_id": m.get("parent_id"),
+                "root_id": m.get("root_id"),
+                "reply_to": m.get("reply_to"),
+                "mentions": m.get("mentions", []),
+                "content": m.get("content"),
                 "media": m.get("media"),
                 "voice_transcript": m.get("voice_transcript"),
+                "feishu": m.get("feishu"),
                 "_direction": "outgoing" if outgoing else "incoming",
             })
 
@@ -1257,7 +1416,10 @@ class FeishuManager:
         for msg in messages:
             if target_chat and msg.get("chat_id") != target_chat:
                 continue
-            name = self._get_contact_name(account, msg.get("from_open_id", ""))
+            name = (
+                msg.get("from_name")
+                or self._get_contact_name(account, msg.get("from_open_id", ""))
+            )
             searchable = " ".join([
                 msg.get("from_open_id", ""),
                 name,
@@ -1269,8 +1431,14 @@ class FeishuManager:
                     "from_open_id": msg.get("from_open_id"),
                     "from_name": name,
                     "chat_id": msg.get("chat_id"),
+                    "thread_id": msg.get("thread_id"),
                     "date": msg.get("date"),
                     "text": msg.get("text"),
+                    "parent_id": msg.get("parent_id"),
+                    "root_id": msg.get("root_id"),
+                    "reply_to": msg.get("reply_to"),
+                    "mentions": msg.get("mentions", []),
+                    "content": msg.get("content"),
                 })
 
         return {"status": "ok", "total": len(matches), "messages": matches}
