@@ -195,11 +195,10 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
         "Defaults to 'open_id'."
     )
     send["properties"]["placeholder"]["anyOf"][0]["description"] = (
-        "send only — send 'text' as a placeholder message immediately "
-        "and return its compound message_id so the agent can call "
-        "edit later with the final result. "
-        "Use for long-running responses (>5s) to avoid the perception "
-        "of silence."
+        "send only — wrap text, markdown, or post content in a native "
+        "schema-2.0 progress card and return its compound message_id. "
+        "Edit that card only at meaningful phase changes; send the final "
+        "answer separately with send or reply."
     )
     empty = _object({})
     return {
@@ -293,9 +292,9 @@ def feishu_schema() -> dict[str, Any]:
         "to a user or chat "
         "(receive_id, receive_id_type, exactly one of text/content; "
         "optional account, placeholder). "
-        "If placeholder is true, sends text as a placeholder message "
-        "immediately and returns its compound message_id so the agent "
-        "can call edit later with the final result. "
+        "If placeholder is true, sends a native progress card immediately; "
+        "edit it only at meaningful phase changes and send the final answer "
+        "separately with send or reply. "
         "check: list recent conversations with unread counts "
         "(optional account). "
         "read: read messages from a specific chat "

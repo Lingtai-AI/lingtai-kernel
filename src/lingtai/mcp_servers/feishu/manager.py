@@ -150,6 +150,33 @@ def _card_preview(card: dict[str, Any]) -> str:
     return "\n".join(parts) or "[interactive card]"
 
 
+def _native_progress_card(
+    content: dict[str, Any], preview: str,
+) -> tuple[dict[str, Any], str]:
+    """Wrap one meaningful phase update in a native schema-2.0 card."""
+    phase = (
+        content.get("markdown")
+        if content.get("type") == "markdown"
+        else preview
+    )
+    if not isinstance(phase, str) or not phase.strip():
+        phase = "…"
+    card = {
+        "schema": "2.0",
+        "config": {"update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": "LingTai"},
+            "template": "blue",
+        },
+        "body": {
+            "elements": [
+                {"tag": "markdown", "content": f"⏳ {phase.strip()}"},
+            ],
+        },
+    }
+    return card, _card_preview(card)
+
+
 def _normalize_outbound_content(
     args: dict[str, Any], *, editable: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], str, str]:
@@ -565,9 +592,9 @@ def _structured_attachments_payload(
 class TypingIndicatorManager:
     """Manages automatic typing feedback for Feishu chats.
 
-    Since Feishu has no native typing indicator API (unlike Telegram's
-    sendChatAction), this sends a temporary "typing..." message that is
-    deleted when the response is ready. Best-effort — never blocks or fails.
+    Feishu exposes transient processing presence as the native ``Typing``
+    reaction on the incoming message. The exact reaction id is retained only
+    until the response/progress card is sent, then removed best-effort.
     """
 
     def __init__(self) -> None:
@@ -575,15 +602,20 @@ class TypingIndicatorManager:
         self._lock = threading.Lock()
 
     def start_typing(
-        self, account: Any, chat_id: str, receive_id: str, receive_id_type: str,
+        self,
+        account: Any,
+        chat_id: str,
+        message_id: str,
+        receive_id: str,
+        receive_id_type: str,
     ) -> str | None:
-        """Send a typing feedback message. Returns the feishu_message_id of the
-        temporary message, or None on failure.
+        """Add a native Typing reaction and return its reaction id.
 
         Args:
             account: FeishuAccount instance.
-            chat_id: The chat_id to associate the typing message with.
-            receive_id: The receive_id (open_id or chat_id) for sending.
+            chat_id: The chat_id used to serialize presence cleanup.
+            message_id: Incoming Feishu message receiving the reaction.
+            receive_id: The response receive_id (open_id or chat_id).
             receive_id_type: "open_id" or "chat_id".
         """
         key = (account.alias, chat_id)
@@ -591,35 +623,37 @@ class TypingIndicatorManager:
             if key in self._active_chats:
                 return None  # Already typing
             try:
-                result = account.send_text(
-                    receive_id, receive_id_type, "⏳ ...",
-                )
-                msg_id = result.get("message_id", "")
+                reaction_id = account.add_typing_reaction(message_id)
+                if not reaction_id:
+                    return None
                 self._active_chats[key] = {
-                    "message_id": msg_id,
+                    "message_id": message_id,
+                    "reaction_id": reaction_id,
                     "receive_id": receive_id,
                     "receive_id_type": receive_id_type,
                 }
-                return msg_id
+                return reaction_id
             except Exception as e:
                 log.debug("Typing indicator failed for %s:%s: %s",
                           account.alias, chat_id, e)
                 return None
 
     def stop_typing(self, account: Any, chat_id: str) -> bool:
-        """Delete the typing feedback message for a chat.
+        """Remove the native Typing reaction for a chat.
 
         Returns True when an active typing entry existed and deletion was
-        attempted, even if the best-effort delete call itself failed.
+        attempted, even if the best-effort reaction removal itself failed.
         """
         key = (account.alias, chat_id)
         with self._lock:
             info = self._active_chats.pop(key, None)
-        if info and info.get("message_id"):
+        if info and info.get("message_id") and info.get("reaction_id"):
             try:
-                account.delete_message(info["message_id"])
+                account.remove_reaction(
+                    info["message_id"], info["reaction_id"],
+                )
             except Exception as e:
-                log.debug("Failed to delete typing message for %s:%s: %s",
+                log.debug("Failed to remove typing reaction for %s:%s: %s",
                           account.alias, chat_id, e)
             return True
         return False
@@ -643,23 +677,24 @@ class TypingIndicatorManager:
             ]
             removed = [(key, self._active_chats.pop(key)) for key in matching]
         for key, info in removed:
-            msg_id = info.get("message_id")
-            if not msg_id:
+            message_id = info.get("message_id")
+            reaction_id = info.get("reaction_id")
+            if not message_id or not reaction_id:
                 continue
             try:
-                account.delete_message(msg_id)
+                account.remove_reaction(message_id, reaction_id)
             except Exception as e:
                 log.debug(
-                    "Failed to delete typing message for %s (receive_id=%s): %s",
+                    "Failed to remove typing reaction for %s (receive_id=%s): %s",
                     key, receive_id, e,
                 )
 
     def stop_all(self, accounts: dict | None = None) -> None:
-        """Stop all typing indicators and delete temp messages.
+        """Stop all typing indicators and remove their native reactions.
 
         Args:
             accounts: Optional dict of alias -> FeishuAccount for cleanup.
-                      If provided, temp messages are deleted before clearing.
+                      If provided, reactions are removed before clearing.
                       If None, just clears the tracking dict (best-effort).
         """
         with self._lock:
@@ -668,16 +703,17 @@ class TypingIndicatorManager:
 
         if accounts:
             for (alias, _chat_id), info in chats.items():
-                msg_id = info.get("message_id")
-                if msg_id:
+                message_id = info.get("message_id")
+                reaction_id = info.get("reaction_id")
+                if message_id and reaction_id:
                     acct = accounts.get(alias)
                     if acct:
                         try:
-                            acct.delete_message(msg_id)
+                            acct.remove_reaction(message_id, reaction_id)
                         except Exception as e:
                             log.debug(
-                                "Failed to delete typing message %s on shutdown: %s",
-                                msg_id, e,
+                                "Failed to remove typing reaction %s on shutdown: %s",
+                                reaction_id, e,
                             )
 
 
@@ -759,9 +795,9 @@ DESCRIPTION = (
     "'accounts' to list configured app accounts. "
     "Voice/audio messages are automatically transcribed using Whisper (local) "
     "and delivered as text. "
-    "Rich feedback: automatic 'seen' emoji reaction (OK) on message receipt, "
-    "'done' emoji reaction (THUMBSUP) after response is sent, "
-    "and placeholder messages for long-running tasks."
+    "Rich feedback: automatic 'seen' (OK) and transient native Typing reactions "
+    "on message receipt, 'done' (THUMBSUP) after response is sent, and native "
+    "schema-2.0 progress cards for long-running tasks."
 )
 
 # Public callers receive the strict LTP-v2 family schema. Manager dispatch
@@ -1469,7 +1505,11 @@ class FeishuManager:
                     typing_receive_id = chat_id
                     typing_receive_id_type = "chat_id"
                 _typing_manager.start_typing(
-                    account, chat_id, typing_receive_id, typing_receive_id_type,
+                    account,
+                    chat_id,
+                    feishu_msg_id,
+                    typing_receive_id,
+                    typing_receive_id_type,
                 )
 
             attachments = self._download_inbound_attachments(
@@ -2031,6 +2071,8 @@ class FeishuManager:
             "date": now_iso,
             "status": status,
         }
+        if status == "placeholder":
+            sent_record["placeholder"] = True
         media = _outbound_media_summary(content)
         if media is not None:
             sent_record["media"] = media
@@ -2076,6 +2118,11 @@ class FeishuManager:
         content, sdk_message, text, message_type = _normalize_outbound_content(args)
         if placeholder and content["type"] not in _PLACEHOLDER_CONTENT_TYPES:
             return {"error": "placeholder only supports text, markdown, or post"}
+        if placeholder:
+            card, text = _native_progress_card(content, text)
+            content = {"type": "card", "card": card}
+            sdk_message = {"card": card}
+            message_type = "interactive"
 
         content_key = json.dumps(content, ensure_ascii=False, sort_keys=True)
         dup_key = (account, receive_id, content_key)
@@ -2112,9 +2159,10 @@ class FeishuManager:
             if placeholder:
                 response["placeholder"] = True
                 response["hint"] = (
-                    f"Placeholder sent — call feishu(action='edit', "
+                    f"Native progress card sent — call feishu(action='edit', "
                     f"message_id='{response['message_id']}', "
-                    "text=<final> or content=<final>) when ready."
+                    "text=<next meaningful phase>) only when the phase changes. "
+                    "Send the final answer separately with send or reply."
                 )
 
             return response
@@ -2387,34 +2435,58 @@ class FeishuManager:
         compound_id = args.get("message_id", "")
         if not compound_id:
             return {"error": "message_id is required"}
+        alias, _chat_id, feishu_msg_id = self._parse_compound_id(compound_id)
+        record = self._find_message_record(alias, compound_id)
+        is_progress = bool(
+            record.get("placeholder") or record.get("status") == "placeholder"
+        )
         content, sdk_message, text, message_type = _normalize_outbound_content(
             args, editable=True,
         )
-        alias, _chat_id, feishu_msg_id = self._parse_compound_id(compound_id)
+        if is_progress:
+            if content["type"] not in _PLACEHOLDER_CONTENT_TYPES:
+                raise ValueError(
+                    "progress card edits only support text, markdown, or post"
+                )
+            card, text = _native_progress_card(content, text)
+            content = {"type": "card", "card": card}
+            sdk_message = {"card": card}
+            message_type = "interactive"
         acct = self._service.get_account(alias)
         acct.update_content(feishu_msg_id, sdk_message)
 
-        record = self._find_message_record(alias, compound_id)
         record_dir = record.pop("_dir", "") if record else ""
         if record_dir:
             record.update({
                 "content": content,
                 "message_type": message_type,
                 "text": text,
-                "status": "sent",
+                "status": "placeholder" if is_progress else "sent",
                 "edited_at": datetime.now(timezone.utc).strftime(
                     "%Y-%m-%dT%H:%M:%SZ"
                 ),
             })
+            if is_progress:
+                record["placeholder"] = True
             (Path(record_dir) / "message.json").write_text(
                 json.dumps(record, indent=2, ensure_ascii=False, default=str),
                 encoding="utf-8",
             )
-        return {
+        response = {
             "status": "edited",
             "message_id": compound_id,
             "content_type": content["type"],
         }
+        if is_progress:
+            response.update({
+                "placeholder": True,
+                "hint": (
+                    "Progress card updated. Update again only at a meaningful "
+                    "phase change; send the final answer separately with send "
+                    "or reply."
+                ),
+            })
+        return response
 
     def _contacts(self, args: dict) -> dict:
         account = self._resolve_account(args)

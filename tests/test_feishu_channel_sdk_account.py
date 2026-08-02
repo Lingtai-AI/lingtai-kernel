@@ -65,6 +65,10 @@ def test_outbound_methods_use_channel_sdk_generated_models() -> None:
     class _MessageReaction:
         def create(self, request: object) -> _Success:
             requests["reaction"] = request
+            return _Success(data=SimpleNamespace(reaction_id="reaction-1"))
+
+        def delete(self, request: object) -> _Success:
+            requests["reaction_delete"] = request
             return _Success()
 
     rest_client = SimpleNamespace(
@@ -93,6 +97,8 @@ def test_outbound_methods_use_channel_sdk_generated_models() -> None:
         b"audio",
     )
     assert account.add_reaction("om_original", "OK") is True
+    assert account.add_typing_reaction("om_original") == "reaction-1"
+    assert account.remove_reaction("om_original", "reaction-1") is True
     assert account.update_message("om_reply", "edited") == {}
     assert account.delete_message("om_reply") is True
 
@@ -121,7 +127,11 @@ def test_outbound_methods_use_channel_sdk_generated_models() -> None:
 
     reaction = requests["reaction"]
     assert reaction.message_id == "om_original"
-    assert reaction.request_body.reaction_type.emoji_type == "OK"
+    assert reaction.request_body.reaction_type.emoji_type == "Typing"
+
+    reaction_delete = requests["reaction_delete"]
+    assert reaction_delete.message_id == "om_original"
+    assert reaction_delete.reaction_id == "reaction-1"
 
     patch = requests["patch"]
     assert patch.message_id == "om_reply"

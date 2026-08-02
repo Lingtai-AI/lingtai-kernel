@@ -212,9 +212,14 @@ def test_reply_defaults_to_persisted_thread_and_allows_explicit_flat_override(
     threaded = next(record for record in records if record["reply_in_thread"])
     assert threaded["thread_id"] == "omt_topic"
     assert threaded["reply_to"] == topic_target
+    assert (
+        "reaction", ("om_target", "THUMBSUP"), {}
+    ) in account.calls
 
 
-def test_edit_refreshes_persisted_content_only_after_transport_success(tmp_path):
+def test_progress_edit_stays_a_card_and_persists_only_after_transport_success(
+    tmp_path,
+):
     manager, account = _manager(tmp_path)
     sent = _call(
         manager,
@@ -236,11 +241,15 @@ def test_edit_refreshes_persisted_content_only_after_transport_success(tmp_path)
     )
     path, record = _sent_records(tmp_path)[0]
     assert edited["status"] == "edited"
-    assert edited["content_type"] == "post"
-    assert record["content"]["type"] == "post"
-    assert record["message_type"] == "post"
-    assert record["text"] == "after\nupdated"
-    assert record["status"] == "sent"
+    assert edited["content_type"] == "card"
+    assert edited["placeholder"] is True
+    assert record["content"]["type"] == "card"
+    assert record["content"]["card"]["schema"] == "2.0"
+    assert record["message_type"] == "interactive"
+    assert "after" in record["text"]
+    assert "updated" in record["text"]
+    assert record["status"] == "placeholder"
+    assert record["placeholder"] is True
     assert record["edited_at"]
 
     before_failure = path.read_text(encoding="utf-8")

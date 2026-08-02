@@ -4,14 +4,15 @@ description: |
   Progressive-disclosure usage manual for the Feishu (Lark) MCP tool. Read this
   when you need detail beyond the one-line action descriptions: receive_id vs
   receive_id_type (open_id/chat_id), send vs reply, check/read/search, placeholder
-  + edit for long responses, text/markdown/post/card outbound content, topic-aware
-  replies, interactive card callbacks, outbound media/share/sticker sources, contacts/accounts basics, the notification
+  + edit for native progress cards, text/markdown/post/card outbound content,
+  topic-aware replies, Typing/seen/done reactions, interactive card callbacks,
+  outbound media/share/sticker sources, contacts/accounts basics, the notification
   transient-hook vs persistent-context split, normalized inbound conversations,
   preserved inbound media, passive channel events, group @Bot routing, and
   side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.9.0
+version: 1.10.0
 last_changed_at: 2026-08-03T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
@@ -134,11 +135,18 @@ maintenance: |
 ## PLACEHOLDER / PROGRESS
 
 - For responses that take more than ~5s, send `action='send'` with
-  `placeholder=true` and interim `text` or `content`. This returns a compound
-  `message_id`.
-- Update it later with `action='edit'`, `message_id=<that id>`, plus final `text`
-  or `content`
-  instead of sending a second message, so the user sees one evolving reply.
+  `placeholder=true` and interim text, Markdown, or post content. Feishu sends
+  it as a native schema-2.0 progress card and returns a compound `message_id`.
+- Update that same card with `action='edit'` only when the work enters a
+  meaningful new phase. A progress-card edit remains a progress card even when
+  the edit input uses text/Markdown/post; custom-card and media replacement are
+  rejected on this path.
+- Send the final answer as a separate durable `send` or `reply` message. Never
+  edit the progress card into the final answer, and do not update it for every
+  token or trivial internal step.
+- Incoming messages receive the native `Typing` reaction while work is pending;
+  it is removed when the first response/progress card is sent. Existing `OK`
+  (seen) and `THUMBSUP` (done after reply) reactions continue independently.
 
 ## CONTACTS / ACCOUNTS
 

@@ -902,16 +902,14 @@ class FeishuAccount:
     # Reactions (emoji responses on messages)
     # ------------------------------------------------------------------
 
-    def add_reaction(self, message_id: str, emoji_type: str) -> bool:
-        """Add an emoji reaction to a message.
+    def _create_reaction(self, message_id: str, emoji_type: str) -> str | None:
+        """Add one reaction and return its provider reaction id when exposed.
 
         Args:
             message_id: Feishu message ID (om_xxx).
             emoji_type: Emoji type string (e.g. "OK", "THUMBSUP", "SMILE").
-
-        Returns:
-            True on success.
         """
+
         from lark_channel.api.im.v1.model.create_message_reaction_request import (
             CreateMessageReactionRequest,
         )
@@ -938,6 +936,45 @@ class FeishuAccount:
         if not response.success():
             raise RuntimeError(
                 f"Feishu add_reaction failed: "
+                f"code={response.code} msg={response.msg}"
+            )
+        data = getattr(response, "data", None)
+        reaction_id = getattr(data, "reaction_id", None) if data else None
+        return reaction_id if isinstance(reaction_id, str) and reaction_id else None
+
+    def add_reaction(self, message_id: str, emoji_type: str) -> bool:
+        """Add an emoji reaction to a message.
+
+        Args:
+            message_id: Feishu message ID (om_xxx).
+            emoji_type: Emoji type string (e.g. "OK", "THUMBSUP", "SMILE").
+
+        Returns:
+            True on success.
+        """
+        self._create_reaction(message_id, emoji_type)
+        return True
+
+    def add_typing_reaction(self, message_id: str) -> str | None:
+        """Add Feishu's native Typing reaction for best-effort presence."""
+        return self._create_reaction(message_id, "Typing")
+
+    def remove_reaction(self, message_id: str, reaction_id: str) -> bool:
+        """Remove one Bot-owned reaction by its provider reaction id."""
+        from lark_channel.api.im.v1.model.delete_message_reaction_request import (
+            DeleteMessageReactionRequest,
+        )
+
+        request = (
+            DeleteMessageReactionRequest.builder()
+            .message_id(message_id)
+            .reaction_id(reaction_id)
+            .build()
+        )
+        response = self._rest_client.im.v1.message_reaction.delete(request)
+        if not response.success():
+            raise RuntimeError(
+                f"Feishu remove_reaction failed: "
                 f"code={response.code} msg={response.msg}"
             )
         return True

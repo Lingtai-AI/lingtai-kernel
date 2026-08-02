@@ -320,8 +320,9 @@ Compound message IDs have the form `account_alias:chat_id:feishu_message_id`.
 
 Voice messages received from Feishu are downloaded and transcribed locally with
 the required faster-whisper dependency. For long-running responses,
-`send` accepts `placeholder=true` to post an immediate placeholder that `edit`
-can later replace.
+`send` accepts `placeholder=true` to post a native progress card that `edit`
+updates only at meaningful phase changes. Send the final answer separately with
+`send` or `reply`; the progress card is not the final response.
 """
 
 
