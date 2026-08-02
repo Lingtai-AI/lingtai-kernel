@@ -312,6 +312,67 @@ def test_update_system_prompt_invalidates_remote_session():
     assert session.kimi_session_id is None
 
 
+def test_per_turn_resync_with_identical_content_keeps_session(tmp_path):
+    """Regression: the per-turn system/tool resync must not drop the CLI session.
+
+    ``SessionManager.send`` rebuilds the system prompt and tools before *every*
+    turn because they may have changed. When the rebuilt content is identical
+    that resync must stay inert; an unconditional reset here cleared
+    ``_kimi_session_id`` before each call, so ``--session`` was never sent and
+    every turn replayed the whole conversation without the provider cache
+    identity. The CLI only emits ``session.resume_hint`` on the turn that opens
+    a session, so a discarded id is not re-offered.
+    """
+    adapter = KimiCodeAdapter(model="kimi-k2", cwd=tmp_path / "cwd")
+    session = adapter.create_chat("kimi-k2", "sys", [_weather_tool()])
+    captured = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append(cmd)
+        return _FakeProc(stdout=_stream('{"action":"final","text":"ok"}'))
+
+    with patch("lingtai.llm.kimi_code.adapter.subprocess.run", side_effect=fake_run):
+        for i in range(4):
+            # Exactly what SessionManager.send does each turn, same content.
+            session.update_system_prompt("sys")
+            session.update_tools([_weather_tool()])
+            session.send(f"message {i}")
+
+    assert "--session" not in captured[0]
+    for cmd in captured[1:]:
+        assert cmd[cmd.index("--session") + 1] == "kimi-session-1"
+    assert session.kimi_session_id == "kimi-session-1"
+
+
+def test_changed_system_prompt_or_tools_resets_remote_session(tmp_path):
+    """A real content change must still invalidate the CLI session."""
+    adapter = KimiCodeAdapter(model="kimi-k2", cwd=tmp_path / "cwd")
+    session = adapter.create_chat("kimi-k2", "sys", [_weather_tool()])
+    captured = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append(cmd)
+        return _FakeProc(stdout=_stream('{"action":"final","text":"ok"}'))
+
+    other_tool = FunctionSchema(
+        name="other", description="o", parameters={"type": "object", "properties": {}}
+    )
+
+    with patch("lingtai.llm.kimi_code.adapter.subprocess.run", side_effect=fake_run):
+        session.update_system_prompt("sys")
+        session.send("m0")
+        session.update_system_prompt("sys")
+        session.send("m1")
+        session.update_system_prompt("CHANGED")  # real system-prompt change
+        session.send("m2")
+        session.update_system_prompt("CHANGED")
+        session.send("m3")
+        session.update_tools([other_tool])  # real tool change
+        session.send("m4")
+
+    assert ["--session" in cmd for cmd in captured] == [False, True, False, True, False]
+
+
 def test_env_maps_existing_kimi_alias_without_logging(monkeypatch):
     monkeypatch.delenv("KIMI_MODEL_API_KEY", raising=False)
     monkeypatch.setenv("KIMI_CODE_API_KEY", "secret-for-child-only")

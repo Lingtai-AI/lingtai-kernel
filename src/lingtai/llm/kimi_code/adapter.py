@@ -13,6 +13,7 @@ record and never fabricates a hit when the wire is unavailable.
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import os
 import re
@@ -287,6 +288,9 @@ class KimiCodeChatSession(ChatSession):
         self._kimi_session_id: str | None = None
         self._remote_entry_count = 0
         self._pending_resume_session_id: str | None = None
+        # Seeded from the constructor content so the first per-turn resync in
+        # ``SessionManager.send`` is already recognised as a no-op.
+        self._stable_context_digest = self._system_block_digest()
 
     @property
     def interface(self) -> ChatInterface:
@@ -374,21 +378,44 @@ class KimiCodeChatSession(ChatSession):
         self._remote_entry_count = 0
         self._pending_resume_session_id = None
 
-    def update_tools(self, tools: list[FunctionSchema] | None) -> None:
-        self._tools = list(tools) if tools else []
+    def _system_block_digest(self) -> str:
+        """Digest of the stable context the remote session was opened with."""
+        payload = json.dumps(
+            {
+                "system_prompt": self._system_prompt,
+                "tools": [t.to_dict() for t in self._tools],
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _resync_stable_context(self) -> None:
+        """Re-publish the system block, dropping the CLI session only on change.
+
+        ``SessionManager.send`` rebuilds the system prompt and tools on *every*
+        turn because they may have changed. Resetting unconditionally here would
+        clear ``_kimi_session_id`` before each call, so ``--session`` would never
+        be sent and every turn would replay the whole conversation without the
+        provider cache identity. The CLI only emits ``session.resume_hint`` on
+        the turn that opens a session, so a discarded id is not re-offered.
+        """
+        digest = self._system_block_digest()
         self._interface.add_system(
             self._system_prompt,
             tools=[t.to_dict() for t in self._tools] if self._tools else None,
         )
-        self._reset_remote_session()
+        if digest != self._stable_context_digest:
+            self._stable_context_digest = digest
+            self._reset_remote_session()
+
+    def update_tools(self, tools: list[FunctionSchema] | None) -> None:
+        self._tools = list(tools) if tools else []
+        self._resync_stable_context()
 
     def update_system_prompt(self, system_prompt: str) -> None:
         self._system_prompt = system_prompt
-        self._interface.add_system(
-            system_prompt,
-            tools=[t.to_dict() for t in self._tools] if self._tools else None,
-        )
-        self._reset_remote_session()
+        self._resync_stable_context()
 
     def commit_tool_results(self, tool_results: list) -> None:
         self._interface.add_tool_results(tool_results)
