@@ -28,7 +28,11 @@ from uuid import uuid4
 
 from .. import _skill
 from . import _family
-from .account import FeishuInboundChannelEvent, FeishuInboundEvent
+from .account import (
+    FeishuInboundCardAction,
+    FeishuInboundChannelEvent,
+    FeishuInboundEvent,
+)
 from lingtai.kernel._frontmatter import strip_frontmatter
 
 if TYPE_CHECKING:
@@ -89,7 +93,8 @@ _OUTBOUND_CONTENT_FIELDS = {
     "post": "post",
 }
 _OUTBOUND_MEDIA_TYPES = {"image", "file", "audio", "video"}
-_EDITABLE_CONTENT_TYPES = frozenset(_OUTBOUND_CONTENT_FIELDS)
+_EDITABLE_CONTENT_TYPES = frozenset({*_OUTBOUND_CONTENT_FIELDS, "card"})
+_PLACEHOLDER_CONTENT_TYPES = frozenset(_OUTBOUND_CONTENT_FIELDS)
 
 
 def _post_preview(post: dict[str, Any]) -> str:
@@ -121,6 +126,30 @@ def _post_preview(post: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _card_preview(card: dict[str, Any]) -> str:
+    """Extract visible CardKit text without traversing callback values."""
+    parts: list[str] = []
+
+    def visit(value: object) -> None:
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+            return
+        if not isinstance(value, dict):
+            return
+        for key in ("text", "content"):
+            text = value.get(key)
+            if isinstance(text, str) and text and text not in parts[-1:]:
+                parts.append(text)
+        for key in (
+            "header", "title", "body", "elements", "columns", "items", "text",
+        ):
+            visit(value.get(key))
+
+    visit(card)
+    return "\n".join(parts) or "[interactive card]"
+
+
 def _normalize_outbound_content(
     args: dict[str, Any], *, editable: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], str, str]:
@@ -144,7 +173,7 @@ def _normalize_outbound_content(
     if not isinstance(content_type, str):
         raise ValueError("content.type must be a supported outbound type")
     if editable and content_type not in _EDITABLE_CONTENT_TYPES:
-        raise ValueError("edit only supports text, markdown, or post content")
+        raise ValueError("edit only supports text, markdown, post, or card content")
     field = _OUTBOUND_CONTENT_FIELDS.get(content_type)
     if field is not None:
         if set(raw) != {"type", field}:
@@ -162,6 +191,18 @@ def _normalize_outbound_content(
         sdk_message = {field: value}
         wire_type = "text" if content_type == "text" else "post"
         return content, sdk_message, preview, wire_type
+
+    if content_type == "card":
+        if set(raw) != {"type", "card"}:
+            raise ValueError("content must be one strict card value")
+        card = raw.get("card")
+        if (
+            not isinstance(card, dict)
+            or card.get("schema") != "2.0"
+            or len(card) < 2
+        ):
+            raise ValueError("content.card must be a non-empty schema 2.0 card")
+        return dict(raw), {"card": card}, _card_preview(card), "interactive"
 
     if content_type in _OUTBOUND_MEDIA_TYPES:
         optional = {"caption"} if content_type in {"image", "video"} else set()
@@ -704,7 +745,7 @@ DESCRIPTION = (
     "do not attempt to configure or reconfigure this MCP — your orchestrator "
     "manages it, and if the network needs this MCP to reach you the wiring "
     "is propagated to your session automatically. "
-    "Use 'send' for outgoing text, markdown, post, media, share, or sticker messages "
+    "Use 'send' for outgoing text, markdown, post, card, media, share, or sticker messages "
     "(specify receive_id + receive_id_type and exactly one of text/content). "
     "'check' to see recent conversations with unread counts. "
     "'read' to read messages from a specific chat (returns compound message IDs). "
@@ -712,7 +753,7 @@ DESCRIPTION = (
     "(use compound ID from read results). "
     "'search' to find messages by keyword or regex. "
     "'delete' to delete a bot message (message_id). "
-    "'edit' to edit a sent text/post message (message_id, text or content; "
+    "'edit' to edit a sent text/post/card message (message_id, text or content; "
     "media is not editable through this action). "
     "'contacts' to manage saved contacts (open_id aliases). "
     "'accounts' to list configured app accounts. "
@@ -751,6 +792,8 @@ class FeishuManager:
         self._seen_channel_event_ids: dict[str, OrderedDict[str, None]] = {}
         self._dedupe_lock = threading.Lock()
         self._dedupe_limit = 1000
+        self._card_action_locks: dict[tuple[str, str], threading.Lock] = {}
+        self._card_action_locks_guard = threading.Lock()
 
     def _account_dir(self, alias: str) -> Path:
         return self._working_dir / "feishu" / alias
@@ -1060,6 +1103,162 @@ class FeishuManager:
         except Exception as exc:
             log.warning(
                 "Feishu channel event projection failed (%s): %s",
+                account_alias,
+                exc,
+            )
+
+    def _card_action_lock(
+        self, account_alias: str, chat_id: str,
+    ) -> threading.Lock:
+        key = (account_alias, chat_id)
+        with self._card_action_locks_guard:
+            return self._card_action_locks.setdefault(key, threading.Lock())
+
+    def _card_action_already_persisted(
+        self, account_alias: str, event_id: str,
+    ) -> bool:
+        return any(
+            message.get("event_type") == "card_action"
+            and message.get("feishu_event_id") == event_id
+            for message in self._list_messages(account_alias, "inbox")
+        )
+
+    @classmethod
+    def _card_action_projection(cls, action_event: object) -> dict[str, Any]:
+        action = getattr(action_event, "action", None)
+        return {
+            "source_message_id": getattr(action_event, "message_id", "") or "",
+            "chat_id": getattr(action_event, "chat_id", "") or "",
+            "operator": cls._event_operator_payload(
+                getattr(action_event, "operator", None)
+            ),
+            "action": {
+                key: _legacy_envelope_payload(getattr(action, key, None))
+                for key in (
+                    "tag", "value", "name", "option", "form_value",
+                    "input_value", "options", "checked",
+                )
+                if getattr(action, key, None) is not None
+            },
+        }
+
+    @staticmethod
+    def _card_action_thread_id(raw: dict[str, Any]) -> str:
+        event = raw.get("event")
+        context = event.get("context") if isinstance(event, dict) else None
+        if not isinstance(context, dict):
+            return ""
+        value = context.get("open_thread_id") or context.get("thread_id")
+        return value if isinstance(value, str) else ""
+
+    @staticmethod
+    def _card_action_text(projection: dict[str, Any]) -> str:
+        action = projection.get("action") or {}
+        tag = action.get("tag") or "unknown"
+        value = json.dumps(
+            action.get("value"), ensure_ascii=False, sort_keys=True, default=str,
+        )
+        text = f"[card action: {tag}] {value}"
+        return text if len(text) <= 2000 else text[:1999] + "…"
+
+    def on_card_action(
+        self, account_alias: str, data: FeishuInboundCardAction,
+    ) -> None:
+        """Persist one authorized business callback and wake its conversation."""
+        try:
+            if not isinstance(data, FeishuInboundCardAction):
+                return
+            raw = data.feishu if isinstance(data.feishu, dict) else {}
+            projection = self._card_action_projection(data.action)
+            chat_id = projection["chat_id"]
+            actor = projection["operator"]
+            actor_open_id = actor.get("open_id", "")
+            if not chat_id or not actor_open_id:
+                return
+            event_id = self._channel_event_id(raw, "card_action", projection)
+
+            with self._card_action_lock(account_alias, chat_id):
+                if self._card_action_already_persisted(account_alias, event_id):
+                    return
+                date_str = self._channel_event_date(raw, data.action)
+                thread_id = self._card_action_thread_id(raw)
+                compound_id = f"{account_alias}:{chat_id}:callback-{event_id}"
+                source_message_id = projection["source_message_id"]
+                source_compound_id = (
+                    f"{account_alias}:{chat_id}:{source_message_id}"
+                    if source_message_id else None
+                )
+                text = self._card_action_text(projection)
+                payload = {
+                    "id": compound_id,
+                    "feishu_event_id": event_id,
+                    "chat_id": chat_id,
+                    "chat_type": "unknown",
+                    "thread_id": thread_id or None,
+                    "message_type": "card_action",
+                    "event_type": "card_action",
+                    "from_open_id": actor_open_id,
+                    "from_name": actor.get("name"),
+                    "sender_type": "user",
+                    "sender_is_bot": False,
+                    "text": text,
+                    "date": date_str,
+                    "source_message_id": source_message_id or None,
+                    "source_message_ref": source_compound_id,
+                    "content": {
+                        "kind": "card_action",
+                        **projection,
+                    },
+                    "card_action": projection,
+                    "feishu": raw,
+                }
+                msg_dir = (
+                    self._account_dir(account_alias) / "inbox" / str(uuid4())
+                )
+                msg_dir.mkdir(parents=True, exist_ok=True)
+                (msg_dir / "message.json").write_text(
+                    json.dumps(
+                        payload, indent=2, ensure_ascii=False, default=str,
+                    ),
+                    encoding="utf-8",
+                )
+                self._upsert_contact(account_alias, actor_open_id, chat_id)
+
+                preview, preview_metadata = (
+                    self._build_conversation_preview_and_metadata(
+                        account_alias, chat_id, compound_id,
+                    )
+                )
+                display_name = (
+                    actor.get("name")
+                    or self._get_contact_name(account_alias, actor_open_id)
+                    or actor_open_id
+                )
+                self._on_inbound({
+                    "from": display_name,
+                    "subject": (
+                        f"feishu card action from {display_name} "
+                        f"via {account_alias}"
+                    ),
+                    "body": preview,
+                    "metadata": {
+                        "message_id": compound_id,
+                        "account": account_alias,
+                        "chat_id": chat_id,
+                        "chat_type": "unknown",
+                        "thread_id": thread_id or None,
+                        "from_open_id": actor_open_id,
+                        "platform": "feishu",
+                        "conversation_ref": f"{account_alias}:{chat_id}",
+                        "message_ref": compound_id,
+                        "message_type": "card_action",
+                        **preview_metadata,
+                    },
+                    "wake": True,
+                })
+        except Exception as exc:
+            log.warning(
+                "Feishu card action processing failed (%s): %s",
                 account_alias,
                 exc,
             )
@@ -1875,7 +2074,7 @@ class FeishuManager:
         if not receive_id:
             return {"error": "receive_id is required"}
         content, sdk_message, text, message_type = _normalize_outbound_content(args)
-        if placeholder and content["type"] not in _EDITABLE_CONTENT_TYPES:
+        if placeholder and content["type"] not in _PLACEHOLDER_CONTENT_TYPES:
             return {"error": "placeholder only supports text, markdown, or post"}
 
         content_key = json.dumps(content, ensure_ascii=False, sort_keys=True)
@@ -2046,8 +2245,12 @@ class FeishuManager:
                 "media": m.get("media"),
                 "voice_transcript": m.get("voice_transcript"),
                 "event_type": m.get("event_type"),
+                "feishu_event_id": m.get("feishu_event_id"),
                 "synthetic": m.get("synthetic", False),
                 "source_chat_id": m.get("source_chat_id"),
+                "source_message_id": m.get("source_message_id"),
+                "source_message_ref": m.get("source_message_ref"),
+                "card_action": m.get("card_action"),
                 "event": m.get("event"),
                 "feishu": m.get("feishu"),
                 "_direction": "outgoing" if outgoing else "incoming",

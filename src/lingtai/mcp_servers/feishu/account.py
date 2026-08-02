@@ -173,6 +173,19 @@ class FeishuInboundChannelEvent:
     event: Any
 
 
+@dataclass(frozen=True)
+class FeishuInboundCardAction:
+    """One authorized SDK card action paired with its raw event envelope."""
+
+    action: Any
+    feishu: dict[str, Any]
+
+
+def _legacy_card_action_envelope(action: Any) -> dict[str, Any]:
+    raw = getattr(action, "raw", None)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
 def _coerce_lark_outbound(message: dict[str, Any]) -> Any:
     """Build one public SDK outbound dataclass from the manager's strict shape."""
     sdk = _import_lark()
@@ -182,6 +195,8 @@ def _coerce_lark_outbound(message: dict[str, Any]) -> Any:
         return sdk.OutboundPost(markdown=message["markdown"])
     if "post" in message:
         return sdk.OutboundPost(post=message["post"])
+    if "card" in message:
+        return sdk.OutboundCard(card=message["card"])
 
     for kind, outbound_type in (
         ("image", sdk.OutboundImage),
@@ -307,6 +322,7 @@ class FeishuAccount:
         allowed_users: list[str] | None,
         on_message: Callable[[str, Any], None] | None = None,
         on_event: Callable[[str, Any], None] | None = None,
+        on_card_action: Callable[[str, Any], None] | None = None,
         state_dir: Path | None = None,
     ) -> None:
         self.alias = alias
@@ -317,6 +333,7 @@ class FeishuAccount:
         )
         self._on_message = on_message
         self._on_event = on_event
+        self._on_card_action = on_card_action
         self._state_dir = state_dir
 
         self._ws_thread: threading.Thread | None = None
@@ -567,6 +584,13 @@ class FeishuAccount:
         """Retain the SDK raw envelope until its normalized message is emitted."""
         if not isinstance(envelope, dict):
             return
+        header = envelope.get("header")
+        event_type = header.get("event_type") if isinstance(header, dict) else ""
+        if event_type in {"card.action.trigger", "card.action.trigger_v1"}:
+            action = self._raw_card_action(envelope)
+            if action is not None:
+                self._process_card_action(action)
+            return
         message_id = self._raw_message_id(envelope)
         if not message_id:
             return
@@ -575,6 +599,47 @@ class FeishuAccount:
             self._raw_envelopes.move_to_end(message_id)
             while len(self._raw_envelopes) > self._raw_envelopes_limit:
                 self._raw_envelopes.popitem(last=False)
+
+    @staticmethod
+    def _raw_card_action(envelope: dict[str, Any]) -> Any | None:
+        """Normalize the pre-safety raw callback using the SDK public types.
+
+        The SDK's card-action safety key is based on message/operator/value and
+        therefore also suppresses a user's later intentional click on the same
+        button. LingTai consumes the raw event before that gate and dedupes on
+        Feishu's stable header event id in the manager instead.
+        """
+        event = envelope.get("event")
+        if not isinstance(event, dict):
+            return None
+        context = event.get("context")
+        action = event.get("action")
+        operator = event.get("operator")
+        if not all(isinstance(value, dict) for value in (context, action, operator)):
+            return None
+        value = action.get("value")
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                value = {"value": value}
+        sdk = _import_lark()
+        return sdk.CardActionEvent(
+            message_id=context.get("open_message_id") or "",
+            chat_id=context.get("open_chat_id") or "",
+            operator=sdk.EventOperator(open_id=operator.get("open_id") or ""),
+            action=sdk.CardActionPayload(
+                tag=action.get("tag") or "",
+                value=value,
+                name=action.get("name"),
+                option=action.get("option"),
+                form_value=action.get("form_value"),
+                input_value=action.get("input_value"),
+                options=action.get("options"),
+                checked=action.get("checked"),
+            ),
+            raw=envelope,
+        )
 
     def _take_raw_envelope(self, message_id: str) -> dict[str, Any]:
         with self._raw_envelopes_lock:
@@ -628,6 +693,25 @@ class FeishuAccount:
             self._on_event(
                 self.alias,
                 FeishuInboundChannelEvent(event_type=event_type, event=event),
+            )
+
+    def _process_card_action(self, action: Any) -> None:
+        """Reject untrusted actors before forwarding one business callback."""
+        operator = getattr(action, "operator", None)
+        actor_open_id = getattr(operator, "open_id", "") if operator else ""
+        if not actor_open_id:
+            logger.warning("Feishu card action rejected without actor (%s)", self.alias)
+            return
+        if (
+            self._allowed_users is not None
+            and actor_open_id not in self._allowed_users
+        ):
+            return
+        if self._on_card_action:
+            raw = _legacy_card_action_envelope(action)
+            self._on_card_action(
+                self.alias,
+                FeishuInboundCardAction(action=action, feishu=raw),
             )
 
     # ------------------------------------------------------------------
@@ -901,8 +985,13 @@ class FeishuAccount:
         return {}
 
     def update_content(self, message_id: str, message: dict[str, Any]) -> dict:
-        """Edit a text/post message through the SDK's typed outbound pipeline."""
-        result = asyncio.run(self._channel.edit_message(message_id, message))
+        """Edit a text/post message or replace one schema-2.0 card."""
+        if "card" in message:
+            result = asyncio.run(
+                self._channel.update_card(message_id, message["card"])
+            )
+        else:
+            result = asyncio.run(self._channel.edit_message(message_id, message))
         projected = self._channel_send_result(result)
         projected["message_id"] = projected["message_id"] or message_id
         if not projected["message_ids"]:

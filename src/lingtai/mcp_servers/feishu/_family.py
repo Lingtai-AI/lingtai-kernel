@@ -72,8 +72,16 @@ def _media_source_schema() -> dict[str, Any]:
 
 
 def _outbound_content_schema(*, include_media: bool = True) -> dict[str, Any]:
-    """Strict outbound union; cards remain in their dedicated slice."""
+    """Strict outbound union; media may be excluded for edit."""
     post_value = {"type": "object", "minProperties": 1}
+    card_value = {
+        "type": "object",
+        "properties": {
+            "schema": {"type": "string", "enum": ["2.0"]},
+        },
+        "required": ["schema"],
+        "minProperties": 2,
+    }
     branches = [
         _object(
             {
@@ -95,6 +103,13 @@ def _outbound_content_schema(*, include_media: bool = True) -> dict[str, Any]:
                 "post": post_value,
             },
             required=["type", "post"],
+        ),
+        _object(
+            {
+                "type": {"type": "string", "enum": ["card"]},
+                "card": card_value,
+            },
+            required=["type", "card"],
         ),
     ]
     if include_media:
@@ -274,7 +289,7 @@ def feishu_schema() -> dict[str, Any]:
     # another action's branch also fits.
     schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "send: send text, markdown, post, media, share, or sticker content "
+        "send: send text, markdown, post, card, media, share, or sticker content "
         "to a user or chat "
         "(receive_id, receive_id_type, exactly one of text/content; "
         "optional account, placeholder). "
@@ -285,14 +300,14 @@ def feishu_schema() -> dict[str, Any]:
         "(optional account). "
         "read: read messages from a specific chat "
         "(chat_id; optional limit, account). "
-        "reply: reply to a specific message with text, markdown, post, media, "
-        "share, or sticker content "
+        "reply: reply to a specific message with text, markdown, post, card, "
+        "media, share, or sticker content "
         "(message_id from read results, exactly one of text/content; "
         "optional reply_in_thread). "
         "search: search inbox messages by regex "
         "(query; optional account, chat_id). "
         "delete: delete a bot message (message_id). "
-        "edit: edit a bot text/post message "
+        "edit: edit a bot text/post/card message "
         "(message_id, exactly one of text/content). "
         "contacts: list saved contacts (optional account). "
         "add_contact: save a contact "

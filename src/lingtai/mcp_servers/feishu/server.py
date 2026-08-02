@@ -623,6 +623,9 @@ def build_manager() -> tuple[FeishuManager, Path]:
         on_message=lambda alias, ctx: mgr_ref[0].on_incoming(alias, ctx),
         config_source=os.environ.get("LINGTAI_FEISHU_CONFIG"),
         on_event=lambda alias, event: mgr_ref[0].on_channel_event(alias, event),
+        on_card_action=lambda alias, action: mgr_ref[0].on_card_action(
+            alias, action
+        ),
     )
 
     mgr = FeishuManager(

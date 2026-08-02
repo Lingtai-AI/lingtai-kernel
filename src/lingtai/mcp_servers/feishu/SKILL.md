@@ -4,15 +4,15 @@ description: |
   Progressive-disclosure usage manual for the Feishu (Lark) MCP tool. Read this
   when you need detail beyond the one-line action descriptions: receive_id vs
   receive_id_type (open_id/chat_id), send vs reply, check/read/search, placeholder
-  + edit for long responses, text/markdown/post outbound content, topic-aware
-  replies, outbound media/share/sticker sources, contacts/accounts basics, the notification
+  + edit for long responses, text/markdown/post/card outbound content, topic-aware
+  replies, interactive card callbacks, outbound media/share/sticker sources, contacts/accounts basics, the notification
   transient-hook vs persistent-context split, normalized inbound conversations,
   preserved inbound media, passive channel events, group @Bot routing, and
   side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.8.0
-last_changed_at: 2026-08-02T00:00:00Z
+version: 1.9.0
+last_changed_at: 2026-08-03T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
 - src/lingtai/mcp_servers/feishu/manager.py
@@ -42,7 +42,9 @@ maintenance: |
 - Structured content is a strict tagged union in this slice:
   `{'type':'text','text':'...'}`,
   `{'type':'markdown','markdown':'...'}`, or
-  `{'type':'post','post':{...}}`, plus the media/share/sticker forms below.
+  `{'type':'post','post':{...}}`,
+  `{'type':'card','card':{'schema':'2.0',...}}`, plus the
+  media/share/sticker forms below.
   Unknown keys or mixed variants are rejected.
 - `reply` (`message_id` from read/check results plus `text` or `content`) replies
   to a specific incoming message; prefer it when answering that message. It
@@ -55,9 +57,37 @@ maintenance: |
   boundaries when long. Successful send/reply results include the primary
   compound `message_id`, ordered `message_ids`, `chunk_count`, and `chunks`;
   every chunk of a topic reply stays in that topic.
-- `edit` accepts the text/markdown/post subset and updates the persisted sent
-  record after Feishu confirms the edit. Feishu does not expose these media
-  messages through the same edit path; cards use their dedicated update action.
+- `edit` accepts text, markdown, post, or a complete schema-2.0 card and updates
+  the persisted sent record after Feishu confirms the edit. Card edits replace
+  the existing card in place through Feishu's native card update API. Feishu
+  does not expose media messages through the same edit path.
+
+## INTERACTIVE CARDS AND BUSINESS CALLBACKS
+
+- `send` and `reply` accept a complete schema-2.0 interactive card through
+  `content.type='card'`; `edit` replaces a previously sent card with another
+  complete schema-2.0 card. The sent record keeps the exact card JSON, while
+  its text preview extracts visible card text and never traverses button
+  callback values.
+- A business button click is admitted only when Feishu supplies an actor and
+  that actor passes the account's `allowed_users` gate. Authorized callbacks
+  are serialized per account/chat, durably deduplicated by Feishu's stable
+  event id, persisted in the original conversation with
+  `message_type='card_action'`, and wake the agent. Distinct later clicks on
+  the same button remain distinct events even when actor, source card, and
+  callback value are identical.
+- `read` exposes the normalized callback under `card_action`, its exact
+  `feishu_event_id`, the source card's `source_message_ref`, and the complete
+  raw envelope under `feishu`. A callback record is not itself a Feishu
+  message that can be replied to: use its `source_message_ref` to update the
+  source card when appropriate, or `send` a fresh response to the callback's
+  chat.
+- The Feishu application must enable card callback delivery over the same
+  long-connection mode and publish that configuration. If clicking a button
+  produces only client-side success feedback but no `card_action` record or
+  agent wake, verify that application callback setting; ordinary event
+  subscriptions and messaging permissions do not prove card callbacks are
+  being delivered.
 
 ## OUTBOUND MEDIA, SHARES, AND STICKERS
 
