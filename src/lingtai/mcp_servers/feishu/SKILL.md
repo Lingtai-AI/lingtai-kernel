@@ -13,7 +13,7 @@ description: |
   control cards, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.15.0
+version: 1.15.1
 last_changed_at: 2026-08-03T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
@@ -128,9 +128,13 @@ needed; do not load all three for an ordinary message send.
   become `card_action` inbox records and never wake the Agent. Ordinary
   business-card values keep the business callback behavior described above.
 - Control-card clicks reuse the account actor/allowlist gate and the manager's
-  per-account/chat serialization. Their stable Feishu event ids are stored
-  only as bounded SHA-256 hashes in `feishu/control_callbacks.json`, so a
-  callback replay after refresh cannot repeat a local signal.
+  per-account/chat serialization. An internal command executes only when its
+  exact account/chat/source-message binding was registered after LingTai
+  successfully sent the local control card; a reserved-looking value from any
+  other card remains an ordinary business callback. Source bindings and stable
+  Feishu event ids are stored only as bounded SHA-256 hashes in
+  `feishu/control_callbacks.json`, so neither source IDs nor callback event IDs
+  are exposed and a replay after refresh cannot repeat a local signal.
 - User-facing card titles, navigation, command descriptions, and feedback use
   `agent.language`: `zh` is Chinese, `en` is English, and `wen` is literary
   Chinese. Unknown or missing languages use English.

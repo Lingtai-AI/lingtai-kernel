@@ -202,9 +202,11 @@ click is retained even when it has the same button value.
 ### Local-command button creates no `card_action`
 
 That is correct. Namespaced control callbacks are actor-checked, serialized,
-durably claimed by a bounded hash, and handled locally by updating the source
-card. Diagnose them from the visible card result and redacted lifecycle errors,
-not from the business inbox.
+bound to the exact account/chat/source card that LingTai successfully sent,
+durably claimed by bounded hashes, and handled locally by updating that source
+card. A reserved-looking value from any other source remains a business
+callback. Diagnose trusted controls from the visible card result and redacted
+lifecycle errors, not from the business inbox.
 
 ### Card edit or progress update fails
 

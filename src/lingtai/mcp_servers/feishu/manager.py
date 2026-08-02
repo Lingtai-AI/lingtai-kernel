@@ -1619,6 +1619,13 @@ class FeishuManager:
             )
             response_id = response.get("message_id")
             if isinstance(response_id, str) and response_id:
+                if not self._control_event_store.register_source(
+                    account_alias, chat_id, response_id,
+                ):
+                    log.warning(
+                        "Feishu control-card source registration failed (%s)",
+                        account_alias,
+                    )
                 self._note_task_card_message(
                     route, f"{account_alias}:{chat_id}:{response_id}"
                 )
@@ -1660,7 +1667,13 @@ class FeishuManager:
             control_text = self._control_cards.callback_text(action.get("value"))
 
             with self._card_action_lock(account_alias, chat_id):
-                if control_text is not None:
+                if control_text is not None and (
+                    self._control_event_store.is_trusted_source(
+                        account_alias,
+                        chat_id,
+                        projection["source_message_id"],
+                    )
+                ):
                     if not self._control_event_store.claim(account_alias, event_id):
                         return
                     self._handle_control_callback(

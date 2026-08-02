@@ -520,38 +520,132 @@ class FeishuControlCards:
 
 
 class FeishuControlEventStore:
-    """Durably claim hashed internal callback event ids before side effects."""
+    """Durably bind control-card sources and claim callback events by hash."""
 
-    VERSION = 1
+    VERSION = 2
     LIMIT = 1_000
 
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
         self._lock = threading.Lock()
 
-    def claim(self, account: str, event_id: str) -> bool:
-        digest = hashlib.sha256(event_id.encode("utf-8")).hexdigest()
-        with self._lock:
-            if self._path.exists():
-                try:
-                    payload = read_json(self._path, expect=dict)
-                except (OSError, TypeError, ValueError):
-                    return False
-                if payload.get("version") != self.VERSION or not isinstance(
-                    payload.get("accounts"), dict
-                ):
-                    return False
-            else:
-                payload = {"version": self.VERSION, "accounts": {}}
-            accounts = payload["accounts"]
-            values = accounts.get(account, [])
-            if not isinstance(values, list) or not all(
-                isinstance(value, str) for value in values
+    @staticmethod
+    def _event_digest(event_id: str) -> str:
+        # Keep v1 event hashes stable so a migrated store retains replay claims.
+        return hashlib.sha256(event_id.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _source_digest(chat_id: str, message_id: str) -> str:
+        material = f"source\0{chat_id}\0{message_id}".encode("utf-8")
+        return hashlib.sha256(material).hexdigest()
+
+    def _load(self) -> dict[str, Any] | None:
+        if not self._path.exists():
+            return {"version": self.VERSION, "accounts": {}}
+        try:
+            payload = read_json(self._path, expect=dict)
+        except (OSError, TypeError, ValueError):
+            return None
+        accounts = payload.get("accounts")
+        if not isinstance(accounts, dict):
+            return None
+
+        # v1 stored only {account: [event_hash, ...]}. Migrate in memory; the
+        # next successful write upgrades the file and intentionally trusts no
+        # pre-upgrade source card.
+        if payload.get("version") == 1:
+            if not all(
+                isinstance(values, list)
+                and all(isinstance(value, str) for value in values)
+                for values in accounts.values()
             ):
+                return None
+            return {
+                "version": self.VERSION,
+                "accounts": {
+                    account: {
+                        "events": values[-self.LIMIT :],
+                        "sources": [],
+                    }
+                    for account, values in accounts.items()
+                },
+            }
+        if payload.get("version") != self.VERSION:
+            return None
+        for values in accounts.values():
+            if not isinstance(values, dict) or set(values) != {
+                "events",
+                "sources",
+            }:
+                return None
+            if not all(
+                isinstance(items, list)
+                and all(isinstance(value, str) for value in items)
+                for items in values.values()
+            ):
+                return None
+        return payload
+
+    @staticmethod
+    def _account_values(
+        payload: dict[str, Any],
+        account: str,
+    ) -> dict[str, list[str]]:
+        return payload["accounts"].setdefault(account, {"events": [], "sources": []})
+
+    def register_source(
+        self,
+        account: str,
+        chat_id: str,
+        message_id: str,
+    ) -> bool:
+        """Trust one successfully sent local card at its exact route."""
+        if not account or not chat_id or not message_id:
+            return False
+        digest = self._source_digest(chat_id, message_id)
+        with self._lock:
+            payload = self._load()
+            if payload is None:
                 return False
-            if digest in values:
+            values = self._account_values(payload, account)
+            sources = values["sources"]
+            if digest in sources:
+                return True
+            values["sources"] = [*sources[-(self.LIMIT - 1) :], digest]
+            try:
+                atomic_write_json(self._path, payload, fsync=True)
+            except OSError:
                 return False
-            accounts[account] = [*values[-(self.LIMIT - 1) :], digest]
+            return True
+
+    def is_trusted_source(
+        self,
+        account: str,
+        chat_id: str,
+        message_id: str,
+    ) -> bool:
+        """Return whether a callback source is one registered local card."""
+        if not account or not chat_id or not message_id:
+            return False
+        digest = self._source_digest(chat_id, message_id)
+        with self._lock:
+            payload = self._load()
+            if payload is None:
+                return False
+            values = payload["accounts"].get(account)
+            return isinstance(values, dict) and digest in values.get("sources", [])
+
+    def claim(self, account: str, event_id: str) -> bool:
+        digest = self._event_digest(event_id)
+        with self._lock:
+            payload = self._load()
+            if payload is None:
+                return False
+            values = self._account_values(payload, account)
+            events = values["events"]
+            if digest in events:
+                return False
+            values["events"] = [*events[-(self.LIMIT - 1) :], digest]
             try:
                 atomic_write_json(self._path, payload, fsync=True)
             except OSError:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Callable
@@ -13,7 +14,10 @@ from lingtai.mcp_servers.feishu.account import (
     FeishuInboundCardAction,
     FeishuInboundEvent,
 )
-from lingtai.mcp_servers.feishu.control_cards import FeishuControlCards
+from lingtai.mcp_servers.feishu.control_cards import (
+    FeishuControlCards,
+    FeishuControlEventStore,
+)
 from lingtai.mcp_servers.feishu.manager import FeishuManager
 from lingtai.mcp_servers.feishu.service import FeishuService
 
@@ -124,10 +128,16 @@ def _message(
     )
 
 
-def _control_action(event_id: str, command: str) -> FeishuInboundCardAction:
+def _control_action(
+    event_id: str,
+    command: str,
+    *,
+    message_id: str = "om_control",
+    chat_id: str = "oc_chat",
+) -> FeishuInboundCardAction:
     event = lark.CardActionEvent(
-        message_id="om_control",
-        chat_id="oc_chat",
+        message_id=message_id,
+        chat_id=chat_id,
         operator=lark.EventOperator(open_id="ou_allowed"),
         action=lark.CardActionPayload(
             tag="button",
@@ -225,6 +235,8 @@ def test_internal_callback_updates_in_place_without_persist_or_wake(
 ) -> None:
     wakes: list[dict[str, Any]] = []
     manager, service = _manager(tmp_path, wakes=wakes)
+    manager.on_incoming("main", _message("/help"))
+    service.default_account.replies.clear()
     callback = _control_action("evt-control", "status")
 
     manager.on_card_action("main", callback)
@@ -234,13 +246,79 @@ def test_internal_callback_updates_in_place_without_persist_or_wake(
     assert len(service.default_account.updates) == 1
     assert service.default_account.updates[0][0] == "om_control"
     assert not list(tmp_path.glob("feishu/main/inbox/*/message.json"))
-    store = (tmp_path / "feishu" / "control_callbacks.json").read_text(encoding="utf-8")
+    store_path = tmp_path / "feishu" / "control_callbacks.json"
+    store = store_path.read_text(encoding="utf-8")
     assert "evt-control" not in store
+    assert "om_control" not in store
+    assert "oc_chat" not in store
+    assert json.loads(store)["version"] == 2
 
     restarted_service = _FakeService()
     restarted, _service = _manager(tmp_path, wakes=wakes, service=restarted_service)
     restarted.on_card_action("main", callback)
     assert restarted_service.default_account.updates == []
+
+
+def test_reserved_control_value_from_untrusted_source_is_business_callback(
+    tmp_path: Path,
+) -> None:
+    wakes: list[dict[str, Any]] = []
+    manager, service = _manager(tmp_path, wakes=wakes)
+
+    manager.on_card_action(
+        "main",
+        _control_action(
+            "evt-untrusted",
+            "refresh",
+            message_id="om_business",
+        ),
+    )
+
+    assert service.default_account.updates == []
+    assert len(wakes) == 1
+    assert wakes[0]["wake"] is True
+    assert not (tmp_path / ".refresh").exists()
+    records = list(tmp_path.glob("feishu/main/inbox/*/message.json"))
+    assert len(records) == 1
+    assert json.loads(records[0].read_text(encoding="utf-8"))["event_type"] == (
+        "card_action"
+    )
+
+
+def test_control_source_binding_is_exact_to_account_chat_and_message(
+    tmp_path: Path,
+) -> None:
+    store = FeishuControlEventStore(tmp_path / "callbacks.json")
+    assert store.register_source("main", "oc_chat", "om_control") is True
+    assert store.is_trusted_source("main", "oc_chat", "om_control") is True
+    assert store.is_trusted_source("other", "oc_chat", "om_control") is False
+    assert store.is_trusted_source("main", "oc_other", "om_control") is False
+    assert store.is_trusted_source("main", "oc_chat", "om_other") is False
+
+    raw = (tmp_path / "callbacks.json").read_text(encoding="utf-8")
+    assert "oc_chat" not in raw
+    assert "om_control" not in raw
+
+
+def test_v1_event_claims_migrate_without_trusting_old_source_cards(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "callbacks.json"
+    old_digest = hashlib.sha256(b"evt-old").hexdigest()
+    path.write_text(
+        json.dumps({"version": 1, "accounts": {"main": [old_digest]}}),
+        encoding="utf-8",
+    )
+    store = FeishuControlEventStore(path)
+
+    assert store.is_trusted_source("main", "oc_chat", "om_old") is False
+    assert store.claim("main", "evt-old") is False
+    assert store.register_source("main", "oc_chat", "om_new") is True
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["version"] == 2
+    assert payload["accounts"]["main"]["events"] == [old_digest]
+    assert len(payload["accounts"]["main"]["sources"]) == 1
 
 
 def test_non_control_value_remains_a_business_callback(tmp_path: Path) -> None:
