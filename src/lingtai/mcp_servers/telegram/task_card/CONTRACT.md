@@ -1,11 +1,12 @@
 ---
 name: telegram-task-card-projection
-contract_version: 4
+contract_version: 5
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
+  - src/lingtai/mcp_servers/task_card/event_projection.py
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/service.py
   - src/lingtai/mcp_servers/telegram/server.py
@@ -53,9 +54,11 @@ live here; the public producer contract lives in
    Automatic mechanics continue, and hidden programmable finalize still clears
    the committed programmable slot internally so a stale frame cannot resurface
    after re-enable.
-7. Telegram transport, resident replacement, edit-in-place behavior, and the
-   automatic event-tail channel remain Telegram-owned concerns and are outside
-   the intrinsic producer contract.
+7. Telegram owns `events.jsonl` tail I/O and lifecycle, account/chat routing,
+   resident replacement, edit-in-place behavior, persistence, and transport.
+   The canonical safe-event allowlist, redaction/budget rules, API-call grouping,
+   safe result merge, metadata, and text rendering live in the transport-free
+   shared `TaskCardEventProjection`; that core has no route or delivery state.
 
 ## Port
 
@@ -81,7 +84,10 @@ Internal resident/projector boundary owned by `TaskCardResident` and consumed by
    composed resident text.
 5. The automatic Task Card behavior remains independent of the programmable
    file projector.
-6. This package's manual and governed docs remain explicitly packaged through
+6. Moving the pure automatic projection core must preserve Telegram's rendered
+   bytes and private compatibility helpers; it must not move journal tailing,
+   resident state, or transport out of `TelegramManager`.
+7. This package's manual and governed docs remain explicitly packaged through
    `pyproject.toml`.
 
 ## Tests
@@ -94,4 +100,6 @@ Internal resident/projector boundary owned by `TaskCardResident` and consumed by
   hidden-finalize clear semantics.
 - `tests/test_telegram_task_card_event_tail.py` continues to cover the automatic
   channel independently.
+- `tests/test_task_card_event_projection_shared.py` pins shared-core safety and
+  byte compatibility with Telegram's established render surface.
 - `tests/test_mcp_skill_manuals.py` covers packaged docs for this subpackage.

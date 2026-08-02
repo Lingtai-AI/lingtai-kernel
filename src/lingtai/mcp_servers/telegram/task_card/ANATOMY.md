@@ -3,6 +3,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
+  - src/lingtai/mcp_servers/task_card/event_projection.py
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/service.py
   - src/lingtai/mcp_servers/ANATOMY.md
@@ -29,9 +30,12 @@ onto its one tracked resident Task Card target per account+chat.
 
 - `resident.py` — `TaskCardResident`, the owner of channel frames, route locks,
   composition, enablement, and serialized per-route delivery.
-- `manager.py` — the Telegram adapter that renders, transports, persists, and
-  reprojects both the automatic event-tail channel and the programmable file
-  channel.
+- `manager.py` — the Telegram adapter that tails `events.jsonl`, supplies safe
+  events to the shared projection core, and owns Telegram routing, transport,
+  persistence, resident delivery, and programmable file projection.
+- `../../task_card/event_projection.py` — the channel-neutral pure core for safe
+  event allowlisting, redaction, API-call grouping, budgets, metadata, and text
+  rendering. It owns no journal I/O, route, resident, or transport state.
 - `SKILL.md` — packaged Telegram-facing manual/procedure material for this
   component.
 - Retained legacy files in this package (`controller.py`, `_family.py`,
@@ -43,6 +47,9 @@ onto its one tracked resident Task Card target per account+chat.
 
 - The intrinsic producer writes `<workdir>/taskcard/status` and
   `<workdir>/taskcard/taskcard.md`.
+- `TelegramManager` alone tails `<workdir>/logs/events.jsonl`; it delegates only
+  pure event projection/grouping/rendering to `TaskCardEventProjection` and
+  keeps the existing private helpers as compatibility wrappers.
 - `TelegramManager._broadcast_programmable_task_card_file()` reads
   `taskcard/status` first: exact `active` reads the body and projects it
   (diff-only against the last committed programmable frame); exact `inactive`
@@ -57,6 +64,7 @@ onto its one tracked resident Task Card target per account+chat.
 - Parent: [`src/lingtai/mcp_servers/ANATOMY.md`](../../ANATOMY.md)
 - Paired contract: [`CONTRACT.md`](CONTRACT.md)
 - Producer owner: [`src/lingtai/tools/task_card/ANATOMY.md`](../../../tools/task_card/ANATOMY.md)
+- Shared projection core: [`src/lingtai/mcp_servers/task_card/event_projection.py`](../../task_card/event_projection.py)
 
 ## State
 

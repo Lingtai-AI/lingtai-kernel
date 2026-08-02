@@ -8,10 +8,11 @@ description: |
   the programmable Task Card (task_card tool) — including task-specific watcher
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
-version: 1.5.5
-last_changed_at: 2026-07-29T00:00:00Z
+version: 1.5.6
+last_changed_at: 2026-08-03T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
+- src/lingtai/mcp_servers/task_card/event_projection.py
 - src/lingtai/mcp_servers/telegram/manager.py
 - src/lingtai/mcp_servers/telegram/server.py
 - src/lingtai/mcp_servers/telegram/_family.py
@@ -209,8 +210,9 @@ The automatic slot is a bounded projection of the agent's durable behavior
 journal, and it feeds the same Telegram-owned `TaskCardResident` as the
 programmable slot:
 
-1. `TelegramManager` owns one tail worker for its lifetime. It reads
-   `<workdir>/logs/events.jsonl` and accepts only canonical public `diary` text
+1. `TelegramManager` owns one tail worker for its lifetime and reads
+   `<workdir>/logs/events.jsonl`. The transport-free
+   `TaskCardEventProjection` core accepts only canonical public `diary` text
    plus validated `tool_call` name and redacted/bounded `_reasoning`. Hidden
    thinking, aliases, raw action/arguments/results, external response bodies,
    URLs, tokens, prompts, paths, tracebacks, auth material, and private runtime
@@ -227,11 +229,12 @@ programmable slot:
 4. Each rendered card carries the safe public text and tool rows, the fixed
    no-reply footer naming both `/taskcard` command forms, and the render-time
    timestamp.
-5. The manager renders the bounded groups once and broadcasts the same
-   agent-behavior view to every tracked resident Task Card across configured
-   Telegram accounts and chats. Groups carry no account/chat route and are not
-   correlated to the chat that created a resident card; one target's failure
-   does not block the others.
+5. The shared core renders the bounded groups once; the manager broadcasts that
+   same agent-behavior view to every tracked resident Task Card across configured
+   Telegram accounts and chats. The shared projection contains no journal I/O,
+   account/chat route, resident state, or transport. Groups are not correlated
+   to the chat that created a resident card; one target's failure does not block
+   the others.
 6. There is no durable cursor or second behavior store. The byte offset, groups,
    and channel frames are in-memory optimizations. Startup, refresh, molt, and
    detected log truncation/replacement rehydrate from the existing
@@ -240,7 +243,9 @@ programmable slot:
    closed rather than advancing past unseen bytes.
 
 Architecture and lifecycle details live in the owning
-[`mcp_servers` Anatomy](../ANATOMY.md). The resident boundary is
+[`mcp_servers` Anatomy](../ANATOMY.md). The pure event grouping/redaction/render
+core is [`task_card/event_projection.py`](../task_card/event_projection.py),
+while Telegram still owns journal tailing and delivery. The resident boundary is
 [`task_card/resident.py`](task_card/resident.py); the programmable renderer/tool
 structure lives in the separate
 [`telegram/task_card` Anatomy](task_card/ANATOMY.md).
