@@ -116,6 +116,7 @@ def _split_statements(script: str) -> tuple[list[str], bool]:
     quote: str | None = None
     escaped = False
     paren_depth = 0
+    brace_depth = 0  # Track brace depth for script blocks
     while i < len(script):
         char = script[i]
         if quote == "'":
@@ -145,7 +146,12 @@ def _split_statements(script: str) -> tuple[list[str], bool]:
             if paren_depth == 0:
                 return pieces, False
             paren_depth -= 1
-        if char in "|;\r\n" and paren_depth == 0:
+        elif char == "{":  # Track brace depth
+            brace_depth += 1
+        elif char == "}":  # Track brace depth
+            if brace_depth > 0:
+                brace_depth -= 1
+        if char in "|;\r\n" and paren_depth == 0 and brace_depth == 0:
             pieces.append(script[begin:i])
             if char == "|" and i + 1 < len(script) and script[i + 1] in "|&":
                 i += 1
@@ -158,7 +164,7 @@ def _split_statements(script: str) -> tuple[list[str], bool]:
             begin = i + 1
         i += 1
     pieces.append(script[begin:])
-    return pieces, quote is None and paren_depth == 0
+    return pieces, quote is None and paren_depth == 0 and brace_depth == 0
 
 
 def _is_quoted_at(script: str, index: int) -> bool:
