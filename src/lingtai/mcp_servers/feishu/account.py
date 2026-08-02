@@ -548,6 +548,48 @@ class FeishuAccount:
             "create_time": getattr(data, "create_time", ""),
         }
 
+    @staticmethod
+    def _channel_send_result(result: Any, *, fallback_chat_id: str = "") -> dict:
+        """Project the SDK's typed ``SendResult`` into the account boundary."""
+        if not getattr(result, "success", False):
+            error = getattr(result, "error", None)
+            code = getattr(getattr(error, "code", None), "value", None) or "unknown"
+            hint = getattr(error, "hint", None) or "Feishu outbound send failed"
+            raise RuntimeError(f"Feishu outbound failed: code={code} msg={hint}")
+
+        raw = getattr(result, "raw", None)
+        raw_data = raw.get("data") if isinstance(raw, dict) else None
+        data = raw_data if isinstance(raw_data, dict) else {}
+        first_message_id = getattr(result, "message_id", None) or ""
+        chunk_ids = list(getattr(result, "chunk_ids", None) or [])
+        message_ids = chunk_ids or ([first_message_id] if first_message_id else [])
+        return {
+            "message_id": first_message_id,
+            "message_ids": message_ids,
+            "chat_id": data.get("chat_id") or fallback_chat_id,
+            "root_id": data.get("root_id") or "",
+            "parent_id": data.get("parent_id") or "",
+            "thread_id": data.get("thread_id") or "",
+            "create_time": data.get("create_time") or "",
+        }
+
+    def send_content(
+        self,
+        receive_id: str,
+        receive_id_type: str,
+        message: dict[str, Any],
+    ) -> dict:
+        """Send one SDK outbound text/post value, preserving chunk IDs."""
+        result = asyncio.run(
+            self._channel.send(
+                receive_id,
+                message,
+                {"receive_id_type": receive_id_type},
+            )
+        )
+        fallback_chat_id = receive_id if receive_id_type == "chat_id" else ""
+        return self._channel_send_result(result, fallback_chat_id=fallback_chat_id)
+
     def reply_text(self, message_id: str, text: str) -> dict:
         """Reply to a specific message by Feishu message_id."""
         from lark_channel.api.im.v1.model.reply_message_request import (
@@ -578,6 +620,29 @@ class FeishuAccount:
             "message_id": getattr(data, "message_id", ""),
             "chat_id": getattr(data, "chat_id", ""),
         }
+
+    def reply_content(
+        self,
+        message_id: str,
+        chat_id: str,
+        message: dict[str, Any],
+        *,
+        reply_in_thread: bool,
+    ) -> dict:
+        """Reply through the SDK outbound pipeline without fresh-send fallback."""
+        result = asyncio.run(
+            self._channel.send(
+                chat_id,
+                message,
+                {
+                    "receive_id_type": "chat_id",
+                    "reply_to": message_id,
+                    "reply_in_thread": reply_in_thread,
+                    "reply_target_gone": "fail",
+                },
+            )
+        )
+        return self._channel_send_result(result, fallback_chat_id=chat_id)
 
     # ------------------------------------------------------------------
     # File download (voice, audio, images, documents)
@@ -711,6 +776,15 @@ class FeishuAccount:
                 f"code={response.code} msg={response.msg}"
             )
         return {}
+
+    def update_content(self, message_id: str, message: dict[str, Any]) -> dict:
+        """Edit a text/post message through the SDK's typed outbound pipeline."""
+        result = asyncio.run(self._channel.edit_message(message_id, message))
+        projected = self._channel_send_result(result)
+        projected["message_id"] = projected["message_id"] or message_id
+        if not projected["message_ids"]:
+            projected["message_ids"] = [projected["message_id"]]
+        return projected
 
     def delete_message(self, message_id: str) -> bool:
         """Delete a message sent by the bot.

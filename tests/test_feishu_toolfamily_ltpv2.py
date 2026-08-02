@@ -59,16 +59,55 @@ def test_family_dispatch_rejects_root_and_cross_branch_before_manager_io():
     assert manager.calls[0] == {"action": "accounts"}
 
 
-def test_feishu_send_schema_requires_receive_id_and_text():
+def test_feishu_outbound_schema_requires_text_xor_strict_content():
     send = _branches(FEISHU_SCHEMA)["send"]
-    assert send["required"] == ["receive_id", "text"]
+    assert send["required"] == ["receive_id"]
     assert _basic_validate({"receive_id": "ou_1", "text": "hello"}, send)
     assert _basic_validate(
         {"receive_id": "ou_1", "text": "hello", "receive_id_type": "chat_id"}, send
     )
+    for content in (
+        {"type": "text", "text": "hello"},
+        {"type": "markdown", "markdown": "**hello**"},
+        {"type": "post", "post": {"zh_cn": {"title": "hello"}}},
+    ):
+        assert _basic_validate({"receive_id": "ou_1", "content": content}, send)
     assert not _basic_validate({"receive_id": "ou_1"}, send)
     assert not _basic_validate({"text": "missing receive_id"}, send)
     assert not _basic_validate({"receive_id": "ou_1", "text": 17}, send)
+    assert not _basic_validate(
+        {
+            "receive_id": "ou_1",
+            "text": "ambiguous",
+            "content": {"type": "text", "text": "also present"},
+        },
+        send,
+    )
+    assert not _basic_validate(
+        {
+            "receive_id": "ou_1",
+            "content": {"type": "markdown", "text": "wrong field"},
+        },
+        send,
+    )
+
+    reply = _branches(FEISHU_SCHEMA)["reply"]
+    assert _basic_validate(
+        {
+            "message_id": "main:oc_chat:om_1",
+            "content": {"type": "markdown", "markdown": "reply"},
+            "reply_in_thread": True,
+        },
+        reply,
+    )
+    assert not _basic_validate(
+        {
+            "message_id": "main:oc_chat:om_1",
+            "content": {"type": "markdown", "markdown": "reply"},
+            "reply_in_thread": "yes",
+        },
+        reply,
+    )
 
 
 def test_feishu_remove_contact_schema_accepts_exactly_one_of_alias_or_open_id():

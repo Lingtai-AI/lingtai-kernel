@@ -83,6 +83,80 @@ _ATTACHMENT_SUFFIXES = {
     "sticker": ".png",
 }
 _UNSAFE_ATTACHMENT_CHARS = re.compile(r'[\x00-\x1f<>:"/\\|?*]+')
+_OUTBOUND_CONTENT_FIELDS = {
+    "text": "text",
+    "markdown": "markdown",
+    "post": "post",
+}
+
+
+def _post_preview(post: dict[str, Any]) -> str:
+    """Build a readable persisted preview without rewriting the post AST."""
+    documents = [post] if "content" in post else [
+        value for value in post.values() if isinstance(value, dict)
+    ]
+    parts: list[str] = []
+    for document in documents[:1]:
+        title = document.get("title")
+        if isinstance(title, str) and title:
+            parts.append(title)
+        rows = document.get("content") or document.get("content_v2") or []
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            elements = row if isinstance(row, list) else [row]
+            line: list[str] = []
+            for element in elements:
+                if not isinstance(element, dict):
+                    continue
+                value = element.get("text")
+                if not isinstance(value, str):
+                    value = element.get("content")
+                if isinstance(value, str) and value:
+                    line.append(value)
+            if line:
+                parts.append("".join(line))
+    return "\n".join(parts)
+
+
+def _normalize_outbound_content(
+    args: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+    """Validate ``text XOR content`` and return record/SDK/preview/wire type."""
+    has_text = "text" in args
+    has_content = "content" in args
+    if has_text == has_content:
+        raise ValueError("exactly one of text or content is required")
+
+    if has_text:
+        text = args.get("text")
+        if not isinstance(text, str) or not text:
+            raise ValueError("text is required")
+        content = {"type": "text", "text": text}
+        return content, {"text": text}, text, "text"
+
+    raw = args.get("content")
+    if not isinstance(raw, dict):
+        raise ValueError("content must be an object")
+    content_type = raw.get("type")
+    if not isinstance(content_type, str):
+        raise ValueError("content.type must be text, markdown, or post")
+    field = _OUTBOUND_CONTENT_FIELDS.get(content_type)
+    if field is None or set(raw) != {"type", field}:
+        raise ValueError("content must be one strict text, markdown, or post value")
+    value = raw.get(field)
+    if content_type in {"text", "markdown"}:
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"content.{field} is required")
+        preview = value
+    else:
+        if not isinstance(value, dict) or not value:
+            raise ValueError("content.post must be a non-empty object")
+        preview = _post_preview(value)
+    content = dict(raw)
+    sdk_message = {field: value}
+    wire_type = "text" if content_type == "text" else "post"
+    return content, sdk_message, preview, wire_type
 
 
 def _normalized_content_payload(content: object, message_type: str) -> dict:
@@ -536,13 +610,15 @@ DESCRIPTION = (
     "do not attempt to configure or reconfigure this MCP — your orchestrator "
     "manages it, and if the network needs this MCP to reach you the wiring "
     "is propagated to your session automatically. "
-    "Use 'send' for outgoing text messages (specify receive_id + receive_id_type). "
+    "Use 'send' for outgoing text, markdown, or post messages "
+    "(specify receive_id + receive_id_type and exactly one of text/content). "
     "'check' to see recent conversations with unread counts. "
     "'read' to read messages from a specific chat (returns compound message IDs). "
-    "'reply' to respond to a message (use compound ID from read results). "
+    "'reply' to respond to a message and follow its topic by default "
+    "(use compound ID from read results). "
     "'search' to find messages by keyword or regex. "
     "'delete' to delete a bot message (message_id). "
-    "'edit' to edit a sent message (message_id, text). "
+    "'edit' to edit a sent text/post message (message_id, text or content). "
     "'contacts' to manage saved contacts (open_id aliases). "
     "'accounts' to list configured app accounts. "
     "Voice/audio messages are automatically transcribed using Whisper (local) "
@@ -570,7 +646,7 @@ class FeishuManager:
         self._service = service
         self._working_dir = Path(working_dir)
         self._on_inbound = on_inbound
-        # Duplicate send protection: (alias, receive_id, text) -> count
+        # Duplicate send protection: (alias, receive_id, normalized content) -> count
         self._last_sent: dict[tuple[str, str, str], int] = {}
         self._dup_free_passes = 2
         # Incoming event dedupe: per-account FIFO of recently-seen
@@ -1604,6 +1680,90 @@ class FeishuManager:
         info = contacts.get(open_id, {})
         return info.get("name") or info.get("alias") or ""
 
+    def _find_message_record(self, account: str, compound_id: str) -> dict:
+        for folder in ("inbox", "sent"):
+            for message in self._list_messages(account, folder):
+                if message.get("id") == compound_id:
+                    return message
+        return {}
+
+    def _persist_outbound(
+        self,
+        *,
+        account: str,
+        result: dict[str, Any],
+        to: dict[str, str],
+        content: dict[str, Any],
+        text: str,
+        message_type: str,
+        status: str = "sent",
+        reply_to: str | None = None,
+        reply_in_thread: bool | None = None,
+    ) -> dict[str, Any]:
+        chat_id = result.get("chat_id") or to.get("receive_id") or ""
+        feishu_message_ids = [
+            value for value in result.get("message_ids", [])
+            if isinstance(value, str) and value
+        ]
+        if not feishu_message_ids and result.get("message_id"):
+            feishu_message_ids = [result["message_id"]]
+        if not feishu_message_ids:
+            raise RuntimeError("Feishu send succeeded without a message_id")
+
+        compound_ids = [
+            f"{account}:{chat_id}:{message_id}"
+            for message_id in feishu_message_ids
+        ]
+        chunks = [
+            {"index": index, "message_id": message_id}
+            for index, message_id in enumerate(compound_ids, start=1)
+        ]
+        sent_uuid = str(uuid4())
+        sent_dir = self._account_dir(account) / "sent" / sent_uuid
+        sent_dir.mkdir(parents=True, exist_ok=True)
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        sent_record: dict[str, Any] = {
+            "id": compound_ids[0],
+            "feishu_message_id": feishu_message_ids[0],
+            "feishu_message_ids": feishu_message_ids,
+            "message_ids": compound_ids,
+            "chunks": chunks,
+            "to": to,
+            "chat_id": chat_id,
+            "message_type": message_type,
+            "content": content,
+            "text": text,
+            "sent_at": now_iso,
+            "date": now_iso,
+            "status": status,
+        }
+        for key in ("root_id", "parent_id", "thread_id"):
+            value = result.get(key)
+            if value:
+                sent_record[key] = value
+        if reply_to:
+            sent_record["reply_to"] = reply_to
+        if reply_in_thread is not None:
+            sent_record["reply_in_thread"] = reply_in_thread
+        (sent_dir / "message.json").write_text(
+            json.dumps(sent_record, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+
+        response: dict[str, Any] = {
+            "status": "sent",
+            "message_id": compound_ids[0],
+            "message_ids": compound_ids,
+            "chunk_count": len(compound_ids),
+            "chunks": chunks,
+            "content_type": content["type"],
+        }
+        if sent_record.get("thread_id"):
+            response["thread_id"] = sent_record["thread_id"]
+        if reply_in_thread is not None:
+            response["reply_in_thread"] = reply_in_thread
+        return response
+
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
@@ -1611,16 +1771,15 @@ class FeishuManager:
     def _send(self, args: dict) -> dict:
         account = self._resolve_account(args)
         receive_id = args.get("receive_id", "")
-        receive_id_type = args.get("receive_id_type", "open_id")
-        text = args.get("text", "")
+        receive_id_type = args.get("receive_id_type") or "open_id"
         placeholder = bool(args.get("placeholder", False))
 
         if not receive_id:
             return {"error": "receive_id is required"}
-        if not text:
-            return {"error": "text is required"}
+        content, sdk_message, text, message_type = _normalize_outbound_content(args)
 
-        dup_key = (account, receive_id, text)
+        content_key = json.dumps(content, ensure_ascii=False, sort_keys=True)
+        dup_key = (account, receive_id, content_key)
         count = self._last_sent.get(dup_key, 0)
         if count >= self._dup_free_passes:
             return {
@@ -1634,43 +1793,29 @@ class FeishuManager:
         chat_id: str = receive_id if receive_id_type == "chat_id" else ""
 
         try:
-            result = acct.send_text(receive_id, receive_id_type, text)
-
-            self._last_sent[dup_key] = count + 1
-
-            feishu_msg_id = result.get("message_id", "")
-            chat_id = result.get("chat_id", receive_id)
-            compound_id = f"{account}:{chat_id}:{feishu_msg_id}"
-            sent_uuid = str(uuid4())
-            sent_dir = self._account_dir(account) / "sent" / sent_uuid
-            sent_dir.mkdir(parents=True, exist_ok=True)
-            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            sent_record = {
-                "id": compound_id,
-                "feishu_message_id": feishu_msg_id,
-                "to": {"receive_id": receive_id, "receive_id_type": receive_id_type},
-                "chat_id": chat_id,
-                "text": text,
-                "sent_at": now_iso,
-                # `date` mirrors `sent_at` so sent records sort alongside
-                # inbox records in _check/_read merges.
-                "date": now_iso,
-                "status": "placeholder" if placeholder else "sent",
-            }
-            (sent_dir / "message.json").write_text(
-                json.dumps(sent_record, indent=2, default=str),
-                encoding="utf-8",
+            result = acct.send_content(
+                receive_id,
+                receive_id_type,
+                sdk_message,
             )
 
-            response: dict[str, Any] = {
-                "status": "sent",
-                "message_id": compound_id,
-            }
+            self._last_sent[dup_key] = count + 1
+            chat_id = result.get("chat_id") or chat_id
+            response = self._persist_outbound(
+                account=account,
+                result=result,
+                to={"receive_id": receive_id, "receive_id_type": receive_id_type},
+                content=content,
+                text=text,
+                message_type=message_type,
+                status="placeholder" if placeholder else "sent",
+            )
             if placeholder:
                 response["placeholder"] = True
                 response["hint"] = (
                     f"Placeholder sent — call feishu(action='edit', "
-                    f"message_id='{compound_id}', text=<final>) when ready."
+                    f"message_id='{response['message_id']}', "
+                    "text=<final> or content=<final>) when ready."
                 )
 
             return response
@@ -1775,6 +1920,8 @@ class FeishuManager:
             cleaned.append({
                 "id": m.get("id"),
                 "feishu_message_id": m.get("feishu_message_id"),
+                "message_ids": m.get("message_ids"),
+                "chunks": m.get("chunks"),
                 "chat_id": m.get("chat_id"),
                 "chat_type": m.get("chat_type"),
                 "thread_id": m.get("thread_id"),
@@ -1788,9 +1935,11 @@ class FeishuManager:
                 "message_type": m.get("message_type"),
                 "text": m.get("text"),
                 "date": m.get("date"),
+                "edited_at": m.get("edited_at"),
                 "parent_id": m.get("parent_id"),
                 "root_id": m.get("root_id"),
                 "reply_to": m.get("reply_to"),
+                "reply_in_thread": m.get("reply_in_thread"),
                 "mentions": m.get("mentions", []),
                 "content": m.get("content"),
                 "attachments": m.get("attachments", []),
@@ -1808,39 +1957,42 @@ class FeishuManager:
 
     def _reply(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")
-        text = args.get("text", "")
         if not compound_id:
             return {"error": "message_id is required"}
-        if not text:
-            return {"error": "text is required"}
+        content, sdk_message, text, message_type = _normalize_outbound_content(args)
 
         alias, _chat_id, feishu_msg_id = self._parse_compound_id(compound_id)
         acct = self._service.get_account(alias)
+        original = self._find_message_record(alias, compound_id)
+        original_thread_id = original.get("thread_id") or ""
+        if "reply_in_thread" in args:
+            reply_in_thread = args["reply_in_thread"]
+            if type(reply_in_thread) is not bool:
+                raise ValueError("reply_in_thread must be a boolean")
+        else:
+            reply_in_thread = bool(original_thread_id)
 
         try:
-            result = acct.reply_text(feishu_msg_id, text)
-
-            new_msg_id = result.get("message_id", "")
-            new_chat_id = result.get("chat_id", _chat_id)
-            new_compound = f"{alias}:{new_chat_id}:{new_msg_id}"
-            sent_uuid = str(uuid4())
-            sent_dir = self._account_dir(alias) / "sent" / sent_uuid
-            sent_dir.mkdir(parents=True, exist_ok=True)
-            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            sent_record = {
-                "id": new_compound,
-                "feishu_message_id": new_msg_id,
-                "reply_to": compound_id,
-                "to": {"receive_id": new_chat_id, "receive_id_type": "chat_id"},
-                "chat_id": new_chat_id,
-                "text": text,
-                "sent_at": now_iso,
-                "date": now_iso,
-                "status": "sent",
-            }
-            (sent_dir / "message.json").write_text(
-                json.dumps(sent_record, indent=2, default=str),
-                encoding="utf-8",
+            result = acct.reply_content(
+                feishu_msg_id,
+                _chat_id,
+                sdk_message,
+                reply_in_thread=reply_in_thread,
+            )
+            if reply_in_thread and not result.get("thread_id"):
+                result["thread_id"] = original_thread_id
+            response = self._persist_outbound(
+                account=alias,
+                result=result,
+                to={
+                    "receive_id": result.get("chat_id") or _chat_id,
+                    "receive_id_type": "chat_id",
+                },
+                content=content,
+                text=text,
+                message_type=message_type,
+                reply_to=compound_id,
+                reply_in_thread=reply_in_thread,
             )
 
             # Rich feedback: Add "done" reaction (THUMBSUP) to the original message
@@ -1849,7 +2001,7 @@ class FeishuManager:
             except Exception as e:
                 log.debug("Failed to add 'done' reaction: %s", e)
 
-            return {"status": "sent", "message_id": new_compound}
+            return response
         finally:
             # Always clean up typing indicator, even if reply_text or
             # downstream logic throws. Some historical compound IDs can have
@@ -1930,15 +2082,34 @@ class FeishuManager:
 
     def _edit(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")
-        text = args.get("text", "")
         if not compound_id:
             return {"error": "message_id is required"}
-        if not text:
-            return {"error": "text is required"}
+        content, sdk_message, text, message_type = _normalize_outbound_content(args)
         alias, _chat_id, feishu_msg_id = self._parse_compound_id(compound_id)
         acct = self._service.get_account(alias)
-        acct.update_message(feishu_msg_id, text)
-        return {"status": "edited", "message_id": compound_id}
+        acct.update_content(feishu_msg_id, sdk_message)
+
+        record = self._find_message_record(alias, compound_id)
+        record_dir = record.pop("_dir", "") if record else ""
+        if record_dir:
+            record.update({
+                "content": content,
+                "message_type": message_type,
+                "text": text,
+                "status": "sent",
+                "edited_at": datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+            })
+            (Path(record_dir) / "message.json").write_text(
+                json.dumps(record, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+        return {
+            "status": "edited",
+            "message_id": compound_id,
+            "content_type": content["type"],
+        }
 
     def _contacts(self, args: dict) -> dict:
         account = self._resolve_account(args)

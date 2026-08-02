@@ -4,13 +4,14 @@ description: |
   Progressive-disclosure usage manual for the Feishu (Lark) MCP tool. Read this
   when you need detail beyond the one-line action descriptions: receive_id vs
   receive_id_type (open_id/chat_id), send vs reply, check/read/search, placeholder
-  + edit for long responses, contacts/accounts basics, the notification
+  + edit for long responses, text/markdown/post outbound content, topic-aware
+  replies, contacts/accounts basics, the notification
   transient-hook vs persistent-context split, normalized inbound conversations,
   preserved inbound media, passive channel events, group @Bot routing, and
   side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.6.0
+version: 1.7.0
 last_changed_at: 2026-08-02T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
@@ -35,10 +36,27 @@ maintenance: |
 
 ## SEND vs REPLY
 
-- `reply` (`message_id` from read/check results, `text`) threads your response to
-  a specific incoming message; prefer it when answering a particular message.
-- `send` (`receive_id`, `receive_id_type`, `text`) starts a fresh message; use it
-  for unsolicited or standalone messages.
+- `send`, `reply`, and `edit` require exactly one of legacy `text` or structured
+  `content`; passing both is rejected before Feishu I/O. `text='...'` remains the
+  plain-text shortcut.
+- Structured content is a strict tagged union in this slice:
+  `{'type':'text','text':'...'}`,
+  `{'type':'markdown','markdown':'...'}`, or
+  `{'type':'post','post':{...}}`. Unknown keys or mixed variants are rejected.
+- `reply` (`message_id` from read/check results plus `text` or `content`) replies
+  to a specific incoming message; prefer it when answering that message. It
+  defaults `reply_in_thread=true` when the persisted target has a `thread_id`,
+  otherwise false. An explicit boolean overrides that default. If the reply
+  target is gone, the call fails and never silently starts a fresh message.
+- `send` (`receive_id`, `receive_id_type`, `text` or `content`) starts a fresh
+  message; use it for unsolicited or standalone messages.
+- Markdown is converted by the channel SDK to a Feishu post and split at safe
+  boundaries when long. Successful send/reply results include the primary
+  compound `message_id`, ordered `message_ids`, `chunk_count`, and `chunks`;
+  every chunk of a topic reply stays in that topic.
+- `edit` accepts the same text/markdown/post union and updates the persisted sent
+  record after Feishu confirms the edit. Media and cards have their own update
+  rules and are introduced by their dedicated capability slices.
 
 ## READING: check / read / search
 
@@ -58,8 +76,10 @@ maintenance: |
 ## PLACEHOLDER / PROGRESS
 
 - For responses that take more than ~5s, send `action='send'` with
-  `placeholder=true` and your interim text. This returns a compound `message_id`.
-- Update it later with `action='edit'`, `message_id=<that id>`, `text=<final>`
+  `placeholder=true` and interim `text` or `content`. This returns a compound
+  `message_id`.
+- Update it later with `action='edit'`, `message_id=<that id>`, plus final `text`
+  or `content`
   instead of sending a second message, so the user sees one evolving reply.
 
 ## CONTACTS / ACCOUNTS
@@ -107,9 +127,9 @@ maintenance: |
 - For group commands, the normalized `text` removes this bot's own mention;
   other resolved mentions remain visible. `content.kind` identifies the
   original Feishu content family.
-- Topic/thread routing metadata is observational in this slice. Thread-aware
-  outbound reply behavior is introduced with rich outbound content; until then,
-  pass the compound message ID to `reply` as before.
+- Topic/thread routing metadata drives `reply`: an omitted `reply_in_thread`
+  follows the persisted target's `thread_id`, so topic messages stay in their
+  topic while ordinary messages remain flat.
 
 ## NOTIFICATIONS: TRANSIENT HOOK vs PERSISTENT CONTEXT
 

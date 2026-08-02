@@ -50,7 +50,38 @@ def _object(
     return result
 
 
+def _outbound_content_schema() -> dict[str, Any]:
+    """Strict first-slice outbound union; media and cards land separately."""
+    post_value = {"type": "object", "minProperties": 1}
+    return {
+        "oneOf": [
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["text"]},
+                    "text": {"type": "string"},
+                },
+                required=["type", "text"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["markdown"]},
+                    "markdown": {"type": "string"},
+                },
+                required=["type", "markdown"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["post"]},
+                    "post": post_value,
+                },
+                required=["type", "post"],
+            ),
+        ],
+    }
+
+
 def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
+    content = _outbound_content_schema()
     send = _object(
         {
             "account": _nullable({"type": "string"}),
@@ -60,9 +91,11 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
                 "enum": ["open_id", "user_id", "email", "chat_id", "union_id"],
             }),
             "text": {"type": "string"},
+            "content": content,
             "placeholder": _nullable({"type": "boolean"}),
         },
-        required=["receive_id", "text"],
+        required=["receive_id"],
+        one_of=[{"required": ["text"]}, {"required": ["content"]}],
     )
     send["properties"]["receive_id_type"]["anyOf"][0]["description"] = (
         "Type of receive_id. Use 'open_id' for individual users "
@@ -92,8 +125,11 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "message_id": {"type": "string"},
                 "text": {"type": "string"},
+                "content": content,
+                "reply_in_thread": {"type": "boolean"},
             },
-            required=["message_id", "text"],
+            required=["message_id"],
+            one_of=[{"required": ["text"]}, {"required": ["content"]}],
         ),
         "search": _object(
             {
@@ -108,8 +144,10 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "message_id": {"type": "string"},
                 "text": {"type": "string"},
+                "content": content,
             },
-            required=["message_id", "text"],
+            required=["message_id"],
+            one_of=[{"required": ["text"]}, {"required": ["content"]}],
         ),
         "contacts": _object({"account": _nullable({"type": "string"})}),
         "add_contact": _object(
@@ -159,8 +197,9 @@ def feishu_schema() -> dict[str, Any]:
     # another action's branch also fits.
     schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "send: send a text message to a user or chat "
-        "(receive_id, receive_id_type, text; optional account, placeholder). "
+        "send: send text, markdown, or post content to a user or chat "
+        "(receive_id, receive_id_type, exactly one of text/content; "
+        "optional account, placeholder). "
         "If placeholder is true, sends text as a placeholder message "
         "immediately and returns its compound message_id so the agent "
         "can call edit later with the final result. "
@@ -168,12 +207,14 @@ def feishu_schema() -> dict[str, Any]:
         "(optional account). "
         "read: read messages from a specific chat "
         "(chat_id; optional limit, account). "
-        "reply: reply to a specific message "
-        "(message_id from read results, text). "
+        "reply: reply to a specific message with text, markdown, or post "
+        "(message_id from read results, exactly one of text/content; "
+        "optional reply_in_thread). "
         "search: search inbox messages by regex "
         "(query; optional account, chat_id). "
         "delete: delete a bot message (message_id). "
-        "edit: edit a bot message (message_id, text). "
+        "edit: edit a bot text/post message "
+        "(message_id, exactly one of text/content). "
         "contacts: list saved contacts (optional account). "
         "add_contact: save a contact "
         "(open_id, alias; optional name, chat_id). "
@@ -207,6 +248,8 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
         return isinstance(value, Mapping) and all(key in value for key in required)
     if expected == "object":
         if not isinstance(value, Mapping):
+            return False
+        if len(value) < schema.get("minProperties", 0):
             return False
         properties = schema.get("properties", {})
         if schema.get("additionalProperties") is False and set(value) - set(properties):
