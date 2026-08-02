@@ -289,7 +289,7 @@ class FeishuManager:
         self._last_sent: dict[tuple[str, str, str], int] = {}
         self._dup_free_passes = 2
         # Incoming event dedupe: per-account FIFO of recently-seen
-        # feishu_message_id values. Protects against lark-oapi WS
+        # feishu_message_id values. Protects against Feishu SDK WS
         # reconnect redelivery (issue #5). Bounded; oldest evicted first.
         self._seen_msg_ids: dict[str, OrderedDict[str, None]] = {}
         self._dedupe_lock = threading.Lock()

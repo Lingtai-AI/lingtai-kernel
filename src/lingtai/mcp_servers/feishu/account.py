@@ -1,6 +1,6 @@
 """FeishuAccount — single app credential, WebSocket listener + REST sender.
 
-One daemon thread per account runs the lark-oapi WebSocket client.
+One daemon thread per account runs the lark-channel-sdk WebSocket client.
 Constructor stores config only — no connections, no threads.
 start() spawns the WebSocket thread and initialises the REST client.
 stop() signals the thread to stop and joins it.
@@ -20,12 +20,12 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
-# lark_oapi is lazy-imported so the module stays importable without
+# lark_channel is lazy-imported so the module stays importable without
 # the optional dependency installed.
 lark: Any = None
 
-# The lark_oapi.ws.client module, captured lazily. Stored as a module global so
-# tests can inject a fake SDK module (see tests/test_ws_event_loop.py). The real
+# The lark_channel.ws.client module, captured lazily. Stored globally so tests
+# can inject a fake SDK module (see test_feishu_channel_sdk_account.py). The real
 # SDK keeps its own module-level ``loop`` attribute that ``Client.start()`` uses
 # directly — see ``_ThreadLocalLoop`` and ``_ws_loop`` for why that matters.
 _sdk_ws_client_module: Any = None
@@ -47,27 +47,27 @@ def _route_lark_stdout_handlers_to_stderr() -> None:
 def _import_lark() -> Any:
     global lark
     if lark is None:
-        import lark_oapi as _lark
+        import lark_channel as _lark
         lark = _lark
     _route_lark_stdout_handlers_to_stderr()
     return lark
 
 
 def _get_sdk_ws_client_module() -> Any:
-    """Return the ``lark_oapi.ws.client`` module (or an injected fake).
+    """Return the ``lark_channel.ws.client`` module (or an injected fake).
 
     Tests set ``_sdk_ws_client_module`` directly to a stand-in that exposes the
     same ``loop`` attribute contract as the real SDK module.
     """
     global _sdk_ws_client_module
     if _sdk_ws_client_module is None:
-        import lark_oapi.ws.client as _ws_client
+        import lark_channel.ws.client as _ws_client
         _sdk_ws_client_module = _ws_client
     return _sdk_ws_client_module
 
 
 class _ThreadLocalLoop:
-    """Per-thread proxy that stands in for ``lark_oapi.ws.client.loop``.
+    """Per-thread proxy that stands in for ``lark_channel.ws.client.loop``.
 
     The SDK captures ``loop = asyncio.get_event_loop()`` at *import time* into a
     module global, and ``Client.start()`` calls ``loop.run_until_complete(...)``
@@ -150,6 +150,8 @@ class FeishuAccount:
 
         self._ws_thread: threading.Thread | None = None
         self._ws_client: Any = None
+        self._ws_event_loop: asyncio.AbstractEventLoop | None = None
+        self._ws_loop_lock = threading.Lock()
         self._rest_client: Any = None
         self._stop_event = threading.Event()
         self._bot_info: dict | None = None
@@ -190,8 +192,9 @@ class FeishuAccount:
                     "Feishu event processing error (%s): %s", self.alias, exc
                 )
 
+        security = _lark.SecurityConfig(mode="compat")
         event_handler = (
-            _lark.EventDispatcherHandler.builder("", "")
+            _lark.EventDispatcherHandler.builder("", "", security=security)
             .register_p2_im_message_receive_v1(_handle_message)
             .build()
         )
@@ -203,6 +206,7 @@ class FeishuAccount:
             self._app_secret,
             event_handler=event_handler,
             log_level=_lark.LogLevel.INFO,
+            security=security,
         )
 
         self._ws_thread = threading.Thread(
@@ -220,8 +224,8 @@ class FeishuAccount:
     def _ws_loop(self) -> None:
         """Run the blocking WebSocket client in a background thread.
 
-        lark-oapi captures ``loop = asyncio.get_event_loop()`` into a *module
-        global* (``lark_oapi.ws.client.loop``) at import time, and
+        lark-channel-sdk captures ``loop = asyncio.get_event_loop()`` into a
+        *module global* (``lark_channel.ws.client.loop``) at import time, and
         ``Client.start()`` calls ``loop.run_until_complete(...)`` on that global
         — it never re-reads the thread-current loop. Imported on the main MCP
         thread under ``asyncio.run(serve())``, that global is the already-running
@@ -242,7 +246,14 @@ class FeishuAccount:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         proxy.bind(loop)
+        with self._ws_loop_lock:
+            self._ws_event_loop = loop
+        set_loop = getattr(self._ws_client, "_set_loop", None)
+        if callable(set_loop):
+            set_loop(loop)
         try:
+            if self._stop_event.is_set():
+                return
             self._ws_client.start()
         except Exception as e:
             if not self._stop_event.is_set():
@@ -251,7 +262,17 @@ class FeishuAccount:
                     self.alias, e,
                 )
         finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending and not loop.is_closed():
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
             proxy.unbind()
+            with self._ws_loop_lock:
+                if self._ws_event_loop is loop:
+                    self._ws_event_loop = None
             try:
                 loop.close()
             finally:
@@ -260,14 +281,21 @@ class FeishuAccount:
     def stop(self) -> None:
         """Signal the WebSocket thread to stop."""
         self._stop_event.set()
-        if self._ws_client is not None:
-            try:
-                self._ws_client.stop()
-            except Exception:
-                pass
+        with self._ws_loop_lock:
+            loop = self._ws_event_loop
+        if loop is not None and not loop.is_closed():
+            disconnect = getattr(self._ws_client, "_disconnect", None)
+            if callable(disconnect) and loop.is_running():
+                try:
+                    future = asyncio.run_coroutine_threadsafe(disconnect(), loop)
+                    future.result(timeout=2.0)
+                except Exception:
+                    pass
+            loop.call_soon_threadsafe(loop.stop)
         if self._ws_thread is not None:
             self._ws_thread.join(timeout=5.0)
-            self._ws_thread = None
+            if not self._ws_thread.is_alive():
+                self._ws_thread = None
 
     # ------------------------------------------------------------------
     # Event processing
@@ -300,8 +328,10 @@ class FeishuAccount:
         text: str,
     ) -> dict:
         """Send a plain-text message. Returns created Message fields as dict."""
-        from lark_oapi.api.im.v1 import (
+        from lark_channel.api.im.v1.model.create_message_request import (
             CreateMessageRequest,
+        )
+        from lark_channel.api.im.v1.model.create_message_request_body import (
             CreateMessageRequestBody,
         )
 
@@ -331,8 +361,10 @@ class FeishuAccount:
 
     def reply_text(self, message_id: str, text: str) -> dict:
         """Reply to a specific message by Feishu message_id."""
-        from lark_oapi.api.im.v1 import (
+        from lark_channel.api.im.v1.model.reply_message_request import (
             ReplyMessageRequest,
+        )
+        from lark_channel.api.im.v1.model.reply_message_request_body import (
             ReplyMessageRequestBody,
         )
 
@@ -378,7 +410,9 @@ class FeishuAccount:
         Returns:
             (filename, content_bytes) tuple.
         """
-        from lark_oapi.api.im.v1 import GetMessageResourceRequest
+        from lark_channel.api.im.v1.model.get_message_resource_request import (
+            GetMessageResourceRequest,
+        )
 
         request = (
             GetMessageResourceRequest.builder()
@@ -411,9 +445,13 @@ class FeishuAccount:
         Returns:
             True on success.
         """
-        from lark_oapi.api.im.v1 import (
+        from lark_channel.api.im.v1.model.create_message_reaction_request import (
             CreateMessageReactionRequest,
+        )
+        from lark_channel.api.im.v1.model.create_message_reaction_request_body import (
             CreateMessageReactionRequestBody,
+        )
+        from lark_channel.api.im.v1.model.emoji import (
             Emoji,
         )
 
@@ -454,8 +492,10 @@ class FeishuAccount:
         Returns:
             Response dict (empty on success since PATCH returns no body).
         """
-        from lark_oapi.api.im.v1 import (
+        from lark_channel.api.im.v1.model.patch_message_request import (
             PatchMessageRequest,
+        )
+        from lark_channel.api.im.v1.model.patch_message_request_body import (
             PatchMessageRequestBody,
         )
 
@@ -486,7 +526,9 @@ class FeishuAccount:
         Returns:
             True on success.
         """
-        from lark_oapi.api.im.v1 import DeleteMessageRequest
+        from lark_channel.api.im.v1.model.delete_message_request import (
+            DeleteMessageRequest,
+        )
 
         request = (
             DeleteMessageRequest.builder()
