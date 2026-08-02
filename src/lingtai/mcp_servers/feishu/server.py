@@ -734,11 +734,11 @@ async def serve() -> None:
     """Run the MCP server over stdio. Eagerly starts the WebSocket clients
     so inbound messages flow before the host expects them."""
     manager: FeishuManager | None = None
-    service_started = False
+    manager_started = False
     try:
         manager, _wd = build_manager()
-        manager._service.start()
-        service_started = True
+        manager.start()
+        manager_started = True
         log.info("Feishu listener running")
     except Exception as e:
         log.error(
@@ -755,8 +755,8 @@ async def serve() -> None:
                 server.create_initialization_options(),
             )
     finally:
-        if manager is not None and service_started:
+        if manager is not None and manager_started:
             try:
-                manager._service.stop()
+                manager.stop()
             except Exception:
                 pass

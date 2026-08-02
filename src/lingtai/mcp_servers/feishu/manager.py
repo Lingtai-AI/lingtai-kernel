@@ -26,15 +26,23 @@ from pathlib import Path
 from typing import Any, Callable, TYPE_CHECKING
 from uuid import uuid4
 
+from lingtai.kernel._frontmatter import strip_frontmatter
+from lingtai.mcp_servers.task_card import (
+    TaskCardEventProjection,
+    TaskCardResident,
+    TaskCardResidentTransport,
+    TaskCardRoute,
+)
+
 from .. import _skill
 from . import _family
-from ._errors import failure_result
+from ._errors import FeishuOperationError, failure_result
 from .account import (
     FeishuInboundCardAction,
     FeishuInboundChannelEvent,
     FeishuInboundEvent,
 )
-from lingtai.kernel._frontmatter import strip_frontmatter
+from .task_card import FeishuTaskCardJournal, FeishuTaskCardStore
 
 if TYPE_CHECKING:
     from .service import FeishuService
@@ -176,6 +184,19 @@ def _native_progress_card(
         },
     }
     return card, _card_preview(card)
+
+
+def _automatic_task_card(frame: str) -> dict[str, Any]:
+    """Render the shared resident frame as one updateable Feishu card."""
+    return {
+        "schema": "2.0",
+        "config": {"update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": "LingTai Task Card"},
+            "template": "blue",
+        },
+        "body": {"elements": [{"tag": "markdown", "content": frame}]},
+    }
 
 
 def _normalize_outbound_content(
@@ -832,6 +853,40 @@ class FeishuManager:
         self._dedupe_limit = 1000
         self._card_action_locks: dict[tuple[str, str], threading.Lock] = {}
         self._card_action_locks_guard = threading.Lock()
+        self._task_card_store = FeishuTaskCardStore(
+            self._working_dir / "feishu" / "task_cards.json"
+        )
+        self._task_card_last_messages: dict[str, str] = {}
+        self._task_card_last_messages_lock = threading.Lock()
+        self._task_card_active = False
+        self._resident = TaskCardResident(
+            enabled=True,
+            transport=TaskCardResidentTransport(
+                get_resident=lambda route: self._task_card_store.get(route),
+                matches_route=lambda route, resident_id: (
+                    self._resident_id_matches_route(route, resident_id)
+                ),
+                is_superseded=lambda route, resident_id: (
+                    self._resident_is_superseded(route, resident_id)
+                ),
+                edit=lambda resident_id, frame: self._edit_resident_task_card(
+                    resident_id, frame
+                ),
+                delete=lambda resident_id: self._delete_resident_task_card(
+                    resident_id
+                ),
+                send=lambda route, frame: self._send_resident_task_card(
+                    route, frame
+                ),
+                persist=lambda route, resident_id: self._task_card_store.set(
+                    route, resident_id
+                ),
+            ),
+        )
+        self._task_card_journal = FeishuTaskCardJournal(
+            self._working_dir / "logs" / "events.jsonl",
+            self._broadcast_automatic_task_card,
+        )
 
     def _account_dir(self, alias: str) -> Path:
         return self._working_dir / "feishu" / alias
@@ -908,8 +963,18 @@ class FeishuManager:
 
     def start(self) -> None:
         self._service.start()
+        try:
+            self._task_card_active = True
+            self._task_card_journal.start()
+        except Exception:
+            self._task_card_active = False
+            self._task_card_journal.stop()
+            self._service.stop()
+            raise
 
     def stop(self) -> None:
+        self._task_card_active = False
+        self._task_card_journal.stop()
         # Clean up any orphan typing indicator messages before stopping
         try:
             _typing_manager.stop_all(
@@ -919,6 +984,176 @@ class FeishuManager:
         except Exception:
             pass
         self._service.stop()
+
+    # ------------------------------------------------------------------
+    # Automatic resident Task Card
+    # ------------------------------------------------------------------
+
+    def _note_task_card_message(
+        self, route: TaskCardRoute, compound_id: str,
+    ) -> None:
+        """Record a route's latest observed message for this process only."""
+        if not compound_id:
+            return
+        with self._task_card_last_messages_lock:
+            self._task_card_last_messages[route.key] = compound_id
+
+    def _last_task_card_message(self, route: TaskCardRoute) -> str | None:
+        with self._task_card_last_messages_lock:
+            return self._task_card_last_messages.get(route.key)
+
+    def _resident_id_matches_route(
+        self, route: TaskCardRoute, resident_id: str,
+    ) -> bool:
+        try:
+            account, chat_id, _message_id = self._parse_compound_id(resident_id)
+        except ValueError:
+            return False
+        return (
+            account == route.account
+            and chat_id == str(route.chat_id)
+            and self._task_card_store.get(route) == resident_id
+        )
+
+    def _resident_is_superseded(
+        self, route: TaskCardRoute, resident_id: str,
+    ) -> bool:
+        """Rotate only after this process observes a different later message."""
+        latest = self._last_task_card_message(route)
+        return latest is not None and latest != resident_id
+
+    @staticmethod
+    def _task_card_target_gone(exc: Exception) -> bool:
+        return isinstance(exc, FeishuOperationError) and exc.error_code in {
+            "NOT_FOUND",
+            "TARGET_GONE",
+            "TARGET_REVOKED",
+        }
+
+    def _edit_resident_task_card(
+        self, resident_id: str, frame: str,
+    ) -> tuple[str, str | None]:
+        try:
+            account, _chat_id, message_id = self._parse_compound_id(resident_id)
+            self._service.get_account(account).update_content(
+                message_id, {"card": _automatic_task_card(frame)}
+            )
+        except Exception as exc:
+            if self._task_card_target_gone(exc):
+                return TaskCardResident.EDIT_IMPOSSIBLE, None
+            return TaskCardResident.EDIT_FAILED, "Failed to update Feishu Task Card"
+        return TaskCardResident.EDIT_OK, None
+
+    def _delete_resident_task_card(self, resident_id: str) -> str:
+        tracked = self._task_card_store.contains(resident_id)
+        if tracked is None:
+            return TaskCardResident.DELETE_FAILED
+        if not tracked:
+            # A peer already replaced the persisted resident. The shared core
+            # will re-read and adopt that exact card before considering a send.
+            return TaskCardResident.DELETE_MISSING
+        try:
+            account, _chat_id, message_id = self._parse_compound_id(resident_id)
+            self._service.get_account(account).delete_message(message_id)
+        except Exception as exc:
+            if self._task_card_target_gone(exc):
+                return TaskCardResident.DELETE_MISSING
+            return TaskCardResident.DELETE_FAILED
+        return TaskCardResident.DELETE_OK
+
+    def _send_resident_task_card(
+        self, route: TaskCardRoute, frame: str,
+    ) -> dict[str, Any] | None:
+        account = self._service.get_account(route.account)
+        card = _automatic_task_card(frame)
+        reply_to: str | None = None
+        reply_in_thread: bool | None = None
+        try:
+            if route.thread_id is None:
+                result = account.send_content(
+                    str(route.chat_id), "chat_id", {"card": card}
+                )
+            else:
+                anchor = self._last_task_card_message(route)
+                if not anchor:
+                    return None
+                anchor_account, anchor_chat, anchor_message = self._parse_compound_id(
+                    anchor
+                )
+                if (
+                    anchor_account != route.account
+                    or anchor_chat != str(route.chat_id)
+                ):
+                    return None
+                result = account.reply_content(
+                    anchor_message,
+                    str(route.chat_id),
+                    {"card": card},
+                    reply_in_thread=True,
+                )
+                result["thread_id"] = result.get("thread_id") or str(
+                    route.thread_id
+                )
+                reply_to = anchor
+                reply_in_thread = True
+        except Exception:
+            return {"status": TaskCardResident.SEND_INDETERMINATE}
+
+        try:
+            response = self._persist_outbound(
+                account=route.account,
+                result=result,
+                to={
+                    "receive_id": str(route.chat_id),
+                    "receive_id_type": "chat_id",
+                },
+                content={"type": "card", "card": card},
+                text=frame,
+                message_type="interactive",
+                reply_to=reply_to,
+                reply_in_thread=reply_in_thread,
+                task_card=True,
+            )
+        except Exception:
+            return {"status": TaskCardResident.SEND_INDETERMINATE}
+        return {
+            "status": TaskCardResident.SEND_OK,
+            "message_id": response["message_id"],
+        }
+
+    def _automatic_task_card_frame(self) -> str:
+        groups, metadata = self._task_card_journal.snapshot()
+        return TaskCardEventProjection.render_event_groups(
+            groups,
+            normal_rows=TaskCardEventProjection.DEFAULT_NORMAL_ROWS,
+            metadata=metadata,
+        )
+
+    def _ensure_automatic_task_card(self, route: TaskCardRoute) -> dict[str, Any]:
+        return self._resident.ensure(
+            route.account,
+            route.chat_id,
+            self._automatic_task_card_frame(),
+            error="Failed to ensure Feishu Task Card",
+            thread_id=route.thread_id,
+        )
+
+    def _broadcast_automatic_task_card(self) -> None:
+        if not self._task_card_active:
+            return
+        frame = self._automatic_task_card_frame()
+        for route, _resident_id in self._task_card_store.routes():
+            try:
+                self._resident.project(
+                    route.account,
+                    route.chat_id,
+                    "automatic",
+                    frame,
+                    error="Failed to update Feishu Task Card",
+                    thread_id=route.thread_id,
+                )
+            except Exception as exc:
+                log.debug("Feishu automatic Task Card projection failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Action dispatch
@@ -1572,6 +1807,13 @@ class FeishuManager:
             if open_id:
                 self._upsert_contact(account_alias, open_id, chat_id)
 
+            route = TaskCardRoute(
+                account_alias,
+                str(chat_id),
+                str(thread_id) if thread_id else None,
+            )
+            self._note_task_card_message(route, compound_id)
+
         except Exception as exc:
             import logging as _logging
             _logging.getLogger(__name__).warning(
@@ -1600,6 +1842,14 @@ class FeishuManager:
             if len(text or "") > 300:
                 preview += "..."
             preview_metadata = {}
+
+        if self._task_card_active and chat_id:
+            try:
+                self._ensure_automatic_task_card(route)
+            except Exception as exc:
+                # Task Card transport is fail-open for the actual inbound
+                # delivery and must never prevent the agent wake.
+                log.debug("Failed to ensure inbound Feishu Task Card: %s", exc)
 
         log.info(
             "feishu_received account=%s sender=%r id=%s",
@@ -1665,6 +1915,8 @@ class FeishuManager:
             if msg_dir.is_dir() and msg_file.is_file():
                 try:
                     data = json.loads(msg_file.read_text(encoding="utf-8"))
+                    if data.get("task_card") is True:
+                        continue
                     data["_dir"] = str(msg_dir)
                     messages.append(data)
                 except (json.JSONDecodeError, OSError):
@@ -1716,6 +1968,8 @@ class FeishuManager:
                 try:
                     data = json.loads(msg_file.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError):
+                    continue
+                if data.get("task_card") is True:
                     continue
                 if data.get("chat_id") != chat_id:
                     continue
@@ -2040,6 +2294,7 @@ class FeishuManager:
         status: str = "sent",
         reply_to: str | None = None,
         reply_in_thread: bool | None = None,
+        task_card: bool = False,
     ) -> dict[str, Any]:
         chat_id = result.get("chat_id") or to.get("receive_id") or ""
         feishu_message_ids = [
@@ -2080,6 +2335,8 @@ class FeishuManager:
         }
         if status == "placeholder":
             sent_record["placeholder"] = True
+        if task_card:
+            sent_record["task_card"] = True
         media = _outbound_media_summary(content)
         if media is not None:
             sent_record["media"] = media
@@ -2094,6 +2351,16 @@ class FeishuManager:
         (sent_dir / "message.json").write_text(
             json.dumps(sent_record, indent=2, ensure_ascii=False, default=str),
             encoding="utf-8",
+        )
+        self._note_task_card_message(
+            TaskCardRoute(
+                account,
+                str(chat_id),
+                str(sent_record["thread_id"])
+                if sent_record.get("thread_id")
+                else None,
+            ),
+            compound_ids[-1],
         )
 
         response: dict[str, Any] = {

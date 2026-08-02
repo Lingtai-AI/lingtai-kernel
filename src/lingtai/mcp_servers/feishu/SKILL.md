@@ -9,16 +9,19 @@ description: |
   interactive card callbacks, outbound media/share/sticker sources, contacts/accounts basics, the notification
   transient-hook vs persistent-context split, normalized inbound conversations,
   preserved inbound media, passive channel events, group @Bot routing, and
-  side-effect caveats.
+  automatic resident Task Cards, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.11.0
+version: 1.12.0
 last_changed_at: 2026-08-03T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
 - src/lingtai/mcp_servers/feishu/manager.py
 - src/lingtai/mcp_servers/feishu/server.py
 - src/lingtai/mcp_servers/feishu/service.py
+- src/lingtai/mcp_servers/feishu/task_card.py
+- src/lingtai/mcp_servers/task_card/event_projection.py
+- src/lingtai/mcp_servers/task_card/resident.py
 - src/lingtai/mcp_servers/feishu/_family.py
 - src/lingtai/mcp_servers/feishu/_errors.py
 maintenance: |
@@ -148,6 +151,26 @@ maintenance: |
 - Incoming messages receive the native `Typing` reaction while work is pending;
   it is removed when the first response/progress card is sent. Existing `OK`
   (seen) and `THUMBSUP` (done after reply) reactions continue independently.
+
+## AUTOMATIC RESIDENT TASK CARD
+
+- The Bot automatically maintains one schema-2.0 resident Task Card for every
+  admitted `account + chat + optional thread` route. This is a mechanical,
+  bounded projection of the agent's safe public `events.jsonl` rows; the model
+  should not send, edit, answer, or otherwise manage it through the public
+  `feishu` actions.
+- Direct chats and ordinary group conversations receive a card in the chat.
+  Topic messages receive their own resident card inside that exact topic. The
+  automatic route never guesses a topic from another conversation.
+- A card that is still last is updated in place. After this process observes a
+  newer message below it, rotation is old-first: the exact persisted card is
+  deleted (or confirmed gone) before one replacement is sent. A refresh has no
+  trusted ordering high-water mark, so it conservatively updates the persisted
+  card in place until a later message is actually observed; it never guesses
+  and sends a duplicate.
+- Automatic Task Cards and `placeholder=true` progress cards are independent.
+  The automatic card summarizes agent behavior; a placeholder communicates a
+  user-meaningful phase. Final answers remain separate durable messages.
 
 ## REACTIONS
 
