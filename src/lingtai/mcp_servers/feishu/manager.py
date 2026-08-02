@@ -95,6 +95,8 @@ _STRUCTURED_MESSAGE_MENTION_CAP = 20
 _STRUCTURED_MESSAGE_ATTACHMENT_CAP = 8
 _STRUCTURED_ATTACHMENT_PATH_CAP = 1024
 SYNTHETIC_EVENTS_CHAT_ID = "events"
+_PRIVATE_DIRECTORY_MODE = 0o700
+_PRIVATE_FILE_MODE = 0o600
 
 _ATTACHMENT_TYPES = {"image", "file", "audio", "video", "sticker"}
 _ATTACHMENT_SUFFIXES = {
@@ -529,8 +531,21 @@ def _unique_attachment_path(directory: Path, filename: str) -> Path:
     return candidate
 
 
-def _write_attachment_atomic(path: Path, content: bytes) -> None:
-    fd, temporary = tempfile.mkstemp(prefix=".attachment-", dir=str(path.parent))
+def _private_mkdir(path: Path) -> None:
+    """Create one Feishu state directory and keep it owner-only."""
+    path.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIRECTORY_MODE)
+    try:
+        path.chmod(_PRIVATE_DIRECTORY_MODE)
+    except OSError as exc:
+        log.warning(
+            "Failed to restrict a Feishu state directory (%s)",
+            type(exc).__name__,
+        )
+
+
+def _write_private_atomic(path: Path, content: bytes) -> None:
+    """Atomically replace one Feishu state file with owner-only mode."""
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}-", dir=str(path.parent))
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(content)
@@ -541,6 +556,53 @@ def _write_attachment_atomic(path: Path, content: bytes) -> None:
         except OSError:
             pass
         raise
+
+
+def _write_private_json(
+    path: Path,
+    payload: object,
+    *,
+    ensure_ascii: bool = True,
+) -> None:
+    body = json.dumps(
+        payload,
+        indent=2,
+        ensure_ascii=ensure_ascii,
+        default=str,
+    ).encode("utf-8")
+    _write_private_atomic(path, body)
+
+
+def _harden_existing_state(root: Path) -> None:
+    """Best-effort migration of the bounded Feishu state tree to private modes."""
+    _private_mkdir(root)
+    failures = 0
+    for current, directory_names, filenames in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        safe_directories: list[str] = []
+        for name in directory_names:
+            child = current_path / name
+            if child.is_symlink():
+                continue
+            safe_directories.append(name)
+            try:
+                child.chmod(_PRIVATE_DIRECTORY_MODE)
+            except OSError:
+                failures += 1
+        directory_names[:] = safe_directories
+        for name in filenames:
+            child = current_path / name
+            if child.is_symlink():
+                continue
+            try:
+                child.chmod(_PRIVATE_FILE_MODE)
+            except OSError:
+                failures += 1
+    if failures:
+        log.warning(
+            "Failed to restrict %d existing Feishu state entries",
+            failures,
+        )
 
 
 def _safe_attachment_error(error: object) -> str:
@@ -965,7 +1027,7 @@ class FeishuManager:
                 )
                 if not isinstance(content, (bytes, bytearray)):
                     raise TypeError("resource response is not bytes")
-                attachment_dir.mkdir(parents=True, exist_ok=True)
+                _private_mkdir(attachment_dir)
                 filename = _safe_attachment_filename(
                     response_name or resource.get("file_name"),
                     resource_type=resource["type"],
@@ -973,7 +1035,7 @@ class FeishuManager:
                 )
                 path = _unique_attachment_path(attachment_dir, filename)
                 body = bytes(content)
-                _write_attachment_atomic(path, body)
+                _write_private_atomic(path, body)
                 result.update({
                     "status": "downloaded",
                     "filename": path.name,
@@ -998,6 +1060,7 @@ class FeishuManager:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
+        _harden_existing_state(self._working_dir / "feishu")
         self._service.start()
         try:
             self._task_card_active = True
@@ -1493,10 +1556,8 @@ class FeishuManager:
             msg_dir = (
                 self._account_dir(account_alias) / "inbox" / str(uuid4())
             )
-            msg_dir.mkdir(parents=True, exist_ok=True)
-            (msg_dir / "message.json").write_text(
-                json.dumps(payload, indent=2, default=str), encoding="utf-8"
-            )
+            _private_mkdir(msg_dir)
+            _write_private_json(msg_dir / "message.json", payload)
         except Exception as exc:
             log.warning(
                 "Feishu channel event projection failed (%s): %s",
@@ -1717,12 +1778,11 @@ class FeishuManager:
                 msg_dir = (
                     self._account_dir(account_alias) / "inbox" / str(uuid4())
                 )
-                msg_dir.mkdir(parents=True, exist_ok=True)
-                (msg_dir / "message.json").write_text(
-                    json.dumps(
-                        payload, indent=2, ensure_ascii=False, default=str,
-                    ),
-                    encoding="utf-8",
+                _private_mkdir(msg_dir)
+                _write_private_json(
+                    msg_dir / "message.json",
+                    payload,
+                    ensure_ascii=False,
                 )
                 self._upsert_contact(account_alias, actor_open_id, chat_id)
 
@@ -1947,7 +2007,7 @@ class FeishuManager:
             msg_uuid = str(uuid4())
             acct_dir = self._account_dir(account_alias)
             msg_dir = acct_dir / "inbox" / msg_uuid
-            msg_dir.mkdir(parents=True, exist_ok=True)
+            _private_mkdir(msg_dir)
 
             # Rich feedback: Add "seen" reaction (OK emoji) immediately
             account = None
@@ -2025,10 +2085,7 @@ class FeishuManager:
                     audio["transcription_status"] = "skipped"
 
             # Persist to disk
-            (msg_dir / "message.json").write_text(
-                json.dumps(payload, indent=2, default=str),
-                encoding="utf-8",
-            )
+            _write_private_json(msg_dir / "message.json", payload)
 
             if open_id:
                 self._upsert_contact(account_alias, open_id, chat_id)
@@ -2443,7 +2500,7 @@ class FeishuManager:
         ids = self._read_ids(account)
         ids.update(compound_ids)
         acct_dir = self._account_dir(account)
-        acct_dir.mkdir(parents=True, exist_ok=True)
+        _private_mkdir(acct_dir)
         target = acct_dir / "read.json"
         fd, tmp = tempfile.mkstemp(dir=str(acct_dir), suffix=".tmp")
         try:
@@ -2470,7 +2527,7 @@ class FeishuManager:
 
     def _save_contacts(self, account: str, contacts: dict) -> None:
         acct_dir = self._account_dir(account)
-        acct_dir.mkdir(parents=True, exist_ok=True)
+        _private_mkdir(acct_dir)
         target = acct_dir / "contacts.json"
         fd, tmp = tempfile.mkstemp(dir=str(acct_dir), suffix=".tmp")
         try:
@@ -2542,7 +2599,7 @@ class FeishuManager:
         ]
         sent_uuid = str(uuid4())
         sent_dir = self._account_dir(account) / "sent" / sent_uuid
-        sent_dir.mkdir(parents=True, exist_ok=True)
+        _private_mkdir(sent_dir)
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         sent_record: dict[str, Any] = {
             "id": compound_ids[0],
@@ -2574,9 +2631,10 @@ class FeishuManager:
             sent_record["reply_to"] = reply_to
         if reply_in_thread is not None:
             sent_record["reply_in_thread"] = reply_in_thread
-        (sent_dir / "message.json").write_text(
-            json.dumps(sent_record, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
+        _write_private_json(
+            sent_dir / "message.json",
+            sent_record,
+            ensure_ascii=False,
         )
         self._note_task_card_message(
             TaskCardRoute(
@@ -3029,9 +3087,10 @@ class FeishuManager:
             })
             if is_progress:
                 record["placeholder"] = True
-            (Path(record_dir) / "message.json").write_text(
-                json.dumps(record, indent=2, ensure_ascii=False, default=str),
-                encoding="utf-8",
+            _write_private_json(
+                Path(record_dir) / "message.json",
+                record,
+                ensure_ascii=False,
             )
         response = {
             "status": "edited",

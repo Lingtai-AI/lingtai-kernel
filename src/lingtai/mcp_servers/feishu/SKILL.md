@@ -174,6 +174,9 @@ needed; do not load all three for an ordinary message send.
   filename, and size — never provider keys or the local source path.
 - Each materialized wire chunk is attempted exactly once. A rejected post or
   caption is returned as a failure; it is never silently resent as plain text.
+- Feishu conversation state and downloaded media are stored beneath an
+  owner-only channel tree. Startup also tightens permissions on records left by
+  earlier versions before the listener begins accepting events.
 
 ## READING: check / read / search
 
