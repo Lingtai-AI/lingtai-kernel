@@ -9,10 +9,10 @@ description: |
   interactive card callbacks, outbound media/share/sticker sources, contacts/accounts basics, the notification
   transient-hook vs persistent-context split, normalized inbound conversations,
   preserved inbound media, passive channel events, group @Bot routing, and
-  automatic resident Task Cards, and side-effect caveats.
+  automatic and programmable resident Task Cards, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.12.0
+version: 1.13.0
 last_changed_at: 2026-08-03T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
@@ -171,6 +171,15 @@ maintenance: |
 - Automatic Task Cards and `placeholder=true` progress cards are independent.
   The automatic card summarizes agent behavior; a placeholder communicates a
   user-meaningful phase. Final answers remain separate durable messages.
+- The same resident also carries the channel-neutral intrinsic Task Card body
+  from `<workdir>/taskcard/taskcard.md` when `<workdir>/taskcard/status` is
+  exact `active`. It is composed below the automatic frame under
+  `— WATCH —`; the model manages that artifact only through the public
+  intrinsic `task_card` tool, never through Feishu message actions.
+- Exact `inactive` clears only the programmable `WATCH` slot and preserves the
+  automatic frame. Missing, unreadable, invalid, or blank producer state is a
+  no-op that preserves the last successfully delivered programmable frame.
+  One route's delivery failure does not stop projection to other chats/topics.
 
 ## REACTIONS
 

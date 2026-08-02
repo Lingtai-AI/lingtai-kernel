@@ -42,7 +42,11 @@ from .account import (
     FeishuInboundChannelEvent,
     FeishuInboundEvent,
 )
-from .task_card import FeishuTaskCardJournal, FeishuTaskCardStore
+from .task_card import (
+    FeishuProgrammableTaskCardPoller,
+    FeishuTaskCardJournal,
+    FeishuTaskCardStore,
+)
 
 if TYPE_CHECKING:
     from .service import FeishuService
@@ -887,6 +891,11 @@ class FeishuManager:
             self._working_dir / "logs" / "events.jsonl",
             self._broadcast_automatic_task_card,
         )
+        self._programmable_task_card_poller = FeishuProgrammableTaskCardPoller(
+            self._working_dir,
+            on_active=self._broadcast_programmable_task_card,
+            on_inactive=self._clear_programmable_task_card,
+        )
 
     def _account_dir(self, alias: str) -> Path:
         return self._working_dir / "feishu" / alias
@@ -966,14 +975,17 @@ class FeishuManager:
         try:
             self._task_card_active = True
             self._task_card_journal.start()
+            self._programmable_task_card_poller.start()
         except Exception:
             self._task_card_active = False
+            self._programmable_task_card_poller.stop()
             self._task_card_journal.stop()
             self._service.stop()
             raise
 
     def stop(self) -> None:
         self._task_card_active = False
+        self._programmable_task_card_poller.stop()
         self._task_card_journal.stop()
         # Clean up any orphan typing indicator messages before stopping
         try:
@@ -1154,6 +1166,64 @@ class FeishuManager:
                 )
             except Exception as exc:
                 log.debug("Feishu automatic Task Card projection failed: %s", exc)
+
+    def _task_card_channel_frame(
+        self,
+        route: TaskCardRoute,
+        channel: str,
+    ) -> str | None:
+        return self._resident.frames.get(route.key, {}).get(channel)
+
+    def _broadcast_programmable_task_card(self, frame: str) -> None:
+        """Project one valid intrinsic body without disturbing automatic slots."""
+        if not self._task_card_active:
+            return
+        for route, _resident_id in self._task_card_store.routes():
+            try:
+                with self._resident.delivery_lock(
+                    route.account,
+                    route.chat_id,
+                    route.thread_id,
+                ):
+                    if self._task_card_channel_frame(route, "programmable") == frame:
+                        continue
+                    self._resident.project(
+                        route.account,
+                        route.chat_id,
+                        "programmable",
+                        frame,
+                        error="Failed to update Feishu programmable Task Card",
+                        thread_id=route.thread_id,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.debug(
+                    "Feishu programmable Task Card projection failed: %s",
+                    exc,
+                )
+
+    def _clear_programmable_task_card(self) -> None:
+        """Clear only the committed programmable slot on every resident route."""
+        if not self._task_card_active:
+            return
+        for route, _resident_id in self._task_card_store.routes():
+            try:
+                with self._resident.delivery_lock(
+                    route.account,
+                    route.chat_id,
+                    route.thread_id,
+                ):
+                    if self._task_card_channel_frame(route, "programmable") is None:
+                        continue
+                    self._resident.project(
+                        route.account,
+                        route.chat_id,
+                        "programmable",
+                        None,
+                        error="Failed to clear Feishu programmable Task Card",
+                        thread_id=route.thread_id,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.debug("Feishu programmable Task Card clear failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Action dispatch

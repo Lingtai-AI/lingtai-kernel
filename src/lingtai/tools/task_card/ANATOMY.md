@@ -7,10 +7,13 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/manager.py
+  - src/lingtai/mcp_servers/feishu/task_card.py
+  - src/lingtai/mcp_servers/feishu/manager.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - tests/test_task_card_controller.py
   - tests/test_telegram_toolfamily_ltpv2.py
   - tests/test_telegram_task_card_programmable.py
+  - tests/test_feishu_programmable_task_cards.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this Anatomy reciprocal with its paired CONTRACT.md and manual. Update
@@ -47,9 +50,10 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
   `lingtai.tools.registry`.
 - `lifecycle._stop` calls `shutdown_for_agent_stop()` so a stopping agent
   writes `inactive` and joins the watch thread best-effort.
-- Telegram is only a consumer: `TelegramManager` reads
+- Telegram and Feishu are only consumers: each manager reads
   `<workdir>/taskcard/status` and `<workdir>/taskcard/taskcard.md` and projects
-  them separately. The intrinsic capability never calls back into Telegram.
+  them separately. The intrinsic capability never calls back into either
+  messaging adapter.
 - One-way only, the reverse direction: if `<workdir>/taskcard/taskcard.json`
   has never been created, `start` reads `<workdir>/telegram/taskcard.json`
   (the retired Telegram-owned controller's persisted refresh ceiling) once,
@@ -63,7 +67,8 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
 
 - Parent: [`src/lingtai/tools/ANATOMY.md`](../ANATOMY.md)
 - Paired contract: [`CONTRACT.md`](CONTRACT.md)
-- Consumer-specific projection rules: `src/lingtai/mcp_servers/telegram/`
+- Consumer-specific projection rules: `src/lingtai/mcp_servers/telegram/` and
+  `src/lingtai/mcp_servers/feishu/task_card.py`
 
 ## State
 

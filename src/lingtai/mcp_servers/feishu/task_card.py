@@ -1,7 +1,8 @@
-"""Feishu-owned durable routes and automatic Task Card journal tailing."""
+"""Feishu-owned durable routes and Task Card projection workers."""
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from collections.abc import Callable
@@ -10,6 +11,8 @@ from typing import Any
 
 from lingtai.kernel._fsutil import atomic_write_json, read_json
 from lingtai.mcp_servers.task_card import TaskCardEventProjection, TaskCardRoute
+
+log = logging.getLogger(__name__)
 
 
 class FeishuTaskCardStore:
@@ -314,12 +317,93 @@ class FeishuTaskCardJournal:
             while not self._stop.wait(self.POLL_INTERVAL):
                 try:
                     self.poll_once()
-                except Exception:
-                    continue
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("Feishu Task Card journal poll failed: %s", exc)
 
         self._thread = threading.Thread(
             target=_loop,
             name="feishu-task-card-event-tail",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        self._thread = None
+
+
+class FeishuProgrammableTaskCardPoller:
+    """Read the intrinsic Task Card artifact and project valid intent."""
+
+    POLL_INTERVAL = 1.0
+    TEXT_LIMIT = TaskCardEventProjection.TEXT_LIMIT
+
+    def __init__(
+        self,
+        working_dir: Path,
+        *,
+        on_active: Callable[[str], None],
+        on_inactive: Callable[[], None],
+    ) -> None:
+        taskcard_dir = Path(working_dir) / "taskcard"
+        self._status_path = taskcard_dir / "status"
+        self._body_path = taskcard_dir / "taskcard.md"
+        self._on_active = on_active
+        self._on_inactive = on_inactive
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _read_status(self) -> str | None:
+        try:
+            return self._status_path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+    def _read_body(self) -> str | None:
+        try:
+            body = self._body_path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        if not body.strip():
+            return None
+        return body[: self.TEXT_LIMIT]
+
+    def poll_once(self) -> bool:
+        """Dispatch one valid intent; malformed or incomplete state is a no-op."""
+        status = self._read_status()
+        if status == "inactive":
+            self._on_inactive()
+            return True
+        if status != "active":
+            return False
+        body = self._read_body()
+        if body is None:
+            return False
+        self._on_active(body)
+        return True
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        try:
+            self.poll_once()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Initial Feishu programmable Task Card poll failed: %s", exc)
+
+        def _loop() -> None:
+            while not self._stop.wait(self.POLL_INTERVAL):
+                try:
+                    self.poll_once()
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("Feishu programmable Task Card poll failed: %s", exc)
+
+        self._thread = threading.Thread(
+            target=_loop,
+            name="feishu-task-card-programmable-poller",
             daemon=True,
         )
         self._thread.start()

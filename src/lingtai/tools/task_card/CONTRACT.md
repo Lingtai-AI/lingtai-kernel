@@ -1,6 +1,6 @@
 ---
 name: intrinsic-task-card
-contract_version: 2
+contract_version: 3
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/task_card/ANATOMY.md
@@ -11,9 +11,12 @@ related_files:
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/manager.py
+  - src/lingtai/mcp_servers/feishu/task_card.py
+  - src/lingtai/mcp_servers/feishu/manager.py
   - tests/test_task_card_controller.py
   - tests/test_telegram_toolfamily_ltpv2.py
   - tests/test_telegram_task_card_programmable.py
+  - tests/test_feishu_programmable_task_cards.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md. Keep related
   files complete and repo-relative, keep the paired Anatomy/manual reciprocal,
@@ -132,8 +135,9 @@ Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
 - Filesystem config reader: plain read of `taskcard/taskcard.json` (no fsync;
   read-only in the steady state) plus the one-way legacy-migration writer
   described in Behavior rule 11.
-- Consumer example only: `TelegramManager` reads the artifact and projects it;
-  that consuming behavior is not part of this contract.
+- Consumer examples only: `TelegramManager` and `FeishuManager` read the
+  artifact and project it; that consuming behavior is not part of this
+  producer contract.
 
 ## Contract rules
 
@@ -170,4 +174,6 @@ Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
 - `tests/test_telegram_toolfamily_ltpv2.py` covers the strict public family
   schema plus intrinsic refresh-limit behavior.
 - `tests/test_telegram_task_card_programmable.py` covers Telegram's read-only
+  consumer semantics against this producer contract.
+- `tests/test_feishu_programmable_task_cards.py` covers Feishu's read-only
   consumer semantics against this producer contract.
