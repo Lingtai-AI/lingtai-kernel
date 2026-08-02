@@ -1,6 +1,7 @@
 """Feishu/Lark logging must not contaminate the MCP stdio protocol."""
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -40,6 +41,7 @@ def test_lark_stdout_handlers_are_rerouted_without_changing_logger_state(capsys)
     original_level = logger.level
     original_disabled = logger.disabled
     original_propagate = logger.propagate
+    original_filters = logger.filters[:]
 
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.INFO)
@@ -72,7 +74,7 @@ def test_lark_stdout_handlers_are_rerouted_without_changing_logger_state(capsys)
                 handler,
                 handler.level,
                 handler.formatter,
-                tuple(handler.filters),
+                (*handler.filters, account._lark_credential_filter),
             )
             for handler in arranged_handlers
         ]
@@ -92,6 +94,7 @@ def test_lark_stdout_handlers_are_rerouted_without_changing_logger_state(capsys)
             for handler in logger.handlers
         ] == expected_handler_state
         assert (logger.level, logger.disabled, logger.propagate) == expected_logger_state
+        assert logger.filters.count(account._lark_credential_filter) == 1
         assert stdout_handler.stream is sys.stderr
         assert original_stdout_handler.stream is sys.stderr
 
@@ -104,6 +107,46 @@ def test_lark_stdout_handlers_are_rerouted_without_changing_logger_state(capsys)
         logger.setLevel(original_level)
         logger.disabled = original_disabled
         logger.propagate = original_propagate
+        logger.filters[:] = original_filters
+
+
+def test_lark_credentials_are_redacted_before_handler_rendering():
+    logger = logging.getLogger("Lark")
+    original_handlers = logger.handlers[:]
+    original_level = logger.level
+    original_disabled = logger.disabled
+    original_propagate = logger.propagate
+    original_filters = logger.filters[:]
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+
+    try:
+        logger.handlers[:] = [handler]
+        logger.setLevel(logging.INFO)
+        logger.disabled = False
+        logger.propagate = False
+
+        account._route_lark_stdout_handlers_to_stderr()
+        account._route_lark_stdout_handlers_to_stderr()
+        logger.info(
+            "connected %s",
+            "wss://example.invalid/ws?access_key=access-secret"
+            "&ticket=ticket-secret&trace=visible",
+        )
+
+        rendered = stream.getvalue()
+        assert "access-secret" not in rendered
+        assert "ticket-secret" not in rendered
+        assert "access_key=[REDACTED]" in rendered
+        assert "ticket=[REDACTED]" in rendered
+        assert "trace=visible" in rendered
+        assert handler.filters.count(account._lark_credential_filter) == 1
+    finally:
+        logger.handlers[:] = original_handlers
+        logger.setLevel(original_level)
+        logger.disabled = original_disabled
+        logger.propagate = original_propagate
+        logger.filters[:] = original_filters
 
 
 _CHILD = textwrap.dedent(

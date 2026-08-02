@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -33,13 +34,39 @@ lark: Any = None
 _sdk_ws_client_module: Any = None
 
 _lark_logging_lock = threading.Lock()
+_LARK_CREDENTIAL_QUERY = re.compile(
+    r"(?i)([?&](?:access_key|ticket|token|tenant_access_token|app_access_token)=)"
+    r"[^&\s]+"
+)
+
+
+class _RedactLarkCredentials(logging.Filter):
+    """Remove credential-bearing query values before any handler renders them."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            rendered = record.getMessage()
+        except Exception:
+            return True
+        redacted = _LARK_CREDENTIAL_QUERY.sub(r"\1[REDACTED]", rendered)
+        if redacted != rendered:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+_lark_credential_filter = _RedactLarkCredentials()
 
 
 def _route_lark_stdout_handlers_to_stderr() -> None:
     """Keep Lark's existing stdout handlers off the MCP protocol stream."""
     lark_logger = logging.getLogger("Lark")
     with _lark_logging_lock:
+        if _lark_credential_filter not in lark_logger.filters:
+            lark_logger.addFilter(_lark_credential_filter)
         for handler in lark_logger.handlers:
+            if _lark_credential_filter not in handler.filters:
+                handler.addFilter(_lark_credential_filter)
             if not isinstance(handler, logging.StreamHandler):
                 continue
             if handler.stream is sys.stdout or handler.stream is sys.__stdout__:
