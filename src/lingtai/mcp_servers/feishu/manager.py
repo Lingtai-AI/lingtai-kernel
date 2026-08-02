@@ -69,6 +69,8 @@ _CONVERSATION_PREVIEW_MESSAGES = 10
 # exact producer state.
 _STRUCTURED_MESSAGE_TEXT_CAP = 500
 _STRUCTURED_MESSAGE_MENTION_CAP = 20
+_STRUCTURED_MESSAGE_ATTACHMENT_CAP = 8
+_STRUCTURED_ATTACHMENT_PATH_CAP = 1024
 
 _ATTACHMENT_TYPES = {"image", "file", "audio", "video", "sticker"}
 _ATTACHMENT_SUFFIXES = {
@@ -298,6 +300,55 @@ def _legacy_media_from_attachments(attachments: list[dict[str, Any]]) -> dict | 
     if primary.get("status") == "failed":
         result["download_error"] = primary.get("error", "download failed")
     return result
+
+
+def _structured_attachments_payload(
+    attachments: object,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return bounded, secret-safe local attachment refs for the current event.
+
+    Provider file keys and parent resource keys stay in the durable Feishu
+    record/read surface.  The notification projection carries only enough
+    local state for the agent to inspect a successfully downloaded resource or
+    understand that a download/transcription stage failed.
+    """
+    if not isinstance(attachments, list):
+        return [], False
+
+    projected: list[dict[str, Any]] = []
+    for attachment in attachments[:_STRUCTURED_MESSAGE_ATTACHMENT_CAP]:
+        if not isinstance(attachment, dict):
+            continue
+        item = {
+            key: attachment[key]
+            for key in (
+                "type",
+                "status",
+                "size",
+                "duration_ms",
+                "role",
+                "transcription_status",
+            )
+            if attachment.get(key) is not None
+        }
+        filename = attachment.get("filename") or attachment.get("file_name")
+        if isinstance(filename, str) and filename:
+            item["filename"] = filename[:180]
+        path = attachment.get("path")
+        if isinstance(path, str) and path:
+            item["path"] = path[:_STRUCTURED_ATTACHMENT_PATH_CAP]
+            if len(path) > _STRUCTURED_ATTACHMENT_PATH_CAP:
+                item["path_truncated"] = True
+        for source, target in (
+            ("error", "error"),
+            ("transcription_error", "transcription_error"),
+        ):
+            value = attachment.get(source)
+            if isinstance(value, str) and value:
+                item[target] = value[:200]
+        if item:
+            projected.append(item)
+    return projected, len(attachments) > _STRUCTURED_MESSAGE_ATTACHMENT_CAP
 
 
 class TypingIndicatorManager:
@@ -1175,6 +1226,38 @@ class FeishuManager:
                 for key in ("type", "filename", "size", "duration", "mime_type")
                 if key in media and media[key] is not None
             }
+        if current_compound_id and cid == current_compound_id:
+            attachments, attachments_truncated = _structured_attachments_payload(
+                message.get("attachments")
+            )
+            if attachments:
+                item["attachments"] = attachments
+                if attachments_truncated:
+                    item["attachments_truncated"] = True
+                downloaded = any(
+                    attachment.get("status") == "downloaded"
+                    and attachment.get("path")
+                    for attachment in attachments
+                )
+                failed = any(
+                    attachment.get("status") == "failed"
+                    for attachment in attachments
+                )
+                guidance: list[str] = []
+                if downloaded:
+                    guidance.append(
+                        "Current Feishu attachments were downloaded locally; "
+                        "inspect the listed paths before answering when the "
+                        "human's intent depends on the media."
+                    )
+                if failed:
+                    guidance.append(
+                        "Some Feishu attachments failed to download; call "
+                        "feishu.read for the exact preserved descriptor and "
+                        "report the limitation instead of guessing."
+                    )
+                if guidance:
+                    item["comment"] = " ".join(guidance)
         parent_id = message.get("parent_id")
         if parent_id:
             item["parent_id"] = parent_id

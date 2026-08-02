@@ -317,9 +317,14 @@ hook.
 
 Feishu's structured items may additionally carry `type`, `thread_id`, resolved
 `mentions` (at most 20 per message), and `mentions_truncated=true` when that cap
-is exceeded. The complete raw Feishu event and normalized content union remain
-in the producer's durable message record/read surface; they MUST NOT be copied
-into bounded LICC preview metadata or the transient attention hook.
+is exceeded. Its current message may also carry at most eight bounded
+`attachments` projections containing only local inspection fields (type,
+status, filename/path, size, role, and download/transcription errors); provider
+file keys and parent resource keys are excluded. Historical window entries keep
+only the existing primary-media summary. The complete raw Feishu event and
+normalized content union remain in the producer's durable message record/read
+surface; they MUST NOT be copied into bounded LICC preview metadata or the
+transient attention hook.
 
 ## State
 

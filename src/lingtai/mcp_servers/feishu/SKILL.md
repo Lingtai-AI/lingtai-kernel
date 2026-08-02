@@ -9,7 +9,7 @@ description: |
   preserved inbound media, group @Bot routing, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.5.0
+version: 1.5.1
 last_changed_at: 2026-08-02T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
@@ -84,6 +84,12 @@ maintenance: |
   its Feishu `type` and `file_key`; `status='downloaded'` adds the safe local
   `filename`, absolute `path`, and byte `size`, while `status='failed'` keeps
   the original descriptor plus a bounded `error` instead of discarding it.
+- The current message's persistent notification context includes at most eight
+  secret-safe attachment projections (`type`, download/transcription status,
+  local `path`, filename, and size). Provider file keys and the raw envelope
+  remain on `read` only. When the user's intent depends on an image, inspect
+  the listed path with `vision`; use the appropriate local tool/skill for
+  documents, audio, or video instead of replying from the media placeholder.
 - Audio messages continue through local Whisper transcription after download.
   A successful transcript remains in `voice_transcript` and becomes the message
   text. Download or transcription failure stays attached to the resource

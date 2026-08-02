@@ -189,6 +189,29 @@ def test_normalized_resources_download_and_surface_in_read_and_search(
     })
     assert search_result["messages"][0]["attachments"] == attachments
 
+    _preview, metadata = manager._build_conversation_preview_and_metadata(
+        "main", "oc_media", payload["id"]
+    )
+    current = metadata["latest_incoming"]
+    assert [item["type"] for item in current["attachments"]] == [
+        "video",
+        "image",
+        "sticker",
+        "image",
+        "file",
+    ]
+    assert all("file_key" not in item for item in current["attachments"])
+    assert all("parent_file_key" not in item for item in current["attachments"])
+    assert [item["path"] for item in current["attachments"]] == [
+        item["path"] for item in attachments
+    ]
+    assert "inspect the listed paths" in current["comment"]
+
+    _preview, historical = manager._build_conversation_preview_and_metadata(
+        "main", "oc_media", "main:oc_media:om_other"
+    )
+    assert "attachments" not in historical["latest_incoming"]
+
 
 def test_download_failure_retains_the_original_resource_descriptor(
     tmp_path: Path, monkeypatch: Any
@@ -225,6 +248,19 @@ def test_download_failure_retains_the_original_resource_descriptor(
     }]
     assert payload["media"]["download_error"] == "download unavailable"
     assert not (message_dir / "attachments").exists()
+
+    _preview, metadata = manager._build_conversation_preview_and_metadata(
+        "main", "oc_media", payload["id"]
+    )
+    current = metadata["latest_incoming"]
+    assert current["attachments"] == [{
+        "type": "file",
+        "status": "failed",
+        "filename": "report.txt",
+        "error": "download unavailable",
+    }]
+    assert "file_key" not in current["attachments"][0]
+    assert "feishu.read" in current["comment"]
 
 
 def test_audio_transcription_failure_keeps_download_and_normalized_text(
