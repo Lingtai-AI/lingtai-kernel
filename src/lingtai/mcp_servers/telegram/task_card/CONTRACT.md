@@ -1,10 +1,11 @@
 ---
 name: telegram-task-card-projection
-contract_version: 5
+contract_version: 6
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
+  - src/lingtai/mcp_servers/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/mcp_servers/task_card/event_projection.py
   - src/lingtai/mcp_servers/telegram/manager.py
@@ -26,15 +27,18 @@ maintenance: |
 
 ## Purpose
 
-Own Telegram's resident Task Card state and its read-only projection of the
-intrinsic declarative Task Card artifact. Telegram-specific consuming semantics
-live here; the public producer contract lives in
+Own Telegram's provider adapter and read-only projection of the intrinsic
+declarative Task Card artifact. Provider-neutral resident state/delivery lives
+in `src/lingtai/mcp_servers/task_card/resident.py`; Telegram-specific consuming
+semantics live here. The public producer contract lives in
 `src/lingtai/tools/task_card/CONTRACT.md`.
 
 ## Behavior
 
-1. Telegram owns one tracked resident Task Card target per account+chat and
-   composes two independent channels into it: `automatic` and `programmable`.
+1. The shared resident core owns one tracked route transaction and composes two
+   independent channels: `automatic` and `programmable`. Its route includes
+   account, chat, and an optional thread. Telegram continues to route resident
+   cards per account+chat and passes no thread in this slice.
 2. The programmable channel is read-only with respect to the intrinsic
    producer. It reads `<workdir>/taskcard/status` and `<workdir>/taskcard/taskcard.md`.
 3. Telegram reads and composes the programmable body only when `taskcard/status`
@@ -54,22 +58,24 @@ live here; the public producer contract lives in
    Automatic mechanics continue, and hidden programmable finalize still clears
    the committed programmable slot internally so a stale frame cannot resurface
    after re-enable.
-7. Telegram owns `events.jsonl` tail I/O and lifecycle, account/chat routing,
-   resident replacement, edit-in-place behavior, persistence, and transport.
-   The canonical safe-event allowlist, redaction/budget rules, API-call grouping,
-   safe result merge, metadata, and text rendering live in the transport-free
-   shared `TaskCardEventProjection`; that core has no route or delivery state.
+7. Telegram owns `events.jsonl` tail I/O/lifecycle, compound-ID and high-water
+   semantics, Bot API error classification, real transport, and persistence.
+   The shared `TaskCardResident` owns route locking, proposed-slot composition,
+   commit-after-success, edit-first delivery, conservative old-first rotation,
+   peer adoption, and failure-state projection. It invokes Telegram only through
+   `TaskCardResidentTransport` callbacks.
 
 ## Port
 
-Internal resident/projector boundary owned by `TaskCardResident` and consumed by
-`TelegramManager`. There is no public MCP `task_card` family in this component.
+Internal `TaskCardResidentTransport` boundary implemented by `TelegramManager`.
+There is no public MCP `task_card` family in this component.
 
 ## Adapters
 
 - Filesystem reader for `<workdir>/taskcard/status` and `taskcard/taskcard.md`
 - Telegram transport adapter in `TelegramManager`
 - Durable Telegram account state for tracked resident message ids
+- Shared in-memory route locks and automatic/programmable slot frames
 
 ## Contract rules
 
@@ -84,10 +90,13 @@ Internal resident/projector boundary owned by `TaskCardResident` and consumed by
    composed resident text.
 5. The automatic Task Card behavior remains independent of the programmable
    file projector.
-6. Moving the pure automatic projection core must preserve Telegram's rendered
-   bytes and private compatibility helpers; it must not move journal tailing,
-   resident state, or transport out of `TelegramManager`.
-7. This package's manual and governed docs remain explicitly packaged through
+6. The shared resident core must preserve Telegram's result fields, call order,
+   slot commit timing, singleton/rotation behavior, and private compatibility
+   helpers. Telegram's journal tail, ID/high-water semantics, API classification,
+   state-file I/O, and provider transport must remain in `TelegramManager`.
+7. The shared core must not import Telegram or assume numeric chat/message ids;
+   provider authorization and exact route binding stay adapter responsibilities.
+8. This package's manual and governed docs remain explicitly packaged through
    `pyproject.toml`.
 
 ## Tests
@@ -102,4 +111,6 @@ Internal resident/projector boundary owned by `TaskCardResident` and consumed by
   channel independently.
 - `tests/test_task_card_event_projection_shared.py` pins shared-core safety and
   byte compatibility with Telegram's established render surface.
+- `tests/test_task_card_resident_shared.py` pins provider-neutral route/slot,
+  old-first rotation, peer adoption, and partial-failure state transitions.
 - `tests/test_mcp_skill_manuals.py` covers packaged docs for this subpackage.

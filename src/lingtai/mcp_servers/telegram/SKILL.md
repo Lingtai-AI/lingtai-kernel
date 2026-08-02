@@ -8,11 +8,12 @@ description: |
   the programmable Task Card (task_card tool) — including task-specific watcher
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
-version: 1.5.6
+version: 1.5.7
 last_changed_at: 2026-08-03T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/task_card/event_projection.py
+- src/lingtai/mcp_servers/task_card/resident.py
 - src/lingtai/mcp_servers/telegram/manager.py
 - src/lingtai/mcp_servers/telegram/server.py
 - src/lingtai/mcp_servers/telegram/_family.py
@@ -207,8 +208,9 @@ Important behavior notes:
 ## AUTOMATIC TASK CARD: `events.jsonl` → resident broadcast
 
 The automatic slot is a bounded projection of the agent's durable behavior
-journal, and it feeds the same Telegram-owned `TaskCardResident` as the
-programmable slot:
+journal, and it feeds the same shared `TaskCardResident` state machine as the
+programmable slot. Telegram supplies the provider transport and persistence
+adapter:
 
 1. `TelegramManager` owns one tail worker for its lifetime and reads
    `<workdir>/logs/events.jsonl`. The transport-free
@@ -244,19 +246,23 @@ programmable slot:
 
 Architecture and lifecycle details live in the owning
 [`mcp_servers` Anatomy](../ANATOMY.md). The pure event grouping/redaction/render
-core is [`task_card/event_projection.py`](../task_card/event_projection.py),
-while Telegram still owns journal tailing and delivery. The resident boundary is
-[`task_card/resident.py`](task_card/resident.py); the programmable renderer/tool
-structure lives in the separate
+core is [`task_card/event_projection.py`](../task_card/event_projection.py).
+The route/slot/rotation/failure state machine is
+[`task_card/resident.py`](../task_card/resident.py); Telegram still owns journal
+tailing and implements the real edit/delete/send/persist callbacks. The local
+[`telegram/task_card/resident.py`](task_card/resident.py) path is a compatibility
+re-export. The programmable renderer/tool structure lives in the separate
 [`telegram/task_card` Anatomy](task_card/ANATOMY.md).
 
 ### Resident-card behavior you can rely on
 
 Both slots share one per-account+chat delivery transaction over a single tracked
-resident target. While that resident is still the chat's last message it is edited
-in place (an identical Telegram edit is a successful no-op). Once a newer message
-sits below it — your own durable send/reply, or an incoming user message — the
-manager replaces it old-first and fails closed: the exact old card must be
+resident target. The provider-neutral resident core serializes and commits slot
+state only after success; Telegram callbacks classify the real API outcomes.
+While that resident is still the chat's last message it is edited in place (an
+identical Telegram edit is a successful no-op). Once a newer message sits below
+it — your own durable send/reply, or an incoming user message — the shared state
+machine replaces it old-first and fails closed: the exact old card must be
 confirmed deleted, or Telegram must explicitly report it already missing, before a
 replacement is sent, so rotation never deliberately shows two cards. A replacement
 that then fails may leave **zero** cards and says so explicitly; a durable-id write
