@@ -27,6 +27,10 @@ from typing import Any, Callable, TYPE_CHECKING
 from uuid import uuid4
 
 from lingtai.kernel._frontmatter import strip_frontmatter
+from lingtai.mcp_servers.local_commands import (
+    LocalCommandCore,
+    TaskCardSettingsPort,
+)
 from lingtai.mcp_servers.task_card import (
     TaskCardEventProjection,
     TaskCardResident,
@@ -42,6 +46,7 @@ from .account import (
     FeishuInboundChannelEvent,
     FeishuInboundEvent,
 )
+from .control_cards import FeishuControlCards, FeishuControlEventStore
 from .task_card import (
     FeishuProgrammableTaskCardPoller,
     FeishuTaskCardJournal,
@@ -841,6 +846,7 @@ class FeishuManager:
         *,
         working_dir: Path,
         on_inbound: "Callable[[dict], None]",
+        local_command_core: LocalCommandCore | None = None,
     ) -> None:
         self._service = service
         self._working_dir = Path(working_dir)
@@ -857,6 +863,24 @@ class FeishuManager:
         self._dedupe_limit = 1000
         self._card_action_locks: dict[tuple[str, str], threading.Lock] = {}
         self._card_action_locks_guard = threading.Lock()
+        self._local_commands = local_command_core or LocalCommandCore(
+            self._working_dir
+        )
+        self._control_event_store = FeishuControlEventStore(
+            self._working_dir / "feishu" / "control_callbacks.json"
+        )
+        self._control_cards = FeishuControlCards(
+            self._local_commands,
+            TaskCardSettingsPort(
+                enabled=self._raw_taskcard_enabled,
+                set_enabled=getattr(self._service, "set_taskcard_enabled", None),
+                normal_rows=self._taskcard_normal_rows,
+                set_normal_rows=getattr(
+                    self._service, "set_taskcard_normal_rows", None
+                ),
+            ),
+            on_normal_rows_changed=self._on_taskcard_normal_rows_changed,
+        )
         self._task_card_store = FeishuTaskCardStore(
             self._working_dir / "feishu" / "task_cards.json"
         )
@@ -864,7 +888,7 @@ class FeishuManager:
         self._task_card_last_messages_lock = threading.Lock()
         self._task_card_active = False
         self._resident = TaskCardResident(
-            enabled=True,
+            enabled=self._raw_taskcard_enabled(),
             transport=TaskCardResidentTransport(
                 get_resident=lambda route: self._task_card_store.get(route),
                 matches_route=lambda route, resident_id: (
@@ -896,6 +920,9 @@ class FeishuManager:
             on_active=self._broadcast_programmable_task_card,
             on_inactive=self._clear_programmable_task_card,
         )
+        listener = getattr(self._service, "set_taskcard_listener", None)
+        if callable(listener):
+            listener(self._on_taskcard_changed)
 
     def _account_dir(self, alias: str) -> Path:
         return self._working_dir / "feishu" / alias
@@ -1000,6 +1027,28 @@ class FeishuManager:
     # ------------------------------------------------------------------
     # Automatic resident Task Card
     # ------------------------------------------------------------------
+
+    def _raw_taskcard_enabled(self) -> bool:
+        getter = getattr(self._service, "taskcard_enabled", None)
+        return bool(getter()) if callable(getter) else True
+
+    def _taskcard_normal_rows(self) -> int:
+        getter = getattr(self._service, "taskcard_normal_rows", None)
+        value = getter() if callable(getter) else None
+        if type(value) is not int or not 1 <= value <= 10:
+            return TaskCardEventProjection.DEFAULT_NORMAL_ROWS
+        return value
+
+    def _on_taskcard_changed(self, enabled: bool) -> None:
+        if self._resident.set_enabled(enabled) and enabled:
+            self._broadcast_automatic_task_card()
+            try:
+                self._programmable_task_card_poller.poll_once()
+            except Exception as exc:  # noqa: BLE001
+                log.debug("Feishu programmable Task Card re-enable failed: %s", exc)
+
+    def _on_taskcard_normal_rows_changed(self) -> None:
+        self._broadcast_automatic_task_card()
 
     def _note_task_card_message(
         self, route: TaskCardRoute, compound_id: str,
@@ -1509,10 +1558,93 @@ class FeishuManager:
         text = f"[card action: {tag}] {value}"
         return text if len(text) <= 2000 else text[:1999] + "…"
 
+    @staticmethod
+    def _local_command_context(
+        data: object,
+    ) -> tuple[str, str, str, str, str] | None:
+        if isinstance(data, FeishuInboundEvent):
+            inbound = data.message
+            conversation = getattr(inbound, "conversation", None)
+            if conversation is None:
+                return None
+            text = getattr(inbound, "body_text", None)
+            if not isinstance(text, str):
+                text = getattr(inbound, "content_text", "") or ""
+            return (
+                text,
+                getattr(inbound, "id", "") or "",
+                getattr(conversation, "chat_id", "") or "",
+                getattr(conversation, "chat_type", "unknown") or "unknown",
+                getattr(conversation, "thread_id", "") or "",
+            )
+        event = getattr(data, "event", None)
+        message = getattr(event, "message", None) if event is not None else None
+        if message is None:
+            return None
+        try:
+            content = json.loads(getattr(message, "content", "{}") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            content = {}
+        return (
+            content.get("text", "") if isinstance(content, dict) else "",
+            getattr(message, "message_id", "") or "",
+            getattr(message, "chat_id", "") or "",
+            getattr(message, "chat_type", "unknown") or "unknown",
+            getattr(message, "thread_id", "") or "",
+        )
+
+    def _handle_local_command(self, account_alias: str, data: object) -> bool:
+        context = self._local_command_context(data)
+        if context is None:
+            return False
+        text, message_id, chat_id, _chat_type, thread_id = context
+        if self._control_cards.parse(text) is None:
+            return False
+        if not message_id or not chat_id:
+            return True
+        if self._is_duplicate_event(account_alias, message_id):
+            return True
+        route = TaskCardRoute(account_alias, chat_id, thread_id or None)
+        self._note_task_card_message(
+            route, f"{account_alias}:{chat_id}:{message_id}"
+        )
+        try:
+            card = self._control_cards.render(text)
+            account = self._service.get_account(account_alias)
+            response = account.reply_content(
+                message_id,
+                chat_id,
+                {"card": card},
+                reply_in_thread=bool(thread_id),
+            )
+            response_id = response.get("message_id")
+            if isinstance(response_id, str) and response_id:
+                self._note_task_card_message(
+                    route, f"{account_alias}:{chat_id}:{response_id}"
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Feishu local command failed (%s): %s", account_alias, exc
+            )
+        return True
+
+    def _handle_control_callback(
+        self,
+        account_alias: str,
+        projection: dict[str, Any],
+        text: str,
+    ) -> None:
+        source_message_id = projection.get("source_message_id")
+        if not isinstance(source_message_id, str) or not source_message_id:
+            return
+        card = self._control_cards.render(text)
+        account = self._service.get_account(account_alias)
+        account.update_content(source_message_id, {"card": card})
+
     def on_card_action(
         self, account_alias: str, data: FeishuInboundCardAction,
     ) -> None:
-        """Persist one authorized business callback and wake its conversation."""
+        """Handle a local control callback or persist a business callback."""
         try:
             if not isinstance(data, FeishuInboundCardAction):
                 return
@@ -1524,8 +1656,17 @@ class FeishuManager:
             if not chat_id or not actor_open_id:
                 return
             event_id = self._channel_event_id(raw, "card_action", projection)
+            action = projection.get("action") or {}
+            control_text = self._control_cards.callback_text(action.get("value"))
 
             with self._card_action_lock(account_alias, chat_id):
+                if control_text is not None:
+                    if not self._control_event_store.claim(account_alias, event_id):
+                        return
+                    self._handle_control_callback(
+                        account_alias, projection, control_text
+                    )
+                    return
                 if self._card_action_already_persisted(account_alias, event_id):
                     return
                 date_str = self._channel_event_date(raw, data.action)
@@ -1613,6 +1754,8 @@ class FeishuManager:
 
     def on_incoming(self, account_alias: str, data: object) -> None:
         """Persist an incoming Feishu message event to disk and notify agent."""
+        if self._handle_local_command(account_alias, data):
+            return
         try:
             if isinstance(data, FeishuInboundEvent):
                 inbound = data.message

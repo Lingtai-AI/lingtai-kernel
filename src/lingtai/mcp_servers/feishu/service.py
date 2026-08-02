@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Callable
+
+from lingtai.kernel._fsutil import atomic_write_json, read_json
+from lingtai.mcp_servers.task_card import TaskCardEventProjection
 
 from .. import _identity
 from .account import FeishuAccount
@@ -34,6 +38,12 @@ class FeishuService:
         self._config_source = config_source
         self._account_order: list[str] = []
         self._accounts: dict[str, FeishuAccount] = {}
+        self._taskcard_path = self._working_dir / "feishu" / "taskcard.json"
+        self._taskcard_lock = threading.RLock()
+        self._taskcard_enabled, self._taskcard_normal_rows = (
+            self._load_taskcard_state()
+        )
+        self._taskcard_listener: Callable[[bool], None] | None = None
 
         for cfg in accounts_config:
             alias = cfg["alias"]
@@ -50,6 +60,60 @@ class FeishuService:
             )
             self._accounts[alias] = acct
             self._account_order.append(alias)
+
+    def _load_taskcard_state(self) -> tuple[bool, int]:
+        default_rows = TaskCardEventProjection.DEFAULT_NORMAL_ROWS
+        if not self._taskcard_path.is_file():
+            return True, default_rows
+        try:
+            data = read_json(self._taskcard_path, expect=dict)
+        except (OSError, TypeError, ValueError):
+            logger.warning("Invalid Feishu taskcard state; using defaults")
+            return True, default_rows
+        enabled = data.get("taskcard")
+        if type(enabled) is not bool:
+            enabled = True
+        normal_rows = data.get("normal_rows")
+        if type(normal_rows) is not int or not 1 <= normal_rows <= 10:
+            normal_rows = default_rows
+        return enabled, normal_rows
+
+    def _persist_taskcard_state(self, enabled: bool, normal_rows: int) -> None:
+        atomic_write_json(
+            self._taskcard_path,
+            {"taskcard": enabled, "normal_rows": normal_rows},
+            fsync=True,
+        )
+
+    def set_taskcard_listener(self, listener: Callable[[bool], None]) -> None:
+        with self._taskcard_lock:
+            self._taskcard_listener = listener
+
+    def taskcard_enabled(self) -> bool:
+        with self._taskcard_lock:
+            return self._taskcard_enabled
+
+    def set_taskcard_enabled(self, enabled: bool) -> None:
+        if type(enabled) is not bool:
+            raise TypeError("enabled must be a boolean")
+        with self._taskcard_lock:
+            changed = self._taskcard_enabled != enabled
+            self._persist_taskcard_state(enabled, self._taskcard_normal_rows)
+            self._taskcard_enabled = enabled
+            listener = self._taskcard_listener if changed else None
+        if listener is not None:
+            listener(enabled)
+
+    def taskcard_normal_rows(self) -> int:
+        with self._taskcard_lock:
+            return self._taskcard_normal_rows
+
+    def set_taskcard_normal_rows(self, normal_rows: int) -> None:
+        if type(normal_rows) is not int or not 1 <= normal_rows <= 10:
+            raise ValueError("normal_rows must be an integer from 1 to 10")
+        with self._taskcard_lock:
+            self._persist_taskcard_state(self._taskcard_enabled, normal_rows)
+            self._taskcard_normal_rows = normal_rows
 
     def get_account(self, alias: str) -> FeishuAccount:
         """Get account by alias. Raises KeyError if not found."""

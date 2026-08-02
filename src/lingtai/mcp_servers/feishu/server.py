@@ -38,6 +38,7 @@ from typing import Any
 import mcp.types as types
 from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
+from lingtai.mcp_servers.local_commands import LocalCommandCore
 
 from .._results import json_tool_result as _tool_result
 from .._results import text_resource_result as _resource_result
@@ -635,6 +636,7 @@ def build_manager() -> tuple[FeishuManager, Path]:
         service=svc,
         working_dir=working_dir,
         on_inbound=_on_inbound,
+        local_command_core=LocalCommandCore(working_dir),
     )
     mgr_ref[0] = mgr
     return mgr, working_dir

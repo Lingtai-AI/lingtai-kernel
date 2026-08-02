@@ -9,16 +9,19 @@ description: |
   interactive card callbacks, outbound media/share/sticker sources, contacts/accounts basics, the notification
   transient-hook vs persistent-context split, normalized inbound conversations,
   preserved inbound media, passive channel events, group @Bot routing, and
-  automatic and programmable resident Task Cards, and side-effect caveats.
+  automatic and programmable resident Task Cards, localized local-command
+  control cards, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.13.0
+version: 1.14.0
 last_changed_at: 2026-08-03T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
 - src/lingtai/mcp_servers/feishu/manager.py
 - src/lingtai/mcp_servers/feishu/server.py
 - src/lingtai/mcp_servers/feishu/service.py
+- src/lingtai/mcp_servers/feishu/control_cards.py
+- src/lingtai/mcp_servers/local_commands/core.py
 - src/lingtai/mcp_servers/feishu/task_card.py
 - src/lingtai/mcp_servers/task_card/event_projection.py
 - src/lingtai/mcp_servers/task_card/resident.py
@@ -93,6 +96,35 @@ maintenance: |
   agent wake, verify that application callback setting; ordinary event
   subscriptions and messaging permissions do not prove card callbacks are
   being delivered.
+
+## LOCAL COMMANDS AND CONTROL CARDS
+
+- `/help`, `/status`, `/kanban`, `/system`, `/brief`, `/refresh`, `/sleep`,
+  `/clear`, and `/taskcard` execute inside the Feishu MCP without an LLM call.
+  Direct-message commands are handled immediately. Group and topic commands
+  still pass the normal account `allowed_users` gate and require an explicit
+  `@Bot`; unknown slash commands remain ordinary Agent input.
+- Responses are updateable Feishu schema-2.0 control cards. `/kanban` exposes
+  seven drill-down layers, `/system` provides document navigation, and buttons
+  update their source control card in place. Internal control callbacks never
+  become `card_action` inbox records and never wake the Agent. Ordinary
+  business-card values keep the business callback behavior described above.
+- Control-card clicks reuse the account actor/allowlist gate and the manager's
+  per-account/chat serialization. Their stable Feishu event ids are stored
+  only as bounded SHA-256 hashes in `feishu/control_callbacks.json`, so a
+  callback replay after refresh cannot repeat a local signal.
+- User-facing card titles, navigation, command descriptions, and feedback use
+  `agent.language`: `zh` is Chinese, `en` is English, and `wen` is literary
+  Chinese. Unknown or missing languages use English.
+- `/taskcard on|off` and `/taskcard N` (1–10) configure Feishu's Agent-wide
+  resident-card presentation. The durable owner is
+  `<workdir>/feishu/taskcard.json`; exact resident targets remain independently
+  routed and persisted by `account + chat + optional thread`. Turning cards
+  off suppresses projection without guessing or deleting unknown cards;
+  turning them on reprojects known routes conservatively.
+- `/refresh`, `/sleep`, and `/clear` write the same established Agent signals
+  as the shared command core. Their control-card feedback stays local and does
+  not create a second Agent conversation turn.
 
 ## OUTBOUND MEDIA, SHARES, AND STICKERS
 

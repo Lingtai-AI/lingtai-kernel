@@ -5,8 +5,12 @@ related_files:
   - src/lingtai/mcp_servers/local_commands/core.py
   - src/lingtai/mcp_servers/telegram/account.py
   - src/lingtai/mcp_servers/telegram/service.py
+  - src/lingtai/mcp_servers/feishu/control_cards.py
+  - src/lingtai/mcp_servers/feishu/manager.py
+  - src/lingtai/mcp_servers/feishu/service.py
   - tests/test_local_command_core.py
   - tests/test_telegram_slash_commands.py
+  - tests/test_feishu_control_cards.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Update this Anatomy with changes to command ownership, workdir reads, signal
@@ -33,8 +37,10 @@ keyboards/Markdown or Feishu cards, or sends a provider request.
   Telegram rendering, delegating only reads and controls to this package.
 - `telegram/service.py` injects one workdir-bound core into every configured
   account so local commands share the same Agent scope.
-- Feishu control-card rendering is intentionally not part of this refactor;
-  the later Feishu adapter may consume these neutral results.
+- `feishu/control_cards.py` consumes the same semantic results while owning
+  Feishu schema-2.0 rendering, `zh`/`en`/`wen` localization, layered navigation,
+  and internal callback values. `feishu/manager.py` retains admission,
+  callback dispatch, recipient/thread routing, and transport.
 
 ## Composition
 
@@ -46,7 +52,8 @@ keyboards/Markdown or Feishu cards, or sends a provider request.
 
 The core owns no durable state. It reads current workdir artifacts and writes
 only existing signal files. Task Card preferences remain owned/persisted by the
-injected adapter service.
+injected adapter service: Telegram under `telegram/taskcard.json` and Feishu
+under `feishu/taskcard.json`.
 
 ## Notes
 
