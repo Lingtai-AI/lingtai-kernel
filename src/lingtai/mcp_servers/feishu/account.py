@@ -187,6 +187,19 @@ class FeishuInboundCardAction:
     feishu: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class _PartialSendResult:
+    """Failed SDK chunk plus the exact earlier provider-side successes."""
+
+    message_id: str
+    chunk_ids: tuple[str, ...]
+    error: Any
+    raw: Any
+    failed_chunk_index: int
+    chunk_count: int
+    success: bool = False
+
+
 def _legacy_card_action_envelope(action: Any) -> dict[str, Any]:
     raw = getattr(action, "raw", None)
     return dict(raw) if isinstance(raw, dict) else {}
@@ -289,6 +302,7 @@ class _SingleAttemptOutboundAdapter:
 
         message_ids: list[str] = []
         last_result: Any = None
+        last_successful_result: Any = None
         for index, body in enumerate(bodies):
             request_uuid = str(uuid4())
             # Topic replies keep every chunk in the topic.  Flat replies quote
@@ -316,7 +330,17 @@ class _SingleAttemptOutboundAdapter:
                 )
             last_result = result
             if not getattr(result, "success", False):
+                if message_ids:
+                    return _PartialSendResult(
+                        message_id=message_ids[0],
+                        chunk_ids=tuple(message_ids),
+                        error=getattr(result, "error", None),
+                        raw=getattr(last_successful_result, "raw", None),
+                        failed_chunk_index=index + 1,
+                        chunk_count=len(bodies),
+                    )
                 return result
+            last_successful_result = result
             message_id = getattr(result, "message_id", None)
             if message_id:
                 message_ids.append(message_id)
@@ -777,7 +801,8 @@ class FeishuAccount:
     @staticmethod
     def _channel_send_result(result: Any, *, fallback_chat_id: str = "") -> dict:
         """Project the SDK's typed ``SendResult`` into the account boundary."""
-        if not getattr(result, "success", False):
+        partial_delivery = isinstance(result, _PartialSendResult)
+        if not getattr(result, "success", False) and not partial_delivery:
             raise operation_error_from_send_result("outbound", result)
 
         raw = getattr(result, "raw", None)
@@ -786,7 +811,7 @@ class FeishuAccount:
         first_message_id = getattr(result, "message_id", None) or ""
         chunk_ids = list(getattr(result, "chunk_ids", None) or [])
         message_ids = chunk_ids or ([first_message_id] if first_message_id else [])
-        return {
+        projected = {
             "message_id": first_message_id,
             "message_ids": message_ids,
             "chat_id": data.get("chat_id") or fallback_chat_id,
@@ -795,6 +820,16 @@ class FeishuAccount:
             "thread_id": data.get("thread_id") or "",
             "create_time": data.get("create_time") or "",
         }
+        if partial_delivery:
+            projected.update({
+                "partial_delivery": True,
+                "failed_chunk_index": result.failed_chunk_index,
+                "chunk_count": result.chunk_count,
+                "_partial_error": operation_error_from_send_result(
+                    "outbound", result,
+                ),
+            })
+        return projected
 
     def send_content(
         self,

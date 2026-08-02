@@ -10,8 +10,10 @@ import lark_channel as lark
 import pytest
 
 from lingtai.mcp_servers.feishu._family import handle_feishu
+from lingtai.mcp_servers.feishu._errors import FeishuOperationError
 from lingtai.mcp_servers.feishu.account import FeishuAccount
 from lingtai.mcp_servers.feishu.manager import FeishuManager
+from lingtai.mcp_servers.task_card import TaskCardRoute
 
 
 class _FakeAccount:
@@ -335,6 +337,150 @@ def test_account_sdk_outbound_single_attempt_adapter_projects_chunks():
     assert reply_call[1][2] is True
     assert sum(call[0] == "reply" for call in calls) == 1
     assert edited["message_id"] == "om_1"
+
+
+def test_account_sdk_outbound_surfaces_exact_partial_delivery():
+    calls: list[str] = []
+
+    class _Sender:
+        async def _materialize(
+            self, _outbound: Any, **_kwargs: Any,
+        ) -> list[dict[str, str]]:
+            return [
+                {"msg_type": "post", "content": "one"},
+                {"msg_type": "post", "content": "two"},
+                {"msg_type": "post", "content": "three"},
+            ]
+
+        async def _create(self, *_args: Any) -> lark.SendResult:
+            calls.append("create")
+            if len(calls) == 1:
+                return lark.SendResult.ok(
+                    message_id="om_delivered",
+                    raw={"data": {"chat_id": "oc_chat"}},
+                )
+            return lark.SendResult.fail(lark.SendError(
+                code=lark.FeishuChannelErrorCode.RATE_LIMITED,
+                retryable=True,
+                retry_after_seconds=2,
+                hint="synthetic rate limit",
+            ))
+
+    account = FeishuAccount("main", "app", "secret", ["ou_user"])
+    account._channel = SimpleNamespace(sender=_Sender())
+
+    result = account.send_content(
+        "oc_chat", "chat_id", {"markdown": "long markdown"},
+    )
+
+    assert calls == ["create", "create"]
+    assert result["message_ids"] == ["om_delivered"]
+    assert result["partial_delivery"] is True
+    assert result["failed_chunk_index"] == 2
+    assert result["chunk_count"] == 3
+    error = result["_partial_error"]
+    assert isinstance(error, FeishuOperationError)
+    assert error.error_code == "RATE_LIMITED"
+    assert error.retryable is True
+    assert error.retry_after_seconds == 2
+
+
+def test_manager_persists_partial_send_and_reply_without_done_reaction(tmp_path):
+    partial_error = FeishuOperationError(
+        "synthetic rate limit",
+        error_code="RATE_LIMITED",
+        retryable=True,
+        retry_after_seconds=2,
+    )
+
+    class _PartialAccount(_FakeAccount):
+        def send_content(
+            self, receive_id: str, receive_id_type: str, message: dict[str, Any]
+        ) -> dict[str, Any]:
+            self.calls.append(("send", (receive_id, receive_id_type, message), {}))
+            return {
+                "message_id": "om_send_delivered",
+                "message_ids": ["om_send_delivered"],
+                "chat_id": "oc_chat",
+                "partial_delivery": True,
+                "failed_chunk_index": 2,
+                "chunk_count": 3,
+                "_partial_error": partial_error,
+            }
+
+        def reply_content(
+            self,
+            message_id: str,
+            chat_id: str,
+            message: dict[str, Any],
+            *,
+            reply_in_thread: bool,
+        ) -> dict[str, Any]:
+            self.calls.append((
+                "reply",
+                (message_id, chat_id, message),
+                {"reply_in_thread": reply_in_thread},
+            ))
+            return {
+                "message_id": "om_reply_delivered",
+                "message_ids": ["om_reply_delivered"],
+                "chat_id": chat_id,
+                "partial_delivery": True,
+                "failed_chunk_index": 2,
+                "chunk_count": 2,
+                "_partial_error": partial_error,
+            }
+
+    account = _PartialAccount()
+    manager = FeishuManager(
+        _FakeService(account),
+        working_dir=tmp_path,
+        on_inbound=lambda _payload: None,
+    )
+    target = _write_target(tmp_path, thread_id="omt_topic")
+
+    sent = _call(
+        manager,
+        "send",
+        {
+            "receive_id": "oc_chat",
+            "receive_id_type": "chat_id",
+            "content": {"type": "markdown", "markdown": "send"},
+        },
+    )
+    replied = _call(
+        manager,
+        "reply",
+        {
+            "message_id": target,
+            "content": {"type": "markdown", "markdown": "reply"},
+        },
+    )
+
+    for result in (sent, replied):
+        assert result["status"] == "failed"
+        assert result["partial_delivery"] is True
+        assert result["error_code"] == "RATE_LIMITED"
+        assert result["retryable"] is True
+        assert result["automatic_retry_allowed"] is False
+        assert result["delivered_chunk_count"] == 1
+        assert "Do not retry the whole action" in result["warning"]
+    assert sent["chunk_count"] == 3
+    assert replied["chunk_count"] == 2
+    assert replied["reply_in_thread"] is True
+    assert replied["thread_id"] == "omt_topic"
+    assert not [call for call in account.calls if call[0] == "reaction"]
+    assert manager._last_sent
+    assert manager._last_task_card_message(
+        TaskCardRoute("main", "oc_chat", "omt_topic")
+    ) == replied["message_ids"][-1]
+
+    records = [record for _path, record in _sent_records(tmp_path)]
+    assert len(records) == 2
+    assert {record["status"] for record in records} == {"partial"}
+    assert all(record["partial_delivery"] is True for record in records)
+    assert all(record["automatic_retry_allowed"] is False for record in records)
+    assert {record["failed_chunk_index"] for record in records} == {2}
 
 
 @pytest.mark.parametrize(

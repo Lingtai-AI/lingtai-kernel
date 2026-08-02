@@ -83,6 +83,13 @@ needed; do not load all three for an ordinary message send.
   boundaries when long. Successful send/reply results include the primary
   compound `message_id`, ordered `message_ids`, `chunk_count`, and `chunks`;
   every chunk of a topic reply stays in that topic.
+- If a later chunk fails, the action returns the normal `status='failed'` error
+  fields plus `partial_delivery=true`, the exact delivered `message_ids`,
+  `failed_chunk_index`, total `chunk_count`, `delivered_chunk_count`, and
+  `automatic_retry_allowed=false`. One `status='partial'` sent record preserves
+  those exact side effects. Never replay the whole action: even when the failed
+  chunk's provider classification says `retryable=true`, doing so can duplicate
+  the already delivered chunks. Partial replies do not add the done reaction.
 - `edit` accepts text, markdown, post, or a complete schema-2.0 card and updates
   the persisted sent record after Feishu confirms the edit. Card edits replace
   the existing card in place through Feishu's native card update API. Feishu

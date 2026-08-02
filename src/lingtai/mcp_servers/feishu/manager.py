@@ -2578,6 +2578,7 @@ class FeishuManager:
         text: str,
         message_type: str,
         status: str = "sent",
+        partial_error: FeishuOperationError | None = None,
         reply_to: str | None = None,
         reply_in_thread: bool | None = None,
         task_card: bool = False,
@@ -2600,6 +2601,15 @@ class FeishuManager:
             {"index": index, "message_id": message_id}
             for index, message_id in enumerate(compound_ids, start=1)
         ]
+        partial_delivery = partial_error is not None
+        total_chunk_count = (
+            int(result.get("chunk_count") or len(compound_ids))
+            if partial_delivery else len(compound_ids)
+        )
+        failed_chunk_index = (
+            int(result.get("failed_chunk_index") or len(compound_ids) + 1)
+            if partial_delivery else None
+        )
         sent_uuid = str(uuid4())
         sent_dir = self._account_dir(account) / "sent" / sent_uuid
         _private_mkdir(sent_dir)
@@ -2617,10 +2627,23 @@ class FeishuManager:
             "text": text,
             "sent_at": now_iso,
             "date": now_iso,
-            "status": status,
+            "status": "partial" if partial_delivery else status,
         }
         if status == "placeholder":
             sent_record["placeholder"] = True
+        if partial_delivery:
+            failed = failure_result(partial_error)
+            sent_record.update({
+                "partial_delivery": True,
+                "chunk_count": total_chunk_count,
+                "delivered_chunk_count": len(compound_ids),
+                "failed_chunk_index": failed_chunk_index,
+                "error": failed["error"],
+                "error_code": failed["error_code"],
+                "retryable": failed["retryable"],
+                "retry_after_seconds": failed["retry_after_seconds"],
+                "automatic_retry_allowed": False,
+            })
         if task_card:
             sent_record["task_card"] = True
         media = _outbound_media_summary(content)
@@ -2654,10 +2677,27 @@ class FeishuManager:
             "status": "sent",
             "message_id": compound_ids[0],
             "message_ids": compound_ids,
-            "chunk_count": len(compound_ids),
+            "chunk_count": total_chunk_count,
             "chunks": chunks,
             "content_type": content["type"],
         }
+        if partial_delivery:
+            response = failure_result(partial_error)
+            response.update({
+                "partial_delivery": True,
+                "message_id": compound_ids[0],
+                "message_ids": compound_ids,
+                "chunk_count": total_chunk_count,
+                "delivered_chunk_count": len(compound_ids),
+                "failed_chunk_index": failed_chunk_index,
+                "chunks": chunks,
+                "content_type": content["type"],
+                "automatic_retry_allowed": False,
+                "warning": (
+                    "Some chunks were delivered. Do not retry the whole action; "
+                    "doing so may duplicate the delivered chunks."
+                ),
+            })
         if sent_record.get("thread_id"):
             response["thread_id"] = sent_record["thread_id"]
         if reply_in_thread is not None:
@@ -2723,8 +2763,9 @@ class FeishuManager:
                 text=text,
                 message_type=message_type,
                 status="placeholder" if placeholder else "sent",
+                partial_error=result.get("_partial_error"),
             )
-            if placeholder:
+            if placeholder and not result.get("partial_delivery"):
                 response["placeholder"] = True
                 response["hint"] = (
                     f"Native progress card sent — call feishu(action='edit', "
@@ -2749,7 +2790,7 @@ class FeishuManager:
 
     @staticmethod
     def _is_outgoing_record(m: dict) -> bool:
-        return "to" in m or m.get("status") in {"sent", "placeholder"}
+        return "to" in m or m.get("status") in {"sent", "placeholder", "partial"}
 
     def _check(self, args: dict) -> dict:
         account = self._resolve_account(args)
@@ -2839,6 +2880,15 @@ class FeishuManager:
                 "feishu_message_id": m.get("feishu_message_id"),
                 "message_ids": m.get("message_ids"),
                 "chunks": m.get("chunks"),
+                "status": m.get("status"),
+                "partial_delivery": m.get("partial_delivery", False),
+                "chunk_count": m.get("chunk_count"),
+                "delivered_chunk_count": m.get("delivered_chunk_count"),
+                "failed_chunk_index": m.get("failed_chunk_index"),
+                "error_code": m.get("error_code"),
+                "retryable": m.get("retryable"),
+                "retry_after_seconds": m.get("retry_after_seconds"),
+                "automatic_retry_allowed": m.get("automatic_retry_allowed"),
                 "chat_id": m.get("chat_id"),
                 "chat_type": m.get("chat_type"),
                 "thread_id": m.get("thread_id"),
@@ -2916,7 +2966,11 @@ class FeishuManager:
                 message_type=message_type,
                 reply_to=compound_id,
                 reply_in_thread=reply_in_thread,
+                partial_error=result.get("_partial_error"),
             )
+
+            if result.get("partial_delivery"):
+                return response
 
             # Rich feedback: Add "done" reaction (THUMBSUP) to the original message
             try:
