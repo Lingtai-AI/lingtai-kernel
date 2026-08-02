@@ -13,7 +13,7 @@ description: |
   control cards, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.14.0
+version: 1.15.0
 last_changed_at: 2026-08-03T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
@@ -27,11 +27,29 @@ related_files:
 - src/lingtai/mcp_servers/task_card/resident.py
 - src/lingtai/mcp_servers/feishu/_family.py
 - src/lingtai/mcp_servers/feishu/_errors.py
+- src/lingtai/mcp_servers/feishu/reference/setup.md
+- src/lingtai/mcp_servers/feishu/reference/diagnostics.md
+- src/lingtai/mcp_servers/feishu/reference/capability-matrix.md
 maintenance: |
   Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
 
 # Feishu (Lark) MCP — usage manual (progressive disclosure)
+
+## OPERATOR REFERENCES
+
+Keep this file focused on Agent-facing action and message semantics. Load the
+packaged sidecar that matches the operational question:
+
+| Need | Read |
+|---|---|
+| App permissions, event/card callback setup, complete config fields, multi-account behavior, canary, acceptance, rollback | [`reference/setup.md`](reference/setup.md) |
+| Safe status interpretation and symptom-based startup, WebSocket, admission, media, card, reaction, Task Card, refresh, and error diagnosis | [`reference/diagnostics.md`](reference/diagnostics.md) |
+| Feishu v1 vs Telegram coverage, action/content inventory, and explicit non-goals | [`reference/capability-matrix.md`](reference/capability-matrix.md) |
+
+The sidecars are packaged with LingTai but are not embedded into the
+`action='manual'` result. Follow these relative paths only when that detail is
+needed; do not load all three for an ordinary message send.
 
 ## RECIPIENTS: receive_id / receive_id_type
 
