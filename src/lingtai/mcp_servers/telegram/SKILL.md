@@ -8,12 +8,14 @@ description: |
   the programmable Task Card (task_card tool) — including task-specific watcher
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
-version: 1.5.7
+version: 1.5.8
 last_changed_at: 2026-08-03T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/task_card/event_projection.py
 - src/lingtai/mcp_servers/task_card/resident.py
+- src/lingtai/mcp_servers/local_commands/ANATOMY.md
+- src/lingtai/mcp_servers/local_commands/core.py
 - src/lingtai/mcp_servers/telegram/manager.py
 - src/lingtai/mcp_servers/telegram/server.py
 - src/lingtai/mcp_servers/telegram/_family.py
@@ -155,7 +157,8 @@ Telegram has two separate slash-command layers:
    from each account's optional `commands` config list.
 2. **Runtime handling**: what happens when a user sends the slash command. A
    small built-in set is handled locally by the addon without an LLM call
-   (`/kanban`, `/taskcard`, `/refresh`, `/sleep`, `/system`). Other slash commands are not
+   (`/help`, `/status`, `/kanban`, `/system`, `/brief`, `/refresh`, `/sleep`,
+   `/clear`, `/taskcard`). Other slash commands are not
    swallowed; they pass through as normal inbound messages for the host agent to
    answer or route.
 
@@ -191,6 +194,12 @@ To dynamically add a command such as `/tokenstats` to a bot's Telegram menu:
    status shows `commands_count` but never exposes the bot token.
 
 Important behavior notes:
+
+- The built-in commands use the channel-neutral local-command core for Agent
+  filesystem reads, signal writes, and Task Card preference parsing. Telegram
+  still owns actor admission, slash/callback dispatch, Markdown, emoji, inline
+  keyboards, chat/message IDs, and Bot API delivery, so their visible output
+  and behavior are unchanged.
 
 - Adding a command to `commands` **only registers the menu entry**. It does not
   by itself create a local no-LLM implementation. For `/tokenstats`, either

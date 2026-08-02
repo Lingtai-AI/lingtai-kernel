@@ -16,6 +16,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from lingtai.mcp_servers.local_commands import (
+    DEFAULT_COMMANDS,
+    HIDDEN_COMMANDS,
+    LocalCommandCore,
+    TaskCardSettingsPort,
+)
+
 from . import updates as tg_updates
 
 logger = logging.getLogger(__name__)
@@ -57,26 +64,6 @@ def _retry_after_from_payload(payload: Any) -> int | None:
     if type(retry_after) is not int or retry_after < 0:
         return None
     return retry_after
-
-
-# Default slash commands registered with @BotFather via setMyCommands on
-# bot startup. Override per-account via the "commands" config field.
-DEFAULT_COMMANDS: list[dict[str, str]] = [
-    {"command": "help", "description": "List available commands"},
-    {"command": "kanban", "description": "Show full agent dashboard (model, tokens, network, config)"},
-    {"command": "taskcard", "description": "Show or hide Task Cards"},
-    {"command": "refresh", "description": "Restart agent"},
-    {"command": "sleep", "description": "Put agent to sleep"},
-    {"command": "clear", "description": "Clear conversation"},
-]
-
-# Commands that still work when typed, but are hidden from the visible
-# setMyCommands menu because they are rarely useful interactively.
-HIDDEN_COMMANDS: list[dict[str, str]] = [
-    {"command": "status", "description": "Show agent status (also in /kanban)"},
-    {"command": "system", "description": "Browse system files (tap to view)"},
-    {"command": "brief", "description": "Show current briefing"},
-]
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +173,7 @@ class TelegramAccount:
         set_taskcard_enabled: Callable[[bool], None] | None = None,
         taskcard_normal_rows: Callable[[], int] | None = None,
         set_taskcard_normal_rows: Callable[[int], None] | None = None,
+        local_command_core: LocalCommandCore | None = None,
     ) -> None:
         self.alias = alias
         self._bot_token = bot_token
@@ -199,6 +187,7 @@ class TelegramAccount:
         self._set_taskcard_enabled = set_taskcard_enabled
         self._taskcard_normal_rows = taskcard_normal_rows or (lambda: 1)
         self._set_taskcard_normal_rows = set_taskcard_normal_rows
+        self._local_commands = local_command_core or LocalCommandCore()
         # If commands is None, fall back to DEFAULT_COMMANDS at registration
         # time. An explicit empty list means "register no commands" and is
         # respected (Telegram clears the menu).
@@ -477,45 +466,31 @@ class TelegramAccount:
     def _cmd_taskcard(self, chat_id: int, text: str) -> None:
         """Report or configure agent-wide Telegram Task Card presentation."""
         usage = "❌ Usage: /taskcard on | /taskcard off | /taskcard N (1-10)"
-        parts = text.split()
-        args = parts[1:]
-        if len(args) > 1:
+        result = self._local_commands.apply_taskcard(
+            text,
+            TaskCardSettingsPort(
+                enabled=self._taskcard_enabled,
+                set_enabled=self._set_taskcard_enabled,
+                normal_rows=self._taskcard_normal_rows,
+                set_normal_rows=self._set_taskcard_normal_rows,
+            ),
+        )
+        if result.status == "usage":
             self.send_message(chat_id, usage)
             return
+        if result.status == "update_failed":
+            logger.warning(
+                "Telegram account '%s' could not persist taskcard setting",
+                self.alias,
+            )
+            self.send_message(
+                chat_id,
+                "⚠️ Could not update taskcard; the previous setting is unchanged.",
+            )
+            return
 
-        if args:
-            arg = args[0].lower()
-            if arg in {"on", "off"}:
-                setter = self._set_taskcard_enabled
-                value: bool | int = arg == "on"
-            elif arg.isascii() and arg.isdecimal() and 1 <= int(arg) <= 10:
-                setter = self._set_taskcard_normal_rows
-                value = int(arg)
-            else:
-                self.send_message(chat_id, usage)
-                return
-
-            if setter is None:
-                self.send_message(
-                    chat_id,
-                    "⚠️ Could not update taskcard; the previous setting is unchanged.",
-                )
-                return
-            try:
-                setter(value)
-            except Exception:
-                logger.warning(
-                    "Telegram account '%s' could not persist taskcard setting",
-                    self.alias,
-                )
-                self.send_message(
-                    chat_id,
-                    "⚠️ Could not update taskcard; the previous setting is unchanged.",
-                )
-                return
-
-        enabled = self._taskcard_enabled()
-        normal_rows = self._taskcard_normal_rows()
+        enabled = bool(result.enabled)
+        normal_rows = result.normal_rows
         if enabled:
             description = (
                 "automatic and programmable Task Cards may be sent for this agent."
@@ -532,302 +507,8 @@ class TelegramAccount:
         )
 
     def _collect_kanban_data(self) -> dict | None:
-        """Collect every value the kanban layers need from the agent directory.
-
-        Pure filesystem read, no LLM call. Returns None when LINGTAI_AGENT_DIR
-        is not set, so callers can show the standard warning.
-        """
-        agent_dir = os.environ.get("LINGTAI_AGENT_DIR", "")
-        if not agent_dir:
-            return None
-
-        agent_path = Path(agent_dir)
-        lingtai_dir = agent_path.parent  # .lingtai/
-        current_agent = agent_path.name
-
-        # Helper: format large token counts
-        def fmt(n: int | float | None) -> str:
-            try:
-                value = int(n or 0)
-            except (TypeError, ValueError):
-                value = 0
-            if value >= 1_000_000:
-                return f"{value/1_000_000:.1f}M"
-            if value >= 1_000:
-                return f"{value/1_000:.1f}K"
-            return str(value)
-
-        def fmt_duration(seconds: int | float | None) -> str:
-            try:
-                total = int(seconds or 0)
-            except (TypeError, ValueError):
-                total = 0
-            if total <= 0:
-                return "0m"
-            days, rem = divmod(total, 86400)
-            hours, rem = divmod(rem, 3600)
-            minutes, _ = divmod(rem, 60)
-            parts: list[str] = []
-            if days:
-                parts.append(f"{days}d")
-            if hours:
-                parts.append(f"{hours}h")
-            if minutes or not parts:
-                parts.append(f"{minutes}m")
-            return "".join(parts[:3])
-
-        def fmt_time(value: str | None) -> str:
-            if not value:
-                return "?"
-            try:
-                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                local = dt.astimezone()
-                return local.strftime("%Y-%m-%d %H:%M %Z")
-            except (TypeError, ValueError):
-                return str(value)
-
-        def age_since(value: str | None) -> str:
-            if not value:
-                return "?"
-            try:
-                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return fmt_duration((datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds())
-            except (TypeError, ValueError):
-                return "?"
-
-        def read_json(path: Path) -> dict:
-            if not path.exists():
-                return {}
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                return data if isinstance(data, dict) else {}
-            except (json.JSONDecodeError, OSError):
-                return {}
-
-        def count_matching(root: Path, pattern: str) -> int:
-            if not root.exists():
-                return 0
-            try:
-                return sum(1 for _ in root.rglob(pattern))
-            except OSError:
-                return 0
-
-        def join_limited(items: list[str], max_chars: int = 220) -> str:
-            out: list[str] = []
-            used = 0
-            for item in items:
-                piece = item if not out else ", " + item
-                if used + len(piece) > max_chars:
-                    remaining = len(items) - len(out)
-                    out.append(f"…(+{remaining})")
-                    break
-                out.append(piece if not out else piece[2:])
-                used += len(piece)
-            return ", ".join(out) if out else "—"
-
-        # ---- 1. Read static and materialized agent metadata ----
-        init = read_json(agent_path / "init.json")
-        agent_meta = read_json(agent_path / ".agent.json")
-        manifest = init.get("manifest", {})
-
-        meta_llm = agent_meta.get("llm", {})
-        init_llm = manifest.get("llm", {})
-        current_model = meta_llm.get("model") or init_llm.get("model", "?")
-        current_provider = meta_llm.get("provider") or init_llm.get("provider", "?")
-        context_limit = meta_llm.get("context_limit") or manifest.get("context_limit", 0)
-        language = agent_meta.get("language") or manifest.get("language", "?")
-        soul_delay = agent_meta.get("soul_delay") or manifest.get("soul", {}).get("delay", 0)
-        created_at = agent_meta.get("created_at")
-        started_at = agent_meta.get("started_at")
-        agent_id = agent_meta.get("agent_id") or "?"
-        nickname = agent_meta.get("nickname")
-        molt_count = int(agent_meta.get("molt_count") or 0)
-        summaries_count = count_matching(agent_path / "system" / "summaries", "molt_*.md")
-        if not molt_count:
-            molt_count = summaries_count
-        admin = agent_meta.get("admin") or manifest.get("admin", {})
-
-        raw_caps = agent_meta.get("capabilities") or manifest.get("capabilities", {})
-        capability_names: list[str] = []
-        if isinstance(raw_caps, dict):
-            capability_names = sorted(str(k) for k in raw_caps)
-        elif isinstance(raw_caps, list):
-            for item in raw_caps:
-                if isinstance(item, (list, tuple)) and item:
-                    capability_names.append(str(item[0]))
-                elif isinstance(item, str):
-                    capability_names.append(item)
-            capability_names = sorted(set(capability_names))
-
-        # ---- 2. Read presets ----
-        preset_info = agent_meta.get("preset") or manifest.get("preset", {})
-        active_preset_path = preset_info.get("active", "")
-        default_preset_path = preset_info.get("default", "")
-        allowed_presets = preset_info.get("allowed", [])
-        preset_models: list[dict] = []
-        for ppath in allowed_presets:
-            p = Path(ppath).expanduser()
-            if p.exists():
-                try:
-                    with open(p, "r", encoding="utf-8") as f:
-                        pd = json.load(f)
-                    pd_llm = pd.get("manifest", {}).get("llm", {})
-                    pd_desc = pd.get("description", {}).get("summary", "")
-                    is_active = str(p) == str(Path(active_preset_path).expanduser())
-                    preset_models.append({
-                        "name": pd.get("name", p.stem),
-                        "model": pd_llm.get("model", "?"),
-                        "provider": pd_llm.get("provider", "?"),
-                        "desc": pd_desc,
-                        "active": is_active,
-                    })
-                except (json.JSONDecodeError, OSError):
-                    pass
-
-        # ---- 3. Read .status.json ----
-        status = read_json(agent_path / ".status.json")
-        runtime = status.get("runtime", {})
-        tokens_status = status.get("tokens", {})
-        ctx = tokens_status.get("context", {})
-        agent_state = runtime.get("state", agent_meta.get("state", "?"))
-        uptime = runtime.get("uptime_seconds", 0)
-        started_at = runtime.get("started_at") or started_at
-
-        # ---- 4. Discover all agents and read token ledgers + lifecycle ----
-        all_agents: dict[str, dict[str, Any]] = {}
-        total_input = total_output = total_thinking = total_cached = 0
-        total_api_calls = 0
-
-        for child in sorted(lingtai_dir.iterdir()):
-            if not child.is_dir():
-                continue
-            agent_json = child / ".agent.json"
-            if not agent_json.exists():
-                continue
-
-            child_meta = read_json(agent_json)
-            child_status = read_json(child / ".status.json")
-            child_runtime = child_status.get("runtime", {})
-            ledger_path = child / "logs" / "token_ledger.jsonl"
-            agent_input = agent_output = agent_thinking = agent_cached = 0
-            agent_calls = 0
-
-            if ledger_path.exists():
-                try:
-                    with open(ledger_path, "r", encoding="utf-8") as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                entry = json.loads(line)
-                                agent_input += entry.get("input", 0)
-                                agent_output += entry.get("output", 0)
-                                agent_thinking += entry.get("thinking", 0)
-                                agent_cached += entry.get("cached", 0)
-                                agent_calls += 1
-                            except json.JSONDecodeError:
-                                continue
-                except OSError:
-                    pass
-
-            all_agents[child.name] = {
-                "input": agent_input,
-                "output": agent_output,
-                "thinking": agent_thinking,
-                "cached": agent_cached,
-                "calls": agent_calls,
-                "state": child_runtime.get("state") or child_meta.get("state", "?"),
-                "molt_count": int(child_meta.get("molt_count") or 0),
-                "model": child_meta.get("llm", {}).get("model", "?"),
-            }
-            total_input += agent_input
-            total_output += agent_output
-            total_thinking += agent_thinking
-            total_cached += agent_cached
-            total_api_calls += agent_calls
-
-        # ---- 5. Check addon status ----
-        addons = init.get("addons", [])
-        addon_status: dict[str, bool] = {}
-        for addon in addons:
-            if addon == "telegram":
-                addon_status[addon] = (agent_path / ".secrets" / "telegram.json").exists()
-            elif addon == "imap":
-                addon_status[addon] = (agent_path / ".secrets" / "imap.json").exists()
-            elif addon == "feishu":
-                addon_status[addon] = (agent_path / ".secrets" / "feishu.json").exists()
-            elif addon == "wechat":
-                addon_status[addon] = (agent_path / ".secrets" / "wechat" / "config.json").exists()
-            else:
-                addon_status[addon] = addon in init.get("mcp", {})
-
-        # ---- 6. Count durable stores ----
-        delegates_path = agent_path / "delegates" / "ledger.jsonl"
-        delegate_count = 0
-        if delegates_path.exists():
-            try:
-                with open(delegates_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if line.strip():
-                            delegate_count += 1
-            except OSError:
-                pass
-
-        knowledge_count = count_matching(agent_path / "knowledge", "KNOWLEDGE.md")
-        skill_count = count_matching(agent_path / ".library" / "custom", "SKILL.md")
-        codex_dir = agent_path / "codex"
-        codex_count = 0
-        if codex_dir.exists():
-            codex_count = len([f for f in codex_dir.iterdir() if f.suffix == ".md"])
-
-        # ---- Assemble the collected values for the kanban builders ----
-        grand_total = total_input + total_output + total_thinking
-        return {
-            "current_agent": current_agent,
-            "nickname": nickname,
-            "agent_id": agent_id,
-            "created_at": created_at,
-            "started_at": started_at,
-            "uptime": uptime,
-            "molt_count": molt_count,
-            "summaries_count": summaries_count,
-            "admin": admin,
-            "current_model": current_model,
-            "current_provider": current_provider,
-            "active_preset_path": active_preset_path,
-            "default_preset_path": default_preset_path,
-            "preset_models": preset_models,
-            "agent_state": agent_state,
-            "ctx": ctx,
-            "context_limit": context_limit,
-            "language": language,
-            "soul_delay": soul_delay,
-            "knowledge_count": knowledge_count,
-            "skill_count": skill_count,
-            "delegate_count": delegate_count,
-            "codex_count": codex_count,
-            "capability_names": capability_names,
-            "all_agents": all_agents,
-            "total_input": total_input,
-            "total_output": total_output,
-            "total_thinking": total_thinking,
-            "total_cached": total_cached,
-            "total_api_calls": total_api_calls,
-            "addon_status": addon_status,
-            "manifest": manifest,
-            "grand_total": grand_total,
-            "fmt": fmt,
-            "fmt_duration": fmt_duration,
-            "fmt_time": fmt_time,
-            "age_since": age_since,
-            "join_limited": join_limited,
-        }
+        """Read the shared channel-neutral dashboard snapshot."""
+        return self._local_commands.collect_kanban_data()
 
     def _kanban_layer_text(self, data: dict, layer_key: str) -> str:
         """Build one kanban layer's markdown text from ``_collect_kanban_data``."""
@@ -1054,48 +735,28 @@ class TelegramAccount:
 
     def _cmd_refresh(self, chat_id: int) -> None:
         """Handle /refresh — trigger agent refresh via signal file. No LLM call."""
-        agent_dir = os.environ.get("LINGTAI_AGENT_DIR", "")
-        if not agent_dir:
+        result = self._local_commands.send_signal("refresh", source="telegram")
+        if result.status == "agent_dir_missing":
             self.send_message(chat_id, "⚠️ LINGTAI_AGENT_DIR not set — cannot send refresh signal.")
             return
-
-        agent_path = Path(agent_dir)
-        refresh_file = agent_path / ".refresh"
-        taken_file = agent_path / ".refresh.taken"
-
-        # Clean up stale .refresh.taken from a previous refresh
-        if taken_file.exists():
-            try:
-                taken_file.unlink()
-            except OSError:
-                pass
-
-        # Check if .refresh already exists (shouldn't, but be safe)
-        if refresh_file.exists():
+        if result.status == "pending":
             self.send_message(chat_id, "⏳ Refresh signal already pending...")
             return
-
-        try:
-            refresh_file.write_text("", encoding="utf-8")
+        if result.status == "sent":
             self.send_message(chat_id, "🔄 Refresh signal sent — agent will restart momentarily.")
-        except OSError as e:
-            self.send_message(chat_id, f"⚠️ Failed to write refresh signal: {e}")
+            return
+        self.send_message(chat_id, f"⚠️ Failed to write refresh signal: {result.error}")
 
     def _cmd_sleep(self, chat_id: int) -> None:
         """Handle /sleep — put agent to sleep via signal file. No LLM call."""
-        agent_dir = os.environ.get("LINGTAI_AGENT_DIR", "")
-        if not agent_dir:
+        result = self._local_commands.send_signal("sleep", source="telegram")
+        if result.status == "agent_dir_missing":
             self.send_message(chat_id, "⚠️ LINGTAI_AGENT_DIR not set — cannot send sleep signal.")
             return
-
-        agent_path = Path(agent_dir)
-        sleep_file = agent_path / ".sleep"
-
-        try:
-            sleep_file.write_text("", encoding="utf-8")
+        if result.status == "sent":
             self.send_message(chat_id, "😴 Sleep signal sent — agent is going to sleep. Message me to wake up.")
-        except OSError as e:
-            self.send_message(chat_id, f"⚠️ Failed to write sleep signal: {e}")
+            return
+        self.send_message(chat_id, f"⚠️ Failed to write sleep signal: {result.error}")
 
     def _cmd_status(self, chat_id: int) -> None:
         """Handle /status — compact one-message agent status. No LLM call."""
@@ -1140,46 +801,17 @@ class TelegramAccount:
 
     def _cmd_brief(self, chat_id: int) -> None:
         """Handle /brief — show the agent's briefing. Pure filesystem read, no LLM."""
-        agent_dir = os.environ.get("LINGTAI_AGENT_DIR", "")
-        if not agent_dir:
+        result = self._local_commands.read_brief()
+        if result.status == "agent_dir_missing":
             self.send_message(chat_id, "⚠️ LINGTAI_AGENT_DIR not set — cannot read briefing.")
             return
-
-        agent_path = Path(agent_dir)
-        brief_content: str | None = None
-
-        # Primary source: system/brief.md
-        brief_path = agent_path / "system" / "brief.md"
-        if brief_path.is_file():
-            try:
-                brief_content = brief_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                brief_content = None
-
-        # Fallback: knowledge/*/brief.md
-        if not brief_content:
-            for kb_path in sorted((agent_path / "knowledge").glob("*/brief.md")):
-                try:
-                    brief_content = kb_path.read_text(encoding="utf-8")
-                    break
-                except (OSError, UnicodeDecodeError):
-                    continue
-
-        # Fallback: brief recorded in init.json
-        if not brief_content:
-            try:
-                init = json.loads((agent_path / "init.json").read_text(encoding="utf-8"))
-                brief_content = init.get("brief") or init.get("manifest", {}).get("brief")
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-                brief_content = None
-
-        if not brief_content or not brief_content.strip():
+        if result.status == "not_found" or result.content is None:
             self.send_message(chat_id, "📄 No brief found — ask the operator to set one up.")
             return
 
         # Send the brief, splitting at 4000 chars per message (mirror _cmd_system)
         MAX_MSG = 4000
-        content = brief_content.strip()
+        content = result.content.strip()
         header = "📋 *Brief*\n"
         available = MAX_MSG - len(header)
         if len(content) <= available:
@@ -1204,21 +836,17 @@ class TelegramAccount:
 
     def _cmd_clear(self, chat_id: int) -> None:
         """Handle /clear — write the .clear forced-molt signal. No LLM call."""
-        agent_dir = os.environ.get("LINGTAI_AGENT_DIR", "")
-        if not agent_dir:
+        result = self._local_commands.send_signal("clear", source="telegram")
+        if result.status == "agent_dir_missing":
             self.send_message(chat_id, "⚠️ LINGTAI_AGENT_DIR not set — cannot send clear signal.")
             return
-
-        agent_path = Path(agent_dir)
-        clear_file = agent_path / ".clear"
-        try:
-            clear_file.write_text("telegram\n", encoding="utf-8")
+        if result.status == "sent":
             self.send_message(
                 chat_id,
                 "🧹 Clear signal sent — conversation will be reset (forced molt) momentarily.",
             )
-        except OSError as e:
-            self.send_message(chat_id, f"⚠️ Failed to write clear signal: {e}")
+            return
+        self.send_message(chat_id, f"⚠️ Failed to write clear signal: {result.error}")
 
     def _cmd_system(self, chat_id: int, text: str) -> None:
         """Handle /system — progressive disclosure of system folder.
@@ -1226,37 +854,31 @@ class TelegramAccount:
         /system          → list files with inline keyboard to view each
         /system <name>   → send only that specific file
         """
-        agent_dir = os.environ.get("LINGTAI_AGENT_DIR", "")
-        if not agent_dir:
-            self.send_message(chat_id, "⚠️ LINGTAI_AGENT_DIR not set — cannot read system files.")
-            return
-
-        system_dir = Path(agent_dir) / "system"
-        if not system_dir.exists():
-            self.send_message(chat_id, "⚠️ system/ directory not found.")
-            return
-
-        md_files = sorted(system_dir.glob("*.md"))
-        if not md_files:
-            self.send_message(chat_id, "📂 No markdown files in system/")
-            return
-
-        # Parse optional filename filter
         parts = text.strip().split(maxsplit=1)
         filter_name = parts[1].strip().lower() if len(parts) > 1 else ""
+        result = self._local_commands.system_documents(filter_name or None)
+        if result.status == "agent_dir_missing":
+            self.send_message(chat_id, "⚠️ LINGTAI_AGENT_DIR not set — cannot read system files.")
+            return
+        if result.status == "directory_missing":
+            self.send_message(chat_id, "⚠️ system/ directory not found.")
+            return
+        if result.status == "empty":
+            self.send_message(chat_id, "📂 No markdown files in system/")
+            return
 
         if not filter_name:
             # List mode: show directory listing with inline keyboard
             lines = ["📂 *system/* 目录\n"]
             buttons = []
-            for fpath in md_files:
-                size = fpath.stat().st_size
+            for document in result.documents:
+                size = document.size
                 if size < 1024:
                     size_str = f"{size}B"
                 else:
                     size_str = f"{size / 1024:.1f}KB"
-                lines.append(f"• `{fpath.stem}` ({size_str})")
-                buttons.append([{"text": f"📄 {fpath.stem} ({size_str})", "callback_data": f"sys:{fpath.stem}"}])
+                lines.append(f"• `{document.name}` ({size_str})")
+                buttons.append([{"text": f"📄 {document.name} ({size_str})", "callback_data": f"sys:{document.name}"}])
 
             self.send_message(
                 chat_id,
@@ -1267,21 +889,19 @@ class TelegramAccount:
             return
 
         # Specific file mode
-        matched = [f for f in md_files if filter_name in f.stem.lower()]
-        if not matched:
-            file_list = ", ".join(f.stem for f in md_files)
+        if result.status == "no_match":
+            file_list = ", ".join(document.name for document in result.documents)
             self.send_message(chat_id, f"❌ No match for '{filter_name}'\n\nAvailable: {file_list}")
             return
 
         # Send matched file(s), splitting if needed
         MAX_MSG = 4000
-        for fpath in matched:
-            try:
-                content = fpath.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+        for document in result.documents:
+            if document.content is None:
                 continue
+            content = document.content
 
-            header = f"📄 *{fpath.stem}*\n```\n"
+            header = f"📄 *{document.name}*\n```\n"
             footer = "\n```"
             available = MAX_MSG - len(header) - len(footer)
 
@@ -1301,7 +921,7 @@ class TelegramAccount:
                     content = content[split_at:]
 
                 for i, chunk in enumerate(chunks):
-                    part_header = f"📄 *{fpath.stem}* ({i+1}/{len(chunks)})\n```\n"
+                    part_header = f"📄 *{document.name}* ({i+1}/{len(chunks)})\n```\n"
                     self.send_message(chat_id, part_header + chunk + footer, parse_mode="Markdown")
 
     # -- Sending -------------------------------------------------------------

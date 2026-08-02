@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from lingtai.kernel._fsutil import atomic_write_json, read_json
+from lingtai.mcp_servers.local_commands import LocalCommandCore
 
 from .. import _identity
 from .account import TelegramAccount
@@ -55,6 +56,7 @@ class TelegramService:
             self._taskcard_max_refreshes,
         ) = self._load_taskcard_state()
         self._taskcard_listener: Callable[[bool], None] | None = None
+        local_command_core = LocalCommandCore(self._working_dir)
 
         for cfg in accounts_config:
             alias = cfg["alias"]
@@ -71,6 +73,7 @@ class TelegramService:
                 set_taskcard_enabled=self.set_taskcard_enabled,
                 taskcard_normal_rows=self.taskcard_normal_rows,
                 set_taskcard_normal_rows=self.set_taskcard_normal_rows,
+                local_command_core=local_command_core,
             )
             self._accounts[alias] = acct
             self._account_order.append(alias)
