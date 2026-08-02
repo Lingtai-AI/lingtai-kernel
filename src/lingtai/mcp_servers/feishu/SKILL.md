@@ -5,13 +5,13 @@ description: |
   when you need detail beyond the one-line action descriptions: receive_id vs
   receive_id_type (open_id/chat_id), send vs reply, check/read/search, placeholder
   + edit for long responses, text/markdown/post outbound content, topic-aware
-  replies, contacts/accounts basics, the notification
+  replies, outbound media/share/sticker sources, contacts/accounts basics, the notification
   transient-hook vs persistent-context split, normalized inbound conversations,
   preserved inbound media, passive channel events, group @Bot routing, and
   side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.7.0
+version: 1.8.0
 last_changed_at: 2026-08-02T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/account.py
@@ -42,7 +42,8 @@ maintenance: |
 - Structured content is a strict tagged union in this slice:
   `{'type':'text','text':'...'}`,
   `{'type':'markdown','markdown':'...'}`, or
-  `{'type':'post','post':{...}}`. Unknown keys or mixed variants are rejected.
+  `{'type':'post','post':{...}}`, plus the media/share/sticker forms below.
+  Unknown keys or mixed variants are rejected.
 - `reply` (`message_id` from read/check results plus `text` or `content`) replies
   to a specific incoming message; prefer it when answering that message. It
   defaults `reply_in_thread=true` when the persisted target has a `thread_id`,
@@ -54,9 +55,36 @@ maintenance: |
   boundaries when long. Successful send/reply results include the primary
   compound `message_id`, ordered `message_ids`, `chunk_count`, and `chunks`;
   every chunk of a topic reply stays in that topic.
-- `edit` accepts the same text/markdown/post union and updates the persisted sent
-  record after Feishu confirms the edit. Media and cards have their own update
-  rules and are introduced by their dedicated capability slices.
+- `edit` accepts the text/markdown/post subset and updates the persisted sent
+  record after Feishu confirms the edit. Feishu does not expose these media
+  messages through the same edit path; cards use their dedicated update action.
+
+## OUTBOUND MEDIA, SHARES, AND STICKERS
+
+- `send` and `reply` additionally accept `image`, `file`, `audio`, `video`,
+  `share_chat`, `share_user`, and `sticker` content.
+- Media uses one strict source: `{'type':'path','path':'/absolute/file'}` uploads
+  a readable local file, while `{'type':'key','key':'<provider key>'}` reuses an
+  already uploaded Feishu key. Relative paths and URL downloads are rejected;
+  use a downloaded attachment path from `read`, or an explicit provider key.
+  Provider keys must be owned by this Bot; a key copied from an inbound user
+  message may be readable yet still be rejected for outbound reuse by Feishu.
+- Shapes:
+  `{'type':'image','source':SOURCE,'caption':'optional markdown'}`,
+  `{'type':'file','source':SOURCE,'file_name':'optional name'}`,
+  `{'type':'audio','source':SOURCE}`, and
+  `{'type':'video','source':SOURCE,'caption':'optional markdown'}`.
+  Image/video captions are rendered as Feishu post messages. File/audio
+  captions are not supported by Feishu and are intentionally absent.
+- Sharing/sticker shapes are
+  `{'type':'share_chat','chat_id':'oc_...'}`,
+  `{'type':'share_user','user_id':'ou_...'}`, and
+  `{'type':'sticker','file_key':'...'}`.
+- Sent records preserve the exact source descriptor for `read`, while bounded
+  notification previews expose only safe media summaries such as type,
+  filename, and size — never provider keys or the local source path.
+- Each materialized wire chunk is attempted exactly once. A rejected post or
+  caption is returned as a failure; it is never silently resent as plain text.
 
 ## READING: check / read / search
 

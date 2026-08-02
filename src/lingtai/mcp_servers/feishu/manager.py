@@ -88,6 +88,8 @@ _OUTBOUND_CONTENT_FIELDS = {
     "markdown": "markdown",
     "post": "post",
 }
+_OUTBOUND_MEDIA_TYPES = {"image", "file", "audio", "video"}
+_EDITABLE_CONTENT_TYPES = frozenset(_OUTBOUND_CONTENT_FIELDS)
 
 
 def _post_preview(post: dict[str, Any]) -> str:
@@ -120,7 +122,7 @@ def _post_preview(post: dict[str, Any]) -> str:
 
 
 def _normalize_outbound_content(
-    args: dict[str, Any],
+    args: dict[str, Any], *, editable: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], str, str]:
     """Validate ``text XOR content`` and return record/SDK/preview/wire type."""
     has_text = "text" in args
@@ -140,23 +142,115 @@ def _normalize_outbound_content(
         raise ValueError("content must be an object")
     content_type = raw.get("type")
     if not isinstance(content_type, str):
-        raise ValueError("content.type must be text, markdown, or post")
+        raise ValueError("content.type must be a supported outbound type")
+    if editable and content_type not in _EDITABLE_CONTENT_TYPES:
+        raise ValueError("edit only supports text, markdown, or post content")
     field = _OUTBOUND_CONTENT_FIELDS.get(content_type)
-    if field is None or set(raw) != {"type", field}:
-        raise ValueError("content must be one strict text, markdown, or post value")
-    value = raw.get(field)
-    if content_type in {"text", "markdown"}:
-        if not isinstance(value, str) or not value:
-            raise ValueError(f"content.{field} is required")
-        preview = value
-    else:
-        if not isinstance(value, dict) or not value:
-            raise ValueError("content.post must be a non-empty object")
-        preview = _post_preview(value)
-    content = dict(raw)
-    sdk_message = {field: value}
-    wire_type = "text" if content_type == "text" else "post"
-    return content, sdk_message, preview, wire_type
+    if field is not None:
+        if set(raw) != {"type", field}:
+            raise ValueError("content must be one strict text, markdown, or post value")
+        value = raw.get(field)
+        if content_type in {"text", "markdown"}:
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"content.{field} is required")
+            preview = value
+        else:
+            if not isinstance(value, dict) or not value:
+                raise ValueError("content.post must be a non-empty object")
+            preview = _post_preview(value)
+        content = dict(raw)
+        sdk_message = {field: value}
+        wire_type = "text" if content_type == "text" else "post"
+        return content, sdk_message, preview, wire_type
+
+    if content_type in _OUTBOUND_MEDIA_TYPES:
+        optional = {"caption"} if content_type in {"image", "video"} else set()
+        if content_type == "file":
+            optional.add("file_name")
+        if set(raw) - {"type", "source", *optional} or "source" not in raw:
+            raise ValueError(f"invalid {content_type} content fields")
+        source = raw.get("source")
+        if not isinstance(source, dict) or len(source) != 2:
+            raise ValueError("content.source must be one strict path or key value")
+        source_type = source.get("type")
+        source_field = "path" if source_type == "path" else "key"
+        if source_type not in {"path", "key"} or set(source) != {
+            "type", source_field,
+        }:
+            raise ValueError("content.source must be one strict path or key value")
+        source_value = source.get(source_field)
+        if not isinstance(source_value, str) or not source_value:
+            raise ValueError(f"content.source.{source_field} is required")
+        if source_value.lower().startswith(("http://", "https://")):
+            raise ValueError("content.source does not support URLs")
+        if source_type == "path":
+            path = Path(source_value)
+            if not path.is_absolute():
+                raise ValueError("content.source.path must be absolute")
+            if not path.is_file():
+                raise ValueError("content.source.path must name a readable file")
+        caption = raw.get("caption")
+        if caption is not None and not isinstance(caption, str):
+            raise ValueError("content.caption must be a string")
+        file_name = raw.get("file_name")
+        if file_name is not None and (
+            not isinstance(file_name, str) or not file_name
+        ):
+            raise ValueError("content.file_name must be a non-empty string")
+        sdk_spec: dict[str, Any] = {"source": source_value}
+        if file_name:
+            sdk_spec["file_name"] = file_name
+        sdk_message = {content_type: sdk_spec}
+        if caption:
+            sdk_message["caption"] = caption
+        filename = file_name or (
+            Path(source_value).name if source_type == "path" else ""
+        )
+        preview = caption or (
+            f"[{content_type}: {filename}]" if filename else f"[{content_type}]"
+        )
+        wire_type = (
+            "post" if caption and content_type in {"image", "video"}
+            else content_type
+        )
+        return dict(raw), sdk_message, preview, wire_type
+
+    scalar_fields = {
+        "share_chat": "chat_id",
+        "share_user": "user_id",
+        "sticker": "file_key",
+    }
+    scalar_field = scalar_fields.get(content_type)
+    if scalar_field is None or set(raw) != {"type", scalar_field}:
+        raise ValueError("content must be one strict supported outbound value")
+    scalar_value = raw.get(scalar_field)
+    if not isinstance(scalar_value, str) or not scalar_value:
+        raise ValueError(f"content.{scalar_field} is required")
+    sdk_message = {content_type: {scalar_field: scalar_value}}
+    preview = {
+        "share_chat": "[shared chat]",
+        "share_user": "[shared user]",
+        "sticker": "[sticker]",
+    }[content_type]
+    return dict(raw), sdk_message, preview, content_type
+
+
+def _outbound_media_summary(content: dict[str, Any]) -> dict[str, Any] | None:
+    content_type = content.get("type")
+    if content_type not in _OUTBOUND_MEDIA_TYPES | {"sticker"}:
+        return None
+    summary: dict[str, Any] = {"type": content_type}
+    source = content.get("source")
+    if isinstance(source, dict) and source.get("type") == "path":
+        path = Path(source.get("path") or "")
+        summary["filename"] = content.get("file_name") or path.name
+        try:
+            summary["size"] = path.stat().st_size
+        except OSError:
+            pass
+    elif content.get("file_name"):
+        summary["filename"] = content["file_name"]
+    return summary
 
 
 def _normalized_content_payload(content: object, message_type: str) -> dict:
@@ -610,7 +704,7 @@ DESCRIPTION = (
     "do not attempt to configure or reconfigure this MCP — your orchestrator "
     "manages it, and if the network needs this MCP to reach you the wiring "
     "is propagated to your session automatically. "
-    "Use 'send' for outgoing text, markdown, or post messages "
+    "Use 'send' for outgoing text, markdown, post, media, share, or sticker messages "
     "(specify receive_id + receive_id_type and exactly one of text/content). "
     "'check' to see recent conversations with unread counts. "
     "'read' to read messages from a specific chat (returns compound message IDs). "
@@ -618,7 +712,8 @@ DESCRIPTION = (
     "(use compound ID from read results). "
     "'search' to find messages by keyword or regex. "
     "'delete' to delete a bot message (message_id). "
-    "'edit' to edit a sent text/post message (message_id, text or content). "
+    "'edit' to edit a sent text/post message (message_id, text or content; "
+    "media is not editable through this action). "
     "'contacts' to manage saved contacts (open_id aliases). "
     "'accounts' to list configured app accounts. "
     "Voice/audio messages are automatically transcribed using Whisper (local) "
@@ -1737,6 +1832,9 @@ class FeishuManager:
             "date": now_iso,
             "status": status,
         }
+        media = _outbound_media_summary(content)
+        if media is not None:
+            sent_record["media"] = media
         for key in ("root_id", "parent_id", "thread_id"):
             value = result.get(key)
             if value:
@@ -1777,6 +1875,8 @@ class FeishuManager:
         if not receive_id:
             return {"error": "receive_id is required"}
         content, sdk_message, text, message_type = _normalize_outbound_content(args)
+        if placeholder and content["type"] not in _EDITABLE_CONTENT_TYPES:
+            return {"error": "placeholder only supports text, markdown, or post"}
 
         content_key = json.dumps(content, ensure_ascii=False, sort_keys=True)
         dup_key = (account, receive_id, content_key)
@@ -2084,7 +2184,9 @@ class FeishuManager:
         compound_id = args.get("message_id", "")
         if not compound_id:
             return {"error": "message_id is required"}
-        content, sdk_message, text, message_type = _normalize_outbound_content(args)
+        content, sdk_message, text, message_type = _normalize_outbound_content(
+            args, editable=True,
+        )
         alias, _chat_id, feishu_msg_id = self._parse_compound_id(compound_id)
         acct = self._service.get_account(alias)
         acct.update_content(feishu_msg_id, sdk_message)

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,129 @@ class FeishuInboundChannelEvent:
 
     event_type: str
     event: Any
+
+
+def _coerce_lark_outbound(message: dict[str, Any]) -> Any:
+    """Build one public SDK outbound dataclass from the manager's strict shape."""
+    sdk = _import_lark()
+    if "text" in message:
+        return sdk.OutboundText(text=message["text"])
+    if "markdown" in message:
+        return sdk.OutboundPost(markdown=message["markdown"])
+    if "post" in message:
+        return sdk.OutboundPost(post=message["post"])
+
+    for kind, outbound_type in (
+        ("image", sdk.OutboundImage),
+        ("file", sdk.OutboundFile),
+        ("audio", sdk.OutboundAudio),
+        ("video", sdk.OutboundVideo),
+    ):
+        if kind not in message:
+            continue
+        spec = message[kind]
+        source_value = spec["source"]
+        path = Path(source_value)
+        source = (
+            sdk.MediaSource(kind="file", path=source_value)
+            if path.is_absolute()
+            else sdk.MediaSource(kind="key", key=source_value)
+        )
+        kwargs: dict[str, Any] = {"source": source}
+        if message.get("caption") is not None:
+            kwargs["caption"] = message["caption"]
+        if kind == "file" and spec.get("file_name"):
+            kwargs["file_name"] = spec["file_name"]
+        return outbound_type(**kwargs)
+
+    if "share_chat" in message:
+        return sdk.OutboundShareChat(chat_id=message["share_chat"]["chat_id"])
+    if "share_user" in message:
+        return sdk.OutboundShareUser(user_id=message["share_user"]["user_id"])
+    if "sticker" in message:
+        return sdk.OutboundSticker(file_key=message["sticker"]["file_key"])
+    raise TypeError(f"unsupported Feishu outbound keys: {sorted(message)}")
+
+
+class _SingleAttemptOutboundAdapter:
+    """Use SDK materialization while issuing exactly one request per chunk.
+
+    ``lark-channel-sdk`` 1.x deliberately retries a rejected post as plain
+    text inside ``OutboundSender._send_one_with_fallback``.  That is useful as
+    a general SDK default, but it violates LingTai's public contract: callers
+    must see the original failure and decide whether a second, different send
+    is acceptable.  ``max_attempts=1`` does not disable that format downgrade.
+
+    Keep the narrow adapter at the account boundary.  It reuses the pinned
+    1.x sender's coercion-independent materialization (uploads, Markdown
+    conversion and chunking), then calls its create/reply transport primitive
+    once for each materialized chunk.  No reply-target or format fallback is
+    entered.  These three private sender methods are intentionally isolated in
+    this class so an SDK 2.x migration has one compatibility seam to replace.
+    """
+
+    def __init__(self, sender: Any) -> None:
+        self._sender = sender
+
+    async def send(
+        self,
+        outbound: Any,
+        *,
+        receive_id: str,
+        receive_id_type: str,
+        reply_to: str | None = None,
+        reply_in_thread: bool | None = None,
+    ) -> Any:
+        bodies = await self._sender._materialize(
+            outbound,
+            chat_id=receive_id,
+            receive_id_type=receive_id_type,
+        )
+        if not bodies:
+            raise RuntimeError("Feishu outbound materialized an empty body")
+
+        message_ids: list[str] = []
+        last_result: Any = None
+        for index, body in enumerate(bodies):
+            request_uuid = str(uuid4())
+            # Topic replies keep every chunk in the topic.  Flat replies quote
+            # only the first chunk and create the remaining chunks in the chat,
+            # matching the SDK's established chunk routing without its
+            # retry/downgrade behavior.
+            effective_reply_to = (
+                reply_to
+                if reply_in_thread is True or index == 0
+                else None
+            )
+            if effective_reply_to:
+                result = await self._sender._reply(
+                    effective_reply_to,
+                    body,
+                    reply_in_thread,
+                    request_uuid,
+                )
+            else:
+                result = await self._sender._create(
+                    receive_id,
+                    receive_id_type,
+                    body,
+                    request_uuid,
+                )
+            last_result = result
+            if not getattr(result, "success", False):
+                return result
+            message_id = getattr(result, "message_id", None)
+            if message_id:
+                message_ids.append(message_id)
+
+        if len(message_ids) > 1:
+            result_type = type(last_result)
+            return result_type.ok(
+                message_id=message_ids[0],
+                raw=getattr(last_result, "raw", None),
+                chunk_ids=message_ids,
+            )
+        return last_result
 
 
 class FeishuAccount:
@@ -579,12 +703,13 @@ class FeishuAccount:
         receive_id_type: str,
         message: dict[str, Any],
     ) -> dict:
-        """Send one SDK outbound text/post value, preserving chunk IDs."""
+        """Send one outbound value once per SDK-materialized chunk."""
+        outbound = _coerce_lark_outbound(message)
         result = asyncio.run(
-            self._channel.send(
-                receive_id,
-                message,
-                {"receive_id_type": receive_id_type},
+            _SingleAttemptOutboundAdapter(self._channel.sender).send(
+                outbound,
+                receive_id=receive_id,
+                receive_id_type=receive_id_type,
             )
         )
         fallback_chat_id = receive_id if receive_id_type == "chat_id" else ""
@@ -629,17 +754,15 @@ class FeishuAccount:
         *,
         reply_in_thread: bool,
     ) -> dict:
-        """Reply through the SDK outbound pipeline without fresh-send fallback."""
+        """Reply once per SDK-materialized chunk without any fallback."""
+        outbound = _coerce_lark_outbound(message)
         result = asyncio.run(
-            self._channel.send(
-                chat_id,
-                message,
-                {
-                    "receive_id_type": "chat_id",
-                    "reply_to": message_id,
-                    "reply_in_thread": reply_in_thread,
-                    "reply_target_gone": "fail",
-                },
+            _SingleAttemptOutboundAdapter(self._channel.sender).send(
+                outbound,
+                receive_id=chat_id,
+                receive_id_type="chat_id",
+                reply_to=message_id,
+                reply_in_thread=reply_in_thread,
             )
         )
         return self._channel_send_result(result, fallback_chat_id=chat_id)

@@ -50,38 +50,115 @@ def _object(
     return result
 
 
-def _outbound_content_schema() -> dict[str, Any]:
-    """Strict first-slice outbound union; media and cards land separately."""
-    post_value = {"type": "object", "minProperties": 1}
+def _media_source_schema() -> dict[str, Any]:
     return {
         "oneOf": [
             _object(
                 {
-                    "type": {"type": "string", "enum": ["text"]},
-                    "text": {"type": "string"},
+                    "type": {"type": "string", "enum": ["path"]},
+                    "path": {"type": "string", "minLength": 1},
                 },
-                required=["type", "text"],
+                required=["type", "path"],
             ),
             _object(
                 {
-                    "type": {"type": "string", "enum": ["markdown"]},
-                    "markdown": {"type": "string"},
+                    "type": {"type": "string", "enum": ["key"]},
+                    "key": {"type": "string", "minLength": 1},
                 },
-                required=["type", "markdown"],
+                required=["type", "key"],
             ),
-            _object(
-                {
-                    "type": {"type": "string", "enum": ["post"]},
-                    "post": post_value,
-                },
-                required=["type", "post"],
-            ),
-        ],
+        ]
     }
+
+
+def _outbound_content_schema(*, include_media: bool = True) -> dict[str, Any]:
+    """Strict outbound union; cards remain in their dedicated slice."""
+    post_value = {"type": "object", "minProperties": 1}
+    branches = [
+        _object(
+            {
+                "type": {"type": "string", "enum": ["text"]},
+                "text": {"type": "string", "minLength": 1},
+            },
+            required=["type", "text"],
+        ),
+        _object(
+            {
+                "type": {"type": "string", "enum": ["markdown"]},
+                "markdown": {"type": "string", "minLength": 1},
+            },
+            required=["type", "markdown"],
+        ),
+        _object(
+            {
+                "type": {"type": "string", "enum": ["post"]},
+                "post": post_value,
+            },
+            required=["type", "post"],
+        ),
+    ]
+    if include_media:
+        source = _media_source_schema()
+        branches.extend([
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["image"]},
+                    "source": source,
+                    "caption": {"type": "string"},
+                },
+                required=["type", "source"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["file"]},
+                    "source": source,
+                    "file_name": {"type": "string", "minLength": 1},
+                },
+                required=["type", "source"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["audio"]},
+                    "source": source,
+                },
+                required=["type", "source"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["video"]},
+                    "source": source,
+                    "caption": {"type": "string"},
+                },
+                required=["type", "source"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["share_chat"]},
+                    "chat_id": {"type": "string", "minLength": 1},
+                },
+                required=["type", "chat_id"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["share_user"]},
+                    "user_id": {"type": "string", "minLength": 1},
+                },
+                required=["type", "user_id"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["sticker"]},
+                    "file_key": {"type": "string", "minLength": 1},
+                },
+                required=["type", "file_key"],
+            ),
+        ])
+    return {"oneOf": branches}
 
 
 def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
     content = _outbound_content_schema()
+    editable_content = _outbound_content_schema(include_media=False)
     send = _object(
         {
             "account": _nullable({"type": "string"}),
@@ -144,7 +221,7 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "message_id": {"type": "string"},
                 "text": {"type": "string"},
-                "content": content,
+                "content": editable_content,
             },
             required=["message_id"],
             one_of=[{"required": ["text"]}, {"required": ["content"]}],
@@ -197,7 +274,8 @@ def feishu_schema() -> dict[str, Any]:
     # another action's branch also fits.
     schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "send: send text, markdown, or post content to a user or chat "
+        "send: send text, markdown, post, media, share, or sticker content "
+        "to a user or chat "
         "(receive_id, receive_id_type, exactly one of text/content; "
         "optional account, placeholder). "
         "If placeholder is true, sends text as a placeholder message "
@@ -207,7 +285,8 @@ def feishu_schema() -> dict[str, Any]:
         "(optional account). "
         "read: read messages from a specific chat "
         "(chat_id; optional limit, account). "
-        "reply: reply to a specific message with text, markdown, or post "
+        "reply: reply to a specific message with text, markdown, post, media, "
+        "share, or sticker content "
         "(message_id from read results, exactly one of text/content; "
         "optional reply_in_thread). "
         "search: search inbox messages by regex "
@@ -266,7 +345,11 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
     if expected == "array":
         return isinstance(value, list)
     if expected == "string":
-        return isinstance(value, str) and value in schema.get("enum", [value])
+        return (
+            isinstance(value, str)
+            and value in schema.get("enum", [value])
+            and len(value) >= schema.get("minLength", 0)
+        )
     if expected == "integer":
         return (
             type(value) is int

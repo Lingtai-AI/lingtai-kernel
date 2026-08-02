@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import lark_channel as lark
 import pytest
 
 from lingtai.mcp_servers.feishu._family import handle_feishu
@@ -253,22 +254,38 @@ def test_edit_refreshes_persisted_content_only_after_transport_success(tmp_path)
     assert path.read_text(encoding="utf-8") == before_failure
 
 
-def test_account_sdk_outbound_uses_fail_reply_policy_and_projects_chunks():
+def test_account_sdk_outbound_single_attempt_adapter_projects_chunks():
     calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
 
-    class _Channel:
-        async def send(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            calls.append(("send", args, kwargs))
-            return SimpleNamespace(
-                success=True,
-                message_id="om_1",
-                chunk_ids=["om_1", "om_2"],
-                raw={"data": {
-                    "chat_id": "oc_chat",
-                    "thread_id": "omt_topic",
-                    "root_id": "om_root",
-                }},
+    class _Sender:
+        async def _materialize(
+            self, outbound: Any, **kwargs: Any,
+        ) -> list[dict[str, str]]:
+            calls.append(("materialize", (outbound,), kwargs))
+            if getattr(outbound, "markdown", None):
+                return [
+                    {"msg_type": "post", "content": "chunk 1"},
+                    {"msg_type": "post", "content": "chunk 2"},
+                ]
+            return [{"msg_type": "text", "content": "reply"}]
+
+        async def _create(self, *args: Any) -> lark.SendResult:
+            calls.append(("create", args, {}))
+            index = sum(call[0] == "create" for call in calls)
+            return lark.SendResult.ok(
+                message_id=f"om_{index}",
+                raw={"data": {"chat_id": "oc_chat"}},
             )
+
+        async def _reply(self, *args: Any) -> lark.SendResult:
+            calls.append(("reply", args, {}))
+            return lark.SendResult.ok(
+                message_id="om_reply",
+                raw={"data": {"chat_id": "oc_chat", "thread_id": "omt_topic"}},
+            )
+
+    class _Channel:
+        sender = _Sender()
 
         async def edit_message(
             self, message_id: str, message: dict[str, Any]
@@ -296,15 +313,11 @@ def test_account_sdk_outbound_uses_fail_reply_policy_and_projects_chunks():
     edited = account.update_content("om_1", {"markdown": "edited"})
 
     assert sent["message_ids"] == ["om_1", "om_2"]
-    assert sent["thread_id"] == "omt_topic"
-    assert replied["message_ids"] == ["om_1", "om_2"]
-    reply_opts = calls[1][1][2]
-    assert reply_opts == {
-        "receive_id_type": "chat_id",
-        "reply_to": "om_target",
-        "reply_in_thread": True,
-        "reply_target_gone": "fail",
-    }
+    assert replied["message_ids"] == ["om_reply"]
+    reply_call = next(call for call in calls if call[0] == "reply")
+    assert reply_call[1][0] == "om_target"
+    assert reply_call[1][2] is True
+    assert sum(call[0] == "reply" for call in calls) == 1
     assert edited["message_id"] == "om_1"
 
 
