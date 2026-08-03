@@ -71,6 +71,12 @@ class FakeHandshakeError(RuntimeError):
         self.response = SimpleNamespace(status_code=status)
 
 
+class FakeCloseError(ConnectionError):
+    def __init__(self, code, reason):
+        super().__init__("websocket closed")
+        self.rcvd = SimpleNamespace(code=code, reason=reason)
+
+
 class FakeResponses:
     def __init__(self, manager=None, http_response=None):
         self.manager = manager
@@ -94,14 +100,14 @@ class FakeClient:
         self.responses = responses
 
 
-def make_session(responses, *, websocket=True):
+def make_session(responses, *, websocket=True, extra_kwargs=None):
     return OpenAIResponsesSession(
         client=FakeClient(responses),
         model="test-model",
         instructions="system",
         tools=None,
         tool_choice=None,
-        extra_kwargs={},
+        extra_kwargs=extra_kwargs or {},
         compact_threshold=None,
         prompt_cache_key=None,
         stateless_replay=True,
@@ -153,10 +159,21 @@ def test_websocket_reuses_connection_and_sends_delta_continuation():
     assert connect_call["websocket_connection_options"] == {"ping_interval": None}
     assert responses.create_calls == []
     assert connection.frames[0]["type"] == "response.create"
+    assert "stream" not in connection.frames[0]
+    assert "stream" not in connection.frames[1]
     assert "previous_response_id" not in connection.frames[0]
     assert connection.frames[1]["previous_response_id"] == "resp-1"
     assert len(connection.frames[1]["input"]) == 1
     assert connection.frames[1]["input"][0]["role"] == "user"
+
+
+def test_websocket_omits_http_stream_option_from_extra_kwargs():
+    connection = FakeConnection([completed("resp-1")])
+    responses = FakeResponses(manager=FakeManager(connection))
+
+    make_session(responses, extra_kwargs={"stream": True}).send("hello")
+
+    assert "stream" not in connection.frames[0]
 
 
 def test_websocket_non_prefix_history_starts_a_fresh_full_chain():
@@ -277,6 +294,28 @@ def test_transient_connect_failure_retries_once_without_http_fallback():
     assert responses.create_calls == []
 
 
+def test_first_event_failure_retries_only_once_and_keeps_close_details():
+    first = FakeConnection(
+        events=[FakeCloseError(1011, "upstream websocket proxy failed")]
+    )
+    second = FakeConnection(events=[FakeCloseError(1011, "still failed\nretry later")])
+    responses = FakeResponses(
+        manager=[FakeManager(first), FakeManager(second)]
+    )
+
+    with pytest.raises(ResponsesWebSocketRequestError) as raised:
+        make_session(responses).send("hello")
+
+    message = str(raised.value)
+    assert "close_code=1011" in message
+    assert "close_reason=still failed retry later" in message
+    assert "\n" not in message
+    assert len(responses.connect_calls) == 2
+    assert responses.create_calls == []
+    assert first.closed
+    assert second.closed
+
+
 def test_first_turn_transient_drop_reconnects_once():
     dropped = FakeConnection(send_error=ConnectionError("node dropped"))
     working = FakeConnection(
@@ -313,17 +352,53 @@ def test_established_continuation_failure_is_not_automatically_resent():
 
 def test_partial_stream_failure_is_marked_terminal():
     connection = FakeConnection(
-        [event("response.output_text.delta", delta="visible"), ConnectionError("drop")]
+        [
+            event("response.output_text.delta", delta="visible"),
+            FakeCloseError(1011, "upstream websocket proxy failed"),
+        ]
     )
+    responses = FakeResponses(manager=FakeManager(connection))
     chunks = []
 
     with pytest.raises(ResponsesWebSocketRequestError) as raised:
-        make_session(FakeResponses(manager=FakeManager(connection))).send_stream(
-            "hello", chunks.append
-        )
+        make_session(responses).send_stream("hello", chunks.append)
 
     assert chunks == ["visible"]
+    assert "close_code=1011" in str(raised.value)
+    assert "close_reason=upstream websocket proxy failed" in str(raised.value)
     assert getattr(raised.value, "_lingtai_partial_stream", False) is True
+    assert len(responses.connect_calls) == 1
+
+
+def test_mapping_error_event_preserves_upstream_fields():
+    connection = FakeConnection(
+        [
+            {
+                "type": "error",
+                "error": {
+                    "status": 502,
+                    "code": "websocket_proxy_failed",
+                    "type": "upstream_error",
+                    "param": "previous_response_id",
+                    "message": "upstream websocket proxy failed\nretry later",
+                },
+            }
+        ]
+    )
+    responses = FakeResponses(manager=FakeManager(connection))
+
+    with pytest.raises(ResponsesWebSocketRequestError) as raised:
+        make_session(responses).send("hello")
+
+    message = str(raised.value)
+    assert "event=error" in message
+    assert "status=502" in message
+    assert "code=websocket_proxy_failed" in message
+    assert "type=upstream_error" in message
+    assert "param=previous_response_id" in message
+    assert "message=upstream websocket proxy failed retry later" in message
+    assert "\n" not in message
+    assert responses.create_calls == []
 
 
 def test_reset_closes_connection_and_rebuilds_chain_on_next_request():

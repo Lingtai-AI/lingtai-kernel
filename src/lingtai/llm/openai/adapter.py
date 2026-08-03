@@ -16,6 +16,7 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -2194,20 +2195,79 @@ class OpenAIResponsesSession(ChatSession):
                 ) from exc
             if self._is_websocket_handshake_rejection(exc):
                 raise self._unsupported_websocket_error() from exc
+            close_text = self._websocket_close_text(exc)
             raise ResponsesWebSocketRequestError(
-                f"Could not connect Responses WebSocket to {self._upstream_host}; "
+                f"Could not connect Responses WebSocket to {self._upstream_host}"
+                f"{close_text}; "
                 "check the network and credentials, then retry."
             ) from exc
         self._ws_connection = connection
         return connection
 
     @staticmethod
-    def _websocket_error_text(event) -> str:
-        response = getattr(event, "response", None)
-        error = getattr(event, "error", None)
-        response_error = getattr(response, "error", None)
-        incomplete_details = getattr(response, "incomplete_details", None)
-        parts = [str(getattr(event, "type", ""))]
+    def _websocket_field(source, key: str):
+        if source is None:
+            return None
+        if isinstance(source, Mapping):
+            return source.get(key)
+        try:
+            return getattr(source, key, None)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _websocket_diagnostic_value(value, *, limit: int = 200) -> str:
+        if value is None:
+            return ""
+        if not isinstance(value, (str, int, float, bool)):
+            return ""
+        rendered = str(value)
+        return " ".join(rendered.split())[:limit]
+
+    @classmethod
+    def _websocket_close_text(cls, exc: BaseException) -> str:
+        """Extract only bounded close metadata from an exception chain."""
+        current: BaseException | None = exc
+        for _ in range(4):
+            if current is None:
+                break
+            sources = (
+                current,
+                cls._websocket_field(current, "rcvd"),
+                cls._websocket_field(current, "received"),
+                cls._websocket_field(current, "close"),
+            )
+            for source in sources:
+                code = cls._websocket_field(source, "close_code")
+                if code is None:
+                    code = cls._websocket_field(source, "code")
+                reason = cls._websocket_field(source, "close_reason")
+                if reason is None:
+                    reason = cls._websocket_field(source, "reason")
+                safe_code = cls._websocket_diagnostic_value(code, limit=20)
+                safe_reason = cls._websocket_diagnostic_value(reason)
+                details = []
+                if safe_code:
+                    details.append(f"close_code={safe_code}")
+                if safe_reason:
+                    details.append(f"close_reason={safe_reason}")
+                if details:
+                    return " (" + ", ".join(details) + ")"
+            current = current.__cause__ or current.__context__
+        return ""
+
+    @classmethod
+    def _websocket_error_text(cls, event) -> str:
+        response = cls._websocket_field(event, "response")
+        error = cls._websocket_field(event, "error")
+        response_error = cls._websocket_field(response, "error")
+        incomplete_details = cls._websocket_field(response, "incomplete_details")
+        parts = []
+        event_type = cls._websocket_diagnostic_value(
+            cls._websocket_field(event, "type")
+        )
+        if event_type:
+            parts.append(f"event={event_type}")
         for source in (
             event,
             error,
@@ -2217,11 +2277,25 @@ class OpenAIResponsesSession(ChatSession):
         ):
             if source is None:
                 continue
-            for key in ("code", "type", "param", "message"):
-                value = getattr(source, key, None)
-                if value is not None:
-                    parts.append(str(value))
-        return " ".join(parts).replace("\n", " ")[:500]
+            for label, keys in (
+                ("status", ("status", "status_code")),
+                ("code", ("code",)),
+                ("type", ("type",)),
+                ("param", ("param",)),
+                ("message", ("message",)),
+            ):
+                if source is event and label == "type":
+                    continue
+                value = None
+                for key in keys:
+                    value = cls._websocket_field(source, key)
+                    if value is not None:
+                        break
+                safe_value = cls._websocket_diagnostic_value(value)
+                part = f"{label}={safe_value}" if safe_value else ""
+                if part and part not in parts:
+                    parts.append(part)
+        return (" ".join(parts) or "unknown error")[:500]
 
     @classmethod
     def _websocket_previous_response_missing(cls, event) -> bool:
@@ -2257,9 +2331,10 @@ class OpenAIResponsesSession(ChatSession):
             "type": "response.create",
             "model": self._model,
             "input": input_items,
-            "stream": True,
             **self._extra_kwargs,
         }
+        # WebSocket mode always streams events and rejects this HTTP option.
+        frame.pop("stream", None)
         if self._instructions:
             frame["instructions"] = self._instructions
         if self._tools:
@@ -2293,8 +2368,10 @@ class OpenAIResponsesSession(ChatSession):
             raise
         except Exception as exc:
             self._close_websocket()
+            close_text = self._websocket_close_text(exc)
             raise ResponsesWebSocketRequestError(
-                f"Responses WebSocket connection to {self._upstream_host} failed; "
+                f"Responses WebSocket connection to {self._upstream_host} failed"
+                f"{close_text}; "
                 "the connection will be retried on the next request."
             ) from exc
 
@@ -2318,7 +2395,8 @@ class OpenAIResponsesSession(ChatSession):
 
         if (
             previous_response_id
-            and getattr(first_event, "type", None) in {"error", "response.failed"}
+            and self._websocket_field(first_event, "type")
+            in {"error", "response.failed"}
             and self._websocket_previous_response_missing(first_event)
         ):
             self._clear_websocket_chain()
@@ -2335,7 +2413,7 @@ class OpenAIResponsesSession(ChatSession):
         delivered_text = False
         try:
             while True:
-                event_type = getattr(event, "type", None)
+                event_type = self._websocket_field(event, "type")
                 if event_type in {"error", "response.failed", "response.incomplete"}:
                     raise ResponsesWebSocketRequestError(
                         "Responses WebSocket request failed: "
@@ -2384,9 +2462,11 @@ class OpenAIResponsesSession(ChatSession):
                     event = connection.recv()
                 except Exception as exc:
                     self._close_websocket()
+                    close_text = self._websocket_close_text(exc)
                     request_error = ResponsesWebSocketRequestError(
                         f"Responses WebSocket stream from {self._upstream_host} "
-                        "disconnected; the connection will be retried on the next request."
+                        f"disconnected{close_text}; the connection will be retried "
+                        "on the next request."
                     )
                     self._mark_partial_websocket_stream(request_error, delivered_text)
                     raise request_error from exc
