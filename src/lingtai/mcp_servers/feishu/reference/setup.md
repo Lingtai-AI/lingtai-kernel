@@ -20,13 +20,17 @@ Grant the tenant/app permissions required by the enabled slice:
 | `im:message:send_as_bot` | Send, reply, edit, and delete as the Bot. |
 | `im:message.p2p_msg:readonly` | Receive direct-message events. |
 | `im:message.group_at_msg:readonly` | Receive group messages that explicitly `@Bot`. |
-| `im:resource` | Download inbound message resources and upload outbound media. |
+| `im:resource` | Download inbound message resources; this broad permission also satisfies outbound media upload. |
+| `im:resource:upload` | Upload outbound media without granting broad resource access. Prefer this narrower permission when only upload is missing. |
 | `im:message.reactions:read` | Receive and inspect reaction events. |
 | `im:message.reactions:write_only` | Add and remove seen, typing, done, and public reactions. |
 
 Feishu may present a broader aggregate permission instead of one of the narrow
 permissions above. Use the Developer Console's permission requested by the
-corresponding API when the tenant UI differs. The current LingTai adapter does
+corresponding API when the tenant UI differs. In particular, an outbound upload
+permission error can name either `im:resource:upload` or the broad
+`im:resource`; grant the narrower upload permission when the console offers it.
+Do not infer an unlisted download-scope name. The current LingTai adapter does
 not need contact-directory access to admit a sender.
 
 Select **long connection** as the event delivery mode and subscribe to:

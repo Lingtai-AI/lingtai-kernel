@@ -183,6 +183,18 @@ An inbound user's provider key can be downloadable but not owned by the Bot for
 outbound reuse. Upload from the downloaded absolute local path, or use a key
 previously created by this Bot. Do not convert the key into a URL.
 
+### Local media upload reports provider code `99991672`
+
+The app lacks an effective resource-upload permission. In the Developer
+Console, grant `im:resource:upload` when it is available; the broader
+`im:resource` also satisfies the API but is not required solely for upload.
+Create and publish a new app version, then complete any tenant-admin approval or
+reinstallation the console requires. A draft permission change is not enough.
+
+After the published permission is effective, make one new explicit upload
+attempt. Before that point, repeating the same send only reproduces a
+non-retryable `UPLOAD_FAILED` result and must not create a message side effect.
+
 ## Cards and callbacks
 
 ### Card sends, but clicking a button does nothing
