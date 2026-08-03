@@ -884,8 +884,10 @@ DESCRIPTION = (
     "(use compound ID from read results). "
     "'react' to add or remove a reaction on a message. "
     "'search' to find messages by keyword or regex. "
-    "'delete' to delete a bot message (message_id). "
-    "'edit' to edit a sent text/post/card message (message_id, text or content; "
+    "'delete' to delete every physical chunk of a logical bot message using "
+    "any returned compound message_id. "
+    "'edit' to edit every physical chunk of a sent text/post/card message "
+    "using any returned compound message_id (text or content; "
     "media is not editable through this action). "
     "'contacts' to manage saved contacts (open_id aliases). "
     "'accounts' to list configured app accounts. "
@@ -2564,9 +2566,180 @@ class FeishuManager:
     def _find_message_record(self, account: str, compound_id: str) -> dict:
         for folder in ("inbox", "sent"):
             for message in self._list_messages(account, folder):
-                if message.get("id") == compound_id:
+                if (
+                    message.get("id") == compound_id
+                    or compound_id in (message.get("message_ids") or [])
+                ):
                     return message
         return {}
+
+    def _logical_message_group(
+        self,
+        account: str,
+        chat_id: str,
+        requested_id: str,
+        record: dict[str, Any],
+    ) -> list[str]:
+        """Resolve every physical chunk belonging to one sent record."""
+        candidates: list[object] = list(record.get("message_ids") or [])
+        candidates.extend(
+            chunk.get("message_id")
+            for chunk in (record.get("chunks") or [])
+            if isinstance(chunk, dict)
+        )
+        if not candidates:
+            candidates.extend(
+                f"{account}:{chat_id}:{message_id}"
+                for message_id in (record.get("feishu_message_ids") or [])
+            )
+        if not candidates and record.get("id"):
+            candidates.append(record["id"])
+
+        result: list[str] = []
+        for candidate in candidates:
+            if not isinstance(candidate, str) or not candidate:
+                continue
+            try:
+                candidate_account, candidate_chat, candidate_message = (
+                    self._parse_compound_id(candidate)
+                )
+            except ValueError:
+                continue
+            if (
+                candidate_account != account
+                or candidate_chat != chat_id
+                or not candidate_message
+                or candidate in result
+            ):
+                continue
+            result.append(candidate)
+        return result if requested_id in result else [requested_id]
+
+    @staticmethod
+    def _lifecycle_failure(
+        compound_id: str,
+        chunk_index: int,
+        error: BaseException,
+    ) -> dict[str, Any]:
+        failure = failure_result(error)
+        return {
+            "message_id": compound_id,
+            "chunk_index": chunk_index,
+            "error": failure["error"],
+            "error_code": failure["error_code"],
+            "retryable": failure["retryable"],
+            "retry_after_seconds": failure["retry_after_seconds"],
+        }
+
+    def _persist_lifecycle(
+        self,
+        record: dict[str, Any],
+        *,
+        operation: str,
+        message_ids: list[str],
+        succeeded_message_ids: list[str],
+        failures: list[dict[str, Any]],
+        content: dict[str, Any] | None = None,
+        message_type: str | None = None,
+        text: str | None = None,
+        placeholder: bool = False,
+    ) -> None:
+        # Preserve the existing transport-success boundary when the provider
+        # rejected every member. Only a mixed outcome creates new durable
+        # side-effect state that must be reconciled after restart.
+        if failures and not succeeded_message_ids:
+            return
+        record_dir = record.get("_dir")
+        if not isinstance(record_dir, str) or not record_dir:
+            return
+        persisted = {
+            key: value for key, value in record.items() if key != "_dir"
+        }
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        lifecycle_status = (
+            "completed"
+            if not failures
+            else "partial" if succeeded_message_ids else "failed"
+        )
+        persisted["lifecycle"] = {
+            "operation": operation,
+            "status": lifecycle_status,
+            "attempted_message_ids": message_ids,
+            "succeeded_message_ids": succeeded_message_ids,
+            "failures": failures,
+            "at": now,
+        }
+        if failures:
+            persisted["status"] = f"{operation}_{lifecycle_status}"
+        elif operation == "delete":
+            persisted["status"] = "deleted"
+            persisted["deleted_at"] = now
+            persisted["deleted_message_ids"] = message_ids
+        else:
+            persisted.update({
+                "content": content,
+                "message_type": message_type,
+                "text": text,
+                "status": "placeholder" if placeholder else "sent",
+                "edited_at": now,
+                "edited_message_ids": message_ids,
+            })
+            if placeholder:
+                persisted["placeholder"] = True
+        _write_private_json(
+            Path(record_dir) / "message.json",
+            persisted,
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _lifecycle_response(
+        *,
+        operation: str,
+        primary_id: str,
+        message_ids: list[str],
+        succeeded_message_ids: list[str],
+        failures: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        chunks = [
+            {"index": index, "message_id": message_id}
+            for index, message_id in enumerate(message_ids, start=1)
+        ]
+        if not failures:
+            return {
+                "status": "edited" if operation == "edit" else "deleted",
+                "message_id": primary_id,
+                "message_ids": message_ids,
+                "chunk_count": len(message_ids),
+                "chunks": chunks,
+            }
+
+        first = failures[0]
+        response = failure_result(
+            first["error"],
+            error_code=first["error_code"],
+            retryable=first["retryable"],
+            retry_after_seconds=first["retry_after_seconds"],
+        )
+        response.update({
+            "operation": operation,
+            "partial_failure": bool(succeeded_message_ids),
+            "message_id": primary_id,
+            "message_ids": message_ids,
+            "chunk_count": len(message_ids),
+            "chunks": chunks,
+            "succeeded_message_ids": succeeded_message_ids,
+            "failed_message_ids": [
+                failure["message_id"] for failure in failures
+            ],
+            "failures": failures,
+            "automatic_retry_allowed": False,
+            "warning": (
+                "The logical message group may now be inconsistent. "
+                "Inspect provider state before any new lifecycle operation."
+            ),
+        })
+        return response
 
     def _persist_outbound(
         self,
@@ -2882,6 +3055,7 @@ class FeishuManager:
                 "chunks": m.get("chunks"),
                 "status": m.get("status"),
                 "partial_delivery": m.get("partial_delivery", False),
+                "lifecycle": m.get("lifecycle"),
                 "chunk_count": m.get("chunk_count"),
                 "delivered_chunk_count": m.get("delivered_chunk_count"),
                 "failed_chunk_index": m.get("failed_chunk_index"),
@@ -2903,6 +3077,9 @@ class FeishuManager:
                 "text": m.get("text"),
                 "date": m.get("date"),
                 "edited_at": m.get("edited_at"),
+                "edited_message_ids": m.get("edited_message_ids"),
+                "deleted_at": m.get("deleted_at"),
+                "deleted_message_ids": m.get("deleted_message_ids"),
                 "parent_id": m.get("parent_id"),
                 "root_id": m.get("root_id"),
                 "reply_to": m.get("reply_to"),
@@ -3100,10 +3277,40 @@ class FeishuManager:
             return failure_result(
                 "message_id is required", error_code="INVALID_ARGUMENT",
             )
-        alias, _chat_id, feishu_msg_id = self._parse_compound_id(compound_id)
+        alias, chat_id, _feishu_msg_id = self._parse_compound_id(compound_id)
+        record = self._find_message_record(alias, compound_id)
+        message_ids = self._logical_message_group(
+            alias, chat_id, compound_id, record,
+        )
         acct = self._service.get_account(alias)
-        acct.delete_message(feishu_msg_id)
-        return {"status": "deleted", "message_id": compound_id}
+        succeeded: list[str] = []
+        failures: list[dict[str, Any]] = []
+        for index, message_id in enumerate(message_ids, start=1):
+            _member_alias, _member_chat, physical_id = self._parse_compound_id(
+                message_id
+            )
+            try:
+                acct.delete_message(physical_id)
+                succeeded.append(message_id)
+            except Exception as exc:  # noqa: BLE001
+                failures.append(
+                    self._lifecycle_failure(message_id, index, exc)
+                )
+        self._persist_lifecycle(
+            record,
+            operation="delete",
+            message_ids=message_ids,
+            succeeded_message_ids=succeeded,
+            failures=failures,
+        )
+        primary_id = record.get("id") or compound_id
+        return self._lifecycle_response(
+            operation="delete",
+            primary_id=primary_id,
+            message_ids=message_ids,
+            succeeded_message_ids=succeeded,
+            failures=failures,
+        )
 
     def _edit(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")
@@ -3111,8 +3318,11 @@ class FeishuManager:
             return failure_result(
                 "message_id is required", error_code="INVALID_ARGUMENT",
             )
-        alias, _chat_id, feishu_msg_id = self._parse_compound_id(compound_id)
+        alias, chat_id, _feishu_msg_id = self._parse_compound_id(compound_id)
         record = self._find_message_record(alias, compound_id)
+        message_ids = self._logical_message_group(
+            alias, chat_id, compound_id, record,
+        )
         is_progress = bool(
             record.get("placeholder") or record.get("status") == "placeholder"
         )
@@ -3129,32 +3339,40 @@ class FeishuManager:
             sdk_message = {"card": card}
             message_type = "interactive"
         acct = self._service.get_account(alias)
-        acct.update_content(feishu_msg_id, sdk_message)
-
-        record_dir = record.pop("_dir", "") if record else ""
-        if record_dir:
-            record.update({
-                "content": content,
-                "message_type": message_type,
-                "text": text,
-                "status": "placeholder" if is_progress else "sent",
-                "edited_at": datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                ),
-            })
-            if is_progress:
-                record["placeholder"] = True
-            _write_private_json(
-                Path(record_dir) / "message.json",
-                record,
-                ensure_ascii=False,
+        succeeded: list[str] = []
+        failures: list[dict[str, Any]] = []
+        for index, message_id in enumerate(message_ids, start=1):
+            _member_alias, _member_chat, physical_id = self._parse_compound_id(
+                message_id
             )
-        response = {
-            "status": "edited",
-            "message_id": compound_id,
-            "content_type": content["type"],
-        }
-        if is_progress:
+            try:
+                acct.update_content(physical_id, sdk_message)
+                succeeded.append(message_id)
+            except Exception as exc:  # noqa: BLE001
+                failures.append(
+                    self._lifecycle_failure(message_id, index, exc)
+                )
+        self._persist_lifecycle(
+            record,
+            operation="edit",
+            message_ids=message_ids,
+            succeeded_message_ids=succeeded,
+            failures=failures,
+            content=content,
+            message_type=message_type,
+            text=text,
+            placeholder=is_progress,
+        )
+        primary_id = record.get("id") or compound_id
+        response = self._lifecycle_response(
+            operation="edit",
+            primary_id=primary_id,
+            message_ids=message_ids,
+            succeeded_message_ids=succeeded,
+            failures=failures,
+        )
+        response["content_type"] = content["type"]
+        if is_progress and not failures:
             response.update({
                 "placeholder": True,
                 "hint": (

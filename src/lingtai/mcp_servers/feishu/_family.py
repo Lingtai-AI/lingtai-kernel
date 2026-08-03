@@ -258,10 +258,24 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
             },
             required=["query"],
         ),
-        "delete": _object({"message_id": {"type": "string"}}, required=["message_id"]),
+        "delete": _object({
+            "message_id": {
+                "type": "string",
+                "description": (
+                    "Any compound ID returned for a logical bot message; "
+                    "all persisted physical chunks are deleted."
+                ),
+            },
+        }, required=["message_id"]),
         "edit": _object(
             {
-                "message_id": {"type": "string"},
+                "message_id": {
+                    "type": "string",
+                    "description": (
+                        "Any compound ID returned for a logical bot message; "
+                        "all persisted physical chunks are edited."
+                    ),
+                },
                 "text": {"type": "string"},
                 "content": editable_content,
             },
@@ -336,8 +350,9 @@ def feishu_schema() -> dict[str, Any]:
         "operation='remove' + reaction_id). "
         "search: search inbox messages by regex "
         "(query; optional account, chat_id). "
-        "delete: delete a bot message (message_id). "
-        "edit: edit a bot text/post/card message "
+        "delete: delete every physical chunk of a logical bot message "
+        "using any returned compound message_id. "
+        "edit: edit every physical chunk of a bot text/post/card message "
         "(message_id, exactly one of text/content). "
         "contacts: list saved contacts (optional account). "
         "add_contact: save a contact "

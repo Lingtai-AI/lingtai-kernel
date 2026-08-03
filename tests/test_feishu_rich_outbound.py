@@ -24,6 +24,8 @@ class _FakeAccount:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
         self.fail_edit = False
+        self.fail_edit_ids: set[str] = set()
+        self.fail_delete_ids: set[str] = set()
 
     def send_content(
         self, receive_id: str, receive_id_type: str, message: dict[str, Any]
@@ -64,7 +66,7 @@ class _FakeAccount:
         self, message_id: str, message: dict[str, Any]
     ) -> dict[str, Any]:
         self.calls.append(("edit", (message_id, message), {}))
-        if self.fail_edit:
+        if self.fail_edit or message_id in self.fail_edit_ids:
             raise RuntimeError("edit rejected")
         return {"message_id": message_id, "message_ids": [message_id]}
 
@@ -72,7 +74,10 @@ class _FakeAccount:
         self.calls.append(("reaction", (message_id, emoji_type), {}))
         return True
 
-    def delete_message(self, _message_id: str) -> bool:
+    def delete_message(self, message_id: str) -> bool:
+        self.calls.append(("delete", (message_id,), {}))
+        if message_id in self.fail_delete_ids:
+            raise RuntimeError("delete rejected")
         return True
 
 
@@ -263,15 +268,121 @@ def test_progress_edit_stays_a_card_and_persists_only_after_transport_success(
         "edit",
         {"message_id": sent["message_id"], "text": "must not persist"},
     )
-    assert failed == {
-        "status": "failed",
-        "error": "edit rejected",
-        "message": "edit rejected",
-        "error_code": "UNKNOWN",
-        "retryable": False,
-        "retry_after_seconds": None,
-    }
+    assert failed["status"] == "failed"
+    assert failed["error"] == "edit rejected"
+    assert failed["error_code"] == "UNKNOWN"
+    assert failed["partial_failure"] is False
+    assert failed["message_ids"] == [sent["message_id"]]
+    assert failed["failed_message_ids"] == [sent["message_id"]]
+    assert failed["automatic_retry_allowed"] is False
     assert path.read_text(encoding="utf-8") == before_failure
+
+
+@pytest.mark.parametrize("requested_index", [0, 1])
+@pytest.mark.parametrize("operation", ["edit", "delete"])
+def test_chunk_lifecycle_resolves_the_whole_group_from_any_member(
+    tmp_path: Path,
+    requested_index: int,
+    operation: str,
+) -> None:
+    manager, account = _manager(tmp_path)
+    sent = _call(manager, "send", {
+        "receive_id": "oc_chat",
+        "receive_id_type": "chat_id",
+        "content": {"type": "markdown", "markdown": "two chunks"},
+    })
+    account.calls.clear()
+    input_: dict[str, Any] = {
+        "message_id": sent["message_ids"][requested_index],
+    }
+    if operation == "edit":
+        input_["text"] = "edited group"
+
+    result = _call(manager, operation, input_)
+
+    assert result["status"] == ("edited" if operation == "edit" else "deleted")
+    assert result["message_id"] == sent["message_id"]
+    assert result["message_ids"] == sent["message_ids"]
+    assert result["chunk_count"] == 2
+    assert [call[1][0] for call in account.calls] == [
+        "om_chunk_1", "om_chunk_2",
+    ]
+    assert {call[0] for call in account.calls} == {operation}
+
+    _path, record = _sent_records(tmp_path)[0]
+    assert record["lifecycle"] == {
+        "operation": operation,
+        "status": "completed",
+        "attempted_message_ids": sent["message_ids"],
+        "succeeded_message_ids": sent["message_ids"],
+        "failures": [],
+        "at": record["lifecycle"]["at"],
+    }
+    if operation == "edit":
+        assert record["text"] == "edited group"
+        assert record["edited_message_ids"] == sent["message_ids"]
+    else:
+        assert record["status"] == "deleted"
+        assert record["deleted_message_ids"] == sent["message_ids"]
+
+
+@pytest.mark.parametrize("operation", ["edit", "delete"])
+def test_chunk_lifecycle_persists_exact_partial_failure(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    manager, account = _manager(tmp_path)
+    sent = _call(manager, "send", {
+        "receive_id": "oc_chat",
+        "receive_id_type": "chat_id",
+        "content": {"type": "markdown", "markdown": "original group"},
+    })
+    account.calls.clear()
+    if operation == "edit":
+        account.fail_edit_ids.add("om_chunk_2")
+    else:
+        account.fail_delete_ids.add("om_chunk_2")
+    input_: dict[str, Any] = {"message_id": sent["message_ids"][1]}
+    if operation == "edit":
+        input_["text"] = "must not replace durable logical content"
+
+    result = _call(manager, operation, input_)
+
+    assert result["status"] == "failed"
+    assert result["operation"] == operation
+    assert result["partial_failure"] is True
+    assert result["automatic_retry_allowed"] is False
+    assert result["message_id"] == sent["message_id"]
+    assert result["message_ids"] == sent["message_ids"]
+    assert result["succeeded_message_ids"] == [sent["message_ids"][0]]
+    assert result["failed_message_ids"] == [sent["message_ids"][1]]
+    assert result["failures"][0]["chunk_index"] == 2
+    assert [call[1][0] for call in account.calls] == [
+        "om_chunk_1", "om_chunk_2",
+    ]
+
+    _path, record = _sent_records(tmp_path)[0]
+    assert record["status"] == f"{operation}_partial"
+    assert record["lifecycle"]["operation"] == operation
+    assert record["lifecycle"]["status"] == "partial"
+    assert record["lifecycle"]["attempted_message_ids"] == sent["message_ids"]
+    assert record["lifecycle"]["succeeded_message_ids"] == [
+        sent["message_ids"][0]
+    ]
+    assert record["lifecycle"]["failures"][0]["message_id"] == (
+        sent["message_ids"][1]
+    )
+    if operation == "edit":
+        assert record["text"] == "original group"
+
+    read = _call(manager, "read", {
+        "account": "main",
+        "chat_id": "oc_chat",
+        "limit": 10,
+    })
+    assert read["status"] == "ok"
+    assert read["messages"][0]["status"] == f"{operation}_partial"
+    assert read["messages"][0]["lifecycle"] == record["lifecycle"]
 
 
 def test_account_sdk_outbound_single_attempt_adapter_projects_chunks():
