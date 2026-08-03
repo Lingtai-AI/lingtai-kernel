@@ -61,8 +61,14 @@ class WhatsAppBridge:
         self.startup_timeout = startup_timeout
         self._proc: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
+        # stdin is written from arbitrary caller threads; two concurrent
+        # requests must not interleave halves of a frame on one line.
+        self._write_lock = threading.Lock()
+        # _latches is mutated from the reader thread and from callers.
+        self._latch_lock = threading.Lock()
         self._latches: dict[str, dict[str, Any]] = {}
         self._reader: threading.Thread | None = None
+        self._stderr_reader: threading.Thread | None = None
         self._started_at: float | None = None
         self._stop = threading.Event()
 
@@ -94,13 +100,24 @@ class WhatsAppBridge:
                 raise BridgeError(f"node executable not found ({self.node_path}); install Node.js >= 18") from e
             self._stop.clear()
             self._started_at = time.time()
-            self._reader = threading.Thread(target=self._read_loop, name="whatsapp-bridge-reader", daemon=True)
+            proc = self._proc
+            self._reader = threading.Thread(
+                target=self._read_loop, args=(proc,), name="whatsapp-bridge-reader", daemon=True,
+            )
             self._reader.start()
+            # Puppeteer/Chromium are prolific stderr writers. An undrained
+            # PIPE fills its ~64 KiB kernel buffer and blocks the bridge
+            # inside a stderr write, deadlocking the whole channel.
+            self._stderr_reader = threading.Thread(
+                target=self._drain_stderr, args=(proc,), name="whatsapp-bridge-stderr", daemon=True,
+            )
+            self._stderr_reader.start()
 
     def stop(self) -> None:
         self._stop.set()
         with self._lock:
             proc, self._proc = self._proc, None
+        self._fail_pending("bridge stopped")
         if proc is None:
             return
         try:
@@ -121,37 +138,75 @@ class WhatsAppBridge:
 
     # -- protocol --------------------------------------------------------
 
-    def _read_loop(self) -> None:
-        proc = self._proc
+    def _drain_stderr(self, proc: subprocess.Popen[str]) -> None:
+        """Consume the bridge's stderr into the logger so it can never fill."""
+        stream = proc.stderr
+        if stream is None:
+            return
+        try:
+            for line in stream:
+                line = line.rstrip()
+                if line:
+                    log.warning("bridge stderr: %s", line[:2000])
+        except Exception:  # stream closed under us during stop()
+            pass
+
+    def _fail_pending(self, error: str) -> None:
+        """Release every waiter with a typed failure (bridge died)."""
+        with self._latch_lock:
+            pending, self._latches = self._latches, {}
+        for latch in pending.values():
+            latch.setdefault("error", error)
+            latch["done"].set()
+
+    def _read_loop(self, proc: subprocess.Popen[str]) -> None:
         if proc is None or proc.stdout is None:
             return
-        for line in proc.stdout:
-            if self._stop.is_set():
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                log.debug("bridge: non-JSON line: %.120s", line)
-                continue
-            rid = obj.get("id")
-            if rid is not None:
-                latch = self._latches.pop(str(rid), None)
-                if latch:
-                    if "error" in obj:
-                        latch["error"] = obj["error"]
-                    else:
-                        latch["result"] = obj.get("result") or {}
-                    latch["done"].set()
-                continue
-            # Outbound event.
-            try:
-                if self.on_event:
-                    self.on_event(obj)
-            except Exception:
-                log.exception("bridge on_event handler failed")
+        try:
+            for line in proc.stdout:
+                if self._stop.is_set():
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    log.debug("bridge: non-JSON line: %.120s", line)
+                    continue
+                if not isinstance(obj, dict):
+                    log.debug("bridge: non-object frame: %.120s", line)
+                    continue
+                rid = obj.get("id")
+                if rid is not None:
+                    with self._latch_lock:
+                        latch = self._latches.pop(str(rid), None)
+                    if latch:
+                        if "error" in obj:
+                            latch["error"] = obj["error"]
+                        else:
+                            # ``.get(..., {})``: a falsy-but-valid result
+                            # ([], 0, false) must survive.
+                            latch["result"] = obj.get("result", {})
+                        latch["done"].set()
+                    continue
+                if "error" in obj:
+                    # {"id": null, "error": ...} is a protocol error the bridge
+                    # could not correlate — surface it instead of routing it
+                    # into the event handler as an untyped event.
+                    log.warning("bridge protocol error: %s", obj.get("error"))
+                    continue
+                # Outbound event.
+                try:
+                    if self.on_event:
+                        self.on_event(obj)
+                except Exception:
+                    log.exception("bridge on_event handler failed")
+        finally:
+            # EOF (or a read error) means the bridge is gone. Waiters must not
+            # block for the full timeout after the process has already died.
+            if not self._stop.is_set():
+                self._fail_pending("bridge exited")
 
     def request(self, method: str, params: dict[str, Any] | None = None, timeout: float = 30.0) -> dict[str, Any]:
         self.start()
@@ -160,17 +215,24 @@ class WhatsAppBridge:
             raise BridgeError("bridge not running")
         rid = str(uuid4())
         latch: dict[str, Any] = {"done": threading.Event()}
-        self._latches[rid] = latch
+        with self._latch_lock:
+            self._latches[rid] = latch
         payload = {"id": rid, "method": method, "params": params or {}}
         try:
-            proc.stdin.write(json.dumps(payload) + "\n")
-            proc.stdin.flush()
-        except BrokenPipeError as e:
-            self._latches.pop(rid, None)
+            with self._write_lock:
+                proc.stdin.write(json.dumps(payload) + "\n")
+                proc.stdin.flush()
+        except (BrokenPipeError, ValueError, OSError) as e:
+            with self._latch_lock:
+                self._latches.pop(rid, None)
             raise BridgeError(f"bridge write failed ({method}); is the bridge installed/running?") from e
         if not latch["done"].wait(timeout):
-            self._latches.pop(rid, None)
-            raise BridgeError(f"bridge request timed out: {method}")
+            with self._latch_lock:
+                # The reader may have landed the response between the wait()
+                # returning False and this pop; prefer the real response.
+                self._latches.pop(rid, None)
+            if not latch["done"].is_set():
+                raise BridgeError(f"bridge request timed out: {method}")
         if "error" in latch:
             raise BridgeError(latch["error"])
-        return latch.get("result") or {}
+        return latch.get("result", {})

@@ -105,6 +105,8 @@ related_files:
   - src/lingtai/mcp_servers/wechat/server.py
   - src/lingtai/mcp_servers/wechat/types.py
   - src/lingtai/mcp_servers/whatsapp/SKILL.md
+  - src/lingtai/mcp_servers/whatsapp/bridge/index.js
+  - src/lingtai/mcp_servers/whatsapp/bridge/package.json
   - src/lingtai/mcp_servers/whatsapp/__init__.py
   - src/lingtai/mcp_servers/whatsapp/__main__.py
   - src/lingtai/mcp_servers/whatsapp/client.py
@@ -113,8 +115,6 @@ related_files:
   - src/lingtai/mcp_servers/whatsapp/redaction.py
   - src/lingtai/mcp_servers/whatsapp/resources.py
   - src/lingtai/mcp_servers/whatsapp/server.py
-  - src/lingtai/mcp_servers/whatsapp/webhook.py
-  - src/lingtai/mcp_servers/whatsapp/webhook_server.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -144,7 +144,7 @@ Curated and built-in MCP server package implementations shipped inside the `ling
 | `telegram/task_card/` | Telegram-owned **adapter + programmable projection** unit (governed component with paired `ANATOMY.md`/`CONTRACT.md` + packaged docs). Its `resident.py` is a compatibility re-export of the shared core; `TelegramManager` supplies compound-ID binding, last-message high-water policy, Telegram error classification, transport, and persistence callbacks. The public `task_card` tool lives in `src/lingtai/tools/task_card/`; Telegram reads the intrinsic artifact and projects it read-only. |
 | `feishu/task_card.py` | Feishu-owned resident bindings plus lifecycle workers for the shared automatic event projection and the read-only intrinsic programmable artifact projection. `FeishuManager` supplies account+chat+optional-thread routing, conservative process-local high-water policy, Feishu card transport, and exact resident persistence. |
 | `feishu/control_cards.py` | Feishu-owned schema-2.0 renderer and bounded hashed-event claim store for local `/help`, `/status`, `/kanban`, `/system`, `/brief`, `/refresh`, `/sleep`, `/clear`, and `/taskcard` cards. Shared command semantics stay in `local_commands/core.py`; actor admission, routing, callback dispatch, and transport stay in the account/manager adapter. |
-| Per-server standard layout | Each curated server package repeats the same file shape: `__init__.py` (package surface), `__main__.py` (`python -m lingtai.mcp_servers.<name>`, delegating to `_entrypoint.py`), `server.py` (the SDK v2 low-level `Server` and its handlers), `manager.py` and/or `_family.py` (the flat action boundary and the LTP-v2 envelope), `account.py`/`client.py`/`service.py` (provider transport and session), `licc.py` (the `_licc_compat.py` shim), and `notification_header.md` (the model-facing "how to read this conversation preview" header the manager injects). Provider extras follow the same rule — `imap/_migrate.py` and `imap/bridge.py`, `cloud_mail/_watermark.py` and `imap/_watermark.py`, `feishu/_errors.py`, `wechat/{api,login,media,types,lockfile}.py`, `whatsapp/{redaction,resources,webhook,webhook_server}.py`. |
+| Per-server standard layout | Each curated server package repeats the same file shape: `__init__.py` (package surface), `__main__.py` (`python -m lingtai.mcp_servers.<name>`, delegating to `_entrypoint.py`), `server.py` (the SDK v2 low-level `Server` and its handlers), `manager.py` and/or `_family.py` (the flat action boundary and the LTP-v2 envelope), `account.py`/`client.py`/`service.py` (provider transport and session), `licc.py` (the `_licc_compat.py` shim), and `notification_header.md` (the model-facing "how to read this conversation preview" header the manager injects). Provider extras follow the same rule — `imap/_migrate.py` and `imap/bridge.py`, `cloud_mail/_watermark.py` and `imap/_watermark.py`, `feishu/_errors.py`, `wechat/{api,login,media,types,lockfile}.py`, `whatsapp/{redaction,resources}.py` plus `whatsapp/bridge/` (the Node `whatsapp-web.js` personal-account bridge: `index.js` + `package.json`, spawned and supervised by `whatsapp/client.py`). |
 | Per-package `SKILL.md` | The human/agent-facing bundled manual. If a manual has sidecars, the sidecar inventory and relative paths live in this markdown, not in the tool payload. |
 | `feishu/reference/` | Packaged operator references for Feishu app permissions/events/card callbacks, complete account config and canary/rollback, safe diagnostic flows, and the Telegram comparison/non-goal matrix. `feishu/SKILL.md` is their progressive-disclosure catalog. |
 | `pyproject.toml` package-data entries | Ships every curated MCP `SKILL.md`; `reference/**/*` and `assets/**/*` are also packaged for future sidecar files (`pyproject.toml:81-86`). |
