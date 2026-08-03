@@ -83,6 +83,7 @@ class FeishuService:
             self._taskcard_path,
             {"taskcard": enabled, "normal_rows": normal_rows},
             fsync=True,
+            file_mode=0o600,
         )
 
     def set_taskcard_listener(self, listener: Callable[[bool], None]) -> None:

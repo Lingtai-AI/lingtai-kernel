@@ -157,7 +157,10 @@ needed; do not load all three for an ordinary message send.
   `<workdir>/feishu/taskcard.json`; exact resident targets remain independently
   routed and persisted by `account + chat + optional thread`. Turning cards
   off suppresses projection without guessing or deleting unknown cards;
-  turning them on reprojects known routes conservatively.
+  turning them on reprojects known routes conservatively. Both the preference
+  file and exact resident-binding store enforce owner-only mode (`0600`) on
+  every atomic creation or replacement rather than inheriting the process
+  umask.
 - `/refresh`, `/sleep`, and `/clear` write the same established Agent signals
   as the shared command core. Their control-card feedback stays local and does
   not create a second Agent conversation turn.

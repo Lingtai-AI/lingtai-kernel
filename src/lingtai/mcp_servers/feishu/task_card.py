@@ -111,6 +111,7 @@ class FeishuTaskCardStore:
                     self._path,
                     {"version": self.VERSION, "routes": routes},
                     fsync=True,
+                    file_mode=0o600,
                 )
             except OSError:
                 return False
