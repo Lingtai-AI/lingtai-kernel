@@ -141,7 +141,9 @@ needed; do not load all three for an ordinary message send.
   other card remains an ordinary business callback. Source bindings and stable
   Feishu event ids are stored only as bounded SHA-256 hashes in
   `feishu/control_callbacks.json`, so neither source IDs nor callback event IDs
-  are exposed and a replay after refresh cannot repeat a local signal.
+  are exposed and a replay after refresh cannot repeat a local signal. Every
+  atomic creation or replacement of this store enforces owner-only mode
+  (`0600`) rather than inheriting the process umask.
 - Local commands and trusted control callbacks arrive on the SDK WebSocket
   event-loop thread. Their synchronous reply/update boundary bridges the SDK
   coroutine to a separate short-lived loop, waits for the exact result, and

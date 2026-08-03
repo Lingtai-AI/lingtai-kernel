@@ -58,6 +58,37 @@ def test_atomic_write_text_default_still_uses_umask_for_replacement(tmp_path):
     assert stat.S_IMODE(target.stat().st_mode) == 0o644
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits required")
+def test_atomic_write_json_explicit_mode_applies_to_create_and_replace(tmp_path):
+    target = tmp_path / "private.json"
+    old_umask = os.umask(0o022)
+    try:
+        _fsutil.atomic_write_json(target, {"version": 1}, file_mode=0o600)
+        created_mode = stat.S_IMODE(target.stat().st_mode)
+        target.chmod(0o644)
+        _fsutil.atomic_write_json(target, {"version": 2}, file_mode=0o600)
+    finally:
+        os.umask(old_umask)
+
+    assert created_mode == 0o600
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert json.loads(target.read_text()) == {"version": 2}
+
+
+def test_atomic_write_rejects_conflicting_mode_policies_before_create(tmp_path):
+    target = tmp_path / "state.json"
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _fsutil.atomic_write_text(
+            target,
+            "state",
+            preserve_existing_mode=True,
+            file_mode=0o600,
+        )
+
+    assert not target.exists()
+
+
 def test_atomic_write_temp_is_sibling_of_target(tmp_path, monkeypatch):
     # The temp file must live in the target's directory so os.replace is atomic
     # (same filesystem).  Capture the temp path os.replace sees.

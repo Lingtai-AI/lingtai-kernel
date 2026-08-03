@@ -81,6 +81,7 @@ def atomic_write_text(
     encoding: str = "utf-8",
     fsync: bool = False,
     preserve_existing_mode: bool = False,
+    file_mode: Optional[int] = None,
 ) -> Path:
     """Atomically write ``text`` to ``path``.
 
@@ -99,7 +100,16 @@ def atomic_write_text(
     exists, its permission bits are applied to the new temp file before the
     replace.  A missing target still inherits the process umask, and the
     default False preserves the existing behaviour for other callers.
+
+    ``file_mode`` is an alternative opt-in for security-sensitive state.  It
+    creates the sibling temp file no broader than the requested mode and
+    applies those exact permission bits before replace.  It cannot be combined
+    with ``preserve_existing_mode`` because their replacement policies differ.
     """
+    if preserve_existing_mode and file_mode is not None:
+        raise ValueError(
+            "preserve_existing_mode and file_mode are mutually exclusive"
+        )
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = _unique_tmp(target)
@@ -110,15 +120,26 @@ def atomic_write_text(
                 existing_mode = stat.S_IMODE(target.stat().st_mode)
             except FileNotFoundError:
                 pass
-        # "x" (exclusive create) guarantees we never write into a temp file
-        # another writer already created; combined with the uuid4 name this
-        # makes concurrent same-target writes collision-free.
-        with open(tmp, "x", encoding=encoding) as f:
+        # Exclusive creation guarantees we never write into a temp file another
+        # writer already created. Security-sensitive callers use os.open so the
+        # temporary inode is never created broader than their requested mode.
+        if file_mode is None:
+            stream = open(tmp, "x", encoding=encoding)
+        else:
+            fd = os.open(
+                tmp,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                stat.S_IMODE(file_mode),
+            )
+            stream = os.fdopen(fd, "w", encoding=encoding)
+        with stream as f:
             f.write(text)
             if fsync:
                 f.flush()
                 os.fsync(f.fileno())
-        if existing_mode is not None:
+        if file_mode is not None:
+            tmp.chmod(stat.S_IMODE(file_mode))
+        elif existing_mode is not None:
             tmp.chmod(existing_mode)
         os.replace(str(tmp), str(target))
     except BaseException:
@@ -141,6 +162,7 @@ def atomic_write_json(
     default: Optional[Callable[[Any], Any]] = None,
     fsync: bool = False,
     preserve_existing_mode: bool = False,
+    file_mode: Optional[int] = None,
 ) -> Path:
     """Atomically write ``obj`` as JSON to ``path``.
 
@@ -149,8 +171,8 @@ def atomic_write_json(
     *before* the file is touched, so a non-serializable ``obj`` raises without
     leaving a temp file or clobbering the target.
 
-    ``preserve_existing_mode`` is forwarded to :func:`atomic_write_text` and
-    remains disabled by default.
+    ``preserve_existing_mode`` and ``file_mode`` are forwarded to
+    :func:`atomic_write_text` and remain disabled by default.
     """
     text = json.dumps(
         obj,
@@ -165,6 +187,7 @@ def atomic_write_json(
         encoding="utf-8",
         fsync=fsync,
         preserve_existing_mode=preserve_existing_mode,
+        file_mode=file_mode,
     )
 
 

@@ -29,6 +29,7 @@ COMMANDS = frozenset(
     }
 )
 _CONTENT_LIMIT = 8_000
+_PRIVATE_FILE_MODE = 0o600
 
 
 def _language(value: object) -> str:
@@ -613,7 +614,12 @@ class FeishuControlEventStore:
                 return True
             values["sources"] = [*sources[-(self.LIMIT - 1) :], digest]
             try:
-                atomic_write_json(self._path, payload, fsync=True)
+                atomic_write_json(
+                    self._path,
+                    payload,
+                    fsync=True,
+                    file_mode=_PRIVATE_FILE_MODE,
+                )
             except OSError:
                 return False
             return True
@@ -647,7 +653,12 @@ class FeishuControlEventStore:
                 return False
             values["events"] = [*events[-(self.LIMIT - 1) :], digest]
             try:
-                atomic_write_json(self._path, payload, fsync=True)
+                atomic_write_json(
+                    self._path,
+                    payload,
+                    fsync=True,
+                    file_mode=_PRIVATE_FILE_MODE,
+                )
             except OSError:
                 return False
             return True

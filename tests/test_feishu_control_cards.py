@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import stat
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -240,6 +242,9 @@ def test_internal_callback_updates_in_place_without_persist_or_wake(
     wakes: list[dict[str, Any]] = []
     manager, service = _manager(tmp_path, wakes=wakes)
     manager.on_incoming("main", _message("/help"))
+    store_path = tmp_path / "feishu" / "control_callbacks.json"
+    if os.name == "posix":
+        assert stat.S_IMODE(store_path.stat().st_mode) == 0o600
     service.default_account.replies.clear()
     callback = _control_action("evt-control", "status")
 
@@ -250,7 +255,8 @@ def test_internal_callback_updates_in_place_without_persist_or_wake(
     assert len(service.default_account.updates) == 1
     assert service.default_account.updates[0][0] == "om_control"
     assert not list(tmp_path.glob("feishu/main/inbox/*/message.json"))
-    store_path = tmp_path / "feishu" / "control_callbacks.json"
+    if os.name == "posix":
+        assert stat.S_IMODE(store_path.stat().st_mode) == 0o600
     store = store_path.read_text(encoding="utf-8")
     assert "evt-control" not in store
     assert "om_control" not in store
@@ -389,6 +395,8 @@ def test_v1_event_claims_migrate_without_trusting_old_source_cards(
     assert payload["version"] == 2
     assert payload["accounts"]["main"]["events"] == [old_digest]
     assert len(payload["accounts"]["main"]["sources"]) == 1
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_non_control_value_remains_a_business_callback(tmp_path: Path) -> None:
