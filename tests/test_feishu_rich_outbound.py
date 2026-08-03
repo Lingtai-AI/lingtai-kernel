@@ -1,7 +1,9 @@
 """Focused Feishu text/markdown/post outbound and thread-routing coverage."""
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -337,6 +339,89 @@ def test_account_sdk_outbound_single_attempt_adapter_projects_chunks():
     assert reply_call[1][2] is True
     assert sum(call[0] == "reply" for call in calls) == 1
     assert edited["message_id"] == "om_1"
+
+
+def test_account_sdk_outbound_bridges_a_running_caller_loop_exactly_once():
+    calls: list[tuple[str, int]] = []
+
+    class _Sender:
+        async def _materialize(
+            self, _outbound: Any, **_kwargs: Any,
+        ) -> list[dict[str, str]]:
+            calls.append(("materialize", threading.get_ident()))
+            return [{"msg_type": "text", "content": "reply"}]
+
+        async def _reply(self, *_args: Any) -> lark.SendResult:
+            calls.append(("reply", threading.get_ident()))
+            return lark.SendResult.ok(
+                message_id="om_reply",
+                raw={"data": {"chat_id": "oc_chat"}},
+            )
+
+    class _Channel:
+        sender = _Sender()
+
+        async def update_card(
+            self, message_id: str, _card: dict[str, Any]
+        ) -> SimpleNamespace:
+            calls.append(("update", threading.get_ident()))
+            return SimpleNamespace(
+                success=True,
+                message_id=message_id,
+                chunk_ids=None,
+                raw={},
+            )
+
+    account = FeishuAccount("main", "app", "secret", ["ou_user"])
+    account._channel = _Channel()
+
+    async def _exercise() -> tuple[int, dict[str, Any], dict[str, Any]]:
+        caller_thread = threading.get_ident()
+        replied = account.reply_content(
+            "om_target",
+            "oc_chat",
+            {"text": "reply"},
+            reply_in_thread=False,
+        )
+        updated = account.update_content(
+            "om_reply", {"card": {"schema": "2.0", "body": {}}}
+        )
+        return caller_thread, replied, updated
+
+    caller_thread, replied, updated = asyncio.run(_exercise())
+
+    assert replied["message_id"] == "om_reply"
+    assert updated["message_id"] == "om_reply"
+    assert [name for name, _thread in calls] == [
+        "materialize", "reply", "update",
+    ]
+    assert all(thread != caller_thread for _name, thread in calls)
+
+
+def test_account_sdk_bridge_propagates_the_exact_exception_once():
+    boom = RuntimeError("synthetic update rejection")
+    calls: list[int] = []
+
+    class _Channel:
+        async def update_card(
+            self, _message_id: str, _card: dict[str, Any]
+        ) -> SimpleNamespace:
+            calls.append(threading.get_ident())
+            raise boom
+
+    account = FeishuAccount("main", "app", "secret", ["ou_user"])
+    account._channel = _Channel()
+
+    async def _exercise() -> None:
+        account.update_content(
+            "om_target", {"card": {"schema": "2.0", "body": {}}}
+        )
+
+    with pytest.raises(RuntimeError) as raised:
+        asyncio.run(_exercise())
+
+    assert raised.value is boom
+    assert len(calls) == 1
 
 
 def test_account_sdk_outbound_surfaces_exact_partial_delivery():

@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import lark_channel as lark
 from lark_channel import Conversation, Identity, InboundMessage, TextContent
 
 from lingtai.mcp_servers.feishu.account import (
+    FeishuAccount,
     FeishuInboundCardAction,
     FeishuInboundEvent,
 )
@@ -257,6 +261,72 @@ def test_internal_callback_updates_in_place_without_persist_or_wake(
     restarted, _service = _manager(tmp_path, wakes=wakes, service=restarted_service)
     restarted.on_card_action("main", callback)
     assert restarted_service.default_account.updates == []
+
+
+def test_real_account_bridges_local_command_and_trusted_callback_io(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, int]] = []
+
+    class _Sender:
+        async def _materialize(
+            self, _outbound: Any, **_kwargs: Any,
+        ) -> list[dict[str, str]]:
+            calls.append(("materialize", threading.get_ident()))
+            return [{"msg_type": "interactive", "content": "card"}]
+
+        async def _reply(self, *_args: Any) -> lark.SendResult:
+            calls.append(("reply", threading.get_ident()))
+            return lark.SendResult.ok(
+                message_id="om_control",
+                raw={"data": {"chat_id": "oc_chat"}},
+            )
+
+    class _Channel:
+        sender = _Sender()
+
+        async def update_card(
+            self, message_id: str, _card: dict[str, Any]
+        ) -> SimpleNamespace:
+            calls.append(("update", threading.get_ident()))
+            return SimpleNamespace(
+                success=True,
+                message_id=message_id,
+                chunk_ids=None,
+                raw={},
+            )
+
+    account = FeishuAccount("main", "app", "secret", ["ou_allowed"])
+    account._channel = _Channel()
+    wakes: list[dict[str, Any]] = []
+    manager, _service = _manager(
+        tmp_path,
+        wakes=wakes,
+        service=_FakeService(account),
+    )
+
+    async def _exercise() -> int:
+        caller_thread = threading.get_ident()
+        manager.on_incoming("main", _message("/help"))
+        manager.on_card_action(
+            "main", _control_action("evt-control-real", "status")
+        )
+        return caller_thread
+
+    caller_thread = asyncio.run(_exercise())
+
+    assert wakes == []
+    assert [name for name, _thread in calls] == [
+        "materialize", "reply", "update",
+    ]
+    assert all(thread != caller_thread for _name, thread in calls)
+    store = json.loads(
+        (tmp_path / "feishu" / "control_callbacks.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert len(store["accounts"]["main"]["sources"]) == 1
+    assert len(store["accounts"]["main"]["events"]) == 1
 
 
 def test_reserved_control_value_from_untrusted_source_is_business_callback(

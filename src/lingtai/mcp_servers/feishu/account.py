@@ -249,6 +249,48 @@ def _coerce_lark_outbound(message: dict[str, Any]) -> Any:
     raise TypeError(f"unsupported Feishu outbound keys: {sorted(message)}")
 
 
+def _run_sdk_coroutine(factory: Callable[[], Any]) -> Any:
+    """Run one SDK coroutine behind the account's synchronous boundary.
+
+    MCP tool calls normally reach this boundary from a worker without an
+    active event loop, where ``asyncio.run`` is sufficient. Inbound local
+    commands and card callbacks instead execute on the SDK WebSocket loop
+    thread. Nesting ``asyncio.run`` there raises before reply/update I/O and
+    prevents control-card source registration.
+
+    Preserve the synchronous account contract and one-attempt semantics by
+    creating and running the coroutine on a short-lived bridge thread only
+    when the caller already owns a running loop. The caller still waits for the
+    exact result or exception, so manager serialization and durable claims
+    remain ordered.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(factory())
+
+    results: list[Any] = []
+    errors: list[BaseException] = []
+
+    def _runner() -> None:
+        try:
+            results.append(asyncio.run(factory()))
+        except BaseException as exc:  # propagate the exact SDK failure
+            errors.append(exc)
+
+    bridge = threading.Thread(
+        target=_runner,
+        name="feishu-sdk-coroutine-bridge",
+    )
+    bridge.start()
+    bridge.join()
+    if errors:
+        raise errors[0]
+    if not results:
+        raise RuntimeError("Feishu SDK coroutine bridge returned no result")
+    return results[0]
+
+
 class _SingleAttemptOutboundAdapter:
     """Use SDK materialization while issuing exactly one request per chunk.
 
@@ -839,8 +881,8 @@ class FeishuAccount:
     ) -> dict:
         """Send one outbound value once per SDK-materialized chunk."""
         outbound = _coerce_lark_outbound(message)
-        result = asyncio.run(
-            _SingleAttemptOutboundAdapter(self._channel.sender).send(
+        result = _run_sdk_coroutine(
+            lambda: _SingleAttemptOutboundAdapter(self._channel.sender).send(
                 outbound,
                 receive_id=receive_id,
                 receive_id_type=receive_id_type,
@@ -888,8 +930,8 @@ class FeishuAccount:
     ) -> dict:
         """Reply once per SDK-materialized chunk without any fallback."""
         outbound = _coerce_lark_outbound(message)
-        result = asyncio.run(
-            _SingleAttemptOutboundAdapter(self._channel.sender).send(
+        result = _run_sdk_coroutine(
+            lambda: _SingleAttemptOutboundAdapter(self._channel.sender).send(
                 outbound,
                 receive_id=chat_id,
                 receive_id_type="chat_id",
@@ -1071,11 +1113,13 @@ class FeishuAccount:
     def update_content(self, message_id: str, message: dict[str, Any]) -> dict:
         """Edit a text/post message or replace one schema-2.0 card."""
         if "card" in message:
-            result = asyncio.run(
-                self._channel.update_card(message_id, message["card"])
+            result = _run_sdk_coroutine(
+                lambda: self._channel.update_card(message_id, message["card"])
             )
         else:
-            result = asyncio.run(self._channel.edit_message(message_id, message))
+            result = _run_sdk_coroutine(
+                lambda: self._channel.edit_message(message_id, message)
+            )
         projected = self._channel_send_result(result)
         projected["message_id"] = projected["message_id"] or message_id
         if not projected["message_ids"]:

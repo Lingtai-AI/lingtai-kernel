@@ -142,6 +142,11 @@ needed; do not load all three for an ordinary message send.
   Feishu event ids are stored only as bounded SHA-256 hashes in
   `feishu/control_callbacks.json`, so neither source IDs nor callback event IDs
   are exposed and a replay after refresh cannot repeat a local signal.
+- Local commands and trusted control callbacks arrive on the SDK WebSocket
+  event-loop thread. Their synchronous reply/update boundary bridges the SDK
+  coroutine to a separate short-lived loop, waits for the exact result, and
+  keeps one-attempt ordering; it never nests `asyncio.run`, retries, or releases
+  the callback serialization lock before the provider result is known.
 - User-facing card titles, navigation, command descriptions, and feedback use
   `agent.language`: `zh` is Chinese, `en` is English, and `wen` is literary
   Chinese. Unknown or missing languages use English.
