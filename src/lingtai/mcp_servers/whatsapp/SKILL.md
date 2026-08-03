@@ -1,93 +1,77 @@
 ---
 name: whatsapp-mcp-manual
 description: |
-  Progressive-disclosure usage manual for the WhatsApp Cloud API MCP tool. Read
-  this when you need detail beyond the one-line action descriptions: the 24-hour
-  customer-service window and approved templates, send vs reply vs react,
-  check/read/search, media attachments, contacts/accounts/status basics, the
-  notification transient-hook vs persistent-context split, and
-  external-delivery side-effect caveats. Pulled on demand via action='manual'; you
-  do not need to call it before every send.
-version: 1.3.0
-last_changed_at: "2026-07-29T00:00:00Z"
+  Progressive-disclosure usage manual for the personal-account WhatsApp MCP tool.
+  Read this when you need detail beyond the one-line action descriptions:
+  QR-code pairing via get_qr, send vs reply vs react, check/read/search,
+  media attachments, contacts/status basics, the notification transient-hook vs
+  persistent-context split, external-delivery side-effect caveats, and the
+  whatsapp-web.js bridge (ToS/ban-risk) notes. Pulled on demand via
+  action='manual'; you do not need to call it before every send.
+version: 2.0.0
+last_changed_at: "2026-08-03T00:00:00Z"
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/whatsapp/manager.py
 - src/lingtai/mcp_servers/whatsapp/server.py
 - src/lingtai/mcp_servers/whatsapp/client.py
 - src/lingtai/mcp_servers/whatsapp/_family.py
+- src/lingtai/mcp_servers/whatsapp/bridge/index.js
 maintenance: |
   Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
 
 # WhatsApp MCP — usage manual (progressive disclosure)
 
-This client uses the official Meta WhatsApp Cloud API only (no WhatsApp Web
-bridge).
+This client drives a personal WhatsApp account through a local whatsapp-web.js
+bridge (QR-code pairing). It does **not** use the Meta Cloud API.
 
-## 24-HOUR WINDOW / TEMPLATES
+## PAIRING / QR CODE
 
-- WhatsApp Cloud API allows free-form business replies only inside the 24-hour
-  customer-service window (24h since the user's last message). Outside that
-  window you must send an approved message `template`, not free text.
-- `templates`: list approved message templates. Use a template's `name` +
-  `language.code` to send outside the window.
+- First use: call the `get_qr` action. The bridge emits a QR code (data URL)
+  as soon as Puppeteer has started.
+- Open WhatsApp on the phone: Settings → Linked Devices → Link a Device.
+- Scan the QR. The session persists locally in the session directory, so later
+  restarts reconnect without a new scan.
+- `status` reports `ready`, the paired `me` (wa_id), and whether a QR is
+  available.
 
-## RECIPIENTS
+## BRIDGE PREREQUISITES
 
-- Messages target a recipient by `to` (or `wa_id`) — the WhatsApp `wa_id`. Use
-  ids returned by `check`/`read`/`contacts`.
+- Node.js >= 18 on PATH (or `node_path` in config).
+- `npm install` inside the bridge directory (`whatsapp/bridge/`) to fetch
+  whatsapp-web.js, Puppeteer, and qrcode.
+- First launch downloads/launches Chromium; allow extra time.
 
 ## SEND / REPLY / REACT
 
-- `send` (`to`/`wa_id`, plus `text`, `media`, or `template`) starts a message.
-  `media` is an object with `type` (image/document/audio/video) and the media
-  fields; `template` is an object requiring `name` and `language.code`.
-- `reply` threads to a specific message (`message_id`, then `text`/`media`/
-  `template`). `message_id` is the compound `account:wa_id:wamid` id.
-- `react` adds an emoji reaction to a message (`message_id`, `emoji`).
-- For text sends, `preview_url=true` enables link previews.
+- `send` requires `to` (or `wa_id`) plus `text` or `media`.
+- `reply` requires `message_id`, `to`, and `text`; it quote-replies through
+  the bridge.
+- `react` requires `message_id` and `emoji`.
+- Recipients use international format, digits only (e.g. `15551234567`); the
+  bridge converts to `@c.us` automatically. Group ids may pass through with
+  their suffix.
 
-## READING: check / read / search
+## CHECK / READ / SEARCH
 
-- `check`: list recent conversations.
-- `read`: read messages from one conversation (`wa_id`, or a `message_id` to
-  resolve it; optional `limit`). `mark_read` defaults to true — `read` marks the
-  conversation read on WhatsApp unless you pass `mark_read=false`.
-- `search`: regex search over message text (`query`).
+- `check` lists recent chats (unread counts + last message).
+- `read` returns stored message history for a `wa_id`, or chat list when no
+  wa_id is given.
+- `search` queries message bodies across recent chats (bounded).
 
-## CONTACTS / ACCOUNTS / STATUS
+## NOTIFICATIONS
 
-- `contacts`: list saved contacts. `add_contact`/`remove_contact` manage aliases.
-- `accounts`: list configured WhatsApp accounts (redacted).
-- `status`: connection/health status for an account.
+- Inbound messages are pushed to the agent inbox (LICC event) with
+  structured context: conversation_ref `whatsapp:<wa_id>`, recent_messages
+  (<=10), latest_incoming. `allowed_users` in config filters who may trigger
+  inbound pushes.
 
-## NOTIFICATIONS: TRANSIENT HOOK vs PERSISTENT CONTEXT
+## SIDE EFFECTS / RISK
 
-- Inbound WhatsApp messages surface to the agent in two `_meta` lanes:
-  - `_meta.agent_meta.notifications.attention.mcp.whatsapp` is a compact high-attention hook only —
-    `data.message_ids` (compound `account:wa_id:wamid` ids) and dismiss
-    guidance, never message text or routing context.
-  - `_meta.agent_meta.notifications.persistent.mcp.whatsapp` carries the durable context:
-    recent conversation messages (bounded text, both directions), sender/chat
-    routing hooks, and per-message comments for the agent's own outgoing
-    messages, truncated text, and non-text/media messages.
-- The whatsapp tool remains the source of truth. Neither lane marks anything
-  read; use `read`/`check` for exact producer state, especially when a
-  persistent message is truncated or is a media placeholder.
-- Reply on WhatsApp when the message arrived through WhatsApp (`reply` with the
-  compound message id, or `send`), respecting the 24-hour window rule above.
-- After handling, dismiss the transient hook via
-  `notification.dismiss_channel("mcp.whatsapp")`; the persistent block is
-  context history, not unread state — do not treat its presence as a pending
-  event.
-
-## SIDE EFFECTS & ERROR SURFACING
-
-- `send`, `reply`, and `react` deliver to real users — external side effects.
-  Confirm recipient and content before sending unsolicited messages, and respect
-  the 24-hour window rule above.
-- Actions return `{'status': 'ok', ...}` on success or `{'status': 'error',
-  'error': <message>, 'error_type': ...}` on failure (e.g. missing `to`, invalid
-  template, outside-window free text). Check the status and surface or act on
-  errors rather than assuming delivery.
+- Sending, replying, reacting, and media delivery reach real WhatsApp users;
+  confirm before unsolicited sends.
+- whatsapp-web.js is unofficial and violates WhatsApp ToS; account bans are
+  possible. Use for personal/experimental purposes only, respond mostly to
+  inbound, and do not send automated bulk messages.
+- Errors are returned as `{'status':'error','error':...,'error_type':...}`.

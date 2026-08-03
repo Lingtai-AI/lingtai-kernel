@@ -1,4 +1,4 @@
-"""LingTai WhatsApp MCP server."""
+"""LingTai WhatsApp MCP server (personal-account mode)."""
 from __future__ import annotations
 
 import asyncio
@@ -11,149 +11,98 @@ import mcp.types as types
 from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 
-from .. import _config
 from .._results import json_tool_result as _tool_result
 from .._results import text_resource_result as _resource_result
 from .._results import unknown_resource_error as _unknown_resource
 from .._results import unknown_tool_error as _unknown_tool
-from ._family import handle_whatsapp
 from .licc import push_inbox_event
 from .manager import WhatsAppManager, SCHEMA, DESCRIPTION
 from .resources import resource_text
-from .webhook_server import WhatsAppWebhookServer
 
 log = logging.getLogger("lingtai.mcp_servers.whatsapp")
 
 _SERVER_INSTRUCTIONS = (
-    "lingtai-whatsapp: official Meta WhatsApp Cloud API client. "
-    "Configure via LINGTAI_WHATSAPP_CONFIG. Inbound delivery requires a public HTTPS webhook."
+    "lingtai-whatsapp: personal-account WhatsApp client via a local whatsapp-web.js "
+    "bridge. Configure via LINGTAI_WHATSAPP_CONFIG. Pair by scanning the QR code "
+    "returned by the get_qr action (phone: WhatsApp Settings -> Linked Devices)."
 )
 
 
-def load_config() -> tuple[dict[str, Any], Path]:
-    return _config.load_config_file(
-        "LINGTAI_WHATSAPP_CONFIG",
-        label="WhatsApp",
-        missing_env_msg="LINGTAI_WHATSAPP_CONFIG env var not set",
-    )
+def load_config() -> tuple[dict[str, Any], Path | None]:
+    from .manager import load_config as _load
+    return _load()
 
 
-def _accounts_from_config(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    accounts = cfg.get("accounts")
-    if not accounts:
-        raise ValueError("config must contain 'accounts' list")
-    return list(accounts)
+def build_manager(config: dict[str, Any] | None = None) -> WhatsAppManager:
+    cfg = config if config is not None else (load_config()[0] or {})
+    return WhatsAppManager(cfg)
 
 
-def build_manager() -> tuple[WhatsAppManager, Path]:
-    cfg, config_path = load_config()
-    working_dir = Path(os.environ.get("LINGTAI_AGENT_DIR", os.getcwd()))
-    working_dir.mkdir(parents=True, exist_ok=True)
-
-    def _on_inbound(event: dict[str, Any]) -> None:
-        push_inbox_event(sender=event["from"], subject=event["subject"], body=event["body"], metadata=event.get("metadata"), wake=event.get("wake", True))
-
-    manager = WhatsAppManager(
-        accounts_config=_accounts_from_config(cfg),
-        working_dir=working_dir,
-        on_inbound=_on_inbound,
-        config_source=os.environ.get("LINGTAI_WHATSAPP_CONFIG") or str(config_path),
-    )
-    try:
-        path = manager.write_identity_file()
-        log.info("Wrote WhatsApp MCP identity metadata to %s", path)
-    except Exception as e:
-        log.warning("Failed to write WhatsApp MCP identity metadata (continuing): %s", e)
-    return manager, working_dir
-
-
-def build_server(manager: WhatsAppManager | None) -> Server:
-    async def _list_tools(
-        _ctx: ServerRequestContext,
-        _params: types.PaginatedRequestParams | None,
-    ) -> types.ListToolsResult:
-        return types.ListToolsResult(
-            tools=[types.Tool(name="whatsapp", description=DESCRIPTION, input_schema=SCHEMA)],
-        )
-
-    async def _call_tool(
-        _ctx: ServerRequestContext,
-        params: types.CallToolRequestParams,
-    ) -> types.CallToolResult:
-        if params.name != "whatsapp":
-            raise _unknown_tool(params.name)
-        arguments = params.arguments or {}
-        if manager is None:
-            result = handle_whatsapp(None, arguments)
-            if not result:
-                result = {
-                    "status": "error",
-                    "error": "WhatsApp manager not initialized; check LINGTAI_WHATSAPP_CONFIG",
-                }
-        else:
-            try:
-                result = await asyncio.to_thread(handle_whatsapp, manager, arguments)
-            except Exception as e:
-                result = {"status": "error", "error": str(e), "error_type": type(e).__name__}
-        return _tool_result(result)
-
-    async def _list_resources(
-        _ctx: ServerRequestContext,
-        _params: types.PaginatedRequestParams | None,
-    ) -> types.ListResourcesResult:
-        return types.ListResourcesResult(
-            resources=[types.Resource(uri=uri, name=uri.rsplit("/", 1)[-1], mime_type=mime) for uri, mime in [
-                ("lingtai://manifest", "application/json"),
-                ("lingtai://skills/whatsapp", "text/markdown; profile=lingtai-skill"),
-                ("lingtai://docs/configuration", "text/markdown"),
-                ("lingtai://docs/troubleshooting", "text/markdown"),
-                ("lingtai://status", "application/json"),
-                ("lingtai://onboarding/whatsapp", "text/markdown"),
-                ("lingtai://onboarding/html-template", "text/html"),
-            ]],
-        )
-
-    async def _read_resource(
-        _ctx: ServerRequestContext,
-        params: types.ReadResourceRequestParams,
-    ) -> types.ReadResourceResult:
-        status = manager.handle({"action": "status"}) if manager is not None else {"status": "not_initialized"}
-        uri = str(params.uri)
-        try:
-            text, mime = resource_text(uri, status)
-        except KeyError as exc:
-            # `resource_text` signals an unlisted URI with a bare KeyError,
-            # which would flatten to -32603. Same lookup-miss classification as
-            # the other resource servers.
-            raise _unknown_resource(uri) from exc
-        return _resource_result(uri, text, mime)
-
-    server: Server = Server(
-        "lingtai-whatsapp",
-        instructions=_SERVER_INSTRUCTIONS,
-        on_list_tools=_list_tools,
-        on_call_tool=_call_tool,
-        on_list_resources=_list_resources,
-        on_read_resource=_read_resource,
-    )
-    return server
-
-
-async def serve() -> None:
+def serve() -> Server:
     manager: WhatsAppManager | None = None
-    webhook_server: WhatsAppWebhookServer | None = None
-    try:
-        manager, _wd = build_manager()
-        log.info("WhatsApp manager initialized")
-        webhook_server = WhatsAppWebhookServer.from_manager_config(manager)
-        if webhook_server is not None:
-            webhook_server.start()
-    except Exception as e:
-        log.error("eager start failed; tool calls will return errors until fixed: %s", e)
-    server = build_server(manager)
-    try:
-        async with stdio_server() as (read_stream, write_stream):
-            await server.run(read_stream, write_stream, server.create_initialization_options())
-    finally:
-        if webhook_server is not None:
-            webhook_server.stop()
+
+    async def _ensure_manager() -> WhatsAppManager:
+        nonlocal manager
+        if manager is None:
+            manager = build_manager()
+        return manager
+
+    app = Server("whatsapp", instructions=_SERVER_INSTRUCTIONS)
+
+    @app.list_tools()
+    async def list_tools(ctx: ServerRequestContext | None = None) -> list[types.Tool]:
+        return [types.Tool(**SCHEMA)]
+
+    @app.call_tool()
+    async def call_tool(name: str, arguments: dict[str, Any], ctx: ServerRequestContext | None = None) -> list[types.TextContent]:
+        if name != SCHEMA["name"]:
+            raise _unknown_tool(name)
+        m = await _ensure_manager()
+        action = (arguments or {}).get("action")
+        args = (arguments or {}).get("args") or {}
+        if action == "manual":
+            return [_tool_result({"manual": "whatsapp-mcp-manual"})]
+        result = m.action(action, args)
+        return [_tool_result(result)]
+
+    @app.list_resource_templates()
+    async def list_resource_templates(ctx: ServerRequestContext | None = None) -> list[types.ResourceTemplate]:
+        return []
+
+    @app.list_resources()
+    async def list_resources(ctx: ServerRequestContext | None = None) -> list[types.Resource]:
+        return [
+            types.Resource(uri="lingtai://manifest", name="manifest", mimeType="application/json", description="WhatsApp MCP manifest"),
+            types.Resource(uri="lingtai://skills/whatsapp", name="whatsapp-mcp-manual", mimeType="text/markdown", description="WhatsApp MCP skill"),
+            types.Resource(uri="lingtai://status", name="status", mimeType="application/json", description="WhatsApp MCP status"),
+            types.Resource(uri="lingtai://docs/configuration", name="configuration", mimeType="text/markdown", description="WhatsApp MCP configuration"),
+            types.Resource(uri="lingtai://docs/troubleshooting", name="troubleshooting", mimeType="text/markdown", description="WhatsApp MCP troubleshooting"),
+            types.Resource(uri="lingtai://onboarding/whatsapp", name="onboarding", mimeType="text/markdown", description="WhatsApp MCP onboarding"),
+            types.Resource(uri="lingtai://onboarding/html-template", name="onboarding-html-template", mimeType="text/html", description="WhatsApp MCP onboarding HTML template"),
+        ]
+
+    @app.read_resource()
+    async def read_resource(uri: str, ctx: ServerRequestContext | None = None) -> types.ReadResourceResult:
+        status: dict[str, Any] = {}
+        if manager is not None:
+            try:
+                status = manager.action("status")
+            except Exception:
+                pass
+        try:
+            text, mime = resource_text(uri, status=status)
+        except KeyError:
+            raise _unknown_resource(uri)
+        return _resource_result(text, mime)
+
+    return app
+
+
+async def main() -> None:
+    app = serve()
+    async with stdio_server() as (read_stream, write_stream):
+        await app.run(read_stream, write_stream, app.create_initialization_options())
+
+
+def run() -> None:
+    asyncio.run(main())

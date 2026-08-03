@@ -1,4 +1,4 @@
-"""LingTai profile resources for WhatsApp MCP."""
+"""LingTai profile resources for WhatsApp MCP (personal-account mode)."""
 from __future__ import annotations
 
 import json
@@ -9,10 +9,10 @@ def manifest() -> dict[str, Any]:
     return {
         "name": "lingtai-whatsapp",
         "profile": "lingtai-mcp-v1",
-        "summary": "Official Meta WhatsApp Cloud API MCP for LingTai.",
-        "transport": "stdio MCP plus public HTTP webhook for inbound Meta callbacks",
-        "backend": "official_meta_cloud_api_only",
-        "tools": {"name": "whatsapp", "actions": ["send", "check", "read", "reply", "search", "react", "contacts", "add_contact", "remove_contact", "templates", "accounts", "status"]},
+        "summary": "Personal-account WhatsApp MCP for LingTai via a local whatsapp-web.js bridge (QR-code pairing).",
+        "transport": "stdio MCP plus a local Node child process (whatsapp-web.js)",
+        "backend": "personal_account_whatsapp_web",
+        "tools": {"name": "whatsapp", "actions": ["send", "check", "read", "reply", "react", "search", "contacts", "add_contact", "remove_contact", "get_qr", "logout", "status", "manual"]},
         "resources": [
             "lingtai://manifest", "lingtai://skills/whatsapp", "lingtai://docs/configuration", "lingtai://docs/troubleshooting", "lingtai://status", "lingtai://onboarding/whatsapp", "lingtai://onboarding/html-template",
         ],
@@ -20,15 +20,15 @@ def manifest() -> dict[str, Any]:
     }
 
 
-SKILL = """# WhatsApp MCP skill\n\nUse this MCP when the human wants LingTai to communicate over WhatsApp Business. This v1 uses the official Meta WhatsApp Cloud API only. Do not suggest unofficial WhatsApp Web bridges as the default path.\n\nKey constraints:\n- inbound requires a public HTTPS webhook configured in Meta App Dashboard;\n- free-form replies are limited to the 24-hour customer-service window; outside the window use approved templates;\n- status/tool resources redact access tokens, app secrets, and verify tokens.\n\nTypical setup flow: read `lingtai://onboarding/whatsapp`, collect Meta app/phone prerequisites from the human, write config, expose webhook URL, verify `lingtai://status`, then ask the human to send a test WhatsApp message.\n"""
+SKILL = """# WhatsApp MCP skill\n\nUse this MCP when the human wants LingTai to communicate over a personal WhatsApp account. This implementation drives WhatsApp Web through a local whatsapp-web.js bridge; pairing is done by scanning a QR code from the phone (WhatsApp Settings -> Linked Devices -> Link a Device).\n\nKey constraints:\n- the bridge uses the unofficial whatsapp-web.js library, which violates WhatsApp's Terms of Service; account bans are possible. Use for personal/experimental purposes only;\n- the Node bridge and Puppeteer/Chromium must be available on the host (npm install in the bridge directory);\n- inbound messages are pushed into the agent inbox; outbound sends/replies/reacts go through the bridge.\n\nTypical setup flow: install bridge deps, write config, start the MCP, call the `get_qr` action, scan the QR with the phone, verify `status`, then send a test message.\n"""
 
-CONFIGURATION = """# WhatsApp MCP configuration\n\nSet `LINGTAI_WHATSAPP_CONFIG` to a JSON file containing `accounts`. Required per account: `alias`, `access_token`, `phone_number_id`, `waba_id` or `business_account_id`, `app_secret`, `verify_token`. Optional: `api_version`, `display_phone_number`, `webhook`, `templates`.\n\nThe webhook object should include `public_url`, `host`, `port`, and `path`. The public URL must be HTTPS and reachable by Meta.\n"""
+CONFIGURATION = """# WhatsApp MCP configuration\n\nSet `LINGTAI_WHATSAPP_CONFIG` to a JSON file. Optional keys:\n- `node_path`: Node executable (default: `node` on PATH)\n- `bridge_dir`: path to the Node bridge directory (default: bundled `bridge/`)\n- `session_dir`: path to store the whatsapp-web.js session (default: `<workdir>/.wwebjs_auth`)\n- `store_dir`: path to store message/contact metadata (default: `<workdir>/whatsapp`)\n- `allowed_users`: optional list of wa_ids / `@c.us` ids allowed to trigger inbound pushes\n\nExample:\n{\"session_dir\": \"C:\\\\Users\\\\me\\.wwebjs_auth\", \"allowed_users\": [\"15551234567@c.us\"]}\n"""
 
-TROUBLESHOOTING = """# WhatsApp MCP troubleshooting\n\n- GET verification fails: check verify_token equality and callback URL path.\n- POST callbacks rejected: check `X-Hub-Signature-256`, app_secret, and raw request body handling.\n- Send fails outside customer-service window: use an approved template.\n- No inbound messages: confirm webhook subscription for the WhatsApp Business Account and public HTTPS reachability.\n"""
+TROUBLESHOOTING = """# WhatsApp MCP troubleshooting\n\n- `get_qr` says no QR available: the bridge may still be starting (Puppeteer/Chromium first launch is slow) or the session is already authenticated; call `status` first.\n- Authentication fails: delete the session directory and scan a new QR.\n- `node` not found: install Node.js >= 18 and/or set `node_path` in config.\n- Bridge `npm install` missing: run `npm install` inside the bridge directory.\n- Sends fail outside any window: personal WhatsApp Web mode has no 24-hour window; failures are usually transient network or rate-limit issues.\n- Account ban risk: do not send automated bulk messages; prefer responding to incoming messages.\n"""
 
-ONBOARDING = """# WhatsApp onboarding\n\n1. Create/choose a Meta App with WhatsApp product enabled.\n2. Connect a WhatsApp Business Account and phone number; record `phone_number_id` and `waba_id`.\n3. Create a permanent system-user access token with WhatsApp messaging permissions.\n4. Choose a random `verify_token`; store it in config and in Meta's webhook verification screen.\n5. Expose the MCP webhook endpoint over HTTPS, then complete Meta's GET challenge.\n6. Subscribe to messages/status callbacks.\n7. Send a test message from an allowed WhatsApp user.\n\nNever put secrets in generated HTML. Use the HTML template only as a local checklist/status page.\n"""
+ONBOARDING = """# WhatsApp onboarding (personal account)\n\n1. Install Node.js >= 18 and run `npm install` in the bridge directory.\n2. Write `LINGTAI_WHATSAPP_CONFIG` (optional; defaults are fine for first use).\n3. Start the MCP server; wait for the bridge to boot (first launch downloads/launches Chromium).\n4. Call the `get_qr` action and scan the QR with the phone: WhatsApp Settings -> Linked Devices -> Link a Device.\n5. Confirm `status` shows `ready`.\n6. Send a test message to an allowed WhatsApp user.\n\nThe session persists across restarts in the session directory.\n"""
 
-HTML_TEMPLATE = """<!doctype html><html><head><meta charset='utf-8'><title>LingTai WhatsApp MCP setup</title><style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:760px;margin:40px auto;padding:0 20px;line-height:1.5}.warn{background:#fff3cd;border:1px solid #ffe08a;padding:12px;border-radius:8px}.box{background:#f6f8fa;padding:14px;border-radius:8px;white-space:pre-wrap}</style></head><body><h1>WhatsApp MCP setup</h1><p class='warn'>Official Meta WhatsApp Cloud API only. Do not paste access tokens, app secrets, or verify tokens into this page.</p><div class='box'>{{SETUP}}</div></body></html>"""
+HTML_TEMPLATE = """<!doctype html><html><head><meta charset='utf-8'><title>LingTai WhatsApp MCP setup</title><style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:760px;margin:40px auto;padding:0 20px;line-height:1.5}.warn{background:#fff3cd;border:1px solid #ffe08a;padding:12px;border-radius:8px}.box{background:#f6f8fa;padding:14px;border-radius:8px;white-space:pre-wrap}</style></head><body><h1>WhatsApp MCP setup (personal account)</h1><p class='warn'>Unofficial whatsapp-web.js bridge: violating WhatsApp ToS may lead to account bans. Personal/experimental use only.</p><div class='box'>{{SETUP}}</div></body></html>"""
 
 
 def resource_text(uri: str, status: dict[str, Any] | None = None) -> tuple[str, str]:

@@ -20,8 +20,8 @@ _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(
 )
 
 _ACTIONS = (
-    "send", "check", "read", "reply", "search", "react", "contacts",
-    "add_contact", "remove_contact", "templates", "accounts", "status",
+    "send", "check", "read", "reply", "react", "search", "contacts",
+    "add_contact", "remove_contact", "get_qr", "logout", "status",
     "manual",
 )
 
@@ -136,8 +136,8 @@ def _whatsapp_input_schemas() -> dict[str, dict[str, Any]]:
             },
             one_of=contact_target,
         ),
-        "templates": _object({"account": _nullable({"type": "string"})}),
-        "accounts": _object({}),
+        "get_qr": _object({}),
+        "logout": _object({}),
         "status": _object({}),
         "manual": _object({}),
     }
@@ -168,9 +168,7 @@ def whatsapp_schema() -> dict[str, Any]:
     schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
     schema["properties"]["action"]["description"] = (
         "WhatsApp action. Each action owns a strict input branch. WhatsApp "
-        "Cloud API allows free-form business replies only inside the 24-hour "
-        "customer-service window; outside that window use an approved "
-        "message template. Call manual "
+        "Call manual "
         + _skill.manual_action_description(_SKILL_FRONTMATTER, _SKILL_NAME)
     )
     return schema

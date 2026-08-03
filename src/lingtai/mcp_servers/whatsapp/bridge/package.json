@@ -1,0 +1,18 @@
+{
+  "name": "lingtai-whatsapp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Node bridge for the LingTai WhatsApp MCP (personal account via whatsapp-web.js).",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "whatsapp-web.js": "^1.26.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
