@@ -10,6 +10,8 @@ related_files:
   - tests/test_meta_block.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/lifecycle.py
+  - src/lingtai/kernel/base_agent/turn.py
+  - tests/test_aed_recovery.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/process_scan.py
   - src/lingtai/adapters/posix/process_scan.py
@@ -192,6 +194,28 @@ Clause IDs are stable; each rule composes the linked normative source.
    emitted only for strictly greater rendered-prompt/window ratios with valid
    metrics, remains bounded and prompt-body-free, and preserves each caller's
    existing effective-window precedence and local isolation.
+10. `agent-runtime.provider-recovery-terminal.v1` — A provider adapter may mark
+   its final exception `_lingtai_no_aed_retry` only after consuming a complete,
+   request-owned bounded recovery budget. Producer and main-turn consumer MUST
+   use the shared kernel replay-terminal representation: every provider-owned
+   exception is wrapped in an exact kernel-owned `LLMReplayTerminalError`, and
+   only that exact type may carry trusted `True` flags. Neither side may read,
+   write, dynamically dispatch, or coerce provider-owned marker storage. A
+   secondary account callback may inspect only the wrapper's original exception;
+   callback failure MUST NOT replace or remove the replay-safe wrapper.
+   After that budget is consumed, every ordinary downstream failure—from
+   credential recovery through retry wire creation/iteration, response-event
+   processing, response finalization, rollback-snapshot construction, and the
+   complete post-finalization success bookkeeping tail—MUST fail closed with
+   this representation. Any adapter path that
+   describes the exception before terminal dispatch, and the main turn loop
+   itself, MUST use the shared render-safe description rather than letting
+   provider `str`/`repr` hooks escape. The main turn reports the failure as
+   terminal, sets the agent's ASLEEP gate, and MUST NOT transient-retry,
+   increment AED, rebuild the session, or replay the request. Visible partial
+   output MUST acquire the stricter `_lingtai_partial_stream` flag before
+   secondary account telemetry, retains priority when flags merge, and ends the
+   turn without replay.
 
 ## Contract tests
 
@@ -206,7 +230,9 @@ command lines and doctor parity), `tests/test_process_scan.py` (scan Port,
 platform selector, CLI stop signals, CPR spawn kwargs, and the Windows
 scan→guard wiring), `tests/test_windows_import_graph.py` (the boot-path import
 graph survives missing POSIX mechanisms — the construction-gate proof), and
-`tests/test_cli.py` (duplicate-guard policy). The
+`tests/test_cli.py` (duplicate-guard policy), and
+`tests/test_aed_recovery.py` (partial-output and exhausted provider-recovery
+terminal guards before transient/AED replay). The
 Windows CI lane (`.github/workflows/kernel-windows-pr.yml`) executes the
 platform-marked tiers natively; the capability matrix cites which rows carry
 native receipts.

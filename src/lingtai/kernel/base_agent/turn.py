@@ -17,7 +17,11 @@ from ..safety_limits import (
 )
 from ..tool_executor import ToolExecutor
 from ..tool_result_artifacts import CompactionStats, compact_oversized_history
-from ..llm.base import is_all_empty_response
+from ..llm.base import (
+    is_all_empty_response,
+    llm_replay_terminal_flags,
+    safe_exception_description,
+)
 from ..meta_block import (
     attach_active_notifications,
     attach_active_runtime,
@@ -186,7 +190,7 @@ def _is_transient_provider_error(exc: Exception) -> bool:
     if name in _TRANSIENT_EXC_NAMES:
         return True
 
-    msg = (str(exc) or "").lower()
+    msg = safe_exception_description(exc).lower()
     return any(fragment in msg for fragment in _TRANSIENT_MSG_FRAGMENTS)
 
 
@@ -370,7 +374,7 @@ def _prepare_aed_retry_message(agent, err_desc: str) -> Message:
 # is "the wire is too long" and whose only safe recovery is to shrink the
 # transcript before retry.  Distinct from generic transient errors:
 # retrying transiently on the same unchanged wire just repeats the failure.
-# Matched case-insensitively against ``str(exc)``.
+# Matched case-insensitively against a render-safe exception description.
 _OVER_WINDOW_MSG_FRAGMENTS = (
     "context window",
     "context_window",
@@ -399,7 +403,7 @@ def _is_over_window_error(exc: Exception) -> bool:
     """
     if isinstance(exc, EmptyLLMResponseError):
         return False
-    msg = (str(exc) or "").lower()
+    msg = safe_exception_description(exc).lower()
     return any(fragment in msg for fragment in _OVER_WINDOW_MSG_FRAGMENTS)
 
 
@@ -689,7 +693,15 @@ def _run_loop(agent) -> None:
                 except Exception as e:
                     from ..llm_utils import WorkerStillRunningError
 
-                    err_desc = str(e) or repr(e)
+                    # Read replay-safety markers before invoking any provider
+                    # exception rendering hooks.  The rendering itself is also
+                    # fail-closed so a hostile ``__str__``/``__repr__`` cannot
+                    # bypass terminal rollback or escape the run loop.
+                    (
+                        partial_stream_terminal,
+                        no_aed_retry_terminal,
+                    ) = llm_replay_terminal_flags(e)
+                    err_desc = safe_exception_description(e)
 
                     # Account selection has already exhausted the configured
                     # Codex candidates. This is deterministic for this turn,
@@ -714,7 +726,7 @@ def _run_loop(agent) -> None:
                         agent._asleep.set()
                         break
 
-                    if getattr(e, "_lingtai_partial_stream", False):
+                    if partial_stream_terminal:
                         # Provider output has already reached the human-facing
                         # stream. Replaying this turn through transient retry or
                         # AED would duplicate/mix visible content, so terminate
@@ -726,6 +738,23 @@ def _run_loop(agent) -> None:
                             exception=type(e).__name__,
                         )
                         skip_post_turn_save = True
+                        break
+
+                    if no_aed_retry_terminal:
+                        # The provider adapter has already spent its complete,
+                        # request-owned recovery budget. Rebuilding the session
+                        # would replay the same request outside that budget.
+                        agent._log(
+                            "llm_no_aed_retry_terminal",
+                            error=err_desc[:300],
+                            exception=type(e).__name__,
+                        )
+                        logger.warning(
+                            f"[{agent.agent_name}] Provider recovery exhausted: {err_desc}"
+                        )
+                        _report_api_error_to_task_card(agent, e, terminal=True)
+                        sleep_state = AgentState.ASLEEP
+                        agent._asleep.set()
                         break
 
                     if isinstance(e, WorkerStillRunningError):

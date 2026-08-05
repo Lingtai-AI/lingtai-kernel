@@ -5,12 +5,18 @@ from __future__ import annotations
 import base64
 import json
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-from lingtai.auth.codex import REFRESH_BUFFER_SECONDS, CodexAuthError, CodexTokenManager
+from lingtai.auth.codex import (
+    REFRESH_BUFFER_SECONDS,
+    CodexAuthError,
+    CodexTokenManager,
+    _is_token_expired_error,
+)
 
 
 def _make_id_token(payload: dict) -> str:
@@ -328,3 +334,96 @@ class TestGetAccountId:
 
         mgr = CodexTokenManager(token_path=str(token_file))
         assert mgr.get_account_id() == _ACCT_FROM_TOKEN
+
+
+class TestRejectedAccessTokenRefresh:
+    @patch("lingtai.auth.codex.httpx.post")
+    def test_locally_valid_rejected_token_forces_refresh(self, mock_post, tmp_path):
+        token_file = tmp_path / "codex-auth.json"
+        _write_token_file(token_file, access_token="tok_rejected")
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "access_token": "tok_recovered",
+            "expires_in": 3600,
+        }
+        mock_post.return_value = mock_response
+
+        mgr = CodexTokenManager(token_path=str(token_file))
+        assert mgr.refresh_access_token("tok_rejected") == "tok_recovered"
+        mock_post.assert_called_once()
+
+    @patch("lingtai.auth.codex.httpx.post")
+    def test_locked_reload_reuses_peer_replacement(self, mock_post, tmp_path):
+        token_file = tmp_path / "codex-auth.json"
+        _write_token_file(token_file, access_token="tok_rejected")
+        mgr = CodexTokenManager(token_path=str(token_file))
+        assert mgr.get_access_token() == "tok_rejected"  # warm the mtime cache
+
+        _write_token_file(token_file, access_token="tok_from_peer")
+
+        assert mgr.refresh_access_token("tok_rejected") == "tok_from_peer"
+        mock_post.assert_not_called()
+
+    @patch("lingtai.auth.codex.httpx.post")
+    def test_refresh_endpoint_401_preserves_relogin_error(self, mock_post, tmp_path):
+        token_file = tmp_path / "codex-auth.json"
+        _write_token_file(token_file, access_token="tok_rejected")
+        response = MagicMock(status_code=401)
+        response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Unauthorized", request=MagicMock(), response=response
+        )
+        mock_post.return_value = response
+
+        mgr = CodexTokenManager(token_path=str(token_file))
+        with pytest.raises(CodexAuthError, match="/login"):
+            mgr.refresh_access_token("tok_rejected")
+
+
+class _StructuredProviderError(Exception):
+    def __init__(self, *, status=401, body=None, code=None, response=None):
+        super().__init__("provider request failed")
+        self.status_code = status
+        self.body = body
+        self.code = code
+        self.response = response
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        _StructuredProviderError(
+            body={"error": {"code": "token_expired"}}
+        ),
+        _StructuredProviderError(code="token_expired"),
+        _StructuredProviderError(
+            status=None,
+            body={"error": {"type": "token_expired"}},
+            response=SimpleNamespace(status_code=401),
+        ),
+    ],
+)
+def test_token_expired_classifier_accepts_only_trusted_401_code(exc):
+    assert _is_token_expired_error(exc) is True
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        Exception("401 token_expired"),
+        _StructuredProviderError(
+            body={"error": {"message": "token_expired"}}
+        ),
+        _StructuredProviderError(
+            status=403, body={"error": {"code": "token_expired"}}
+        ),
+        _StructuredProviderError(
+            status=401, body={"error": {"code": "invalid_token"}}
+        ),
+        _StructuredProviderError(
+            status=401, body="token_expired"
+        ),
+    ],
+)
+def test_token_expired_classifier_rejects_text_and_wrong_structure(exc):
+    assert _is_token_expired_error(exc) is False
