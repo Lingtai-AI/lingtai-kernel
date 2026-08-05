@@ -119,6 +119,36 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         max_aed_attempts=manifest.get(
             "max_aed_attempts", defaults.max_aed_attempts
         ),
+        # Steering block: per-agent steering.enabled (default true for human
+        # channel) plus optional priority channel / budget overrides. The
+        # kernel default channel set applies when steering.priority_channels is
+        # omitted/empty (see lingtai.kernel.steering.DEFAULT_PRIORITY_CHANNELS).
+        steering_enabled=bool(
+            manifest.get("steering", {}).get(
+                "enabled", defaults.steering_enabled
+            )
+        ),
+        steering_priority_channels=tuple(
+            manifest.get("steering", {}).get(
+                "priority_channels", defaults.steering_priority_channels
+            )
+            or ()
+        ),
+        steering_max_turns=int(
+            manifest.get("steering", {}).get(
+                "max_turns", defaults.steering_max_turns
+            )
+        ),
+        steering_timeout_s=float(
+            manifest.get("steering", {}).get(
+                "timeout_s", defaults.steering_timeout_s
+            )
+        ),
+        steering_tail_messages=int(
+            manifest.get("steering", {}).get(
+                "tail_messages", defaults.steering_tail_messages
+            )
+        ),
         max_rpm=max_rpm,
     )
 
