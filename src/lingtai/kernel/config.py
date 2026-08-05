@@ -185,6 +185,15 @@ class AgentConfig:
     soul_voice: str = "inner"  # consultation prompt profile — "inner" (terse, "you are the soul, speak as inner voice"), "observer" (structured stepped-back hook framing), or "custom" (use soul_voice_prompt). One unified prompt per profile; the per-fire cue text differentiates insights (current diary) vs past (future-self diary).
     soul_voice_prompt: str = ""  # custom voice prompt — only used when soul_voice == "custom". Set/cleared by the agent via soul(action="voice", set="custom", prompt="..."). Length-capped at SOUL_VOICE_PROMPT_MAX in soul.py.
     snapshot_interval: float | None = None  # seconds between git snapshots; None = off
+    # Preemptive parallel steering (see lingtai.kernel.steering).
+    # steering_enabled defaults True for the human channel: while a turn is
+    # running a tool call, high-priority human-channel messages dispatch a
+    # bounded steering lane instead of only being deferred.
+    steering_enabled: bool = True
+    steering_priority_channels: tuple[str, ...] = ()  # () = kernel default set
+    steering_max_turns: int = 10
+    steering_timeout_s: float = 300.0
+    steering_tail_messages: int = 8
 
     def __post_init__(self):
         # Clamp max_aed_attempts to at least 1.  A value of 0 or negative
