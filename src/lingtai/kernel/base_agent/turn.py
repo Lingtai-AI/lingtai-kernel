@@ -1789,6 +1789,33 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # can carry the post-batch ACTIVE-turn progress meter.
         guard.record_calls(len(response.tool_calls))
 
+        # Steering interrupt boundary: the preemptive steering lane may have
+        # written steering_interrupt.json while the main loop was mid-turn.
+        # At this safe boundary (before dispatching the next tool batch),
+        # abort the current tool call, mark the turn interrupted, and surface
+        # the steering decision to the next turn.
+        from ..steering import check_steering_interrupt, abort_current_tool_call
+
+        steering_interrupt = check_steering_interrupt(agent)
+        if steering_interrupt is not None:
+            if agent._chat is not None and agent._chat.interface.has_pending_tool_calls():
+                agent._chat.interface.close_pending_tool_calls(
+                    reason="steering_interrupt"
+                )
+            abort_current_tool_call(agent, steering_interrupt)
+            agent._save_chat_history()
+            agent._log(
+                "turn_aborted_by_steering",
+                reason=steering_interrupt.get("reason"),
+                run_id=steering_interrupt.get("run_id"),
+            )
+            return {
+                "text": "\n".join(collected_text_parts),
+                "failed": False,
+                "errors": list(collected_errors),
+                "interrupted_by_steering": True,
+            }
+
         # Delegate to ToolExecutor.  The progress notice is batch-scoped: it is
         # visible on this batch's tool results, then cleared before the next LLM
         # response is processed.
