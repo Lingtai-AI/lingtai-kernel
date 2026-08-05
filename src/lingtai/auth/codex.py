@@ -97,6 +97,22 @@ class CodexTokenManager:
 
         return data["access_token"]
 
+    def refresh_access_token(self, rejected_access_token: str) -> str:
+        """Reload or refresh after a model request rejects ``rejected_access_token``.
+
+        The refresh is serialized by the same cross-process lock as proactive
+        expiry refresh.  Once inside the lock we re-read from disk: if another
+        request already replaced the rejected token, reuse that newer credential;
+        otherwise refresh even when the JWT's local expiry still looks valid.
+        OAuth refresh-endpoint failures retain the ordinary ``CodexAuthError``
+        behavior from :meth:`_refresh`.
+        """
+        if not isinstance(rejected_access_token, str) or not rejected_access_token:
+            raise ValueError("rejected_access_token must be a non-empty string")
+        data = self._read()
+        self._refresh(data, rejected_access_token=rejected_access_token)
+        return self._read()["access_token"]
+
     def get_account_id(self) -> str | None:
         """Return the user's own ChatGPT account id, or ``None`` if unavailable.
 
@@ -164,7 +180,9 @@ class CodexTokenManager:
         self._cache_mtime = mtime
         return data
 
-    def _refresh(self, data: dict) -> None:
+    def _refresh(
+        self, data: dict, *, rejected_access_token: str | None = None
+    ) -> None:
         """Refresh the access token using the stored refresh token.
 
         Uses a file lock so concurrent processes don't race.  After
@@ -173,10 +191,23 @@ class CodexTokenManager:
         """
         lock = FileLock(self._lock_path, timeout=30)
         with lock:
-            # Re-read inside the lock; someone else may have refreshed.
+            # Force a physical re-read inside the lock. Atomic replacement can
+            # otherwise leave this manager's mtime cache holding a credential a
+            # concurrent process already superseded (notably on coarse-mtime FSes).
+            self._cache = None
+            self._cache_mtime = 0.0
             fresh = self._read()
-            if fresh.get("expires_at", 0) > time.time() + REFRESH_BUFFER_SECONDS:
-                return  # already refreshed by another process
+            expires_safely = (
+                fresh.get("expires_at", 0) > time.time() + REFRESH_BUFFER_SECONDS
+            )
+            already_replaced = bool(
+                rejected_access_token
+                and fresh.get("access_token") != rejected_access_token
+            )
+            if expires_safely and (
+                rejected_access_token is None or already_replaced
+            ):
+                return  # proactively valid, or recovered by another request
 
             refresh_token = fresh.get("refresh_token") or data.get("refresh_token")
             if not refresh_token:
@@ -227,6 +258,7 @@ class CodexTokenManager:
 # The exact structured provider error code that triggers a request-scoped Codex
 # account switch. Recognized STRUCTURALLY only (never from the message string).
 _USAGE_LIMIT_CODE = "usage_limit_reached"
+_TOKEN_EXPIRED_CODE = "token_expired"
 
 
 def _structured_status_code(exc: BaseException) -> int | None:
@@ -259,6 +291,19 @@ def _structured_error_codes(exc: BaseException) -> tuple[str, ...]:
             candidates.append(err.get("type"))
         candidates.append(body.get("code"))
     return tuple(c for c in candidates if isinstance(c, str) and c)
+
+
+def _is_token_expired_error(exc: BaseException) -> bool:
+    """Return whether ``exc`` is structurally an HTTP ``401`` carrying the
+    exact trusted machine code ``token_expired``.
+
+    This classifies ordinary provider request failures only. OAuth refresh
+    endpoint handling remains inside :class:`CodexTokenManager` and never calls
+    this helper; message text and websocket fallback strings are not inspected.
+    """
+    if _structured_status_code(exc) != 401:
+        return False
+    return _TOKEN_EXPIRED_CODE in _structured_error_codes(exc)
 
 
 def _is_usage_limit_reached_error(exc: BaseException) -> bool:
