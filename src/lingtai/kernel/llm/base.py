@@ -17,6 +17,93 @@ from .interface import ChatInterface
 logger = get_logger()
 
 
+_PARTIAL_STREAM_MARKER = "_lingtai_partial_stream"
+_NO_AED_RETRY_MARKER = "_lingtai_no_aed_retry"
+
+
+def safe_exception_description(exc: BaseException) -> str:
+    """Render a third-party exception without letting its hooks escape."""
+    for render in (str, repr):
+        try:
+            text = render(exc)
+        except BaseException:
+            continue
+        if text:
+            return text
+    try:
+        name = type(exc).__name__
+    except BaseException:
+        name = "Exception"
+    return f"<unrenderable {name}>"
+
+
+class LLMReplayTerminalError(Exception):
+    """Trusted wrapper when a provider exception cannot carry replay metadata.
+
+    Provider exception attribute hooks are untrusted.  This exact kernel-owned
+    type stores only constant booleans and the original exception; its message
+    must be supplied by the adapter without rendering ``original``.
+    """
+
+    def __init__(
+        self,
+        original: Exception,
+        *,
+        partial_stream: bool,
+        no_aed_retry: bool,
+        message: str,
+    ):
+        self.original = original
+        self._lingtai_partial_stream = partial_stream is True
+        self._lingtai_no_aed_retry = no_aed_retry is True
+        super().__init__(message)
+
+
+def llm_replay_terminal_flags(exc: BaseException) -> tuple[bool, bool]:
+    """Read replay-safety flags only from the exact kernel-owned wrapper.
+
+    Provider exception classes control their attribute machinery, including a
+    subclass ``__dict__`` descriptor, so no provider-owned storage is trusted.
+    Exact type and exact ``True`` checks avoid subclass hooks and coercion.
+    """
+    if type(exc) is not LLMReplayTerminalError:
+        return False, False
+    return (
+        object.__getattribute__(exc, _PARTIAL_STREAM_MARKER) is True,
+        object.__getattribute__(exc, _NO_AED_RETRY_MARKER) is True,
+    )
+
+
+def mark_llm_replay_terminal(
+    exc: Exception,
+    *,
+    partial_stream: bool = False,
+    no_aed_retry: bool = False,
+    message: str = "Provider failure cannot be replayed safely",
+) -> Exception:
+    """Return the exact trusted wrapper carrying merged replay metadata.
+
+    Provider-owned storage is never read or mutated.  Re-marking an exact
+    kernel wrapper merges flags in place; every other exception is wrapped.
+    This makes the representation stable across adapter and BaseAgent reads.
+    """
+    current_partial, current_no_aed = llm_replay_terminal_flags(exc)
+    want_partial = current_partial or partial_stream is True
+    want_no_aed = current_no_aed or no_aed_retry is True
+
+    if type(exc) is LLMReplayTerminalError:
+        object.__setattr__(exc, _PARTIAL_STREAM_MARKER, want_partial)
+        object.__setattr__(exc, _NO_AED_RETRY_MARKER, want_no_aed)
+        return exc
+
+    return LLMReplayTerminalError(
+        exc,
+        partial_stream=want_partial,
+        no_aed_retry=want_no_aed,
+        message=message,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------

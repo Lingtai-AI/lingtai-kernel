@@ -37,9 +37,12 @@ from lingtai.kernel.llm.base import (
     WIRE_TOOL_DESCRIPTION,
     ChatSession,
     FunctionSchema,
+    LLMReplayTerminalError,
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    mark_llm_replay_terminal,
+    safe_exception_description,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
@@ -148,7 +151,7 @@ def _is_codex_unverifiable_encrypted_content_error(exc: BaseException) -> bool:
     continue if we fall back to summary/plain replay.
     """
 
-    parts = [str(exc)]
+    parts = [safe_exception_description(exc)]
     for attr in ("message", "body"):
         value = getattr(exc, attr, None)
         if value is None:
@@ -1603,7 +1606,7 @@ class OpenAIChatSession(ChatSession):
             # Some compatible endpoints surface this overflow as a generic
             # APIError. Keep this deliberately narrow: arbitrary APIError or
             # generic "context window" text is not a retryable overflow.
-            return "input exceeds the context window" in (str(exc) or "").lower()
+            return "input exceeds the context window" in (safe_exception_description(exc) or "").lower()
         if not isinstance(exc, openai.BadRequestError):
             return False
         # Canonical OpenAI code on the body's error object.
@@ -1617,7 +1620,7 @@ class OpenAIChatSession(ChatSession):
             pass
         if code == "context_length_exceeded":
             return True
-        msg = (str(exc) or "").lower()
+        msg = (safe_exception_description(exc) or "").lower()
         return any(
             needle in msg
             for needle in (
@@ -3098,6 +3101,7 @@ class _CodexAccountContext:
     model: str
     client: Any
     binding: dict[str, Any] = field(default_factory=dict)
+    binding_generation: int = 0
     selection: dict[str, Any] = field(default_factory=dict)
     bound_molt_count: int | None = None
     excluded_accounts: set[str] = field(default_factory=set)
@@ -3136,7 +3140,20 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         codex_pool_selection: dict[str, Any] | None = None,
         codex_account_error_callback: Callable[[Exception, bool], None] | None = None,
         codex_account_success_callback: Callable[[], dict[str, Any] | None] | None = None,
-        codex_account_request_callback: Callable[[], dict[str, Any]] | None = None,
+        codex_account_request_callback: Callable[
+            [Callable[[dict[str, Any]], None]], dict[str, Any]
+        ] | None = None,
+        codex_token_expired_callback: Callable[
+            [
+                Exception,
+                int | None,
+                str | None,
+                str | None,
+                Callable[[dict[str, Any]], None],
+                Callable[[], Any],
+            ],
+            Any | None,
+        ] | None = None,
         codex_account_epoch_reset_callback: Callable[[str], None] | None = None,
         installation_id: str | None = None,
         metadata_sandbox: str = "lingtai",
@@ -3290,7 +3307,11 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         self._codex_account_error_callback = codex_account_error_callback
         self._codex_account_success_callback = codex_account_success_callback
         self._codex_account_request_callback = codex_account_request_callback
+        self._codex_token_expired_callback = codex_token_expired_callback
         self._codex_account_epoch_reset_callback = codex_account_epoch_reset_callback
+        self._codex_binding_generation: int | None = None
+        self._codex_binding_api_key: str | None = None
+        self._codex_token_expired_recovery_attempted = False
         self._codex_partial_output = False
         self._codex_account_error_reported = False
         # Non-secret attribution for token/debug ledgers. The raw account id is
@@ -4548,49 +4569,249 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         delta_interface.entries.extend(entries)
         return self._frozen_responses_input(delta_interface)
 
-    def _codex_report_account_error(self, exc: Exception) -> None:
-        """Report one structural request failure to the native Codex adapter."""
+    def _codex_report_account_error(self, exc: Exception) -> Exception:
+        """Report one structural failure and return its replay-safe form."""
+        reported = exc
+        if self._codex_partial_output:
+            reported = mark_llm_replay_terminal(
+                reported,
+                partial_stream=True,
+                message="Provider output was partially delivered",
+            )
         if self._codex_account_error_reported:
-            return
+            return reported
         self._codex_account_error_reported = True
         callback = self._codex_account_error_callback
         if callback is not None:
-            callback(exc, self._codex_partial_output)
+            callback_exc = (
+                object.__getattribute__(reported, "original")
+                if type(reported) is LLMReplayTerminalError
+                else reported
+            )
+            try:
+                callback(callback_exc, self._codex_partial_output)
+            except Exception:
+                # Account telemetry is secondary.  It may inspect the original
+                # provider error, but cannot mutate or replace the replay-safe
+                # kernel wrapper that must reach BaseAgent.
+                pass
+        return reported
 
-    def _codex_refresh_account_for_request(self) -> None:
-        """Bind the current epoch account and refresh its safe quota telemetry."""
-        callback = self._codex_account_request_callback
-        if callback is None:
-            self._codex_account_error_reported = False
-            self._codex_partial_output = False
-            return
-        binding = callback()
-        if not isinstance(binding, dict):
-            raise TypeError("Codex account request callback returned non-dict binding")
-
+    def _codex_apply_account_binding(self, binding: dict[str, Any]) -> None:
+        """Apply one owned binding to both REST and websocket auth state."""
         previous_sha8 = self._codex_auth_path_sha8
+        previous_api_key = getattr(self, "_ws_api_key", None)
         next_sha8 = binding.get("auth_path_sha8")
+        next_api_key = binding.get("api_key")
         account_changed = bool(
             previous_sha8 and next_sha8 and previous_sha8 != next_sha8
         )
-        if account_changed and not self._codex_account_epoch_boundary_pending:
-            # A websocket transport is authenticated when opened.  Never reuse
-            # it, or its previous_response_id chain, after switching accounts.
-            self._reset_ws_epoch("codex_account_switch")
+        credential_changed = bool(
+            self._codex_binding_generation is not None
+            and previous_api_key
+            and next_api_key
+            and previous_api_key != next_api_key
+        )
+        if not self._codex_account_epoch_boundary_pending:
+            # A websocket transport authenticates only at connect time. Never
+            # retain that connection or its continuation chain across an account
+            # switch or an in-place credential replacement.
+            if account_changed:
+                self._reset_ws_epoch("codex_account_switch")
+            elif credential_changed:
+                self._reset_ws_epoch("codex_token_refresh")
         self._codex_account_epoch_boundary_pending = False
 
-        self._client.api_key = binding.get("api_key")
+        self._client.api_key = next_api_key
         if hasattr(self, "_ws_api_key"):
-            self._ws_api_key = binding.get("api_key")
+            self._ws_api_key = next_api_key
         self._account_id = binding.get("account_id")
         self._codex_auth_path_sha8 = next_sha8
         self._codex_auth_path_source = binding.get("auth_path_source")
+        generation = binding.get("binding_generation")
+        self._codex_binding_generation = (
+            generation if isinstance(generation, int) and not isinstance(generation, bool) else None
+        )
+        self._codex_binding_api_key = (
+            next_api_key if isinstance(next_api_key, str) and next_api_key else None
+        )
         selection = binding.get("selection")
         if isinstance(selection, dict):
             self._codex_pool_selection = dict(selection)
             self.codex_pool_selection = dict(selection)
+
+    def _codex_refresh_account_for_request(self) -> None:
+        """Bind and publish the current epoch account as one owned transaction."""
         self._codex_account_error_reported = False
         self._codex_partial_output = False
+        self._codex_token_expired_recovery_attempted = False
+        callback = self._codex_account_request_callback
+        if callback is None:
+            return
+        binding = callback(self._codex_apply_account_binding)
+        if not isinstance(binding, dict):
+            raise TypeError("Codex account request callback returned non-dict binding")
+
+    @staticmethod
+    def _codex_mark_provider_recovery_terminal(exc: Exception) -> Exception:
+        """Return an exception that verifiably fail-closes outer retries."""
+        return mark_llm_replay_terminal(
+            exc,
+            no_aed_retry=True,
+            message="Provider recovery failed after bounded retry",
+        )
+
+    def _codex_fail_closed_after_recovery(
+        self,
+        exc: Exception,
+        *,
+        drop_trailing_user: bool = False,
+        committed_entry_ids: frozenset[int] | None = None,
+        reset_continuation: bool = False,
+    ) -> Exception:
+        """Terminalize recovery fallout without letting cleanup reopen AED."""
+        escaped = self._codex_mark_provider_recovery_terminal(exc)
+        try:
+            escaped = self._codex_report_account_error(escaped)
+        except Exception:
+            # Account telemetry is secondary to preserving the terminal marker.
+            pass
+        try:
+            if committed_entry_ids is not None:
+                self._interface.drop_trailing(
+                    lambda entry: entry.id not in committed_entry_ids,
+                )
+            elif drop_trailing_user:
+                self._interface.drop_trailing(lambda entry: entry.role == "user")
+        except Exception:
+            # Interface cleanup must never replace the marked provider failure.
+            pass
+        if reset_continuation:
+            try:
+                self._reset_ws_epoch("provider_recovery_terminal")
+            except Exception:
+                # The agent will sleep on the marked failure. Preserve that
+                # invariant even if best-effort continuation cleanup fails.
+                pass
+            self._response_id = None
+        return escaped
+
+    @staticmethod
+    def _codex_reraise_terminalized(original: Exception, terminal: Exception) -> None:
+        """Raise a fail-closed wrapper only when the original rejected metadata."""
+        if terminal is original:
+            raise original
+        raise terminal from original
+
+    def _codex_apply_recovered_binding(
+        self, binding: dict[str, Any], request_kwargs: dict[str, Any]
+    ) -> None:
+        """Publish transport auth and the account header under context ownership."""
+        self._codex_apply_account_binding(binding)
+        headers = dict(request_kwargs.get("extra_headers") or {})
+        if self._account_id:
+            headers["ChatGPT-Account-ID"] = self._account_id
+        else:
+            headers.pop("ChatGPT-Account-ID", None)
+        if headers:
+            request_kwargs["extra_headers"] = headers
+        else:
+            request_kwargs.pop("extra_headers", None)
+
+    def _codex_try_token_expired_recovery(
+        self, exc: Exception, request_kwargs: dict[str, Any]
+    ) -> Any | None | Exception:
+        """Refresh once and create the retry stream inside context ownership."""
+        if self._codex_partial_output:
+            return None
+        from lingtai.auth.codex import _is_token_expired_error
+
+        if not _is_token_expired_error(exc):
+            return None
+        if self._codex_token_expired_recovery_attempted:
+            return self._codex_mark_provider_recovery_terminal(exc)
+        callback = self._codex_token_expired_callback
+        if callback is None:
+            return self._codex_mark_provider_recovery_terminal(exc)
+
+        # Consume the request-local budget before calling out. Every ordinary
+        # exception after this point is terminal for this logical request.
+        self._codex_token_expired_recovery_attempted = True
+        apply_binding = lambda binding: self._codex_apply_recovered_binding(
+            binding, request_kwargs
+        )
+        retry_request = lambda: self._client.responses.create(**request_kwargs)
+        try:
+            retry_stream = callback(
+                exc,
+                self._codex_binding_generation,
+                self._codex_binding_api_key,
+                self._codex_auth_path_sha8,
+                apply_binding,
+                retry_request,
+            )
+        except Exception as callback_exc:
+            terminal = self._codex_mark_provider_recovery_terminal(callback_exc)
+            if terminal is callback_exc:
+                raise
+            raise terminal from callback_exc
+        if retry_stream is None:
+            return self._codex_mark_provider_recovery_terminal(exc)
+        return retry_stream
+
+    def _codex_rest_stream_with_token_recovery(
+        self, request_kwargs: dict[str, Any]
+    ):
+        """Create and iterate one REST stream with at most one safe auth replay."""
+        post_recovery_stream = False
+        try:
+            stream = self._client.responses.create(**request_kwargs)
+        except Exception as exc:
+            recovery = self._codex_try_token_expired_recovery(exc, request_kwargs)
+            if recovery is None:
+                raise
+            if isinstance(recovery, Exception):
+                self._codex_reraise_terminalized(exc, recovery)
+            stream = recovery
+            post_recovery_stream = True
+
+        def _events():
+            first_attempt_event_observed = False
+            try:
+                for event in stream:
+                    # Set before yielding: once the caller can mutate its stream
+                    # accumulator, this first attempt can never be replayed.
+                    first_attempt_event_observed = True
+                    yield event
+            except Exception as exc:
+                if post_recovery_stream:
+                    terminal = self._codex_mark_provider_recovery_terminal(exc)
+                    if terminal is exc:
+                        raise
+                    raise terminal from exc
+                if first_attempt_event_observed:
+                    from lingtai.auth.codex import _is_token_expired_error
+
+                    if _is_token_expired_error(exc):
+                        terminal = self._codex_mark_provider_recovery_terminal(exc)
+                        if terminal is exc:
+                            raise
+                        raise terminal from exc
+                    raise
+                recovery = self._codex_try_token_expired_recovery(exc, request_kwargs)
+                if recovery is None:
+                    raise
+                if isinstance(recovery, Exception):
+                    self._codex_reraise_terminalized(exc, recovery)
+                try:
+                    yield from recovery
+                except Exception as retry_exc:
+                    terminal = self._codex_mark_provider_recovery_terminal(retry_exc)
+                    if terminal is retry_exc:
+                        raise
+                    raise terminal from retry_exc
+
+        return _events()
 
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
         # Maintain the canonical interface for local recovery and full-replay
@@ -4789,7 +5010,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                 except _CodexWsFallback as exc:
                     logger.info(
                         "Codex websocket path unavailable; using HTTP full replay: %s",
-                        str(exc)[:240],
+                        safe_exception_description(exc)[:240],
                     )
                     ws_stream = None
                 else:
@@ -4852,7 +5073,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                     self._ws_pending_baseline_input = list(full_replay_input_items)
                     continuation_turn_recorded = True
                 try:
-                    stream = self._client.responses.create(**kwargs)
+                    stream = self._codex_rest_stream_with_token_recovery(kwargs)
                 except Exception as exc:
                     if not (previous_response_id or request_store):
                         # No continuation was in flight (first full turn): usually a
@@ -4865,7 +5086,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                             stripped_reasoning_items = self._strip_codex_encrypted_reasoning_items()
                             if stripped_reasoning_items:
                                 fallback_error_type = type(exc).__name__
-                                fallback_error_message = str(exc)
+                                fallback_error_message = safe_exception_description(exc)
                                 logger.info(
                                     "Codex encrypted reasoning replay failed; stripped %s raw reasoning item(s) and retrying full replay",
                                     stripped_reasoning_items,
@@ -4905,7 +5126,9 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                                         retry_full_replay_input_items
                                     )
                                     continuation_turn_recorded = True
-                                stream = self._client.responses.create(**retry_kwargs)
+                                stream = self._codex_rest_stream_with_token_recovery(
+                                    retry_kwargs
+                                )
                             else:
                                 if rest_continuation:
                                     self._ws_session.last_request = rest_prev_last_request
@@ -4920,7 +5143,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                             raise
                     else:
                         fallback_error_type = type(exc).__name__
-                        fallback_error_message = str(exc)
+                        fallback_error_message = safe_exception_description(exc)
                         logger.info(
                             "Codex incremental Responses request failed; falling back to full replay store=false: %s: %s",
                             fallback_error_type,
@@ -4947,7 +5170,9 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                                 fallback_kwargs, full_replay_input_items
                             )
                             self._ws_pending_baseline_input = list(full_replay_input_items)
-                        stream = self._client.responses.create(**fallback_kwargs)
+                        stream = self._codex_rest_stream_with_token_recovery(
+                            fallback_kwargs
+                        )
             for event in stream:
                 thoughts_before = acc.thoughts
                 pending_thought_chars_before = len("".join(acc._thought_parts))
@@ -5009,15 +5234,19 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                     if on_chunk:
                         on_chunk(event.delta)
                 elif event.type == "response.function_call_arguments.delta":
+                    self._codex_partial_output = True
                     acc.add_tool_args(event.delta)
                 elif event.type == "response.function_call_arguments.done":
+                    self._codex_partial_output = True
                     # Spark may emit complete args without any deltas.
                     acc.set_tool_args_if_empty(getattr(event, "arguments", None))
                 elif event.type == "response.output_item.added":
                     if getattr(event.item, "type", None) == "function_call":
+                        self._codex_partial_output = True
                         acc.start_tool(id=event.item.call_id, name=event.item.name)
                 elif event.type == "response.output_item.done":
                     if getattr(event.item, "type", None) == "function_call":
+                        self._codex_partial_output = True
                         # Use the final item as a second complete-args fallback.
                         acc.set_tool_args_if_empty(
                             getattr(event.item, "arguments", None)
@@ -5070,134 +5299,168 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                             ),
                         )
         except Exception as exc:
-            # Only the final exception escaping all built-in Codex fallback
-            # paths may affect account exclusion. Intermediate fallbacks must
-            # not poison the AED chain.
-            self._codex_report_account_error(exc)
-            # Revert the trailing user entry we just added so the next retry
-            # doesn't double-record it. Mirrors OpenAIChatSession.send's
-            # error path. ToolResultBlock entries also revert — the executor
-            # will re-supply them when AED rebuilds the loop.
-            self._interface.drop_trailing(lambda e: e.role == "user")
-            raise
+            # Once provider-owned auth recovery consumed this logical request's
+            # budget, every later event-processing/stream exception is terminal
+            # before outer transient/AED replay. Partial-stream marking remains
+            # higher priority in the BaseAgent handler.
+            if self._codex_token_expired_recovery_attempted:
+                escaped = self._codex_fail_closed_after_recovery(
+                    exc,
+                    drop_trailing_user=True,
+                )
+            else:
+                escaped = exc
+                # Only the final exception escaping all built-in Codex fallback
+                # paths may affect account exclusion. Intermediate fallbacks must
+                # not poison the AED chain.
+                escaped = self._codex_report_account_error(escaped)
+                # Revert the trailing user entry we just added so the next retry
+                # doesn't double-record it. Mirrors OpenAIChatSession.send's
+                # error path. ToolResultBlock entries also revert — the executor
+                # will re-supply them when AED rebuilds the loop.
+                self._interface.drop_trailing(lambda e: e.role == "user")
+            self._codex_reraise_terminalized(exc, escaped)
 
-        result = acc.finalize(usage=usage)
         try:
-            provider_input_tokens = int(usage.input_tokens or 0)
-        except Exception:
-            provider_input_tokens = 0
-        self._last_provider_input_tokens = provider_input_tokens if provider_input_tokens > 0 else None
-        # Local/provider calibration sample (HIGH-2 fix; corrected per PR #926
-        # Sol source-audit finding): capture a local estimate of the EXACT
-        # rendered request representation that was ACTUALLY sent for this
-        # successful response — ``full_replay_input_items``, the same
-        # opaque-compacted-prefix-plus-delta or full-conversion list that was
-        # placed in ``kwargs["input"]`` (and kept in sync across the
-        # encrypted-reasoning self-heal retry / incremental-fallback paths
-        # above, which reassign it to whatever was actually resent) — paired
-        # with the provider-reported actual above. This is deliberately NOT
-        # ``ChatInterface.estimate_context_tokens()`` (the full raw canonical
-        # history): before compaction the two representations are roughly the
-        # same, but after compaction the raw canonical estimate keeps growing
-        # with every pre-compaction turn forever (compaction never deletes
-        # canonical entries) while the actual request shrinks to the opaque
-        # prefix + live suffix. Calibrating against the raw estimate would
-        # divide by an artificially large, ever-growing denominator and
-        # silently under-project the next live delta. ``_projected_provider_tokens``
-        # divides these two same-representation numbers to derive a
-        # calibration ratio so the compaction trigger can PROJECT
-        # provider-visible size from the CURRENT rendered representation
-        # rather than only reacting after a past request already crossed the
-        # limit. Opaque content (e.g. ``encrypted_content``) is counted in
-        # memory only — never logged or persisted.
-        if self._last_provider_input_tokens is not None:
+            result = acc.finalize(usage=usage)
+        except Exception as exc:
+            if not self._codex_token_expired_recovery_attempted:
+                raise
+            escaped = self._codex_fail_closed_after_recovery(
+                exc,
+                drop_trailing_user=True,
+            )
+            self._codex_reraise_terminalized(exc, escaped)
+        committed_entry_ids: frozenset[int] | None = None
+        try:
+            committed_entry_ids = frozenset(
+                entry.id for entry in self._interface.entries
+            )
             try:
-                self._last_local_estimate_tokens = _estimate_responses_input_tokens(
-                    self._instructions, self._tools, full_replay_input_items,
-                )
+                provider_input_tokens = int(usage.input_tokens or 0)
             except Exception:
-                self._last_local_estimate_tokens = None
-        # Successful provider response observed: re-arm the one-shot forced-rebuild
-        # latch when usage dropped strictly below 1.0, or clear pending verification
-        # when this is the first post-rebuild response (the boundary for the
-        # persistent overflow warning). A failed request never reaches here.
-        self._observe_provider_usage_for_boundary()
-
-        # Record assistant response into the interface so it rides along on
-        # the next request. Without this, the stateless backend would never
-        # see the assistant's own prior turns.
-        blocks: list = []
-        raw_items = raw_reasoning_items
-        if result.thoughts or raw_items:
-            joined = "\n".join(t for t in result.thoughts if t)
-            if raw_items:
-                # Attach every raw reasoning item (with encrypted_content), even
-                # when the provider returned no summary_text. Codex commonly
-                # returns summary=[] with encrypted_content; dropping the block
-                # in that case would lose the cache-stable replay state.
-                for idx, raw_item in enumerate(raw_items):
-                    item_summary_text = "\n".join(
-                        str(s.get("text"))
-                        for s in raw_item.get("summary", [])
-                        if isinstance(s, dict)
-                        and s.get("type") == "summary_text"
-                        and s.get("text")
+                provider_input_tokens = 0
+            self._last_provider_input_tokens = provider_input_tokens if provider_input_tokens > 0 else None
+            # Local/provider calibration sample (HIGH-2 fix; corrected per PR #926
+            # Sol source-audit finding): capture a local estimate of the EXACT
+            # rendered request representation that was ACTUALLY sent for this
+            # successful response — ``full_replay_input_items``, the same
+            # opaque-compacted-prefix-plus-delta or full-conversion list that was
+            # placed in ``kwargs["input"]`` (and kept in sync across the
+            # encrypted-reasoning self-heal retry / incremental-fallback paths
+            # above, which reassign it to whatever was actually resent) — paired
+            # with the provider-reported actual above. This is deliberately NOT
+            # ``ChatInterface.estimate_context_tokens()`` (the full raw canonical
+            # history): before compaction the two representations are roughly the
+            # same, but after compaction the raw canonical estimate keeps growing
+            # with every pre-compaction turn forever (compaction never deletes
+            # canonical entries) while the actual request shrinks to the opaque
+            # prefix + live suffix. Calibrating against the raw estimate would
+            # divide by an artificially large, ever-growing denominator and
+            # silently under-project the next live delta. ``_projected_provider_tokens``
+            # divides these two same-representation numbers to derive a
+            # calibration ratio so the compaction trigger can PROJECT
+            # provider-visible size from the CURRENT rendered representation
+            # rather than only reacting after a past request already crossed the
+            # limit. Opaque content (e.g. ``encrypted_content``) is counted in
+            # memory only — never logged or persisted.
+            if self._last_provider_input_tokens is not None:
+                try:
+                    self._last_local_estimate_tokens = _estimate_responses_input_tokens(
+                        self._instructions, self._tools, full_replay_input_items,
                     )
-                    blocks.append(
-                        ThinkingBlock(
-                            text=item_summary_text or (joined if idx == 0 else ""),
-                            provider_data={
-                                "openai_responses_reasoning_item": raw_item,
-                            },
+                except Exception:
+                    self._last_local_estimate_tokens = None
+            # Successful provider response observed: re-arm the one-shot forced-rebuild
+            # latch when usage dropped strictly below 1.0, or clear pending verification
+            # when this is the first post-rebuild response (the boundary for the
+            # persistent overflow warning). A failed request never reaches here.
+            self._observe_provider_usage_for_boundary()
+
+            # Record assistant response into the interface so it rides along on
+            # the next request. Without this, the stateless backend would never
+            # see the assistant's own prior turns.
+            blocks: list = []
+            raw_items = raw_reasoning_items
+            if result.thoughts or raw_items:
+                joined = "\n".join(t for t in result.thoughts if t)
+                if raw_items:
+                    # Attach every raw reasoning item (with encrypted_content), even
+                    # when the provider returned no summary_text. Codex commonly
+                    # returns summary=[] with encrypted_content; dropping the block
+                    # in that case would lose the cache-stable replay state.
+                    for idx, raw_item in enumerate(raw_items):
+                        item_summary_text = "\n".join(
+                            str(s.get("text"))
+                            for s in raw_item.get("summary", [])
+                            if isinstance(s, dict)
+                            and s.get("type") == "summary_text"
+                            and s.get("text")
                         )
+                        blocks.append(
+                            ThinkingBlock(
+                                text=item_summary_text or (joined if idx == 0 else ""),
+                                provider_data={
+                                    "openai_responses_reasoning_item": raw_item,
+                                },
+                            )
+                        )
+                elif joined:
+                    blocks.append(ThinkingBlock(text=joined))
+            if result.text:
+                blocks.append(TextBlock(text=result.text))
+            for tc in result.tool_calls:
+                blocks.append(ToolCallBlock(id=tc.id, name=tc.name, args=tc.args))
+            if not blocks:
+                blocks.append(TextBlock(text=""))
+            self._interface.add_assistant_message(
+                blocks,
+                model=self._model,
+                provider="codex",
+                usage={
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "thinking_tokens": usage.thinking_tokens,
+                },
+            )
+
+            # Now that the assistant turn is in the canonical interface, recompute the
+            # delta baseline in the SAME converter schema the next full request will
+            # use, so a strict prefix can actually match next turn. Runs for BOTH
+            # transports (it fixed the ``full``-every-turn root cause). On a turn that
+            # produced no chainable response it leaves ``items_added`` empty and the
+            # next turn falls back to full. See ``_ws_record_baseline_from_interface``.
+            if self._continuation_enabled:
+                self._ws_record_baseline_from_interface()
+                # Count the turn + record the cache ledger whenever the continuation
+                # machine actually drove a request this turn — the WebSocket wire
+                # (``ws_stream_was_used``) OR the REST transport.
+                if locals().get("ws_stream_was_used") or locals().get("continuation_turn_recorded"):
+                    self._ws_turns_since_epoch_reset += 1
+                    self._record_ws_cache_ledger(
+                        request_mode=request_mode,
+                        usage=usage,
+                        ws_diag=self._ws_last_diag,
                     )
-            elif joined:
-                blocks.append(ThinkingBlock(text=joined))
-        if result.text:
-            blocks.append(TextBlock(text=result.text))
-        for tc in result.tool_calls:
-            blocks.append(ToolCallBlock(id=tc.id, name=tc.name, args=tc.args))
-        if not blocks:
-            blocks.append(TextBlock(text=""))
-        self._interface.add_assistant_message(
-            blocks,
-            model=self._model,
-            provider="codex",
-            usage={
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "thinking_tokens": usage.thinking_tokens,
-            },
-        )
 
-        # Now that the assistant turn is in the canonical interface, recompute the
-        # delta baseline in the SAME converter schema the next full request will
-        # use, so a strict prefix can actually match next turn. Runs for BOTH
-        # transports (it fixed the ``full``-every-turn root cause). On a turn that
-        # produced no chainable response it leaves ``items_added`` empty and the
-        # next turn falls back to full. See ``_ws_record_baseline_from_interface``.
-        if self._continuation_enabled:
-            self._ws_record_baseline_from_interface()
-            # Count the turn + record the cache ledger whenever the continuation
-            # machine actually drove a request this turn — the WebSocket wire
-            # (``ws_stream_was_used``) OR the REST transport.
-            if locals().get("ws_stream_was_used") or locals().get("continuation_turn_recorded"):
-                self._ws_turns_since_epoch_reset += 1
-                self._record_ws_cache_ledger(
-                    request_mode=request_mode,
-                    usage=usage,
-                    ws_diag=self._ws_last_diag,
-                )
-
-        # Stateless: don't persist the response_id beyond this single turn.
-        # Stored only as a transient debug aid; never threaded into the next
-        # request.
-        self._response_id = response_id
-        if self._codex_account_success_callback is not None:
-            # Success only closes the current AED exclusion chain. The current
-            # account binding remains sticky until the next approved boundary.
-            self._codex_account_success_callback()
-        return result
+            # Stateless: don't persist the response_id beyond this single turn.
+            # Stored only as a transient debug aid; never threaded into the next
+            # request.
+            self._response_id = response_id
+            if self._codex_account_success_callback is not None:
+                # Success only closes the current AED exclusion chain. The current
+                # account binding remains sticky until the next approved boundary.
+                self._codex_account_success_callback()
+            return result
+        except Exception as exc:
+            if not self._codex_token_expired_recovery_attempted:
+                raise
+            escaped = self._codex_fail_closed_after_recovery(
+                exc,
+                committed_entry_ids=committed_entry_ids,
+                reset_continuation=True,
+            )
+            self._codex_reraise_terminalized(exc, escaped)
 
 
 class CodexOpenAIAdapter(OpenAIAdapter):
@@ -5386,8 +5649,22 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         return copy.copy(self._client)
 
     @staticmethod
+    def _set_codex_account_binding(
+        context: _CodexAccountContext, binding: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Replace this context's binding and publish a new ownership generation."""
+        context.binding_generation += 1
+        owned = dict(binding)
+        owned["binding_generation"] = context.binding_generation
+        context.binding = owned
+        selection = owned.get("selection")
+        context.selection = dict(selection) if isinstance(selection, dict) else {}
+        return dict(owned)
+
+    @staticmethod
     def _clear_codex_account_binding(context: _CodexAccountContext) -> None:
         """Forget only this context's account for its next approved epoch."""
+        context.binding_generation += 1
         context.binding = {}
         context.selection = {}
         context.bound_molt_count = None
@@ -5535,11 +5812,11 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                     "auth_path_source": self.codex_auth_path_source,
                     "selection": dict(context.selection),
                 }
-                context.binding = binding
+                binding = self._set_codex_account_binding(context, binding)
                 context.bound_molt_count = self._current_molt_count()
                 if legacy_direct:
                     self._publish_legacy_codex_binding(binding)
-                return dict(binding)
+                return binding
             if source is None:
                 from lingtai.auth.codex_account_source import FixedAccountSource
                 source = FixedAccountSource(self._codex_fallback_auth_path or "")
@@ -5646,39 +5923,109 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             if selection_fallback is not None:
                 selection["fallback"] = selection_fallback
             context.client.api_key = access_token
-            context.selection = selection
-            context.binding = {
-                "api_key": access_token,
-                "account_id": account_id,
-                "auth_path_sha8": candidate.auth_path_sha8,
-                "auth_path_source": auth_source,
-                "auth_ref": candidate.auth_ref,
-                "selection": dict(selection),
-            }
+            binding = self._set_codex_account_binding(
+                context,
+                {
+                    "api_key": access_token,
+                    "account_id": account_id,
+                    "auth_path_sha8": candidate.auth_path_sha8,
+                    "auth_path_source": auth_source,
+                    "auth_ref": candidate.auth_ref,
+                    "selection": dict(selection),
+                },
+            )
             context.bound_molt_count = self._current_molt_count()
-            binding = dict(context.binding)
             if legacy_direct:
                 self._publish_legacy_codex_binding(binding)
             return binding
 
-    def _codex_account_request(self, context: _CodexAccountContext) -> dict[str, Any]:
-        """Return this context's account, sticky until its next boundary."""
+    def _codex_account_request(
+        self,
+        context: _CodexAccountContext,
+        apply_binding: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """Select and publish this context's sticky account under one lock."""
         with context.lock:
             current_molt = self._current_molt_count()
             if context.binding and context.bound_molt_count != current_molt:
                 self._clear_codex_account_binding(context)
             if not context.binding:
-                return self._select_codex_account(context)
-            return self._refresh_codex_bound_quota(context)
+                binding = self._select_codex_account(context)
+            else:
+                binding = self._refresh_codex_bound_quota(context)
+            if apply_binding is not None:
+                apply_binding(binding)
+            return binding
+
+    def _codex_token_expired(
+        self,
+        context: _CodexAccountContext,
+        exc: Exception,
+        expected_generation: int | None,
+        rejected_access_token: str | None,
+        expected_auth_path_sha8: str | None,
+        apply_binding: Callable[[dict[str, Any]], None] | None = None,
+        retry_request: Callable[[], Any] | None = None,
+    ) -> Any | None:
+        """Compare, publish, and optionally create one retry under ownership."""
+        from lingtai.auth.codex import _is_token_expired_error
+
+        if (
+            not _is_token_expired_error(exc)
+            or not isinstance(expected_generation, int)
+            or isinstance(expected_generation, bool)
+            or not rejected_access_token
+            or not expected_auth_path_sha8
+        ):
+            return None
+
+        with context.lock:
+            current = dict(context.binding)
+            same_account = (
+                current.get("auth_path_sha8") == expected_auth_path_sha8
+            )
+            if not same_account:
+                # An approved boundary selected another account after this request
+                # started. The late failure owns neither that binding nor a retry.
+                return None
+            if current.get("binding_generation") != expected_generation:
+                # A same-account peer already replaced the rejected generation.
+                # Reuse only that newer credential; never clear it or refresh again.
+                current_token = current.get("api_key")
+                if not current_token or current_token == rejected_access_token:
+                    return None
+                recovered = current
+            elif current.get("api_key") != rejected_access_token:
+                recovered = current
+            else:
+                auth_ref = current.get("auth_ref")
+                if not isinstance(auth_ref, str) or not auth_ref:
+                    return None
+                manager = self._new_codex_token_manager(auth_ref)
+                access_token = manager.refresh_access_token(rejected_access_token)
+                account_id = manager.get_account_id()
+
+                refreshed = dict(current)
+                refreshed["api_key"] = access_token
+                refreshed["account_id"] = account_id
+                context.client.api_key = access_token
+                recovered = self._set_codex_account_binding(context, refreshed)
+
+            # The comparison, REST/WS/header/epoch publication, and retry wire
+            # creation are one context-owned transaction. A newer owner cannot
+            # interleave a different client key with this request's account header.
+            if apply_binding is not None:
+                apply_binding(recovered)
+            if retry_request is not None:
+                return retry_request()
+            return recovered
 
     def _codex_account_error(
         self, context: _CodexAccountContext, exc: Exception, partial_output: bool
     ) -> None:
+        # The session owns replay-safe partial marking before this callback.
+        # Partial output must not mutate account exclusion state.
         if partial_output:
-            try:
-                setattr(exc, "_lingtai_partial_stream", True)
-            except Exception:
-                pass
             return
         from lingtai.auth.codex import _is_usage_limit_reached_error
         if _is_usage_limit_reached_error(exc):
@@ -5953,7 +6300,16 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 else None
             ),
             codex_account_request_callback=(
-                (lambda: self._codex_account_request(context))
+                (lambda apply: self._codex_account_request(context, apply))
+                if self._codex_account_resolution_enabled
+                else None
+            ),
+            codex_token_expired_callback=(
+                (
+                    lambda exc, generation, token, identity, apply, retry: self._codex_token_expired(
+                        context, exc, generation, token, identity, apply, retry
+                    )
+                )
                 if self._codex_account_resolution_enabled
                 else None
             ),
