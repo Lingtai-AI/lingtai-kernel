@@ -209,6 +209,7 @@ related_files:
   - tests/test_llm_utils.py
   - tests/test_local_command_core.py
   - tests/test_loop_guard.py
+  - tests/test_macos_shell_adapter.py
   - tests/test_mail_transport.py
   - tests/test_make_tool_executor.py
   - tests/test_max_rpm_plumbing.py

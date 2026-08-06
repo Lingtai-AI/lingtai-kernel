@@ -233,3 +233,30 @@ The workdir-lease adapter is a faithful move of the former
 `WorkingDir.acquire_lock`/`release_lock` flock mechanism; no concrete lock
 authority remains in Core, and platform selection with fail-loud unsupported
 handling lives in `src/lingtai/adapters/workdir_lease.py`.
+
+### macOS shell decisions (bash/shell capability)
+
+macOS has no cgroups, no Job Objects, and no `/usr/bin/timeout`; the only
+reliable tree primitive is the process group. The POSIX shell path therefore:
+
+- **Spawns every command in its own process group** (`start_new_session=True`)
+  and cancels/times out by signaling the group with SIGTERM then SIGKILL
+  after a short grace period (`os.killpg` in `bash_process.py` and the sync
+  `_run_sync_posix_grouped` path) — the Hermes `os.killpg` reaping pattern.
+  `subprocess.run`'s timeout kills only the direct child and leaks
+  grandchildren, so timeouts are enforced by this supervisor in-process, never
+  by shelling out to `timeout`.
+- **Detects the user's login shell on macOS** (`$SHELL` → `dscl . -read
+  /Users/<user> UserShell` → `/bin/zsh` → `/bin/bash`) and spawns
+  `[shell, "-lc", script]` (never `shell=True` string concatenation) so
+  `.zprofile`/`.zshrc` state is restored for GUI-launched apps — the Codex
+  `shell_detect`/`derive_exec_args` pattern.
+- **Guarantees the Homebrew PATH for GUI-launched sessions**: the child env
+  (`ShellInvocation.env`, serialized into durable async state) prepends
+  `/opt/homebrew/bin` and `/usr/local/bin` and strips credential-shaped
+  variables (provider API keys, auth/OAuth tokens, secrets, passwords) so a
+  desktop-launched agent never leaks credentials into commands — the Claude
+  Code `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` model.
+
+Linux keeps the historical `shell=True` spawn form byte-for-byte; the Darwin
+branch is gated on `platform.system() == "Darwin"` at invocation build time.

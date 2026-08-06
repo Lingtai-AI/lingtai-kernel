@@ -15,6 +15,7 @@ import math
 import os
 import re
 import secrets
+import signal
 import subprocess
 import threading
 import time
@@ -733,6 +734,21 @@ class ShellManager:
                 # Keep the historical safety net: an unexpected contained-path
                 # failure is reported, never raised to the tool caller.
                 return {"status": "error", "message": f"Command failed: {e}"}
+        if os.name == "posix":
+            # POSIX (macOS/Linux): own process group with graceful-then-KILL
+            # tree kill on timeout.  macOS has no cgroups/Job Objects and no
+            # ``/usr/bin/timeout``; the process group is the only reliable
+            # tree primitive there, and this supervisor enforces ``timeout``
+            # in-process instead of shelling out.
+            try:
+                return self._run_sync_posix_grouped(
+                    command, cwd, timeout, invocation, process_args, process_kwargs,
+                )
+            except Exception as e:
+                # Same safety net as the contained path: an unexpected
+                # grouped-path failure is reported, never raised to the tool
+                # caller.
+                return {"status": "error", "message": f"Command failed: {e}"}
         try:
             process_args, process_kwargs = invocation.process_args()
             if invocation.encoding is not None:
@@ -861,6 +877,80 @@ class ShellManager:
             # the sync path (see module/CONTRACT docs).
             win32_job.close_handle(job)
         return self._sync_result_from(stdout, stderr, returncode, command)
+
+    def _run_sync_posix_grouped(
+        self, command: str, cwd: str, timeout: float,
+        invocation: ShellInvocation, process_args: object, process_kwargs: dict,
+    ) -> dict:
+        """POSIX sync run: own process group plus graceful-then-KILL tree kill.
+
+        macOS has no cgroups/Job Objects and no ``/usr/bin/timeout``; the only
+        reliable tree primitive is the process group (Hermes killpg pattern).
+        Every POSIX sync command is therefore spawned with
+        ``start_new_session=True`` (the child becomes its own PGID leader),
+        ``timeout`` is enforced by this supervisor, and on expiry the whole
+        group gets SIGTERM and then SIGKILL after a short grace period.
+        ``subprocess.run``'s timeout path kills only the direct child and
+        leaks grandchildren; this path never relies on an external ``timeout``
+        binary.  This mirrors the Windows Job Object containment
+        (``_run_sync_contained``) on the POSIX side.
+        """
+        spawn_kwargs = {
+            **process_kwargs,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "cwd": cwd,
+            "start_new_session": True,
+        }
+        # stdin bootstrap integration (same contract as the contained path):
+        # ``input`` is a ``subprocess.run``-only kwarg, so pop it and feed
+        # ``communicate(input=...)``; the ASCII bootstrap otherwise never sees
+        # EOF and every command would time out and be group-killed.
+        input_data = spawn_kwargs.pop("input", None)
+        if input_data is not None:
+            spawn_kwargs["stdin"] = subprocess.PIPE
+        else:
+            # Never inherit the parent stdin: a sync run must not read from or
+            # pin the supervisor's input handle.
+            spawn_kwargs["stdin"] = subprocess.DEVNULL
+        process = subprocess.Popen(process_args, **spawn_kwargs)
+        try:
+            try:
+                stdout, stderr = process.communicate(input=input_data, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                pgid = process.pid
+                try:
+                    os.killpg(pgid, signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    pass
+                # Grace period for the direct child and its descendants to
+                # exit on SIGTERM before the forced kill (0.5s, matching the
+                # async POSIX adapter's graceful-then-KILL window).
+                deadline = time.monotonic() + 0.5
+                while time.monotonic() < deadline:
+                    try:
+                        os.killpg(pgid, 0)
+                    except (ProcessLookupError, OSError):
+                        break
+                    time.sleep(0.05)
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+                try:
+                    process.wait(timeout=_IO_DRAIN_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    pass
+                return _timeout_error(command, timeout)
+        finally:
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+        stdout = sanitize_output(stdout, self._max_output)
+        stderr = sanitize_output(stderr, self._max_output)
+        return self._sync_result_from(stdout, stderr, process.returncode, command)
 
     @staticmethod
     def _terminal(status: object) -> bool:

@@ -83,6 +83,12 @@ def resolve_shell_kind(
          is discoverable, then Git Bash, then cmd.exe as the last resort;
          WSL is opt-in only (never auto-selected).
 
+    The kind stays ``POSIX`` on macOS -- the Darwin-specific work (resolving
+    the user's login shell to ``/bin/zsh`` or ``/bin/bash`` and spawning
+    ``[shell, "-lc", script]`` with the Homebrew PATH guarantee) lives in the
+    POSIX dialect/``make_invocation_for_kind`` so the durable kind vocabulary
+    never splits between classifier and dialect.
+
     Unknown override values fall back to the platform default instead of
     failing setup, so a stale config never disables the shell capability.
     """
