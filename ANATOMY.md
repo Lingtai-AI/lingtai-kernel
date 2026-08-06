@@ -20,6 +20,7 @@ related_files:
   - .github/ISSUE_TEMPLATE/bug_report.yml
   - .github/ISSUE_TEMPLATE/config.yml
   - .github/ISSUE_TEMPLATE/feature_request.yml
+  - .github/workflows/kernel-macos-smoke-pr.yml
   - .github/workflows/kernel-windows-pr.yml
   - .github/workflows/shell-windows-pr.yml
   - .github/workflows/wheels.yml
@@ -207,7 +208,8 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
 - [`.github/`](.github/) — GitHub Actions, issue templates, and pull request
   templates. `workflows/wheels.yml` is the release build/verify/manifest
   pipeline; `kernel-windows-pr.yml` and `shell-windows-pr.yml` are the native
-  Windows PR gates. `ISSUE_TEMPLATE/{bug_report,feature_request}.yml` plus
+  Windows PR gates and `kernel-macos-smoke-pr.yml` is the macOS smoke tier.
+  `ISSUE_TEMPLATE/{bug_report,feature_request}.yml` plus
   `config.yml` and `PULL_REQUEST_TEMPLATE.md` are the contributor intake forms —
   the pull-request template carries its governance metadata in an HTML comment
   rather than a `---` fence, because GitHub injects its raw bytes into every new
