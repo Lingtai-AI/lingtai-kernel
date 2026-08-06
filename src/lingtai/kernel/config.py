@@ -4,32 +4,45 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
+from types import MappingProxyType
+
+# Vocabulary and the manifest-admission gate are owned by the current-wiring
+# route description surface; re-exported here for the existing callers.
+from lingtai.kernel.llm.routes import (  # noqa: F401 — re-exports
+    THINKING_LEVELS,
+    THINKING_PROVIDERS,
+    llm_supports_thinking,
+)
 
 
-# Accepted manifest.llm.thinking values, mirroring the upstream Responses
-# ``reasoning.effort`` payload values in ascending effort order. Explicit
-# ``"none"`` is a real payload value (effort none), distinct from an *omitted*
-# field — omitted stays the internal ``"default"`` sentinel and the Codex
-# adapter maps it to ``"xhigh"``.
-THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
-
-# Codex-family providers that accept manifest.llm.thinking. ``codex-pool``
-# reuses the Codex adapter (both dash/underscore spellings). Custom
-# OpenAI-compatible Responses is the other supported scope; use
-# ``llm_supports_thinking`` so validators share the complete rule.
-THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
+# Alias/coercion vocabulary for accepted explicit thinking inputs. This table
+# is deliberately empty: no alias or case coercion is currently authorized, so
+# normalization is the identity on today's vocabulary. A future alias must be
+# added here so acceptance (``thinking_is_valid``) and the captured canonical
+# value (``resolve_main_thinking``) change together in one owner. Provider
+# wire collapses (e.g. generic Chat's non-default -> "low") are emission
+# behavior and must NOT move into this table.
+THINKING_ALIASES: MappingProxyType[str, str] = MappingProxyType({})
 
 
-def llm_supports_thinking(llm: dict) -> bool:
-    """Return whether a manifest LLM block accepts explicit thinking effort."""
+def normalize_thinking(value: object) -> object:
+    """Return the canonical spelling for an explicit thinking input."""
+    if isinstance(value, str):
+        return THINKING_ALIASES.get(value, value)
+    return value
+
+
+def thinking_is_valid(value: object) -> bool:
+    """Return the existing manifest thinking vocabulary/type result."""
+    return isinstance(value, str) and normalize_thinking(value) in THINKING_LEVELS
+
+
+def resolve_main_thinking(llm: dict) -> str:
+    """Resolve the existing main-session omission baseline."""
+    if "thinking" in llm:
+        return normalize_thinking(llm["thinking"])
     provider = str(llm.get("provider") or "").lower()
-    if provider in THINKING_PROVIDERS:
-        return True
-    return (
-        provider == "custom"
-        and str(llm.get("api_compat") or "").lower() == "openai"
-        and str(llm.get("wire_api") or "").lower() == "responses"
-    )
+    return "default" if provider in THINKING_PROVIDERS else "high"
 
 # Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
 # agent-configurable. An agent must not be able to raise its own molt

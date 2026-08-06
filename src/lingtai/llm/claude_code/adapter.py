@@ -31,6 +31,7 @@ from lingtai.kernel.llm.interface import (
     ToolCallBlock,
     ToolResultBlock,
 )
+from lingtai.kernel.llm.policy import ReasoningConstruction
 from lingtai.kernel.logging import get_logger
 
 from lingtai.llm.base import LLMAdapter
@@ -180,6 +181,27 @@ def _extract_json_object(text: str) -> dict | None:
     return None
 
 
+def _cli_reasoning_construction(
+    thinking: str | None, *, phase: str
+) -> ReasoningConstruction:
+    """Claude Code CLI route owner (``first``/``resume`` phases).
+
+    The CLI exposes no reasoning flag or environment variable, so both
+    phases contribute an empty argv/env delta: a ``default``/``None`` policy
+    is omitted and any other captured value is dropped from the actual
+    command. The command builder (``_invoke_raw``) consumes this result, so
+    a future CLI flag must flow through here or the evidence goes stale
+    loudly rather than silently.
+    """
+    requested = "default" if thinking is None else thinking
+    return ReasoningConstruction(
+        route="claude-code/cli",
+        requested=requested,
+        disposition="omitted" if thinking in (None, "default") else "dropped",
+        phase=phase,
+    )
+
+
 class ClaudeCodeChatSession(ChatSession):
     """Multi-turn session backed by repeated ``claude -p`` invocations.
 
@@ -209,6 +231,12 @@ class ClaudeCodeChatSession(ChatSession):
         # the recovery source whenever this continuation cannot be trusted.
         self._remote_session_id: str | None = None
         self._remote_entry_count = 0
+        # Captured construction policy value plus the first-phase route
+        # result; ``send`` consumes the stored result for first-style
+        # commands and re-derives a resume-phase result at the actual
+        # resume command construction.
+        self._reasoning_thinking: str | None = "default"
+        self._reasoning_construction: ReasoningConstruction | None = None
         # Seeded from the constructor content so the first per-turn resync in
         # ``SessionManager.send`` is already recognised as a no-op.
         self._stable_context_digest = self._system_block_digest()
@@ -245,11 +273,17 @@ class ClaudeCodeChatSession(ChatSession):
                 prompt = self._render_prompt(
                     self._remote_entry_count if self._remote_session_id else 0
                 )
+                # The builder consumes the pre-armed result for exactly this
+                # command; every remote-session transition re-arms it, so the
+                # llm_call record written before dispatch already described
+                # this command's phase. (An overflow reset below re-arms
+                # ``first`` before the shared recovery retries.)
                 try:
                     return self._adapter._invoke(
                         prompt,
                         self._model,
                         resume_session_id=self._remote_session_id,
+                        reasoning=self._reasoning_construction,
                     )
                 except ClaudeCodeContextOverflow:
                     # A locally trimmed retry cannot safely continue a remote
@@ -303,9 +337,25 @@ class ClaudeCodeChatSession(ChatSession):
 
         return restore
 
+    def _arm_reasoning(self) -> None:
+        """Arm the route result for the exact next CLI command.
+
+        Called at construction and on every remote-session transition, so
+        the ``llm_call`` record written before dispatch already describes
+        the phase of the command the builder will construct, and the builder
+        consumes this same stored instance.
+        """
+        construction = _cli_reasoning_construction(
+            self._reasoning_thinking,
+            phase="resume" if self._remote_session_id else "first",
+        )
+        self._reasoning_construction = construction
+        self.reasoning_emission = construction.emission()
+
     def _reset_remote_session(self) -> None:
         self._remote_session_id = None
         self._remote_entry_count = 0
+        self._arm_reasoning()
 
     def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
         self._reset_remote_session()
@@ -316,6 +366,7 @@ class ClaudeCodeChatSession(ChatSession):
         if isinstance(session_id, str) and session_id:
             self._remote_session_id = session_id
             self._remote_entry_count = len(self._interface._entries)
+            self._arm_reasoning()
         else:
             self._reset_remote_session()
 
@@ -596,6 +647,8 @@ class ClaudeCodeAdapter(LLMAdapter):
             interface=iface,
             context_window=context_window or self._context_window,
         )
+        session._reasoning_thinking = thinking
+        session._arm_reasoning()
         return self._wrap_with_gate(session)
 
     def generate(
@@ -668,6 +721,7 @@ class ClaudeCodeAdapter(LLMAdapter):
         model: str,
         system_prompt_file: Any = _UNSET,
         resume_session_id: str | None = None,
+        reasoning: ReasoningConstruction | None = None,
     ) -> tuple[str, UsageMetadata, dict]:
         """Run ``claude -p`` once. Returns (result_text, usage, envelope).
 
@@ -675,12 +729,19 @@ class ClaudeCodeAdapter(LLMAdapter):
         file (the chat path). Pass ``None`` to omit the flag entirely — used
         by the one-shot ``generate`` path, which has no cross-turn cache to
         protect and must not reuse (or poison) the chat system-prompt file.
+
+        ``reasoning`` is the route-owned construction result for this
+        command; its argv/env deltas (empty today — the CLI accepts no
+        reasoning control) are the only reasoning contribution to the
+        spawned process.
         """
         cmd = [self._cli_path, "-p", "--output-format", "json"]
         if model:
             cmd += ["--model", model]
         if resume_session_id:
             cmd += ["--resume", resume_session_id]
+        if reasoning is not None:
+            cmd += list(reasoning.argv_delta)
         if self._disallowed:
             cmd += ["--disallowedTools", *self._disallowed]
         if system_prompt_file is _UNSET:
@@ -689,13 +750,16 @@ class ClaudeCodeAdapter(LLMAdapter):
             cmd += ["--append-system-prompt-file", str(system_prompt_file)]
         cmd += self._extra_argv
 
+        env = self._build_env()
+        if reasoning is not None:
+            env.update(dict(reasoning.env_delta))
         try:
             proc = subprocess.run(
                 cmd,
                 input=prompt,
                 capture_output=True,
                 text=True,
-                env=self._build_env(),
+                env=env,
                 cwd=str(self._cwd),
                 timeout=self._timeout_s,
             )
@@ -774,12 +838,14 @@ class ClaudeCodeAdapter(LLMAdapter):
         model: str,
         *,
         resume_session_id: str | None = None,
+        reasoning: ReasoningConstruction | None = None,
     ) -> tuple[dict, UsageMetadata, dict]:
         """Run the CLI and parse one JSON *action* from its result."""
         result_str, usage, envelope = self._invoke_raw(
             prompt,
             model,
             resume_session_id=resume_session_id,
+            reasoning=reasoning,
         )
         action = _extract_json_object(result_str)
         if action is None:

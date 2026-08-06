@@ -39,7 +39,12 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from .config import THINKING_LEVELS, THINKING_PROVIDERS, llm_supports_thinking
+from .config import (
+    THINKING_LEVELS,
+    THINKING_PROVIDERS,
+    llm_supports_thinking,
+    thinking_is_valid,
+)
 
 log = logging.getLogger(__name__)
 
@@ -366,7 +371,7 @@ def load_preset(
                 "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+        if not thinking_is_valid(thinking):
             raise ValueError(
                 f"preset {name!r} ({p}): manifest.llm.thinking must be one of "
                 f"{', '.join(THINKING_LEVELS)}"

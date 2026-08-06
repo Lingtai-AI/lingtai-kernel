@@ -44,6 +44,11 @@ class OpenRouterAdapter(OpenAIAdapter):
             default_headers=default_headers,
         )
 
+    def _chat_route_id(self) -> str:
+        # OpenRouter Chat route owner: the inherited flat mapping plus the
+        # coupled reasoning-text opt-out below travel in one route result.
+        return "openrouter/chat"
+
     def _adapter_extra_body(self) -> dict:
         # Explicit opt-out: we don't want reasoning text back. Billing is
         # unaffected.

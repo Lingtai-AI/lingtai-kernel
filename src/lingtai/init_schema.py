@@ -7,6 +7,7 @@ from lingtai.kernel.config import (
     THINKING_LEVELS,
     THINKING_PROVIDERS,
     llm_supports_thinking,
+    thinking_is_valid,
 )
 
 log = logging.getLogger(__name__)
@@ -430,7 +431,7 @@ def validate_init(data: dict) -> list[str]:
                 "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+        if not thinking_is_valid(thinking):
             raise ValueError(
                 "manifest.llm.thinking: expected one of "
                 f"{', '.join(THINKING_LEVELS)}"

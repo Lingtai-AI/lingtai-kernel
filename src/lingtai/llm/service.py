@@ -22,6 +22,7 @@ from lingtai.kernel.llm.base import (
     LLMResponse,
 )
 from lingtai.kernel.llm.interface import ChatInterface, ToolResultBlock
+from lingtai.kernel.llm.policy import ReasoningPolicy, reasoning_policy
 from lingtai.kernel.llm.service import LLMService as LLMServiceABC
 
 from .base import LLMAdapter
@@ -387,7 +388,7 @@ class LLMService(LLMServiceABC):
         tools: list[FunctionSchema] | None = None,
         *,
         model: str | None = None,
-        thinking: str = "default",
+        thinking: ReasoningPolicy | str | None = "default",
         agent_type: str = "",
         tracked: bool = True,
         interaction_id: str | None = None,
@@ -406,6 +407,10 @@ class LLMService(LLMServiceABC):
             context_window: Override the service-level context window for this
                 session.  Falls back to the value passed at LLMService construction.
         """
+        policy = reasoning_policy(thinking)
+        adapter_thinking = (
+            thinking.effort if isinstance(thinking, ReasoningPolicy) else thinking
+        )
         adapter = self.get_adapter(provider) if provider else self.get_adapter(self._provider, self._base_url)
         session_model = model or self._model
         ctx_window = context_window or self._context_window
@@ -413,13 +418,15 @@ class LLMService(LLMServiceABC):
             model=session_model,
             system_prompt=system_prompt,
             tools=tools,
-            thinking=thinking,
+            thinking=adapter_thinking,
             interaction_id=interaction_id,
             json_schema=json_schema,
             force_tool_call=force_tool_call,
             interface=interface,
             context_window=ctx_window,
         )
+        target = getattr(chat, "_inner", None) or chat
+        setattr(target, "reasoning_policy", policy)
         if tracked:
             chat.session_id = _generate_session_id()
             chat._agent_type = agent_type

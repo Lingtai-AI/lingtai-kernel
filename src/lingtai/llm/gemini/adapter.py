@@ -24,6 +24,7 @@ from lingtai.kernel.llm.base import (
     UsageMetadata,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
+from lingtai.kernel.llm.policy import ReasoningConstruction
 from lingtai.llm.base import LLMAdapter
 from lingtai.kernel.llm.interface import ChatInterface
 from lingtai.kernel.llm.streaming import StreamingAccumulator
@@ -126,15 +127,73 @@ def _supports_thinking(model: str) -> bool:
     return False
 
 
-def _thinking_config(level: str) -> types.ThinkingConfig | None:
-    """Build a Gemini ThinkingConfig from a normalized level string.
+def _dropped_or_omitted(thinking: str | None) -> str:
+    return "omitted" if thinking in (None, "default") else "dropped"
 
-    Returns None if thinking is disabled ("off").
+
+def _interactions_reasoning_construction(
+    model: str, thinking: str | None
+) -> ReasoningConstruction:
+    """Gemini Interactions route owner.
+
+    Model-gated hard-coded behavior: Gemini 3+ always sends
+    ``generation_config.thinking_level = "high"`` and the caller's value is
+    ignored (recorded as requested); nonmatching models emit no thinking
+    config, dropping any non-default caller value.
     """
-    if level == "off":
-        return None
-    level_upper = level.upper() if level != "default" else "LOW"
-    return types.ThinkingConfig(include_thoughts=True, thinking_level=level_upper)
+    requested = "default" if thinking is None else thinking
+    if _supports_thinking(model):
+        return ReasoningConstruction(
+            route="gemini/interactions",
+            requested=requested,
+            disposition="emitted",
+            json_delta=(("thinking_level", "high"),),
+            merge_root="generation_config",
+            emitted_path="generation_config.thinking_level",
+            emitted_value="high",
+            source="model-gated-hardcoded",
+        )
+    return ReasoningConstruction(
+        route="gemini/interactions",
+        requested=requested,
+        disposition=_dropped_or_omitted(thinking),
+        source="model-gate-unmet",
+    )
+
+
+def _chat_reasoning_construction(
+    model: str, thinking: str | None
+) -> ReasoningConstruction:
+    """Gemini JSON-schema Chat route owner.
+
+    Same model gate as Interactions but with the native ``ThinkingConfig``
+    shape (``include_thoughts=True, thinking_level=HIGH``), also ignoring the
+    caller's value on Gemini 3+ and omitting it entirely on older models.
+    """
+    requested = "default" if thinking is None else thinking
+    if _supports_thinking(model):
+        # Stored as the immutable plain-JSON spec of the native fragment; the
+        # construction site materializes it and ``GenerateContentConfig``
+        # coerces the dict into the identical
+        # ``types.ThinkingConfig(include_thoughts=True, thinking_level=HIGH)``.
+        return ReasoningConstruction(
+            route="gemini/chat",
+            requested=requested,
+            disposition="emitted",
+            json_delta=(
+                ("thinking_config", {"include_thoughts": True, "thinking_level": "HIGH"}),
+            ),
+            emitted_path="thinking_config.thinking_level",
+            emitted_value="HIGH",
+            coupled=(("thinking_config.include_thoughts", "True"),),
+            source="model-gated-hardcoded",
+        )
+    return ReasoningConstruction(
+        route="gemini/chat",
+        requested=requested,
+        disposition=_dropped_or_omitted(thinking),
+        source="model-gate-unmet",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -765,11 +824,10 @@ class GeminiAdapter(LLMAdapter):
         config_kwargs: dict[str, Any] = {}
         config_kwargs["system_instruction"] = system_prompt
 
-        # Only send thinking_config for Gemini 3+ models.
-        if _supports_thinking(model):
-            tc = _thinking_config("high")
-            if tc is not None:
-                config_kwargs["thinking_config"] = tc
+        # Only send thinking_config for Gemini 3+ models; the route-owned
+        # result builds the native fragment and the recorded evidence.
+        construction = _chat_reasoning_construction(model, thinking)
+        config_kwargs.update(construction.materialize_json())
 
         fds = _build_function_declarations(tools)
         if fds:
@@ -794,9 +852,11 @@ class GeminiAdapter(LLMAdapter):
         self._use_interactions = False
         chat = self._client.chats.create(**create_kwargs)
 
-        return self._wrap_with_gate(
-            GeminiChatSession(chat, context_window=context_window, interface=interface)
+        session = GeminiChatSession(
+            chat, context_window=context_window, interface=interface
         )
+        session.reasoning_emission = construction.emission()
+        return self._wrap_with_gate(session)
 
     def _create_interactions_session(
         self,
@@ -827,10 +887,11 @@ class GeminiAdapter(LLMAdapter):
         if interactions_tools:
             config_kwargs["tools"] = interactions_tools
 
-        # Generation config (thinking + tool_choice)
+        # Generation config (thinking + tool_choice): the route-owned result
+        # builds the model-gated fragment and the recorded evidence.
+        construction = _interactions_reasoning_construction(model, thinking)
         gen_config: dict[str, Any] = {}
-        if _supports_thinking(model):
-            gen_config["thinking_level"] = "high"
+        gen_config.update(construction.materialize_json())
 
         if force_tool_call and tools:
             gen_config["tool_choice"] = "any"
@@ -842,7 +903,7 @@ class GeminiAdapter(LLMAdapter):
 
         # If resuming from a saved interaction_id, history is server-side
         if interaction_id:
-            return InteractionsChatSession(
+            session = InteractionsChatSession(
                 self._client,
                 model,
                 config_kwargs,
@@ -850,6 +911,8 @@ class GeminiAdapter(LLMAdapter):
                 context_window=context_window,
                 interface=interface,
             )
+            session.reasoning_emission = construction.emission()
+            return session
 
         # If seeding with conversation history, use pre-converted TurnParam
         # turns for the first call. The InteractionsChatSession will send
@@ -863,6 +926,7 @@ class GeminiAdapter(LLMAdapter):
             context_window=context_window,
             interface=interface,
         )
+        session.reasoning_emission = construction.emission()
 
         if seed_turns:
             session._pending_seed_turns = seed_turns

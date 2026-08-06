@@ -42,6 +42,7 @@ from lingtai.kernel.llm.base import (
     UsageMetadata,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
+from lingtai.kernel.llm.policy import ReasoningConstruction
 from lingtai.llm.base import LLMAdapter
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
 from ..interface_converters import to_openai, to_responses_input
@@ -953,16 +954,94 @@ def _estimate_responses_input_tokens(
     return total
 
 
-def _responses_reasoning_kwargs(thinking: str | None) -> dict[str, dict[str, str]]:
-    """Return OpenAI Responses reasoning kwargs for a configured thinking level."""
+def responses_reasoning_construction(
+    thinking: str | None,
+    *,
+    route: str,
+    requested: str | None = None,
+    source: str | None = None,
+) -> ReasoningConstruction:
+    """Byte-identical OpenAI Responses reasoning primitive.
+
+    Route-local wrappers (generic/custom Responses, Codex, DeepSeek, MiMo)
+    delegate here but each owns its complete result under its own route id.
+    ``default``/``None`` omit the field; explicit values pass through
+    verbatim; anything else raises the historical Responses-specific error.
+    """
+    if requested is None:
+        requested = "default" if thinking is None else thinking
     if thinking in (None, "default"):
-        return {}
+        return ReasoningConstruction(
+            route=route, requested=requested, disposition="omitted", source=source
+        )
     if thinking not in THINKING_LEVELS:
         raise ValueError(
             "OpenAI Responses thinking must be one of "
             f"{', '.join(THINKING_LEVELS)}, or default"
         )
-    return {"reasoning": {"effort": thinking}}
+    return ReasoningConstruction(
+        route=route,
+        requested=requested,
+        disposition="emitted",
+        json_delta=(("reasoning", {"effort": thinking}),),
+        emitted_path="reasoning.effort",
+        emitted_value=thinking,
+        source=source,
+    )
+
+
+def chat_reasoning_construction(
+    thinking: str | None,
+    *,
+    route: str,
+    coupled_extra_body: dict | None = None,
+    source: str | None = None,
+) -> ReasoningConstruction:
+    """Byte-identical generic OpenAI Chat Completions reasoning primitive.
+
+    Preserves the current collapse (defect G-3): only literal ``default``
+    omits the flat field; ``high`` stays high; every other value including
+    ``None`` becomes ``low``. ``coupled_extra_body`` carries a route-coupled
+    constant fragment (e.g. OpenRouter's reasoning-text opt-out) inside the
+    same result.
+    """
+    requested = "default" if thinking is None else thinking
+    delta: list[tuple[str, Any]] = []
+    emitted_path = emitted_value = None
+    disposition = "omitted"
+    if thinking != "default":
+        emitted_path = "reasoning_effort"
+        emitted_value = "high" if thinking == "high" else "low"
+        delta.append((emitted_path, emitted_value))
+        disposition = "emitted"
+    coupled: tuple[tuple[str, str], ...] = ()
+    if coupled_extra_body:
+        delta.append(("extra_body", coupled_extra_body))
+        coupled = tuple(
+            (f"extra_body.{path}", value)
+            for path, value in _flatten_extra_body(coupled_extra_body)
+        )
+    return ReasoningConstruction(
+        route=route,
+        requested=requested,
+        disposition=disposition,
+        json_delta=tuple(delta),
+        emitted_path=emitted_path,
+        emitted_value=emitted_value,
+        coupled=coupled,
+        source=source,
+    )
+
+
+def _flatten_extra_body(fragment: dict, prefix: str = "") -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for key, value in fragment.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, dict):
+            pairs.extend(_flatten_extra_body(value, prefix=f"{path}."))
+        else:
+            pairs.append((path, str(value)))
+    return pairs
 
 
 def _codex_responses_trace_path() -> Path | None:
@@ -2510,6 +2589,39 @@ class OpenAIAdapter(LLMAdapter):
         # auto
         return self._use_responses and (not self.base_url or self._force_responses)
 
+    # -- Reasoning route ownership ---------------------------------------------
+    #
+    # Each wire route owns one construction result produced exactly once at
+    # its real construction site; subclasses with a distinct route identity
+    # (Codex, DeepSeek, MiMo, Zhipu, OpenRouter) override the route id or the
+    # mapper itself while delegating to the byte-identical primitives above.
+
+    def _responses_route_id(self) -> str:
+        if not self.base_url:
+            return "openai/responses"
+        return f"openai-compat:{_base_url_namespace(self.base_url)}/responses"
+
+    def _chat_route_id(self) -> str:
+        if not self.base_url:
+            return "openai/chat"
+        return f"openai-compat:{_base_url_namespace(self.base_url)}/chat"
+
+    def _responses_reasoning_construction(
+        self, thinking: str | None
+    ) -> ReasoningConstruction:
+        return responses_reasoning_construction(
+            thinking, route=self._responses_route_id()
+        )
+
+    def _chat_reasoning_construction(
+        self, thinking: str | None
+    ) -> ReasoningConstruction:
+        return chat_reasoning_construction(
+            thinking,
+            route=self._chat_route_id(),
+            coupled_extra_body=self._adapter_extra_body() or None,
+        )
+
     # -- LLMAdapter interface --------------------------------------------------
 
     def create_chat(
@@ -2588,9 +2700,10 @@ class OpenAIAdapter(LLMAdapter):
         # Completions SDK's flat `reasoning_effort`. Sending the wrong shape
         # silently drops the field on the OpenAI Responses endpoint and 400s
         # on Codex's `/backend-api/codex/responses`.
-        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        construction = self._responses_reasoning_construction(thinking)
+        extra_kwargs.update(construction.materialize_json())
 
-        return OpenAIResponsesSession(
+        session = OpenAIResponsesSession(
             client=self._client,
             model=model,
             instructions=system_prompt,
@@ -2604,6 +2717,8 @@ class OpenAIAdapter(LLMAdapter):
             context_window=context_window,
             stateless_replay=self._responses_stateless_replay,
         )
+        session.reasoning_emission = construction.emission()
+        return session
 
     def _create_completions_session(
         self,
@@ -2640,19 +2755,13 @@ class OpenAIAdapter(LLMAdapter):
                 },
             }
 
-        # Reasoning effort for o-series models
-        if thinking != "default":
-            extra_kwargs["reasoning_effort"] = "high" if thinking == "high" else "low"
+        # Reasoning effort for o-series models, plus any route-coupled
+        # extra_body (e.g. OpenRouter's reasoning include) from the one
+        # route-owned construction result.
+        construction = self._chat_reasoning_construction(thinking)
+        extra_kwargs.update(construction.materialize_json())
 
-        # Subclass-provided extra_body (e.g. OpenRouter's reasoning include).
-        # Merge rather than overwrite so callers adding their own extra_body
-        # via extra_kwargs aren't clobbered.
-        sub_extra_body = self._adapter_extra_body()
-        if sub_extra_body:
-            existing = extra_kwargs.get("extra_body") or {}
-            extra_kwargs["extra_body"] = {**sub_extra_body, **existing}
-
-        return self._session_class(
+        session = self._session_class(
             client=self._client,
             model=model,
             interface=interface,
@@ -2663,6 +2772,8 @@ class OpenAIAdapter(LLMAdapter):
             context_window=context_window,
             prompt_cache_key=self._resolve_prompt_cache_key(model),
         )
+        session.reasoning_emission = construction.emission()
+        return session
 
     def _adapter_extra_body(self) -> dict:
         """Return extra_body JSON fields to include on every request.
@@ -5840,6 +5951,23 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             return current
         return f"lingtai-codex:{model}:v1"
 
+    def _responses_reasoning_construction(
+        self, thinking: str | None
+    ) -> ReasoningConstruction:
+        # Codex route owner. Codex-only default: an omitted/``default``
+        # thinking level sends an explicit ``reasoning.effort = "xhigh"``
+        # instead of omitting the field (omitting it would fall back to the
+        # Codex backend's own, lower default). Explicit levels pass through
+        # unchanged, and the generic OpenAI Responses route keeps its
+        # omit-on-default behavior.
+        defaulted = thinking in (None, "default")
+        return responses_reasoning_construction(
+            "xhigh" if defaulted else thinking,
+            route="codex/responses",
+            requested="default" if thinking is None else thinking,
+            source="codex-default" if defaulted else None,
+        )
+
     def _create_responses_session(
         self,
         model: str,
@@ -5873,14 +6001,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 },
             }
 
-        # Codex-only default: an omitted/``default`` thinking level sends an
-        # explicit ``reasoning.effort = "xhigh"`` instead of omitting the field
-        # (omitting it would fall back to the Codex backend's own, lower
-        # default). Explicit levels pass through unchanged, and the generic
-        # OpenAI Responses path keeps its omit-on-default behavior.
-        if thinking in (None, "default"):
-            thinking = "xhigh"
-        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        construction = self._responses_reasoning_construction(thinking)
+        extra_kwargs.update(construction.materialize_json())
 
         # Codex's backend doesn't accept context_management compaction —
         # leave compact_threshold unset.
@@ -5889,7 +6011,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             extra_kwargs["service_tier"] = self._codex_service_tier
 
         session_id, thread_id = self._resolve_codex_ids(model)
-        return CodexResponsesSession(
+        session = CodexResponsesSession(
             client=context.client,
             model=model,
             instructions=system_prompt,
@@ -5943,3 +6065,5 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             api_key=getattr(context.client, "api_key", None),
             compact_token_limit=self._codex_compact_token_limit,
         )
+        session.reasoning_emission = construction.emission()
+        return session

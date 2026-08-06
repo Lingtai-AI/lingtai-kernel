@@ -123,6 +123,7 @@ class ClaudeInteractiveBridge:
         env: dict[str, str] | None = None,
         log_callback: Callable[..., None] | None = None,
         terminal_port: InteractiveTerminalPort | None = None,
+        reasoning=None,
     ) -> None:
         self.em_id = em_id
         self.run_dir = run_dir
@@ -137,6 +138,10 @@ class ClaudeInteractiveBridge:
         self.env = dict(env or os.environ)
         self.log_callback = log_callback or (lambda *args, **kwargs: None)
         self.terminal_port = terminal_port
+        # Ask-phase route result threaded from the manager's dispatcher; its
+        # (currently empty) argv/env deltas are the bridge's only reasoning
+        # contribution to the spawned command. None for initial runs.
+        self.reasoning = reasoning
 
         managed_root = Path(
             self.env.get("LINGTAI_CLAUDE_MANAGED_ROOT")
@@ -591,7 +596,15 @@ class ClaudeInteractiveBridge:
         cmd.extend(["--append-system-prompt-file", str(self.system_prompt_path)])
         if self.backend_argv:
             cmd.extend(self.backend_argv)
+        if self.reasoning is not None:
+            cmd.extend(self.reasoning.argv_delta)
         return cmd
+
+    def _reasoning_env(self, env: dict) -> dict:
+        """Apply the ask route result's (currently empty) env delta."""
+        if self.reasoning is not None:
+            env.update(dict(self.reasoning.env_delta))
+        return env
 
     def run(self) -> ClaudeInteractiveResult:
         # Terminal ownership must be established by manager composition before
@@ -615,7 +628,7 @@ class ClaudeInteractiveBridge:
         )
         hook_thread.start()
 
-        env = dict(self.env)
+        env = self._reasoning_env(dict(self.env))
         env["LINGTAI_CLAUDE_INTERACTIVE_FIFO"] = str(self.fifo_path)
         cmd = self._command(settings_json)
         self._log(
@@ -800,6 +813,7 @@ def run_claude_interactive(
     env: dict[str, str] | None = None,
     log_callback: Callable[..., None] | None = None,
     terminal_port: InteractiveTerminalPort | None = None,
+    reasoning=None,
 ) -> ClaudeInteractiveResult:
     """Convenience wrapper used by ``DaemonManager`` and tests."""
 
@@ -815,4 +829,5 @@ def run_claude_interactive(
         env=env,
         log_callback=log_callback,
         terminal_port=terminal_port,
+        reasoning=reasoning,
     ).run()

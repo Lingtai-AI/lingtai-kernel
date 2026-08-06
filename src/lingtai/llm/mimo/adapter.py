@@ -306,6 +306,16 @@ class MimoAdapter(OpenAIAdapter):
         # hit the cross-request prompt cache.
         return f"lingtai-mimo:{model}:v1"
 
+    def _chat_route_id(self) -> str:
+        # MiMo Chat route owner: inherits the generic collapse mapper under
+        # its own replaceable route identity.
+        return "mimo/chat"
+
+    def _responses_route_id(self) -> str:
+        # MiMo Responses route owner: byte-identical to the generic
+        # Responses mapping today, independently replaceable later.
+        return "mimo/responses"
+
     def _create_responses_session(
         self,
         model: str,
@@ -317,7 +327,7 @@ class MimoAdapter(OpenAIAdapter):
         thinking: str = "default",
         context_window: int = 0,
     ) -> MimoResponsesSession:
-        from ..openai.adapter import _build_responses_tools, _responses_reasoning_kwargs
+        from ..openai.adapter import _build_responses_tools
 
         if interface is None:
             interface = ChatInterface()
@@ -338,9 +348,10 @@ class MimoAdapter(OpenAIAdapter):
                     "schema": json_schema,
                 },
             }
-        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        construction = self._responses_reasoning_construction(thinking)
+        extra_kwargs.update(construction.materialize_json())
 
-        return MimoResponsesSession(
+        session = MimoResponsesSession(
             client=self._client,
             model=model,
             instructions=system_prompt,
@@ -357,3 +368,5 @@ class MimoAdapter(OpenAIAdapter):
             stateless_replay=True,
             compact_token_limit=self._mimo_compact_token_limit,
         )
+        session.reasoning_emission = construction.emission()
+        return session
