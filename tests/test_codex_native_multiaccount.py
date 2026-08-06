@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import httpx
@@ -1137,9 +1138,12 @@ def test_native_codex_request_builder_propagates_watchdog_timeout():
     assert response.text == "ok"
     wire_timeout = responses.calls[0].get("timeout")
     assert isinstance(wire_timeout, httpx.Timeout)
-    assert wire_timeout.connect == 0.125
-    assert wire_timeout.read == 0.125
-    assert wire_timeout.write == 0.125
+    # The wire call receives the REMAINING absolute-deadline budget: no more
+    # than the watchdog timeout, minus whatever account binding and request
+    # construction already consumed.
+    assert 0 < wire_timeout.connect <= 0.125
+    assert wire_timeout.read == wire_timeout.connect
+    assert wire_timeout.write == wire_timeout.connect
 
 
 def test_native_codex_recovery_past_deadline_fails_closed_without_second_call():
@@ -1165,6 +1169,88 @@ def test_native_codex_recovery_past_deadline_fails_closed_without_second_call():
     assert type(excinfo.value.original) is TimeoutError
     assert manager.refresh_calls == ["secret-one.json"]
     assert len(responses.calls) == 1
+
+
+def test_native_codex_initial_binding_past_deadline_fails_closed_no_wire_call():
+    """Initial account binding consumes the whole logical budget: the FIRST
+    provider request must not start at all, and the escape through the main
+    watchdog must be the exact no-AED terminal wrapper, never a plain
+    transient TimeoutError that would reopen replay."""
+    from lingtai.kernel.base_agent.turn import _is_transient_provider_error
+    from lingtai.kernel.llm_utils import send_with_timeout_stream
+
+    source = _SequenceSource("one.json")
+
+    class _SlowInitialManager(_RefreshingManager):
+        def get_access_token(self):
+            # Burn the entire logical-request budget inside initial account
+            # binding so the first wire call would start past the deadline.
+            time.sleep(0.08)
+            return super().get_access_token()
+
+    manager = _SlowInitialManager("one.json")
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, {"one.json": manager}, responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+    chunks = []
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        with pytest.raises(LLMReplayTerminalError) as excinfo:
+            send_with_timeout_stream(
+                chat, "hello", pool, 0.05, "test", None, chunks.append
+            )
+    finally:
+        pool.shutdown(wait=True)
+
+    assert llm_replay_terminal_flags(excinfo.value) == (False, True)
+    assert type(excinfo.value.original) is TimeoutError
+    assert _is_transient_provider_error(excinfo.value) is False
+    # The wire call never started and no output reached the user or the
+    # canonical interface.
+    assert responses.calls == []
+    assert chunks == []
+    roles = [entry.role for entry in chat.interface.entries]
+    assert "assistant" not in roles
+
+
+def test_native_codex_settle_success_is_preserved_not_replaced_by_timeout():
+    """The first request starts within budget, the outer watchdog fires, and
+    the worker completes successfully during the settle grace: the successful
+    response must be returned — exactly one provider call, chunks delivered,
+    assistant committed — not discarded as a transient TimeoutError."""
+    from lingtai.kernel.llm_utils import send_with_timeout_stream
+
+    source = _SequenceSource("one.json")
+
+    def slow_success():
+        # Cross the 50ms main-thread watchdog inside the stream, then
+        # complete successfully while the main thread waits in settle grace.
+        time.sleep(0.08)
+        yield from _success_events()
+
+    responses = _Responses([slow_success])
+    adapter = _adapter(source, _managers("one.json"), responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+    chunks = []
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        response = send_with_timeout_stream(
+            chat, "hello", pool, 0.05, "test", None, chunks.append
+        )
+    finally:
+        pool.shutdown(wait=True)
+
+    assert response.text == "ok"
+    assert chunks == ["ok"]
+    assert len(responses.calls) == 1
+    # The first wire call received only the remaining deadline budget, not
+    # the original full timeout.
+    wire_timeout = responses.calls[0].get("timeout")
+    assert isinstance(wire_timeout, httpx.Timeout)
+    assert wire_timeout.connect is not None
+    assert wire_timeout.connect <= 0.05
+    roles = [entry.role for entry in chat.interface.entries]
+    assert roles == ["system", "user", "assistant"]
 
 
 def test_native_codex_empty_pool_falls_back_to_legacy_account():

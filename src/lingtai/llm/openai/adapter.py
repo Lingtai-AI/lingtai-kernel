@@ -4652,6 +4652,30 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             message="Provider recovery failed after bounded retry",
         )
 
+    def _codex_remaining_wire_budget(self) -> float | None:
+        """Remaining absolute-deadline budget for the next wire operation.
+
+        The deadline is armed before account binding, which may spend the
+        whole budget on token-file locks and OAuth work. A wire call started
+        past the deadline with a fresh full timeout can deliver visible output
+        and commit the assistant response after the main-thread watchdog has
+        already expired, so fail closed here with the exact no-AED terminal
+        wrapper instead of starting the call at all.
+        """
+        deadline = self._codex_request_deadline
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            exhausted = TimeoutError(
+                "Codex logical request deadline exhausted before the provider "
+                "call could start"
+            )
+            raise self._codex_mark_provider_recovery_terminal(
+                exhausted
+            ) from exhausted
+        return remaining
+
     def _codex_fail_closed_after_recovery(
         self,
         exc: Exception,
@@ -4772,6 +4796,12 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
     ):
         """Create and iterate one REST stream with at most one safe auth replay."""
         post_recovery_stream = False
+        # The FIRST attempt shares the absolute deadline with token recovery:
+        # never start a wire call past it, and give the call only the
+        # remaining per-call budget rather than the original full timeout.
+        remaining = self._codex_remaining_wire_budget()
+        if remaining is not None:
+            request_kwargs["timeout"] = _build_http_timeout(remaining)
         try:
             stream = self._client.responses.create(**request_kwargs)
         except Exception as exc:
@@ -5017,6 +5047,9 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             # ``store`` stays ``false``.
             ws_stream = None
             if ws_enabled_this_turn:
+                # The websocket connect authenticates on open; it must obey
+                # the same absolute deadline as the REST wire call below.
+                self._codex_remaining_wire_budget()
                 try:
                     ws_stream, ws_mode, ws_prev_id = self._codex_ws_open(
                         kwargs,
