@@ -11,6 +11,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from lingtai.auth.codex import CodexAuthError
@@ -1065,6 +1066,104 @@ def test_native_codex_token_expired_does_not_replay_partial_tool_call():
     assert getattr(excinfo.value, "_lingtai_partial_stream", False) is True
     assert type(excinfo.value.original) is _TokenExpired
     assert manager.refresh_calls == []
+    assert len(responses.calls) == 1
+
+
+def test_native_codex_partial_text_cleanup_failure_keeps_terminal_wrapper():
+    source = _SequenceSource("one.json", "two.json")
+
+    def partial_then_fail():
+        yield _Event("response.output_text.delta", delta="visible")
+        raise _UsageLimit()
+
+    responses = _Responses([partial_then_fail])
+    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    def failing_drop_trailing(predicate):
+        raise RuntimeError("drop_trailing failed")
+
+    chat.interface.drop_trailing = failing_drop_trailing
+    chunks = []
+
+    with pytest.raises(LLMReplayTerminalError) as excinfo:
+        chat.send_stream("hello", on_chunk=chunks.append)
+
+    assert llm_replay_terminal_flags(excinfo.value) == (True, False)
+    assert type(excinfo.value.original) is _UsageLimit
+    assert excinfo.value.__cause__ is excinfo.value.original
+    assert chunks == ["visible"]
+    assert len(responses.calls) == 1
+
+
+def test_native_codex_partial_tool_cleanup_failure_keeps_terminal_wrapper():
+    source = _SequenceSource("one.json", "two.json")
+
+    def partial_tool_then_fail():
+        yield _Event(
+            "response.output_item.added",
+            item=SimpleNamespace(type="function_call", call_id="call-1", name="shell"),
+        )
+        yield _Event("response.function_call_arguments.delta", delta='{"command":')
+        raise _UsageLimit()
+
+    responses = _Responses([partial_tool_then_fail])
+    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    def failing_drop_trailing(predicate):
+        raise RuntimeError("drop_trailing failed")
+
+    chat.interface.drop_trailing = failing_drop_trailing
+
+    with pytest.raises(LLMReplayTerminalError) as excinfo:
+        chat.send("hello")
+
+    assert llm_replay_terminal_flags(excinfo.value) == (True, False)
+    assert type(excinfo.value.original) is _UsageLimit
+    assert excinfo.value.__cause__ is excinfo.value.original
+    assert len(responses.calls) == 1
+
+
+def test_native_codex_request_builder_propagates_watchdog_timeout():
+    source = _SequenceSource("one.json")
+    responses = _Responses([_success_events])
+    adapter = _adapter(source, _managers("one.json"), responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+    chat._request_timeout = 0.125
+
+    response = chat.send("hello")
+
+    assert response.text == "ok"
+    wire_timeout = responses.calls[0].get("timeout")
+    assert isinstance(wire_timeout, httpx.Timeout)
+    assert wire_timeout.connect == 0.125
+    assert wire_timeout.read == 0.125
+    assert wire_timeout.write == 0.125
+
+
+def test_native_codex_recovery_past_deadline_fails_closed_without_second_call():
+    source = _SequenceSource("one.json")
+
+    class _SlowRefreshingManager(_RefreshingManager):
+        def refresh_access_token(self, rejected_access_token):
+            # Burn the entire logical-request budget inside recovery so the
+            # bounded retry would start past the absolute deadline.
+            time.sleep(0.08)
+            return super().refresh_access_token(rejected_access_token)
+
+    manager = _SlowRefreshingManager("one.json")
+    responses = _Responses([_TokenExpired()])
+    adapter = _adapter(source, {"one.json": manager}, responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+    chat._request_timeout = 0.05
+
+    with pytest.raises(LLMReplayTerminalError) as excinfo:
+        chat.send("hello")
+
+    assert llm_replay_terminal_flags(excinfo.value) == (False, True)
+    assert type(excinfo.value.original) is TimeoutError
+    assert manager.refresh_calls == ["secret-one.json"]
     assert len(responses.calls) == 1
 
 

@@ -9,6 +9,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 
 from .llm import LLMResponse
+from .llm.base import llm_replay_terminal_flags
 from .logging import get_logger
 
 _logger = get_logger()
@@ -99,11 +100,17 @@ def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> 
             agent_name=agent_name,
             future=future,
         )
-    except Exception:
-        # Worker raised something other than timeout — that's fine, its
-        # except-block already ran drop_trailing. Swallow here; main thread
-        # re-raises its own TimeoutError.
-        pass
+    except Exception as worker_exc:
+        # Worker raised something other than timeout — its except-block
+        # already ran drop_trailing. An exact kernel replay-terminal wrapper
+        # means visible output was delivered or a provider-owned recovery
+        # budget was consumed; replacing it with a plain TimeoutError would
+        # reopen transient retries/AED past that budget, so rethrow the exact
+        # wrapper. Ordinary worker exceptions are still swallowed and the
+        # main thread re-raises its own TimeoutError.
+        partial_stream, no_aed_retry = llm_replay_terminal_flags(worker_exc)
+        if partial_stream or no_aed_retry:
+            raise
 
 
 class _SubmitFn:

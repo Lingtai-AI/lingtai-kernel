@@ -2108,6 +2108,11 @@ class OpenAIResponsesSession(ChatSession):
             self._context_window = int(context_window or 0)
         except Exception:
             self._context_window = 0
+        # Per-request HTTP timeout (seconds). Set by send_with_timeout before
+        # dispatching the worker so the HTTP client aborts at the same moment
+        # the main-thread watchdog gives up, instead of keeping the client
+        # constructor's independent default while the watchdog has moved on.
+        self._request_timeout: float | None = None
 
     @property
     def interface(self) -> ChatInterface:
@@ -3314,6 +3319,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         self._codex_token_expired_recovery_attempted = False
         self._codex_partial_output = False
         self._codex_account_error_reported = False
+        self._codex_request_deadline: float | None = None
         # Non-secret attribution for token/debug ledgers. The raw account id is
         # already needed for the ChatGPT-Account-ID request header, but it must
         # never be copied into UsageMetadata.extra / token_ledger / events.
@@ -4645,6 +4651,15 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         self._codex_account_error_reported = False
         self._codex_partial_output = False
         self._codex_token_expired_recovery_attempted = False
+        # One absolute deadline for the whole logical request: the first wire
+        # call, token recovery (auth-file lock + OAuth HTTP), and the bounded
+        # retry all consume the SAME watchdog budget rather than each
+        # restarting it.
+        self._codex_request_deadline = (
+            time.monotonic() + self._request_timeout
+            if self._request_timeout is not None
+            else None
+        )
         callback = self._codex_account_request_callback
         if callback is None:
             return
@@ -4740,7 +4755,24 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         apply_binding = lambda binding: self._codex_apply_recovered_binding(
             binding, request_kwargs
         )
-        retry_request = lambda: self._client.responses.create(**request_kwargs)
+
+        def retry_request():
+            # Recovery may have spent most of the logical budget on the
+            # auth-file lock and OAuth refresh. Never start the second wire
+            # call past the absolute deadline, and give it only the remaining
+            # per-call budget. Raising here stays inside the callback's
+            # fail-closed terminalization, so the escape is the exact no-AED
+            # wrapper rather than a fresh transient-looking timeout.
+            deadline = self._codex_request_deadline
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        "Codex token recovery exhausted the logical request "
+                        "deadline before the bounded provider retry"
+                    )
+                request_kwargs["timeout"] = _build_http_timeout(remaining)
+            return self._client.responses.create(**request_kwargs)
         try:
             retry_stream = callback(
                 exc,
@@ -4911,6 +4943,13 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             # WebSocket path the strict-additive ``incremental`` continuation is what
             # carries ``previous_response_id``, also with ``store=false``.
             kwargs["store"] = False
+            # Align the wire timeout with the main-thread watchdog, exactly as
+            # the Chat Completions builder does. Without this the SDK keeps the
+            # constructor default and the worker can outlive the watchdog by
+            # minutes. ``timeout`` is an SDK transport kwarg: the WS/REST
+            # continuation planners exclude it (``_WS_NON_FRAME_KEYS``).
+            if self._request_timeout is not None:
+                kwargs["timeout"] = _build_http_timeout(self._request_timeout)
             # Ensure reasoning.encrypted_content is requested so the raw
             # reasoning item can be preserved for prompt-cache-stable replay.
             existing_include = kwargs.get("include") or []
@@ -5318,7 +5357,14 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                 # doesn't double-record it. Mirrors OpenAIChatSession.send's
                 # error path. ToolResultBlock entries also revert — the executor
                 # will re-supply them when AED rebuilds the loop.
-                self._interface.drop_trailing(lambda e: e.role == "user")
+                try:
+                    self._interface.drop_trailing(lambda e: e.role == "user")
+                except Exception:
+                    # Interface cleanup must never replace the reported failure:
+                    # a partial-stream wrapper that already marked visible
+                    # output has to stay the escaping exception, or BaseAgent
+                    # would replay delivered content through transient/AED.
+                    pass
             self._codex_reraise_terminalized(exc, escaped)
 
         try:
