@@ -214,6 +214,20 @@ _BROAD_SCAN_HINT = (
     "for a genuinely large tree."
 )
 
+# Steering guidance appended to a timeout error when the command produced no
+# output before it was killed (OpenClaw exec-runner.ts ``no-output-timeout`` /
+# overall-timeout copy, adapted to our ``async`` parameter name; Hermes
+# foreground-hint guidance).  The point is to steer the model away from both
+# failure modes that this class of timeout represents: a foreground command that
+# should have been launched with ``async=true``, and shell backgrounding with a
+# trailing ``&``, which detaches the child from any supervision/collectable
+# output stream.
+_BACKGROUND_GUIDANCE = (
+    "Long-running or no-output work should be launched with async=true "
+    "(or as a daemon) rather than as a foreground command; do not rely on "
+    "shell backgrounding with a trailing &."
+)
+
 
 def _broad_scan_hint(command: str) -> str | None:
     """Return a broad-scan recipe hint if the command resembles a recursive walk.
@@ -224,11 +238,26 @@ def _broad_scan_hint(command: str) -> str | None:
     return _BROAD_SCAN_HINT if _BROAD_SCAN_RE.search(command) else None
 
 
-def _timeout_error(command: str, timeout: float) -> dict:
-    """Build the historical timeout result shape; shared by every sync path."""
+def _timeout_error(command: str, timeout: float, no_output: bool = False) -> dict:
+    """Build the historical timeout result shape; shared by every sync path.
+
+    ``no_output`` is the OpenClaw ``no-output-timeout`` signal: the command was
+    killed by the timeout before it produced any output.  In that case the
+    message appends the background-discipline steering guidance so the model
+    learns to launch long/no-output work with ``async=true`` instead of a
+    foreground command (or a bare trailing ``&``).  Backward compatible: callers
+    that do not pass ``no_output`` (and timeouts that did capture output) keep
+    the exact historical message.
+    """
     msg = f"Command timed out after {timeout}s"
     hint = _broad_scan_hint(command)
-    return {"status": "error", "message": f"{msg}. {hint}" if hint else msg}
+    if hint:
+        msg = f"{msg}. {hint}"
+    if no_output:
+        # ``hint`` (when present) already ends with a period, so a plain space
+        # keeps a clean sentence boundary in both shapes.
+        msg = f"{msg}{' ' if hint else '. '}{_BACKGROUND_GUIDANCE}"
+    return {"status": "error", "message": msg}
 
 
 # =============================================================================
@@ -759,8 +788,14 @@ class ShellManager:
                 "status": "ok", "exit_code": result.returncode,
                 "stdout": stdout, "stderr": stderr,
             }, command=command)
-        except subprocess.TimeoutExpired:
-            return _timeout_error(command, timeout)
+        except subprocess.TimeoutExpired as exc:
+            # ``no-output`` timeout (OpenClaw exec-runner.ts semantics): the
+            # command was killed before it produced any output, so steer the
+            # model toward async=true / a daemon instead of a silent foreground
+            # run (or a trailing-& shell background).
+            return _timeout_error(
+                command, timeout, no_output=not (exc.stdout or exc.stderr)
+            )
         except Exception as e:
             return {"status": "error", "message": f"Command failed: {e}"}
 
@@ -839,14 +874,16 @@ class ShellManager:
                     process_args, capture_output=True, text=True,
                     timeout=timeout, cwd=cwd, **process_kwargs,
                 )
-            except subprocess.TimeoutExpired:
-                return _timeout_error(command, timeout)
+            except subprocess.TimeoutExpired as exc:
+                return _timeout_error(
+                    command, timeout, no_output=not (exc.stdout or exc.stderr)
+                )
             return self._sync_result_from(result.stdout, result.stderr, result.returncode, command)
         try:
             try:
                 stdout, stderr = process.communicate(input=input_data, timeout=timeout)
                 returncode = process.returncode
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
                 win32_job.terminate_owned_tree(job, process.pid)
                 # Bounded drain: a grandchild that survived the kill and still
                 # holds the pipe write ends must not block this supervisor on
@@ -854,7 +891,9 @@ class ShellManager:
                 # process is never ``wait()``-ed on this double-timeout path;
                 # the bounded drain plus handle close is the documented bound.
                 win32_job.drain_pipes(process, win32_job.IO_DRAIN_TIMEOUT_SECONDS)
-                return _timeout_error(command, timeout)
+                return _timeout_error(
+                    command, timeout, no_output=not (exc.stdout or exc.stderr)
+                )
         finally:
             # Closing the last job handle fires KILL_ON_JOB_CLOSE, terminating
             # any surviving descendant — this is the containment contract of
