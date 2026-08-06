@@ -9,10 +9,12 @@ mutating ChatInterface) — no filesystem sentinel involved.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import json
 import queue
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -25,7 +27,7 @@ from lingtai.kernel.llm.base import (
     llm_replay_terminal_flags,
     mark_llm_replay_terminal,
 )
-from lingtai.kernel.llm_utils import WorkerStillRunningError
+from lingtai.kernel.llm_utils import WorkerStillRunningError, send_with_timeout_stream
 from lingtai.kernel.message import _make_message, MSG_REQUEST
 from lingtai.kernel.state import AgentState
 from lingtai.auth.codex_account_source import AccountCandidate, NoCandidateError
@@ -408,6 +410,114 @@ def test_codex_provider_retry_budget_is_terminal_in_run_loop(tmp_path, monkeypat
     assert not any(name == "aed_transient_retry" for name, _ in agent._logs)
     assert not any(name == "aed_attempt" for name, _ in agent._logs)
 
+
+def test_codex_terminal_wrapper_survives_watchdog_settle_boundary(
+    tmp_path, monkeypatch
+):
+    """A no-AED terminal wrapper that settles during the watchdog grace window
+    must stay the escaping exception — never replaced by a plain transient
+    TimeoutError that would reopen retries/AED past the consumed budget."""
+
+    class _TokenExpired(Exception):
+        status_code = 401
+        body = {"error": {"code": "token_expired"}}
+
+    class _Responses:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                raise _TokenExpired("expired")
+            # Cross the 50ms main-thread watchdog, then fail while the main
+            # thread waits inside the settle grace window.
+            time.sleep(0.08)
+            raise RuntimeError("network failed after provider-owned retry")
+
+    candidate = AccountCandidate("one.json", "account.json", 0, 1)
+    source = SimpleNamespace(
+        snapshot=lambda: [candidate],
+        quota_targets=lambda exclude=None, snapshot=None: [
+            (candidate.auth_ref, candidate.auth_path_sha8)
+        ],
+        select=lambda exclude=None, quota_left_snapshot=None, snapshot=None: candidate,
+    )
+
+    class _Manager:
+        def __init__(self):
+            self.refresh_calls = []
+            self.token = "secret-one"
+
+        def get_access_token(self):
+            return self.token
+
+        def get_account_id(self):
+            return "acct-one"
+
+        def refresh_access_token(self, rejected_access_token):
+            self.refresh_calls.append(rejected_access_token)
+            self.token = "recovered-one"
+            return self.token
+
+    manager = _Manager()
+    responses = _Responses()
+    adapter = CodexOpenAIAdapter(
+        api_key="boot",
+        base_url="http://codex.test",
+        use_responses=True,
+        force_responses=True,
+        codex_account_source=source,
+        codex_token_manager_factory=lambda **_kwargs: manager,
+        codex_fallback_auth_path="one.json",
+    )
+    adapter._client = SimpleNamespace(responses=responses, api_key="boot")
+    chat = adapter.create_chat("gpt-5.5", "system")
+    agent = _make_run_loop_agent(tmp_path)
+    agent._session.chat = chat
+    agent._chat = chat
+    agent.reports = []
+    agent._report_task_card_api_error = lambda exc, **kw: agent.reports.append(
+        (exc, kw)
+    )
+    handler_calls = {"n": 0}
+    surfaced_errors = []
+    pool = ThreadPoolExecutor(max_workers=1)
+
+    def fake_handle(_agent, _msg):
+        handler_calls["n"] += 1
+        _agent._shutdown.set()
+        try:
+            send_with_timeout_stream(chat, "hello", pool, 0.05, "test", None)
+        except Exception as exc:
+            surfaced_errors.append(exc)
+            raise
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    try:
+        turn._run_loop(agent)
+    finally:
+        pool.shutdown(wait=True)
+
+    assert handler_calls["n"] == 1
+    assert len(responses.calls) == 2
+    assert manager.refresh_calls == ["secret-one"]
+    escaped = surfaced_errors[0]
+    assert type(escaped) is LLMReplayTerminalError
+    assert llm_replay_terminal_flags(escaped) == (False, True)
+    assert type(escaped.original) is RuntimeError
+    # The watchdog-aligned wire timeout reached both provider calls.
+    assert all("timeout" in call for call in responses.calls)
+    assert getattr(agent, "rebuilds", 0) == 0
+    assert agent._asleep.is_set()
+    assert agent.reports and agent.reports[-1][0] is escaped
+    assert agent.reports[-1][1]["terminal"] is True
+    assert any(name == "llm_no_aed_retry_terminal" for name, _ in agent._logs)
+    assert not any(name == "aed_transient_retry" for name, _ in agent._logs)
+    assert not any(name == "aed_attempt" for name, _ in agent._logs)
 
 
 @pytest.mark.parametrize(
