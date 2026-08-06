@@ -58,7 +58,9 @@ def _send(
         elapsed = time.monotonic() - t0
         remaining = retry_timeout - elapsed
         if remaining <= 0:
-            _wait_for_worker_settle(future, elapsed, agent_name)
+            settled = _wait_for_worker_settle(future, elapsed, agent_name)
+            if settled is not None:
+                return settled
             raise TimeoutError(f"LLM API call timed out after {elapsed:.0f}s")
         wait = min(_LLM_WARN_INTERVAL, remaining)
         try:
@@ -66,7 +68,9 @@ def _send(
         except TimeoutError:
             elapsed = time.monotonic() - t0
             if elapsed >= retry_timeout:
-                _wait_for_worker_settle(future, elapsed, agent_name)
+                settled = _wait_for_worker_settle(future, elapsed, agent_name)
+                if settled is not None:
+                    return settled
                 raise TimeoutError(f"LLM API call timed out after {elapsed:.0f}s")
             _logger.warning(
                 "[%s] LLM API not responding after %.0fs...",
@@ -74,7 +78,9 @@ def _send(
             )
 
 
-def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> None:
+def _wait_for_worker_settle(
+    future: Future, elapsed: float, agent_name: str
+) -> LLMResponse | None:
     """Wait briefly for the worker future to finish after the main-thread
     watchdog expires. The worker's HTTP timeout should fire at (or near) the
     same moment via the per-call ``timeout`` plumbed down to the SDK, letting
@@ -82,12 +88,19 @@ def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> 
     synchronously before we propagate. Without this wait, AED's recovery
     races with the worker's in-progress mutations.
 
+    If the worker COMPLETED SUCCESSFULLY during grace, return its LLMResponse
+    and the caller must use it instead of raising: visible chunks may already
+    be delivered and the assistant response committed to the canonical
+    interface, so discarding the success as a plain transient TimeoutError
+    would reopen transient/AED replay after committed output. Returns None
+    when the worker failed with an ordinary (replayable) exception.
+
     If the worker is still running after the grace period, raise a distinct
     WorkerStillRunningError. AED must not treat this as an ordinary timeout
     because the provider worker may still mutate the shared ChatInterface.
     """
     try:
-        future.result(timeout=_WORKER_SETTLE_GRACE)
+        result = future.result(timeout=_WORKER_SETTLE_GRACE)
     except TimeoutError:
         _logger.error(
             "[%s] LLM worker thread still running after %.0fs + %.0fs grace — "
@@ -111,6 +124,13 @@ def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> 
         partial_stream, no_aed_retry = llm_replay_terminal_flags(worker_exc)
         if partial_stream or no_aed_retry:
             raise
+        return None
+    _logger.warning(
+        "[%s] LLM worker completed successfully during the settle grace after "
+        "the %.0fs watchdog expired; using the completed response",
+        agent_name, elapsed,
+    )
+    return result
 
 
 class _SubmitFn:
