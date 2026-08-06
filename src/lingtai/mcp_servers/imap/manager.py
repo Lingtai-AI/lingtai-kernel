@@ -279,10 +279,18 @@ class IMAPMailManager:
     # Meta injection
     # ------------------------------------------------------------------
 
-    def _inject_meta(self, result: dict) -> dict:
-        """Add tcp_alias and account to every response."""
+    def _inject_meta(
+        self,
+        result: dict,
+        account: "IMAPAccount | None" = None,
+    ) -> dict:
+        """Add tcp_alias and the resolved account to every response."""
         result["tcp_alias"] = self._tcp_alias
-        result["account"] = self._service.default_account.address
+        result["account"] = (
+            account.address
+            if account is not None
+            else self._service.default_account.address
+        )
         return result
 
     # ------------------------------------------------------------------
@@ -328,7 +336,7 @@ class IMAPMailManager:
                 "status": "error",
                 "error": f"Unknown account: {requested_account}",
                 "requested_account": requested_account,
-            })
+            }, account)
 
         dispatch = {
             "send": self._send,
@@ -347,11 +355,14 @@ class IMAPMailManager:
         }
 
         if action == "accounts":
-            return self._inject_meta(self._accounts(args))
+            return self._inject_meta(self._accounts(args), account)
         elif action in dispatch:
-            return self._inject_meta(dispatch[action](args, account))
+            return self._inject_meta(dispatch[action](args, account), account)
         else:
-            return self._inject_meta({"error": f"Unknown imap action: {action}"})
+            return self._inject_meta(
+                {"error": f"Unknown imap action: {action}"},
+                account,
+            )
 
     def _manual(self) -> dict:
         # The manual lives in this package's bundled SKILL.md (standard skill
