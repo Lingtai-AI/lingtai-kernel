@@ -5,6 +5,11 @@ PowerShell statement/pipeline boundaries and recursively inspects command
 substitutions and script blocks.  Unsupported dynamic syntax is represented by
 a sentinel command so a configured allowlist/denylist fails closed; trusted
 (yolo) execution can still pass the original script to pwsh.
+
+The extractor is conservative by design: it only emits statically knowable
+command names, strips comments, honours here-strings and backtick line
+continuations, skips literals/types/operators as data, and fails closed on
+dynamic invocation (call operator on a variable, Invoke-Expression, etc.).
 """
 from __future__ import annotations
 
@@ -15,14 +20,106 @@ from lingtai.tools.bash._shell_dialect import ShellDialect, ShellInvocation
 
 _UNSUPPORTED = "__powershell_unsupported__"
 _CONTROL_WORDS = {
-    "begin", "break", "catch", "class", "continue", "data", "do", "else",
-    "end", "finally", "for", "foreach", "function", "if", "param", "process",
-    "return", "switch", "throw", "trap", "try", "until", "using", "while",
+    "begin", "break", "catch", "class", "continue", "data", "default", "do",
+    "else", "elseif", "end", "enum", "exit", "filter", "finally", "for",
+    "foreach", "function", "hidden", "if", "in", "param", "process",
+    "return", "static", "switch", "throw", "trap", "try", "until", "using",
+    "while",
 }
+# Dynamic evaluation primitives: invoking these with a non-literal argument
+# executes arbitrary code, so the whole script must fail closed.
+_EVAL_COMMANDS = {"invoke-expression", "iex"}
+# Commands that accept a -ScriptBlock; a non-literal block is dynamic.
+_SCRIPTBLOCK_COMMANDS = {"invoke-command", "start-job"}
 _ASSIGNMENT_RE = re.compile(r"^(?:\$[A-Za-z_][\w:]*|[A-Za-z_][\w-]*)$")
 _TOKEN_RE = re.compile(
     r"(?:'[^']*(?:''[^']*)*'|\"(?:`.|[^\"])*\"|&(?=\s|$)|\.(?=\s|$)|[^\s|;&(){}]+)"
 )
+
+
+def _find_here_string_end(script: str, start: int, quote: str) -> int | None:
+    """Return the index just past a here-string's closing delimiter.
+
+    ``start`` points at the ``@`` of an ``@'`` or ``@\"`` opener.  The closing
+    delimiter (``'@`` / ``\"@``) must appear at the start of a line (allowing
+    leading whitespace), per PowerShell syntax.  Returns ``None`` when the
+    here-string is unterminated.
+    """
+    pos = start + 2
+    needle = quote + "@"
+    while pos < len(script):
+        nl = script.find("\n", pos)
+        if nl == -1:
+            return None
+        j = nl + 1
+        while j < len(script) and script[j] in " \t":
+            j += 1
+        if script.startswith(needle, j):
+            return j + 2
+        pos = nl + 1
+    return None
+
+
+def _strip_comments(script: str) -> str:
+    """Remove PowerShell ``#`` comments outside quotes/here-strings."""
+    out: list[str] = []
+    i = 0
+    n = len(script)
+    quote: str | None = None
+    hs: str | None = None
+    while i < n:
+        ch = script[i]
+        if hs:
+            if ch == "\n":
+                j = i + 1
+                while j < n and script[j] in " \t":
+                    j += 1
+                if j + 1 < n and script[j] == hs and script[j + 1] == "@":
+                    out.append(script[i:j + 2])
+                    hs = None
+                    i = j + 2
+                    continue
+            out.append(ch)
+            i += 1
+            continue
+        if quote == "'":
+            out.append(ch)
+            if ch == "'":
+                if i + 1 < n and script[i + 1] == "'":
+                    out.append("'")
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+        if quote == '"':
+            out.append(ch)
+            if ch == "`" and i + 1 < n:
+                out.append(script[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                quote = None
+            i += 1
+            continue
+        if ch == "#":
+            while i < n and script[i] != "\n":
+                i += 1
+            continue
+        if ch == "@" and i + 1 < n and script[i + 1] in ("'", '"'):
+            hs = script[i + 1]
+            out.append(ch)
+            out.append(hs)
+            i += 2
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _balanced_inner(script: str, start: int, opener: str, closer: str) -> tuple[str, int] | None:
@@ -50,6 +147,12 @@ def _balanced_inner(script: str, start: int, opener: str, closer: str) -> tuple[
                 quote = None
             i += 1
             continue
+        if char == "@" and i + 1 < len(script) and script[i + 1] in ("'", '"'):
+            end = _find_here_string_end(script, i, script[i + 1])
+            if end is None:
+                return None
+            i = end
+            continue
         if char in {"'", '"'}:
             quote = char
         elif char == opener:
@@ -70,6 +173,7 @@ def _split_statements(script: str) -> tuple[list[str], bool]:
     quote: str | None = None
     escaped = False
     paren_depth = 0
+    brace_depth = 0  # Track brace depth for script blocks
     while i < len(script):
         char = script[i]
         if quote == "'":
@@ -89,9 +193,20 @@ def _split_statements(script: str) -> tuple[list[str], bool]:
                 quote = None
             i += 1
             continue
+        if char == "@" and i + 1 < len(script) and script[i + 1] in ("'", '"'):
+            # Here-string: consume the whole body; quotes inside are literal.
+            end = _find_here_string_end(script, i, script[i + 1])
+            if end is None:
+                return pieces, False
+            i = end
+            continue
         if char in {"'", '"'}:
             quote = char
             i += 1
+            continue
+        if char == "`" and i + 1 < len(script) and script[i + 1] == "\n":
+            # Backtick line continuation: do not split at the newline.
+            i += 2
             continue
         if char == "(":
             paren_depth += 1
@@ -99,7 +214,12 @@ def _split_statements(script: str) -> tuple[list[str], bool]:
             if paren_depth == 0:
                 return pieces, False
             paren_depth -= 1
-        if char in "|;\r\n" and paren_depth == 0:
+        elif char == "{":  # Track brace depth
+            brace_depth += 1
+        elif char == "}":  # Track brace depth
+            if brace_depth > 0:
+                brace_depth -= 1
+        if char in "|;\r\n" and paren_depth == 0 and brace_depth == 0:
             pieces.append(script[begin:i])
             if char == "|" and i + 1 < len(script) and script[i + 1] in "|&":
                 i += 1
@@ -112,11 +232,11 @@ def _split_statements(script: str) -> tuple[list[str], bool]:
             begin = i + 1
         i += 1
     pieces.append(script[begin:])
-    return pieces, quote is None and paren_depth == 0
+    return pieces, quote is None and paren_depth == 0 and brace_depth == 0
 
 
 def _is_quoted_at(script: str, index: int) -> bool:
-    """Return whether ``index`` is inside a PowerShell quoted string."""
+    """Return whether ``index`` is inside a PowerShell quoted string or here-string."""
     quote: str | None = None
     escaped = False
     i = 0
@@ -139,13 +259,53 @@ def _is_quoted_at(script: str, index: int) -> bool:
                 quote = None
             i += 1
             continue
+        if char == "@" and i + 1 < len(script) and script[i + 1] in ("'", '"'):
+            end = _find_here_string_end(script, i, script[i + 1])
+            if end is None:
+                return True  # unterminated here-string: treat the rest as quoted
+            if index < end:
+                return True
+            i = end
+            continue
         if char in {"'", '"'}:
             quote = char
         i += 1
     return quote is not None
 
 
+def _is_data_token(token: str) -> bool:
+    """Return True for tokens that are data, not a command name."""
+    if not token:
+        return True
+    first = token[0]
+    if first in "'\"$@`":
+        return True
+    if first.isdigit():
+        return True
+    if first in "-:?=[].#":
+        return True
+    return False
+
+
+def _has_dynamic_scriptblock(tokens: tuple[str, ...], start: int) -> bool:
+    """Return True when a -ScriptBlock argument after ``start`` is non-literal.
+
+    A literal ``{ ... }`` block is consumed into ``nested`` by the char scan and
+    does not appear in the token list, so ``-ScriptBlock`` as the last token is
+    static; only a variable/expandable token after it is dynamic.
+    """
+    for idx in range(start, len(tokens)):
+        if tokens[idx].casefold() == "-scriptblock":
+            if idx + 1 >= len(tokens):
+                return False
+            return tokens[idx + 1].startswith(("$", "@", '"', "`"))
+    return False
+
+
+
+
 def _commands(script: str) -> tuple[str, ...]:
+    script = _strip_comments(script)
     pieces, well_formed = _split_statements(script)
     if not well_formed:
         return (_UNSUPPORTED,)
@@ -160,7 +320,15 @@ def _commands(script: str) -> tuple[str, ...]:
         nested: list[str] = []
         i = 0
         while i < len(text):
-            if text.startswith("$(", i):
+            if text[i] == "@" and i + 1 < len(text) and text[i + 1] in ("'", '"'):
+                # Here-string: data, never commands.
+                end = _find_here_string_end(text, i, text[i + 1])
+                if end is None:
+                    result.append(_UNSUPPORTED)
+                    break
+                i = end
+                continue
+            if text.startswith("$(", i) and not _is_quoted_at(text, i):
                 region = _balanced_inner(text, i + 1, "(", ")")
                 if region is None:
                     result.append(_UNSUPPORTED)
@@ -168,7 +336,8 @@ def _commands(script: str) -> tuple[str, ...]:
                 nested.extend(_commands(region[0]))
                 i = region[1]
                 continue
-            if text[i] == "{" or (text[i] == "@" and i + 1 < len(text) and text[i + 1] == "{"):
+            if (text[i] == "{" or (text[i] == "@" and i + 1 < len(text) and text[i + 1] == "{")) \
+                    and not _is_quoted_at(text, i):
                 opener_at = i if text[i] == "{" else i + 1
                 region = _balanced_inner(text, opener_at, "{", "}")
                 if region is None:
@@ -178,8 +347,36 @@ def _commands(script: str) -> tuple[str, ...]:
                 i = region[1]
                 continue
             if text[i] == "(" and not _is_quoted_at(text, i):
+                prev_j = i - 1
+                while prev_j >= 0 and text[prev_j].isspace():
+                    prev_j -= 1
+                if prev_j >= 0 and text[prev_j] in "&.":
+                    # & (Get-Command ...) / . (Get-Command ...): dynamic target.
+                    result.append(_UNSUPPORTED)
+                    break
+                if i > 0 and text[i - 1] == "@":
+                    # @(...) array literal: values are data unless they name
+                    # a command (e.g. @(Get-Process)).
+                    region = _balanced_inner(text, i, "(", ")")
+                    if region is None:
+                        result.append(_UNSUPPORTED)
+                        break
+                    if region[0].strip():
+                        nested.extend(_commands(region[0]))
+                    i = region[1]
+                    continue
                 region = _balanced_inner(text, i, "(", ")")
-                if region is None or not region[0].strip():
+                if region is None:
+                    result.append(_UNSUPPORTED)
+                    break
+                if not region[0].strip():
+                    # Empty parens: method call ($x.ToString()) or attribute
+                    # ([CmdletBinding()]) are data; a bare empty group after a
+                    # command (Write-Output ()) stays unsupported.
+                    prev = text[i - 1] if i > 0 else ""
+                    if prev.isalnum() or prev in "_$].`":
+                        i = region[1]
+                        continue
                     result.append(_UNSUPPORTED)
                     break
                 nested.extend(_commands(region[0]))
@@ -196,56 +393,73 @@ def _commands(script: str) -> tuple[str, ...]:
             if not tokens:
                 result.extend(nested)
                 continue
-            # A call/dot-source operator is syntax, not the command being
-            # invoked.  Only an unquoted literal or a single-quoted literal is
-            # statically knowable; variables, expandable strings, and array or
-            # subexpression targets must fail closed under policy enforcement.
+            emitted = False
+            unsupported = False
+            suppress_nested = False
             index = 0
-            if tokens[0] in {"&", "."}:
-                if len(tokens) < 2:
-                    result.append(_UNSUPPORTED)
-                    result.extend(nested)
+            while index < len(tokens):
+                tok = tokens[index]
+                # Skip assignment LHS: any ``token =`` pair is data.
+                if index + 1 < len(tokens) and tokens[index + 1] == "=":
+                    index += 2
                     continue
-                target = tokens[1]
-                if target.startswith(("$", "@", '"', "`")):
-                    result.append(_UNSUPPORTED)
-                    result.extend(nested)
+                if tok in {"&", "."}:
+                    if index + 1 >= len(tokens):
+                        if tok == "&" and nested and not emitted:
+                            # & { ... } static script-block target.
+                            result.extend(nested)
+                            emitted = True
+                            break
+                        unsupported = True
+                        break
+                    target = tokens[index + 1]
+                    if target.startswith(("$", "@", '"', "`")):
+                        unsupported = True
+                        break
+                    if target.startswith("'") and not target.endswith("'"):
+                        unsupported = True
+                        break
+                    first = target[1:-1].replace("''", "'") if target.startswith("'") else target
+                    if "`" in first:
+                        unsupported = True
+                        break
+                    result.append(first)
+                    emitted = True
+                    break
+                low = tok.casefold()
+                if low in _CONTROL_WORDS:
+                    if low in {"function", "class", "enum", "filter"}:
+                        # Skip the declared name after these keywords.
+                        if index + 1 < len(tokens):
+                            index += 2
+                        else:
+                            index += 1
+                        if low == "enum":
+                            suppress_nested = True
+                        continue
+                    index += 1
                     continue
-                if target.startswith("'") and not target.endswith("'"):
-                    result.append(_UNSUPPORTED)
-                    result.extend(nested)
+                if _is_data_token(tok):
+                    index += 1
                     continue
-                index = 2
-                first = target[1:-1].replace("''", "'") if target.startswith("'") else target
-            else:
-                first = tokens[0].strip("'\"")
-            # Skip assignments and PowerShell control syntax.  A bare control
-            # statement without a block is unsupported rather than guessed.
-            while index + 2 < len(tokens) and _ASSIGNMENT_RE.fullmatch(tokens[index]) and tokens[index + 1] == "=":
-                index += 2
-            if index == 0:
-                if index >= len(tokens):
-                    result.extend(nested)
-                    continue
-                first = tokens[index].strip("'\"")
-            if "`" in first:
-                # PowerShell accepts backticks inside unquoted command names as
-                # lexical escapes (for example ``Rem`ove-Item``).  Decoding every
-                # valid form requires a real PowerShell lexer; configured policy
-                # must instead reject the ambiguous identity conservatively.
+                if "`" in tok:
+                    unsupported = True
+                    break
+                if low in _EVAL_COMMANDS:
+                    unsupported = True
+                    break
+                if low in _SCRIPTBLOCK_COMMANDS and _has_dynamic_scriptblock(tokens, index):
+                    unsupported = True
+                    break
+                result.append(tok.strip("'\""))
+                result.extend(nested)
+                emitted = True
+                break
+            if unsupported:
                 result.append(_UNSUPPORTED)
                 result.extend(nested)
-                continue
-            if first.casefold() in _CONTROL_WORDS:
+            elif not emitted and not suppress_nested:
                 result.extend(nested)
-                continue
-            if first.startswith("$") or first.startswith("@"):
-                # A variable/array expression in a script block is data, not a
-                # command.  Dynamic invocation was already rejected at ``& $x``.
-                result.extend(nested)
-                continue
-            result.append(first)
-            result.extend(nested)
     return tuple(result)
 
 
