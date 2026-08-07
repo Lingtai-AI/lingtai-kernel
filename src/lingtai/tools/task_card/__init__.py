@@ -84,10 +84,15 @@ class _Config(NamedTuple):
     timeout_s: float
     max_refreshes: int
     reminder_turns: int
+    max_body_chars: int
 
 
 _BUILTIN_CONFIG = _Config(
-    _DEFAULT_INTERVAL_S, _DEFAULT_TIMEOUT_S, _DEFAULT_MAX_REFRESHES, _DEFAULT_REMINDER_TURNS
+    _DEFAULT_INTERVAL_S,
+    _DEFAULT_TIMEOUT_S,
+    _DEFAULT_MAX_REFRESHES,
+    _DEFAULT_REMINDER_TURNS,
+    _MAX_BODY_CHARS,
 )
 
 
@@ -591,9 +596,10 @@ class TaskCardManager:
         self._write_status("active")
 
     def _write_body(self, body: str) -> None:
-        if len(body) > _MAX_BODY_CHARS:
+        limit = self._load_config().max_body_chars
+        if len(body) > limit:
             raise TaskCardError(
-                f"taskcard body exceeds the {_MAX_BODY_CHARS}-char cap "
+                f"taskcard body exceeds the {limit}-char cap "
                 f"({len(body)} chars); keep the card a progressive-disclosure "
                 "summary and move complex progress into files"
             )
@@ -1014,6 +1020,7 @@ class TaskCardManager:
             self._config_number(data.get("timeout_s"), _MIN_TIMEOUT_S, _DEFAULT_TIMEOUT_S),
             self._config_max_refreshes(data.get("max_refreshes")),
             self._config_reminder_turns(data.get("reminder_turns")),
+            self._config_max_body_chars(data.get("max_body_chars")),
         )
 
     def _migrate_legacy_config(self) -> _Config:
@@ -1051,7 +1058,13 @@ class TaskCardManager:
         ):
             resolved = _BUILTIN_CONFIG
         else:
-            resolved = _Config(_DEFAULT_INTERVAL_S, _DEFAULT_TIMEOUT_S, legacy_max, _DEFAULT_REMINDER_TURNS)
+            resolved = _Config(
+                _DEFAULT_INTERVAL_S,
+                _DEFAULT_TIMEOUT_S,
+                legacy_max,
+                _DEFAULT_REMINDER_TURNS,
+                _MAX_BODY_CHARS,
+            )
         try:
             atomic_write_json(
                 self._config_path,
@@ -1080,6 +1093,10 @@ class TaskCardManager:
     @staticmethod
     def _config_reminder_turns(value: Any) -> int:
         return value if type(value) is int and value > 0 else _DEFAULT_REMINDER_TURNS
+
+    @staticmethod
+    def _config_max_body_chars(value: Any) -> int:
+        return value if type(value) is int and value >= 100 else _MAX_BODY_CHARS
 
     def _reminder_turns(self) -> int:
         try:
