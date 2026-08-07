@@ -16,15 +16,15 @@ class TaskCardEventProjection:
 
     REASONING_CAP = 500
     TEXT_LIMIT = 3500
-    HEADER = "📋 ACTIVITIES"
+    HEADER = "📋 活动"
     FOOTER = (
-        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
-        "/taskcard N sets normal rows (1-10"
+        "请勿回复此任务卡片。使用 /taskcard on|off 切换；"
+        "/taskcard N 设置显示组数 (1-10"
     )
     DEFAULT_NORMAL_ROWS = 1
     METADATA_MAX_CHARS = 150
     METADATA_MAX_LINES = 2
-    TIME_PREFIX = "Last Updated: "
+    TIME_PREFIX = "最后更新: "
     AGENT_STATES = frozenset(state.value for state in AgentState)
 
     EVENT_WINDOW = 10
@@ -35,7 +35,7 @@ class TaskCardEventProjection:
 
     @classmethod
     def footer(cls, normal_rows: int) -> str:
-        return f"{cls.FOOTER}, current: {normal_rows})."
+        return f"{cls.FOOTER}，当前: {normal_rows})。"
 
     @staticmethod
     def format_current_time(now: datetime) -> str:
@@ -385,7 +385,7 @@ class TaskCardEventProjection:
         agent_line: str | None = None
         lifecycle = metadata.get("agent_lifecycle")
         if lifecycle in (AgentState.STUCK.value, "offline"):
-            agent_line = f"agent · {lifecycle} · try /refresh"
+            agent_line = f"agent · {lifecycle} · 尝试 /refresh"
         elif lifecycle in cls.AGENT_STATES:
             agent_line = f"agent · {lifecycle}"
 
@@ -551,7 +551,7 @@ class TaskCardEventProjection:
     @classmethod
     def format_api_error_line(cls, row: dict[str, Any]) -> str:
         state = row.get("state")
-        parts = ["API error"]
+        parts = ["API 错误"]
         error_type = cls.machine_identifier(row.get("error_type"), limit=48)
         if error_type is not None:
             parts.append(error_type)
@@ -570,9 +570,9 @@ class TaskCardEventProjection:
         summary = " · ".join(parts)
 
         if state == "recovered":
-            return f"✓ {summary} · recovered"
+            return f"✓ {summary} · 已恢复"
         if state == "error":
-            return f"⚠️ {summary} · failed"
+            return f"⚠️ {summary} · 失败"
         attempt = row.get("attempt")
         max_attempts = row.get("max_attempts")
         if (
@@ -581,10 +581,10 @@ class TaskCardEventProjection:
             and attempt > 0
             and max_attempts > 0
         ):
-            return f"⚠️ {summary} · retrying {attempt}/{max_attempts}"
+            return f"⚠️ {summary} · 重试中 {attempt}/{max_attempts}"
         if type(attempt) is int and attempt > 0:
-            return f"⚠️ {summary} · retrying (attempt {attempt})"
-        return f"⚠️ {summary} · retrying"
+            return f"⚠️ {summary} · 重试中 (第 {attempt} 次)"
+        return f"⚠️ {summary} · 重试中"
 
     @staticmethod
     def format_elapsed(value: object) -> str:

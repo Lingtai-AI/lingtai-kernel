@@ -38,7 +38,7 @@ _NOW = datetime(2026, 7, 12, 17, 18, 36, tzinfo=timezone(timedelta(hours=-7)))
 
 
 def _current_time_line(text):
-    return next(ln for ln in text.splitlines() if ln.startswith("Last Updated: "))
+    return next(ln for ln in text.splitlines() if ln.startswith("最后更新: "))
 
 
 def test_manager_renders_each_row_with_its_own_started_at():
@@ -57,7 +57,7 @@ def test_manager_renders_current_time_line_from_render_instant_not_row_start():
     ], now=_NOW)
     lines = text.splitlines()
     # The bottom line is the labelled render-time stamp, not the row's own start.
-    assert lines[-1] == "Last Updated: 17:18:36 UTC-07"
+    assert lines[-1] == "最后更新: 17:18:36 UTC-07"
     assert "04:08:08 UTC-07" != "17:18:36 UTC-07"
 
 
@@ -68,9 +68,9 @@ def test_current_time_line_follows_the_footer():
     ], now=_NOW)
     lines = text.splitlines()
     footer_idx = next(i for i, ln in enumerate(lines) if _TASK_CARD_FOOTER in ln)
-    time_idx = next(i for i, ln in enumerate(lines) if ln.startswith("Last Updated: "))
+    time_idx = next(i for i, ln in enumerate(lines) if ln.startswith("最后更新: "))
     assert time_idx > footer_idx
-    assert lines[time_idx] == "Last Updated: 17:18:36 UTC-07"
+    assert lines[time_idx] == "最后更新: 17:18:36 UTC-07"
 
 
 def test_parallel_rows_each_keep_their_own_started_at_not_the_first_rows():
@@ -90,7 +90,7 @@ def test_parallel_rows_each_keep_their_own_started_at_not_the_first_rows():
     assert "04:08:09 UTC-07" in read_line
     assert "04:08:11 UTC-07" in grep_line
     # The bottom line is still the single render-time stamp, distinct from any row.
-    assert _current_time_line(text) == "Last Updated: 17:18:36 UTC-07"
+    assert _current_time_line(text) == "最后更新: 17:18:36 UTC-07"
 
 
 def test_current_time_line_present_even_when_no_row_has_a_stamp():
@@ -102,7 +102,7 @@ def test_current_time_line_present_even_when_no_row_has_a_stamp():
     ], now=_NOW)
     # Last Updated never depends on any row carrying a stamp — it always
     # reflects the render instant.
-    assert text.splitlines()[-1] == "Last Updated: 17:18:36 UTC-07"
+    assert text.splitlines()[-1] == "最后更新: 17:18:36 UTC-07"
     # Rows without a stamp render with no inline suffix (malformed/missing
     # timestamp tolerance), never crashing and never fabricating one.
     for ln in text.splitlines():
@@ -122,9 +122,9 @@ def test_api_error_row_never_carries_a_stamp_alongside_a_stamped_tool_row():
     ], now=_NOW)
     bash_line = next(ln for ln in text.splitlines() if "bash.run" in ln)
     assert "04:08:08 UTC-07" in bash_line
-    api_line = next(ln for ln in text.splitlines() if "API error" in ln)
+    api_line = next(ln for ln in text.splitlines() if "API 错误" in ln)
     assert "UTC" not in api_line
-    assert text.splitlines()[-1] == "Last Updated: 17:18:36 UTC-07"
+    assert text.splitlines()[-1] == "最后更新: 17:18:36 UTC-07"
 
 
 def test_render_tool_row_without_started_at_is_safe():
@@ -140,7 +140,7 @@ def test_render_tool_row_without_started_at_is_safe():
     assert "(1s)" in text
     row_line = next(ln for ln in text.splitlines() if ln.startswith(("•", "✓")))
     assert "UTC" not in row_line
-    assert text.splitlines()[-1] == "Last Updated: 17:18:36 UTC-07"
+    assert text.splitlines()[-1] == "最后更新: 17:18:36 UTC-07"
 
 
 def test_footer_shows_actual_current_normal_row_setting():
@@ -148,7 +148,7 @@ def test_footer_shows_actual_current_normal_row_setting():
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
          "elapsed_s": 1, "done": False, "started_at": "04:08:08 UTC-07"},
     ], normal_rows=7, now=_NOW)
-    assert "/taskcard N sets normal rows (1-10, current: 7)." in text
+    assert "/taskcard N 设置显示组数 (1-10，当前: 7)。" in text
 
 
 def test_footer_current_row_count_stays_within_1_10_semantics():
@@ -157,4 +157,4 @@ def test_footer_current_row_count_stays_within_1_10_semantics():
             {"tool": "bash", "tool_action": "run", "reasoning": "x",
              "elapsed_s": 1, "done": False, "started_at": "04:08:08 UTC-07"},
         ], normal_rows=n, now=_NOW)
-        assert f"current: {n}" in text
+        assert f"当前: {n}" in text
