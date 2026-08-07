@@ -34,6 +34,11 @@ from lingtai.kernel.llm.interface import (
 from lingtai.kernel.logging import get_logger
 
 from lingtai.llm.base import LLMAdapter
+from lingtai.llm.claude_code.effort import (
+    OMITTED_EFFORT,
+    ClaudeEffort,
+    normalize_claude_effort,
+)
 from lingtai.llm.interface_converters import _project_tool_result
 
 logger = get_logger()
@@ -198,6 +203,7 @@ class ClaudeCodeChatSession(ChatSession):
         tools: list[FunctionSchema],
         interface: ChatInterface,
         context_window: int,
+        effort: ClaudeEffort = OMITTED_EFFORT,
     ) -> None:
         self._adapter = adapter
         self._model = model
@@ -205,6 +211,11 @@ class ClaudeCodeChatSession(ChatSession):
         self._tools = tools
         self._interface = interface
         self._context_window = context_window
+        # Frozen at construction, never re-read from mutable adapter state.
+        # Every physical CLI invocation this session makes — first call,
+        # ``--resume`` call, and each overflow-recovery retry inside one logical
+        # send — carries this one decision.
+        self._effort = effort
         # Remote state is an acceleration only. The canonical interface remains
         # the recovery source whenever this continuation cannot be trusted.
         self._remote_session_id: str | None = None
@@ -250,6 +261,7 @@ class ClaudeCodeChatSession(ChatSession):
                         prompt,
                         self._model,
                         resume_session_id=self._remote_session_id,
+                        effort=self._effort,
                     )
                 except ClaudeCodeContextOverflow:
                     # A locally trimmed retry cannot safely continue a remote
@@ -280,6 +292,15 @@ class ClaudeCodeChatSession(ChatSession):
             if restore is not None:
                 restore()
             raise
+
+    def reasoning_observability(self) -> dict[str, str]:
+        """Safe `llm_call` fields for this session's frozen effort decision.
+
+        Read by ``SessionManager.send`` through a duck-typed lookup, so a
+        provider that has no frozen reasoning decision simply leaves the
+        ``llm_call`` record unchanged.
+        """
+        return self._effort.observability_fields()
 
     def _snapshot_interface(self):
         """Capture the canonical history so a failed turn can be rolled back.
@@ -581,6 +602,10 @@ class ClaudeCodeAdapter(LLMAdapter):
         interaction_id: str | None = None,
         context_window: int = 0,
     ) -> ChatSession:
+        # Reject an out-of-vocabulary effort here, before any interface is
+        # mutated and long before a subprocess is dispatched. The resulting
+        # decision is frozen for the whole life of this chat.
+        effort = normalize_claude_effort(thinking)
         iface = interface or ChatInterface()
         tool_list = list(tools) if tools else []
         if interface is None:
@@ -595,6 +620,7 @@ class ClaudeCodeAdapter(LLMAdapter):
             tools=tool_list,
             interface=iface,
             context_window=context_window or self._context_window,
+            effort=effort,
         )
         return self._wrap_with_gate(session)
 
@@ -668,6 +694,7 @@ class ClaudeCodeAdapter(LLMAdapter):
         model: str,
         system_prompt_file: Any = _UNSET,
         resume_session_id: str | None = None,
+        effort: ClaudeEffort | None = None,
     ) -> tuple[str, UsageMetadata, dict]:
         """Run ``claude -p`` once. Returns (result_text, usage, envelope).
 
@@ -675,6 +702,11 @@ class ClaudeCodeAdapter(LLMAdapter):
         file (the chat path). Pass ``None`` to omit the flag entirely — used
         by the one-shot ``generate`` path, which has no cross-turn cache to
         protect and must not reuse (or poison) the chat system-prompt file.
+
+        ``effort`` is the caller's already-frozen configured-effort decision.
+        It defaults to ``None`` (no ``--effort`` flag) so callers with no
+        session contract — notably the one-shot ``generate`` path — build
+        exactly the pre-contract command.
         """
         cmd = [self._cli_path, "-p", "--output-format", "json"]
         if model:
@@ -687,6 +719,9 @@ class ClaudeCodeAdapter(LLMAdapter):
             system_prompt_file = self._system_prompt_file
         if system_prompt_file:
             cmd += ["--append-system-prompt-file", str(system_prompt_file)]
+        if effort is not None:
+            # Empty for the omitted decision, so the command stays byte-identical.
+            cmd += effort.argv
         cmd += self._extra_argv
 
         try:
@@ -774,12 +809,14 @@ class ClaudeCodeAdapter(LLMAdapter):
         model: str,
         *,
         resume_session_id: str | None = None,
+        effort: ClaudeEffort | None = None,
     ) -> tuple[dict, UsageMetadata, dict]:
         """Run the CLI and parse one JSON *action* from its result."""
         result_str, usage, envelope = self._invoke_raw(
             prompt,
             model,
             resume_session_id=resume_session_id,
+            effort=effort,
         )
         action = _extract_json_object(result_str)
         if action is None:

@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/llm/api_gate.py
   - src/lingtai/llm/base.py
   - src/lingtai/llm/claude_code/adapter.py
+  - src/lingtai/llm/claude_code/effort.py
   - src/lingtai/llm/kimi_code/adapter.py
   - src/lingtai/llm/custom/ANATOMY.md
   - src/lingtai/llm/deepseek/ANATOMY.md
@@ -21,6 +22,7 @@ related_files:
   - src/lingtai/llm/service.py
   - src/lingtai/kernel/llm/ANATOMY.md
   - tests/test_claude_code_adapter.py
+  - tests/test_claude_code_effort.py
   - tests/test_kimi_code_adapter.py
   - tests/test_codex_endpoint_pool.py
   - tests/test_codex_native_multiaccount.py
@@ -51,7 +53,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 | `__init__.py` | 20 | Re-exports kernel types (`ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema`, `ChatInterface`) + `LLMAdapter` from `base.py`. Triggers `register_all_adapters()` on import. |
 | `_register.py` | 241 | Registers adapter factories for all providers with `LLMService.register_adapter()`. Module constant `CODEX_OFFICIAL_BASE_URL` is the Codex default endpoint; `_normalize_service_tier` (`_register.py:28-50`) is the common Codex `service_tier` boundary (`fast` → wire `priority`). The one `_codex` factory (`_register.py:133-192`) supplies either `FixedAccountSource` or live `WeightedAccountSource` to one native `CodexOpenAIAdapter`; `codex`, `codex-pool`, and `codex_pool` are registry aliases for that exact factory (`_register.py:194-198`), not separate implementations. |
 | `identity_headers.py` | 53 | Shared non-secret LingTai HTTP identity/version header helper for SDK-backed LLM adapters. |
-| `claude_code/` | — | `claude-code` provider: drives the local `claude` CLI on a Claude subscription, preserving canonical LingTai history while resuming a successful CLI session for incremental prompts (`adapter.py:ClaudeCodeAdapter`). `claude_code/__init__.py` carries the provider's rationale — it is the Claude analogue of the Codex provider, calling the CLI binary rather than the Anthropic API with a key. |
+| `claude_code/` | — | `claude-code` provider: drives the local `claude` CLI on a Claude subscription, preserving canonical LingTai history while resuming a successful CLI session for incremental prompts (`adapter.py:ClaudeCodeAdapter`). `claude_code/__init__.py` carries the provider's rationale — it is the Claude analogue of the Codex provider, calling the CLI binary rather than the Anthropic API with a key. `claude_code/effort.py` owns the configured-effort contract (see below). |
 | `kimi_code/` | — | `kimi-code` provider: drives the local `kimi` CLI as a LingTai brain. Deliberately distinct from both the generic HTTP `kimi` provider and the `kimicode` daemon backend — the adapter owns canonical history, requires LingTai JSON actions back from the CLI, and uses the CLI's opaque resume identity for provider cache affinity (`kimi_code/__init__.py:1-6`). |
 | `zhipu/` | — | Zhipu (GLM) provider: a thin OpenAI-compat wrapper whose sole deviation is a `_build_messages` session override merging consecutive same-role messages, because GLM rejects them with error 1214. The workaround is provider-local by design and must not migrate into the generic OpenAI adapter (`zhipu/adapter.py:1-8`). |
 | `api_gate.py` | 112 | `APICallGate` — RPM rate limiter with deque timestamps, `ThreadPoolExecutor`, daemon gate thread |
@@ -66,6 +68,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 - **Adapter registration** — `_register.py` registers dedicated factories including native HTTP/OAuth `codex`, local-CLI `claude-code`, and native `mimo`, plus generic-routed providers (`grok`, `qwen`, `kimi`) via `_custom`. Codex ignores generic API keys but honors an explicit `base_url` and resolves OAuth credentials at its request boundary; Claude Code drops generic HTTP settings because its CLI owns transport/auth.
 - **Interface converters** — imported by adapter session modules (e.g. `openai.adapter` imports `to_openai`, `to_responses_input` from `interface_converters.py:120`).
 - **Rate gating** — `LLMAdapter._setup_gate(max_rpm)` creates `APICallGate`; `_wrap_with_gate()` returns `_GatedSession` proxy for sessions.
+- **Claude Code configured effort** — the `claude-code`/`claude_code` route wires `manifest.llm.thinking` into the installed CLI's own `--effort <level>` flag. `claude_code/effort.py:91` (`normalize_claude_effort`) is the single normalizer: `None` and the internal `"default"` omission sentinel produce the frozen `OMITTED_EFFORT` (`claude_code/effort.py:86`, no flag at all — byte-identical to the pre-contract command), an exact member of `CLAUDE_EFFORT_LEVELS` (`claude_code/effort.py:25`, re-exported from `lingtai.kernel.config.CLAUDE_THINKING_LEVELS` so the schema gate and the wire emitter cannot drift) produces an explicit decision, and anything else raises before dispatch. `create_chat` normalizes once (`claude_code/adapter.py:608`) and freezes the immutable `ClaudeEffort` (`claude_code/effort.py:55`) onto the session (`claude_code/adapter.py:218`), so every physical invocation of one logical send — first call, `--resume` call, and each overflow-recovery retry — reuses one snapshot. `_invoke_raw` appends `effort.argv` after `--append-system-prompt-file` and before `_extra_argv` (`claude_code/adapter.py:724`); its `effort=None` default keeps the one-shot `generate` path pre-contract. `ClaudeCodeChatSession.reasoning_observability()` (`claude_code/adapter.py:296`) supplies the provider-neutral `llm_call` fields the kernel merges duck-typed. Capability status is `model_verified=false`: the installed CLI's flag vocabulary is verified, per-model acceptance is not. Proven by `tests/test_claude_code_effort.py`.
 - **Explicit context history rebuild** — `context.rebuild` reconstructs canonical prompt sources before the summary engine calls the session's `request_history_rebuild()` hook (`src/lingtai/tools/context/__init__.py:204-239`, `src/lingtai/tools/system/summarize.py:259-307`). Claude Code and Kimi Code accept that hook even when there are zero pending summaries, discard only their provider-continuation acceleration state, and make the next request replay full canonical history; ordinary per-turn republication of identical prompt/tool content remains continuation-preserving. The provider bullets below own the exact reset state and focused tests.
 
 ## Composition

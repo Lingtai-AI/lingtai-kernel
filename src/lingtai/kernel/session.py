@@ -11,7 +11,10 @@ import uuid
 from typing import Any, Callable, TYPE_CHECKING
 
 from .config import (
+    CLAUDE_THINKING_PROVIDERS,
     CONTEXT_PRESSURE_HIGH_RATIO,
+    DEFAULT_THINKING,
+    THINKING_OMITTED,
     AgentConfig,
     # Re-exported for backward compatibility: the streak logic now lives in
     # ``ContextPressureReminder`` and reads these off ``config`` directly, but
@@ -62,6 +65,29 @@ if TYPE_CHECKING:
 def _elapsed_ms(start: float) -> int:
     """Return non-negative elapsed milliseconds from a monotonic start."""
     return max(0, int((time.monotonic() - start) * 1000))
+
+
+def _reasoning_observability_fields(chat: Any) -> dict[str, str]:
+    """Provider-supplied reasoning fields for the ``llm_call`` record.
+
+    A provider that freezes a reasoning/effort decision at chat creation
+    exposes ``reasoning_observability()`` returning provider-neutral field
+    names with provider-specific values; the Claude Code route is the first.
+    Every other session — and any session that raises or returns a non-dict —
+    contributes nothing, so its ``llm_call`` record stays byte-identical.
+    The provider owns the safety of what it returns: no credential, session id,
+    prompt content, or raw argv belongs in this record.
+    """
+    hook = getattr(chat, "reasoning_observability", None)
+    if not callable(hook):
+        return {}
+    try:
+        fields = hook()
+    except Exception:
+        return {}
+    if not isinstance(fields, dict):
+        return {}
+    return {str(key): str(value) for key, value in fields.items()}
 
 
 _SAFE_USAGE_EXTRA_EVENT_KEYS = {
@@ -286,6 +312,40 @@ class SessionManager:
     # LLM communication
     # ------------------------------------------------------------------
 
+    def _effective_provider(self) -> str:
+        """Provider actually used for chat creation, lowercased.
+
+        ``AgentConfig.provider`` is None when the agent uses the LLMService's
+        own provider, so the service is the fallback authority — exactly the
+        provider ``create_session`` will route to.
+        """
+        provider = self._config.provider
+        if not provider:
+            try:
+                provider = self._llm_service.provider
+            except Exception:
+                provider = None
+        return str(provider or "").lower()
+
+    def _session_thinking(self) -> str:
+        """Configured thinking value to hand to chat creation/rebuild.
+
+        The Claude Code route owns its own omission: a constructor-omitted
+        value must stay the internal ``THINKING_OMITTED`` sentinel (the adapter
+        then emits no ``--effort`` flag) instead of being promoted to the
+        legacy cross-provider ``"high"`` default, which would silently give
+        every existing Claude agent an explicit ``--effort high``. An explicit
+        value passes through unchanged — including a falsey one, which the
+        Claude contract rejects loudly at ``create_chat`` rather than papering
+        over here. Every other provider keeps the historical ``or "high"``.
+        """
+        thinking = self._config.thinking
+        if self._effective_provider() in CLAUDE_THINKING_PROVIDERS:
+            if getattr(self._config, "thinking_omitted", False):
+                return THINKING_OMITTED
+            return thinking
+        return thinking or DEFAULT_THINKING
+
     def ensure_session(self) -> ChatSession:
         """Ensure a persistent LLM session exists, creating one if needed."""
         if self._chat is None:
@@ -293,7 +353,7 @@ class SessionManager:
                 system_prompt=self._build_system_prompt_fn(),
                 tools=self._build_tool_schemas_fn() or None,
                 model=self._config.model or self._llm_service.model,
-                thinking=self._config.thinking or "high",
+                thinking=self._session_thinking(),
                 agent_type=self._display_name,
                 tracked=True,
                 interaction_id=self._interaction_id,
@@ -310,7 +370,7 @@ class SessionManager:
             system_prompt=self._build_system_prompt_fn(),
             tools=self._build_tool_schemas_fn() or None,
             model=self._config.model or self._llm_service.model,
-            thinking=self._config.thinking or "high",
+            thinking=self._session_thinking(),
             agent_type=self._display_name,
             tracked=tracked,
             provider=self._config.provider,
@@ -397,6 +457,7 @@ class SessionManager:
             "model": self._config.model or self._llm_service.model or "unknown",
             "api_call_id": api_call_id,
         }
+        llm_call_fields.update(_reasoning_observability_fields(self._chat))
         self._log("llm_call", **llm_call_fields)
 
         retry_timeout = self._config.retry_timeout
