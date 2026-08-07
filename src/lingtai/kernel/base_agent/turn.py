@@ -21,6 +21,7 @@ from ..llm.base import is_all_empty_response
 from ..meta_block import (
     attach_active_notifications,
     attach_active_runtime,
+    attach_active_taskcard,
     finalize_two_axis_sidecars,
     build_meta,
     build_reconstruction_tool_meta,
@@ -1829,6 +1830,20 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 agent,
                 tool_results,
                 prior_holder=_prior_holder,
+            )
+
+        # Attach the resident Task Card (change-gated) onto the same final
+        # agent_meta carrier. Runs after notifications so both axes coexist.
+        try:
+            agent._taskcard_live_holder = attach_active_taskcard(
+                agent,
+                tool_results,
+                prior_holder=getattr(agent, "_taskcard_live_holder", None),
+            )
+        except Exception:
+            agent._log(
+                "taskcard_block_attach_failed",
+                reason="attach_active_taskcard raised",
             )
 
         # Attach the complete `_meta.agent_meta` snapshot to the designated final

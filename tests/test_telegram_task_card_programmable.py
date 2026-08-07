@@ -112,7 +112,7 @@ def test_active_intrinsic_body_projects_onto_existing_resident(tmp_path):
 
     text = _current(acct)
     assert "compiling" in text
-    assert "— WATCH —" in text
+    assert "— TASK CARD —" in text
     assert "# Task Card" in text
     assert "- first" in text
 
@@ -189,7 +189,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
 
     Telegram owns the resident message and its automatic content: inactive
     must update the same resident (never delete/send-new), drop the
-    programmable ``— WATCH —`` section while keeping the automatic content
+    programmable ``— TASK CARD —`` section while keeping the automatic content
     intact, and never touch automatic updates going forward. Repeated
     inactive handling must be idempotent, and it must never delete the local
     body file either.
@@ -202,7 +202,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
     resident_before = acct.get_task_card(55)
     assert resident_before is not None
     assert "v1" in _current(acct)
-    assert "— WATCH —" in _current(acct)
+    assert "— TASK CARD —" in _current(acct)
     assert (tmp_path / "taskcard" / "taskcard.md").exists()
 
     # `stop` writes inactive but leaves the last body on disk (possibly stale).
@@ -219,7 +219,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
     text = _current(acct)
     assert "stay put" in text  # Telegram-owned automatic content preserved
     assert "v1" not in text and "v2" not in text  # programmable frame excluded
-    assert "— WATCH —" not in text
+    assert "— TASK CARD —" not in text
     assert manager._task_card_channels["mybot:55"].get("programmable") is None
 
     # Repeated inactive handling (e.g. every 1s poll tick) is idempotent: no

@@ -125,7 +125,7 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
 
     assert shared == telegram
     assert shared == (
-        "📋 TASK CARD\n"
+        "📋 ACTIVITIES\n"
         "──────────\n"
         "• public response\n"
         "• bash.run: build (0s, ???) · 12:00:00 UTC+00\n"

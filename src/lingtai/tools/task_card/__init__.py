@@ -48,6 +48,11 @@ _MIN_TIMEOUT_S = 0.1
 _DEFAULT_MAX_REFRESHES = 2000
 _DEFAULT_REMINDER_TURNS = 10
 _TASKCARD_DIR = "taskcard"
+# Hard ceiling for the rendered card body (Jason #taskcard-resident). A renderer
+# output longer than this is REFUSED, never truncated, so the resident
+# ``_meta.agent_meta.taskcard`` projection can stay a bounded high-attention
+# goal. Complex progress belongs in files behind the card.
+_MAX_BODY_CHARS = 2000
 _STATUS_FILENAME = "status"
 _BODY_FILENAME = "taskcard.md"
 _CONFIG_FILENAME = "taskcard.json"
@@ -586,6 +591,12 @@ class TaskCardManager:
         self._write_status("active")
 
     def _write_body(self, body: str) -> None:
+        if len(body) > _MAX_BODY_CHARS:
+            raise TaskCardError(
+                f"taskcard body exceeds the {_MAX_BODY_CHARS}-char cap "
+                f"({len(body)} chars); keep the card a progressive-disclosure "
+                "summary and move complex progress into files"
+            )
         self._atomic_write_text(self._body_path, body, trailing_newline=False)
 
     def _write_status(self, status: str) -> None:

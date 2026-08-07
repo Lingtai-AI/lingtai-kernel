@@ -46,6 +46,25 @@ dead watch.
 
 Actions are `start`, `inspect`, `retry`, `stop`, `remove`, and `manual`.
 
+## Resident meta projection and the 2000-char cap
+
+The card body is projected into the agent's own meta block as
+`_meta.agent_meta.taskcard`, so the human (via Telegram/Feishu/etc) and the
+agent always see the same card. Projection is **change-gated**: an unchanged
+body is not re-injected every turn; only material body/status changes or the
+first appearance attach a fresh payload. When no card is present the meta block
+carries a generic hint (`no taskcard present, consider maintaining one, see
+task_card manual`).
+
+A rendered body longer than **2000 chars is refused**, never truncated. This
+keeps the card a bounded, high-attention goal. Treat the card itself as a
+progressive-disclosure summary: keep the top of the card to the current goal,
+status, and the single next step, and push complex progress detail into files
+(reports, logs, checklists) referenced from the card rather than into the card
+body. If a renderer tries to publish more than 2000 chars, `start`/`retry`
+refuse that update and keep the last valid body.
+
+
 `start` runs a Python renderer under your working directory. The renderer must
 exit `0` and print a nonempty full body to stdout; that body is written to
 `taskcard/taskcard.md`. After the body is written atomically, the capability

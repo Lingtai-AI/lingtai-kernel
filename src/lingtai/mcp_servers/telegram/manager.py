@@ -2030,14 +2030,14 @@ class TelegramManager:
     _TASK_CARD_DEFAULT_CHANNEL = "automatic"
     # Header for the appended programmable section; keeps the composed message
     # legible when both channels are present. English-only (Jason #7175/#7205).
-    _TASK_CARD_PROGRAMMABLE_HEADER = "— WATCH —"
+    _TASK_CARD_PROGRAMMABLE_HEADER = "— TASK CARD —"
     # Terminal presentation delivered when clearing a programmable-ONLY resident
     # would otherwise compose to empty text. Telegram cannot edit a message to
     # empty text, so a stable, nonempty, English-only marker is shown instead,
     # leaving the one resident message reusable by a later automatic or
     # programmable frame. It is presentation-only: the committed programmable slot
     # is still cleared, so it never persists as stored channel state.
-    _TASK_CARD_WATCH_STOPPED = "— WATCH STOPPED —"
+    _TASK_CARD_WATCH_STOPPED = "— TASK CARD STOPPED —"
 
     def _channel_key(self, account: str, chat_id: int) -> str:
         return self._resident.key(account, chat_id)
@@ -2828,7 +2828,7 @@ class TelegramManager:
         (the automatic event tail and the intrinsic-artifact projector).
 
         Sub-actions:
-          - create:  Project the resident 📋 TASK CARD for the current batch —
+          - create:  Project the resident 📋 ACTIVITIES for the current batch —
                      update-first, editing the persisted resident in place (same
                      id) and sending/deleting only as fail-open recovery.
           - update:  Edit the same card to show the current batch.

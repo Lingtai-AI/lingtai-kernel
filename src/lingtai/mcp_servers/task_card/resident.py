@@ -162,7 +162,7 @@ class TaskCardResident:
         programmable = slots.get("programmable", "")
         if not programmable:
             return automatic
-        watch = f"— WATCH —\n{programmable}"
+        watch = f"— TASK CARD —\n{programmable}"
         return watch if not automatic else f"{automatic}\n\n{watch}"
 
     def delivery_lock(

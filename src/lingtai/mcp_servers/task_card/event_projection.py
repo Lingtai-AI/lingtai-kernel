@@ -16,7 +16,7 @@ class TaskCardEventProjection:
 
     REASONING_CAP = 500
     TEXT_LIMIT = 3500
-    HEADER = "📋 TASK CARD"
+    HEADER = "📋 ACTIVITIES"
     FOOTER = (
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
         "/taskcard N sets normal rows (1-10"

@@ -52,6 +52,7 @@ import hashlib as _hashlib
 import json as _json
 import copy as _copy
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Dict, NamedTuple
 
 from .config import (
@@ -141,6 +142,22 @@ NOTIFICATION_PERSISTENT_FEISHU_SEEN_LIMIT = 200
 # tracking and no previous_block hook, so it has no min-context/seen-limit
 # tuning knobs.
 NOTIFICATION_PERSISTENT_WHATSAPP_CHANNEL = "whatsapp"
+
+# Resident Task Card axis: the agent-local ``taskcard/taskcard.md`` +
+# ``taskcard/status`` artifact is projected into ``_meta.agent_meta.taskcard``
+# so the human and the agent always see the same card. It is change-gated:
+# identical bytes are not re-injected every turn. A body longer than
+# ``TASKCARD_MAX_CHARS`` is refused rather than truncated.
+TASKCARD_KEY = "taskcard"
+TASKCARD_MAX_CHARS = 2000
+TASKCARD_ABSENT_HINT = (
+    "no taskcard present, consider maintaining one, see task_card manual"
+)
+TASKCARD_REFUSED_HINT = (
+    "taskcard refused: body exceeds the {max}-char cap; keep the card a "
+    "progressive-disclosure summary and move complex progress into files"
+)
+
 NOTIFICATION_PERSISTENT_WHATSAPP_PATH = (
     f"_meta.{NOTIFICATION_PERSISTENT_KEY}."
     f"{NOTIFICATION_PERSISTENT_MCP_KEY}.{NOTIFICATION_PERSISTENT_WHATSAPP_CHANNEL}"
@@ -3281,6 +3298,119 @@ def agent_meta_signature(agent_meta: Mapping[str, Any]) -> str:
         return str(sorted(material.items()))
 
 
+
+def _collect_taskcard_payload(agent) -> dict | None:
+    """Read the agent-local resident Task Card artifact.
+
+    Returns ``None`` when the card is absent or not ``active``. Returns a dict
+    with ``status`` and ``body`` when an active card exists and its body fits
+    within ``TASKCARD_MAX_CHARS``. Returns a dict with ``status``/``refused``
+    (never the body) when the body exceeds the cap — the oversize card is
+    refused, not truncated or injected.
+    """
+    try:
+        workdir = getattr(agent, "_working_dir", None)
+        if workdir is None:
+            return None
+        taskcard_dir = Path(workdir) / "taskcard"
+        status_path = taskcard_dir / "status"
+        body_path = taskcard_dir / "taskcard.md"
+        if not status_path.is_file() or not body_path.is_file():
+            return None
+        status = status_path.read_text(encoding="utf-8").strip()
+        if status != "active":
+            return None
+        body = body_path.read_text(encoding="utf-8")
+        if not body:
+            return None
+        if len(body) > TASKCARD_MAX_CHARS:
+            return {
+                "status": "refused",
+                "refused": True,
+                "hint": TASKCARD_REFUSED_HINT.format(max=TASKCARD_MAX_CHARS),
+            }
+        return {"status": "active", "body": body}
+    except Exception:
+        return None
+
+
+def taskcard_signature(payload: Mapping[str, Any] | None) -> str:
+    """Return a stable signature of the *material* resident Task Card."""
+    try:
+        return _json.dumps(payload or {}, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return str(sorted((payload or {}).items()))
+
+
+def attach_active_taskcard(
+    agent,
+    tool_results: list,
+    *,
+    prior_holder: dict | None = None,
+) -> dict | None:
+    """Attach the current resident Task Card to the final ``agent_meta`` carrier.
+
+    Change-gated projection of ``<workdir>/taskcard/taskcard.md`` into
+    ``_meta.agent_meta.taskcard`` so the human and the agent always see the same
+    card without re-injecting identical bytes every turn.
+
+    Contract:
+        * When there is no active card, a generic hint is attached ONCE when
+          the state transitions from a prior card (or from nothing):
+          ``{taskcard: {present: False, hint: TASKCARD_ABSENT_HINT}}``.
+        * When an active card exists and its body is unchanged since the last
+          emission, nothing is attached and ``prior_holder`` is returned
+          unchanged — the prior card stays the current holder.
+        * When the card body changes, the new payload is attached under
+          ``_meta.agent_meta.taskcard`` on the designated final result, the
+          fingerprint is committed, and the new holder is returned. Older
+          holders remain historical traces.
+        * A body longer than ``TASKCARD_MAX_CHARS`` is refused: the payload
+          carries ``status: refused`` and a hint, never the oversize body.
+
+    ``tool_results`` is the list of ToolResultBlock objects returned from
+    ToolExecutor; their ``.content`` is shared by reference with the canonical
+    ChatInterface entries, so mutating the dict here propagates to history
+    without a separate write.
+    """
+    payload = _collect_taskcard_payload(agent)
+    target = _final_tool_result_block(tool_results)
+    if payload is None:
+        if target is None:
+            return prior_holder
+        signature = taskcard_signature({"present": False})
+        if signature == getattr(agent, "_taskcard_signature", None):
+            return prior_holder
+        agent_meta = target.metadata.setdefault(AGENT_META_KEY, {
+            "instruction": AGENT_META_INSTRUCTION,
+            "agent_state": {},
+            "guidance": {},
+        })
+        agent_meta[TASKCARD_KEY] = {"present": False, "hint": TASKCARD_ABSENT_HINT}
+        try:
+            agent._taskcard_signature = signature
+        except Exception:
+            pass
+        return target
+
+    if target is None:
+        return prior_holder
+    signature = taskcard_signature(payload)
+    if signature == getattr(agent, "_taskcard_signature", None):
+        return prior_holder
+    agent_meta = target.metadata.setdefault(AGENT_META_KEY, {
+        "instruction": AGENT_META_INSTRUCTION,
+        "agent_state": {},
+        "guidance": {},
+    })
+    agent_meta[TASKCARD_KEY] = {"present": True, **payload}
+    try:
+        agent._taskcard_signature = signature
+    except Exception:
+        pass
+    return target
+
+
 def attach_active_runtime(
     agent,
     tool_results: list,
@@ -3495,6 +3625,8 @@ def finalize_two_axis_sidecars(tool_results: list) -> None:
                 normalized_agent["notifications"] = agent.get("notifications", {})
             if not daemon_local_state or "guidance" in agent:
                 normalized_agent["guidance"] = agent.get("guidance", {})
+            if TASKCARD_KEY in agent:
+                normalized_agent[TASKCARD_KEY] = agent.get(TASKCARD_KEY, {})
             metadata[AGENT_META_KEY] = normalized_agent
         # No private transport or obsolete root siblings can reach adapters.
         for key in list(metadata):

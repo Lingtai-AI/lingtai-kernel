@@ -679,6 +679,13 @@ class BaseAgent:
         # for diagnostics/compatibility only. The complete newest snapshot is
         # emitted whenever private capture exists.
         self._agent_meta_signature: str | None = None
+        # Resident Task Card meta axis (change-gated): signature of the last
+        # attached ``_meta.agent_meta.taskcard`` payload and the live holder
+        # carrying it. ``attach_active_taskcard`` compares the current
+        # signature and only re-attaches on material change; identical bytes
+        # are not re-injected every turn.
+        self._taskcard_signature: str | None = None
+        self._taskcard_live_holder: dict | None = None
 
         # Large-result hint threshold (chars).  When a main-agent tool result's
         # serialized length exceeds this value it is treated as "large": the

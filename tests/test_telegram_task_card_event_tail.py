@@ -732,7 +732,7 @@ def test_automatic_update_leaves_programmable_frame_unchanged(tmp_path):
     manager, service = _manager(tmp_path, acct)
     _pre_resident(acct, 555, manager)
 
-    programmable_before = "— WATCH —\nprogrammable content"
+    programmable_before = "— TASK CARD —\nprogrammable content"
     manager._set_channel_frame(acct.alias, 555, "programmable", programmable_before)
 
     events_path = _events_path(tmp_path)
@@ -1069,7 +1069,7 @@ def test_programmable_slot_untouched_by_automatic_broadcast(tmp_path):
     _pre_resident(acct, 555, manager)
 
     # Commit a programmable frame first, the way the controller would.
-    manager._set_channel_frame(acct.alias, 555, "programmable", "— WATCH —\nprogrammable content")
+    manager._set_channel_frame(acct.alias, 555, "programmable", "— TASK CARD —\nprogrammable content")
 
     events_path = _events_path(tmp_path)
     _write_lines(events_path, [_tool_call_line(tool_name="automatic-row")])

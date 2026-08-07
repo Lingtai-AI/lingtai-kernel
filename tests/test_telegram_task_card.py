@@ -1,7 +1,7 @@
 """Tests for route B — single transient current-step Task Card.
 
 Product contract: cap 500 Unicode code points after redaction, current-step
-only (no cumulative history), no continuation/overflow, loud 📋 TASK CARD.
+only (no cumulative history), no continuation/overflow, loud 📋 ACTIVITIES.
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ def test_task_card_create_shows_header_and_current_tool(tmp_path):
     send_calls = [c for c in account.calls if c[0] == "send_message"]
     assert len(send_calls) == 1
     text = send_calls[0][2]
-    assert "📋 TASK CARD" in text
+    assert "📋 ACTIVITIES" in text
     assert "bash.run" in text
     assert "Check project structure" in text
 
@@ -112,7 +112,7 @@ def test_task_card_update_same_message_id(tmp_path):
     # Only current step visible; previous step replaced
     assert "Step 2" in edited
     assert "Step 1" not in edited  # replaced, not cumulative
-    assert "📋 TASK CARD" in edited
+    assert "📋 ACTIVITIES" in edited
 
 
 def test_task_card_finalize_shows_done_header(tmp_path):
@@ -160,7 +160,7 @@ def test_reasoning_499_fits_no_ellipsis(tmp_path):
     send_calls = [c for c in account.calls if c[0] == "send_message"]
     text = send_calls[0][2]
     assert "A" * 499 in text
-    assert "…" not in text.replace("📋 TASK CARD", "").replace("bash:", "").replace("…", "CHECK")  # no ellipsis
+    assert "…" not in text.replace("📋 ACTIVITIES", "").replace("bash:", "").replace("…", "CHECK")  # no ellipsis
 
 
 def test_reasoning_500_fits_exact_no_ellipsis(tmp_path):
@@ -417,7 +417,7 @@ def test_full_routing_chain_create_update_finalize(tmp_path):
     send_calls = [c for c in account.calls if c[0] == "send_message"]
     assert len(send_calls) == 1
     text = send_calls[0][2]
-    assert "📋 TASK CARD" in text
+    assert "📋 ACTIVITIES" in text
     assert "bash.run" in text
     assert "Check project structure" in text
 

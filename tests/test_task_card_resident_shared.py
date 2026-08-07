@@ -124,7 +124,7 @@ def test_initial_send_and_in_place_slot_compose_commit_after_success() -> None:
     assert (
         "edit",
         "main:chat:thread#1",
-        "automatic-v1\n\n— WATCH —\nwatch-v1",
+        "automatic-v1\n\n— TASK CARD —\nwatch-v1",
     ) in harness.calls
 
 

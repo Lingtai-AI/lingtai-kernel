@@ -525,7 +525,7 @@ def test_stopping_a_hidden_programmable_watch_does_not_resurface_after_reenable(
     latest = rendered[max(rendered)]
     assert "after reenable" in latest
     assert "live watch" not in latest
-    assert "— WATCH —" not in latest
+    assert "— TASK CARD —" not in latest
 
 
 def test_hidden_programmable_create_still_does_not_commit_its_slot(
