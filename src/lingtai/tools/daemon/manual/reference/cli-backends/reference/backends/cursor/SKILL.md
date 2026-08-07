@@ -18,8 +18,8 @@ maintenance: |
 # Cursor Daemon Backend — Flag Discovery Entrypoint
 
 The installed CLI's own help is the authority for Cursor Agent flags; this page
-is only the entrypoint. Conversion rules, key safety, and persistence live in the
-parent [`reference/cli-backends/SKILL.md`](../../../SKILL.md).
+is only the entrypoint. Conversion rules live in the parent
+[`reference/cli-backends/SKILL.md`](../../../SKILL.md).
 
 ## Discover flags from the installed CLI
 
@@ -27,10 +27,9 @@ parent [`reference/cli-backends/SKILL.md`](../../../SKILL.md).
    broader Cursor Agent CLI context).
 2. Run `agent --version` and `agent --help` in bash. The daemon spawns root
    `agent` directly — `agent -p --force --output-format stream-json <prompt>` —
-   so root help is authoritative (open a subcommand only if root routes there).
-   These are read-only checks; keychain errors happen before help on some builds.
+   so root help is authoritative (keychain errors happen before help on some builds).
 3. Translate what you found into `backend_options` with the parent's generic
-   conversion rules. Nothing Cursor-specific is added to that contract here.
+   conversion rules (nothing Cursor-specific is added).
 
 ## Example: model selection via the generic route
 
@@ -61,26 +60,29 @@ For installed `agent-cli@2026.05.28-a70ca7c`, accept usage only from `type=resul
 `inputTokens` is already net; UI-only `cli_tokens` adds read + write as cached, preserves raw usage, ignores invalid/all-zero blocks, and counts duplicate terminal results once.
 Join model only from a preceding matching `system/init` by `session_id`; provider stays unknown because this source emits no provider identity (do not infer it from `apiKeySource`, model, backend, credentials, or environment). This is version-pinned, not a cross-release claim.
 
+## Subscription & auth
+
+Cursor account/subscription (keychain login); LingTai does not inject
+credentials — the CLI must be signed in.
+
+Official docs: https://docs.cursor.com/agent
+
 ## Harness boundary
 
-Cursor currently declares no reserved-flag list at the validation layer, so
-nothing is refused for this backend beyond the generic key/value safety
-rules. Still, do not re-set harness-owned surfaces: `-p` (non-interactive
+Cursor declares no reserved-flag list at validation, so nothing is refused
+beyond generic key/value safety rules. Still, do not re-set harness-owned
+surfaces: `-p` (non-interactive
 print mode), `--force` (allows file modifications in print mode),
 `--output-format stream-json` (one JSON event per stdout line — the daemon's
 progress/result parser and the session-id capture depend on it), and
-`--resume` (owned by `daemon(action='ask', input={'id': ..., 'message': ...})` follow-ups, which replay the
-captured session id).
+`--resume` (owned by `ask` follow-ups, which replay the captured session id).
 
-Session and completion behavior, source-verified: the first stream event
-carrying a session-id-shaped field is stored in `daemon.json` as
-`cursor_session_id`; `ask` resumes with
+Session and completion: the first session-id-shaped stream event is stored
+as `cursor_session_id`; `ask` resumes with
 `agent -p --force --resume <cursor_session_id> --output-format stream-json
-<message>` (async, one follow-up in flight per session). Per-run MCP
-injection — including the `daemon_common` completion MCP — is not wired for
-this backend yet, so there are no MCP loader flags to collide with and no
-`finish` contract: success comes from the stream's final result event and
-the process exit code.
+<message>` (one follow-up in flight per session). Per-run MCP injection is
+not wired for this backend yet, so no `finish` contract: success comes from
+the stream's final result event and the process exit code.
 
 `backend_options` is honored only at `emanate` time; `ask` follow-ups reuse the
 session without re-passing it.

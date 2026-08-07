@@ -58,6 +58,13 @@ between the harness flags and the trailing prompt positional.
 The flag/value vocabulary belongs to the installed CLI — LingTai does not
 validate, enumerate, or simulate it.
 
+## Subscription & auth
+
+Per-provider keys (see `swiss-knife`'s `xiaomi-mimo` reference); the CLI reads
+its configured credentials at spawn. LingTai does not inject or rotate them.
+
+Official docs: https://github.com/XiaomiMiMo/MiMo-Code
+
 ## Harness boundary
 
 `mimocode` reserves `--format` (daemon progress/result extraction depends on

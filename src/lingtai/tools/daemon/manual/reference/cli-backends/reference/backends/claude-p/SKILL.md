@@ -19,19 +19,16 @@ maintenance: |
 # claude-p Daemon Backend — Flag Discovery Entrypoint
 
 The installed CLI's own help is the authority for Claude Code flags; this page is
-only the entrypoint. Conversion rules, key safety, and persistence live in the
-parent [`reference/cli-backends/SKILL.md`](../../../SKILL.md). `claude-p` is the
-canonical print-mode backend id; `claude-code` is a compatibility alias with the
-same runner and reserved-flag set.
+only the entrypoint. Conversion rules and persistence live in the parent
+[`reference/cli-backends/SKILL.md`](../../../SKILL.md). `claude-p` is the
+canonical print-mode backend id; `claude-code` is a compatibility alias.
 
 ## Discover flags from the installed CLI
 
 1. Load `shell-manual` (its nested `reference/bash-claude-code/SKILL.md` has
    broader Claude Code CLI context).
-2. Run, in bash: `claude --version` and `claude --help`. The daemon backend
-   wraps `claude --print`, so the print-mode flags in `claude --help` are the
-   relevant surface. These are local read-only commands; no session is
-   started.
+2. Run `claude --version` and `claude --help` in bash. The daemon wraps
+   `claude --print`; the print-mode flags are the relevant surface.
 3. Translate what you found into `backend_options` with the parent's generic
    conversion rules. Nothing Claude-specific is added to that contract here.
 
@@ -56,6 +53,14 @@ Through `backend_options`, an underscore key becomes a dashed long flag:
 The model-name vocabulary belongs to the installed CLI and the provider account —
 LingTai does not validate, enumerate, or simulate model names.
 
+## Subscription & auth
+
+Uses the human's **Claude subscription** (Pro/Max) via `claude login` OAuth
+(`~/.claude/.credentials.json`); spawn strips `ANTHROPIC_API_KEY` /
+`ANTHROPIC_AUTH_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN`.
+
+Official docs: https://docs.anthropic.com/en/docs/claude-code
+
 ## Harness boundary
 
 The harness spawns `claude --print --dangerously-skip-permissions
@@ -79,12 +84,7 @@ Related run-scoped behavior you should not fight through flags:
   --print ...` against the session id persisted to `daemon.json.claude_session_id`;
   `backend_options` are not re-passed on ask — emanate-time flags persist for
   the session's life.
-- Auth-env hygiene: the spawn environment strips `ANTHROPIC_API_KEY` and
-  `ANTHROPIC_AUTH_TOKEN` (force API billing; GH #107) plus
-  `CLAUDE_CODE_OAUTH_TOKEN` (a stale inherited token can override a refreshed
-  `~/.claude/.credentials.json`, surfacing as a false "weekly limit"; see
-  Lingtai-AI/lingtai#189) so the CLI's own OAuth credentials win — do not
-  re-inject auth overrides via flags. A *manual* `claude` shell invocation has
-  no such protection; for the weekly-limit smoke test and the stale token's
-  source, read `shell-manual` → `reference/bash-claude-code/SKILL.md`. Never
-  print token values while diagnosing.
+- Auth-env hygiene: the daemon spawn strips `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_OAUTH_TOKEN` so refreshed OAuth wins
+  over stale inherited tokens (see Subscription & auth above; a stale token
+  surfaces as a false "weekly limit"). Never print token values.

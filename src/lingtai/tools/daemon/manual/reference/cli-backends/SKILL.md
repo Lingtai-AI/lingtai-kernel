@@ -111,6 +111,12 @@ catalog. Only backends with proven demand get a page.
 | Oh-My-Pi (`omp`)-specific flags for a daemon task: model selection, tool/provider switches, the harness-reserved mode/approval/session flags; discover the installed `omp` CLI's flags and translate them into `backend_options` | `reference/backends/oh-my-pi/SKILL.md` |
 | Built-in `lingtai` backend knowledge for a daemon task: confirm it has no CLI/`backend_options` flag surface; find the live authorities for preset selection/inspection, lingtai/tools/skills/MCP inheritance, and the completion contract | `reference/backends/lingtai/SKILL.md` |
 
+Each backend page also carries a small `## Subscription & auth` section:
+what the vendor subscription/account model is, how LingTai connects (login,
+API-key env, or config file), and the official docs link — enough to answer
+"what do I need to pay for / how does LingTai authenticate" per backend
+without reading the vendor's full billing docs.
+
 ## API note: `daemon(action="list", input={})`
 
 `list` is a compact index over both currently tracked runs and historical run

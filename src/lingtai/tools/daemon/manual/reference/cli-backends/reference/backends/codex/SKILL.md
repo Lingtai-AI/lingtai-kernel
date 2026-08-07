@@ -56,6 +56,14 @@ The effort vocabulary belongs to the installed CLI and the selected model —
 LingTai does not validate, enumerate, or simulate effort levels. A value like
 `ultra` passes through and the CLI/model decides its semantics (or rejects it).
 
+## Subscription & auth
+
+Billed through the **ChatGPT subscription** (Plus/Pro) via `codex login`, or a
+shared codex-pool (`~/.lingtai-tui/codex-auth-pool.json`). LingTai inherits the
+CLI's own credentials; see `bash-openai-codex` for login/API-key variants.
+
+Official docs: https://developers.openai.com/codex/
+
 ## Harness boundary
 
 Codex currently declares no reserved-flag list at the validation layer, so

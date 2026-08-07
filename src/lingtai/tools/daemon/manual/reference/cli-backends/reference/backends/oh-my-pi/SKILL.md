@@ -58,6 +58,13 @@ The model vocabulary belongs to the installed CLI and its configured providers â
 LingTai does not validate, enumerate, or simulate model ids. Use the CLI's own
 discovery surface (root `--help`) and pass the id through.
 
+## Subscription & auth
+
+Per-provider keys through the CLI's own config; LingTai does not inject or
+rotate credentials.
+
+Official docs: https://github.com/pi-coding-agent/pi-coding-agent
+
 ## Harness boundary: reserved flags
 
 The daemon owns Oh-My-Pi's non-interactive JSON harness

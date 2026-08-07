@@ -59,6 +59,13 @@ Your options land between the harness-owned `--yolo` and the final
 The model vocabulary belongs to the installed CLI and the configured provider —
 LingTai does not validate, enumerate, or simulate model names.
 
+## Subscription & auth
+
+Authenticates via the installed CLI's provider config (Qwen/DashScope keys);
+LingTai does not set or rotate credentials.
+
+Official docs: https://github.com/QwenLM/qwen-code
+
 ## Harness boundary
 
 Qwen Code reserves `--prompt`/`-p`, `--yolo`/`-y`, and `--approval-mode`:

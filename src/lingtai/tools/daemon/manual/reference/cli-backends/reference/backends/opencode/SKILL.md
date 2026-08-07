@@ -57,6 +57,15 @@ for both). Through `backend_options`, plain scalars become `--flag <value>`:
 The model and variant vocabularies belong to the installed CLI and the selected
 provider — LingTai does not validate, enumerate, or simulate them.
 
+## Subscription & auth
+
+Provider-agnostic: `opencode auth login` stores credentials in
+`~/.local/share/opencode/auth.json` (env/.env also load keys). For the curated
+**OpenCode Go** subscription use the `opencode-go` preset with
+`OPENCODE_GO_API_KEY` and `https://opencode.ai/zen/go/v1` (chat wire only).
+
+Official docs: https://opencode.ai/docs/
+
 ## Harness boundary
 
 OpenCode reserves `--format` at the validation layer: the daemon owns

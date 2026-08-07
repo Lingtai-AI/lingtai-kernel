@@ -59,6 +59,13 @@ Through `backend_options`, a string value becomes `--flag <value>`:
 The model vocabulary belongs to the installed CLI and its provider
 configuration — LingTai does not validate, enumerate, or simulate model names.
 
+## Subscription & auth
+
+Moonshot AI keys: `KIMICODE_API_KEY` / `KIMI_API_KEY` / `MOONSHOT_API_KEY` map
+to `KIMI_MODEL_API_KEY` only when unset. Never print key values.
+
+Official docs: https://github.com/MoonshotAI/kimi-code
+
 ## Harness boundary
 
 Kimi Code declares a reserved-flag list at the validation layer; passing any

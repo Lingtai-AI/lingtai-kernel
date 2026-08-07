@@ -132,3 +132,29 @@ speaking a wire protocol directly. They are valid main-agent/preset providers
 and are lazy-imported like every other adapter. They are **not** the daemon CLI
 backend axis: the daemon system can dispatch external coding CLIs as task
 subprocesses (`daemon-manual`), independent of these registered providers.
+
+### External CLI harnesses (daemon backends)
+
+The daemon tool runs external coding CLIs as task subprocesses through the
+`backend` axis (`daemon-manual`). Each CLI backend has its own small
+progressive-disclosure page under
+`daemon-manual` → `reference/cli-backends` — what it is, what LingTai uses it
+for, its subscription/auth model, its official docs, and the reserved
+harness-owned flags it refuses in `backend_options`. These pages are
+entrypoints, not flag catalogs; the installed CLI's live help remains the
+authority.
+
+| Daemon backend | Page | Subscription/auth model | Official docs |
+|---|---|---|---|
+| `claude-p` / `claude-code` | `reference/backends/claude-p/SKILL.md` | Claude subscription (Pro/Max), CLI OAuth login | https://docs.anthropic.com/en/docs/claude-code |
+| `codex` | `reference/backends/codex/SKILL.md` | ChatGPT subscription (Plus/Pro), `codex login` or codex-pool | https://developers.openai.com/codex/ |
+| `opencode` | `reference/backends/opencode/SKILL.md` | provider-agnostic auth; OpenCode Go subscription via `OPENCODE_GO_API_KEY` | https://opencode.ai/docs/ |
+| `mimocode` / `mimo` | `reference/backends/mimocode/SKILL.md` | MiMo Code provider keys | https://github.com/XiaomiMiMo/MiMo-Code |
+| `qwen-code` / `qwen` | `reference/backends/qwen-code/SKILL.md` | Qwen provider config | https://github.com/QwenLM/qwen-code |
+| `oh-my-pi` / `omp` | `reference/backends/oh-my-pi/SKILL.md` | Oh-My-Pi provider keys | https://github.com/pi-coding-agent/pi-coding-agent |
+| `kimicode` / `kimi` | `reference/backends/kimicode/SKILL.md` | Moonshot AI keys | https://github.com/MoonshotAI/kimi-code |
+| `cursor` | `reference/backends/cursor/SKILL.md` | Cursor account/subscription login | https://docs.cursor.com/agent |
+
+Each backend page carries the same small `## Subscription & auth` section so
+the question "what do I need to pay for / how does LingTai connect" is
+answered per backend without reading the vendor's full billing docs.
