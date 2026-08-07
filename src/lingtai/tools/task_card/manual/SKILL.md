@@ -78,6 +78,10 @@ decide whether the current work is meaningful enough to warrant a card; when a
 card is present but its body has not changed for many turns, treat it as the
 prompt to update it or `remove` it if the underlying task is done.
 
+The counter resets whenever the card is successfully published (`start`, a
+successful watch refresh, or restart resume), so an actively refreshing watch
+never reaches the threshold — the reminder surfaces only when the card is
+absent, retired, or its updates have stopped landing.
 
 `start` runs a Python renderer under your working directory. The renderer must
 exit `0` and print a nonempty full body to stdout; that body is written to
