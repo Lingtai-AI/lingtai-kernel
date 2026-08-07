@@ -64,6 +64,20 @@ status, and the single next step, and push complex progress detail into files
 body. If a renderer tries to publish more than 2000 chars, `start`/`retry`
 refuse that update and keep the last valid body.
 
+## Absent / stale reminders
+
+After every `reminder_turns` completed text turns (default **10**, configured
+at `taskcard/taskcard.json`), the producer emits a system notification
+("Task Card reminder") telling the agent to check whether the card is **absent
+or stale**, then update it or retire it only if useful. This is the loop that
+keeps the shared agent-human view honest without re-injecting the card body
+itself: the resident meta projection stays change-gated (identical bytes are
+not re-sent every turn), while the reminder re-surfaces the *question* on a
+coarse cadence. When a card is absent, treat the reminder as the prompt to
+decide whether the current work is meaningful enough to warrant a card; when a
+card is present but its body has not changed for many turns, treat it as the
+prompt to update it or `remove` it if the underlying task is done.
+
 
 `start` runs a Python renderer under your working directory. The renderer must
 exit `0` and print a nonempty full body to stdout; that body is written to
@@ -97,8 +111,8 @@ updater is actually stopped.
 `start` accepts optional `interval_s`, `timeout_s` (one renderer execution,
 not the watch's whole lifetime), and `max_refreshes`. Omitted values use this
 agent's configured defaults, persisted at `taskcard/taskcard.json`: `interval_s:
-5`, `timeout_s: 10`, `max_refreshes: 2000`, unless an operator has configured
-different values in that file.
+5`, `timeout_s: 10`, `max_refreshes: 2000`, `reminder_turns: 10`, unless an
+operator has configured different values in that file.
 
 `timeout_s` and `max_refreshes` are safety ceilings: an explicit value may
 lower the configured ceiling but never exceed it — a request above the
