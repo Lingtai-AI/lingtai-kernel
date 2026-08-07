@@ -157,6 +157,10 @@ TASKCARD_REFUSED_HINT = (
     "taskcard refused: body exceeds the {max}-char cap; keep the card a "
     "progressive-disclosure summary and move complex progress into files"
 )
+TASKCARD_UNREADABLE_HINT = (
+    "taskcard present but unreadable; inspect taskcard/status and "
+    "taskcard/taskcard.md before maintaining a new one"
+)
 
 NOTIFICATION_PERSISTENT_WHATSAPP_PATH = (
     f"_meta.{NOTIFICATION_PERSISTENT_KEY}."
@@ -3298,7 +3302,6 @@ def agent_meta_signature(agent_meta: Mapping[str, Any]) -> str:
         return str(sorted(material.items()))
 
 
-
 def _collect_taskcard_payload(agent) -> dict | None:
     """Read the agent-local resident Task Card artifact.
 
@@ -3321,15 +3324,24 @@ def _collect_taskcard_payload(agent) -> dict | None:
         if status != "active":
             return None
         body = body_path.read_text(encoding="utf-8")
-        if not body:
+        if not body.strip():
             return None
         if len(body) > TASKCARD_MAX_CHARS:
             return {
                 "status": "refused",
-                "refused": True,
                 "hint": TASKCARD_REFUSED_HINT.format(max=TASKCARD_MAX_CHARS),
             }
         return {"status": "active", "body": body}
+    except (OSError, UnicodeDecodeError) as exc:
+        # A card that exists but cannot be read is NOT "no card": reporting
+        # absence would instruct the agent to create a duplicate.
+        agent_log = getattr(agent, "_log", None)
+        if callable(agent_log):
+            try:
+                agent_log("taskcard.unreadable", error=type(exc).__name__)
+            except Exception:
+                pass
+        return {"status": "unreadable", "hint": TASKCARD_UNREADABLE_HINT}
     except Exception:
         return None
 
@@ -3373,37 +3385,33 @@ def attach_active_taskcard(
     ChatInterface entries, so mutating the dict here propagates to history
     without a separate write.
     """
-    payload = _collect_taskcard_payload(agent)
     target = _final_tool_result_block(tool_results)
-    if payload is None:
-        if target is None:
-            return prior_holder
-        signature = taskcard_signature({"present": False})
-        if signature == getattr(agent, "_taskcard_signature", None):
-            return prior_holder
-        agent_meta = target.metadata.setdefault(AGENT_META_KEY, {
+    if target is None:
+        return prior_holder
+    payload = _collect_taskcard_payload(agent)
+
+    def _carrier() -> dict:
+        return target.metadata.setdefault(AGENT_META_KEY, {
             "instruction": AGENT_META_INSTRUCTION,
             "agent_state": {},
             "guidance": {},
         })
-        agent_meta[TASKCARD_KEY] = {"present": False, "hint": TASKCARD_ABSENT_HINT}
+
+    if payload is None:
+        signature = taskcard_signature({"present": False})
+        if signature == getattr(agent, "_taskcard_signature", None):
+            return prior_holder
+        _carrier()[TASKCARD_KEY] = {"present": False, "hint": TASKCARD_ABSENT_HINT}
         try:
             agent._taskcard_signature = signature
         except Exception:
             pass
         return target
 
-    if target is None:
-        return prior_holder
     signature = taskcard_signature(payload)
     if signature == getattr(agent, "_taskcard_signature", None):
         return prior_holder
-    agent_meta = target.metadata.setdefault(AGENT_META_KEY, {
-        "instruction": AGENT_META_INSTRUCTION,
-        "agent_state": {},
-        "guidance": {},
-    })
-    agent_meta[TASKCARD_KEY] = {"present": True, **payload}
+    _carrier()[TASKCARD_KEY] = {"present": True, **payload}
     try:
         agent._taskcard_signature = signature
     except Exception:
@@ -3534,6 +3542,8 @@ def attach_active_runtime(
         "instruction": AGENT_META_INSTRUCTION,
         "agent_state": agent_meta["agent_state"],
         "notifications": existing_agent_meta.get("notifications", {}),
+        **({TASKCARD_KEY: existing_agent_meta[TASKCARD_KEY]}
+           if TASKCARD_KEY in existing_agent_meta else {}),
         "guidance": {
             "persistent": build_meta_guidance_ref(),
             **({"transient": existing_agent_meta["guidance"]["transient"]}

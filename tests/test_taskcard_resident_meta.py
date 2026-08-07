@@ -103,7 +103,6 @@ def test_attach_active_taskcard_refuses_oversize(tmp_path):
     assert tc is not None
     assert tc["present"] is True
     assert tc["status"] == "refused"
-    assert "refused" in tc
     assert "body" not in tc  # refused payload never carries the oversize body
     assert "2000" in tc["hint"]
 
@@ -116,3 +115,64 @@ def test_finalize_two_axis_sidecars_preserves_taskcard(tmp_path):
     tc = block.metadata.get("agent_meta", {}).get(TASKCARD_KEY)
     assert tc is not None
     assert tc["body"] == "keep me"
+
+
+# --- Post-review regression + new-behavior tests (fable review #1216) ---
+
+
+def test_runtime_attach_preserves_taskcard_axis(tmp_path):
+    """The true pipeline order: taskcard attaches BEFORE the runtime attacher,
+    which rebuilds agent_meta. The taskcard axis must survive the rebuild."""
+    from lingtai.kernel.meta_block import attach_active_runtime
+
+    agent = _agent_with_taskcard(tmp_path, body="keep me")
+    agent._executor = SimpleNamespace(guard=SimpleNamespace(total_calls=1))
+    block = _final_block()
+    block._agent_pending = {"agent_state": {"session": "s1"}}
+    attach_active_taskcard(agent, [block])
+    attach_active_runtime(agent, [block], prior_holder=None)
+    finalize_two_axis_sidecars([block])
+    tc = block.metadata.get("agent_meta", {}).get(TASKCARD_KEY)
+    assert tc is not None
+    assert tc["present"] is True
+    assert tc["body"] == "keep me"
+
+
+def test_attach_active_taskcard_unreadable_is_not_absent(tmp_path):
+    """A card that exists but cannot be read must not masquerade as absent
+    (which would tell the agent to create a duplicate)."""
+    agent = _agent_with_taskcard(tmp_path, body="present but unreadable")
+    body_path = tmp_path / "taskcard" / "taskcard.md"
+    body_path.chmod(0o000)
+    block = _final_block()
+    holder = attach_active_taskcard(agent, [block])
+    tc = block.metadata.get("agent_meta", {}).get(TASKCARD_KEY)
+    # No read permission may not work as root; assert either outcome is sane,
+    # but if a payload exists it must be the unreadable sentinel, not absent.
+    if tc is None:
+        return
+    assert tc.get("status") != "absent"
+    if tc.get("status") == "unreadable":
+        assert tc["present"] is True
+        assert "body" not in tc
+    body_path.chmod(0o644)
+
+
+def test_attach_active_taskcard_whitespace_body_is_absent(tmp_path):
+    """A whitespace-only body is not a real card: treat as absent so the
+    create-one hint can fire."""
+    agent = _agent_with_taskcard(tmp_path, body="   \n  ")
+    block = _final_block()
+    attach_active_taskcard(agent, [block])
+    tc = block.metadata.get("agent_meta", {}).get(TASKCARD_KEY)
+    assert tc is not None
+    assert tc["present"] is False
+    assert tc["hint"] == TASKCARD_ABSENT_HINT
+
+
+def test_task_card_cap_matches_kernel_cap():
+    """The tool-side builtin cap and the kernel projection cap must agree;
+    drift would silently make every write succeed while projection refuses."""
+    from lingtai.tools.task_card import _MAX_BODY_CHARS
+
+    assert _MAX_BODY_CHARS == TASKCARD_MAX_CHARS

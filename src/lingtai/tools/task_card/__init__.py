@@ -519,7 +519,21 @@ class TaskCardManager:
                 return
             if shutdown is not None and shutdown.is_set():
                 return
-            self._tick(watch)
+            try:
+                self._tick(watch)
+            except Exception:
+                # A background watch must never die without a trace: mark the
+                # error (and notify) instead of letting the thread vanish.
+                self._mark_error(
+                    watch,
+                    {
+                        "code": "watch_crash",
+                        "retryable": True,
+                        "message": "task card watch crashed in refresh loop",
+                    },
+                    emit_notification=True,
+                )
+                return
 
     def _tick(self, watch: _Watch) -> None:
         with watch.attempt_lock:
@@ -541,6 +555,19 @@ class TaskCardManager:
                 return
             try:
                 self._write_body(body)
+            except TaskCardError as exc:
+                self._mark_error(
+                    watch,
+                    {
+                        "code": "body_too_large",
+                        "retryable": False,
+                        "message": str(exc),
+                    },
+                    emit_notification=not exhausted,
+                )
+                if exhausted:
+                    self._exhaust(watch)
+                return
             except OSError as exc:
                 self._mark_error(
                     watch,

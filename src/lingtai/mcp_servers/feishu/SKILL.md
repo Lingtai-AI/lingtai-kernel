@@ -237,7 +237,7 @@ needed; do not load all three for an ordinary message send.
 - The same resident also carries the channel-neutral intrinsic Task Card body
   from `<workdir>/taskcard/taskcard.md` when `<workdir>/taskcard/status` is
   exact `active`. It is composed below the automatic frame under
-  `— WATCH —`; the model manages that artifact only through the public
+  `— TASK CARD —`; the model manages that artifact only through the public
   intrinsic `task_card` tool, never through Feishu message actions.
 - Exact `inactive` clears only the programmable `WATCH` slot and preserves the
   automatic frame. Missing, unreadable, invalid, or blank producer state is a

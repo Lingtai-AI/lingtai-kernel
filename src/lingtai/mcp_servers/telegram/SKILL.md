@@ -332,7 +332,7 @@ chat-history cardinality. Normative source:
   composition, persistence, and message updates. It reads
   `taskcard/status` and `taskcard/taskcard.md` only for the agent-owned
   programmable frame: exact `active` plus a nonempty body includes or updates
-  `— WATCH —`; exact `inactive` idempotently excludes only that programmable
+  `— TASK CARD —`; exact `inactive` idempotently excludes only that programmable
   frame while preserving the resident, automatic content, and local body.
   Missing/unreadable/other status, active with a missing/blank body, or
   unchanged bytes remain a no-op at the Telegram boundary.
