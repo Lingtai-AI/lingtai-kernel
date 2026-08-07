@@ -4,13 +4,16 @@ description: >
   Nested system-manual reference for the built-in LLM adapters: what each
   named adapter is, how it is configured and dispatched, its special transport
   or protocol behaviors, and the environment variables that control it.
-version: 0.1.0
-last_changed_at: "2026-08-06T00:00:00Z"
+version: 0.2.0
+last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/service.py
 - src/lingtai/llm/openai/adapter.py
 - src/lingtai/llm/openai/codex_ws.py
+- src/lingtai/llm/openai/CONTRACT.md
+- src/lingtai/llm/openai/codex_reasoning.py
+- src/lingtai/init.jsonc
 - src/lingtai/llm/custom/adapter.py
 - ENVIRONMENT_VARIABLES.md
 maintenance: |
@@ -62,6 +65,35 @@ The Codex adapter (`CodexOpenAIAdapter` → `CodexResponsesSession`, both in
 `/backend-api/codex/responses` endpoint. It is the single native Codex
 provider: account selection, token-pool rotation, and `store=false` semantics
 are all handled inside the adapter (see `_register.py` and `service.py`).
+
+### Reasoning effort (`manifest.llm.thinking`)
+
+**What.** For the registered native Codex aliases (`codex`, `codex-pool`,
+`codex_pool`) on the official Responses endpoint, `manifest.llm.thinking`
+selects the request's `reasoning.effort`. Omission (or the internal `default`
+sentinel) is a deliberate LingTai product baseline: construction emits an
+explicit `xhigh` on the wire — this is not an upstream Codex default. The
+exact allowed values are model-specific and owned by the provider contract
+(`src/lingtai/llm/openai/CONTRACT.md`, implemented in
+`src/lingtai/llm/openai/codex_reasoning.py`); this page deliberately does not
+restate that model table.
+
+**How.** Set one exact allowed value in the `init.json` / preset `llm` block
+(canonical shape: `src/lingtai/init.jsonc`), or omit the field to get the
+LingTai `xhigh` baseline. The literal `default`, case/whitespace aliases, and
+unsupported or non-string values fail before any request is sent. After an
+authorized config/preset edit, refresh (`system(action="refresh")`) so the
+rebuilt session constructs a fresh capture. To inspect what was actually
+sent, read the captured `reasoning_requested` / `reasoning_normalized` /
+`reasoning_actual` / `reasoning_source` / `reasoning_capability_source`
+fields on the `llm_call` event: `reasoning_requested="omitted"` marks
+omission, and the source distinguishes `lingtai_codex_default` from
+`explicit_config`.
+
+**Why.** Validation and construction are provider-local so exact per-model
+capability never degrades into a global enum guess, and one immutable
+construction result keeps REST, WebSocket, and observability consistent;
+future providers add sibling contracts instead of modifying Codex policy.
 
 ### Transport: REST vs WebSocket
 

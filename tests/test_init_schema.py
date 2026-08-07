@@ -316,7 +316,7 @@ def test_llm_thinking_invalid_for_custom_openai_responses(value):
         validate_init(data)
 
 
-@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
+@pytest.mark.parametrize("value", ["default", "", 1, None])
 def test_llm_thinking_invalid_values(value):
     data = _valid_init()
     data["manifest"]["llm"]["provider"] = "codex"

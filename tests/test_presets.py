@@ -398,7 +398,7 @@ def test_load_preset_rejects_invalid_custom_responses_thinking(tmp_path, value):
         load_preset(str(f))
 
 
-@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
+@pytest.mark.parametrize("value", ["default", "", 1, None])
 def test_load_preset_rejects_invalid_thinking(tmp_path, value):
     p = {
         "name": "bad",

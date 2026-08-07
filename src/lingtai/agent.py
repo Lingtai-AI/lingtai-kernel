@@ -94,10 +94,10 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         cache_miss_budget=manifest.get(
             "cache_miss_budget", defaults.cache_miss_budget
         ),
-        # Codex-family providers own their omitted-thinking default at the
-        # adapter (omitted -> reasoning.effort "xhigh"), so an omitted manifest
-        # value stays the "default" sentinel for them instead of being promoted
-        # to the legacy cross-provider "high" main-session default.
+        # Registered Codex-family routes resolve omitted thinking through their
+        # injected provider contract (omitted -> explicit wire "xhigh"), so an
+        # omitted manifest value stays the internal "default" sentinel instead
+        # of being promoted to the legacy cross-provider "high" default.
         thinking=llm.get(
             "thinking",
             "default"

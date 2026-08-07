@@ -86,6 +86,7 @@ related_files:
   - tests/test_codex_pool_quota_exclusion.py
   - tests/test_codex_prompt_cache_key.py
   - tests/test_codex_quota.py
+  - tests/test_codex_reasoning_contract.py
   - tests/test_codex_raw_reasoning_replay.py
   - tests/test_codex_standalone_compaction.py
   - tests/test_codex_ws_delta.py

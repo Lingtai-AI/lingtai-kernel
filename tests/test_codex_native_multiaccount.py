@@ -1,12 +1,14 @@
 """Native Codex multi-account request-path regressions.
 
 These tests deliberately exercise one ``CodexOpenAIAdapter`` and one
-``CodexResponsesSession``. ``codex-pool`` remains only a registry spelling for
-the same factory; there is no pool chat wrapper or SessionManager selection hook.
+``CodexResponsesSession``. ``codex-pool`` remains only a registry spelling bound
+to the same native implementation; there is no pool chat wrapper or
+SessionManager selection hook.
 """
 
 from __future__ import annotations
 
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -138,12 +140,17 @@ def _managers(*paths):
     }
 
 
-def test_codex_pool_spellings_are_only_aliases_for_native_codex_factory():
+def test_codex_pool_spellings_bind_one_native_implementation_per_alias():
     from lingtai.llm.service import LLMService
 
-    native = LLMService._adapter_registry["codex"]
-    assert LLMService._adapter_registry["codex-pool"] is native
-    assert LLMService._adapter_registry["codex_pool"] is native
+    provider_names = ("codex", "codex-pool", "codex_pool")
+    factories = [LLMService._adapter_registry[name] for name in provider_names]
+
+    assert all(isinstance(factory, partial) for factory in factories)
+    assert all(factory.func is factories[0].func for factory in factories)
+    assert [factory.keywords["actual_provider"] for factory in factories] == list(
+        provider_names
+    )
 
 
 def test_native_codex_single_account_uses_normal_chat_path():

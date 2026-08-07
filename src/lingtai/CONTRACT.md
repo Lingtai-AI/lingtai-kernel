@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/init.jsonc
   - src/lingtai/init_reader.py
   - src/lingtai/init_schema.py
+  - src/lingtai/llm/openai/CONTRACT.md
   - src/lingtai/kernel/config_resolve.py
   - src/lingtai/cli.py
   - src/lingtai/agent.py
@@ -128,12 +129,17 @@ constructs a migration workspace, or performs a second notification path.
    This is a Nudge-transport concern, not an `init_reader` concern: no
    producer, including `nudge/init_config.py`, individually re-implements
    truncation, externalization, or kind validation.
-8. `manifest.llm.thinking` accepts explicit
-   `none|minimal|low|medium|high|xhigh` only for Codex-family providers or for
-   `provider="custom"`, `api_compat="openai"`, `wire_api="responses"`.
-   Custom omission keeps the existing `high` runtime default; Codex omission
-   keeps its existing adapter-owned `xhigh` default. Invalid values or scopes
-   fail validation rather than being normalized silently.
+8. `manifest.llm.thinking` is scoped to Codex-family providers or to
+   `provider="custom"`, `api_compat="openai"`, `wire_api="responses"`. Custom
+   Responses retains the exact `none|minimal|low|medium|high|xhigh` vocabulary
+   and its existing omitted-to-`high` runtime behavior. Core validation treats a
+   Codex value only as a non-empty exact string and rejects the reserved literal
+   `default`; exact endpoint/model capability belongs to the injected provider
+   contract in `src/lingtai/llm/openai/CONTRACT.md`. For its registered official
+   route, Codex omission/default deliberately constructs explicit wire `xhigh`
+   with source `lingtai_codex_default`; unsupported exact model values fail at
+   session construction before dispatch. Unregistered/custom/direct routes keep
+   their prior adapter path.
 
 ## Contract tests
 
@@ -157,6 +163,9 @@ dismissal/repeat semantics for a capped finding.
 `tests/test_preset_materialization.py` prove the accepted custom Responses
 scope, rejected out-of-scope values, and the distinct custom/Codex omission
 defaults through real config and session materialization.
+`tests/test_codex_reasoning_contract.py` proves the exact registered Codex
+model capability, immutable construction capture, transport parity, and legacy
+fallthrough described by the nearest provider contract.
 
 ## Maintenance
 

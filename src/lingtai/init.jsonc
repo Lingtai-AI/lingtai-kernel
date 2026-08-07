@@ -53,8 +53,11 @@
       //
       // Custom OpenAI-compatible Responses may add an explicit reasoning
       // effort after setting api_compat="openai" and wire_api="responses".
-      // Allowed values are none/minimal/low/medium/high/xhigh. Omit thinking
-      // for "default"; custom then keeps the existing high default.
+      // Its exact vocabulary remains none/minimal/low/medium/high/xhigh;
+      // omission keeps the existing high runtime default.
+      // Registered Codex values are exact-model-specific (not this global
+      // list). Do not write the reserved literal "default": omit thinking to
+      // use LingTai's explicit Codex xhigh quality baseline.
       // "api_compat": "openai",
       // "wire_api": "responses",
       // "thinking": "minimal",
