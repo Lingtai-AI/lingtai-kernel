@@ -59,7 +59,7 @@ Uses the human's **Claude subscription** (Pro/Max) via `claude login` OAuth
 (`~/.claude/.credentials.json`); spawn strips `ANTHROPIC_API_KEY` /
 `ANTHROPIC_AUTH_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN`.
 
-Official docs: https://docs.anthropic.com/en/docs/claude-code
+Official docs: https://platform.claude.com/docs/en/docs/claude-code
 
 ## Harness boundary
 
