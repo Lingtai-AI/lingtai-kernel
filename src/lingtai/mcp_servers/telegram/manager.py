@@ -560,11 +560,13 @@ class TelegramManager:
         working_dir: Path,
         notification_store: "NotificationStorePort",
         on_inbound: "Callable[[dict], None]",
+        proxy_mode: bool = False,
     ) -> None:
         self._service = service
         self._working_dir = Path(working_dir)
         self._notification_store = notification_store
         self._on_inbound = on_inbound
+        self._proxy_mode = proxy_mode
         # Duplicate send protection: (account, chat_id, text) → count
         self._last_sent: dict[tuple[str, int, str], int] = {}
         self._dup_free_passes = 2
@@ -715,12 +717,15 @@ class TelegramManager:
 
     def start(self) -> None:
         self._service.start()
+        if self._proxy_mode:
+            return
         self._start_task_card_tail()
         self._start_programmable_task_card_poller()
 
     def stop(self) -> None:
-        self._stop_programmable_task_card_poller()
-        self._stop_task_card_tail()
+        if not self._proxy_mode:
+            self._stop_programmable_task_card_poller()
+            self._stop_task_card_tail()
         self._service.stop()
 
     # ------------------------------------------------------------------

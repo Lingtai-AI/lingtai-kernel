@@ -48,9 +48,10 @@ from .._results import unknown_resource_error as _unknown_resource
 from .._results import unknown_tool_error as _unknown_tool
 
 from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
+from lingtai.services.mcp_licc import push_inbox_event
 
 from .. import _config
-from .licc import push_inbox_event
+from .bus import SqliteCommandBus
 from .manager import TelegramManager, SCHEMA, DESCRIPTION
 from ._family import handle_telegram
 from .service import TelegramService
@@ -629,6 +630,26 @@ def _accounts_from_config(cfg: dict) -> list[dict]:
 # Manager construction
 # ---------------------------------------------------------------------------
 
+def _gateway_marker(agent_dir: Path) -> dict | None:
+    marker = agent_dir / "telegram" / "gateway.json"
+    if not marker.is_file():
+        return None
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        log.warning("unreadable gateway marker %s; ignoring it", marker)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _proxy_bus_path(agent_dir: Path, marker: dict | None) -> Path:
+    value = marker.get("bus") if marker else None
+    if not isinstance(value, str) or not value.strip():
+        return agent_dir / "telegram" / "gateway.sqlite3"
+    path = Path(value)
+    return path if path.is_absolute() else agent_dir / path
+
+
 def build_manager() -> tuple[TelegramManager, Path]:
     """Construct manager + service from env + config. Returns (manager, working_dir)."""
     cfg = load_config()
@@ -637,6 +658,8 @@ def build_manager() -> tuple[TelegramManager, Path]:
     agent_dir_raw = os.environ.get("LINGTAI_AGENT_DIR")
     working_dir = Path(agent_dir_raw) if agent_dir_raw else Path.cwd()
     working_dir.mkdir(parents=True, exist_ok=True)
+    marker = _gateway_marker(working_dir)
+    proxy_mode = marker is not None
 
     def _on_inbound(event: dict) -> None:
         push_inbox_event(
@@ -645,18 +668,32 @@ def build_manager() -> tuple[TelegramManager, Path]:
             body=event["body"],
             metadata=event.get("metadata"),
             wake=event.get("wake", True),
+            agent_dir=str(working_dir),
+            mcp_name="telegram",
         )
 
     # Forward declare the manager so the service's on_message callback can
     # reach it. Same pattern as the legacy addon's lambda + mgr_ref dance.
     mgr_ref: list[TelegramManager | None] = [None]
 
-    svc = TelegramService(
-        working_dir=working_dir,
-        accounts_config=accounts,
-        on_message=lambda alias, update: mgr_ref[0].on_incoming(alias, update),
-        config_source=os.environ.get("LINGTAI_TELEGRAM_CONFIG"),
-    )
+    if proxy_mode:
+        from .proxy import TelegramGatewayProxyService
+
+        bus = SqliteCommandBus(_proxy_bus_path(working_dir, marker))
+        svc = TelegramGatewayProxyService(
+            working_dir=working_dir,
+            aliases=[str(item["alias"]) for item in accounts if item.get("alias")],
+            command_sink=bus.submit,
+            config_source=os.environ.get("LINGTAI_TELEGRAM_CONFIG"),
+        )
+        svc._command_bus = bus
+    else:
+        svc = TelegramService(
+            working_dir=working_dir,
+            accounts_config=accounts,
+            on_message=lambda alias, update: mgr_ref[0].on_incoming(alias, update),
+            config_source=os.environ.get("LINGTAI_TELEGRAM_CONFIG"),
+        )
 
     notification_store = PosixNotificationStoreAdapter(working_dir)
     mgr = TelegramManager(
@@ -664,6 +701,7 @@ def build_manager() -> tuple[TelegramManager, Path]:
         working_dir=working_dir,
         notification_store=notification_store,
         on_inbound=_on_inbound,
+        proxy_mode=proxy_mode,
     )
     mgr_ref[0] = mgr
     return mgr, working_dir
