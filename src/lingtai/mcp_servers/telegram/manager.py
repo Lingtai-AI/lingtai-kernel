@@ -3658,7 +3658,18 @@ class TelegramManager:
             opts["parse_mode"] = mode
         return opts, None
 
+    @staticmethod
+    def _apply_structured_blocks(args: dict) -> None:
+        blocks = args.get("structured_blocks")
+        if not isinstance(blocks, list) or not blocks:
+            return
+        from .render import render_structured_blocks
+
+        args["text"] = render_structured_blocks(blocks)
+        args["rendering_mode"] = "HTML"
+
     def _send(self, args: dict) -> dict:
+        self._apply_structured_blocks(args)
         account = self._resolve_account(args)
         chat_id = args.get("chat_id")
         text = args.get("text", "")
@@ -3935,6 +3946,7 @@ class TelegramManager:
         return {"status": "ok", "taskcard": taskcard, "messages": cleaned}
 
     def _reply(self, args: dict) -> dict:
+        self._apply_structured_blocks(args)
         compound_id = args.get("message_id", "")
         text = args.get("text", "")
         if not compound_id:
@@ -4020,6 +4032,7 @@ class TelegramManager:
         return {"status": "deleted", "message_id": compound_id}
 
     def _edit(self, args: dict) -> dict:
+        self._apply_structured_blocks(args)
         compound_id = args.get("message_id", "")
         text = args.get("text", "")
         if not compound_id:

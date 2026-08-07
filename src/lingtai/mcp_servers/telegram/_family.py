@@ -88,6 +88,13 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             },
             "entities": _nullable({"type": "array"}),
             "caption_entities": _nullable({"type": "array"}),
+            "structured_blocks": _nullable({
+                "type": "array",
+                "description": (
+                    "System-generated structured content rendered deterministically "
+                    "into escaped Telegram HTML."
+                ),
+            }),
             "link_preview_options": _nullable({"type": "object"}),
             "disable_web_page_preview": _nullable({"type": "boolean"}),
         },
@@ -147,6 +154,10 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
                     ),
                 },
                 "entities": _nullable({"type": "array"}),
+                "structured_blocks": _nullable({
+                    "type": "array",
+                    "description": "System-generated blocks rendered as escaped Telegram HTML.",
+                }),
             },
             required=["message_id", "text", "rendering_mode"],
         ),
@@ -172,6 +183,10 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
                     ),
                 },
                 "entities": _nullable({"type": "array"}),
+                "structured_blocks": _nullable({
+                    "type": "array",
+                    "description": "System-generated blocks rendered as escaped Telegram HTML.",
+                }),
             },
             required=["message_id", "text", "rendering_mode"],
         ),
