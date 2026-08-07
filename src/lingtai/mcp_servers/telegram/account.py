@@ -355,9 +355,6 @@ class TelegramAccount:
     def _process_update(self, update: dict) -> None:
         """Process a single update — filter, dispatch, track offset."""
         update_id = update.get("update_id", 0)
-        if update_id > self._last_update_id:
-            self._last_update_id = update_id
-            self._save_state()
 
         if "message" in update:
             # A plain message is a new bottom message in the chat; record it so a
@@ -385,14 +382,23 @@ class TelegramAccount:
         # boundary with their uncertainty recorded on the envelope.
         actor = tg_updates.resolve_update_actor(update)
         if not tg_updates.is_admitted(actor, self._allowed_users):
+            self._commit_update(update_id)
             return
 
         # Intercept slash commands before they reach the agent
         if self._handle_slash_command(update):
+            self._commit_update(update_id)
             return
 
         if self._on_message:
             self._on_message(self.alias, update)
+        self._commit_update(update_id)
+
+    def _commit_update(self, update_id: object) -> None:
+        """Advance the durable offset only after handling succeeds."""
+        if type(update_id) is int and update_id > self._last_update_id:
+            self._last_update_id = update_id
+            self._save_state()
 
     def _handle_slash_command(self, update: dict) -> bool:
         """Handle slash commands locally (no LLM call). Returns True if handled."""
