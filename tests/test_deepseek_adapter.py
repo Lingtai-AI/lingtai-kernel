@@ -403,3 +403,104 @@ def test_deepseek_responses_create_responses_session_uses_deepseek_session():
     assert isinstance(session, DeepSeekResponsesSession)
     assert session._stateless_replay is True
 
+
+
+# ---------------------------------------------------------------------------
+# Configured-effort payload capture (issue #1197 DeepSeek contract vertical)
+#
+# DeepSeek is two-axis (mode + effort) and two-wire. These tests capture the
+# EXACT construction-frozen request kwargs so the generic OpenAI Chat mapper
+# ("high" else "low") can never own a DeepSeek request again: it collapses
+# ``max`` to ``low`` and turns ``none`` (mode-off) into ``low``. See
+# workspace/effort-live-control/deepseek-effort-audit.md §2.3.
+# ---------------------------------------------------------------------------
+
+
+def _chat_kwargs(thinking_kwargs: dict, model: str = "deepseek-v4-pro") -> dict:
+    adapter = DeepSeekAdapter(api_key="x")
+    session = adapter.create_chat(model, "system prompt", **thinking_kwargs)
+    return session._extra_kwargs
+
+
+def _responses_kwargs(thinking_kwargs: dict, model: str = "deepseek-v4-flash") -> dict:
+    adapter = DeepSeekAdapter(api_key="x", wire_api="responses")
+    session = adapter.create_chat(model, "system prompt", **thinking_kwargs)
+    return session._extra_kwargs
+
+
+@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}, {"thinking": None}])
+def test_deepseek_chat_omission_sends_no_reasoning_fields(thinking_kwargs):
+    """Omission must mean omission — upstream's enabled/high default applies."""
+    kwargs = _chat_kwargs(thinking_kwargs)
+    assert "reasoning_effort" not in kwargs
+    assert "thinking" not in (kwargs.get("extra_body") or {})
+    assert "reasoning" not in kwargs
+
+
+def test_deepseek_chat_none_disables_mode_without_effort():
+    kwargs = _chat_kwargs({"thinking": "none"})
+    assert kwargs["extra_body"]["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in kwargs
+
+
+@pytest.mark.parametrize("thinking", ["low", "high", "max"])
+def test_deepseek_chat_enabled_sends_mode_and_exact_canonical_effort(thinking):
+    kwargs = _chat_kwargs({"thinking": thinking})
+    assert kwargs["extra_body"]["thinking"] == {"type": "enabled"}
+    assert kwargs["reasoning_effort"] == thinking
+
+
+def test_deepseek_chat_max_never_collapses_to_low():
+    """The exact generic-mapper defect the audit found (headline case)."""
+    assert _chat_kwargs({"thinking": "max"})["reasoning_effort"] == "max"
+
+
+@pytest.mark.parametrize("thinking", ["minimal", "medium", "xhigh", "High", "ultra"])
+def test_deepseek_chat_rejects_aliases_before_dispatch(thinking):
+    """Chat aliases raise at construction; nothing reaches the wire."""
+    adapter = DeepSeekAdapter(api_key="x")
+    with pytest.raises(ValueError, match="DeepSeek Chat Completions thinking"):
+        adapter.create_chat("deepseek-v4-pro", "system prompt", thinking=thinking)
+
+
+@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}])
+def test_deepseek_responses_omission_sends_no_reasoning(thinking_kwargs):
+    assert "reasoning" not in _responses_kwargs(thinking_kwargs)
+
+
+@pytest.mark.parametrize(
+    "thinking", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+)
+def test_deepseek_responses_sends_exact_nested_effort(thinking):
+    kwargs = _responses_kwargs({"thinking": thinking})
+    assert kwargs["reasoning"] == {"effort": thinking}
+    assert "reasoning_effort" not in kwargs
+
+
+def test_deepseek_responses_rejects_pro_with_explicit_thinking():
+    """Responses is Flash-only upstream today — reject, never coerce."""
+    adapter = DeepSeekAdapter(api_key="x", wire_api="responses")
+    with pytest.raises(ValueError, match="DeepSeek Responses"):
+        adapter.create_chat("deepseek-v4-pro", "system prompt", thinking="high")
+
+
+@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}])
+def test_deepseek_responses_pro_omission_still_constructs(thinking_kwargs):
+    """The model guard is scoped to explicit effort; omission stays inert.
+
+    Native daemons hardcode ``thinking="default"``; an unconditional raise here
+    would turn an existing Pro+Responses daemon into a hard local crash, which
+    is outside this slice.
+    """
+    kwargs = _responses_kwargs(thinking_kwargs, model="deepseek-v4-pro")
+    assert "reasoning" not in kwargs
+
+
+def test_deepseek_chat_reasoning_kwargs_are_frozen_at_construction():
+    """Construction-time capture — later config changes cannot alter the chat."""
+    adapter = DeepSeekAdapter(api_key="x")
+    session = adapter.create_chat("deepseek-v4-pro", "system prompt", thinking="max")
+    captured = dict(session._extra_kwargs)
+    adapter.create_chat("deepseek-v4-pro", "system prompt", thinking="low")
+    assert session._extra_kwargs == captured
+    assert session._extra_kwargs["reasoning_effort"] == "max"

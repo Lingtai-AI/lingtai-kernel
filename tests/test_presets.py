@@ -1005,3 +1005,76 @@ def test_materialize_preserves_init_skills_paths_carveout(tmp_path):
         "~/preset-skills",
         "~/agent-skills",
     ]
+
+
+# ---------------------------------------------------------------------------
+# DeepSeek configured-effort contract (issue #1197): per-wire vocabulary
+# ---------------------------------------------------------------------------
+
+
+def _deepseek_preset(tmp_path, llm, name="deepseek-thinking"):
+    p = {
+        "name": name,
+        "description": _DESC,
+        "manifest": {"llm": llm, "capabilities": {}},
+    }
+    f = tmp_path / f"{name}.json"
+    f.write_text(json.dumps(p))
+    return str(f)
+
+
+@pytest.mark.parametrize("value", ["none", "low", "high", "max"])
+def test_load_preset_accepts_deepseek_chat_thinking(tmp_path, value):
+    path = _deepseek_preset(
+        tmp_path,
+        {"provider": "deepseek", "model": "deepseek-v4-pro", "thinking": value},
+    )
+
+    loaded = load_preset(path)
+
+    assert loaded["manifest"]["llm"]["thinking"] == value
+
+
+@pytest.mark.parametrize("value", ["minimal", "medium", "xhigh", "default", "ultra", 1, None])
+def test_load_preset_rejects_deepseek_chat_aliases(tmp_path, value):
+    path = _deepseek_preset(
+        tmp_path,
+        {"provider": "deepseek", "model": "deepseek-v4-pro", "thinking": value},
+    )
+
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
+        load_preset(path)
+
+
+@pytest.mark.parametrize(
+    "value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+)
+def test_load_preset_accepts_deepseek_responses_thinking_on_flash(tmp_path, value):
+    path = _deepseek_preset(
+        tmp_path,
+        {
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "wire_api": "responses",
+            "thinking": value,
+        },
+    )
+
+    loaded = load_preset(path)
+
+    assert loaded["manifest"]["llm"]["thinking"] == value
+
+
+def test_load_preset_rejects_deepseek_responses_on_pro(tmp_path):
+    path = _deepseek_preset(
+        tmp_path,
+        {
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "wire_api": "responses",
+            "thinking": "high",
+        },
+    )
+
+    with pytest.raises(ValueError, match="deepseek-v4-flash"):
+        load_preset(path)

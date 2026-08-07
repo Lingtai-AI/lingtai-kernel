@@ -60,6 +60,16 @@ stateless (no ``previous_response_id``) and never send generic
 ``context_management`` (``compact_threshold=None`` default), matching
 the MiMo pattern for endpoints without server-side response storage.
 
+Configured reasoning effort
+---------------------------
+
+DeepSeek is two-axis (mode + effort) and two-wire, so both session builders
+below take their mode/effort kwargs from ``effort.py`` rather than the generic
+OpenAI-compatible helpers, which are lossy for DeepSeek in both directions (the
+generic Chat mapper collapses ``max`` and mode-off ``none`` to ``"low"``; the
+generic Responses helper has no ``max``). Omission emits nothing so DeepSeek's
+documented default (enabled/high) applies. See ``effort.py`` and ``ANATOMY.md``.
+
 Everything else inherits from ``OpenAIAdapter`` unchanged via the
 ``_build_messages`` and ``_session_class`` hook points on the parent.
 """
@@ -67,6 +77,10 @@ Everything else inherits from ``OpenAIAdapter`` unchanged via the
 from __future__ import annotations
 
 from ..openai.adapter import OpenAIAdapter, OpenAIChatSession, OpenAIResponsesSession
+from .effort import (
+    deepseek_chat_reasoning_kwargs,
+    deepseek_responses_reasoning_kwargs,
+)
 
 
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -252,6 +266,48 @@ class DeepSeekAdapter(OpenAIAdapter):
             **kwargs,
         )
 
+    def _create_completions_session(
+        self,
+        model: str,
+        system_prompt: str,
+        tools=None,
+        json_schema: dict | None = None,
+        force_tool_call: bool = False,
+        interface=None,
+        thinking: str = "default",
+        context_window: int = 0,
+    ) -> DeepSeekChatSession:
+        """Build a Chat session with DeepSeek-owned mode + effort kwargs.
+
+        The parent's generic branch emits ``reasoning_effort = "high" if
+        thinking == "high" else "low"``, which collapses ``max`` to ``low`` and
+        turns ``none`` (mode-off) into ``low``. DeepSeek must never reach it, so
+        the parent is called with the omission sentinel and the DeepSeek payload
+        is merged in afterwards. Normalization runs FIRST: an invalid value
+        raises before any session object exists.
+        """
+        reasoning_kwargs = deepseek_chat_reasoning_kwargs(thinking)
+
+        session = super()._create_completions_session(
+            model,
+            system_prompt,
+            tools,
+            json_schema,
+            force_tool_call,
+            interface,
+            "default",
+            context_window=context_window,
+        )
+
+        # Merge into any adapter-provided extra_body rather than replacing it.
+        extra_body = reasoning_kwargs.pop("extra_body", None)
+        if extra_body:
+            existing = dict(session._extra_kwargs.get("extra_body") or {})
+            existing.update(extra_body)
+            session._extra_kwargs["extra_body"] = existing
+        session._extra_kwargs.update(reasoning_kwargs)
+        return session
+
     def _create_responses_session(
         self,
         model: str,
@@ -263,7 +319,7 @@ class DeepSeekAdapter(OpenAIAdapter):
         thinking: str = "default",
         context_window: int = 0,
     ) -> DeepSeekResponsesSession:
-        from ..openai.adapter import _build_responses_tools, _responses_reasoning_kwargs
+        from ..openai.adapter import _build_responses_tools
 
         if interface is None:
             from lingtai.kernel.llm.interface import ChatInterface
@@ -276,6 +332,12 @@ class DeepSeekAdapter(OpenAIAdapter):
         if force_tool_call and ds_tools:
             tool_choice = "required"
 
+        # DeepSeek-local seven-value emission (supports ``max``; ``none`` maps
+        # to ``effort=none``) plus the source-dated Flash-only model guard —
+        # NOT the generic ``_responses_reasoning_kwargs``, whose vocabulary is
+        # the global six-value tuple. Raises before the session is built.
+        reasoning_kwargs = deepseek_responses_reasoning_kwargs(thinking, model=model)
+
         extra_kwargs: dict = {}
         if json_schema is not None:
             extra_kwargs["response_format"] = {
@@ -286,7 +348,7 @@ class DeepSeekAdapter(OpenAIAdapter):
                     "schema": json_schema,
                 },
             }
-        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        extra_kwargs.update(reasoning_kwargs)
 
         return DeepSeekResponsesSession(
             client=self._client,

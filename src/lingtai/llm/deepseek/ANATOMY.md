@@ -3,7 +3,10 @@ related_files:
   - src/lingtai/llm/ANATOMY.md
   - src/lingtai/llm/deepseek/__init__.py
   - src/lingtai/llm/deepseek/adapter.py
+  - src/lingtai/llm/deepseek/effort.py
   - src/lingtai/llm/openai/adapter.py
+  - src/lingtai/kernel/config.py
+  - tests/test_deepseek_effort.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -23,6 +26,46 @@ DeepSeek adapter — thin OpenAI-compat wrapper that satisfies DeepSeek V4 think
 |------|-----|------|
 | `__init__.py` | 0 | Empty |
 | `adapter.py` | 133 | `DeepSeekAdapter`, `DeepSeekChatSession`, `_fallback_reasoning_for` |
+| `effort.py` | 113 | DeepSeek-local reasoning emission: `deepseek_chat_reasoning_kwargs`, `deepseek_responses_reasoning_kwargs`, `deepseek_thinking_is_omitted`, re-exported `deepseek_responses_model_supported` |
+
+### Configured reasoning effort (two axes, two wires)
+
+DeepSeek V4 is a *hybrid* family: `deepseek-v4-flash` vs `deepseek-v4-pro` is a
+**model** choice, not the thinking switch. Mode and effort are independent axes,
+and the two wires spell them differently:
+
+| Wire | `manifest.llm.thinking` | Request payload |
+|------|-------------------------|-----------------|
+| Chat Completions (Flash + Pro) | `none`, `low`, `high`, `max` | `none` → `extra_body.thinking = {"type": "disabled"}` and NO `reasoning_effort`; `low`/`high`/`max` → `extra_body.thinking = {"type": "enabled"}` plus the same exact flat `reasoning_effort` |
+| Responses (Flash only) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | nested `reasoning = {"effort": <value>}`; `none` encodes disabled |
+| either | omitted / `"default"` sentinel | **nothing** — upstream's documented default (thinking enabled, effort high) applies |
+
+`thinking` is not an OpenAI SDK parameter, so the Chat mode axis rides in
+`extra_body`, the same mechanism `_adapter_extra_body` uses for OpenRouter;
+`DeepSeekAdapter._create_completions_session` calls the parent with the
+`"default"` sentinel and merges the DeepSeek payload afterwards, so the generic
+`"high" else "low"` branch can never own a DeepSeek request. Chat aliases
+(`minimal`/`medium`/`xhigh`), case variants, and non-strings raise before a
+session object exists — nothing is silently normalized. Responses is documented
+Flash-only, so an explicit effort on any other model raises; the guard is scoped
+to explicit effort because native daemons construct sessions with the
+`"default"` sentinel and an unconditional raise would crash existing
+Pro + Responses daemons.
+
+Vocabulary tuples, the source-dated model table
+(`DEEPSEEK_RESPONSES_MODELS`, `DEEPSEEK_CAPABILITY_SOURCE = deepseek_docs_20260805`,
+`model_verified=false` — documentation-derived, not server conformance tested),
+and the `_OmittedThinking` constructor-omission sentinel live in
+`lingtai/kernel/config.py` so `init_schema.py` and `kernel/presets.py` validate
+against the same definitions without importing from `lingtai.llm`. The global
+`THINKING_LEVELS` / `THINKING_PROVIDERS` tuples are deliberately unchanged:
+adding DeepSeek's `max` there would widen every other provider's accepted set.
+
+`SessionManager` freezes the resolved value at chat construction/rebuild and
+stamps `reasoning_requested` / `reasoning_normalized` / `reasoning_actual` /
+`reasoning_source` / `reasoning_capability_source` onto every `llm_call`
+(`kernel/session.py`). Tests: `tests/test_deepseek_effort.py`,
+`tests/test_deepseek_adapter.py`.
 
 ### Classes
 

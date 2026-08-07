@@ -4,8 +4,14 @@ from __future__ import annotations
 import logging
 
 from lingtai.kernel.config import (
+    DEEPSEEK_CAPABILITY_SOURCE,
+    DEEPSEEK_RESPONSES_MODELS,
+    DEEPSEEK_THINKING_PROVIDERS,
     THINKING_LEVELS,
     THINKING_PROVIDERS,
+    deepseek_responses_model_supported,
+    deepseek_thinking_levels,
+    resolve_deepseek_wire,
     llm_supports_thinking,
 )
 
@@ -426,11 +432,34 @@ def validate_init(data: dict) -> list[str]:
             raise ValueError(
                 "manifest.llm.thinking is currently supported only for "
                 "the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)}) or custom "
+                f"({', '.join(THINKING_PROVIDERS)}), DeepSeek, or custom "
                 "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+        if str(llm.get("provider") or "").lower() in DEEPSEEK_THINKING_PROVIDERS:
+            # DeepSeek is two-axis and two-wire: the accepted vocabulary
+            # differs per wire, and Chat aliases must fail loudly rather than
+            # be coerced. See kernel/config.py for the source-dated tables.
+            wire = resolve_deepseek_wire(llm.get("wire_api"))
+            levels = deepseek_thinking_levels(llm.get("wire_api"))
+            if not isinstance(thinking, str) or thinking not in levels:
+                raise ValueError(
+                    "manifest.llm.thinking: provider deepseek on the "
+                    f"{wire} wire expects one of {', '.join(levels)} "
+                    f"(got {thinking!r})"
+                )
+            if wire == "responses" and not deepseek_responses_model_supported(
+                llm.get("model")
+            ):
+                raise ValueError(
+                    "manifest.llm.thinking: provider deepseek on the responses "
+                    "wire currently supports only "
+                    f"{', '.join(DEEPSEEK_RESPONSES_MODELS)}; model "
+                    f"{llm.get('model')!r} has no documented Responses support "
+                    f"(capability source {DEEPSEEK_CAPABILITY_SOURCE}). "
+                    "Use wire_api=chat_completions for this model."
+                )
+        elif not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
             raise ValueError(
                 "manifest.llm.thinking: expected one of "
                 f"{', '.join(THINKING_LEVELS)}"

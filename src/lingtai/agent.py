@@ -18,7 +18,12 @@ from typing import Any
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
-from lingtai.kernel.config import AgentConfig, THINKING_PROVIDERS
+from lingtai.kernel.config import (
+    AgentConfig,
+    DEEPSEEK_THINKING_PROVIDERS,
+    THINKING_DEFAULT_SENTINEL,
+    THINKING_PROVIDERS,
+)
 from lingtai.kernel.llm.base import ToolCall
 from lingtai.llm.service import (
     CONSERVATIVE_CONTEXT_WINDOW,
@@ -97,11 +102,17 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         # Codex-family providers own their omitted-thinking default at the
         # adapter (omitted -> reasoning.effort "xhigh"), so an omitted manifest
         # value stays the "default" sentinel for them instead of being promoted
-        # to the legacy cross-provider "high" main-session default.
+        # to the legacy cross-provider "high" main-session default. DeepSeek
+        # joins that branch for the opposite reason: its adapter must emit NO
+        # mode/effort field on omission so the documented upstream default
+        # (enabled/high) applies, rather than sending an accidental explicit
+        # flat ``reasoning_effort: "high"`` that only looked correct by
+        # coincident defaults (issue #1197).
         thinking=llm.get(
             "thinking",
-            "default"
-            if str(llm.get("provider") or "").lower() in THINKING_PROVIDERS
+            THINKING_DEFAULT_SENTINEL
+            if str(llm.get("provider") or "").lower()
+            in (*THINKING_PROVIDERS, *DEEPSEEK_THINKING_PROVIDERS)
             else defaults.thinking,
         ),
         # Molt thresholds and the context.molt message are kernel-fixed runtime
