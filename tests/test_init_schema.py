@@ -864,3 +864,87 @@ def test_deepseek_wire_api_responses_allowed():
     data["manifest"]["llm"]["base_url"] = "https://api.deepseek.com"
     data["manifest"]["llm"]["wire_api"] = "responses"
     validate_init(data)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Kimi Code configured-effort vocabulary (issue #1197)
+# ---------------------------------------------------------------------------
+
+KIMI_PROVIDERS = ("kimi-code", "kimi_code")
+KIMI_LEVELS = ("low", "high", "max")
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+@pytest.mark.parametrize("value", KIMI_LEVELS)
+def test_llm_thinking_accepted_for_kimi_code(provider, value):
+    """Both registered kimi-code spellings accept the K3 coding vocabulary."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["thinking"] = value
+
+    validate_init(data)
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+@pytest.mark.parametrize(
+    "value",
+    ["medium", "xhigh", "minimal", "none", "default", "High", " high", "", "ultra", 1, None],
+)
+def test_llm_thinking_rejected_outside_kimi_vocabulary(provider, value):
+    """Responses values, aliases, and the omission sentinel are not Kimi values.
+
+    The rejection must come from the *vocabulary* gate rather than the
+    out-of-scope gate, so the message has to offer exactly ``low, high, max``.
+    Asserting only ``pytest.raises`` would pass before the contract exists,
+    because kimi-code is currently rejected as an unsupported scope.
+    """
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["thinking"] = value
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking") as excinfo:
+        validate_init(data)
+
+    message = str(excinfo.value)
+    assert "expected one of " in message, message
+    offered = message.split("expected one of ", 1)[1]
+    assert offered.split(", ") == list(KIMI_LEVELS), message
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+def test_llm_thinking_scope_message_names_the_kimi_providers(provider):
+    """The out-of-scope message must advertise the kimi-code route too."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "anthropic"
+    data["manifest"]["llm"]["thinking"] = "high"
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking.*Codex") as excinfo:
+        validate_init(data)
+
+    assert provider in str(excinfo.value), str(excinfo.value)
+
+
+@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
+def test_llm_thinking_max_stays_rejected_on_responses(provider):
+    """``max`` is a Kimi level; it must not leak into the Responses tuple."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["thinking"] = "max"
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking"):
+        validate_init(data)
+
+
+def test_llm_thinking_max_stays_rejected_on_custom_responses():
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {
+            "provider": "custom",
+            "api_compat": "openai",
+            "wire_api": "responses",
+            "thinking": "max",
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking"):
+        validate_init(data)

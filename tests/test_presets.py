@@ -1005,3 +1005,101 @@ def test_materialize_preserves_init_skills_paths_carveout(tmp_path):
         "~/preset-skills",
         "~/agent-skills",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Kimi Code configured-effort vocabulary through preset materialization (#1197)
+# ---------------------------------------------------------------------------
+
+KIMI_PROVIDERS = ("kimi-code", "kimi_code")
+KIMI_LEVELS = ("low", "high", "max")
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+@pytest.mark.parametrize("value", KIMI_LEVELS)
+def test_load_preset_accepts_kimi_thinking_values(tmp_path, provider, value):
+    """A saved kimi-code preset may carry the K3 coding effort vocabulary."""
+    p = {
+        "name": "kimi-thinking",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "k3", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "kimi-thinking.json"
+    f.write_text(json.dumps(p))
+
+    loaded = load_preset(str(f))
+
+    assert loaded["manifest"]["llm"]["thinking"] == value
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+@pytest.mark.parametrize(
+    "value",
+    ["medium", "xhigh", "minimal", "none", "default", "High", " high", "", "ultra", 1, None],
+)
+def test_load_preset_rejects_outside_kimi_vocabulary(tmp_path, provider, value):
+    """Rejection must come from the vocabulary gate, not the scope gate.
+
+    Before the contract exists kimi-code is out of scope entirely, so a bare
+    ``pytest.raises`` would pass without proving anything; the message must
+    offer exactly ``low, high, max``.
+    """
+    p = {
+        "name": "bad-kimi-thinking",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "k3", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad-kimi-thinking.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking") as excinfo:
+        load_preset(str(f))
+
+    message = str(excinfo.value)
+    assert "must be one of " in message, message
+    offered = message.split("must be one of ", 1)[1]
+    assert offered.split(", ") == list(KIMI_LEVELS), message
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+def test_load_preset_scope_message_names_the_kimi_providers(tmp_path, provider):
+    """The out-of-scope preset message must advertise the kimi-code route."""
+    p = {
+        "name": "bad",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": "anthropic", "model": "claude", "thinking": "high"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad-provider-kimi.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking.*Codex") as excinfo:
+        load_preset(str(f))
+
+    assert provider in str(excinfo.value), str(excinfo.value)
+
+
+@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
+def test_load_preset_max_stays_rejected_on_responses(tmp_path, provider):
+    """``max`` is a Kimi level; it must not leak into the Responses tuple."""
+    p = {
+        "name": "bad-max",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "gpt-5.5", "thinking": "max"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad-max.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking"):
+        load_preset(str(f))
