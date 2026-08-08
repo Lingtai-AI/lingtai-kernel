@@ -368,16 +368,16 @@ SCHEMA = {
                 "accounts", "manual",
             ],
             "description": (
-                "send: send message to a chat (chat_id, text, rendering_mode; optional media, reply_markup, placeholder, chat_action, entities). "
+                "send: send message to a chat (chat_id, rendering_mode, and text or structured_message; optional media, reply_markup, placeholder, chat_action, entities). "
                 "For charts, reports, generated artifacts, and other files the user should open intact, prefer media.type='document'; use media.type='photo' only when an inline Telegram photo preview is desired, because photo previews may crop, compress, or display poorly for text-heavy graphics. "
                 "If chat_action is set and no text/media is provided, sends a typing "
                 "indicator (auto-expires after 5s) instead of a message. "
                 "check: list recent conversations with unread counts (optional account). "
                 "read: read messages from a chat (chat_id; optional limit). "
-                "reply: reply to a specific message (message_id from read results, text, rendering_mode; optional entities). "
+                "reply: reply to a specific message (message_id from read results, rendering_mode, and text or structured_message; optional entities). "
                 "search: search messages (query; optional account, chat_id). "
                 "delete: delete a bot message (message_id). "
-                "edit: edit a bot message (message_id, text, rendering_mode; optional reply_markup, entities). "
+                "edit: edit a bot message (message_id, rendering_mode, and text or structured_message; optional reply_markup, entities). "
                 "contacts: list saved contacts. "
                 "add_contact: save a chat alias (chat_id, alias); this does not grant inbound permission. "
                 "To receive messages from that user, their Telegram user ID must also be in allowed_users. "
@@ -3351,7 +3351,7 @@ class TelegramManager:
     # ------------------------------------------------------------------
 
     _PARSE_MODES = {"HTML", "MarkdownV2", "Markdown"}
-    _RENDERING_MODES = _PARSE_MODES | {"plain_text", "entities"}
+    _RENDERING_MODES = _PARSE_MODES | {"plain_text", "entities", "rich"}
 
     @staticmethod
     def _normalize_chat_action(value: Any) -> Any:
@@ -3387,7 +3387,7 @@ class TelegramManager:
         if mode not in cls._RENDERING_MODES:
             return (
                 "rendering_mode must be one of: plain_text, HTML, MarkdownV2, "
-                "Markdown, entities"
+                "Markdown, entities, rich"
             )
         if mode == "entities" and not has_entities:
             return "rendering_mode='entities' requires entities or caption_entities"
@@ -3438,6 +3438,49 @@ class TelegramManager:
             opts["parse_mode"] = mode
         return opts, None
 
+    @classmethod
+    def _native_rich_message(
+        cls,
+        args: dict,
+        *,
+        text: str,
+        media: Any,
+    ) -> tuple[dict[str, Any] | None, str | None, str | None]:
+        """Validate and build native rich content at the model/API boundary."""
+        structured = args.get("structured_message")
+        mode = cls._rendering_mode(args)
+        if mode != "rich":
+            if structured is not None:
+                return None, None, "structured_message requires rendering_mode='rich'"
+            return None, None, None
+        if structured is None:
+            return None, None, "rendering_mode='rich' requires structured_message"
+
+        conflicts = []
+        if text:
+            conflicts.append("text")
+        if media:
+            conflicts.append("media")
+        for field in (
+            "entities", "caption_entities", "link_preview_options",
+            "disable_web_page_preview",
+        ):
+            if args.get(field) is not None:
+                conflicts.append(field)
+        if conflicts:
+            return None, None, (
+                "rendering_mode='rich' cannot be combined with "
+                + ", ".join(conflicts)
+            )
+
+        from .render import render_structured_message
+
+        try:
+            rich_message, preview = render_structured_message(structured)
+            return rich_message, preview, None
+        except ValueError as exc:
+            return None, None, str(exc)
+
     def _send(self, args: dict) -> dict:
         account = self._resolve_account(args)
         chat_id = args.get("chat_id")
@@ -3449,6 +3492,13 @@ class TelegramManager:
         # media so text-only sends do not try to upload/open an empty path.
         if media and isinstance(media, dict) and not (media.get("path") or "").strip():
             media = None
+        rich_message, rich_preview, rich_error = self._native_rich_message(
+            args, text=text, media=media,
+        )
+        if rich_error:
+            return {"error": rich_error}
+        if rich_preview is not None:
+            text = rich_preview
         reply_markup = args.get("reply_markup")
         chat_action = self._normalize_chat_action(args.get("chat_action"))
         placeholder = bool(args.get("placeholder", False))
@@ -3546,6 +3596,11 @@ class TelegramManager:
                 )
             else:
                 return {"error": f"Unknown media type: {media_type}"}
+        elif rich_message is not None:
+            result = acct.send_rich_message(
+                chat_id, rich_message, reply_markup=reply_markup,
+                reply_to_message_id=reply_to,
+            )
         else:
             result = acct.send_message(
                 chat_id, text, reply_markup=reply_markup,
@@ -3576,6 +3631,8 @@ class TelegramManager:
             "caption_entities": args.get("caption_entities"),
             "link_preview_options": args.get("link_preview_options"),
             "disable_web_page_preview": args.get("disable_web_page_preview"),
+            "structured_message": args.get("structured_message"),
+            "rich_message": rich_message,
             "sent_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "status": "placeholder" if placeholder else "sent",
         }
@@ -3717,10 +3774,11 @@ class TelegramManager:
     def _reply(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")
         text = args.get("text", "")
+        structured_message = args.get("structured_message")
         if not compound_id:
             return {"error": "message_id is required"}
-        if not text:
-            return {"error": "text is required"}
+        if not text and structured_message is None:
+            return {"error": "text or structured_message is required"}
 
         account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
         result = self._send({
@@ -3734,6 +3792,7 @@ class TelegramManager:
             "caption_entities": args.get("caption_entities"),
             "link_preview_options": args.get("link_preview_options"),
             "disable_web_page_preview": args.get("disable_web_page_preview"),
+            "structured_message": structured_message,
             # We need to pass reply_to_message_id through
             "_reply_to_message_id": tg_msg_id,
         })
@@ -3802,10 +3861,11 @@ class TelegramManager:
     def _edit(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")
         text = args.get("text", "")
+        structured_message = args.get("structured_message")
         if not compound_id:
             return {"error": "message_id is required"}
-        if not text:
-            return {"error": "text is required"}
+        if not text and structured_message is None:
+            return {"error": "text or structured_message is required"}
         account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
         reply_markup = args.get("reply_markup")
         acct = self._service.get_account(account)
@@ -3825,6 +3885,15 @@ class TelegramManager:
                     except (json.JSONDecodeError, OSError):
                         continue
 
+        if is_caption and self._rendering_mode(args) == "rich":
+            return {"error": "rendering_mode='rich' cannot edit a media caption"}
+
+        rich_message, _rich_preview, rich_error = self._native_rich_message(
+            args, text=text, media=None,
+        )
+        if rich_error:
+            return {"error": rich_error}
+
         if is_caption:
             edit_options, rendering_error = self._caption_options(args)
         else:
@@ -3832,11 +3901,17 @@ class TelegramManager:
         if rendering_error:
             return {"error": rendering_error}
 
-        acct.edit_message(
-            chat_id=chat_id, message_id=tg_msg_id, text=text,
-            reply_markup=reply_markup, is_caption=is_caption,
+        edit_args: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": tg_msg_id,
+            "text": None if rich_message is not None else text,
+            "reply_markup": reply_markup,
+            "is_caption": is_caption,
             **edit_options,
-        )
+        }
+        if rich_message is not None:
+            edit_args["rich_message"] = rich_message
+        acct.edit_message(**edit_args)
         return {"status": "edited", "message_id": compound_id}
 
     def _contacts(self, args: dict) -> dict:
