@@ -267,13 +267,14 @@ def test_command_includes_print_json_model_and_disallowed_tools():
     # prompt is piped via stdin, not argv
     assert captured["kw"]["input"]
     # Stable context (protocol/system/tools) lives in the system-prompt file
-    # passed via --append-system-prompt-file (for prompt caching); the stdin
+    # passed via --system-prompt-file (for prompt caching); the stdin
     # user message carries only the conversation.
     assert "# CONVERSATION" in captured["kw"]["input"]
     assert "# NOW" in captured["kw"]["input"]
     assert "# AVAILABLE TOOLS" not in captured["kw"]["input"]
-    assert "--append-system-prompt-file" in cmd
-    sp_idx = cmd.index("--append-system-prompt-file")
+    assert "--system-prompt-file" in cmd
+    assert "--append-system-prompt-file" not in cmd
+    sp_idx = cmd.index("--system-prompt-file")
     sp_path = cmd[sp_idx + 1]
     with open(sp_path, encoding="utf-8") as f:
         sp_content = f.read()
@@ -282,6 +283,27 @@ def test_command_includes_print_json_model_and_disallowed_tools():
     assert "(no tools available" in sp_content  # create_chat called with None
     assert "sys" in sp_content  # the system prompt text
     assert "You are the REASONING CORE" in sp_content  # the action protocol
+
+
+def test_append_system_prompt_mode_keeps_legacy_flag():
+    ad = ClaudeCodeAdapter(model="sonnet", system_prompt_mode="append")
+    sess = ad.create_chat("sonnet", "sys", None)
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _FakeProc(stdout=_envelope('{"action":"final","text":"ok"}'))
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+        sess.send("hi")
+
+    assert "--append-system-prompt-file" in captured["cmd"]
+    assert "--system-prompt-file" not in captured["cmd"]
+
+
+def test_invalid_system_prompt_mode_fails_closed():
+    with pytest.raises(ValueError, match="system_prompt_mode"):
+        ClaudeCodeAdapter(system_prompt_mode="discard")
 
 
 def test_session_resume_keeps_system_block_stable_and_sends_only_new_history():
@@ -313,13 +335,13 @@ def test_session_resume_keeps_system_block_stable_and_sends_only_new_history():
 
     sp_paths = set()
     for cmd, _kw in captured:
-        sp_idx = cmd.index("--append-system-prompt-file")
+        sp_idx = cmd.index("--system-prompt-file")
         sp_paths.add(cmd[sp_idx + 1])
     assert len(sp_paths) == 1  # same stable file every turn
 
     contents = []
     for cmd, _kw in captured:
-        sp_idx = cmd.index("--append-system-prompt-file")
+        sp_idx = cmd.index("--system-prompt-file")
         with open(cmd[sp_idx + 1], encoding="utf-8") as f:
             contents.append(f.read())
     assert contents[0] == contents[1] == contents[2]  # byte-identical system block
@@ -362,7 +384,7 @@ def test_per_turn_resync_with_identical_content_keeps_resuming():
     # The cached system block stays byte-identical across the resyncs.
     contents = []
     for cmd, _kw in captured:
-        with open(cmd[cmd.index("--append-system-prompt-file") + 1], encoding="utf-8") as f:
+        with open(cmd[cmd.index("--system-prompt-file") + 1], encoding="utf-8") as f:
             contents.append(f.read())
     assert len(set(contents)) == 1
 
@@ -538,7 +560,7 @@ def test_generate_omits_system_prompt_file():
     with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
         resp = ad.generate("sonnet", "hello", system_prompt="sys")
     assert resp.text == "plain answer"
-    assert "--append-system-prompt-file" not in captured["cmd"]
+    assert "--system-prompt-file" not in captured["cmd"]
 
 
 def test_update_system_prompt_rewrites_system_file():
@@ -553,7 +575,7 @@ def test_update_system_prompt_rewrites_system_file():
 
     with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
         sess.send("hi")
-    sp_idx = captured["cmd"].index("--append-system-prompt-file")
+    sp_idx = captured["cmd"].index("--system-prompt-file")
     sp_path = captured["cmd"][sp_idx + 1]
     with open(sp_path, encoding="utf-8") as f:
         assert "sys-v1" in f.read()
