@@ -412,6 +412,26 @@ _DAEMON_COMPACT_MANUAL_PROCEDURES = (
 )
 
 
+DAEMON_ASYNC_HANDOFF = (
+    "While waiting, go idle or call system(action='sleep'); the terminal result "
+    "will arrive and wake you as a notification; read daemon-manual and "
+    "notification-manual for details. If Telegram is connected and a Task Card "
+    "is available for the current turn, use it to report progress; call "
+    "`telegram(action='manual')` and follow its `Programmable Task Card` "
+    "section for details."
+)
+# A fleet (two or more daemons), or a single one whose caller explicitly asked
+# for a long ceiling, is work a human wants to follow. The default 3600s
+# ceiling does not count: it says nothing about how long the batch will run,
+# and nudging on it would fire for every single quick daemon.
+DAEMON_CARD_NUDGE_MIN_TASKS = 2
+DAEMON_CARD_NUDGE_MIN_TIMEOUT_S = 900.0
+DAEMON_CARD_NUDGE = (
+    " You dispatched {count} daemon(s) with no active task_card watch — consider "
+    "starting one (task_card action='start') so a human can follow progress."
+)
+
+
 _DAEMON_COMMON_MCP_NAME = "daemon_common"
 _DAEMON_EMAIL_MCP_NAME = "email"
 # Tool names satisfied by a LingTai-auto-mounted, task-scoped MCP server
@@ -4213,6 +4233,10 @@ class DaemonManager:
         else:
             effective_max_turns = self._max_turns
 
+        # The caller's own timeout, kept separate from the effective one: the
+        # default ceiling says nothing about how long this batch will run, but
+        # an explicitly requested long ceiling does.
+        requested_timeout: float | None = None
         if timeout is not None:
             try:
                 to = float(timeout)
@@ -4227,6 +4251,7 @@ class DaemonManager:
                 return {"status": "error",
                         "message": f"timeout must be ≥ 5 seconds (got {to})"}
             effective_timeout = min(to, self._timeout)
+            requested_timeout = effective_timeout
         else:
             effective_timeout = self._timeout
 
@@ -4254,6 +4279,7 @@ class DaemonManager:
                 tasks, backend=backend,
                 effective_max_turns=effective_max_turns,
                 effective_timeout=effective_timeout,
+                requested_timeout=requested_timeout,
             )
 
         # Pre-flight: validate per-task ``context_token_limit`` (LingTai backend
@@ -4519,7 +4545,42 @@ class DaemonManager:
 
         return {"status": "dispatched", "count": len(tasks), "ids": ids,
                 "group_id": group_id,
-                "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read daemon-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details."}
+                "handoff": self._emanate_handoff(len(tasks), requested_timeout)}
+
+    def _emanate_handoff(self, count: int, requested_timeout_s: float | None) -> str:
+        """Async handoff line, plus a Task Card nudge for fleet-scale dispatch.
+
+        The nudge is conditional twice over: only for a fleet or a deliberately
+        long single run, and only when no watch is already running — a quick
+        daemon, or one dispatched under a live card, gets the plain handoff.
+        """
+        if not self._should_nudge_task_card(count, requested_timeout_s):
+            return DAEMON_ASYNC_HANDOFF
+        return DAEMON_ASYNC_HANDOFF + DAEMON_CARD_NUDGE.format(count=count)
+
+    def _should_nudge_task_card(
+        self, count: int, requested_timeout_s: float | None
+    ) -> bool:
+        """True when this dispatch is card-worthy and no watch is active.
+
+        Duck-typed on purpose: daemon still neither imports nor requires Task
+        Card runtime code, so an agent whose capability is disabled simply
+        never gets nudged.
+        """
+        if count < DAEMON_CARD_NUDGE_MIN_TASKS and (
+            requested_timeout_s is None
+            or requested_timeout_s < DAEMON_CARD_NUDGE_MIN_TIMEOUT_S
+        ):
+            return False
+        has_active = getattr(
+            getattr(self._agent, "_task_card_manager", None), "has_active_watch", None
+        )
+        if not callable(has_active):
+            return False
+        try:
+            return not has_active()
+        except Exception:
+            return False
 
     def _handle_emanate_cli(
         self,
@@ -4527,6 +4588,7 @@ class DaemonManager:
         backend: str,
         effective_max_turns: int,
         effective_timeout: float,
+        requested_timeout: float | None = None,
     ) -> dict:
         """Dispatch emanations via an external CLI backend.
 
@@ -4779,7 +4841,7 @@ class DaemonManager:
                   tasks=[{"task": s["task"][:80], "tools": s.get("tools", [])} for s in tasks])
         return {"status": "dispatched", "count": len(tasks), "ids": ids,
                 "group_id": group_id, "backend": backend,
-                "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read daemon-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details."}
+                "handoff": self._emanate_handoff(len(tasks), requested_timeout)}
 
     @staticmethod
     def _truncate_list_string(value: object, limit: int = 500) -> object:

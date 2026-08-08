@@ -190,9 +190,12 @@ operations, preset swaps, notification handling, and karma actions.
 
 ### Task Card Lifecycle
 
-Start a `task_card` watch only for meaningful ongoing work a human is
-following; skip it for quick single-step work or ritual updates. Keep the
-rendered body truthful and current while it runs, and optionally `retry` once
+Start a `task_card` watch for meaningful long-running or parallel work a human
+is following: multi-daemon fleets (two or more), multi-PR batches, long
+review→merge flows, anything running past roughly ten minutes. Skip it for
+quick single-step work or ritual updates. When a watch expires mid-task
+(`max_refreshes`), start a new watch rather than letting the card go dark.
+Keep the rendered body truthful and current while it runs, and optionally `retry` once
 more to publish a final state before winding down. Use `stop` to pause a watch
 while preserving its last body; use `remove` once the work is completed,
 cancelled, or abandoned so `/taskcard` and other consumers cannot keep

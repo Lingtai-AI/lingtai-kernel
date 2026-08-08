@@ -6,8 +6,8 @@ description: >
   hunch, understand `daemon(action="list", input={})`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.10.0
-last_changed_at: 2026-07-27T00:00:00Z
+version: 0.11.0
+last_changed_at: 2026-08-07T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
@@ -273,6 +273,11 @@ are the three that change state.
   `telegram(action='manual')` and follow its `Programmable Task Card` section.
   The daemon tool does not create a Task Card automatically or require a
   watcher; daemon lifecycle and terminal-notification behavior are unchanged.
+  A card-worthy dispatch — two or more tasks, or an explicitly requested
+  `timeout` of 900s or more — appends one extra nudge sentence to `handoff`
+  when you have no active watch: start one with `task_card(action='start')` so
+  a human can follow the fleet instead of watching it run dark. The nudge
+  disappears once a watch is running.
 - **`check` still resolves a daemon after refresh/molt.** A refresh/molt gives
   you a fresh daemon registry with no in-memory entries, but the run folders
   and their notifications survive on disk. New daemon ids are compact run ids

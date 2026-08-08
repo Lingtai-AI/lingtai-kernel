@@ -164,7 +164,8 @@ def get_description() -> str:
         "channel-specific readers. Use it proactively for meaningful long-running, "
         "multi-step, or parallel work so a human can follow progress; skip it for "
         "quick single-step work, ritual updates, or a body you cannot keep truthful "
-        "and current. Use stop to pause a watch while preserving its last body, and "
+        "and current. Restart a new watch when one expires mid-task. Use stop to "
+        "pause a watch while preserving its last body, and "
         "remove once the work is completed, cancelled, or abandoned so the artifact "
         "cannot mislead a consumer as stale. Actions: start, inspect, retry, stop, "
         "remove, manual."
@@ -790,7 +791,9 @@ class TaskCardManager:
                 body=(
                     f"Task Card watch {watch.watch_id} reached its refresh limit. "
                     "Refresh or reinspect the underlying task state, and start a new "
-                    "watch only if useful."
+                    "watch only if useful. If this work is still ongoing, start a new "
+                    "watch (task_card action='start') — do not let the card go dark "
+                    "mid-task."
                 ),
                 idempotency_key=f"task_card.limit:{watch.watch_id}:{maximum}",
                 skip_if_idempotency_key_exists=True,
@@ -799,6 +802,20 @@ class TaskCardManager:
             )
         except Exception:
             pass
+
+    def has_active_watch(self) -> bool:
+        """True while exactly one watch is running and not yet retiring.
+
+        Read-only cross-capability probe: the daemon fleet nudge asks this
+        before suggesting a card, so an agent that already keeps one is never
+        told to start another.
+        """
+        with self._lock:
+            watch = self._watch
+        if watch is None:
+            return False
+        with watch.lock:
+            return not (watch.stopping or watch.terminated)
 
     def _require_watch(self, watch_id: Any) -> _Watch:
         if not isinstance(watch_id, str):

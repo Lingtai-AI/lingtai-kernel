@@ -1989,6 +1989,8 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path, monkeypatch):
         {"task": "task B", "tools": ["file"]},
     ]})
     assert result["status"] == "dispatched"
+    # Two tasks is a fleet, and this agent keeps no watch, so the handoff also
+    # carries the Task Card nudge (see tests/test_task_card_proactivity.py).
     assert result["handoff"] == (
         "While waiting, go idle or call system(action='sleep'); the terminal result "
         "will arrive and wake you as a notification; read daemon-manual and "
@@ -1996,6 +1998,8 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path, monkeypatch):
         "is available for the current turn, use it to report progress; call "
         "`telegram(action='manual')` and follow its `Programmable Task Card` "
         "section for details."
+        " You dispatched 2 daemon(s) with no active task_card watch — consider "
+        "starting one (task_card action='start') so a human can follow progress."
     )
     assert result["count"] == 2
     ids = result["ids"]

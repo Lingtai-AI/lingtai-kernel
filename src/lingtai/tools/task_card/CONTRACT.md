@@ -1,6 +1,6 @@
 ---
 name: intrinsic-task-card
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/task_card/ANATOMY.md
@@ -14,6 +14,7 @@ related_files:
   - src/lingtai/mcp_servers/feishu/task_card.py
   - src/lingtai/mcp_servers/feishu/manager.py
   - tests/test_task_card_controller.py
+  - tests/test_task_card_proactivity.py
   - tests/test_telegram_toolfamily_ltpv2.py
   - tests/test_telegram_task_card_programmable.py
   - tests/test_feishu_programmable_task_cards.py
@@ -59,7 +60,12 @@ declarative artifact and one active watch per agent.
    recovery policy.
 7. Renderer execution failures after a watch exists preserve the last valid body
    and emit deduped `task_card.error` and `recovered` notifications. Refresh
-   exhaustion emits one `task_card.limit` notification keyed by watch and limit.
+   exhaustion emits one `task_card.limit` notification keyed by watch and limit;
+   its body tells the agent to start a new watch when the underlying work is
+   still ongoing, so an expired watch does not silently leave the card dark.
+   The capability also exposes a read-only `has_active_watch()` probe so another
+   capability (the daemon fleet nudge) can ask whether a card is already running
+   without creating, mutating, or importing watch state.
 8. Missing, invalid, or inactive producer state is outside this contract.
    Consumers decide what those states mean.
 9. `taskcard/taskcard.json` holds optional `interval_s`, `timeout_s`, and

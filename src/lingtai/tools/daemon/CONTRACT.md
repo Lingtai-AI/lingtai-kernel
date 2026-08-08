@@ -7,8 +7,8 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 8
-last_changed_at: "2026-07-27"
+contract_version: 9
+last_changed_at: "2026-08-07"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
@@ -38,6 +38,7 @@ related_files:
   - src/lingtai/llm/openai/ANATOMY.md
   - src/lingtai/llm/mimo/ANATOMY.md
   - tests/test_daemon_contract_doc.py
+  - tests/test_task_card_proactivity.py
   - tests/test_tool_family_daemon_migration.py
   - tests/test_daemon.py
   - tests/test_daemon_empty_parity.py
@@ -264,6 +265,19 @@ conditional: use the Task Card only when Telegram is connected and a Task Card
 is available for the current turn, and read `telegram(action='manual')` for the
 `Programmable Task Card` details. Daemon does not create or require a watcher
 and does not import or call Telegram/Task Card runtime code.
+
+A card-worthy dispatch — two or more tasks in the batch, or an explicitly
+requested `timeout` at or above 900s — additionally appends one nudge sentence
+to `handoff` naming the dispatched count and suggesting
+`task_card(action='start')`. An omitted `timeout` never qualifies on its own:
+the default ceiling describes no actual run length, so a single daemon
+dispatched without an explicit long `timeout` is not card-worthy. The nudge
+also appears only when the agent has the Task Card capability enabled and no
+watch is currently active, so a quick single daemon, an agent with the
+capability disabled, and a fleet dispatched under a live card all receive the
+plain `handoff` unchanged. The active-watch check is a duck-typed read-only
+probe; daemon still imports no Task Card runtime code and never starts a watch
+itself.
 
 ## Capability Invariants
 

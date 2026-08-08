@@ -312,6 +312,7 @@ related_files:
   - tests/test_task_card_controller.py
   - tests/test_task_card_event_projection_shared.py
   - tests/test_task_card_handoff_guidance.py
+  - tests/test_task_card_proactivity.py
   - tests/test_task_card_resident_shared.py
   - tests/test_taskcard_resident_meta.py
   - tests/test_tc_inbox.py

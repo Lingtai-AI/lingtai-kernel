@@ -129,6 +129,9 @@ Guidelines:
 
 - Keep one active watch per agent. A second `start` is refused until the first
   watch is stopped.
+- Restart a watch that expires mid-task. Exhausting `max_refreshes` retires the
+  watch and sends one `task_card.limit` notification; if the underlying work is
+  still ongoing, `start` a new watch rather than letting the card go dark.
 - Write the body you want projected. The producer is channel-neutral and does
   not own Telegram/Feishu/portal layout details.
 - Keep renderer output truthful and complete. Projection channels may compare
