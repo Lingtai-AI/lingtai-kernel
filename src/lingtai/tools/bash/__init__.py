@@ -621,7 +621,14 @@ class ShellManager:
                     "cmd.exe policy validation does not support this syntax; "
                     "refusing to run it"
                     if cmd
-                    else "PowerShell policy validation does not support this syntax; refusing to run it"
+                    else (
+                        "PowerShell policy validation does not support this syntax; refusing "
+                        "to run it. The parser could not statically extract all commands "
+                        "(likely variable-based invocation, here-strings, or complex "
+                        "expressions). Options: (1) simplify the script to use only literal "
+                        "command names, (2) run with yolo=true to bypass policy, or "
+                        "(3) split into multiple simpler commands."
+                    )
                 ),
             }
         if not all(self._policy._check_single(cmd, case_insensitive=case_insensitive) for cmd in commands):
