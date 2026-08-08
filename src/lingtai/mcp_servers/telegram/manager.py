@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -2179,6 +2180,21 @@ class TelegramManager:
         model = self._task_card_current_model()
         if model:
             snapshot["model"] = model
+        # Physical path + device short name make the card self-identifying:
+        # the reader can tell exactly which agent on which machine produced
+        # this card, and where its durable state lives. ``socket.gethostname``
+        # returns the short host name (no FQDN suffix); failures degrade to
+        # omitting the key so no line is fabricated.
+        try:
+            snapshot["device_short_name"] = socket.gethostname()
+        except (OSError, ValueError):
+            pass
+        try:
+            working_dir = str(self._working_dir)
+        except Exception:
+            working_dir = None
+        if working_dir:
+            snapshot["working_dir"] = working_dir
         return snapshot or None
 
     def _task_card_current_model(self) -> str | None:

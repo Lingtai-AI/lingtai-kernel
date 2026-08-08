@@ -22,8 +22,8 @@ class TaskCardEventProjection:
         "/taskcard N sets normal rows (1-10"
     )
     DEFAULT_NORMAL_ROWS = 1
-    METADATA_MAX_CHARS = 150
-    METADATA_MAX_LINES = 2
+    METADATA_MAX_CHARS = 260
+    METADATA_MAX_LINES = 3
     TIME_PREFIX = "Last Updated: "
     AGENT_STATES = frozenset(state.value for state in AgentState)
 
@@ -402,6 +402,23 @@ class TaskCardEventProjection:
             lines.append(session_line)
         if context_line:
             lines.append(context_line)
+
+        # Device identity line: physical path + short host name make the card
+        # self-identifying. Both values pass through the same machine-identifier
+        # allowlist used for API error rows so path/name content stays printable
+        # and bounded. Missing or malformed values simply omit the line.
+        device_parts: list[str] = []
+        device = cls.machine_identifier(
+            metadata.get("device_short_name"), limit=64
+        )
+        if device is not None:
+            device_parts.append(device)
+        working_dir = cls.machine_identifier(metadata.get("working_dir"), limit=180)
+        if working_dir is not None:
+            device_parts.append(working_dir)
+        if device_parts:
+            lines.append("device · " + " · ".join(device_parts))
+
         lines = lines[: cls.METADATA_MAX_LINES]
         if not lines:
             return []
@@ -541,7 +558,7 @@ class TaskCardEventProjection:
         value = value.strip()
         if not value or len(value) > limit:
             return None
-        safe_punctuation = frozenset("._:/-")
+        safe_punctuation = frozenset("._:/\\-")
         if not all(
             ch.isascii() and (ch.isalnum() or ch in safe_punctuation) for ch in value
         ):

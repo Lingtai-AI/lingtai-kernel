@@ -588,7 +588,14 @@ def test_lifecycle_status_presence_error_falls_back_to_raw_state(tmp_path, monke
 
 def test_event_metadata_snapshot_none_when_nothing_available(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    assert mgr._task_card_event_metadata_snapshot() is None
+    snapshot = mgr._task_card_event_metadata_snapshot()
+    # The snapshot always carries the self-identifying device/path fields, so
+    # it is never None; lifecycle/model remain absent when nothing is available.
+    assert snapshot is not None
+    assert "agent_lifecycle" not in snapshot
+    assert "model" not in snapshot
+    assert "device_short_name" in snapshot
+    assert "working_dir" in snapshot
 
 
 def test_event_metadata_snapshot_adds_lifecycle_alone(tmp_path, monkeypatch):
@@ -597,7 +604,10 @@ def test_event_metadata_snapshot_adds_lifecycle_alone(tmp_path, monkeypatch):
     monkeypatch.setattr(manager_mod, "observe_alive", lambda *a, **kw: True)
     mgr, _ = _integration_manager(tmp_path)
     _write_status(tmp_path, {"runtime": {"state": "active"}})
-    assert mgr._task_card_event_metadata_snapshot() == {"agent_lifecycle": "active"}
+    snapshot = mgr._task_card_event_metadata_snapshot()
+    assert snapshot["agent_lifecycle"] == "active"
+    assert "device_short_name" in snapshot
+    assert "working_dir" in snapshot
 
 
 def test_event_metadata_snapshot_merges_with_existing_session_metadata(tmp_path):
@@ -605,7 +615,10 @@ def test_event_metadata_snapshot_merges_with_existing_session_metadata(tmp_path)
     _write_status(tmp_path, {"runtime": {"state": "suspended"}})
     mgr._task_card_event_metadata = {"api_calls": 4}
     snapshot = mgr._task_card_event_metadata_snapshot()
-    assert snapshot == {"api_calls": 4, "agent_lifecycle": "suspended"}
+    assert snapshot["api_calls"] == 4
+    assert snapshot["agent_lifecycle"] == "suspended"
+    assert "device_short_name" in snapshot
+    assert "working_dir" in snapshot
     # The manager's own stored metadata must not be mutated by the merge.
     assert mgr._task_card_event_metadata == {"api_calls": 4}
 
@@ -627,4 +640,7 @@ def test_event_metadata_snapshot_adds_current_model(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
     _write_status(tmp_path, {"runtime": {"state": "active"}})
     snapshot = mgr._task_card_event_metadata_snapshot()
-    assert snapshot == {"agent_lifecycle": "active", "model": "deepseek-v4-flash"}
+    assert snapshot["agent_lifecycle"] == "active"
+    assert snapshot["model"] == "deepseek-v4-flash"
+    assert "device_short_name" in snapshot
+    assert "working_dir" in snapshot

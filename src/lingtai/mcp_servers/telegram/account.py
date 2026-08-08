@@ -423,6 +423,10 @@ class TelegramAccount:
                 # kb:overview, kb:back, or unknown — back to the overview
                 self._cmd_kanban(chat_id, text="", message_id=message_id)
             return True
+        # Handle tc:* callback data from /taskcard inline buttons
+        if text.startswith("tc:") and chat_id:
+            self._cmd_taskcard_callback(chat_id, message_id, text[3:])
+            return True
         # Handle sys:* callback data from /system inline buttons
         if text.startswith("sys:") and chat_id:
             file_name = text[4:]  # strip "sys:" prefix
@@ -464,8 +468,17 @@ class TelegramAccount:
         return False
 
     def _cmd_taskcard(self, chat_id: int, text: str) -> None:
-        """Report or configure agent-wide Telegram Task Card presentation."""
+        """Report or configure agent-wide Telegram Task Card presentation.
+
+        ``/taskcard`` with no arguments opens the interactive settings menu
+        (inline keyboard, mirroring /kanban's design). ``/taskcard on|off``
+        toggles delivery and ``/taskcard N`` sets the rolling API-call-group
+        window (1-10), both as before.
+        """
         usage = "❌ Usage: /taskcard on | /taskcard off | /taskcard N (1-10)"
+        if text.strip() in ("/taskcard", f"/taskcard@{self.alias}"):
+            self._cmd_taskcard_menu(chat_id)
+            return
         result = self._local_commands.apply_taskcard(
             text,
             TaskCardSettingsPort(
@@ -505,6 +518,61 @@ class TelegramAccount:
             f"📋 taskcard: {enabled} · normal rows: {normal_rows} — {description}\n"
             "Usage: /taskcard on | /taskcard off | /taskcard N (1-10)",
         )
+
+    def _cmd_taskcard_menu(self, chat_id: int, message_id: int | None = None) -> None:
+        """Show the interactive Task Card settings menu (kanban-style)."""
+        enabled = self._taskcard_enabled()
+        normal_rows = self._taskcard_normal_rows()
+        state_emoji = "🟢" if enabled else "⚪"
+        menu_text = (
+            f"📋 *Task Card — settings*\n\n"
+            f"{state_emoji} Delivery: {'on' if enabled else 'off'}\n"
+            f"👁️ Rows: {normal_rows} (latest API-call groups)\n\n"
+            "Tap to change:"
+        )
+        keyboard = inline_keyboard_options(
+            [
+                {"text": "◀️ Rows −", "data": "tc:rows_dec"},
+                {"text": "Rows ▶️ +", "data": "tc:rows_inc"},
+                {"text": "📶 Delivery on", "data": "tc:on"},
+                {"text": "🚫 Delivery off", "data": "tc:off"},
+                {"text": "✖️ Close", "data": "tc:close"},
+            ],
+            columns=2,
+        )
+        if message_id is not None:
+            self.edit_message(
+                chat_id, message_id, menu_text,
+                reply_markup=keyboard, parse_mode="Markdown",
+            )
+        else:
+            self.send_message(
+                chat_id, menu_text,
+                reply_markup=keyboard, parse_mode="Markdown",
+            )
+
+    def _cmd_taskcard_callback(self, chat_id: int, message_id: int | None, action: str) -> None:
+        """Handle tc:* inline button callbacks from the Task Card menu."""
+        if action == "rows_inc":
+            current = self._taskcard_normal_rows()
+            self._set_taskcard_normal_rows(min(10, current + 1))
+        elif action == "rows_dec":
+            current = self._taskcard_normal_rows()
+            self._set_taskcard_normal_rows(max(1, current - 1))
+        elif action == "on":
+            self._set_taskcard_enabled(True)
+        elif action == "off":
+            self._set_taskcard_enabled(False)
+        elif action in ("close", "back"):
+            if message_id is not None:
+                try:
+                    self.delete_message(chat_id, message_id)
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    pass
+            return
+        # Re-render the menu with the updated state (or back to the menu for back).
+        self._cmd_taskcard_menu(chat_id, message_id)
+
 
     def _collect_kanban_data(self) -> dict | None:
         """Read the shared channel-neutral dashboard snapshot."""

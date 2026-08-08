@@ -206,8 +206,11 @@ def test_taskcard_commands_are_local_agent_wide_and_mentions_work(
         "update_id": 1,
         "message": {"from": {"id": 7}, "chat": {"id": 10}, "text": "/taskcard"},
     })
-    assert "taskcard: True" in replies[-1]
-    assert "Usage: /taskcard on | /taskcard off" in replies[-1]
+    # Bare /taskcard now opens the interactive settings menu instead of a
+    # text status reply (kanban-style).
+    assert "Task Card — settings" in replies[-1]
+    assert "Delivery" in replies[-1]
+    assert "Rows:" in replies[-1]
 
     one._process_update({
         "update_id": 2,
