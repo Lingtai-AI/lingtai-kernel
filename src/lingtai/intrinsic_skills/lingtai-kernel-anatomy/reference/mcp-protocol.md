@@ -2,11 +2,15 @@
 related_files:
 - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
 - src/lingtai/services/mcp.py
+- src/lingtai/agent.py
+- src/lingtai/tools/daemon/__init__.py
 - src/lingtai/services/ANATOMY.md
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/tools/mcp/manual/SKILL.md
 - pyproject.toml
 - tests/test_mcp_sdk_v2_contract.py
+- tests/test_mcp_capability.py
+- tests/test_mcp_v2_adapter_metadata.py
 maintenance: |
   Tracks the officially supported MCP SDK range, the negotiated protocol
   version, and the SDK-versus-LingTai ownership split. Update it whenever the
@@ -53,6 +57,9 @@ Owned by LingTai:
   (`src/lingtai/services/mcp.py`);
 * the kernel-facing tool record, the metadata sidecar, and the legacy result
   projection (same file, plus the adapters below);
+* schema-aware argument preparation at Agent stdio/HTTP and task-daemon MCP
+  provider boundaries (`src/lingtai/services/mcp.py`, `src/lingtai/agent.py`,
+  `src/lingtai/tools/daemon/__init__.py`);
 * configuration, registry gating, redaction, and task-scoped registration
   (`src/lingtai/services/mcp_registry.py`, `src/lingtai/tools/daemon/`);
 * the curated server implementations under `src/lingtai/mcp_servers/`.
@@ -79,6 +86,12 @@ Owned by LingTai:
   lifecycle.
 * **Retry.** stdio supports an opt-in `retry_policy="safe"` single replay. HTTP
   deliberately supports none; see `src/lingtai/services/ANATOMY.md`.
+* **Host-private arguments.** Provider-bound arguments are copied before
+  adaptation. The kernel-owned `_reasoning` field is removed unless the
+  advertised server schema explicitly declares it; the exact closed LTP-v2
+  family schema instead restores its required public `reasoning` field.
+  Ordinary unknown business fields pass through unchanged so server-side
+  closed-schema validation still detects caller mistakes and contract drift.
 
 ## Tool metadata that `FunctionSchema` cannot carry
 
@@ -94,8 +107,9 @@ a **metadata sidecar** rather than being forced into the provider wire schema:
 Both read seams return a copy, so a caller cannot mutate stored metadata
 through the returned mapping. Both sidecars are cleared with the MCP clients
 they describe, so a torn-down or refreshed surface never exposes stale
-metadata. The top-level `additionalProperties` removal remains an intentional
-`FunctionSchema` normalization and applies only to the schema copy.
+metadata. Task-daemon's top-level `additionalProperties` removal remains an
+existing `FunctionSchema` normalization and applies only to its schema copy;
+Agent mounts retain the advertised root unchanged.
 
 ## Server behavior
 
@@ -169,3 +183,5 @@ defects.
 * `src/lingtai/services/ANATOMY.md` — client internals and state.
 * `src/lingtai/mcp_servers/ANATOMY.md` — curated server layout.
 * `tests/test_mcp_sdk_v2_contract.py` — executable form of this reference.
+* `tests/test_mcp_capability.py` / `tests/test_mcp_v2_adapter_metadata.py` —
+  Agent and task-daemon argument-boundary regressions.

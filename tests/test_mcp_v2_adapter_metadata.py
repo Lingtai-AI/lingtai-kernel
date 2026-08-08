@@ -199,6 +199,14 @@ def _stdio_registration() -> dict:
     }
 
 
+def _http_registration() -> dict:
+    return {
+        "name": "demo-mcp",
+        "transport": "http",
+        "url": "https://example.invalid/mcp",
+    }
+
+
 def test_task_daemon_retains_and_copies_metadata(agent, monkeypatch):
     import lingtai.services.mcp as mcp_mod
     monkeypatch.setattr(mcp_mod, "MCPClient", _FakeClient)
@@ -260,6 +268,94 @@ def test_task_daemon_empty_registrations_clear_prior_metadata(agent, monkeypatch
 
     assert manager.task_mcp_tool_metadata("demo_tool") is None
     manager._close_task_mcp_clients(clients)
+
+
+@pytest.mark.parametrize("transport", ["stdio", "http"])
+@pytest.mark.parametrize(
+    ("schema", "arguments", "expected"),
+    [
+        (
+            {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "additionalProperties": False,
+            },
+            {
+                "value": "business",
+                "unknown_business_field": "server validates this",
+                "_reasoning": "kernel audit metadata",
+            },
+            {
+                "value": "business",
+                "unknown_business_field": "server validates this",
+            },
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "input": {"type": "object"},
+                    "reasoning": {"type": "string"},
+                    "summarize": {"type": "boolean"},
+                },
+                "required": ["action", "input", "reasoning"],
+                "additionalProperties": False,
+            },
+            {
+                "action": "accounts",
+                "input": {},
+                "_reasoning": "strict family rationale",
+            },
+            {
+                "action": "accounts",
+                "input": {},
+                "reasoning": "strict family rationale",
+            },
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {
+                    "value": {"type": "string"},
+                    "_reasoning": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+            {"value": "declared", "_reasoning": "server-owned field"},
+            {"value": "declared", "_reasoning": "server-owned field"},
+        ),
+    ],
+    ids=["undeclared-private", "strict-ltp-v2", "declared-private"],
+)
+def test_task_daemon_adapts_host_private_arguments_at_mcp_boundary(
+    agent, monkeypatch, transport, schema, arguments, expected
+):
+    import lingtai.services.mcp as mcp_mod
+
+    records = [_record(schema=schema)]
+    client_class = "MCPClient" if transport == "stdio" else "HTTPMCPClient"
+    monkeypatch.setattr(
+        mcp_mod,
+        client_class,
+        lambda **kw: _FakeClient(records=records),
+    )
+    manager = agent.get_capability("daemon")
+    original = dict(arguments)
+    registration = (
+        _stdio_registration() if transport == "stdio" else _http_registration()
+    )
+
+    _schemas, handlers, clients = manager._connect_task_mcp_registrations(
+        [registration]
+    )
+    try:
+        result = handlers["demo_tool"](arguments)
+    finally:
+        manager._close_task_mcp_clients(clients)
+
+    assert arguments == original
+    assert result == {"called": "demo_tool", "args": expected}
 
 
 # ---------------------------------------------------------------------------
