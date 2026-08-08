@@ -1,5 +1,6 @@
 """Contract coverage for the Bash-local shell-language boundary."""
 import json
+import sys
 import time
 from types import SimpleNamespace
 
@@ -7,6 +8,7 @@ import pytest
 
 from lingtai.adapters.bash import select_bash_shell_dialect
 from lingtai.tools.bash import BashManager, BashPolicy
+from lingtai.tools.bash import _BACKGROUND_GUIDANCE, _timeout_error
 from lingtai.tools.bash._shell_dialect import ShellDialect, ShellInvocation
 from tests._notification_store_helpers import notification_store_for
 
@@ -144,3 +146,53 @@ def test_selector_fails_loudly_on_unsupported_platform(monkeypatch):
     monkeypatch.setattr(composition.os, "name", "java")
     with pytest.raises(NotImplementedError, match="unsupported"):
         composition.select_bash_shell_dialect()
+
+
+# ---------------------------------------------------------------------------
+# PR-7: no-output timeout backgrounding guidance (OpenClaw exec-runner.ts
+# overall/no-output timeout copy + Hermes foreground hint, adapted to our
+# ``async`` parameter name)
+# ---------------------------------------------------------------------------
+
+
+def test_timeout_error_no_output_appends_background_guidance():
+    result = _timeout_error("sleep 5", 5.0, no_output=True)
+    assert result == {
+        "status": "error",
+        "message": (
+            "Command timed out after 5.0s. Long-running or no-output work should "
+            "be launched with async=true (or as a daemon) rather than as a "
+            "foreground command; do not rely on shell backgrounding with a "
+            "trailing &."
+        ),
+    }
+
+
+def test_timeout_error_with_output_keeps_historical_message():
+    assert _timeout_error("echo x", 5.0) == {
+        "status": "error",
+        "message": "Command timed out after 5.0s",
+    }
+    assert _timeout_error("echo x", 5.0, no_output=False) == {
+        "status": "error",
+        "message": "Command timed out after 5.0s",
+    }
+
+
+def test_sync_timeout_with_no_output_returns_background_guidance(tmp_path):
+    mgr = manager(tmp_path)
+    result = mgr.handle({"command": "sleep 5", "timeout": 1.0})
+    assert result["status"] == "error"
+    assert result["message"].startswith("Command timed out after 1.0s")
+    assert _BACKGROUND_GUIDANCE in result["message"]
+
+
+def test_sync_timeout_with_captured_output_omits_guidance(tmp_path):
+    mgr = manager(tmp_path)
+    command = (
+        f"{sys.executable} -u -c \"print('started'); import time; time.sleep(5)\""
+    )
+    result = mgr.handle({"command": command, "timeout": 1.0})
+    assert result["status"] == "error"
+    assert result["message"].startswith("Command timed out after 1.0s")
+    assert "trailing &" not in result["message"]

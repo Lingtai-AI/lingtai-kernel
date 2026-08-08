@@ -47,3 +47,6 @@ MagicMock/
 # Local resolver lockfiles may appear during experiments; pyproject.toml is the
 # packaging source of truth for this repo.
 uv.lock
+DELIVERABLE.md
+PR_BODY.md
+PR_URL.txt
