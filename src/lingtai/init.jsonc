@@ -51,6 +51,9 @@
       // MiniMax China endpoint with Anthropic-compatible protocol.
       // Set to null to use the provider's default.
       //
+      // Reasoning effort ("thinking") is provider-scoped — there is no single
+      // universal vocabulary.
+      //
       // Custom OpenAI-compatible Responses may add an explicit reasoning
       // effort after setting api_compat="openai" and wire_api="responses".
       // Allowed values are none/minimal/low/medium/high/xhigh. Omit thinking
@@ -58,6 +61,23 @@
       // "api_compat": "openai",
       // "wire_api": "responses",
       // "thinking": "minimal",
+      //
+      // The kimi-code / kimi_code provider accepts exactly the K3 coding
+      // service's three native effort levels: low/high/max. It has no
+      // "none"/"minimal", and Responses has no "max"; the gateway's
+      // medium->high and xhigh->max aliases are deliberately not offered here.
+      // Effort applies only to the effort-capable coding models (k3, k3-256k)
+      // and is sent as the KIMI_MODEL_THINKING_EFFORT environment variable.
+      // The default model kimi-for-coding is always-thinking: it has no effort
+      // dimension, so setting thinking for it fails loudly instead of being
+      // silently ignored. Omitting thinking means omitted — LingTai sets no
+      // environment variable at all and does not guess the service's own
+      // default, so existing agents are unaffected. The level you set is
+      // frozen when the session is created and re-applied to every CLI call of
+      // that session, including resumed ones.
+      // "provider": "kimi-code",
+      // "model": "k3",
+      // "thinking": "high",
       "base_url": "https://api.minimaxi.com/anthropic"
     },
 

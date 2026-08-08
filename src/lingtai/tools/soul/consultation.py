@@ -445,11 +445,15 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
         return None
 
     try:
+        from lingtai.kernel.config import ancillary_session_thinking
+
         session = agent.service.create_session(
             system_prompt=system_prompt,
             tools=tool_schemas,
             model=agent._config.model or agent.service.model,
-            thinking="high",
+            thinking=ancillary_session_thinking(
+                agent._config.provider or agent.service.provider
+            ),
             tracked=False,
             interface=fitted,
             provider=agent._config.provider,

@@ -37,11 +37,15 @@ def soul_inquiry(agent, question: str) -> dict | None:
     system_prompt += "\n\nYou have no tools. Respond with plain text only. Never output tool calls or XML tags."
 
     try:
+        from lingtai.kernel.config import ancillary_session_thinking
+
         session = agent.service.create_session(
             system_prompt=system_prompt,
             tools=None,
             model=agent._config.model or agent.service.model,
-            thinking="high",
+            thinking=ancillary_session_thinking(
+                agent._config.provider or agent.service.provider
+            ),
             tracked=False,
             interface=cloned,
         )

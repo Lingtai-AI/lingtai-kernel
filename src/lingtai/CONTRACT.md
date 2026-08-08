@@ -23,6 +23,9 @@ related_files:
   - tests/test_init_schema.py
   - tests/test_preset_materialization.py
   - tests/test_presets.py
+  - tests/test_kimi_code_effort.py
+  - src/lingtai/llm/kimi_code/effort.py
+  - src/lingtai/kernel/config.py
 maintenance: |
   Keep related_files complete and repo-relative: the paired ANATOMY.md, the
   canonical init.jsonc, real reader/writer/validator code, affected composition
@@ -128,12 +131,42 @@ constructs a migration workspace, or performs a second notification path.
    This is a Nudge-transport concern, not an `init_reader` concern: no
    producer, including `nudge/init_config.py`, individually re-implements
    truncation, externalization, or kind validation.
-8. `manifest.llm.thinking` accepts explicit
-   `none|minimal|low|medium|high|xhigh` only for Codex-family providers or for
-   `provider="custom"`, `api_compat="openai"`, `wire_api="responses"`.
-   Custom omission keeps the existing `high` runtime default; Codex omission
-   keeps its existing adapter-owned `xhigh` default. Invalid values or scopes
-   fail validation rather than being normalized silently.
+8. `manifest.llm.thinking` is validated against a **provider-scoped**
+   vocabulary, not one universal tuple. Codex-family providers and
+   `provider="custom"`, `api_compat="openai"`, `wire_api="responses"` accept
+   `none|minimal|low|medium|high|xhigh`. The `kimi-code`/`kimi_code` route
+   accepts exactly `low|high|max` — the K3 coding service's own native effort
+   vocabulary — so `max` stays rejected on Responses and
+   `none`/`minimal`/`medium`/`xhigh` stay rejected on Kimi. The gateway's
+   `medium`→high and `xhigh`→max compatibility aliases are deliberately not
+   surfaced. Every other provider remains out of scope. Custom omission keeps
+   the existing `high` runtime default; Codex omission keeps its existing
+   adapter-owned `xhigh` default; **Kimi omission stays omission** — no
+   `KIMI_MODEL_THINKING_EFFORT` variable is set at all, byte-identical to the
+   pre-contract invocation. `default` is an internal omission sentinel, never a
+   user-configurable literal. Invalid values or scopes fail validation rather
+   than being normalized silently.
+9. For the Kimi Code route, an explicit level is frozen at chat creation and
+   re-applied to the private environment of **every** physical CLI invocation
+   of that session — first call, `--session` resumed call, and each
+   overflow-recovery retry within one logical send. The model capability gate
+   **fails closed** at `create_chat`: explicit effort is accepted only for the
+   documented effort-capable coding ids (`k3`, `k3-256k`); the always-thinking
+   ids (`kimi-for-coding`, `kimi-for-coding-highspeed`) raise because they have
+   no effort dimension, and any other id raises rather than being optimistically
+   allowed. The gate judges every model the CLI could actually run: when an API
+   key is available the adapter drops `--model` and Kimi's env-model synthesis
+   resolves the *adapter's* model rather than the chat's, so a chat model that
+   diverges from the adapter model must clear the gate on **both** ids or the
+   explicit effort fails closed — an effort is never authorized against a model
+   that does not run. Omitted effort never raises, for any model. LingTai-internal ancillary sessions (soul inquiry/consultation mirrors) use `ancillary_session_thinking`: on the Kimi route they pass the omission sentinel so a LingTai-injected legacy `"high"` can never trip the gate against an always-thinking model, and every other provider keeps the legacy default byte-identical. Effort never rebuilds
+   the chat, resets the opaque CLI session id, or rewrites the cached
+   stable-context system block, and it never reaches argv. Capability status is
+   `model_verified=false`: the env-var contract and vocabulary are documented,
+   per-model/account acceptance and installed-CLI-version behavior are not
+   verified. This contract covers *configured* effort only — there is no
+   live-control, clear/reset, or default-restoration claim, and
+   `KIMI_MODEL_THINKING_KEEP` is deliberately not set.
 
 ## Contract tests
 
@@ -156,7 +189,22 @@ dismissal/repeat semantics for a capped finding.
 `tests/test_agent_config_hydration.py`, and
 `tests/test_preset_materialization.py` prove the accepted custom Responses
 scope, rejected out-of-scope values, and the distinct custom/Codex omission
-defaults through real config and session materialization.
+defaults through real config and session materialization. The same two schema
+suites prove the Kimi Code three-value scope for both registered spellings and
+that `none`/`minimal`/`medium`/`xhigh`/case-and-whitespace aliases are rejected
+there while `max` stays rejected on Responses.
+`tests/test_kimi_code_effort.py` is the Kimi configured-effort contract test:
+it proves the omitted invocation is byte-identical to the pre-contract one
+(including for the always-thinking default model), that each explicit level
+reaches the private environment exactly once on the first and every resumed
+invocation and never reaches argv, that one logical send with overflow recovery
+reuses one frozen snapshot, that the model capability gate rejects
+always-thinking and unknown ids before any subprocess dispatch, that
+out-of-vocabulary values are rejected before dispatch with a bounded message,
+that the `llm_call` record gains only the safe provider-neutral reasoning
+fields (and nothing at all for a provider that offers none), and the isolation
+properties — `generate()` sets no variable, both provider spellings behave
+identically, and the CLI session identity and auth-env fallback are unchanged.
 
 ## Maintenance
 
