@@ -37,6 +37,7 @@ from lingtai.kernel.llm.interface import (
     ToolCallBlock,
     ToolResultBlock,
 )
+from lingtai.kernel.llm.policy import ReasoningConstruction
 from lingtai.kernel.logging import get_logger
 
 from lingtai.llm.base import LLMAdapter
@@ -266,6 +267,27 @@ class KimiCodeContextOverflow(KimiCodeError):
     """The prompt or Kimi context exceeded a supported limit."""
 
 
+def _cli_reasoning_construction(
+    thinking: str | None, *, phase: str
+) -> ReasoningConstruction:
+    """Kimi Code CLI route owner (``first``/``resume`` phases).
+
+    The CLI exposes no reasoning flag or environment variable, so both
+    phases contribute an empty argv/env delta: a ``default``/``None`` policy
+    is omitted and any other captured value is dropped from the actual
+    command. The command builder (``_invoke_raw``) consumes this result, so
+    a future CLI flag must flow through here or the evidence goes stale
+    loudly rather than silently.
+    """
+    requested = "default" if thinking is None else thinking
+    return ReasoningConstruction(
+        route="kimi-code/cli",
+        requested=requested,
+        disposition="omitted" if thinking in (None, "default") else "dropped",
+        phase=phase,
+    )
+
+
 class KimiCodeChatSession(ChatSession):
     """Canonical LingTai session backed by Kimi prompt-mode invocations."""
 
@@ -288,6 +310,12 @@ class KimiCodeChatSession(ChatSession):
         self._kimi_session_id: str | None = None
         self._remote_entry_count = 0
         self._pending_resume_session_id: str | None = None
+        # Captured construction policy value plus the first-phase route
+        # result; ``send`` consumes the stored result for first-style
+        # commands and re-derives a resume-phase result at the actual
+        # resume command construction.
+        self._reasoning_thinking: str | None = "default"
+        self._reasoning_construction: ReasoningConstruction | None = None
         # Seeded from the constructor content so the first per-turn resync in
         # ``SessionManager.send`` is already recognised as a no-op.
         self._stable_context_digest = self._system_block_digest()
@@ -317,11 +345,17 @@ class KimiCodeChatSession(ChatSession):
             def _do_call():
                 self._interface.enforce_tool_pairing()
                 prompt = self._render_prompt()
+                # The builder consumes the pre-armed result for exactly this
+                # command; every remote-session transition re-arms it, so the
+                # llm_call record written before dispatch already described
+                # this command's phase. (An overflow reset below re-arms
+                # ``first`` before the shared recovery retries.)
                 try:
                     result = self._adapter._invoke(
                         prompt,
                         self._model,
                         session_id=self._kimi_session_id,
+                        reasoning=self._reasoning_construction,
                     )
                 except KimiCodeContextOverflow:
                     # A failed remote turn may or may not have been committed.
@@ -350,6 +384,7 @@ class KimiCodeChatSession(ChatSession):
             self._remote_entry_count = (
                 len(self._interface._entries) if self._kimi_session_id else 0
             )
+            self._arm_reasoning()
             return response
         except Exception:
             # Canonical history is restored, but remote state is deliberately
@@ -373,10 +408,26 @@ class KimiCodeChatSession(ChatSession):
 
         return restore
 
+    def _arm_reasoning(self) -> None:
+        """Arm the route result for the exact next CLI command.
+
+        Called at construction and on every remote-session transition, so
+        the ``llm_call`` record written before dispatch already describes
+        the phase of the command the builder will construct, and the builder
+        consumes this same stored instance.
+        """
+        construction = _cli_reasoning_construction(
+            self._reasoning_thinking,
+            phase="resume" if self._kimi_session_id else "first",
+        )
+        self._reasoning_construction = construction
+        self.reasoning_emission = construction.emission()
+
     def _reset_remote_session(self) -> None:
         self._kimi_session_id = None
         self._remote_entry_count = 0
         self._pending_resume_session_id = None
+        self._arm_reasoning()
 
     def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
         self._reset_remote_session()
@@ -617,6 +668,8 @@ class KimiCodeAdapter(LLMAdapter):
             interface=iface,
             context_window=context_window or self._context_window,
         )
+        session._reasoning_thinking = thinking
+        session._arm_reasoning()
         return self._wrap_with_gate(session)
 
     def generate(
@@ -708,7 +761,12 @@ class KimiCodeAdapter(LLMAdapter):
         model: str,
         *,
         session_id: str | None = None,
+        reasoning: ReasoningConstruction | None = None,
     ) -> tuple[str, UsageMetadata, dict]:
+        # ``reasoning`` is the route-owned construction result for this
+        # command; its argv/env deltas (empty today — the CLI accepts no
+        # reasoning control) are the only reasoning contribution to the
+        # spawned process.
         prompt_bytes = len(prompt.encode("utf-8"))
         if prompt_bytes > self._max_prompt_bytes:
             raise KimiCodeContextOverflow(
@@ -716,6 +774,8 @@ class KimiCodeAdapter(LLMAdapter):
             )
 
         env = self._build_env()
+        if reasoning is not None:
+            env.update(dict(reasoning.env_delta))
         cmd = [self._cli_path]
         # With an API key, Kimi's supported env-model synthesis creates the
         # reserved default alias in memory; passing --model would bypass that
@@ -725,6 +785,8 @@ class KimiCodeAdapter(LLMAdapter):
             cmd += ["--model", model]
         if session_id:
             cmd += ["--session", session_id]
+        if reasoning is not None:
+            cmd += list(reasoning.argv_delta)
         cmd += [
             "--prompt",
             prompt,
@@ -881,8 +943,11 @@ class KimiCodeAdapter(LLMAdapter):
         model: str,
         *,
         session_id: str | None = None,
+        reasoning: ReasoningConstruction | None = None,
     ) -> tuple[dict, UsageMetadata, dict]:
-        result, usage, raw = self._invoke_raw(prompt, model, session_id=session_id)
+        result, usage, raw = self._invoke_raw(
+            prompt, model, session_id=session_id, reasoning=reasoning
+        )
         action = _extract_json_object(result)
         if action is None:
             logger.warning("[kimi-code] no JSON action parsed; treating as final text")

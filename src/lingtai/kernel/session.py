@@ -28,6 +28,7 @@ from .llm import (
     LLMResponse,
     LLMService,
 )
+from .llm.policy import ReasoningEmission, ReasoningPolicy
 from .llm_utils import (
     send_with_timeout,
     send_with_timeout_stream,
@@ -293,7 +294,7 @@ class SessionManager:
                 system_prompt=self._build_system_prompt_fn(),
                 tools=self._build_tool_schemas_fn() or None,
                 model=self._config.model or self._llm_service.model,
-                thinking=self._config.thinking or "high",
+                thinking=ReasoningPolicy(self._config.thinking or "high"),
                 agent_type=self._display_name,
                 tracked=True,
                 interaction_id=self._interaction_id,
@@ -310,7 +311,7 @@ class SessionManager:
             system_prompt=self._build_system_prompt_fn(),
             tools=self._build_tool_schemas_fn() or None,
             model=self._config.model or self._llm_service.model,
-            thinking=self._config.thinking or "high",
+            thinking=ReasoningPolicy(self._config.thinking or "high"),
             agent_type=self._display_name,
             tracked=tracked,
             provider=self._config.provider,
@@ -397,6 +398,9 @@ class SessionManager:
             "model": self._config.model or self._llm_service.model or "unknown",
             "api_call_id": api_call_id,
         }
+        reasoning = getattr(self._chat, "reasoning_emission", None)
+        if isinstance(reasoning, ReasoningEmission):
+            llm_call_fields["reasoning"] = reasoning.as_dict()
         self._log("llm_call", **llm_call_fields)
 
         retry_timeout = self._config.retry_timeout

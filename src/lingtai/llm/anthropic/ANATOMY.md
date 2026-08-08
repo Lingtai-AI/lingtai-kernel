@@ -55,7 +55,8 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 
 | Method | Line | Notes |
 |--------|------|-------|
-| `create_chat` | 699 | Builds tools, tool_choice, thinking config; wraps in `_GatedSession` via `_wrap_with_gate` |
+| `_messages_reasoning_construction` | 698 | Messages route owner: one `ReasoningConstruction` per construction — current tiers (`high`→16384, `low`→2048) with coupled `max_tokens`, `default`/`None` omitted, other values dropped; MiniMax/custom-Anthropic inherit it under their own route id |
+| `create_chat` | 733 | Builds tools, tool_choice; consumes the one route-owned reasoning result for coupled kwargs and the recorded `reasoning_emission`; wraps in `_GatedSession` via `_wrap_with_gate` |
 | `generate` | 768 | One-shot via `self._client.messages.create`; gated by `_gated_call` |
 | `make_tool_result_message` | 813 | Returns canonical `ToolResultBlock` with `toolu_` prefix ID |
 | `is_quota_error` | 823 | `isinstance(exc, anthropic.RateLimitError)` |

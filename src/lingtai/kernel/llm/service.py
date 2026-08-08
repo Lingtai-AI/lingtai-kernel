@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .base import ChatSession, FunctionSchema, LLMResponse
     from .interface import ChatInterface, ToolResultBlock
+    from .policy import ReasoningPolicy
 
 
 class LLMService(ABC):
@@ -33,7 +34,7 @@ class LLMService(ABC):
         tools: "list[FunctionSchema] | None" = None,
         *,
         model: str | None = None,
-        thinking: str = "default",
+        thinking: "ReasoningPolicy | str | None" = "default",
         agent_type: str = "",
         tracked: bool = True,
         interaction_id: str | None = None,

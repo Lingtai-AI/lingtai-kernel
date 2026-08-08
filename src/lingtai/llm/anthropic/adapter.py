@@ -46,6 +46,7 @@ from lingtai.kernel.llm.base import (
     UsageMetadata,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
+from lingtai.kernel.llm.policy import ReasoningConstruction
 from lingtai.llm.base import LLMAdapter
 from lingtai.kernel.llm.interface import ChatInterface
 from ..interface_converters import to_anthropic
@@ -689,6 +690,44 @@ class AnthropicAdapter(LLMAdapter):
             return 2048
         return None
 
+    def _messages_route_id(self) -> str:
+        # Custom Anthropic-compatible endpoints inherit this exact wiring and
+        # differ only by endpoint identity; MiniMax overrides with its own id.
+        return "anthropic-compat/messages" if self._base_url else "anthropic/messages"
+
+    def _messages_reasoning_construction(
+        self, thinking: str | None
+    ) -> ReasoningConstruction:
+        """Anthropic Messages route owner.
+
+        Current tiers only: ``high`` -> enabled thinking with a 16384 budget,
+        ``low`` -> 2048, each coupled with the derived ``max_tokens``; a
+        ``default``/``None`` policy is omitted and every other accepted value
+        is dropped from the wire.
+        """
+        requested = "default" if thinking is None else thinking
+        budget = self._resolve_thinking_budget(thinking)
+        if budget is None:
+            disposition = "omitted" if thinking in (None, "default") else "dropped"
+            return ReasoningConstruction(
+                route=self._messages_route_id(),
+                requested=requested,
+                disposition=disposition,
+            )
+        max_tokens = max(budget * 2, budget + 8192)
+        return ReasoningConstruction(
+            route=self._messages_route_id(),
+            requested=requested,
+            disposition="emitted",
+            json_delta=(
+                ("thinking", {"type": "enabled", "budget_tokens": budget}),
+                ("max_tokens", max_tokens),
+            ),
+            emitted_path="thinking.budget_tokens",
+            emitted_value=str(budget),
+            coupled=(("thinking.type", "enabled"), ("max_tokens", str(max_tokens))),
+        )
+
     # -- LLMAdapter interface --------------------------------------------------
 
     def create_chat(
@@ -736,16 +775,10 @@ class AnthropicAdapter(LLMAdapter):
 
         extra_kwargs: dict[str, Any] = {}
 
-        # Thinking/extended thinking
-        thinking_budget = self._resolve_thinking_budget(thinking)
-        if thinking_budget is not None:
-            extra_kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": thinking_budget,
-            }
-            extra_kwargs["max_tokens"] = max(
-                thinking_budget * 2, thinking_budget + 8192
-            )
+        # Thinking/extended thinking: one route-owned result builds the
+        # coupled kwargs and the recorded evidence.
+        construction = self._messages_reasoning_construction(thinking)
+        extra_kwargs.update(construction.materialize_json())
 
         session = AnthropicChatSession(
             client=self._client,
@@ -758,6 +791,7 @@ class AnthropicAdapter(LLMAdapter):
             client_kwargs=self._client_kwargs,
             context_window=context_window,
         )
+        session.reasoning_emission = construction.emission()
         return self._wrap_with_gate(session)
 
     def generate(

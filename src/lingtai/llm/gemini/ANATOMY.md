@@ -35,8 +35,9 @@ Gemini adapter — `google-genai` SDK with Chat API and Interactions API, thinki
 |----------|------|---------|
 | `_build_function_declarations` | 38 | `FunctionSchema` → `types.FunctionDeclaration` |
 | `_parse_response` | 54 | Chat API response → `LLMResponse`; reads `thought` parts, `function_call` parts |
-| `_supports_thinking` | 109 | Model version check: Gemini 3+ only |
-| `_thinking_config` | 123 | Level string → `types.ThinkingConfig(include_thoughts=True, thinking_level=...)` |
+| `_supports_thinking` | 116 | Model version check: Gemini 3+ only |
+| `_interactions_reasoning_construction` | 134 | Interactions route owner: one `ReasoningConstruction` — Gemini 3+ hard-codes `generation_config.thinking_level="high"` (caller value ignored, recorded as requested); older models omit/drop |
+| `_chat_reasoning_construction` | 164 | JSON-schema Chat route owner: same model gate; stores the immutable plain-JSON `ThinkingConfig` spec, which `GenerateContentConfig` coerces to the identical native object at construction |
 | `_sanitize_parameters_for_interactions` | 189 | Strip `"required": []` (Interactions API rejects empty array) |
 | `_build_interactions_tools` | 204 | `FunctionSchema` → Interactions API tool dicts (`type: "function"`) |
 | `_parse_interaction_response` | 221 | Interactions API response → `LLMResponse`; reads `function_call`, `text`, `thought` outputs |
@@ -90,8 +91,8 @@ Gemini adapter — `google-genai` SDK with Chat API and Interactions API, thinki
 
 - **Chat API**: `adapter.py:65-70` — `part.thought == True` + `part.text` → `thoughts.append(text)`.
 - **Interactions API**: `adapter.py:241-247` — `output.type == "thought"` → iterates `output.summary` for text items.
-- **Thinking config**: Only sent for Gemini 3+ models (`_supports_thinking()` at `adapter.py:109`). Hardcoded to `"high"` for all tiers (`adapter.py:749`).
-- **Interactions thinking**: Set via `generation_config.thinking_level` (`adapter.py:812`), not `ThinkingConfig`.
+- **Thinking config**: Only sent for Gemini 3+ models (`_supports_thinking()` at `adapter.py:116`). Hardcoded to `"high"` for all tiers; both native shapes are built by the route-owned `ReasoningConstruction` mappers (`adapter.py:134-205`), which also record the session's `reasoning_emission`.
+- **Interactions thinking**: Set via `generation_config.thinking_level` (`_interactions_reasoning_construction`), not `ThinkingConfig`.
 
 ### Streaming protocol (Interactions API)
 

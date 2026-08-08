@@ -25,3 +25,8 @@ class MiniMaxAdapter(AnthropicAdapter):
             default_headers=default_headers,
         )
         self._setup_gate(max_rpm)
+
+    def _messages_route_id(self) -> str:
+        # MiniMax Messages route owner: inherits Anthropic's exact budget
+        # wiring under its own replaceable route identity.
+        return "minimax/messages"

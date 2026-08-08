@@ -182,6 +182,8 @@ related_files:
   - tests/test_interface.py
   - tests/test_intrinsic_manual_actions.py
   - tests/test_intrinsics_comm.py
+  - tests/test_issue_1197_pr1_current_wiring_characterization.py
+  - tests/test_issue_1197_pr1_policy_refactor.py
   - tests/test_karma.py
   - tests/test_kernel_isolation.py
   - tests/test_kernel_migrate.py

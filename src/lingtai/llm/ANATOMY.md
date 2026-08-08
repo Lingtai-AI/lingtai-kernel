@@ -17,6 +17,7 @@ related_files:
   - src/lingtai/llm/mimo/ANATOMY.md
   - src/lingtai/llm/openai/ANATOMY.md
   - src/lingtai/llm/openai/adapter.py
+  - src/lingtai/kernel/llm/policy.py
   - src/lingtai/llm/openrouter/ANATOMY.md
   - src/lingtai/llm/service.py
   - src/lingtai/kernel/llm/ANATOMY.md
@@ -62,6 +63,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 ## Connections
 
 - **Kernel types** — `__init__.py:3` imports `ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema` from `lingtai.kernel.llm.base`; `ChatInterface` from `lingtai.kernel.llm.interface`.
+- **Construction policy** — `service.py` converts legacy scalar `thinking=` values to `lingtai.kernel.llm.policy.ReasoningPolicy` at session construction and attaches the immutable policy/evidence metadata to the returned session. Each adapter route (OpenAI Responses/Chat, Codex, DeepSeek, MiMo, Zhipu, OpenRouter, Anthropic/MiniMax/custom-Anthropic, Gemini Interactions/Chat, Claude Code and Kimi Code first/resume) owns a route-local mapper returning one `lingtai.kernel.llm.policy.ReasoningConstruction`; that single result builds the actual request kwargs/argv/env and the recorded `reasoning_emission`. The descriptive catalogue of these routes lives in `lingtai.kernel.llm.routes`.
 - **ABC chain** — `LLMAdapter` (`base.py:94`) → abstract `create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`. `LLMService` (`service.py:97`) extends `lingtai.kernel.llm.service.LLMService` ABC.
 - **Adapter registration** — `_register.py` registers dedicated factories including native HTTP/OAuth `codex`, local-CLI `claude-code`, and native `mimo`, plus generic-routed providers (`grok`, `qwen`, `kimi`) via `_custom`. Codex ignores generic API keys but honors an explicit `base_url` and resolves OAuth credentials at its request boundary; Claude Code drops generic HTTP settings because its CLI owns transport/auth.
 - **Interface converters** — imported by adapter session modules (e.g. `openai.adapter` imports `to_openai`, `to_responses_input` from `interface_converters.py:120`).

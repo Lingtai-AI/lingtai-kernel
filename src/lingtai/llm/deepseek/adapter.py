@@ -252,6 +252,16 @@ class DeepSeekAdapter(OpenAIAdapter):
             **kwargs,
         )
 
+    def _chat_route_id(self) -> str:
+        # DeepSeek Chat route owner: inherits the generic collapse mapper
+        # under its own replaceable route identity.
+        return "deepseek/chat"
+
+    def _responses_route_id(self) -> str:
+        # DeepSeek Responses route owner: byte-identical to the generic
+        # Responses mapping today, independently replaceable later.
+        return "deepseek/responses"
+
     def _create_responses_session(
         self,
         model: str,
@@ -263,7 +273,7 @@ class DeepSeekAdapter(OpenAIAdapter):
         thinking: str = "default",
         context_window: int = 0,
     ) -> DeepSeekResponsesSession:
-        from ..openai.adapter import _build_responses_tools, _responses_reasoning_kwargs
+        from ..openai.adapter import _build_responses_tools
 
         if interface is None:
             from lingtai.kernel.llm.interface import ChatInterface
@@ -286,9 +296,10 @@ class DeepSeekAdapter(OpenAIAdapter):
                     "schema": json_schema,
                 },
             }
-        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        construction = self._responses_reasoning_construction(thinking)
+        extra_kwargs.update(construction.materialize_json())
 
-        return DeepSeekResponsesSession(
+        session = DeepSeekResponsesSession(
             client=self._client,
             model=model,
             instructions=system_prompt,
@@ -302,3 +313,5 @@ class DeepSeekAdapter(OpenAIAdapter):
             context_window=context_window,
             stateless_replay=self._responses_stateless_replay,
         )
+        session.reasoning_emission = construction.emission()
+        return session

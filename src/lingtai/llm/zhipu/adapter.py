@@ -114,6 +114,11 @@ class ZhipuAdapter(OpenAIAdapter):
 
     _session_class = ZhipuChatSession
 
+    def _chat_route_id(self) -> str:
+        # Zhipu/GLM Chat route owner: inherits the generic collapse mapper
+        # under its own replaceable route identity.
+        return "zhipu/chat"
+
     def _default_prompt_cache_key(self, model: str) -> str:
         # Fixed provider identity — use a clean ``lingtai-zhipu`` namespace
         # rather than the base_url host. Zhipu/GLM Chat Completions accepts

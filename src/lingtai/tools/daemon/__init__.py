@@ -36,6 +36,8 @@ if TYPE_CHECKING:
 from lingtai.kernel._fsutil import atomic_write_json
 from lingtai.kernel.i18n import t as _t
 from lingtai.kernel.llm.base import FunctionSchema, is_all_empty_response
+from lingtai.kernel.llm.policy import ReasoningConstruction
+from lingtai.kernel.llm.routes import RouteFact, describe_reasoning_construction
 from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.message import MSG_REQUEST, _make_message
 from lingtai.kernel.tool_executor import ToolExecutor
@@ -774,6 +776,43 @@ def _dev_pythonpath_with_source_root() -> str:
 # look like a real CLI flag to keep error messages early and obvious.
 _BACKEND_OPTION_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
+# Native LingTai daemon reasoning handoff: every native session construction
+# passes the literal "default" sentinel so provider routes take their own
+# default branch (generic Chat omits, Codex emits xhigh, ...) and may
+# deliberately differ from main-session hydration.
+_NATIVE_DAEMON_THINKING = "default"
+
+
+def _native_daemon_reasoning_construction() -> ReasoningConstruction:
+    """Native-daemon session-handoff route owner.
+
+    One route-local result whose actual delta supplies the literal
+    ``thinking="default"`` keyword every native construction site passes to
+    ``create_session``, with the disposition/path mechanically derivable
+    from the same result.
+    """
+    return ReasoningConstruction(
+        route="native-daemon/session",
+        requested=_NATIVE_DAEMON_THINKING,
+        disposition="emitted",
+        json_delta=(("thinking", _NATIVE_DAEMON_THINKING),),
+        merge_root="create_session",
+        emitted_path="create_session.thinking",
+        emitted_value=_NATIVE_DAEMON_THINKING,
+        source="native-daemon-forced",
+    )
+
+
+def _native_daemon_thinking() -> str:
+    """Native-daemon default-handoff value for all initial/rebuild sites.
+
+    The initial ``_run_emanation`` session plus the mechanical-compact,
+    AED-retry, and compact-reset rebuilds all consume this one owner; the
+    value is derived from the route result's actual delta, so a
+    native-daemon reasoning change must happen in that one result.
+    """
+    return _native_daemon_reasoning_construction().materialize_json()["thinking"]
+
 
 def _backend_options_to_argv(options: dict | None) -> list[str]:
     """Convert a free-form backend_options dict into a list of argv tokens.
@@ -831,6 +870,162 @@ def _backend_options_to_argv(options: dict | None) -> list[str]:
             f"{type(value).__name__}; expected bool/str/int/float/list of scalars/null"
         )
     return argv
+
+
+def _startup_reasoning_construction(options: dict | None) -> ReasoningConstruction:
+    """External-daemon startup-phase route owner over raw backend options.
+
+    The argv delta is the actual startup contribution — the byte-identical
+    ``_backend_options_to_argv`` conversion of the caller's free-form
+    options (converted first, so validation order and error messages are
+    unchanged). Effort occurrence/value evidence is derived from the
+    validated **typed** ``effort`` option, mirroring the converter's rules
+    exactly — scalar str/int/float emits one valued ``--effort``; ``True``
+    emits one bare presence flag; ``False``/``None``/empty list emit
+    nothing; a list emits one valued occurrence per item — and each
+    occurrence's argv position is computed from the converter's own
+    deterministic layout (the converted prefix of the options before
+    ``effort``), never from token-prefix guessing. The first ordinary
+    valued occurrence keeps the historical ``argv:--effort`` event shape
+    when that token is unambiguous; every other occurrence is recorded at
+    its exact ``argv[i]`` position and verified against the stored argv.
+    """
+    argv = tuple(_backend_options_to_argv(options))
+    has_effort = bool(options) and "effort" in options
+    effort = options.get("effort") if has_effort else None
+    requested = str(effort) if has_effort else "default"
+
+    # Typed-domain occurrence values (converter rules, in order).
+    presence = False
+    if not has_effort or effort is False or effort is None:
+        values: tuple[str, ...] = ()
+    elif effort is True:
+        values = ()
+        presence = True
+    elif isinstance(effort, (list, tuple)):
+        values = tuple(str(item) for item in effort)
+    else:
+        values = (str(effort),)
+
+    if not values and not presence:
+        return ReasoningConstruction(
+            route="external-daemon/startup",
+            requested=requested,
+            disposition="omitted",
+            argv_delta=argv,
+            source="raw-backend-options",
+            phase="startup",
+        )
+
+    # Exact argv positions from the converter's deterministic layout: the
+    # effort tokens start right after the converted prefix of the options
+    # that precede the ``effort`` key.
+    items = list(options.items())
+    effort_index = next(i for i, (key, _value) in enumerate(items) if key == "effort")
+    base = len(_backend_options_to_argv(dict(items[:effort_index])))
+
+    if presence:
+        return ReasoningConstruction(
+            route="external-daemon/startup",
+            requested=requested,
+            disposition="emitted",
+            argv_delta=argv,
+            emitted_path=f"argv[{base}]",
+            emitted_value="--effort",
+            source="raw-backend-options",
+            phase="startup",
+        )
+
+    # One valued occurrence per typed item at positions base+1, base+3, ….
+    if argv.index("--effort") == base:
+        primary_path = "argv:--effort"
+    else:
+        primary_path = f"argv[{base + 1}]"
+    coupled = tuple(
+        (f"argv[{base + 2 * occurrence + 1}]", values[occurrence])
+        for occurrence in range(1, len(values))
+    )
+    return ReasoningConstruction(
+        route="external-daemon/startup",
+        requested=requested,
+        disposition="emitted",
+        argv_delta=argv,
+        emitted_path=primary_path,
+        emitted_value=values[0],
+        coupled=coupled,
+        source="raw-backend-options",
+        phase="startup",
+    )
+
+
+def _startup_backend_options_argv(options: dict | None) -> list[str]:
+    """External-daemon startup-phase handoff owner for raw backend options.
+
+    Startup is the only phase that forwards free-form ``backend_options``
+    (including any provider reasoning flag such as ``--effort``) to the CLI
+    argv; the returned argv is the route result's actual argv delta. Backend
+    ask/resume phases construct fixed argv and never replay these options
+    (see ``_handle_ask_cli`` / ``_ask_reasoning_construction``), and some
+    backends do not support ask at all (``_BACKEND_SPECS``); that phase
+    inequality is deliberate current behavior, not an omission.
+    """
+    return list(_startup_reasoning_construction(options).argv_delta)
+
+
+def describe_startup_reasoning(options: dict | None) -> RouteFact:
+    """Callable exact startup-route description over the typed options.
+
+    Projects the one already-correct ``_startup_reasoning_construction``
+    result into an immutable route fact — same disposition, requested value,
+    emitted path/value, and every carrier-verified coupled occurrence. The
+    static catalogue record carries only typed-domain categories; this
+    callable owns per-input exactness with no second heuristic.
+    """
+    return describe_reasoning_construction(_startup_reasoning_construction(options))
+
+
+def _ask_spawn_environment(
+    reasoning: ReasoningConstruction,
+) -> tuple[tuple[str, str], ...] | None:
+    """Complete child environment for a non-Claude ask spawn.
+
+    ``DaemonProcessCommand.environment`` replaces the child environment
+    entirely, so a nonempty reasoning env delta must overlay a snapshot of
+    the inherited ``os.environ`` rather than becoming the whole environment;
+    an empty delta stays exactly ``None`` (inherit), preserving the
+    historical spawn bytes.
+    """
+    delta = dict(reasoning.env_delta)
+    if not delta:
+        return None
+    environment = os.environ.copy()
+    environment.update(delta)
+    return tuple(environment.items())
+
+
+def _ask_reasoning_construction(backend: str) -> ReasoningConstruction:
+    """External-daemon ask/resume-phase route owner tied to ``_BACKEND_SPECS``.
+
+    Backends whose ask handler builds a fixed argv never replay startup
+    backend options and carry no reasoning control (omitted, empty delta);
+    backends without an ask handler are unsupported for this phase.
+    """
+    spec = _BACKEND_SPECS[backend]
+    if spec.ask_handler_attr is None:
+        return ReasoningConstruction(
+            route=f"external-daemon/{backend}/ask",
+            requested="default",
+            disposition="unsupported",
+            source="backend-spec",
+            phase="ask",
+        )
+    return ReasoningConstruction(
+        route=f"external-daemon/{backend}/ask",
+        requested="default",
+        disposition="omitted",
+        source="fixed-argv",
+        phase="ask",
+    )
 
 
 _CLAUDE_COMMON_RESERVED_BACKEND_FLAGS = {
@@ -2827,7 +3022,7 @@ class DaemonManager:
             system_prompt=run_dir.prompt_path.read_text(encoding="utf-8"),
             tools=schemas or None,
             model=effective_model,
-            thinking="default",
+            thinking=_native_daemon_thinking(),
             tracked=False,
         )
 
@@ -2999,7 +3194,7 @@ class DaemonManager:
                 system_prompt=system_prompt,
                 tools=schemas or None,
                 model=effective_model,
-                thinking="default",
+                thinking=_native_daemon_thinking(),
                 tracked=False,
                 interface=retained,
             )
@@ -3181,7 +3376,7 @@ class DaemonManager:
                     system_prompt=system_prompt,
                     tools=schemas or None,
                     model=effective_model,
-                    thinking="default",
+                    thinking=_native_daemon_thinking(),
                     tracked=False,
                     interface=preserved_interface,
                 )
@@ -3284,7 +3479,7 @@ class DaemonManager:
                         system_prompt=system_prompt,
                         tools=schemas or None,
                         model=effective_model,
-                        thinking="default",
+                        thinking=_native_daemon_thinking(),
                         tracked=False,
                         interface=retained,
                     )
@@ -4560,10 +4755,10 @@ class DaemonManager:
                         "message": f"tasks[{i}]: {e}"}
             raw_opts = spec.get("backend_options")
             if raw_opts is None:
-                backend_argv = []
+                backend_argv = _startup_backend_options_argv(None)
             else:
                 try:
-                    backend_argv = _backend_options_to_argv(raw_opts)
+                    backend_argv = _startup_backend_options_argv(raw_opts)
                     _validate_claude_backend_argv(backend, backend_argv)
                 except ValueError as e:
                     return {"status": "error",
@@ -5310,7 +5505,7 @@ class DaemonManager:
                 return {"status": "error", "id": em_id,
                         "message": backend_spec.ask_unsupported_msg}
             ask_handler = getattr(self, backend_spec.ask_handler_attr)
-            return ask_handler(em_id, entry, message)
+            return ask_handler(em_id, entry, message, backend=backend_spec.id)
 
         if entry["future"].done():
             return {"status": "error", "message": "not running"}
@@ -5416,8 +5611,16 @@ class DaemonManager:
         except (OSError, json.JSONDecodeError, ValueError):
             return run_dir.state_snapshot()
 
-    def _handle_ask_claude_interactive(self, em_id: str, entry: dict, message: str) -> dict:
-        """Dispatch an interactive Claude ``--resume`` follow-up asynchronously."""
+    def _handle_ask_claude_interactive(
+        self, em_id: str, entry: dict, message: str,
+        backend: str = "claude-interactive",
+    ) -> dict:
+        """Dispatch an interactive Claude ``--resume`` follow-up asynchronously.
+
+        ``backend`` is the canonical ``_BACKEND_SPECS`` id selected by the
+        dispatcher (``claude`` or ``claude-interactive``); its one ask route
+        result is threaded into the bridge's real command constructor.
+        """
         run_dir = entry.get("run_dir")
         if run_dir is None:
             return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
@@ -5444,9 +5647,12 @@ class DaemonManager:
         except OSError:
             pass
 
+        # Ask-phase route result for this backend, consumed by the bridge's
+        # real command/env constructors (empty deltas today).
+        reasoning = _ask_reasoning_construction(backend)
         ask_future = self._ask_pool.submit(
             self._run_ask_claude_interactive_stream,
-            em_id, entry, message, session_id, run_dir,
+            em_id, entry, message, session_id, run_dir, reasoning,
         )
         ask_future.add_done_callback(
             lambda f, eid=em_id: self._on_ask_done(eid, f)
@@ -5463,6 +5669,7 @@ class DaemonManager:
         message: str,
         session_id: str,
         run_dir: DaemonRunDir,
+        reasoning: ReasoningConstruction | None = None,
     ) -> dict:
         """Background worker for interactive Claude ``--resume`` follow-ups."""
         ask_cancel = threading.Event()
@@ -5505,6 +5712,7 @@ class DaemonManager:
                     env=_claude_code_env(),
                     log_callback=self._log,
                     terminal_port=self._interactive_terminal_port,
+                    reasoning=reasoning,
                 )
             except Exception as e:
                 err = f"interactive claude ask failed: {e}"
@@ -5531,7 +5739,10 @@ class DaemonManager:
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
-    def _handle_ask_cli(self, em_id: str, entry: dict, message: str) -> dict:
+    def _handle_ask_cli(
+        self, em_id: str, entry: dict, message: str,
+        backend: str = "claude-code",
+    ) -> dict:
         """Dispatch a Claude Code `--resume` follow-up off the caller's turn.
 
         Returns immediately after spawning the subprocess; the stream-json
@@ -5543,6 +5754,9 @@ class DaemonManager:
         Refuses a second concurrent ask against the same emanation with
         ``status="busy"`` — ``claude --resume`` serializes per-session and
         a second spawn would either error or interleave reply text.
+
+        ``backend`` is the canonical ``_BACKEND_SPECS`` id selected by the
+        dispatcher (``claude-code`` or ``claude-p`` share this builder).
         """
         run_dir = entry.get("run_dir")
         if run_dir is None:
@@ -5565,6 +5779,10 @@ class DaemonManager:
                                    f"daemon(action='check', id='{em_id}')"}
             entry["ask_in_flight"] = True
 
+        # Ask-phase route result for the selected canonical backend: a fixed
+        # argv that never replays startup backend options; its (empty)
+        # argv/env deltas are this builder's only reasoning contribution.
+        reasoning = _ask_reasoning_construction(backend)
         cmd = [
             "claude",
             "--resume", session_id,
@@ -5572,14 +5790,17 @@ class DaemonManager:
             "--dangerously-skip-permissions",
             "--output-format", "stream-json",
             "--verbose",
+            *reasoning.argv_delta,
             message,
         ]
         self._log("daemon_claude_code_ask", em_id=em_id,
                   session_id=session_id, message_length=len(message))
 
+        spawn_env = _claude_code_env()
+        spawn_env.update(dict(reasoning.env_delta))
         command = DaemonProcessCommand(
             tuple(cmd), self._agent._working_dir,
-            tuple(_claude_code_env().items()),
+            tuple(spawn_env.items()),
         )
         try:
             handle = self._process_port.spawn(command, group_id=None)
@@ -5759,7 +5980,10 @@ class DaemonManager:
             )
         return {"status": "sent", "id": em_id, "output": output}
 
-    def _handle_ask_codex(self, em_id: str, entry: dict, message: str) -> dict:
+    def _handle_ask_codex(
+        self, em_id: str, entry: dict, message: str,
+        backend: str = "codex",
+    ) -> dict:
         """Dispatch a Codex ``exec resume`` follow-up off the caller's turn.
 
         Mirrors ``_handle_ask_cli``: spawn, register the proc, hand the
@@ -5786,6 +6010,9 @@ class DaemonManager:
                                    f"daemon(action='check', id='{em_id}')"}
             entry["ask_in_flight"] = True
 
+        # Ask-phase route result for the canonical backend; its (empty)
+        # argv/env deltas are this builder's only reasoning contribution.
+        reasoning = _ask_reasoning_construction(backend)
         cmd = [
             "codex",
             "exec",
@@ -5793,6 +6020,7 @@ class DaemonManager:
             session_id,
             "--json",
             "--dangerously-bypass-approvals-and-sandbox",
+            *reasoning.argv_delta,
             message,
         ]
         self._log("daemon_codex_ask", em_id=em_id,
@@ -5800,7 +6028,10 @@ class DaemonManager:
 
         try:
             handle = self._process_port.spawn(
-                DaemonProcessCommand(tuple(cmd), self._agent._working_dir),
+                DaemonProcessCommand(
+                    tuple(cmd), self._agent._working_dir,
+                    _ask_spawn_environment(reasoning),
+                ),
                 group_id=None,
             )
         except FileNotFoundError:
@@ -6783,6 +7014,7 @@ class DaemonManager:
     def _handle_ask_opencode(
         self, em_id: str, entry: dict, message: str,
         *,
+        backend: str = "opencode",
         executable: str = "opencode",
         backend_name: str = "opencode",
         session_state_key: str = "opencode_session_id",
@@ -6837,10 +7069,17 @@ class DaemonManager:
                 "--format", "json",
                 message,
             ]
+        # Ask-phase route result for the canonical wrapper backend; splice
+        # its (empty) argv delta before the trailing message positional.
+        reasoning = _ask_reasoning_construction(backend)
+        cmd = [*cmd[:-1], *reasoning.argv_delta, cmd[-1]]
         self._log(f"daemon_{backend_name}_ask", em_id=em_id,
                   session_id=session_id, message_length=len(message))
 
-        command = DaemonProcessCommand(tuple(cmd), self._agent._working_dir)
+        command = DaemonProcessCommand(
+            tuple(cmd), self._agent._working_dir,
+            _ask_spawn_environment(reasoning),
+        )
         try:
             handle = self._process_port.spawn(command, group_id=None)
         except FileNotFoundError:
@@ -6873,7 +7112,10 @@ class DaemonManager:
                 "message": "ask dispatched; check daemon(action='check', "
                            f"id='{em_id}') for progress and final reply"}
 
-    def _handle_ask_mimocode(self, em_id: str, entry: dict, message: str) -> dict:
+    def _handle_ask_mimocode(
+        self, em_id: str, entry: dict, message: str,
+        backend: str = "mimocode",
+    ) -> dict:
         """Dispatch a MiMo Code ``mimo run --session`` follow-up.
 
         Resume argv stays the harness-owned
@@ -6887,6 +7129,7 @@ class DaemonManager:
         """
         return self._handle_ask_opencode(
             em_id, entry, message,
+            backend=backend,
             executable="mimo",
             backend_name="mimocode",
             session_state_key="mimocode_session_id",
@@ -6909,10 +7152,14 @@ class DaemonManager:
             message,
         ]
 
-    def _handle_ask_oh_my_pi(self, em_id: str, entry: dict, message: str) -> dict:
+    def _handle_ask_oh_my_pi(
+        self, em_id: str, entry: dict, message: str,
+        backend: str = "oh-my-pi",
+    ) -> dict:
         """Dispatch an Oh-My-Pi ``omp --mode json --session`` follow-up."""
         return self._handle_ask_opencode(
             em_id, entry, message,
+            backend=backend,
             executable="omp",
             backend_name="oh-my-pi",
             session_state_key="oh_my_pi_session_id",
@@ -7319,7 +7566,10 @@ class DaemonManager:
         run_dir.mark_done(text)
         return text
 
-    def _handle_ask_cursor(self, em_id: str, entry: dict, message: str) -> dict:
+    def _handle_ask_cursor(
+        self, em_id: str, entry: dict, message: str,
+        backend: str = "cursor",
+    ) -> dict:
         """Dispatch a Cursor Agent CLI ``--resume`` follow-up off the caller's turn."""
         run_dir = entry.get("run_dir")
         if run_dir is None:
@@ -7345,12 +7595,16 @@ class DaemonManager:
                                    f"daemon(action='check', id='{em_id}')"}
             entry["ask_in_flight"] = True
 
+        # Ask-phase route result for the canonical backend; its (empty)
+        # argv/env deltas are this builder's only reasoning contribution.
+        reasoning = _ask_reasoning_construction(backend)
         cmd = [
             "agent",
             "-p",
             "--force",
             "--resume", session_id,
             "--output-format", "stream-json",
+            *reasoning.argv_delta,
             message,
         ]
         self._log("daemon_cursor_ask", em_id=em_id,
@@ -7358,7 +7612,10 @@ class DaemonManager:
 
         try:
             handle = self._process_port.spawn(
-                DaemonProcessCommand(tuple(cmd), self._agent._working_dir),
+                DaemonProcessCommand(
+                    tuple(cmd), self._agent._working_dir,
+                    _ask_spawn_environment(reasoning),
+                ),
                 group_id=None,
             )
         except FileNotFoundError:
