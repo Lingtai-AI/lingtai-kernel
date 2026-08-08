@@ -1492,6 +1492,20 @@ class BaseAgent:
                     pass
 
         elif self._state == AgentState.ACTIVE:
+            # Preemptive parallel steering: when the active turn is a tool_call
+            # and a high-priority human-channel message is present, dispatch a
+            # bounded steering lane instead of only deferring. The lane replies
+            # on the channel and may write steering_interrupt.json; the main
+            # tool-call await loop honors it at its next safe boundary.
+            # ``getattr`` keeps minimal test stubs (which never set
+            # ``_active_turn_kind``) on the plain deferral path.
+            if getattr(self, "_active_turn_kind", None) == "tool_call":
+                from ..steering import dispatch_steering_lane
+
+                try:
+                    dispatch_steering_lane(self, notifications)
+                except Exception as exc:
+                    self._log("steering_lane_dispatch_error", error=str(exc)[:300])
             # Do not mutate unrelated tool results while a turn is active.
             # Leave the fingerprint uncommitted so the same on-disk
             # notification state is retried once the run loop transitions
