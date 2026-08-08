@@ -42,6 +42,12 @@ from lingtai.kernel.llm.base import (
     UsageMetadata,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
+from lingtai.kernel.llm.reasoning import (
+    ReasoningConstructionResult,
+    ReasoningContract,
+    ReasoningRouteContext,
+    ReasoningRouteKey,
+)
 from lingtai.llm.base import LLMAdapter
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
 from ..interface_converters import to_openai, to_responses_input
@@ -3123,9 +3129,11 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         base_url: str | None = None,
         api_key: str | None = None,
         compact_token_limit: int | None = None,
+        reasoning_result: ReasoningConstructionResult | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self._reasoning_result = reasoning_result
         # Standalone Codex compaction (daemon task ``context_token_limit``).
         # Distinct axis from ``compact_threshold``/``context_management``,
         # which Codex never receives (see ``_create_responses_session``).
@@ -4524,6 +4532,10 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         delta_interface.entries.extend(entries)
         return self._frozen_responses_input(delta_interface)
 
+    def reasoning_construction_result(self) -> ReasoningConstructionResult | None:
+        """Return the exact result captured when this session was constructed."""
+        return self._reasoning_result
+
     def _codex_report_account_error(self, exc: Exception) -> None:
         """Report one structural request failure to the native Codex adapter."""
         if self._codex_account_error_reported:
@@ -4659,6 +4671,10 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                 "stream": True,
                 **self._extra_kwargs,
             }
+            if self._reasoning_result is not None:
+                # Provider-local policy owns the opaque wire shape. Apply it at
+                # the single source mapping before REST and WebSocket diverge.
+                self._reasoning_result.wire_patch.apply(kwargs)
             # The ChatGPT Codex endpoint explicitly rejects store=True with
             # `{'detail': 'Store must be set to false'}`. Keep store=false on EVERY
             # request and every transport. REST never sends ``previous_response_id``
@@ -5199,12 +5215,16 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         codex_molt_count: int | None = None,
         codex_compact_token_limit: int | None = None,
         codex_service_tier: str | None = None,
+        reasoning_contract: ReasoningContract | None = None,
+        reasoning_provider: str | None = None,
         codex_account_source: Any = None,
         codex_token_manager_factory: Callable[..., Any] | None = None,
         codex_fallback_auth_path: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self._reasoning_contract = reasoning_contract
+        self._reasoning_provider = reasoning_provider
         # service_tier: normalized wire value from the common Codex boundary
         # (e.g. user ``fast`` → wire ``priority``).  ``None`` omits the field.
         self._codex_service_tier: str | None = (
@@ -5873,14 +5893,23 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 },
             }
 
-        # Codex-only default: an omitted/``default`` thinking level sends an
-        # explicit ``reasoning.effort = "xhigh"`` instead of omitting the field
-        # (omitting it would fall back to the Codex backend's own, lower
-        # default). Explicit levels pass through unchanged, and the generic
-        # OpenAI Responses path keeps its omit-on-default behavior.
-        if thinking in (None, "default"):
-            thinking = "xhigh"
-        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        reasoning_result: ReasoningConstructionResult | None = None
+        if self._reasoning_contract is not None and self._reasoning_provider is not None:
+            reasoning_result = self._reasoning_contract.construct(
+                ReasoningRouteContext(
+                    key=ReasoningRouteKey(self._reasoning_provider, "responses"),
+                    endpoint=self.base_url,
+                    model=model,
+                ),
+                thinking,
+            )
+
+        if reasoning_result is None:
+            # Legacy Codex path, retained byte-for-byte for direct adapters,
+            # unknown models, and custom endpoints.
+            if thinking in (None, "default"):
+                thinking = "xhigh"
+            extra_kwargs.update(_responses_reasoning_kwargs(thinking))
 
         # Codex's backend doesn't accept context_management compaction —
         # leave compact_threshold unset.
@@ -5942,4 +5971,5 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             base_url=self.base_url,
             api_key=getattr(context.client, "api_key", None),
             compact_token_limit=self._codex_compact_token_limit,
+            reasoning_result=reasoning_result,
         )

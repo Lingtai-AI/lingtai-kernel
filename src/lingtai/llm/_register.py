@@ -6,6 +6,8 @@ to the adapter's actual constructor signature.
 """
 from __future__ import annotations
 
+from functools import partial
+
 # Official Codex REST endpoint. Used as the default ``base_url`` for the
 # ``codex`` provider when the manifest/provider-defaults do not configure one.
 # A configured ``base_url`` (the generic provider convention) overrides it;
@@ -135,9 +137,10 @@ def register_all_adapters() -> None:
 
     # -- codex ----------------------------------------------------------------
 
-    def _codex(*, model=None, defaults=None, **kw):
+    def _codex(*, actual_provider: str, model=None, defaults=None, **kw):
         """Build the one native Codex provider, including account selection."""
         from .openai.adapter import CodexOpenAIAdapter
+        from .openai.codex_reasoning import CodexReasoningContract
         from lingtai.auth.codex import CodexTokenManager
         from lingtai.auth.codex_account_source import FixedAccountSource, WeightedAccountSource
         from lingtai.auth.codex_pool import (
@@ -155,6 +158,14 @@ def register_all_adapters() -> None:
             else CODEX_OFFICIAL_BASE_URL
         )
         d = defaults or {}
+        # Every registered Codex alias binds the one stateless provider-local
+        # contract; any other spelling keeps the legacy adapter path.
+        codex_reasoning_contract = CodexReasoningContract()
+        reasoning_contract = (
+            codex_reasoning_contract
+            if actual_provider in ("codex", "codex-pool", "codex_pool")
+            else None
+        )
         codex_id_kw: dict = {}
         for cfg_key in ("codex_session_anchor", "codex_thread_salt"):
             val = d.get(cfg_key)
@@ -193,14 +204,16 @@ def register_all_adapters() -> None:
             codex_account_source=source,
             codex_token_manager_factory=CodexTokenManager,
             codex_fallback_auth_path=fallback_path,
+            reasoning_contract=reasoning_contract,
+            reasoning_provider=actual_provider,
             **codex_id_kw,
         )
 
-    # ``codex-pool`` remains only a configuration-level spelling.  All names
-    # resolve to this same factory and the same native Codex adapter; there is
+    # ``codex-pool`` remains only a configuration-level spelling. Each name
+    # binds its registry identity into the one Codex implementation; there is
     # no pool-specific chat/session/retry implementation.
     for name in ("codex", "codex-pool", "codex_pool"):
-        LLMService.register_adapter(name, _codex)
+        LLMService.register_adapter(name, partial(_codex, actual_provider=name))
 
     def _claude_code(*, model=None, defaults=None, **kw):
         from .claude_code.adapter import ClaudeCodeAdapter

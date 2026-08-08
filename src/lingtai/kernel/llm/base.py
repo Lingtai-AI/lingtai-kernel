@@ -8,9 +8,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lingtai.kernel.logging import get_logger
+
+if TYPE_CHECKING:
+    from .reasoning import ReasoningConstructionResult
 
 from .interface import ChatInterface
 
@@ -214,6 +217,11 @@ class ChatSession(ABC):
         it should not need adapter-specific static-key blocklists.
         """
         return None
+
+    def reasoning_construction_result(self) -> "ReasoningConstructionResult | None":
+        """Return the immutable reasoning construction capture, when available."""
+        return None
+
     def on_history_summarized(self, summarized_ids: list[str]) -> None:
         """Hook called after `context(action='summarize')` mutates chat history."""
 

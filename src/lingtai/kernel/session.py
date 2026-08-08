@@ -21,6 +21,7 @@ from .config import (
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,  # back-compat alias for the above
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
+    THINKING_PROVIDERS,
 )
 from .llm import (
     ChatSession,
@@ -28,6 +29,7 @@ from .llm import (
     LLMResponse,
     LLMService,
 )
+from .llm.reasoning import ReasoningConstructionResult
 from .llm_utils import (
     send_with_timeout,
     send_with_timeout_stream,
@@ -286,6 +288,27 @@ class SessionManager:
     # LLM communication
     # ------------------------------------------------------------------
 
+    def _session_thinking(self) -> Any:
+        """Resolve the thinking value for session create/rebuild.
+
+        The effective route identity is ``config.provider or
+        llm_service.provider``: only a constructor-omitted thinking on a
+        Codex-family route passes the internal ``"default"`` omission
+        sentinel, so the injected provider contract owns what omission means
+        on the wire. Explicit values pass through unchanged — falsey ones
+        included, so the provider contract rejects them before dispatch.
+        Only a constructor-omitted value keeps the legacy ``"high"``; this
+        seam knows no model table, wire field, or provider baseline.
+        """
+        if not getattr(self._config, "_thinking_constructor_omitted", False):
+            return self._config.thinking
+        provider = self._config.provider or getattr(
+            self._llm_service, "provider", None
+        )
+        if str(provider or "").lower() in THINKING_PROVIDERS:
+            return "default"
+        return self._config.thinking or "high"
+
     def ensure_session(self) -> ChatSession:
         """Ensure a persistent LLM session exists, creating one if needed."""
         if self._chat is None:
@@ -293,7 +316,7 @@ class SessionManager:
                 system_prompt=self._build_system_prompt_fn(),
                 tools=self._build_tool_schemas_fn() or None,
                 model=self._config.model or self._llm_service.model,
-                thinking=self._config.thinking or "high",
+                thinking=self._session_thinking(),
                 agent_type=self._display_name,
                 tracked=True,
                 interaction_id=self._interaction_id,
@@ -310,7 +333,7 @@ class SessionManager:
             system_prompt=self._build_system_prompt_fn(),
             tools=self._build_tool_schemas_fn() or None,
             model=self._config.model or self._llm_service.model,
-            thinking=self._config.thinking or "high",
+            thinking=self._session_thinking(),
             agent_type=self._display_name,
             tracked=tracked,
             provider=self._config.provider,
@@ -397,6 +420,19 @@ class SessionManager:
             "model": self._config.model or self._llm_service.model or "unknown",
             "api_call_id": api_call_id,
         }
+        result_reader = getattr(self._chat, "reasoning_construction_result", None)
+        reasoning_result = result_reader() if callable(result_reader) else None
+        if isinstance(reasoning_result, ReasoningConstructionResult):
+            llm_call_fields.update(
+                reasoning_requested=(
+                    "omitted" if reasoning_result.requested is None
+                    else reasoning_result.requested
+                ),
+                reasoning_normalized=reasoning_result.normalized,
+                reasoning_actual=reasoning_result.actual,
+                reasoning_source=reasoning_result.source,
+                reasoning_capability_source=reasoning_result.capability_source,
+            )
         self._log("llm_call", **llm_call_fields)
 
         retry_timeout = self._config.retry_timeout

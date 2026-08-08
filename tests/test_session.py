@@ -7,6 +7,7 @@ import pytest
 
 from lingtai.kernel.session import SessionManager
 from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.llm.reasoning import ReasoningConstructionResult
 
 
 def make_session_manager(**kw):
@@ -157,6 +158,50 @@ def test_send_llm_call_omits_codex_pool_for_other_providers():
 
     llm_call = next(fields for event, fields in events if event == "llm_call")
     assert "codex_pool" not in llm_call
+
+
+def test_llm_call_observes_exact_reasoning_construction_result():
+    events = []
+    sm, _, mock_session = make_session_manager(
+        logger_fn=lambda event_type, **fields: events.append((event_type, fields))
+    )
+    mock_session.reasoning_construction_result.return_value = ReasoningConstructionResult(
+        requested=None,
+        normalized="xhigh",
+        actual="xhigh",
+        source="lingtai_codex_default",
+        capability_source="codex_cli_0_144_1_model_metadata",
+        wire_patch=MagicMock(),
+    )
+
+    sm.send("hello")
+
+    llm_call = next(fields for event, fields in events if event == "llm_call")
+    assert llm_call == {
+        "model": "test-model",
+        "api_call_id": llm_call["api_call_id"],
+        "reasoning_requested": "omitted",
+        "reasoning_normalized": "xhigh",
+        "reasoning_actual": "xhigh",
+        "reasoning_source": "lingtai_codex_default",
+        "reasoning_capability_source": "codex_cli_0_144_1_model_metadata",
+    }
+
+
+def test_llm_call_without_reasoning_result_preserves_prior_fields_exactly():
+    events = []
+    sm, _, mock_session = make_session_manager(
+        logger_fn=lambda event_type, **fields: events.append((event_type, fields))
+    )
+    mock_session.reasoning_construction_result.return_value = None
+
+    sm.send("hello")
+
+    llm_call = next(fields for event, fields in events if event == "llm_call")
+    assert llm_call == {
+        "model": "test-model",
+        "api_call_id": llm_call["api_call_id"],
+    }
 
 
 def test_safe_usage_extra_event_filter_allows_pool_model_scope():

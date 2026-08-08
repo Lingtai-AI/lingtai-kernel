@@ -430,7 +430,15 @@ def validate_init(data: dict) -> list[str]:
                 "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+        provider = str(llm.get("provider") or "").lower()
+        if provider in THINKING_PROVIDERS:
+            if not isinstance(thinking, str) or not thinking or thinking == "default":
+                raise ValueError(
+                    "manifest.llm.thinking: expected a non-empty exact string; "
+                    "the reserved 'default' sentinel cannot be configured"
+                )
+        elif not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+            # Custom OpenAI Responses retains its exact six-value vocabulary.
             raise ValueError(
                 "manifest.llm.thinking: expected one of "
                 f"{', '.join(THINKING_LEVELS)}"

@@ -6,11 +6,11 @@ import os
 from dataclasses import dataclass
 
 
-# Accepted manifest.llm.thinking values, mirroring the upstream Responses
-# ``reasoning.effort`` payload values in ascending effort order. Explicit
-# ``"none"`` is a real payload value (effort none), distinct from an *omitted*
-# field — omitted stays the internal ``"default"`` sentinel and the Codex
-# adapter maps it to ``"xhigh"``.
+# Legacy generic/custom OpenAI Responses thinking vocabulary, retained
+# byte-for-byte by the shared helper and custom manifest/preset validation.
+# Registered Codex values are exact-model capabilities owned provider-locally in
+# ``lingtai.llm.openai.codex_reasoning``; they must not be added to this tuple.
+# Omission remains the internal ``"default"`` sentinel.
 THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 
 # Codex-family providers that accept manifest.llm.thinking. ``codex-pool``
@@ -113,6 +113,23 @@ def system_prompt_pressure_ratio() -> float:
 # prompts, status, or tool metadata.
 IDLE_SLEEP_TIMEOUT_SECONDS = 86400.0
 
+class _ThinkingConstructorOmitted:
+    """Unique identity sentinel marking "no thinking constructor argument"."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<thinking constructor omitted>"
+
+
+# Module-private constructor-omission sentinel for AgentConfig.thinking. It is a
+# unique object compared by IDENTITY, so no explicit string value — not even one
+# spelling out an internal sentinel name — can be reinterpreted as omission.
+# __post_init__ resolves it per provider scope and records the private
+# constructor-omission provenance fact; the sentinel never survives
+# construction and is not a configurable value.
+_THINKING_CONSTRUCTOR_OMITTED = _ThinkingConstructorOmitted()
+
 
 @dataclass
 class AgentConfig:
@@ -131,7 +148,18 @@ class AgentConfig:
     max_aed_attempts: int = 3   # max AED retry attempts per inbox message turn
     max_rpm: int = 60  # API requests-per-minute cap for this agent's provider; 0 = no gating. Shared across all agents in the same process that use the same (provider, base_url) pair (adapter cache key).
     thinking_budget: int | None = None
-    thinking: str = "high"  # reasoning/thinking tier passed to the main persistent LLM session
+    # Reasoning/thinking tier passed to the main persistent LLM session. An
+    # omitted constructor value resolves in __post_init__: Codex-family
+    # providers (THINKING_PROVIDERS) keep the internal "default" omission
+    # sentinel — the same fact wrapper manifest hydration preserves — so the
+    # injected registered-route Codex contract owns the omitted->wire policy;
+    # every other provider keeps the legacy visible "high" main-session default
+    # (AgentConfig().thinking == "high"). Explicit values, including an
+    # explicitly supplied "high", always pass through unchanged. The private
+    # constructor-omission provenance fact survives on the instance so the
+    # session seam can resolve the effective route when the provider comes
+    # from the injected LLM service instead of this config.
+    thinking: str = _THINKING_CONSTRUCTOR_OMITTED
     data_dir: str | None = None  # for cache files (e.g., model context windows)
     soul_delay: float = DEFAULT_SOUL_DELAY_SECONDS  # seconds idle before soul whispers; large value = effectively off
     language: str = "en"  # legacy language field retained for compatibility; prompt.py no longer injects prose from it
@@ -181,6 +209,24 @@ class AgentConfig:
     snapshot_interval: float | None = None  # seconds between git snapshots; None = off
 
     def __post_init__(self):
+        # Resolve a constructor-omitted thinking value by provider scope,
+        # comparing the sentinel by IDENTITY so an explicit string value can
+        # never be reinterpreted as omission. The private provenance fact is
+        # kept because the effective session route may come from the injected
+        # LLM service's provider rather than this config; SessionManager
+        # re-reads it at its single create/rebuild seam. This preserves only
+        # the omission FACT: Codex-family providers get the internal "default"
+        # sentinel (the provider-injected contract owns what omission means on
+        # the wire); everything else keeps the legacy "high". No model table,
+        # wire field, or provider baseline lives here.
+        self._thinking_constructor_omitted = (
+            self.thinking is _THINKING_CONSTRUCTOR_OMITTED
+        )
+        if self._thinking_constructor_omitted:
+            if str(self.provider or "").lower() in THINKING_PROVIDERS:
+                self.thinking = "default"
+            else:
+                self.thinking = "high"
         # Clamp max_aed_attempts to at least 1.  A value of 0 or negative
         # causes the AED retry loop in turn.py to spin forever: aed_attempts
         # starts at 1 (incremented before the equality check) and never equals

@@ -25,6 +25,7 @@ related_files:
   - src/lingtai/kernel/migrate/CONTRACT.md
   - src/lingtai/kernel/daemon_supervisor/CONTRACT.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
+  - src/lingtai/llm/openai/CONTRACT.md
   - src/lingtai/CONTRACT.md
   - CONTRIBUTING.md
   - README.md
