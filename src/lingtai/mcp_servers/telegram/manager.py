@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import socket
@@ -2184,6 +2185,9 @@ class TelegramManager:
         lifecycle = self._task_card_agent_lifecycle_status()
         if lifecycle is not None:
             snapshot["agent_lifecycle"] = lifecycle
+        active_seconds = self._task_card_active_seconds()
+        if active_seconds is not None:
+            snapshot["agent_active_seconds"] = active_seconds
         model = self._task_card_current_model()
         if model:
             snapshot["model"] = model
@@ -2284,6 +2288,40 @@ class TelegramManager:
         except Exception:
             return state
         return state if alive else "offline"
+
+    def _task_card_active_seconds(self) -> float | None:
+        """Seconds since the agent's last progress while it is active.
+
+        Reads ``.status.json``'s ``runtime.last_progress_at`` (the wall
+        timestamp ``BaseAgent._write_status_snapshot`` refreshes on every
+        turn) and returns its age only when the runtime reports ``active``.
+        This surfaces the live LLM/tool latency: while the model thinks or a
+        tool runs, ``last_progress_at`` stays put and the age grows; when
+        activity resumes it resets. Missing/malformed data, a non-active
+        state, or a future timestamp degrades to ``None``.
+        """
+        try:
+            raw = (self._working_dir / ".status.json").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        runtime = data.get("runtime")
+        if not isinstance(runtime, dict):
+            return None
+        if runtime.get("state") != AgentState.ACTIVE.value:
+            return None
+        last_progress = runtime.get("last_progress_at")
+        if not isinstance(last_progress, (int, float)) or isinstance(last_progress, bool):
+            return None
+        if not math.isfinite(last_progress):
+            return None
+        age = time.time() - last_progress
+        return age if age >= 0 else None
 
     @staticmethod
     def _project_agent_text_event(event: dict) -> dict | None:

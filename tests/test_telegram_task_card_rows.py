@@ -382,7 +382,29 @@ def test_metadata_renders_compact_normal_lifecycle_states():
     for state in ("active", "idle", "asleep", "suspended"):
         lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": state})
         assert lines == [f"agent · {state}"]
-        assert "/refresh" not in lines[0]
+
+
+def test_metadata_renders_active_seconds_only_when_active():
+    # Active state plus a sane age renders the (N sec) suffix.
+    lines = TelegramManager._format_task_card_metadata({
+        "agent_lifecycle": "active",
+        "agent_active_seconds": 12.0,
+    })
+    assert lines == ["agent · active (12s)"]
+    # Non-active states never render the suffix even if the field is present.
+    lines = TelegramManager._format_task_card_metadata({
+        "agent_lifecycle": "idle",
+        "agent_active_seconds": 12.0,
+    })
+    assert lines == ["agent · idle"]
+    # Missing/invalid age degrades to the plain lifecycle line.
+    lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": "active"})
+    assert lines == ["agent · active"]
+    lines = TelegramManager._format_task_card_metadata({
+        "agent_lifecycle": "active",
+        "agent_active_seconds": "secret",
+    })
+    assert lines == ["agent · active"]
 
 
 def test_metadata_renders_stuck_with_refresh_hint():

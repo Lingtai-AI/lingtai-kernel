@@ -388,6 +388,14 @@ class TaskCardEventProjection:
             agent_line = f"agent · {lifecycle} · try /refresh"
         elif lifecycle in cls.AGENT_STATES:
             agent_line = f"agent · {lifecycle}"
+        if agent_line and lifecycle == AgentState.ACTIVE.value:
+            active_seconds = metadata.get("agent_active_seconds")
+            if (
+                type(active_seconds) in {int, float}
+                and not isinstance(active_seconds, bool)
+                and active_seconds >= 0
+            ):
+                agent_line = f"{agent_line} ({float(active_seconds):.0f}s)"
 
         session_line = (
             "session · " + " · ".join(session_parts) if session_parts else None
