@@ -138,7 +138,7 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
 
 
 def test_metadata_renders_device_and_working_dir_lines() -> None:
-    """Device identity metadata renders compact device + path lines."""
+    """Device identity metadata renders a compact ||-separated footer."""
     metadata = {
         "agent_lifecycle": "active",
         "api_calls": 2,
@@ -147,15 +147,16 @@ def test_metadata_renders_device_and_working_dir_lines() -> None:
         "working_dir": "C:\\Users\\zhuang\\.lingtai\\deepseek-1",
     }
     lines = TaskCardEventProjection.format_metadata(metadata)
-    assert any(
-        line == "device · zesen-desktop · shell powershell" for line in lines
-    )
-    assert any(line.startswith("path · C:\\Users\\zhuang") for line in lines)
+    assert len(lines) == 1
+    joined = lines[0]
+    assert "device · zesen-desktop · shell powershell" in joined
+    assert "path · C:\\Users\\zhuang" in joined
+    assert " | " in joined
 
 
 def test_metadata_omits_device_line_when_only_bad_values() -> None:
-    """Missing or malformed device identity degrades to no device/path lines."""
+    """Missing or malformed device identity degrades to no device/path groups."""
     metadata = {"agent_lifecycle": "active", "device_short_name": 42, "working_dir": ""}
     lines = TaskCardEventProjection.format_metadata(metadata)
-    assert not any(line.startswith("device · ") for line in lines)
-    assert not any(line.startswith("path · ") for line in lines)
+    assert not any("device · " in line for line in lines)
+    assert not any("path · " in line for line in lines)

@@ -340,11 +340,10 @@ def test_metadata_is_two_lines_bounded_and_between_footer_and_timestamp():
     time_idx = next(i for i, line in enumerate(lines) if line.startswith("Last Updated: "))
     metadata_lines = lines[footer_idx + 1:time_idx]
     assert metadata_lines == [
-        "session · cache 87.8% · miss 170.6k/1.0M · calls 13",
-        "ctx · 171.2k/272.0k · 63%",
+        "session · cache 87.8% · miss 170.6k/1.0M · calls 13 | ctx · 171.2k/272.0k · 63%",
     ]
-    assert len(metadata_lines) <= 2
-    assert len("\n".join(metadata_lines)) <= 150
+    assert len(metadata_lines) == 1
+    assert len(metadata_lines[0]) <= 500
 
 
 def test_metadata_omits_untrusted_or_invalid_values():
@@ -370,9 +369,9 @@ def test_metadata_pathological_counts_never_overflow_or_break_budget():
         "context_window": 10**1000,
         "context_usage": 1.0,
     })
-    assert len(lines) == 2
-    assert len("\n".join(lines)) <= 150
-    assert "inf" not in "\n".join(lines).lower()
+    assert len(lines) == 1
+    assert len(lines[0]) <= 500
+    assert "inf" not in lines[0].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -423,11 +422,11 @@ def test_metadata_agent_and_session_combine_on_line_one_ctx_preserved():
         "context_usage": 0.62958,
     })
     assert lines == [
-        "agent · active · session · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "agent · active · session · cache 87.8% · miss 170.6k/1.0M · calls 13 | "
         "ctx · 171.2k/272.0k · 63%",
     ]
-    assert len(lines) <= 2
-    assert len("\n".join(lines)) <= 150
+    assert len(lines) == 1
+    assert len(lines[0]) <= 500
 
 
 def test_metadata_stuck_hint_and_ctx_both_survive_full_metadata():
@@ -444,12 +443,12 @@ def test_metadata_stuck_hint_and_ctx_both_survive_full_metadata():
     # The 2-line cap holds; the hint leads line 1 (safe from end-truncation)
     # and ctx survives as line 2 instead of being dropped by the cap.
     assert lines == [
-        "agent · stuck · try /refresh · session · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "agent · stuck · try /refresh · session · cache 87.8% · miss 170.6k/1.0M · calls 13 | "
         "ctx · 171.2k/272.0k · 63%",
     ]
     assert lines[0].startswith("agent · stuck · try /refresh")
-    assert len(lines) <= 2
-    assert len("\n".join(lines)) <= 150
+    assert len(lines) == 1
+    assert len(lines[0]) <= 500
 
 
 def test_metadata_unchanged_when_no_agent_lifecycle_present():
@@ -464,7 +463,7 @@ def test_metadata_unchanged_when_no_agent_lifecycle_present():
         "context_usage": 0.62958,
     })
     assert lines == [
-        "session · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "session · cache 87.8% · miss 170.6k/1.0M · calls 13 | "
         "ctx · 171.2k/272.0k · 63%",
     ]
 

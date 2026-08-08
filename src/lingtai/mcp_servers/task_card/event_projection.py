@@ -22,8 +22,8 @@ class TaskCardEventProjection:
         "/taskcard N sets normal rows (1-10"
     )
     DEFAULT_NORMAL_ROWS = 1
-    METADATA_MAX_CHARS = 400
-    METADATA_MAX_LINES = 5
+    METADATA_MAX_CHARS = 500
+    METADATA_MAX_LINES = 2
     TIME_PREFIX = "Last Updated: "
     AGENT_STATES = frozenset(state.value for state in AgentState)
 
@@ -393,26 +393,20 @@ class TaskCardEventProjection:
             "session · " + " · ".join(session_parts) if session_parts else None
         )
         context_line = "ctx · " + " · ".join(context_parts) if context_parts else None
-        lines: list[str] = []
+        # One compact footer line: groups separated by "|" so each group stays
+        # readable without forcing line breaks (the card stays narrow on
+        # Telegram). Physical path rides in the last group so a long working
+        # dir cannot crowd the identity.
+        groups: list[str] = []
         if agent_line and session_line:
-            # One compact line when the session is empty-ish; otherwise keep
-            # the agent status on its own line so long session telemetry does
-            # not push it past the card width.
-            if len(session_line) > 60:
-                lines.append(agent_line)
-                lines.append(session_line)
-            else:
-                lines.append(f"{agent_line} · {session_line}")
+            groups.append(f"{agent_line} · {session_line}")
         elif agent_line:
-            lines.append(agent_line)
+            groups.append(agent_line)
         elif session_line:
-            lines.append(session_line)
+            groups.append(session_line)
         if context_line:
-            lines.append(context_line)
+            groups.append(context_line)
 
-        # Device identity: short host name + shell dialect + physical path.
-        # Each value passes through the machine-identifier allowlist; the path
-        # is its own line so a long working dir cannot crowd the name/shell.
         device = cls.machine_identifier(
             metadata.get("device_short_name"), limit=64
         )
@@ -423,13 +417,13 @@ class TaskCardEventProjection:
                 parts.append(device)
             if shell_name is not None:
                 parts.append(f"shell {shell_name}")
-            lines.append("device · " + " · ".join(parts))
+            groups.append("device · " + " · ".join(parts))
         working_dir = cls.machine_identifier(metadata.get("working_dir"), limit=220)
         if working_dir is not None:
-            lines.append(f"path · {working_dir}")
+            groups.append(f"path · {working_dir}")
 
-        lines = lines[: cls.METADATA_MAX_LINES]
-        if not lines:
+        lines = [" | ".join(groups)[: cls.METADATA_MAX_CHARS]]
+        if not lines or not lines[0].strip():
             return []
         joined = "\n".join(lines)
         if len(joined) <= cls.METADATA_MAX_CHARS:
