@@ -484,6 +484,72 @@ def test_load_preset_accepts_thinking_for_codex_pool(tmp_path, provider):
     assert loaded["manifest"]["llm"]["thinking"] == "xhigh"
 
 
+# --- Claude Code five-value scope (issue #1197) ----------------------------
+
+_CLAUDE_PROVIDERS = ["claude-code", "claude_code"]
+_CLAUDE_LEVELS = ["low", "medium", "high", "xhigh", "max"]
+
+
+@pytest.mark.parametrize("provider", _CLAUDE_PROVIDERS)
+@pytest.mark.parametrize("value", _CLAUDE_LEVELS)
+def test_load_preset_accepts_thinking_for_claude_code(tmp_path, provider, value):
+    p = {
+        "name": "claude",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "opus", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / f"claude-{provider}-{value}.json"
+    f.write_text(json.dumps(p))
+
+    loaded = load_preset(str(f))
+
+    assert loaded["manifest"]["llm"]["thinking"] == value
+
+
+@pytest.mark.parametrize("provider", _CLAUDE_PROVIDERS)
+@pytest.mark.parametrize("value", ["none", "minimal", "default", "High", " high", "", 1, None])
+def test_load_preset_rejects_thinking_outside_claude_vocabulary(
+    tmp_path, provider, value
+):
+    p = {
+        "name": "bad-claude",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "opus", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad-claude.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking") as excinfo:
+        load_preset(str(f))
+    message = str(excinfo.value)
+    for level in _CLAUDE_LEVELS:
+        assert level in message, message
+    assert "minimal" not in message, message
+
+
+def test_load_preset_rejects_max_for_codex(tmp_path):
+    """``max`` is Claude-only; the Responses vocabulary must not acquire it."""
+    p = {
+        "name": "bad-max",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": "codex", "model": "gpt-5.5", "thinking": "max"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad-max.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking"):
+        load_preset(str(f))
+
+
 def test_preset_context_limit_reads_from_llm_block():
     manifest = {
         "llm": {"provider": "x", "model": "y", "context_limit": 16384},

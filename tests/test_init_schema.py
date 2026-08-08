@@ -369,6 +369,46 @@ def test_llm_thinking_accepted_for_codex_pool(provider):
     validate_init(data)
 
 
+# --- Claude Code five-value scope (issue #1197) ----------------------------
+
+_CLAUDE_PROVIDERS = ["claude-code", "claude_code"]
+_CLAUDE_LEVELS = ["low", "medium", "high", "xhigh", "max"]
+
+
+@pytest.mark.parametrize("provider", _CLAUDE_PROVIDERS)
+@pytest.mark.parametrize("value", _CLAUDE_LEVELS)
+def test_llm_thinking_accepted_for_claude_code(provider, value):
+    """Both registered Claude spellings accept the installed CLI's five levels."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["thinking"] = value
+    validate_init(data)
+
+
+@pytest.mark.parametrize("provider", _CLAUDE_PROVIDERS)
+@pytest.mark.parametrize("value", ["none", "minimal", "default", "High", " high", "", 1, None])
+def test_llm_thinking_rejected_outside_claude_vocabulary(provider, value):
+    """``none``/``minimal``/aliases are Responses values, not Claude values."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["thinking"] = value
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking") as excinfo:
+        validate_init(data)
+    message = str(excinfo.value)
+    for level in _CLAUDE_LEVELS:
+        assert level in message, message
+    assert "minimal" not in message, message
+
+
+def test_llm_thinking_max_still_rejected_for_codex():
+    """``max`` is Claude-only; the Responses vocabulary must not acquire it."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "codex"
+    data["manifest"]["llm"]["thinking"] = "max"
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking"):
+        validate_init(data)
+
+
 def test_llm_thinking_known_field_does_not_warn():
     data = _valid_init()
     data["manifest"]["llm"]["provider"] = "codex"

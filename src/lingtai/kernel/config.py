@@ -19,17 +19,59 @@ THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 # ``llm_supports_thinking`` so validators share the complete rule.
 THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 
+# Registered spellings of the native Claude Code route. Both already resolve to
+# the same ``ClaudeCodeAdapter`` in ``lingtai/llm/_register.py``, so both accept
+# the same explicit thinking vocabulary.
+CLAUDE_THINKING_PROVIDERS = ("claude-code", "claude_code")
 
-def llm_supports_thinking(llm: dict) -> bool:
-    """Return whether a manifest LLM block accepts explicit thinking effort."""
+# Accepted manifest.llm.thinking values for the Claude Code route. This is the
+# installed ``claude`` CLI's own ``--effort <level>`` vocabulary and is
+# deliberately NOT the Responses tuple above: Claude has no ``none``/``minimal``
+# and Responses has no ``max``. The provider-local descriptor
+# (``lingtai/llm/claude_code/effort.py``) re-exports this tuple rather than
+# restating it, so the schema gate and the wire emitter cannot drift apart.
+# Capability status is ``model_verified=false``: the installed CLI's flag
+# parsing is verified, per-model/account acceptance is not.
+CLAUDE_THINKING_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+# Internal omission sentinel for manifest.llm.thinking. It is never a
+# user-configurable literal: it means "the field was omitted", and each provider
+# adapter owns what omission means on its own wire (Codex maps it to
+# ``reasoning.effort = "xhigh"``; Claude Code emits no ``--effort`` flag at
+# all). Validators reject it as an explicit value.
+THINKING_OMITTED = "default"
+
+# Legacy cross-provider main-session default for a constructor-omitted
+# ``AgentConfig.thinking``. Providers that own their omission (Codex, Claude
+# Code) opt out of it via ``THINKING_OMITTED``.
+DEFAULT_THINKING = "high"
+
+
+def thinking_levels_for_llm(llm: dict) -> tuple[str, ...] | None:
+    """Return the explicit thinking vocabulary a manifest LLM block accepts.
+
+    ``None`` means the block is out of scope entirely. Callers must validate an
+    explicit value against the *returned* tuple rather than a single global
+    tuple — the accepted vocabulary is provider-specific, so ``max`` stays
+    rejected on Responses and ``none``/``minimal`` stay rejected on Claude.
+    """
     provider = str(llm.get("provider") or "").lower()
+    if provider in CLAUDE_THINKING_PROVIDERS:
+        return CLAUDE_THINKING_LEVELS
     if provider in THINKING_PROVIDERS:
-        return True
-    return (
+        return THINKING_LEVELS
+    if (
         provider == "custom"
         and str(llm.get("api_compat") or "").lower() == "openai"
         and str(llm.get("wire_api") or "").lower() == "responses"
-    )
+    ):
+        return THINKING_LEVELS
+    return None
+
+
+def llm_supports_thinking(llm: dict) -> bool:
+    """Return whether a manifest LLM block accepts explicit thinking effort."""
+    return thinking_levels_for_llm(llm) is not None
 
 # Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
 # agent-configurable. An agent must not be able to raise its own molt
@@ -114,6 +156,25 @@ def system_prompt_pressure_ratio() -> float:
 IDLE_SLEEP_TIMEOUT_SECONDS = 86400.0
 
 
+class _OmittedThinking:
+    """Module-private marker for a constructor-omitted ``thinking`` field.
+
+    Compared by IDENTITY only. It exists because ``AgentConfig.thinking``'s
+    historical default (``"high"``) is indistinguishable from an explicitly
+    configured ``"high"``, and the Claude Code route must not turn a silent
+    default into a real ``--effort high`` flag. ``__post_init__`` replaces it
+    with a concrete string, so no caller ever observes this object.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid only
+        return "<AgentConfig.thinking omitted>"
+
+
+_THINKING_OMITTED_SENTINEL = _OmittedThinking()
+
+
 @dataclass
 class AgentConfig:
     """Configuration for a BaseAgent instance.
@@ -131,7 +192,13 @@ class AgentConfig:
     max_aed_attempts: int = 3   # max AED retry attempts per inbox message turn
     max_rpm: int = 60  # API requests-per-minute cap for this agent's provider; 0 = no gating. Shared across all agents in the same process that use the same (provider, base_url) pair (adapter cache key).
     thinking_budget: int | None = None
-    thinking: str = "high"  # reasoning/thinking tier passed to the main persistent LLM session
+    # Reasoning/thinking tier passed to the main persistent LLM session. The
+    # declared default is the module-private omitted sentinel, not a value:
+    # ``__post_init__`` resolves it per provider so a route that owns its own
+    # omission semantics (Claude Code) keeps ``THINKING_OMITTED`` instead of
+    # silently acquiring the legacy cross-provider ``"high"``. Every other
+    # provider still sees exactly ``"high"``.
+    thinking: str = _THINKING_OMITTED_SENTINEL  # type: ignore[assignment]
     data_dir: str | None = None  # for cache files (e.g., model context windows)
     soul_delay: float = DEFAULT_SOUL_DELAY_SECONDS  # seconds idle before soul whispers; large value = effectively off
     language: str = "en"  # legacy language field retained for compatibility; prompt.py no longer injects prose from it
@@ -181,6 +248,19 @@ class AgentConfig:
     snapshot_interval: float | None = None  # seconds between git snapshots; None = off
 
     def __post_init__(self):
+        # Resolve the constructor-omitted ``thinking`` sentinel before anything
+        # reads the field. ``thinking_omitted`` preserves the provenance for
+        # SessionManager, which knows the *effective* provider (this config's
+        # ``provider`` may be None, meaning "use the LLMService provider").
+        self.thinking_omitted = self.thinking is _THINKING_OMITTED_SENTINEL
+        if self.thinking_omitted:
+            provider = str(self.provider or "").lower()
+            self.thinking = (
+                THINKING_OMITTED
+                if provider in CLAUDE_THINKING_PROVIDERS
+                else DEFAULT_THINKING
+            )
+
         # Clamp max_aed_attempts to at least 1.  A value of 0 or negative
         # causes the AED retry loop in turn.py to spin forever: aed_attempts
         # starts at 1 (incremented before the equality check) and never equals

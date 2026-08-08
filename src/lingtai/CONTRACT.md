@@ -23,6 +23,9 @@ related_files:
   - tests/test_init_schema.py
   - tests/test_preset_materialization.py
   - tests/test_presets.py
+  - tests/test_claude_code_effort.py
+  - src/lingtai/llm/claude_code/effort.py
+  - src/lingtai/kernel/config.py
 maintenance: |
   Keep related_files complete and repo-relative: the paired ANATOMY.md, the
   canonical init.jsonc, real reader/writer/validator code, affected composition
@@ -128,12 +131,29 @@ constructs a migration workspace, or performs a second notification path.
    This is a Nudge-transport concern, not an `init_reader` concern: no
    producer, including `nudge/init_config.py`, individually re-implements
    truncation, externalization, or kind validation.
-8. `manifest.llm.thinking` accepts explicit
-   `none|minimal|low|medium|high|xhigh` only for Codex-family providers or for
-   `provider="custom"`, `api_compat="openai"`, `wire_api="responses"`.
-   Custom omission keeps the existing `high` runtime default; Codex omission
-   keeps its existing adapter-owned `xhigh` default. Invalid values or scopes
-   fail validation rather than being normalized silently.
+8. `manifest.llm.thinking` is validated against a **provider-scoped**
+   vocabulary, not one universal tuple. Codex-family providers and
+   `provider="custom"`, `api_compat="openai"`, `wire_api="responses"` accept
+   `none|minimal|low|medium|high|xhigh`. The `claude-code`/`claude_code` route
+   accepts exactly `low|medium|high|xhigh|max` — the installed `claude` CLI's
+   own `--effort <level>` vocabulary — so `max` stays rejected on Responses and
+   `none`/`minimal` stay rejected on Claude. Every other provider remains out of
+   scope. Custom omission keeps the existing `high` runtime default; Codex
+   omission keeps its existing adapter-owned `xhigh` default; **Claude omission
+   stays omission** — no `--effort` flag is constructed at all, byte-identical
+   to the pre-contract command. `default` is an internal omission sentinel,
+   never a user-configurable literal. Invalid values or scopes fail validation
+   rather than being normalized silently.
+9. For the Claude Code route, an explicit level is frozen at chat creation and
+   re-emitted on **every** physical CLI invocation of that session — first call,
+   `--resume` call, and each overflow-recovery retry within one logical send.
+   Effort never rebuilds the chat, resets the remote session id, or rewrites the
+   cached stable-context system block. Capability status is
+   `model_verified=false`: the installed CLI's flag vocabulary is verified,
+   per-model/account acceptance is not. This contract covers *configured*
+   effort only — there is no live-control, clear/reset, or default-restoration
+   claim, and whether `claude --resume <id>` without `--effort` retains a
+   session-saved level remains an unresolved upstream question.
 
 ## Contract tests
 
@@ -156,7 +176,20 @@ dismissal/repeat semantics for a capped finding.
 `tests/test_agent_config_hydration.py`, and
 `tests/test_preset_materialization.py` prove the accepted custom Responses
 scope, rejected out-of-scope values, and the distinct custom/Codex omission
-defaults through real config and session materialization.
+defaults through real config and session materialization. The same two schema
+suites prove the Claude Code five-value scope for both registered spellings and
+that `none`/`minimal`/case-and-whitespace aliases are rejected there while `max`
+stays rejected on Responses.
+`tests/test_claude_code_effort.py` is the Claude configured-effort contract
+test: it proves the omitted command is byte-identical to the pre-contract one,
+that each explicit level reaches the CLI exactly once on the first and every
+resumed invocation, that one logical send with overflow recovery reuses one
+frozen snapshot, that out-of-vocabulary values are rejected before any
+subprocess dispatch with a bounded message, that the `llm_call` record gains
+only the safe provider-neutral reasoning fields (and nothing at all for a
+provider that offers none), and the isolation properties — `generate()` emits no
+`--effort`, both provider spellings behave identically, and auth-env stripping
+and disallowed-tools placement are unchanged.
 
 ## Maintenance
 

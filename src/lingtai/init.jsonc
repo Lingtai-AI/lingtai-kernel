@@ -51,6 +51,9 @@
       // MiniMax China endpoint with Anthropic-compatible protocol.
       // Set to null to use the provider's default.
       //
+      // Reasoning effort ("thinking") is provider-scoped — there is no single
+      // universal vocabulary.
+      //
       // Custom OpenAI-compatible Responses may add an explicit reasoning
       // effort after setting api_compat="openai" and wire_api="responses".
       // Allowed values are none/minimal/low/medium/high/xhigh. Omit thinking
@@ -58,6 +61,16 @@
       // "api_compat": "openai",
       // "wire_api": "responses",
       // "thinking": "minimal",
+      //
+      // The claude-code / claude_code provider accepts exactly the installed
+      // claude CLI's five --effort levels: low/medium/high/xhigh/max. It has
+      // no "none" or "minimal", and Responses has no "max". Omitting thinking
+      // means omitted: LingTai constructs no --effort flag at all and does not
+      // guess the CLI's own default, so existing agents are unaffected. The
+      // level you set is frozen when the session is created and re-sent on
+      // every CLI call of that session, including resumed ones.
+      // "provider": "claude-code",
+      // "thinking": "high",
       "base_url": "https://api.minimaxi.com/anthropic"
     },
 
