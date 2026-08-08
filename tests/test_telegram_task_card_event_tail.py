@@ -668,7 +668,7 @@ def test_automatic_footer_label_is_last_updated(tmp_path):
 
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     rendered = edits[-1][3]
-    assert "Last Updated: " in rendered
+    assert "最后更新: " in rendered
     assert "Current Time: " not in rendered
 
 
@@ -685,7 +685,7 @@ def test_programmable_frame_includes_its_own_last_updated_line(tmp_path):
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     rendered = edits[-1][3]
     assert "watch line" in rendered
-    assert "Last Updated: " in rendered
+    assert "最后更新: " in rendered
 
 
 def test_programmable_update_leaves_automatic_frame_unchanged(tmp_path):
@@ -855,7 +855,7 @@ def test_normal_rows_limits_rendered_event_tail_without_shrinking_buffer(tmp_pat
     rendered = edits[0][3]
     assert "newest" in rendered
     assert "older" not in rendered
-    assert "current: 1" in rendered
+    assert "当前: 1" in rendered
 
 
 def test_no_resident_targets_means_no_transport_calls(tmp_path):
