@@ -409,7 +409,7 @@ class TaskCardEventProjection:
                 and not isinstance(rate, bool)
                 and 0 <= rate <= 1
             ):
-                parts.append(f"{float(rate):.0%}")
+                parts.append(f"{float(rate):.1%}")
         return " ".join(parts)
 
     @classmethod
@@ -775,12 +775,15 @@ class TaskCardEventProjection:
 
     @classmethod
     def format_elapsed_ms(cls, value: object) -> str:
-        """Render a tool row's elapsed duration as whole milliseconds (``412ms``).
+        """Render a tool row's elapsed duration adaptively.
 
-        The tool row suffix uses milliseconds so sub-second tool results stay
-        useful instead of rounding to ``0s``. Coerces defensively (floored,
-        junk/non-finite/negative degrade to ``0ms``) and caps the display at
-        ``MAX_ELAPSED_MS`` so a runaway timer cannot widen the row unboundedly.
+        Under 0.1s (Jason 2026-08-08): whole milliseconds (``31ms``); at or above
+        0.1s: one decimal second (``2.3s``). Milliseconds for sub-0.1s tools stay
+        useful instead of rounding to ``0s``, and seconds read naturally for
+        longer tools instead of a wide millisecond wall. Coerces defensively
+        (floored, junk/non-finite/negative degrade to ``0ms``) and caps the
+        display at ``MAX_ELAPSED_MS`` so a runaway timer cannot widen the row
+        unboundedly.
         """
         try:
             number = float(value)
@@ -788,4 +791,7 @@ class TaskCardEventProjection:
             return "0ms"
         if not math.isfinite(number) or number < 0:
             return "0ms"
-        return f"{min(int(number), cls.MAX_ELAPSED_MS)}ms"
+        if number < 100:
+            return f"{min(int(number), cls.MAX_ELAPSED_MS)}ms"
+        seconds = min(number, cls.MAX_ELAPSED_MS) / 1000
+        return f"{seconds:.1f}s"

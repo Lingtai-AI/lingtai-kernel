@@ -187,14 +187,14 @@ def test_group_events_sets_api_delay_s_delta_from_previous_tool_ts() -> None:
 def test_format_elapsed_ms_renders_milliseconds_defensively() -> None:
     """CHANGE B: sub-second durations render as whole ms (``412ms``), with a
     sane floor/ceiling and no crash on junk payloads."""
-    assert TaskCardEventProjection.format_elapsed_ms(412) == "412ms"
+    assert TaskCardEventProjection.format_elapsed_ms(412) == "0.4s"
     assert TaskCardEventProjection.format_elapsed_ms(0) == "0ms"
-    assert TaskCardEventProjection.format_elapsed_ms(2300) == "2300ms"
+    assert TaskCardEventProjection.format_elapsed_ms(2300) == "2.3s"
     # A legacy elapsed_s value converts to ms through row_elapsed_ms.
     assert TaskCardEventProjection.row_elapsed_ms({"elapsed_s": 0.412}) == 412.0
     assert TaskCardEventProjection.format_elapsed_ms(
         TaskCardEventProjection.row_elapsed_ms({"elapsed_s": 0.412})
-    ) == "412ms"
+    ) == "0.4s"
     # raw elapsed_ms wins over the converted elapsed_s.
     row = {"elapsed_ms": 412, "elapsed_s": 2.3}
     assert TaskCardEventProjection.row_elapsed_ms(row) == 412.0
@@ -203,5 +203,5 @@ def test_format_elapsed_ms_renders_milliseconds_defensively() -> None:
     assert TaskCardEventProjection.format_elapsed_ms(-5) == "0ms"
     assert TaskCardEventProjection.format_elapsed_ms(float("nan")) == "0ms"
     assert TaskCardEventProjection.format_elapsed_ms(10**12) == (
-        f"{TaskCardEventProjection.MAX_ELAPSED_MS}ms"
+        f"{TaskCardEventProjection.MAX_ELAPSED_MS / 1000:.1f}s"
     )

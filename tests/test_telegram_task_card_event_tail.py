@@ -467,7 +467,7 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
     })])
     manager._poll_event_tail()
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    assert "(2300ms, success)" in rendered
+    assert "(2.3s, success)" in rendered
     assert "RESULT_SECRET" not in rendered
 
     _write_lines(path, [
@@ -478,7 +478,7 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
         }),
     ])
     manager._poll_event_tail()
-    assert "(400ms, error)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "(0.4s, error)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
 
 
 def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
@@ -555,7 +555,7 @@ def test_divider_renders_compact_per_call_usage_arrows(tmp_path):
     assert "API 3.4s" in rendered
     assert "\u21931.2k" in rendered    # ↓1.2k output tokens
     assert "\u2191512.3k" in rendered  # ↑512.3k cache miss
-    assert "55%" in rendered           # cache rate
+    assert "55.0%" in rendered         # cache rate (one decimal per Jason)
     # Usage is private per-row state: projected for rendering but never
     # leaked into the public window rows.
     assert all("_usage" not in row for row in manager._task_card_event_window())
@@ -578,8 +578,8 @@ def test_divider_usage_degrades_when_event_lacks_usage(tmp_path):
     assert "\u2193" not in rendered
 
 
-def test_sub_second_tool_elapsed_renders_milliseconds_not_zero_seconds(tmp_path):
-    """CHANGE B: a 412ms tool result renders ``412ms``, never the useless ``0s``."""
+def test_sub_second_tool_elapsed_renders_adaptive_seconds_not_zero_seconds(tmp_path):
+    """CHANGE B: a 412ms tool result renders ``0.4s``, never the useless ``0s``."""
     acct = FakeAccount()
     manager, _ = _manager(tmp_path, acct)
     _pre_resident(acct, 555, manager)
@@ -594,7 +594,7 @@ def test_sub_second_tool_elapsed_renders_milliseconds_not_zero_seconds(tmp_path)
     manager._poll_event_tail()
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    assert "(412ms, success)" in rendered
+    assert "(0.4s, success)" in rendered
     assert "RESULT_SECRET" not in rendered
 
 

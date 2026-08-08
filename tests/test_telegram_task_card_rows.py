@@ -70,9 +70,9 @@ def test_single_row_shows_tool_action_reasoning_elapsed():
     ])
     assert "bash.run" in text
     assert "compile project" in text
-    # Elapsed renders as whole milliseconds, no decimal point.
-    assert "3000ms" in text
-    assert "3.0s" not in text
+    # Elapsed renders adaptively: ms under 0.1s, one-decimal seconds above.
+    assert "3.0s" in text
+    assert "3000ms" not in text
 
 
 def test_parallel_rows_all_represented_with_independent_elapsed():
@@ -88,36 +88,35 @@ def test_parallel_rows_all_represented_with_independent_elapsed():
     assert "bash.run" in text
     assert "read" in text
     assert "grep" in text
-    assert "5000ms" in text
-    assert "2000ms" in text
-    assert "8000ms" in text
+    assert "5.0s" in text
+    assert "2.0s" in text
+    assert "8.0s" in text
 
 
 # ---------------------------------------------------------------------------
-# Whole-second display rule (no decimal point)
+# Adaptive duration display rule (ms under 0.1s, x.x s above)
 # ---------------------------------------------------------------------------
 
-def test_no_decimal_point_in_render():
+def test_adaptive_duration_renders_one_decimal_second():
     text = _fmt([
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
          "elapsed_s": 12, "done": False},
     ])
-    assert "12000ms" in text
-    # The elapsed suffix is whole-millisecond, no decimal point in it.
+    assert "12.0s" in text
+    # The elapsed suffix is one-decimal seconds for >=0.1s durations.
     row_line = next(ln for ln in text.splitlines() if "bash.run" in ln)
     elapsed_suffix = row_line[row_line.rindex("("):]  # "(12000ms)"
-    assert elapsed_suffix == "(12000ms)"
-    assert "." not in elapsed_suffix
+    assert elapsed_suffix == "(12.0s)"
+    assert "." in elapsed_suffix
 
 
-def test_float_elapsed_payload_is_floored_to_whole_ms():
-    """A float elapsed (e.g. from an in-flight value) is floored, not rounded,
-    and shows no decimal — 8.99s displays 8990ms."""
+def test_float_elapsed_payload_floors_to_one_decimal_second():
+    """A float elapsed (e.g. from an in-flight value) floors to one decimal — 8.99s displays 9.0s."""
     text = _fmt([
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
          "elapsed_s": 8.99, "done": False},
     ])
-    assert "8990ms" in text
+    assert "9.0s" in text
     assert "8.99" not in text
     assert "9s" not in text
 
@@ -136,8 +135,8 @@ def test_done_row_elapsed_is_whole_ms():
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
          "elapsed_s": 7, "done": True},
     ])
-    assert "7000ms" in text
-    assert "7.0s" not in text
+    assert "7.0s" in text
+    assert "7000ms" not in text
 
 
 def test_done_row_has_marker_and_active_row_does_not():
