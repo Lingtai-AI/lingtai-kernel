@@ -301,6 +301,16 @@ class TaskCardEventProjection:
         rows: list[dict[str, Any]] = []
         for group in groups[-normal_rows:]:
             rows.append({"kind": "divider", "text": cls.API_CALL_DIVIDER})
+            # The group's API delay is the LLM round-trip gap since the previous
+            # progress; show it just below the divider, not inside tool rows.
+            api_delay_s: float | None = None
+            for row in group.get("events", []):
+                v = row.get("api_delay_s")
+                if type(v) in (int, float) and not isinstance(v, bool) and v >= 0:
+                    api_delay_s = float(v)
+                break
+            if api_delay_s is not None and api_delay_s > 0:
+                rows.append({"kind": "text", "text": f"API {api_delay_s:.1f}s"})
             rows.extend(group.get("events", []))
         text = cls.format_task_card_text(
             "",
@@ -505,21 +515,11 @@ class TaskCardEventProjection:
             status = row.get("status")
             status = status if status in {"success", "error", "???"} else None
             # Duration in whole milliseconds (sub-second tool results were
-            # useless as ``0s``); api_delay_s is the LLM round-trip gap since
-            # the previous progress event, rendered distinctly from the
-            # tool-result elapsed.
+            # useless as ``0s``). The LLM API round-trip gap since the previous
+            # progress is rendered on the group divider, not here.
             elapsed = cls.format_elapsed_ms(cls.row_elapsed_ms(row))
-            api_delay_s = row.get("api_delay_s")
-            if (
-                type(api_delay_s) in (int, float)
-                and not isinstance(api_delay_s, bool)
-                and api_delay_s >= 0
-            ):
-                api_part = f"{float(api_delay_s):.1f}s api, "
-            else:
-                api_part = ""
             status_suffix = f", {status}" if status else ""
-            suffix = f" ({api_part}{elapsed}{status_suffix})"
+            suffix = f" ({elapsed}{status_suffix})"
             tool_prepared.append(
                 (idx, label, redacted, suffix, done, started_at, status)
             )

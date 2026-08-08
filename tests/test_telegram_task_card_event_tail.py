@@ -459,7 +459,7 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
 
     _write_lines(path, [_tool_call_line(tool_name="read", action="read", call_id="c1")])
     manager._poll_event_tail()
-    assert "(0.0s api, 0ms, ???)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "(0ms, ???)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
 
     _write_lines(path, [json.dumps({
         "type": "tool_result", "tool_call_id": "c1", "status": "ok",
@@ -467,7 +467,7 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
     })])
     manager._poll_event_tail()
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    assert "(0.0s api, 2300ms, success)" in rendered
+    assert "(2300ms, success)" in rendered
     assert "RESULT_SECRET" not in rendered
 
     _write_lines(path, [
@@ -478,7 +478,7 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
         }),
     ])
     manager._poll_event_tail()
-    assert "(0.0s api, 400ms, error)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "(400ms, error)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
 
 
 def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
@@ -507,9 +507,10 @@ def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
     assert all("_ts" not in row for row in window)
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    second_line = next(ln for ln in rendered.splitlines() if "second" in ln)
-    assert "3.4s api" in second_line
-    assert "0.0s api" not in second_line
+    # The api delay is rendered on the group divider line, not in tool rows.
+    assert "API 3.4s" in rendered
+    # Tool rows no longer carry the api suffix.
+    assert "3.4s api" not in rendered
 
 
 def test_sub_second_tool_elapsed_renders_milliseconds_not_zero_seconds(tmp_path):
@@ -528,7 +529,7 @@ def test_sub_second_tool_elapsed_renders_milliseconds_not_zero_seconds(tmp_path)
     manager._poll_event_tail()
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    assert "(0.0s api, 412ms, success)" in rendered
+    assert "(412ms, success)" in rendered
     assert "RESULT_SECRET" not in rendered
 
 
