@@ -125,6 +125,12 @@ class TaskCardEventProjection:
         call_id = event.get("tool_call_id")
         if isinstance(call_id, str) and call_id:
             row.update({"_tool_call_id": call_id, "status": "???"})
+        # Preserve the provider round's api_call_id so a pure-tool turn (no
+        # notification_block_injected carrier) can still match the llm_response
+        # per-call usage through the _api_call_id lookup. Jason 2026-08-08.
+        api_call_id = event.get("api_call_id")
+        if isinstance(api_call_id, str) and api_call_id:
+            row["_api_call_id"] = api_call_id
         action = tool_args.get("action")
         if isinstance(action, str) and action:
             row["tool_action"] = action
@@ -348,7 +354,11 @@ class TaskCardEventProjection:
 
         Pure-text rows carry ``_api_call_id`` instead, which the tailer keys
         from ``llm_response`` events; fall back to it so a text-only turn still
-        gets its divider usage arrows."""
+        gets its divider usage arrows. Tool rows now preserve the event's own
+        ``api_call_id`` as ``_api_call_id``, so a pure-tool turn (e.g.
+        ``context.molt``) with no carrier also matches the same ``llm_response``
+        usage through that key. Jason 2026-08-08.
+        """
         changed = False
         for group in groups:
             for row in group.get("events", []):

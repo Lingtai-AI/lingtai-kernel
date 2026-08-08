@@ -1335,6 +1335,47 @@ def test_blanket_resends_when_resident_lost_on_same_frame(tmp_path, monkeypatch)
     assert [c[0] for c in acct.calls] == ["send_message"]
 
 
+def test_pure_tool_turn_renders_api_usage_from_llm_response_group(tmp_path):
+    """A pure-tool turn (tool call with no diary row, no
+    notification_block_injected carrier — e.g. context.molt) still gets divider
+    usage arrows. The tool_call event carries api_call_id; the projection now
+    preserves it as _api_call_id so apply_tool_usages matches the llm_response
+    per-call usage. Jason 2026-08-08: the molt row showed only ``API 8.0s``
+    with no ↓↑ because the tool row dropped api_call_id."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    def tool_call(api_call_id, call_id, ts):
+        return json.dumps({
+            "type": "tool_call", "ts": ts, "api_call_id": api_call_id,
+            "tool_name": "context", "tool_call_id": call_id,
+            "tool_trace_id": "t1", "tool_args": {"action": "molt", "_reasoning": "molt now"},
+        })
+
+    def llm_response(api_call_id, total, cached, out, ts):
+        return json.dumps({
+            "type": "llm_response", "ts": ts, "api_call_id": api_call_id,
+            "input_tokens": total, "cached_tokens": cached,
+            "output_tokens": out, "estimated": False,
+        })
+
+    _write_lines(_events_path(tmp_path), [
+        tool_call("api_molt_1", "call_molt_1", 100.0),
+        llm_response("api_molt_1", 2_000, 1_700, 456, 105.0),
+    ])
+
+    manager._poll_event_tail()
+
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "context" in rendered
+    # llm_response usage rides the divider via the group api_call_id fallback:
+    # output 456, cache miss 300, cache rate 85.0%.
+    assert "\u2193456" in rendered
+    assert "\u2191300" in rendered
+    assert "85.0%" in rendered
+
+
 def test_fingerprint_ignores_last_updated_line_only(tmp_path):
     """The volatile Last Updated line must not change the fingerprint; any
     other content change must."""
