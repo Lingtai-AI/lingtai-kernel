@@ -459,7 +459,7 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
 
     _write_lines(path, [_tool_call_line(tool_name="read", action="read", call_id="c1")])
     manager._poll_event_tail()
-    assert "(0ms, ???)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "(0ms, running)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
 
     _write_lines(path, [json.dumps({
         "type": "tool_result", "tool_call_id": "c1", "status": "ok",

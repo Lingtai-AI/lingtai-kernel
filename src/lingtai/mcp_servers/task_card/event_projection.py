@@ -607,8 +607,14 @@ class TaskCardEventProjection:
             # useless as ``0s``). The LLM API round-trip gap since the previous
             # progress is rendered on the group divider, not here.
             elapsed = cls.format_elapsed_ms(cls.row_elapsed_ms(row))
-            status_suffix = f", {status}" if status else ""
-            suffix = f" ({elapsed}{status_suffix})"
+            if status == "???":
+                # A tool call with no result yet is genuinely running; showing
+                # ``???`` wasted the slot without saying anything real.
+                status_suffix = ""
+                suffix = f" ({elapsed}, running)" if elapsed else " (running)"
+            else:
+                status_suffix = f", {status}" if status else ""
+                suffix = f" ({elapsed}{status_suffix})"
             tool_prepared.append(
                 (idx, label, redacted, suffix, done, started_at, status)
             )

@@ -128,7 +128,7 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         "📋 ACTIVITIES\n"
         "──────────\n"
         "• public response\n"
-        "• bash.run: build (0ms, ???) · 12:00:00 UTC+00\n"
+        "• bash.run: build (0ms, running) · 12:00:00 UTC+00\n"
         "\n"
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
         "/taskcard N sets normal rows (1-10, current: 1).\n"
