@@ -22,8 +22,8 @@ class TaskCardEventProjection:
         "/taskcard N sets normal rows (1-10"
     )
     DEFAULT_NORMAL_ROWS = 1
-    METADATA_MAX_CHARS = 260
-    METADATA_MAX_LINES = 3
+    METADATA_MAX_CHARS = 400
+    METADATA_MAX_LINES = 5
     TIME_PREFIX = "Last Updated: "
     AGENT_STATES = frozenset(state.value for state in AgentState)
 
@@ -395,7 +395,14 @@ class TaskCardEventProjection:
         context_line = "ctx · " + " · ".join(context_parts) if context_parts else None
         lines: list[str] = []
         if agent_line and session_line:
-            lines.append(f"{agent_line} · {session_line}")
+            # One compact line when the session is empty-ish; otherwise keep
+            # the agent status on its own line so long session telemetry does
+            # not push it past the card width.
+            if len(session_line) > 60:
+                lines.append(agent_line)
+                lines.append(session_line)
+            else:
+                lines.append(f"{agent_line} · {session_line}")
         elif agent_line:
             lines.append(agent_line)
         elif session_line:
@@ -403,25 +410,23 @@ class TaskCardEventProjection:
         if context_line:
             lines.append(context_line)
 
-        # Device identity line: short host name, shell dialect, and physical
-        # path make the card self-identifying. All values pass through the
-        # same machine-identifier allowlist used for API error rows so
-        # path/name content stays printable and bounded. Missing or malformed
-        # values simply omit the line (partial identity still renders).
-        device_parts: list[str] = []
+        # Device identity: short host name + shell dialect + physical path.
+        # Each value passes through the machine-identifier allowlist; the path
+        # is its own line so a long working dir cannot crowd the name/shell.
         device = cls.machine_identifier(
             metadata.get("device_short_name"), limit=64
         )
-        if device is not None:
-            device_parts.append(device)
         shell_name = cls.machine_identifier(metadata.get("shell_name"), limit=48)
-        if shell_name is not None:
-            device_parts.append(f"shell {shell_name}")
-        working_dir = cls.machine_identifier(metadata.get("working_dir"), limit=180)
+        if device is not None or shell_name is not None:
+            parts: list[str] = []
+            if device is not None:
+                parts.append(device)
+            if shell_name is not None:
+                parts.append(f"shell {shell_name}")
+            lines.append("device · " + " · ".join(parts))
+        working_dir = cls.machine_identifier(metadata.get("working_dir"), limit=220)
         if working_dir is not None:
-            device_parts.append(working_dir)
-        if device_parts:
-            lines.append("device · " + " · ".join(device_parts))
+            lines.append(f"path · {working_dir}")
 
         lines = lines[: cls.METADATA_MAX_LINES]
         if not lines:
