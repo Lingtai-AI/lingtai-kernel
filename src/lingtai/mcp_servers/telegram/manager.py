@@ -12,8 +12,8 @@ Mirrors IMAPMailManager patterns with Telegram-specific adaptations.
 """
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
 import socket
@@ -2803,25 +2803,38 @@ class TelegramManager:
         fingerprint = self._task_card_automatic_fingerprint(automatic)
         for account, chat_id in self._resident_task_card_targets():
             key = (account, chat_id)
-            if not force and self._task_card_automatic_fingerprints.get(key) == fingerprint:
-                # Skip only when the resident message still exists; if it was
-                # deleted externally, the next tick must re-send even though the
-                # frame fingerprint is unchanged.
-                resident_id = self._get_resident_task_card(account, chat_id)
-                if resident_id is not None:
-                    continue
-            try:
-                result = self._deliver_channel_frame(
-                    account, chat_id, "automatic", automatic,
-                    error="Failed to broadcast task card",
-                )
-                if result.get("status") == "ok":
-                    self._task_card_automatic_fingerprints[key] = fingerprint
-            except Exception as e:
-                log.debug(
-                    "Automatic task card broadcast failed for %s:%s: %s",
-                    account, chat_id, e,
-                )
+            # Check + deliver + store are atomic per route (RLock is reentrant,
+            # so the nested acquisition inside project() is free). This keeps the
+            # fingerprint cache consistent with the actually-delivered frame even
+            # when the 1s blanket loop, the re-enable listener, and a rehydrate
+            # race on the same route.
+            with self._task_card_delivery_lock(account, chat_id):
+                if not force and self._task_card_automatic_fingerprints.get(key) == fingerprint:
+                    # Skip only when the tracked resident still exists. This guard
+                    # catches tracked-map clears (e.g. a peer process rotating the
+                    # resident in state.json); it does NOT probe whether a user
+                    # deleted the message in-chat, so a deleted card heals on the
+                    # next content change (edit fails -> replace_after_probe), not
+                    # on this tick.
+                    resident_id = self._get_resident_task_card(account, chat_id)
+                    if resident_id is not None:
+                        continue
+                try:
+                    result = self._deliver_channel_frame(
+                        account, chat_id, "automatic", automatic,
+                        error="Failed to broadcast task card",
+                    )
+                    # Cache only when a frame was actually delivered. A suppressed
+                    # project (toggle flipped off mid-broadcast) delivers nothing,
+                    # so caching its fingerprint would pin a stale frame once the
+                    # card is re-enabled.
+                    if result.get("status") == "ok" and not result.get("suppressed"):
+                        self._task_card_automatic_fingerprints[key] = fingerprint
+                except Exception as e:
+                    log.debug(
+                        "Automatic task card broadcast failed for %s:%s: %s",
+                        account, chat_id, e,
+                    )
 
     def _start_task_card_tail(self) -> None:
         """Start the one manager-owned tail worker, idempotently.

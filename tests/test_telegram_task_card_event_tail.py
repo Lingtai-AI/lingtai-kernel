@@ -1129,3 +1129,41 @@ def test_blanket_force_bypasses_fingerprint_dedupe(tmp_path):
     # fingerprint is unchanged.
     manager._broadcast_task_card_event_window(force=True)
     assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1
+
+
+def test_blanket_resends_when_resident_lost_on_same_frame(tmp_path, monkeypatch):
+    """Fingerprint match plus a missing tracked resident must still re-send.
+
+    The resident-target enumeration and the tracked-resident lookup are
+    independent: a peer process can rotate the durable state (target survives,
+    resident id gone), so the blanket tick must not suppress the re-send just
+    because the frame fingerprint is unchanged.
+    """
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [_tool_call_line()])
+    manager._poll_event_tail()
+    assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1
+    acct.calls.clear()
+
+    # Simulate durable-state rotation: the chat stays a target but the tracked
+    # resident lookup now reports no resident.
+    monkeypatch.setattr(manager, "_get_resident_task_card", lambda account, chat_id: None)
+    manager._broadcast_task_card_event_window()
+    assert [c[0] for c in acct.calls] == ["send_message"]
+
+
+def test_fingerprint_ignores_last_updated_line_only(tmp_path):
+    """The volatile Last Updated line must not change the fingerprint; any
+    other content change must."""
+    manager, _ = _manager(tmp_path, FakeAccount())
+    a = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:00 UTC+08"
+    b = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:01 UTC+08"
+    c = "\u2699 WORKING\n\u2022 other\n\nfooter\nLast Updated: 10:00:00 UTC+08"
+    assert manager._task_card_automatic_fingerprint(a) == \
+        manager._task_card_automatic_fingerprint(b)
+    assert manager._task_card_automatic_fingerprint(a) != \
+        manager._task_card_automatic_fingerprint(c)
