@@ -367,7 +367,7 @@ class TaskCardEventProjection:
                     break
             info = cls.format_divider_info(api_delay_s, usage)
             if info:
-                rows.append({"kind": "text", "text": info})
+                rows.append({"kind": "api_info", "text": info})
             rows.extend(group.get("events", []))
         text = cls.format_task_card_text(
             "",
@@ -585,6 +585,11 @@ class TaskCardEventProjection:
             kind = row.get("kind")
             if kind == "divider":
                 api_prepared.append((idx, cls.API_CALL_DIVIDER))
+                continue
+            if kind == "api_info":
+                info = redact_text(str(row.get("text", ""))).strip()
+                if info:
+                    api_prepared.append((idx, info[: cls.EVENT_TEXT_CAP]))
                 continue
             if kind == "text":
                 text = redact_text(str(row.get("text", ""))).strip()
