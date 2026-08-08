@@ -4,7 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import enum
 import os
+import platform
 import re
+import subprocess
 from typing import Any
 
 
@@ -102,6 +104,99 @@ _SEQUENCING_GUIDANCE: dict[ShellKind, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# macOS POSIX spawn policy
+# ---------------------------------------------------------------------------
+# macOS has been zsh-by-default since Catalina, and apps launched from the
+# Finder/Dock inherit launchd's minimal PATH -- without /opt/homebrew/bin
+# (Apple Silicon) or /usr/local/bin (Intel) -- so `gh`/`brew` are routinely
+# "command not found" inside GUI-launched agents.  On Darwin the POSIX spawn
+# form therefore becomes an explicit ``[shell, "-lc", script]`` argv (never
+# ``shell=True`` string concatenation) through the user's login shell, which
+# restores .zprofile/.zshrc state, and the child env gets the Homebrew bin
+# dirs prepended.  Linux keeps the historical ``shell=True`` form unchanged.
+_DARWIN_SHELL_PATHS: tuple[str, ...] = ("/bin/zsh", "/bin/bash")
+_HOMEBREW_BIN_PATHS: tuple[str, ...] = ("/opt/homebrew/bin", "/usr/local/bin")
+
+# Credential-shaped env var names stripped from macOS shell children (Claude
+# Code ``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`` model): provider API keys, auth/
+# OAuth tokens, access keys, and passwords.  General-purpose tokens such as
+# ``GITHUB_TOKEN``/``NPM_TOKEN`` are intentionally kept so `gh`/`npm` keep
+# working -- only key/secret/password-shaped variables are dropped.
+_CREDENTIAL_ENV_RE = re.compile(
+    r"(?i)(?:^|_)(?:api[_-]?key|auth[_-]?token|oauth[_-]?token|"
+    r"access[_-]?key|secret[_-]?(?:access[_-]?)?key|secret[_-]?token|"
+    r"password)(?:_|$)"
+)
+
+
+def _darwin_default_shell(env: dict[str, str] | None = None) -> str:
+    """Resolve the login shell path used for macOS POSIX spawns.
+
+    Order: ``$SHELL`` (when it names a real zsh/bash), then the
+    directory-service record for the current user (``dscl . -read
+    /Users/<user> UserShell`` -- the authoritative login shell), then
+    ``/bin/zsh`` (macOS default since Catalina), then ``/bin/bash``.  This is
+    the Codex ``shell_detect`` pattern.  The ``dscl`` probe runs only when
+    ``$SHELL`` does not already name a usable zsh/bash (e.g. fish users),
+    so the common macOS login shell never pays for a subprocess probe.
+    """
+    env = os.environ if env is None else env
+
+    def _is_usable(path: str | None) -> bool:
+        return bool(path) and os.path.basename(path) in {"zsh", "bash"}
+
+    candidate = env.get("SHELL")
+    if _is_usable(candidate):
+        return candidate  # type: ignore[return-value]
+    user = env.get("USER") or env.get("LOGNAME")
+    if user:
+        try:
+            result = subprocess.run(
+                ["dscl", ".", "-read", f"/Users/{user}", "UserShell"],
+                capture_output=True, text=True, timeout=2, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        else:
+            line = result.stdout.strip()
+            if line:
+                shell = line.split()[-1]
+                if _is_usable(shell):
+                    return shell
+    if os.path.exists("/bin/zsh"):
+        return "/bin/zsh"
+    return "/bin/bash"
+
+
+def posix_login_env(
+    base_env: dict[str, str] | None = None,
+) -> dict[str, str] | None:
+    """Build the child env for a POSIX login-shell spawn (macOS only).
+
+    GUI-launched macOS apps inherit launchd's minimal PATH; prepend the
+    Homebrew bin dirs (``/opt/homebrew/bin`` then ``/usr/local/bin``) when
+    they are missing so login shells find ``brew``/``gh``/``python``.  Also
+    strips credential-shaped variables (``*_API_KEY``, ``*_TOKEN`` for auth,
+    ``*_SECRET*``, ``*_PASSWORD``) so a desktop-launched agent never hands
+    provider keys to every command it runs.
+
+    Returns ``None`` on non-Darwin platforms so callers keep the historical
+    inherit-the-parent-env behavior unchanged there.
+    """
+    if platform.system() != "Darwin":
+        return None
+    env = dict(os.environ if base_env is None else base_env)
+    path = env.get("PATH", "")
+    parts = path.split(":") if path else []
+    missing = [extra for extra in _HOMEBREW_BIN_PATHS if extra not in parts]
+    if missing:
+        env["PATH"] = ":".join(missing + parts)
+    for key in [key for key in env if _CREDENTIAL_ENV_RE.search(key)]:
+        env.pop(key)
+    return env
+
+
 def build_cmd_command_line(
     executable: str, switches: tuple[str, ...], script: str,
 ) -> str:
@@ -141,6 +236,22 @@ def make_invocation_for_kind(
     is supplied; the other argv families require a discovered executable.
     """
     if kind is ShellKind.POSIX:
+        # macOS: spawn the user's login shell with an explicit
+        # ``[shell, "-lc", script]`` argv (never ``shell=True`` string
+        # concatenation) so .zprofile/.zshrc PATH state is restored for
+        # GUI-launched apps, with the Homebrew PATH guarantee attached as the
+        # child env.  Linux keeps the historical ``shell=True`` form
+        # byte-for-byte so the default platform path is unchanged.
+        if platform.system() == "Darwin":
+            shell = executable or _darwin_default_shell()
+            return ShellInvocation(
+                script=script,
+                executable=shell,
+                argv=("-lc",),
+                encoding="utf-8",
+                errors="replace",
+                env=posix_login_env(),
+            )
         return ShellInvocation(script=script)
     if kind is ShellKind.CMD and executable is None:
         executable = os.environ.get("COMSPEC") or "cmd.exe"
@@ -182,6 +293,17 @@ def extract_posix_commands(command: str) -> tuple[str, ...]:
     return tuple(commands)
 
 
+def _key_subsets(optional: set[str]) -> list[frozenset[str]]:
+    """Return every subset of *optional* for ``from_dict`` key-set checks."""
+    ordered = sorted(optional)
+    subsets: list[frozenset[str]] = []
+    for mask in range(1 << len(ordered)):
+        subsets.append(
+            frozenset(key for i, key in enumerate(ordered) if mask & (1 << i))
+        )
+    return subsets
+
+
 @dataclass(frozen=True)
 class ShellInvocation:
     """Serializable shell execution form; no cwd, timeout, or result policy.
@@ -206,6 +328,11 @@ class ShellInvocation:
     # how PowerShell dialects dodge the Windows command-line code page and the
     # 32,768-character process command-line limit.
     stdin_script: str | None = None
+    # When set, this exact child env is passed to ``subprocess`` instead of
+    # inheriting the parent's.  Used on macOS to prepend the Homebrew bin dirs
+    # (GUI-launched PATH guarantee) and strip credential-shaped variables;
+    # ``None`` everywhere else keeps the historical inherit-the-parent env.
+    env: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.script, str) or not self.script.strip():
@@ -214,6 +341,14 @@ class ShellInvocation:
             value = getattr(self, name)
             if value is not None and (not isinstance(value, str) or not value):
                 raise ValueError(f"{name} must be a non-empty string when present")
+        if self.env is not None and (
+            not isinstance(self.env, dict)
+            or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in self.env.items()
+            )
+        ):
+            raise ValueError("env must be a dict of str to str when present")
         if self.command_line is not None:
             if not isinstance(self.command_line, str) or not self.command_line.strip():
                 raise ValueError("command_line must be a non-empty string when present")
@@ -245,6 +380,8 @@ class ShellInvocation:
         }
         if self.stdin_script is not None:
             value["stdin_script"] = self.stdin_script
+        if self.env is not None:
+            value["env"] = dict(self.env)
         return value
 
     @classmethod
@@ -252,16 +389,15 @@ class ShellInvocation:
         keys = {"script", "executable", "argv", "encoding", "errors"}
         if not isinstance(value, dict):
             return None
-        # ``command_line`` (cmd.exe raw-string form) and ``stdin_script``
-        # (PowerShell stdin bootstrap) are the new (batch-B) keys; legacy
-        # 5-key records without them still load so durable async state written
-        # by an older kernel is not rejected.
-        if set(value) not in (
-            keys,
-            keys | {"command_line"},
-            keys | {"stdin_script"},
-            keys | {"command_line", "stdin_script"},
-        ):
+        # ``command_line`` (cmd.exe raw-string form), ``stdin_script``
+        # (PowerShell stdin bootstrap) and ``env`` (macOS login-shell child
+        # env) are the newer keys; legacy 5-key records without them still
+        # load so durable async state written by an older kernel is not
+        # rejected.
+        optional_keys = {"command_line", "stdin_script", "env"}
+        if set(value) not in {
+            frozenset(keys | subset) for subset in _key_subsets(optional_keys)
+        }:
             return None
         argv = value.get("argv")
         if argv is not None and (
@@ -275,16 +411,25 @@ class ShellInvocation:
         encoding = value.get("encoding")
         errors = value.get("errors")
         stdin_script = value.get("stdin_script")
+        env = value.get("env")
         if any(
             item is not None and not isinstance(item, str)
             for item in (executable, encoding, errors, stdin_script)
+        ):
+            return None
+        if env is not None and (
+            not isinstance(env, dict)
+            or not all(
+                isinstance(key, str) and isinstance(val, str)
+                for key, val in env.items()
+            )
         ):
             return None
         try:
             return cls(
                 script=value["script"], executable=executable, argv=argv,
                 command_line=command_line, encoding=encoding, errors=errors,
-                stdin_script=stdin_script,
+                stdin_script=stdin_script, env=env,
             )
         except (TypeError, ValueError):
             return None
@@ -292,11 +437,11 @@ class ShellInvocation:
     def process_args(self) -> tuple[object, dict[str, object]]:
         """Return only dialect process arguments; callers add lifecycle policy."""
         if self.command_line is not None:
+            args: object = self.command_line
             kwargs: dict[str, object] = {"shell": False}
             if self.executable is not None:
                 kwargs["executable"] = self.executable
-            return self.command_line, kwargs
-        if self.argv is not None:
+        elif self.argv is not None:
             args = [self.executable, *self.argv]
             if self.stdin_script is None:
                 # Classic argv form: the script is the trailing command argument
@@ -305,15 +450,19 @@ class ShellInvocation:
             # stdin_script form: ``argv`` already is the complete command line
             # (ending in an ASCII-only bootstrap) and the real script travels
             # through stdin; callers feed ``stdin_script`` before waiting.
-            return args, {"shell": False}
-        if self.stdin_script is not None:
+            kwargs = {"shell": False}
+        elif self.stdin_script is not None:
             # A stdin payload without the argv form has no fixed command line
             # to receive it; fail loudly instead of silently dropping it.
             raise ValueError("stdin_script requires the argv form (non-None argv)")
-        kwargs: dict[str, object] = {"shell": True}
-        if self.executable is not None:
-            kwargs["executable"] = self.executable
-        return self.script, kwargs
+        else:
+            args = self.script
+            kwargs = {"shell": True}
+            if self.executable is not None:
+                kwargs["executable"] = self.executable
+        if self.env is not None:
+            kwargs["env"] = dict(self.env)
+        return args, kwargs
 
 
 class ShellDialect:
