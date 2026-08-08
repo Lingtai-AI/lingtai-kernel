@@ -515,31 +515,37 @@ def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
 
 def test_divider_renders_compact_per_call_usage_arrows(tmp_path):
     """The group divider carries per-call LLM usage: down arrow = output tokens,
-    up arrow = cache miss, trailing percentage = cache rate."""
+    up arrow = cache miss, trailing percentage = cache rate. The usage arrives
+    on the notification_block_injected carrier (real kernel shape), keyed by
+    call_id, and is attached to the matching tool row."""
     acct = FakeAccount()
     manager, service = _manager(tmp_path, acct)
     _pre_resident(acct, 555, manager)
 
-    def line(ts, out, miss, rate):
-        event = json.loads(_tool_call_line(call_id=f"c{int(ts)}", ts=ts))
-        event["_meta"] = {
-            "agent_meta": {
-                "agent_state": {
-                    "token_usage": {
-                        "current_call": {
-                            "output": out,
-                            "cache_miss": miss,
-                            "cache_rate": rate,
+    def carrier(call_id, out, miss, rate):
+        return json.dumps({
+            "type": "notification_block_injected",
+            "call_id": call_id,
+            "_meta": {
+                "agent_meta": {
+                    "agent_state": {
+                        "token_usage": {
+                            "current_call": {
+                                "output": out,
+                                "cache_miss": miss,
+                                "cache_rate": rate,
+                            }
                         }
                     }
                 }
-            }
-        }
-        return json.dumps(event)
+            },
+        })
 
     _write_lines(_events_path(tmp_path), [
-        line(100.0, 412, 31_000, 0.97716),
-        line(103.4, 1_234, 512_345, 0.55),
+        _tool_call_line(call_id="c1", ts=100.0),
+        carrier("c1", 412, 31_000, 0.97716),
+        _tool_call_line(call_id="c2", ts=103.4),
+        carrier("c2", 1_234, 512_345, 0.55),
     ])
 
     manager._poll_event_tail()
@@ -557,7 +563,7 @@ def test_divider_renders_compact_per_call_usage_arrows(tmp_path):
 
 
 def test_divider_usage_degrades_when_event_lacks_usage(tmp_path):
-    """Old tool_call events without usage still render the API delay alone."""
+    """Old tool_call events without a usage carrier still render delay alone."""
     acct = FakeAccount()
     manager, _ = _manager(tmp_path, acct)
     _pre_resident(acct, 555, manager)

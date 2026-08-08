@@ -2448,7 +2448,7 @@ class TelegramManager:
                 self._task_card_event_groups = []
                 self._task_card_event_metadata = None
             return
-        rows, offset, metadata = result
+        rows, offset, metadata, usages = result
         with self._task_card_event_lock:
             self._task_card_event_path = path
             self._task_card_event_offset = offset
@@ -2457,6 +2457,9 @@ class TelegramManager:
             self._task_card_event_identity = self._event_file_identity(stat)
             projected = [({"api_call_id": row.get("group_id")}, dict(row)) for row in rows]
             self._task_card_event_groups = self._group_task_card_events(projected)
+            TaskCardEventProjection.apply_tool_usages(
+                self._task_card_event_groups, usages,
+            )
             self._task_card_event_metadata = metadata
 
     def _reverse_tail_latest_rows(
@@ -2483,6 +2486,7 @@ class TelegramManager:
         window = self._TASK_CARD_EVENT_WINDOW
         projected_events: list[tuple[dict, dict]] = []
         latest_metadata: dict | None = None
+        per_call_usages: dict[str, dict] = {}
         tail_offset = size
         try:
             with open(path, "rb") as f:
@@ -2528,6 +2532,10 @@ class TelegramManager:
                         row = self._project_task_card_event(event)
                         if row is not None:
                             round_projected.append((event, row))
+                        carrier = TaskCardEventProjection.project_current_call_usage(event)
+                        if carrier is not None:
+                            carrier_call_id, usage = carrier
+                            per_call_usages[carrier_call_id] = usage
                         candidate = self._project_final_carrier_metadata(event)
                         if candidate is not None:
                             # ``complete`` is oldest-to-newest within this
@@ -2542,9 +2550,10 @@ class TelegramManager:
         # Chunks were prepended above, so projected events are already in
         # journal order before grouping; one API call receives one divider.
         groups = self._group_task_card_events(projected_events)
+        TaskCardEventProjection.apply_tool_usages(groups, per_call_usages)
         return self._flatten_task_card_groups(
             groups, include_group_id=True,
-        ), tail_offset, latest_metadata
+        ), tail_offset, latest_metadata, per_call_usages
 
     @staticmethod
     def _decode_event_line(raw: bytes) -> dict | None:
@@ -2644,6 +2653,7 @@ class TelegramManager:
         projected_events: list[tuple[dict, dict]] = []
         latest_metadata: dict | None = None
         tool_results: dict[str, dict] = {}
+        per_call_usages: dict[str, dict] = {}
         for raw in complete.split(b"\n"):
             event = self._decode_event_line(raw)
             if event is None:
@@ -2651,6 +2661,10 @@ class TelegramManager:
             call_id = event.get("tool_call_id")
             if event.get("type") == "tool_result" and isinstance(call_id, str) and call_id:
                 tool_results[call_id] = event
+            carrier = TaskCardEventProjection.project_current_call_usage(event)
+            if carrier is not None:
+                carrier_call_id, usage = carrier
+                per_call_usages[carrier_call_id] = usage
             row = self._project_task_card_event(event)
             if row is not None:
                 projected_events.append((event, row))
@@ -2682,7 +2696,11 @@ class TelegramManager:
                 self._task_card_event_groups,
                 tool_results,
             )
-        return bool(projected_events) or metadata_changed or result_changed
+            usage_changed = TaskCardEventProjection.apply_tool_usages(
+                self._task_card_event_groups,
+                per_call_usages,
+            )
+        return bool(projected_events) or metadata_changed or result_changed or usage_changed
 
     def _resident_task_card_targets(self) -> list[tuple[str, int]]:
         """Enumerate every ``(account, chat_id)`` with a resident Task Card.

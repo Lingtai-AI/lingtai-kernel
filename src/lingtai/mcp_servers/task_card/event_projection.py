@@ -127,33 +127,7 @@ class TaskCardEventProjection:
                 ts = None
             if ts is not None and math.isfinite(ts):
                 row["_ts"] = ts
-        usage = cls._project_current_call_usage(event)
-        if usage:
-            row["_usage"] = usage
         return row
-
-    @staticmethod
-    def _project_current_call_usage(
-        event: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        """Extract per-call LLM usage (output tokens, cache miss, cache rate)."""
-        envelope = event.get("_meta")
-        if not isinstance(envelope, dict):
-            return None
-        agent_meta = envelope.get("agent_meta")
-        if not isinstance(agent_meta, dict):
-            return None
-        state = agent_meta.get("agent_state")
-        if not isinstance(state, dict):
-            return None
-        token_usage = state.get("token_usage")
-        if not isinstance(token_usage, dict):
-            return None
-        current = token_usage.get("current_call")
-        if not isinstance(current, dict):
-            return None
-        supported = ("output", "cache_miss", "cache_rate")
-        return {key: current[key] for key in supported if key in current} or None
 
     @classmethod
     def project_event(
@@ -287,6 +261,55 @@ class TaskCardEventProjection:
         except (json.JSONDecodeError, UnicodeDecodeError):
             return None
         return event if isinstance(event, dict) else None
+
+    @staticmethod
+    def project_current_call_usage(
+        event: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Extract per-call LLM usage from a ``notification_block_injected``
+        carrier. Returns ``(call_id, {output, cache_miss, cache_rate})`` so the
+        tailer can attach it to the matching tool row."""
+        if event.get("type") != "notification_block_injected":
+            return None
+        call_id = event.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return None
+        envelope = event.get("_meta")
+        if not isinstance(envelope, dict):
+            return None
+        agent_meta = envelope.get("agent_meta")
+        if not isinstance(agent_meta, dict):
+            return None
+        state = agent_meta.get("agent_state")
+        if not isinstance(state, dict):
+            return None
+        token_usage = state.get("token_usage")
+        if not isinstance(token_usage, dict):
+            return None
+        current = token_usage.get("current_call")
+        if not isinstance(current, dict):
+            return None
+        supported = ("output", "cache_miss", "cache_rate")
+        usage = {key: current[key] for key in supported if key in current}
+        return (call_id, usage) if usage else None
+
+    @staticmethod
+    def apply_tool_usages(
+        groups: list[dict[str, Any]],
+        usages: dict[str, dict[str, Any]],
+    ) -> bool:
+        """Attach per-call usage to tool rows by their ``_tool_call_id``."""
+        changed = False
+        for group in groups:
+            for row in group.get("events", []):
+                usage = usages.get(row.get("_tool_call_id"))
+                if usage is None:
+                    continue
+                if row.get("_usage") == usage:
+                    continue
+                row["_usage"] = usage
+                changed = True
+        return changed
 
     @staticmethod
     def apply_tool_results(
