@@ -1081,3 +1081,51 @@ def test_programmable_slot_untouched_by_automatic_broadcast(tmp_path):
     rendered = edits[-1][3]
     assert "automatic-row" in rendered
     assert "programmable content" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Blanket 1s rebuild dedupe: same frame must not re-fire a Telegram edit;
+# content change must; resident loss must force a re-send even on same frame.
+# ---------------------------------------------------------------------------
+
+
+def test_blanket_rebuild_skips_unchanged_frame(tmp_path):
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [_tool_call_line()])
+    manager._poll_event_tail()  # first broadcast creates/edits the resident
+
+    assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1
+    acct.calls.clear()
+
+    # Same frame on a later blanket tick: no Telegram edit.
+    manager._broadcast_task_card_event_window()
+    assert acct.calls == []
+
+    # New event changes the frame: edit fires.
+    _write_lines(events_path, [_tool_call_line(tool_name="second", reasoning="more")])
+    manager._poll_event_tail()
+    assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1
+
+
+def test_blanket_force_bypasses_fingerprint_dedupe(tmp_path):
+    """Truncation/replacement uses force=True so identical rehydrated frames
+    still re-edit rather than being suppressed by the unchanged-fingerprint
+    fast path."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [_tool_call_line()])
+    manager._poll_event_tail()
+    assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1
+    acct.calls.clear()
+
+    # Force broadcast (the truncation path) must edit even though the frame
+    # fingerprint is unchanged.
+    manager._broadcast_task_card_event_window(force=True)
+    assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1

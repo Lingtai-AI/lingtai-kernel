@@ -391,7 +391,9 @@ def test_command_reenables_same_resident_once_and_transition_is_atomic(
     assert account.get_task_card(123) == resident_id
     calls.clear()
     manager._broadcast_task_card_event_window()
-    assert [call[0] for call in calls] == ["edit"]
+    # Blanket dedupe: the frame is unchanged since the last deliver, so the
+    # 1s rebuild must NOT fire another Telegram edit.
+    assert [call[0] for call in calls] == []
 
     service.set_taskcard_enabled(False)
     broadcasts: list[bool] = []
