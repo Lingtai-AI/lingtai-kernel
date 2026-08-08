@@ -578,6 +578,68 @@ def test_divider_usage_degrades_when_event_lacks_usage(tmp_path):
     assert "\u2193" not in rendered
 
 
+def test_pure_text_turn_renders_api_usage_from_llm_response(tmp_path):
+    """A pure-text turn (diary reply with no tool call) has no
+    notification_block_injected carrier, so the divider usage arrows come from
+    the llm_response event keyed by api_call_id (Jason 2026-08-08: pure text
+    output turns only showed the API line with no usage)."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    def diary(text, ts, api_call_id):
+        return json.dumps({
+            "type": "diary", "ts": ts, "api_call_id": api_call_id,
+            "text": text, "visibility": "public",
+        })
+
+    def llm_response(api_call_id, total, cached, out, ts):
+        return json.dumps({
+            "type": "llm_response", "ts": ts, "api_call_id": api_call_id,
+            "input_tokens": total, "cached_tokens": cached,
+            "output_tokens": out, "estimated": False,
+        })
+
+    _write_lines(_events_path(tmp_path), [
+        diary("first pure text", 100.0, "api_pure_1"),
+        llm_response("api_pure_1", 1_000, 900, 123, 105.0),
+    ])
+
+    manager._poll_event_tail()
+
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "first pure text" in rendered
+    # llm_response usage rides the divider: output, cache miss, cache rate.
+    assert "\u2193123" in rendered
+    assert "\u2191100" in rendered   # 1000 - 900 cache miss
+    assert "90.0%" in rendered      # 900/1000
+
+
+def test_pure_text_turn_api_line_has_no_bullet(tmp_path):
+    """The API divider info line must not carry the bullet prefix (it would
+    look like a tool row). Jason 2026-08-08."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    def diary(text, ts, api_call_id):
+        return json.dumps({
+            "type": "diary", "ts": ts, "api_call_id": api_call_id,
+            "text": text, "visibility": "public",
+        })
+
+    _write_lines(_events_path(tmp_path), [
+        diary("only text", 100.0, "api_no_usage"),
+    ])
+    manager._poll_event_tail()
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    lines = rendered.split("\n")
+    # No API info line at all when the turn has no usage (delay 0.0 for a lone
+    # first row is not rendered), and no stray bullet-only line is invented.
+    assert "only text" in rendered
+    assert all("\u2022 API" not in line for line in lines)
+
+
 def test_sub_second_tool_elapsed_renders_adaptive_seconds_not_zero_seconds(tmp_path):
     """CHANGE B: a 412ms tool result renders ``0.4s``, never the useless ``0s``."""
     acct = FakeAccount()

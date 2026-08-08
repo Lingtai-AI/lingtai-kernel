@@ -2536,6 +2536,10 @@ class TelegramManager:
                         if carrier is not None:
                             carrier_call_id, usage = carrier
                             per_call_usages[carrier_call_id] = usage
+                        llm_usage = TaskCardEventProjection.project_llm_response_usage(event)
+                        if llm_usage is not None:
+                            llm_call_id, usage = llm_usage
+                            per_call_usages[llm_call_id] = usage
                         candidate = self._project_final_carrier_metadata(event)
                         if candidate is not None:
                             # ``complete`` is oldest-to-newest within this
@@ -2665,6 +2669,10 @@ class TelegramManager:
             if carrier is not None:
                 carrier_call_id, usage = carrier
                 per_call_usages[carrier_call_id] = usage
+            llm_usage = TaskCardEventProjection.project_llm_response_usage(event)
+            if llm_usage is not None:
+                llm_call_id, usage = llm_usage
+                per_call_usages[llm_call_id] = usage
             row = self._project_task_card_event(event)
             if row is not None:
                 projected_events.append((event, row))

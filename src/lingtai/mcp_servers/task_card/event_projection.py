@@ -84,7 +84,19 @@ class TaskCardEventProjection:
         cap = cls.EVENT_TEXT_CAP if text_cap is None else text_cap
         if len(text) > cap:
             text = text[: cap - 1] + "…"
-        return {"kind": "text", "text": text}
+        row: dict[str, Any] = {"kind": "text", "text": text}
+        raw_ts = event.get("ts")
+        if type(raw_ts) in (int, float) and not isinstance(raw_ts, bool):
+            try:
+                ts = float(raw_ts)
+            except (OverflowError, ValueError):
+                ts = None
+            if ts is not None and math.isfinite(ts):
+                row["_ts"] = ts
+        api_call_id = event.get("api_call_id")
+        if isinstance(api_call_id, str) and api_call_id:
+            row["_api_call_id"] = api_call_id
+        return row
 
     @classmethod
     def project_tool_call_row(
@@ -213,6 +225,7 @@ class TaskCardEventProjection:
                     row.pop("_tool_call_id", None)
                     row.pop("_ts", None)
                     row.pop("_usage", None)
+                    row.pop("_api_call_id", None)
                 if row.get("kind") == "tool":
                     row.pop("kind", None)
                 rows.append(row)
@@ -294,15 +307,54 @@ class TaskCardEventProjection:
         return (call_id, usage) if usage else None
 
     @staticmethod
+    def project_llm_response_usage(
+        event: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Extract per-call LLM usage from a ``llm_response`` event.
+
+        Pure-text turns (an assistant reply with no tool call) never carry a
+        ``notification_block_injected`` carrier, so their per-call token usage
+        has to come from the ``llm_response`` event itself. Returns
+        ``(api_call_id, {output, cache_miss, cache_rate})``; estimated token
+        counts are still shown (they are the only signal a pure-text turn has)
+        but missing/zero input degrades to ``None``.
+        """
+        if event.get("type") != "llm_response":
+            return None
+        call_id = event.get("api_call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return None
+        output = event.get("output_tokens")
+        cached = event.get("cached_tokens")
+        total = event.get("input_tokens")
+        if (
+            type(output) is not int
+            or type(cached) is not int
+            or type(total) is not int
+            or total <= 0
+        ):
+            return None
+        usage: dict[str, Any] = {"output": output, "cache_miss": max(total - cached, 0)}
+        if cached > 0:
+            usage["cache_rate"] = min(cached / total, 1.0)
+        return (call_id, usage)
+
+    @staticmethod
     def apply_tool_usages(
         groups: list[dict[str, Any]],
         usages: dict[str, dict[str, Any]],
     ) -> bool:
-        """Attach per-call usage to tool rows by their ``_tool_call_id``."""
+        """Attach per-call usage to rows by their ``_tool_call_id``.
+
+        Pure-text rows carry ``_api_call_id`` instead, which the tailer keys
+        from ``llm_response`` events; fall back to it so a text-only turn still
+        gets its divider usage arrows."""
         changed = False
         for group in groups:
             for row in group.get("events", []):
                 usage = usages.get(row.get("_tool_call_id"))
+                if usage is None:
+                    usage = usages.get(row.get("_api_call_id"))
                 if usage is None:
                     continue
                 if row.get("_usage") == usage:
