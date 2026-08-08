@@ -16,17 +16,16 @@ from tests._notification_store_helpers import FakeNotificationStore
 
 
 STRUCTURED_MESSAGE = {
-    "status": "success",
-    "title": "修复完成",
+    "title": "✅ 修复完成",
     "summary": "三个 Telegram bot 已恢复。",
     "facts": [
-        {"label": "版本", "value": "1.6.0"},
+        {"label": "🧩 版本", "value": "1.6.0"},
         {"label": "范围", "value": "所有 bot"},
     ],
-    "bullets": ["已读回执即时发送", "任务卡保持常驻"],
+    "bullets": ["👀 已读回执即时发送", "任务卡保持常驻"],
     "steps": ["重启 host", "发送验收消息"],
     "code": {"text": "pytest -q", "language": "bash"},
-    "next": {"label": "下一步", "text": "执行 GUI 验收"},
+    "next": {"label": "👉 下一步", "text": "执行 GUI 验收"},
     "footer": "普通自由文本不受影响",
 }
 
@@ -43,7 +42,7 @@ EXPECTED_RICH_MESSAGE = {
                     "blocks": [{
                         "type": "paragraph",
                         "text": [
-                            {"type": "bold", "text": "版本："},
+                            {"type": "bold", "text": "🧩 版本："},
                             "1.6.0",
                         ],
                     }],
@@ -62,7 +61,7 @@ EXPECTED_RICH_MESSAGE = {
         {
             "type": "list",
             "items": [
-                {"blocks": [{"type": "paragraph", "text": "已读回执即时发送"}]},
+                {"blocks": [{"type": "paragraph", "text": "👀 已读回执即时发送"}]},
                 {"blocks": [{"type": "paragraph", "text": "任务卡保持常驻"}]},
             ],
         },
@@ -85,7 +84,7 @@ EXPECTED_RICH_MESSAGE = {
         {
             "type": "paragraph",
             "text": [
-                {"type": "bold", "text": "下一步："},
+                {"type": "bold", "text": "👉 下一步："},
                 "执行 GUI 验收",
             ],
         },
@@ -142,10 +141,10 @@ def test_builder_uses_native_blocks_and_semantic_emphasis():
     assert plain_text_preview(STRUCTURED_MESSAGE) == (
         "✅ 修复完成\n"
         "三个 Telegram bot 已恢复。\n"
-        "版本：1.6.0\n范围：所有 bot\n"
-        "• 已读回执即时发送\n• 任务卡保持常驻\n"
+        "🧩 版本：1.6.0\n范围：所有 bot\n"
+        "• 👀 已读回执即时发送\n• 任务卡保持常驻\n"
         "1. 重启 host\n2. 发送验收消息\n"
-        "pytest -q\n下一步：执行 GUI 验收\n"
+        "pytest -q\n👉 下一步：执行 GUI 验收\n"
         "普通自由文本不受影响"
     )
 
@@ -153,10 +152,10 @@ def test_builder_uses_native_blocks_and_semantic_emphasis():
 @pytest.mark.parametrize(
     ("message", "error"),
     [
-        ({"status": "celebration", "title": "x"}, "status"),
-        ({"status": "success", "title": ""}, "title"),
-        ({"status": "success", "title": "x", "bullets": "not-a-list"}, "bullets"),
-        ({"status": "success", "title": "x", "facts": [{"label": "x"}]}, "facts"),
+        ({"title": ""}, "title"),
+        ({"title": "x", "bullets": "not-a-list"}, "bullets"),
+        ({"title": "x", "facts": [{"label": "x"}]}, "facts"),
+        ({"title": "x", "emoji_limit": 1}, "unknown fields"),
     ],
 )
 def test_builder_rejects_invalid_boundary_data(message, error):
