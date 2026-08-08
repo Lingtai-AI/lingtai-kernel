@@ -961,6 +961,26 @@ class TelegramAccount:
         self._note_chat_message_id(chat_id, result.get("message_id"))
         return result
 
+    def send_rich_message(
+        self,
+        chat_id: int,
+        rich_message: dict[str, Any],
+        reply_markup: dict | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> dict:
+        """Send a native Telegram ``InputRichMessage``."""
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "rich_message": rich_message,
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        if reply_to_message_id:
+            payload["reply_parameters"] = {"message_id": reply_to_message_id}
+        result = self._request("sendRichMessage", json=payload)
+        self._note_chat_message_id(chat_id, result.get("message_id"))
+        return result
+
     def send_photo(
         self,
         chat_id: int,
@@ -1017,7 +1037,7 @@ class TelegramAccount:
         self,
         chat_id: int,
         message_id: int,
-        text: str,
+        text: str | None,
         reply_markup: dict | None = None,
         is_caption: bool = False,
         parse_mode: str | None = None,
@@ -1025,6 +1045,7 @@ class TelegramAccount:
         caption_entities: list[dict[str, Any]] | None = None,
         link_preview_options: dict[str, Any] | None = None,
         disable_web_page_preview: bool | None = None,
+        rich_message: dict[str, Any] | None = None,
     ) -> dict:
         """Edit a sent message's text or caption."""
         if is_caption:
@@ -1040,8 +1061,12 @@ class TelegramAccount:
             return self._request("editMessageCaption", json=payload)
         else:
             payload = {
-                "chat_id": chat_id, "message_id": message_id, "text": text,
+                "chat_id": chat_id, "message_id": message_id,
             }
+            if text is not None:
+                payload["text"] = text
+            if rich_message is not None:
+                payload["rich_message"] = rich_message
             if reply_markup:
                 payload["reply_markup"] = reply_markup
             if parse_mode:

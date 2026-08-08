@@ -123,7 +123,7 @@ def test_schema_exposes_explicit_rendering_fields():
     props = _send_schema()["properties"]
     for field in ("rendering_mode", "entities", "caption_entities", "link_preview_options", "disable_web_page_preview"):
         assert field in props
-    assert _schema_enum(props["rendering_mode"]) == ["plain_text", "HTML", "MarkdownV2", "Markdown", "entities"]
+    assert _schema_enum(props["rendering_mode"]) == ["plain_text", "HTML", "MarkdownV2", "Markdown", "entities", "rich"]
     assert "no default" in _schema_description(props["rendering_mode"])
     assert "parse_mode" not in props
 
@@ -401,7 +401,7 @@ def test_edit_text_passes_rendering_mode(tmp_path):
 def test_invalid_rendering_mode_is_rejected(tmp_path):
     manager, account = _manager(tmp_path)
     result = manager._send({"account": "mybot", "chat_id": 123, "text": "hello", "rendering_mode": "BBCode"})
-    assert result == {"error": "rendering_mode must be one of: plain_text, HTML, MarkdownV2, Markdown, entities"}
+    assert result == {"error": "rendering_mode must be one of: plain_text, HTML, MarkdownV2, Markdown, entities, rich"}
     assert account.calls == []
 
 @pytest.mark.parametrize("rendering_mode", ["plain_text", "HTML", "Markdown", "MarkdownV2"])
