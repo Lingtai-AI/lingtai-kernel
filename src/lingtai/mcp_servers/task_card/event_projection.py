@@ -393,16 +393,14 @@ class TaskCardEventProjection:
             "session · " + " · ".join(session_parts) if session_parts else None
         )
         context_line = "ctx · " + " · ".join(context_parts) if context_parts else None
-        # One compact footer line: groups separated by "|" so each group stays
+        # One compact footer line: groups separated by "|" so each concept stays
         # readable without forcing line breaks (the card stays narrow on
-        # Telegram). Physical path rides in the last group so a long working
-        # dir cannot crowd the identity.
+        # Telegram). agent/session/ctx/device/path each own a group; a long
+        # working dir rides in the last group so it cannot crowd identity.
         groups: list[str] = []
-        if agent_line and session_line:
-            groups.append(f"{agent_line} · {session_line}")
-        elif agent_line:
+        if agent_line:
             groups.append(agent_line)
-        elif session_line:
+        if session_line:
             groups.append(session_line)
         if context_line:
             groups.append(context_line)

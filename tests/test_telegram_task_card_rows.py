@@ -422,7 +422,7 @@ def test_metadata_agent_and_session_combine_on_line_one_ctx_preserved():
         "context_usage": 0.62958,
     })
     assert lines == [
-        "agent · active · session · cache 87.8% · miss 170.6k/1.0M · calls 13 | "
+        "agent · active | session · cache 87.8% · miss 170.6k/1.0M · calls 13 | "
         "ctx · 171.2k/272.0k · 63%",
     ]
     assert len(lines) == 1
@@ -443,10 +443,10 @@ def test_metadata_stuck_hint_and_ctx_both_survive_full_metadata():
     # The 2-line cap holds; the hint leads line 1 (safe from end-truncation)
     # and ctx survives as line 2 instead of being dropped by the cap.
     assert lines == [
-        "agent · stuck · try /refresh · session · cache 87.8% · miss 170.6k/1.0M · calls 13 | "
+        "agent · stuck · try /refresh | session · cache 87.8% · miss 170.6k/1.0M · calls 13 | "
         "ctx · 171.2k/272.0k · 63%",
     ]
-    assert lines[0].startswith("agent · stuck · try /refresh")
+    assert lines[0].startswith("agent · stuck · try /refresh |")
     assert len(lines) == 1
     assert len(lines[0]) <= 500
 

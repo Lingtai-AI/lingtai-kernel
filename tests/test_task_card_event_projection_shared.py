@@ -132,7 +132,7 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         "\n"
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
         "/taskcard N sets normal rows (1-10, current: 1).\n"
-        "agent · active · session · calls 2\n"
+        "agent · active | session · calls 2\n"
         "Last Updated: 02:30:00 UTC+08"
     )
 
