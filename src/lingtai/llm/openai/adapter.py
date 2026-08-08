@@ -1213,6 +1213,88 @@ def _build_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] |
     return tools
 
 
+# ---------------------------------------------------------------------------
+# Site-specific schema quirks
+# ---------------------------------------------------------------------------
+
+# Some OpenAI-compatible sites validate a narrower JSON-Schema dialect. Apply
+# only the transformations explicitly registered for the exact base_url host;
+# unmatched providers keep the canonical schema byte-for-byte.
+#
+# See <https://github.com/Lingtai-AI/lingtai/issues/694> for the Kimi API error
+# that motivated this boundary.
+_SITE_SCHEMA_QUIRKS: dict[str, frozenset[str]] = {
+    "api.kimi.com": frozenset({"move_type_into_union_branches"}),
+}
+
+
+def _move_type_into_union_branches(node: Any) -> Any:
+    """Move a union node's parent ``type`` into each union branch.
+
+    Kimi's native API rejects ``type`` beside ``anyOf``/``oneOf`` and asks for
+    it inside the union items instead. The canonical schema is not mutated.
+    """
+    if isinstance(node, list):
+        return [_move_type_into_union_branches(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+
+    out = {key: _move_type_into_union_branches(value) for key, value in node.items()}
+    parent_type = out.get("type")
+    union_keys = [
+        key for key in ("anyOf", "oneOf") if isinstance(out.get(key), list)
+    ]
+    if parent_type is None or not union_keys:
+        return out
+
+    out.pop("type", None)
+    for union_key in union_keys:
+        rewritten = []
+        for branch in out[union_key]:
+            if isinstance(branch, dict) and "type" not in branch:
+                branch = _move_type_into_union_branches({"type": parent_type, **branch})
+            rewritten.append(branch)
+        out[union_key] = rewritten
+    return out
+
+
+def _apply_site_quirks(
+    base_url: str | None,
+    tools: list[dict] | None,
+) -> list[dict] | None:
+    """Apply exact-host schema quirks to the outgoing wire copy."""
+    if not tools or not base_url:
+        return tools
+    active = _SITE_SCHEMA_QUIRKS.get((urlsplit(base_url).hostname or "").lower())
+    if not active:
+        return tools
+
+    result = []
+    for tool in tools:
+        tool = dict(tool)
+        if "function" in tool:
+            # Chat Completions shape: {type, function: {name, desc, params}}
+            function = dict(tool["function"])
+            if "parameters" in function:
+                function["parameters"] = _apply_quirk_dict(
+                    function["parameters"],
+                    active,
+                )
+            tool["function"] = function
+        elif "parameters" in tool:
+            # Responses shape: {type, name, desc, params} (flat)
+            tool["parameters"] = _apply_quirk_dict(tool["parameters"], active)
+        result.append(tool)
+    return result
+
+
+def _apply_quirk_dict(params: dict, active: frozenset[str]) -> dict:
+    """Apply the registered quirks to one parameters dict."""
+    if "move_type_into_union_branches" in active:
+        return _move_type_into_union_branches(params)
+    return params
+
+
 def _parse_tool_calls(raw_tool_calls) -> list[ToolCall]:
     """Parse OpenAI tool calls into our ToolCall dataclass."""
     if not raw_tool_calls:
@@ -1546,6 +1628,7 @@ class OpenAIChatSession(ChatSession):
         client_kwargs: dict | None = None,
         context_window: int = 0,
         prompt_cache_key: str | None = None,
+        base_url: str | None = None,
     ):
         self._client = client
         self._model = model
@@ -1562,6 +1645,7 @@ class OpenAIChatSession(ChatSession):
         # ``prompt_cache_retention`` is deliberately never sent (Codex rejects
         # it; we keep the whole OpenAI-compatible surface uniform).
         self._prompt_cache_key = prompt_cache_key
+        self._base_url = base_url
         # Per-request HTTP timeout (seconds). Set by send_with_timeout before
         # dispatching the worker so the HTTP client aborts at the same moment
         # the main-thread watchdog gives up. Prevents a race where the worker
@@ -1790,7 +1874,9 @@ class OpenAIChatSession(ChatSession):
 
     def update_tools(self, tools: list[FunctionSchema] | None) -> None:
         """Replace the tool schemas for subsequent calls in this session."""
-        self._tools = _build_tools(tools) if tools else None
+        self._tools = (
+            _apply_site_quirks(self._base_url, _build_tools(tools)) if tools else None
+        )
         tool_dicts = FunctionSchema.list_to_dicts(tools)
         self._interface.add_system(
             self._interface.current_system_prompt or "", tools=tool_dicts,
@@ -2076,6 +2162,7 @@ class OpenAIResponsesSession(ChatSession):
         compact_threshold: int | None = None,
         interface: ChatInterface | None = None,
         prompt_cache_key: str | None = None,
+        base_url: str | None = None,
         context_window: int = 0,
         stateless_replay: bool = False,
     ):
@@ -2095,6 +2182,7 @@ class OpenAIResponsesSession(ChatSession):
         # Note: ``prompt_cache_retention`` is deliberately never sent — the
         # Codex backend rejects it (``Unsupported parameter``).
         self._prompt_cache_key = prompt_cache_key
+        self._base_url = base_url
         try:
             self._context_window = int(context_window or 0)
         except Exception:
@@ -2377,7 +2465,7 @@ class OpenAIResponsesSession(ChatSession):
     def update_tools(self, tools: list[FunctionSchema] | None) -> None:
         if not self._stateless_replay:
             return
-        self._tools = _build_responses_tools(tools)
+        self._tools = _apply_site_quirks(self._base_url, _build_responses_tools(tools))
         self._interface.add_system(
             self._interface.current_system_prompt or "",
             tools=FunctionSchema.list_to_dicts(tools),
@@ -2567,7 +2655,7 @@ class OpenAIAdapter(LLMAdapter):
             interface = ChatInterface()
             interface.add_system(system_prompt, tools=FunctionSchema.list_to_dicts(tools))
 
-        openai_tools = _build_responses_tools(tools)
+        openai_tools = _apply_site_quirks(self.base_url, _build_responses_tools(tools))
         tool_choice: str | None = None
         if force_tool_call and openai_tools:
             tool_choice = "required"
@@ -2621,7 +2709,7 @@ class OpenAIAdapter(LLMAdapter):
             interface = ChatInterface()
             interface.add_system(system_prompt, tools=FunctionSchema.list_to_dicts(tools))
 
-        openai_tools = _build_tools(tools)
+        openai_tools = _apply_site_quirks(self.base_url, _build_tools(tools))
         tool_choice: str | None = None
         if force_tool_call and openai_tools:
             tool_choice = "required"
@@ -2662,6 +2750,7 @@ class OpenAIAdapter(LLMAdapter):
             client_kwargs=self._client_kwargs,
             context_window=context_window,
             prompt_cache_key=self._resolve_prompt_cache_key(model),
+            base_url=self.base_url,
         )
 
     def _adapter_extra_body(self) -> dict:
@@ -3125,7 +3214,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         compact_token_limit: int | None = None,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, base_url=base_url, **kwargs)
         # Standalone Codex compaction (daemon task ``context_token_limit``).
         # Distinct axis from ``compact_threshold``/``context_management``,
         # which Codex never receives (see ``_create_responses_session``).
@@ -5856,7 +5945,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             interface.add_system(system_prompt, tools=FunctionSchema.list_to_dicts(tools))
 
         context = self._new_codex_account_context(model, interface)
-        openai_tools = _build_responses_tools(tools)
+        openai_tools = _apply_site_quirks(self.base_url, _build_responses_tools(tools))
         tool_choice: str | None = None
         if force_tool_call and openai_tools:
             tool_choice = "required"

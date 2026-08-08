@@ -296,6 +296,7 @@ related_files:
   - tests/test_shell_windows_state_lock_args.py
   - tests/test_signpost_tool_descriptions.py
   - tests/test_silence_kill.py
+  - tests/test_site_schema_quirks.py
   - tests/test_skills.py
   - tests/test_snapshot.py
   - tests/test_soul.py
