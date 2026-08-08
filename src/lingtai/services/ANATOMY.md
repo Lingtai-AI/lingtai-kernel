@@ -8,6 +8,8 @@ related_files:
   - src/lingtai/services/file_io_sidecar.py
   - src/lingtai/services/mail.py
   - src/lingtai/services/mcp.py
+  - src/lingtai/agent.py
+  - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/services/mcp_registry.py
   - src/lingtai/services/mcp_inbox.py
   - src/lingtai/services/mcp_licc.py
@@ -23,6 +25,8 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - tests/test_mcp_structured_result.py
   - tests/test_mcp_sdk_v2_contract.py
+  - tests/test_mcp_capability.py
+  - tests/test_mcp_v2_adapter_metadata.py
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/reference/mcp-protocol.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -45,7 +49,7 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 | `file_io.py` | 530 | `FileIOService` facade contract + `FileIOBackend`/`LocalFileIOBackend` — backs read/edit/write/glob/grep. `grep` accepts an optional basename `glob_filter` that prunes the candidate set before stat/read |
 | `file_io_sidecar.py` | 698 | Rust-backed grep/glob: `RustFileIOBackend`, `SidecarAdapter`, `SidecarError`, plus the `resolve_sidecar_binary` resolver and the `default_file_io_service` factory used by `Agent.__init__`. `grep`'s `glob_filter` is applied as a Python-side basename post-filter (the sidecar wire protocol carries no glob field yet) |
 | `mail.py` | 19 | High-level compatibility surface: re-exports the Core `MailTransportPort` as `MailService` and the POSIX adapter as both `PosixFilesystemMailAdapter` and the legacy public name `FilesystemMailService` |
-| `mcp.py` | 830 | `MCPClient` (stdio) + `HTTPMCPClient` (streamable HTTP) — async-to-sync bridges over the official MCP Python SDK v2 `mcp.Client`, with shared tool-record adaptation, rich-result preservation, and the legacy structured-result projection |
+| `mcp.py` | 1130 | `MCPClient` (stdio) + `HTTPMCPClient` (streamable HTTP) — async-to-sync bridges over the official MCP Python SDK v2 `mcp.Client`, with shared schema-aware host-private argument preparation (`mcp.py:32-88`), tool-record adaptation, rich-result preservation, and the legacy structured-result projection |
 | `mcp_registry.py` | — | MCP registry infrastructure (the non-tool half of the `lingtai/tools/mcp` capability): record schema (`validate_record`), JSONL registry I/O (`read_registry`, `_append_record`), catalog loader (`_load_catalog`, path constant recomputed for this location), secret-safe identity projection (`read_identities`, `IDENTITY_SAFE_ACCOUNT_KEYS`), boot-time addon decompression (`decompress_addons`), and the system-prompt XML renderer (`_build_registry_xml`). Consumed by the `lingtai/tools/mcp` tool slice (lazy import) and `agent.py` |
 | `mcp_inbox.py` | — | LICC v1 filesystem inbox poller plus Core projection; in-process publication receives the agent and uses its injected Notification Store while the external inbox path/envelope stays unchanged (`src/lingtai/services/mcp_inbox.py:373-395`). |
 | `mcp_licc.py` | — | LICC v1 client producer (`push_inbox_event`); imports contract constants from `mcp_inbox.py` |
@@ -64,10 +68,11 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 - **← `lingtai.tools.vision`** — uses `services.vision.VisionService`.
 - **← `lingtai.tools.web_search`** — uses `services.websearch.SearchService`.
 - **← `tools.{read,write,edit,glob,grep}`** — the file tools use `FileIOService` (injected as `agent._file_io`).
+- **← `lingtai.agent` / `lingtai.tools.daemon`** — stdio, HTTP, and task-scoped MCP handlers call `prepare_mcp_tool_arguments` immediately before provider dispatch, using the server's original input schema as authority.
 
 ## Composition
 
-`file_io.py` is a pure stdlib abstraction layer. `LocalFileIOService` is the tool-facing facade while `LocalFileIOBackend` owns the default Python local filesystem implementation. `file_io_sidecar.py` provides `RustFileIOBackend`, an opt-in alternative backend that delegates `read`/`write`/`edit` to a private `LocalFileIOBackend` but routes `grep`/`glob` to the Rust binary under `crates/lingtai-search-sidecar/` via short-lived JSON subprocess calls. `mail.py` is a high-level compatibility re-export across the Core Port and POSIX Adapter; it owns no implementation. `mcp.py` keeps two transport-specific client classes and composes both with one protocol-generic result decoder.
+`file_io.py` is a pure stdlib abstraction layer. `LocalFileIOService` is the tool-facing facade while `LocalFileIOBackend` owns the default Python local filesystem implementation. `file_io_sidecar.py` provides `RustFileIOBackend`, an opt-in alternative backend that delegates `read`/`write`/`edit` to a private `LocalFileIOBackend` but routes `grep`/`glob` to the Rust binary under `crates/lingtai-search-sidecar/` via short-lived JSON subprocess calls. `mail.py` is a high-level compatibility re-export across the Core Port and POSIX Adapter; it owns no implementation. `mcp.py` keeps two transport-specific client classes and composes them with one protocol-generic result decoder and one schema-aware host-private argument adapter shared by Agent and task-daemon handlers.
 
 ## State
 
@@ -84,6 +89,7 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 - **Negotiation is the SDK's, not LingTai's.** Both clients use the default `mode="auto"`: the SDK probes `server/discover` and falls back to the pre-2026 `initialize` handshake, so one client speaks to 2026 and legacy servers alike. The negotiated facts are re-exposed read-only as `protocol_version`, `server_info`, `server_capabilities`, and `instructions` rather than being discarded at connect. LingTai owns no version constant, comparison, or gate.
 - Lazy start: both clients auto-connect on first `call_tool()`.
 - **Complete tool catalog:** `_list_all_tools` pages `tools/list` with `cursor=` until `next_cursor is None`, so a paging server's full surface is returned. `_tool_record` keeps the v2 `input_schema` under the historical `schema` key and carries the remaining advertised metadata (`title`, `output_schema`, `annotations`, `icons`, `_meta`) on the record instead of dropping it.
+- **Host-private arguments:** `prepare_mcp_tool_arguments` always copies caller arguments. It restores `_reasoning` to public `reasoning` only for the exact strict LTP-v2 family schema, preserves `_reasoning` only when the server explicitly declares it, and otherwise removes that kernel-owned field. Ordinary unknown business fields are not filtered and remain the server validator's responsibility. Tests: `tests/test_mcp_capability.py`, `tests/test_mcp_v2_adapter_metadata.py`.
 - **Rich results vs. the compatibility projection:** `preserve_tool_result` keeps the full ordered content union (text/image/audio/resource-link/embedded-resource), `structured_content` at any JSON type, `is_error`, `result_type`, and `_meta`; it is reachable per call through `last_tool_result`. `_decode_tool_result` remains the explicit **compatibility projection** to the single legacy value every kernel tool handler expects: dictionary `structured_content` first, then JSON-object text, preserving structured error fields at top level while forcing protocol-authoritative `status="error"`; plain-text errors retain the legacy `status`/`message` envelope. The projection is a deliberate reduction, not the only copy. Tests: `tests/test_mcp_structured_result.py`, `tests/test_mcp_sdk_v2_contract.py`.
 - **Stale-resource recovery (issue #104):** `MCPClient` detects a dead stdio transport in `call_tool` and recovers. `_format_exception` renders `ClassName: message` (class-only when `str(e)` is empty) so an empty `ClosedResourceError` never surfaces as a blank `{"status":"error","message":""}`. `_is_stale_resource_error` flags closed/broken transports by class name + message substrings. On a stale error `call_tool` calls `restart()` (which `close()`s, clears `_ready`/`_error`, resets `_closed`/`_session`/`_loop`/`_thread`/`*_cm` so `start()` cannot lie) to make a future independent call possible. The default `retry_policy="never"` then returns an ambiguous, non-retryable error **without replaying** the submitted tool call because its remote commit point is unknowable. Exactly one replay occurs only when the caller explicitly attests `retry_policy="safe"`; a failed safe replay returns a helpful error naming the original class and retry failure. Non-stale errors surface the class name without churning the subprocess. `HTTPMCPClient` reuses `MCPClient._format_exception` for its connect error only — it has no stale-resource restart (stdio is the reported transport). Tests: `tests/test_mcp_closed_resource_restart.py`, `tests/test_mcp_sdk_v2_contract.py`.
 - **HTTP non-retry is contractual.** `HTTPMCPClient.call_tool` deliberately takes no `retry_policy`: an HTTP tool call has the same unknowable remote commit point as stdio but none of stdio's transport-restart signal, so it never replays. This asymmetry is a stated policy, not an unfinished feature, and `tests/test_mcp_closed_resource_restart.py` asserts the parameter's absence.

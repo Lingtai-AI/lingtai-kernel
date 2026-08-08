@@ -123,28 +123,6 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
     )
 
 
-_LTP_V2_FAMILY_ROOT_FIELDS = {"action", "input", "reasoning", "summarize"}
-_LTP_V2_FAMILY_REQUIRED_FIELDS = {"action", "input", "reasoning"}
-
-
-def _is_strict_ltp_v2_family_schema(schema: Any) -> bool:
-    """Recognize the canonical closed root used by native MCP ToolFamilies."""
-    if not isinstance(schema, dict):
-        return False
-    properties = schema.get("properties")
-    required = schema.get("required")
-    return (
-        schema.get("type") == "object"
-        and schema.get("additionalProperties") is False
-        and isinstance(properties, dict)
-        and set(properties) == _LTP_V2_FAMILY_ROOT_FIELDS
-        and isinstance(required, list)
-        and set(required) == _LTP_V2_FAMILY_REQUIRED_FIELDS
-        and isinstance(properties.get("reasoning"), dict)
-        and properties["reasoning"].get("type") == "string"
-    )
-
-
 class Agent(BaseAgent):
     """BaseAgent with composable capabilities.
 
@@ -1170,17 +1148,20 @@ class Agent(BaseAgent):
         """Restore canonical reasoning only for mounted strict MCP ToolFamilies.
 
         ``ToolExecutor`` deliberately renames model-facing ``reasoning`` to the
-        private ``_reasoning`` audit key before every dispatch.  Ordinary
-        in-process and legacy MCP handlers consume that existing shape.  A native
-        MCP ToolFamily instead validates the original closed LTP-v2 envelope, so
-        the wrapper composition root restores the public key immediately before
-        the inherited handler dispatch.  The input ToolCall is never mutated.
+        private ``_reasoning`` audit key before every dispatch. Ordinary
+        in-process handlers retain that shape; MCP handler wrappers adapt it to
+        the captured server schema. A native MCP ToolFamily instead validates the
+        original closed LTP-v2 envelope, so the wrapper composition root restores
+        the public key immediately before inherited handler dispatch. The input
+        ToolCall is never mutated.
         """
         if tc.name in getattr(self, "_mcp_tool_names", set()):
+            from .services.mcp import is_strict_ltp_v2_family_schema
+
             schemas = [schema for schema in self._tool_schemas if schema.name == tc.name]
             if (
                 len(schemas) == 1
-                and _is_strict_ltp_v2_family_schema(schemas[0].parameters)
+                and is_strict_ltp_v2_family_schema(schemas[0].parameters)
                 and "_reasoning" in tc.args
             ):
                 args = dict(tc.args)
@@ -1270,9 +1251,12 @@ class Agent(BaseAgent):
         for tool in tools:
             name = tool["name"]
 
-            def _make_handler(c: MCPClient, tool_name: str):
+            def _make_handler(c: MCPClient, tool_name: str, input_schema: Any):
                 def handler(tool_args: dict) -> dict:
-                    return c.call_tool(tool_name, tool_args)
+                    prepared = mcp_service.prepare_mcp_tool_arguments(
+                        tool_args, input_schema
+                    )
+                    return c.call_tool(tool_name, prepared)
                 return handler
 
             # ``schema`` is the SDK v2 ``input_schema`` JSON Schema, already
@@ -1293,7 +1277,7 @@ class Agent(BaseAgent):
             self.add_tool(
                 name,
                 schema=schema,
-                handler=_make_handler(client, name),
+                handler=_make_handler(client, name, schema),
                 description=tool.get("description", ""),
             )
             registered.append(name)
@@ -1469,9 +1453,12 @@ class Agent(BaseAgent):
         for tool in tools:
             name = tool["name"]
 
-            def _make_handler(c: HTTPMCPClient, tool_name: str):
+            def _make_handler(c: HTTPMCPClient, tool_name: str, input_schema: Any):
                 def handler(tool_args: dict) -> dict:
-                    return c.call_tool(tool_name, tool_args)
+                    prepared = mcp_service.prepare_mcp_tool_arguments(
+                        tool_args, input_schema
+                    )
+                    return c.call_tool(tool_name, prepared)
                 return handler
 
             # Same v2 tool record and the same metadata sidecar as the stdio
@@ -1483,7 +1470,7 @@ class Agent(BaseAgent):
             self.add_tool(
                 name,
                 schema=schema,
-                handler=_make_handler(client, name),
+                handler=_make_handler(client, name, schema),
                 description=tool.get("description", ""),
             )
             registered.append(name)

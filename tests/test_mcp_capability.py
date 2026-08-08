@@ -576,16 +576,17 @@ def test_connect_mcp_stdio_placeholder_expansion_is_unchanged(tmp_path, monkeypa
     }
 
 
-def test_strict_ltp_mcp_family_restores_host_reasoning_before_dispatch(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("transport", ["stdio", "http"])
+def test_mcp_boundary_keeps_reasoning_private_unless_server_schema_declares_it(
+    tmp_path, monkeypatch, transport
 ):
-    """The real host path must undo ToolExecutor's private reasoning rename.
+    """Host-private rationale crosses only when the server declares it.
 
-    Native MCP ToolFamilies own a strict public ``reasoning`` field, while
-    ToolExecutor deliberately normalizes that field to ``_reasoning`` for
-    ordinary in-process tools.  The Agent MCP adapter must restore the public
-    key for raw MCP family dispatch (``telegram``) without changing a legacy
-    MCP tool's existing arguments.
+    ToolExecutor normalizes model-facing ``reasoning`` to the host-private
+    ``_reasoning`` audit key. Native strict LTP-v2 ToolFamilies still receive
+    their required public ``reasoning`` field, while ordinary MCP servers must
+    not receive undeclared host rationale. Unknown business arguments remain
+    untouched so the server can reject them against its own schema.
     """
     from lingtai.kernel.llm.base import ToolCall
     from lingtai.kernel.loop_guard import LoopGuard
@@ -613,15 +614,52 @@ def test_strict_ltp_mcp_family_restores_host_reasoning_before_dispatch(
                     },
                     "description": "Legacy flat MCP tool",
                 },
+                {
+                    "name": "open_echo",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "additionalProperties": True,
+                    },
+                    "description": "Open MCP tool",
+                },
+                {
+                    "name": "schemaless_echo",
+                    "schema": {},
+                    "description": "MCP tool without an argument schema",
+                },
+                {
+                    "name": "private_echo",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "value": {"type": "string"},
+                            "_reasoning": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                    "description": "MCP tool that explicitly declares _reasoning",
+                },
             ]
 
         def call_tool(self, name, args):
             self.calls.append((name, copy.deepcopy(args)))
             return {"status": "ok", "name": name}
 
-    monkeypatch.setattr(mcp, "MCPClient", FakeMCPClient)
+    client_class = "MCPClient" if transport == "stdio" else "HTTPMCPClient"
+    monkeypatch.setattr(mcp, client_class, FakeMCPClient)
     agent, _ = _mk_agent(tmp_path)
-    assert agent.connect_mcp("fake-family-server") == ["telegram", "legacy_echo"]
+    if transport == "stdio":
+        registered = agent.connect_mcp("fake-family-server")
+    else:
+        registered = agent.connect_mcp_http("https://example.invalid/mcp")
+    assert registered == [
+        "telegram",
+        "legacy_echo",
+        "open_echo",
+        "schemaless_echo",
+        "private_echo",
+    ]
     client = FakeMCPClient.instances[-1]
 
     executor = ToolExecutor(
@@ -631,7 +669,7 @@ def test_strict_ltp_mcp_family_restores_host_reasoning_before_dispatch(
             "result": result,
         },
         guard=LoopGuard(max_total_calls=10),
-        known_tools={"telegram", "legacy_echo"},
+        known_tools=set(registered),
         parallel_safe_tools=set(),
     )
 
@@ -642,14 +680,35 @@ def test_strict_ltp_mcp_family_restores_host_reasoning_before_dispatch(
         assert not intercepted
         return results[0]["result"]
 
-    run(
-        "telegram",
-        {"action": "accounts", "input": {}, "reasoning": "inspect accounts"},
-    )
-    run(
-        "legacy_echo",
-        {"value": "hello", "reasoning": "legacy audit metadata"},
-    )
+    calls = [
+        (
+            "telegram",
+            {"action": "accounts", "input": {}, "reasoning": "inspect accounts"},
+        ),
+        (
+            "legacy_echo",
+            {
+                "value": "hello",
+                "unknown_business_field": "server must validate this",
+                "reasoning": "kernel audit metadata",
+            },
+        ),
+        ("open_echo", {"value": "open", "reasoning": "kernel audit metadata"}),
+        (
+            "schemaless_echo",
+            {"value": "schemaless", "reasoning": "kernel audit metadata"},
+        ),
+        (
+            "private_echo",
+            {"value": "declared", "reasoning": "server-declared metadata"},
+        ),
+        ("legacy_echo", {"value": "no reasoning"}),
+    ]
+    original_calls = copy.deepcopy(calls)
+    for name, args in calls:
+        run(name, args)
+
+    assert calls == original_calls
 
     assert client.calls[0] == (
         "telegram",
@@ -657,8 +716,18 @@ def test_strict_ltp_mcp_family_restores_host_reasoning_before_dispatch(
     )
     assert client.calls[1] == (
         "legacy_echo",
-        {"value": "hello", "_reasoning": "legacy audit metadata"},
+        {
+            "value": "hello",
+            "unknown_business_field": "server must validate this",
+        },
     )
+    assert client.calls[2] == ("open_echo", {"value": "open"})
+    assert client.calls[3] == ("schemaless_echo", {"value": "schemaless"})
+    assert client.calls[4] == (
+        "private_echo",
+        {"value": "declared", "_reasoning": "server-declared metadata"},
+    )
+    assert client.calls[5] == ("legacy_echo", {"value": "no reasoning"})
 
 
 # ---------------------------------------------------------------------------
