@@ -266,6 +266,7 @@ related_files:
   - tests/test_prompt_section_definitions.py
   - tests/test_psyche_family.py
   - tests/test_publish_release_assets.py
+  - tests/test_python_support_matrix.py
   - tests/test_read_continuation.py
   - tests/test_refresh_watcher_process.py
   - tests/test_refresh_watcher_windows.py

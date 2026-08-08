@@ -41,7 +41,15 @@ maintenance: |
 
 ## 开发者速启
 
-为**内核之开发**，非寻常 LingTai 用者安装之途也。须 Python >= 3.11；宜用本地之 `.venv`。
+为**内核之开发**，非寻常 LingTai 用者安装之途也。须 Python >= 3.11；宜用本地之 `.venv`。代码之基线仍为无上限之 Python >= 3.11；受管之 macOS 运行时与直接依赖，则循下列 wheel 相容之矩阵：
+
+| 所指解释器 | 所支持之 Python | 直接 `onnxruntime` 所需 |
+|---|---|---|
+| Apple Silicon，macOS 14+ | 3.11–3.14 | 1.28.0 |
+| Apple Silicon，macOS 13 | 3.11–3.13 | 1.23.2 |
+| Intel/Rosetta，macOS 13+ | 3.11–3.13 | 1.23.2 |
+
+经验之 `onnxruntime` wheels，以 macOS 13 为支持之下限。此矩阵中，惟 Apple Silicon 且 macOS 14+ 可用 Python 3.14；Rosetta 下之 x86_64 进程从 Intel 一列。
 
 ```bash
 git clone https://github.com/Lingtai-AI/lingtai-kernel.git

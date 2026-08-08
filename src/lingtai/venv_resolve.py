@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -155,16 +156,12 @@ def _test_venv_detail(venv_dir: Path, *, warn_marker_error: bool) -> tuple[bool,
 
 def _create_venv(venv_dir: Path) -> None:
     """Create a fresh venv and install lingtai into it."""
+    # Select before filesystem mutation so an unsupported target or exhausted PATH
+    # leaves no misleading managed-runtime directory behind.
+    python = _find_python()
+
     venv_dir.parent.mkdir(parents=True, exist_ok=True)
     print(f"Creating lingtai runtime at {venv_dir} ...", file=sys.stderr)
-
-    # Find a working Python 3.11+
-    python = _find_python()
-    if not python:
-        raise RuntimeError(
-            "Cannot create venv: Python 3.11+ not found. "
-            "Install Python from python.org and try again."
-        )
 
     # Create venv
     subprocess.run(
@@ -186,22 +183,271 @@ def _create_venv(venv_dir: Path) -> None:
     print("Runtime ready.", file=sys.stderr)
 
 
-def _find_python() -> str | None:
-    """Find a Python ≥ 3.11 on the system."""
-    for name in ("python3", "python"):
+_PYTHON_SELECTOR_PROBE = (
+    "import json, platform, sys; "
+    "print(json.dumps({'version': list(sys.version_info[:3]), "
+    "'sys_platform': sys.platform, 'machine': platform.machine(), "
+    "'macos_version': platform.mac_ver()[0] if sys.platform == 'darwin' else ''}))"
+)
+
+
+@dataclass(frozen=True)
+class _PythonSelectionPolicy:
+    target_os: str
+    architecture: str
+    macos_version: str | None
+    macos_major: int | None
+    minimum: tuple[int, int]
+    maximum: tuple[int, int] | None
+    candidate_names: tuple[str, ...]
+
+    @property
+    def supported_range(self) -> str:
+        if self.maximum is None:
+            return "3.11 or newer"
+        return f"3.11-{self.maximum[0]}.{self.maximum[1]}"
+
+
+def _normalize_selector_architecture(machine: str) -> str:
+    """Normalize only architecture aliases relevant to macOS wheel selection."""
+    value = machine.strip().lower()
+    if value in {"arm64", "aarch64"}:
+        return "arm64"
+    if value in {"x86_64", "amd64"}:
+        return "x86_64"
+    return value
+
+
+def _parse_macos_major(version: str, *, child: bool = False) -> int:
+    label = "child macOS version" if child else "macOS version"
+    if not version.strip():
+        raise ValueError(f"{label} is missing")
+    major_text = version.split(".", 1)[0]
+    try:
+        major = int(major_text)
+    except ValueError as exc:
+        raise ValueError(f"Cannot parse {label} {version!r}") from exc
+    if major_text != str(major) or major < 0:
+        raise ValueError(f"Cannot parse {label} {version!r}")
+    return major
+
+
+def _python_selection_policy() -> _PythonSelectionPolicy:
+    """Return the interpreter policy for the current process target."""
+    target_os = sys.platform
+    architecture = _normalize_selector_architecture(platform.machine())
+    minimum = (3, 11)
+    generic_names = (
+        "python3",
+        "python",
+        "python3.14",
+        "python3.13",
+        "python3.12",
+        "python3.11",
+    )
+    if target_os != "darwin":
+        return _PythonSelectionPolicy(
+            target_os=target_os,
+            architecture=architecture,
+            macos_version=None,
+            macos_major=None,
+            minimum=minimum,
+            maximum=None,
+            candidate_names=generic_names,
+        )
+
+    macos_version = platform.mac_ver()[0]
+    try:
+        macos_major = _parse_macos_major(macos_version)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Cannot select a managed Python on darwin/{architecture}: {exc}. "
+            "Use a supported macOS host or configure a prebuilt compatible venv_path."
+        ) from exc
+    if macos_major < 13:
+        raise RuntimeError(
+            f"Cannot select a managed Python on darwin/{architecture}, macOS "
+            f"{macos_version}: macOS 13 or newer is required by the confirmed "
+            "onnxruntime wheels. Upgrade macOS or configure a prebuilt compatible "
+            "venv_path."
+        )
+    if architecture not in {"arm64", "x86_64"}:
+        raise RuntimeError(
+            f"Unsupported macOS architecture {architecture!r} on macOS "
+            f"{macos_version}; supported process architectures are arm64 and "
+            "x86_64. Use a compatible interpreter process or configure a prebuilt "
+            "compatible venv_path."
+        )
+
+    if architecture == "arm64" and macos_major >= 14:
+        maximum = (3, 14)
+        candidate_names = (
+            "python3.14",
+            "python3.13",
+            "python3.12",
+            "python3.11",
+            "python3",
+            "python",
+        )
+    else:
+        maximum = (3, 13)
+        candidate_names = (
+            "python3.13",
+            "python3.12",
+            "python3.11",
+            "python3",
+            "python",
+        )
+    return _PythonSelectionPolicy(
+        target_os=target_os,
+        architecture=architecture,
+        macos_version=macos_version,
+        macos_major=macos_major,
+        minimum=minimum,
+        maximum=maximum,
+        candidate_names=candidate_names,
+    )
+
+
+def _probe_python_candidate(
+    path: str,
+    policy: _PythonSelectionPolicy,
+) -> tuple[bool, str]:
+    """Probe one executable and return compatibility plus a rejection reason."""
+    try:
+        result = subprocess.run(
+            [path, "-c", _PYTHON_SELECTOR_PROBE],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "probe timed out after 5 seconds"
+    except OSError as exc:
+        return False, f"probe launch failed: {exc}"
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        suffix = f": {detail}" if detail else ""
+        return False, f"probe exited with status {result.returncode}{suffix}"
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError) as exc:
+        return False, f"malformed JSON: {exc}"
+    if not isinstance(payload, dict):
+        return False, "malformed JSON payload: expected an object"
+
+    version = payload.get("version")
+    child_platform = payload.get("sys_platform")
+    child_machine = payload.get("machine")
+    child_macos_version = payload.get("macos_version")
+    if (
+        not isinstance(version, list)
+        or len(version) != 3
+        or any(not isinstance(value, int) or isinstance(value, bool) for value in version)
+        or not isinstance(child_platform, str)
+        or not isinstance(child_machine, str)
+        or not isinstance(child_macos_version, str)
+    ):
+        return False, "malformed JSON payload: invalid interpreter identity fields"
+
+    python_version = (version[0], version[1])
+    if python_version < policy.minimum or (
+        policy.maximum is not None and python_version > policy.maximum
+    ):
+        return (
+            False,
+            f"Python {python_version[0]}.{python_version[1]} is outside supported "
+            f"range {policy.supported_range}",
+        )
+
+    if policy.target_os == "darwin":
+        if child_platform != "darwin":
+            return False, f"child platform {child_platform!r} does not match darwin"
+        child_architecture = _normalize_selector_architecture(child_machine)
+        if child_architecture != policy.architecture:
+            return (
+                False,
+                f"child architecture {child_architecture!r} does not match "
+                f"target {policy.architecture!r}",
+            )
+        try:
+            child_macos_major = _parse_macos_major(child_macos_version, child=True)
+        except ValueError as exc:
+            return False, str(exc)
+        if policy.architecture == "arm64" and policy.macos_major == 13:
+            matching_macos_class = child_macos_major == 13
+        else:
+            matching_macos_class = child_macos_major >= 14 if (
+                policy.architecture == "arm64"
+            ) else child_macos_major >= 13
+        if not matching_macos_class:
+            return (
+                False,
+                f"child macOS {child_macos_version} is outside target class for "
+                f"macOS {policy.macos_version}",
+            )
+    elif policy.target_os == "win32":
+        if child_platform != "win32":
+            return False, f"child platform {child_platform!r} does not match win32"
+    elif policy.target_os.startswith("linux"):
+        if not child_platform.startswith("linux"):
+            return False, f"child platform {child_platform!r} does not match linux"
+    elif child_platform != policy.target_os:
+        return (
+            False,
+            f"child platform {child_platform!r} does not match {policy.target_os!r}",
+        )
+
+    return True, ""
+
+
+def _selection_remedy(policy: _PythonSelectionPolicy) -> str:
+    if policy.maximum is None:
+        return (
+            "Install Python 3.11 or newer, put python3 or a versioned executable "
+            "on PATH, or configure a prebuilt compatible venv_path."
+        )
+    oldest = f"{policy.minimum[0]}.{policy.minimum[1]}"
+    newest = f"{policy.maximum[0]}.{policy.maximum[1]}"
+    return (
+        f"Install {policy.architecture} Python {oldest}-{newest}, put its versioned "
+        "executable on PATH, or configure a prebuilt compatible venv_path."
+    )
+
+
+def _find_python() -> str:
+    """Return the first interpreter compatible with the current target policy."""
+    policy = _python_selection_policy()
+    rejected: list[str] = []
+    seen_paths: set[str] = set()
+    for name in policy.candidate_names:
         path = shutil.which(name)
-        if path:
-            try:
-                result = subprocess.run(
-                    [path, "-c",
-                     "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"],
-                    capture_output=True, timeout=5,
-                )
-                if result.returncode == 0:
-                    return path
-            except (OSError, subprocess.TimeoutExpired):
-                continue
-    return None
+        if not path:
+            continue
+        try:
+            resolved_path = str(Path(path).resolve(strict=False))
+        except OSError:
+            resolved_path = os.path.realpath(path)
+        if resolved_path in seen_paths:
+            continue
+        seen_paths.add(resolved_path)
+        accepted, reason = _probe_python_candidate(path, policy)
+        if accepted:
+            return path
+        rejected.append(f"{path}: {reason}")
+
+    target = f"{policy.target_os}, architecture {policy.architecture}"
+    if policy.macos_version is not None:
+        target += f", macOS {policy.macos_version}"
+    rejection_detail = "; ".join(rejected) if rejected else "none found on PATH"
+    raise RuntimeError(
+        f"No compatible Python interpreter found for target {target}. "
+        f"Supported Python range: {policy.supported_range}. "
+        f"Searched executable names: {', '.join(policy.candidate_names)}. "
+        f"Candidate rejections: {rejection_detail}. Remedy: "
+        f"{_selection_remedy(policy)}"
+    )
 
 
 def _marker_path(venv_dir: Path) -> Path:

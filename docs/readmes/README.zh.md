@@ -41,7 +41,15 @@ TUI/Portal 以及日常工作流。普通用户应从那里开始，让安装器
 
 ## 开发者快速开始
 
-用于**内核开发**，而非常规 LingTai 用户安装路径。需要 Python >= 3.11；请使用本地 `.venv`。
+用于**内核开发**，而非常规 LingTai 用户安装路径。需要 Python >= 3.11；请使用本地 `.venv`。代码基线仍为不设上限的 Python >= 3.11，而受管理的 macOS 运行时与直接依赖遵循以下轮子兼容矩阵：
+
+| 目标解释器 | 支持的 Python | 直接 `onnxruntime` 要求 |
+|---|---|---|
+| Apple Silicon，macOS 14+ | 3.11–3.14 | 1.28.0 |
+| Apple Silicon，macOS 13 | 3.11–3.13 | 1.23.2 |
+| Intel/Rosetta，macOS 13+ | 3.11–3.13 | 1.23.2 |
+
+经确认的 `onnxruntime` 轮子将 macOS 13 定为支持下限。在此矩阵中，只有运行 macOS 14+ 的 Apple Silicon 支持 Python 3.14；Rosetta 下的 x86_64 进程遵循 Intel 一行。
 
 ```bash
 git clone https://github.com/Lingtai-AI/lingtai-kernel.git

@@ -10,6 +10,8 @@ name = "lingtai"
 version = "0.19.5"
 description = "Generic research agent with intrinsic tools and MCP-compatible extension interface"
 readme = "README.md"
+# Architecture-specific macOS Python limits are expressed by the uv resolution
+# environments below; Requires-Python retains the project's global code baseline.
 requires-python = ">=3.11"
 license = "Apache-2.0"
 classifiers = [
@@ -45,6 +47,50 @@ dependencies = [
     "cryptography>=42.0.0",
     "qrcode>=7.4.0",
     "faster-whisper>=1.0.0",
+    # Published PEP 508 metadata must remain safe for pip/packaging evaluators on
+    # every OS. Keep release comparisons out of these public markers; uv-local
+    # constraints below select the exact wheel for each supported macOS cell.
+    "onnxruntime>=1.23.2,<1.29; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "onnxruntime==1.23.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+]
+
+[tool.uv]
+# These entries are disjoint. The project Requires-Python lower bound intersects
+# the non-Darwin branch, so it still means Python >=3.11 there.
+environments = [
+    "sys_platform != 'darwin'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '23' and python_version >= '3.11' and python_version < '3.15'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '22' and platform_release < '23' and python_version >= '3.11' and python_version < '3.14'",
+    "sys_platform == 'darwin' and platform_machine == 'x86_64' and platform_release >= '22' and python_version >= '3.11' and python_version < '3.14'",
+]
+
+# These exact release-gated pins are uv-local constraints, not published wheel
+# metadata. They narrow the architecture-only requirements above only when the
+# corresponding macOS environment is resolved.
+constraint-dependencies = [
+    "onnxruntime==1.28.0; sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '23'",
+    "onnxruntime==1.23.2; sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '22' and platform_release < '23'",
+    "onnxruntime==1.23.2; sys_platform == 'darwin' and platform_machine == 'x86_64' and platform_release >= '22'",
+]
+
+# onnxruntime has no sdist. Enumerating each minor makes every supported
+# ABI/platform cell an explicit wheel obligation.
+required-environments = [
+    # Apple Silicon, macOS 14+
+    "sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '23' and python_version == '3.11'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '23' and python_version == '3.12'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '23' and python_version == '3.13'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '23' and python_version == '3.14'",
+
+    # Apple Silicon, macOS 13
+    "sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '22' and platform_release < '23' and python_version == '3.11'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '22' and platform_release < '23' and python_version == '3.12'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '22' and platform_release < '23' and python_version == '3.13'",
+
+    # Intel/Rosetta, macOS 13+
+    "sys_platform == 'darwin' and platform_machine == 'x86_64' and platform_release >= '22' and python_version == '3.11'",
+    "sys_platform == 'darwin' and platform_machine == 'x86_64' and platform_release >= '22' and python_version == '3.12'",
+    "sys_platform == 'darwin' and platform_machine == 'x86_64' and platform_release >= '22' and python_version == '3.13'",
 ]
 
 [project.scripts]

@@ -58,7 +58,19 @@ bare `pip install` here as the normal installation path.
 ## Developer quick start
 
 For **kernel development** — not the normal LingTai user installation path. Requires
-Python >= 3.11; use a local `.venv`.
+Python >= 3.11; use a local `.venv`. The code baseline remains open-ended at Python
+>= 3.11, while the managed macOS runtime and direct dependency follow this wheel
+compatibility matrix:
+
+| Target interpreter | Supported Python | Direct `onnxruntime` requirement |
+|---|---|---|
+| Apple Silicon, macOS 14+ | 3.11–3.14 | 1.28.0 |
+| Apple Silicon, macOS 13 | 3.11–3.13 | 1.23.2 |
+| Intel/Rosetta, macOS 13+ | 3.11–3.13 | 1.23.2 |
+
+The confirmed `onnxruntime` wheels make macOS 13 the support floor. Only Apple
+Silicon on macOS 14+ supports Python 3.14 in this matrix; an x86_64 process under
+Rosetta follows the Intel row.
 
 ```bash
 git clone https://github.com/Lingtai-AI/lingtai-kernel.git
