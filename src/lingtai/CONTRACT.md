@@ -135,6 +135,56 @@ constructs a migration workspace, or performs a second notification path.
    keeps its existing adapter-owned `xhigh` default. Invalid values or scopes
    fail validation rather than being normalized silently.
 
+   Zhipu/GLM (`provider="zhipu"` or `"glm"`, both registered spellings) is a
+   separate, provider-scoped route with its own vocabulary `none|high|max`.
+   The global `none|minimal|low|medium|high|xhigh` tuple is unchanged: `max` is
+   rejected for Codex/custom Responses, and `minimal|low|medium|xhigh` are
+   rejected for GLM. GLM is Chat-Completions-only; there is no Responses branch
+   and no `wire_api` handling for it. The exact wire is two independent
+   top-level fields, emitted via `extra_body` (which the SDK hoists to top-level
+   JSON siblings), never the Responses nested `reasoning` object:
+
+   | `manifest.llm.thinking` | `thinking` | `reasoning_effort` | effective |
+   |---|---|---|---|
+   | omitted / internal `default` / adapter `None` | *(absent)* | *(absent)* | provider default: enabled / max |
+   | `none` | `{"type": "disabled"}` | *(absent)* | no thinking |
+   | `high` | `{"type": "enabled"}` | `"high"` | enabled / high |
+   | `max` | `{"type": "enabled"}` | `"max"` | enabled / max |
+
+   `none` reuses the same *token* as Codex's "effort none" but reaches the same
+   observable outcome through a **different mechanism** — GLM's mode axis — not
+   a shared implementation. `clear_thinking` is never emitted: it is a
+   history-retention axis, not an effort axis.
+
+   Explicit values (`none`, `high`, `max`) are gated **fail-closed** to
+   normalized model id `glm-5.2` and raise before session construction on any
+   other model; matching normalizes the spelling while the configured spelling
+   is preserved verbatim on the wire. Omission is valid for every model and
+   emits no reasoning fields. Capability metadata is dated
+   (`zhipu_docs_20260805`) with `model_verified=false`.
+
+   **Compatibility change:** GLM omission now stays omission, so an untouched
+   GLM main agent moves from an accidental explicit `reasoning_effort: "high"`
+   to the provider default `max` — more reasoning tokens and higher latency.
+   That `high` was the cross-provider `AgentConfig` field default reaching GLM
+   through a negative condition, not a GLM-specific baseline, and native LingTai
+   daemons already omit the fields and already run at `max`; this aligns main
+   agents with them. Users who need the old tier now configure explicit `high`.
+
+   The decision is normalized once, before session construction, and frozen for
+   every turn and streaming call on that session. It drives both the wire bytes
+   and the safe observability fields (`reasoning_requested`,
+   `reasoning_normalized`, `reasoning_actual`, `reasoning_source`,
+   `reasoning_capability_source`) merged into `llm_call`, so a log line can
+   never report an effort the request did not carry; sessions without the
+   accessor keep the previous `llm_call` shape exactly. No credential, base URL,
+   prompt/body, session id, or raw provider payload enters those fields.
+
+   Both soul sites keep their hard-coded `thinking="high"`, which stays valid on
+   GLM-5.2. On a non-5.2 GLM model the fail-closed gate makes soul session
+   construction raise, and the existing `try/except` degrades to `None` rather
+   than crashing the agent.
+
 ## Contract tests
 
 `tests/test_init_reader.py` proves JSONC parsing, identical boot/refresh reader

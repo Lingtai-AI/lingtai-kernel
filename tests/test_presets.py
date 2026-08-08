@@ -1005,3 +1005,93 @@ def test_materialize_preserves_init_skills_paths_carveout(tmp_path):
         "~/preset-skills",
         "~/agent-skills",
     ]
+
+
+# ---------------------------------------------------------------------------
+# preset manifest.llm.thinking — zhipu/glm provider-scoped vocabulary (#1197)
+# ---------------------------------------------------------------------------
+
+
+def _zhipu_thinking_preset(provider: str, value) -> dict:
+    return {
+        "name": "zhipu-thinking",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "GLM-5.2", "thinking": value},
+            "capabilities": {},
+        },
+    }
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+@pytest.mark.parametrize("value", ["none", "high", "max"])
+def test_load_preset_accepts_thinking_for_zhipu(tmp_path, provider, value):
+    f = tmp_path / "zhipu-thinking.json"
+    f.write_text(json.dumps(_zhipu_thinking_preset(provider, value)))
+
+    loaded = load_preset(str(f))
+
+    assert loaded["manifest"]["llm"]["thinking"] == value
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+@pytest.mark.parametrize(
+    "value",
+    ["minimal", "low", "medium", "xhigh", "default", "High", " high", "", True, 1, None],
+)
+def test_load_preset_rejects_invalid_thinking_for_zhipu(tmp_path, provider, value):
+    f = tmp_path / "bad-zhipu-thinking.json"
+    f.write_text(json.dumps(_zhipu_thinking_preset(provider, value)))
+
+    # The message names the provider spelling actually in play, so a `glm`
+    # preset never reports itself as `zhipu`.
+    with pytest.raises(ValueError, match=rf"manifest\.llm\.thinking.*{provider}"):
+        load_preset(str(f))
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+def test_load_preset_zhipu_thinking_error_names_the_valid_tokens(tmp_path, provider):
+    f = tmp_path / "bad-zhipu-tokens.json"
+    f.write_text(json.dumps(_zhipu_thinking_preset(provider, "medium")))
+
+    with pytest.raises(ValueError, match="none, high, max"):
+        load_preset(str(f))
+
+
+def test_load_preset_rejects_thinking_max_for_codex(tmp_path):
+    """`max` stays zhipu-scoped — the global THINKING_LEVELS tuple is unchanged."""
+    p = {
+        "name": "codex-max",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": "codex", "model": "gpt-5.5", "thinking": "max"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "codex-max.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
+        load_preset(str(f))
+
+
+def test_load_preset_rejects_thinking_max_for_custom_openai_responses(tmp_path):
+    p = {
+        "name": "custom-max",
+        "description": _DESC,
+        "manifest": {
+            "llm": {
+                "provider": "custom",
+                "model": "custom-model",
+                "api_compat": "openai",
+                "wire_api": "responses",
+                "thinking": "max",
+            },
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "custom-max.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
+        load_preset(str(f))

@@ -21,6 +21,7 @@ from .config import (
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,  # back-compat alias for the above
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
+    ZHIPU_THINKING_PROVIDERS,
 )
 from .llm import (
     ChatSession,
@@ -62,6 +63,81 @@ if TYPE_CHECKING:
 def _elapsed_ms(start: float) -> int:
     """Return non-negative elapsed milliseconds from a monotonic start."""
     return max(0, int((time.monotonic() - start) * 1000))
+
+
+# The ONLY reasoning keys a provider session may contribute to ``llm_call``.
+# This is a trust boundary, not a passthrough: the accessor is provider-owned
+# code, so an exact allowlist is what keeps a credential, a base URL, a prompt,
+# or a raw payload out of the log, and what stops a provider from overwriting
+# kernel-owned fields such as ``model`` / ``api_call_id``.
+_REASONING_OBSERVABILITY_KEYS = frozenset(
+    {
+        "reasoning_requested",
+        "reasoning_normalized",
+        "reasoning_actual",
+        "reasoning_source",
+        "reasoning_capability_source",
+    }
+)
+
+# Reasoning values are short enumerated tokens; anything longer is not a tier
+# name and has no business in a log line.
+_REASONING_OBSERVABILITY_MAX_LEN = 64
+
+
+def _reasoning_observability_fields(chat) -> dict:
+    """Return a session's safe reasoning log fields, or ``{}``.
+
+    Optional per-provider accessor. Any session that does not implement it — or
+    whose implementation misbehaves — contributes nothing, so `llm_call` stays
+    byte-identical for every provider that does not own a reasoning contract.
+    Observability must never be able to break a turn.
+
+    Whatever the accessor returns is filtered to
+    ``_REASONING_OBSERVABILITY_KEYS`` and to bounded plain strings. Unknown
+    keys, collisions with kernel-owned log fields, and non-string values are
+    dropped silently rather than trusted.
+    """
+    accessor = getattr(chat, "reasoning_observability", None)
+    if not callable(accessor):
+        return {}
+    try:
+        fields = accessor()
+    except Exception:  # pragma: no cover - defensive; logging must not raise
+        return {}
+    if not isinstance(fields, dict):
+        return {}
+    return {
+        key: value
+        for key, value in fields.items()
+        if key in _REASONING_OBSERVABILITY_KEYS
+        # ``type(value) is str`` rather than isinstance: a str subclass can
+        # carry arbitrary behavior, and bool is not a str either way.
+        and type(value) is str
+        and len(value) <= _REASONING_OBSERVABILITY_MAX_LEN
+    }
+
+
+def _session_thinking(config: AgentConfig, llm_service) -> Any:
+    """Return the thinking value to pass to ``create_session``.
+
+    Providers that own a reasoning contract must receive the configured value
+    **exactly**, including falsey ones. The legacy ``or "high"`` rewrite would
+    turn a direct ``AgentConfig(thinking=""|False|0)`` into an explicit ``high``
+    — so the provider normalizer would never see it and never fail closed — and
+    would turn ``None`` into ``high`` instead of the provider's omission
+    semantics.
+
+    Every other provider keeps the legacy fallback byte-equivalent.
+
+    The effective provider mirrors how ``model`` is resolved on the adjacent
+    line: ``AgentConfig.provider`` of ``None`` means "use the LLMService's own
+    provider".
+    """
+    provider = config.provider or getattr(llm_service, "provider", None)
+    if str(provider or "").lower() in ZHIPU_THINKING_PROVIDERS:
+        return config.thinking
+    return config.thinking or "high"
 
 
 _SAFE_USAGE_EXTRA_EVENT_KEYS = {
@@ -293,7 +369,7 @@ class SessionManager:
                 system_prompt=self._build_system_prompt_fn(),
                 tools=self._build_tool_schemas_fn() or None,
                 model=self._config.model or self._llm_service.model,
-                thinking=self._config.thinking or "high",
+                thinking=_session_thinking(self._config, self._llm_service),
                 agent_type=self._display_name,
                 tracked=True,
                 interaction_id=self._interaction_id,
@@ -310,7 +386,7 @@ class SessionManager:
             system_prompt=self._build_system_prompt_fn(),
             tools=self._build_tool_schemas_fn() or None,
             model=self._config.model or self._llm_service.model,
-            thinking=self._config.thinking or "high",
+            thinking=_session_thinking(self._config, self._llm_service),
             agent_type=self._display_name,
             tracked=tracked,
             provider=self._config.provider,
@@ -397,6 +473,11 @@ class SessionManager:
             "model": self._config.model or self._llm_service.model or "unknown",
             "api_call_id": api_call_id,
         }
+        # Providers that own a reasoning contract expose safe, provider-neutral
+        # fields derived from the same frozen decision that produced the wire
+        # bytes. Sessions without the accessor — every other provider — keep the
+        # exact previous {model, api_call_id} shape.
+        llm_call_fields.update(_reasoning_observability_fields(self._chat))
         self._log("llm_call", **llm_call_fields)
 
         retry_timeout = self._config.retry_timeout

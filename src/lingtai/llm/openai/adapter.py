@@ -2640,9 +2640,10 @@ class OpenAIAdapter(LLMAdapter):
                 },
             }
 
-        # Reasoning effort for o-series models
-        if thinking != "default":
-            extra_kwargs["reasoning_effort"] = "high" if thinking == "high" else "low"
+        # Reasoning effort for o-series models. Subclass hook: providers whose
+        # reasoning wire shape is not the generic flat ``reasoning_effort``
+        # override ``_chat_reasoning_kwargs`` and own the whole decision.
+        extra_kwargs.update(self._chat_reasoning_kwargs(thinking, model))
 
         # Subclass-provided extra_body (e.g. OpenRouter's reasoning include).
         # Merge rather than overwrite so callers adding their own extra_body
@@ -2663,6 +2664,24 @@ class OpenAIAdapter(LLMAdapter):
             context_window=context_window,
             prompt_cache_key=self._resolve_prompt_cache_key(model),
         )
+
+    def _chat_reasoning_kwargs(self, thinking: str, model: str) -> dict:
+        """Return the Chat Completions reasoning kwargs for ``thinking``.
+
+        Default is the long-standing generic mapping, preserved byte-for-byte:
+        the omission sentinel emits nothing, ``high`` maps to a flat
+        ``reasoning_effort="high"``, and every other explicit value maps to
+        ``"low"``. ``model`` is accepted so subclasses can gate on model
+        capability, and is deliberately ignored here — the generic contract is
+        not model-aware and must not become so implicitly.
+
+        Subclasses override to own a provider-specific reasoning wire shape
+        (e.g. Zhipu/GLM's two-axis ``thinking`` + ``reasoning_effort`` pair,
+        emitted via ``extra_body``).
+        """
+        if thinking != "default":
+            return {"reasoning_effort": "high" if thinking == "high" else "low"}
+        return {}
 
     def _adapter_extra_body(self) -> dict:
         """Return extra_body JSON fields to include on every request.

@@ -39,7 +39,12 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from .config import THINKING_LEVELS, THINKING_PROVIDERS, llm_supports_thinking
+from .config import (
+    THINKING_PROVIDERS,
+    ZHIPU_THINKING_PROVIDERS,
+    llm_supports_thinking,
+    thinking_levels_for_llm,
+)
 
 log = logging.getLogger(__name__)
 
@@ -366,10 +371,13 @@ def load_preset(
                 "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+        levels = thinking_levels_for_llm(llm)
+        if not isinstance(thinking, str) or thinking not in levels:
+            provider = str(llm.get("provider") or "").lower()
+            scope = f" for provider {provider!r}" if provider in ZHIPU_THINKING_PROVIDERS else ""
             raise ValueError(
-                f"preset {name!r} ({p}): manifest.llm.thinking must be one of "
-                f"{', '.join(THINKING_LEVELS)}"
+                f"preset {name!r} ({p}): manifest.llm.thinking{scope} must be "
+                f"one of {', '.join(levels)}"
             )
 
     caps = manifest.get("capabilities", {})

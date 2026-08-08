@@ -18,7 +18,11 @@ from typing import Any
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
-from lingtai.kernel.config import AgentConfig, THINKING_PROVIDERS
+from lingtai.kernel.config import (
+    AgentConfig,
+    THINKING_PROVIDERS,
+    ZHIPU_THINKING_PROVIDERS,
+)
 from lingtai.kernel.llm.base import ToolCall
 from lingtai.llm.service import (
     CONSERVATIVE_CONTEXT_WINDOW,
@@ -98,10 +102,21 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         # adapter (omitted -> reasoning.effort "xhigh"), so an omitted manifest
         # value stays the "default" sentinel for them instead of being promoted
         # to the legacy cross-provider "high" main-session default.
+        #
+        # Zhipu/GLM joins that rule: omission there emits NO reasoning fields at
+        # all, so GLM applies its documented enabled/max default. This is a
+        # deliberate behavior change — an untouched GLM agent previously reached
+        # the wire as an accidental explicit `reasoning_effort: "high"`, which
+        # came from this cross-provider field default via a negative condition,
+        # not from any GLM-specific baseline. It also aligns main agents with
+        # native LingTai daemons, which already hard-code the "default" sentinel
+        # and already run at max. Anyone who wants the old tier can now write an
+        # explicit "high", which this slice makes possible for the first time.
         thinking=llm.get(
             "thinking",
             "default"
-            if str(llm.get("provider") or "").lower() in THINKING_PROVIDERS
+            if str(llm.get("provider") or "").lower()
+            in (*THINKING_PROVIDERS, *ZHIPU_THINKING_PROVIDERS)
             else defaults.thinking,
         ),
         # Molt thresholds and the context.molt message are kernel-fixed runtime

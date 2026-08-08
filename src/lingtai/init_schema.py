@@ -4,9 +4,10 @@ from __future__ import annotations
 import logging
 
 from lingtai.kernel.config import (
-    THINKING_LEVELS,
     THINKING_PROVIDERS,
+    ZHIPU_THINKING_PROVIDERS,
     llm_supports_thinking,
+    thinking_levels_for_llm,
 )
 
 log = logging.getLogger(__name__)
@@ -430,10 +431,13 @@ def validate_init(data: dict) -> list[str]:
                 "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+        levels = thinking_levels_for_llm(llm)
+        if not isinstance(thinking, str) or thinking not in levels:
+            provider = str(llm.get("provider") or "").lower()
+            scope = f" for provider {provider!r}" if provider in ZHIPU_THINKING_PROVIDERS else ""
             raise ValueError(
-                "manifest.llm.thinking: expected one of "
-                f"{', '.join(THINKING_LEVELS)}"
+                f"manifest.llm.thinking{scope}: expected one of "
+                f"{', '.join(levels)}"
             )
     for key in llm:
         if key not in LLM_KNOWN:

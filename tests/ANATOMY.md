@@ -417,6 +417,7 @@ related_files:
   - tests/test_workdir.py
   - tests/test_workdir_lease.py
   - tests/test_workdir_lease_posix_only.py
+  - tests/test_zhipu_effort.py
   - tests/test_zhipu_merge_consecutive.py
   - tests/unit/__init__.py
   - tests/unit/auth/__init__.py

@@ -19,17 +19,43 @@ THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 # ``llm_supports_thinking`` so validators share the complete rule.
 THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 
+# Zhipu/GLM registered provider spellings. ``_register.py`` maps both onto the
+# same ZhipuAdapter factory, so every validator, hydration branch, and test must
+# cover both or ``glm`` silently keeps the lossy generic mapping.
+ZHIPU_THINKING_PROVIDERS = ("zhipu", "glm")
+
+# GLM's provider-scoped vocabulary. Deliberately NOT merged into the global
+# ``THINKING_LEVELS`` tuple: ``max`` must stay rejected for Codex/custom
+# Responses, and ``minimal|low|medium|xhigh`` must stay rejected for GLM. The
+# tokens map onto GLM's two top-level Chat Completions axes
+# (``thinking.type`` + ``reasoning_effort``); ``lingtai/llm/zhipu/effort.py``
+# owns the wire rendering and imports this tuple so there is one vocabulary.
+ZHIPU_THINKING_LEVELS = ("none", "high", "max")
+
 
 def llm_supports_thinking(llm: dict) -> bool:
     """Return whether a manifest LLM block accepts explicit thinking effort."""
     provider = str(llm.get("provider") or "").lower()
-    if provider in THINKING_PROVIDERS:
+    if provider in THINKING_PROVIDERS or provider in ZHIPU_THINKING_PROVIDERS:
         return True
     return (
         provider == "custom"
         and str(llm.get("api_compat") or "").lower() == "openai"
         and str(llm.get("wire_api") or "").lower() == "responses"
     )
+
+
+def thinking_levels_for_llm(llm: dict) -> tuple[str, ...]:
+    """Return the accepted thinking vocabulary for a manifest LLM block.
+
+    Provider-scoped: Zhipu/GLM owns ``none|high|max`` because its wire shape is
+    a two-axis ``thinking`` + ``reasoning_effort`` pair rather than the generic
+    flat effort scalar. Every other in-scope provider keeps the global tuple.
+    """
+    provider = str(llm.get("provider") or "").lower()
+    if provider in ZHIPU_THINKING_PROVIDERS:
+        return ZHIPU_THINKING_LEVELS
+    return THINKING_LEVELS
 
 # Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
 # agent-configurable. An agent must not be able to raise its own molt

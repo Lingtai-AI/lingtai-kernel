@@ -864,3 +864,82 @@ def test_deepseek_wire_api_responses_allowed():
     data["manifest"]["llm"]["base_url"] = "https://api.deepseek.com"
     data["manifest"]["llm"]["wire_api"] = "responses"
     validate_init(data)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# manifest.llm.thinking — zhipu/glm provider-scoped vocabulary (issue #1197)
+#
+# GLM owns a provider-scoped vocabulary (none|high|max) that is deliberately
+# NOT the global THINKING_LEVELS tuple: `max` must stay rejected for Codex and
+# custom OpenAI-compatible Responses, and `minimal|low|medium|xhigh` must stay
+# rejected for zhipu/glm. Both registered spellings are covered because
+# `_register.py` registers `glm` and `zhipu` for the same factory.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+@pytest.mark.parametrize("value", ["none", "high", "max"])
+def test_llm_thinking_valid_values_for_zhipu(provider, value):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["model"] = "GLM-5.2"
+    data["manifest"]["llm"]["thinking"] = value
+    validate_init(data)  # should not raise
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+@pytest.mark.parametrize(
+    "value",
+    ["minimal", "low", "medium", "xhigh", "default", "High", " high", "", True, 1, None],
+)
+def test_llm_thinking_invalid_values_for_zhipu(provider, value):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["model"] = "GLM-5.2"
+    data["manifest"]["llm"]["thinking"] = value
+    # The message names the provider spelling actually in play, so a `glm`
+    # manifest never reports itself as `zhipu`.
+    with pytest.raises(ValueError, match=rf"manifest\.llm\.thinking.*{provider}"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+def test_llm_thinking_zhipu_error_names_the_valid_tokens(provider):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["model"] = "GLM-5.2"
+    data["manifest"]["llm"]["thinking"] = "medium"
+    with pytest.raises(ValueError, match="none, high, max"):
+        validate_init(data)
+
+
+def test_llm_thinking_max_still_rejected_for_codex():
+    """`max` is zhipu-scoped — the global THINKING_LEVELS tuple is unchanged."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "codex"
+    data["manifest"]["llm"]["thinking"] = "max"
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
+        validate_init(data)
+
+
+def test_llm_thinking_max_still_rejected_for_custom_openai_responses():
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {
+            "provider": "custom",
+            "api_compat": "openai",
+            "wire_api": "responses",
+            "thinking": "max",
+        }
+    )
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+def test_llm_thinking_omitted_for_zhipu_is_valid(provider):
+    """Omission stays omission — no thinking key is always valid."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["model"] = "GLM-5.2"
+    validate_init(data)  # should not raise

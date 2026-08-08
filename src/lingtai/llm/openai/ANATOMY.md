@@ -517,7 +517,8 @@ In-flight official/stateful Responses and Codex sessions keep no-op prompt/tool 
 ### Subclass hooks
 
 - `_session_class` (`adapter.py:2134`) — override to inject provider-specific session behavior on the CC path.
-- `_adapter_extra_body()` (`adapter.py:2395`) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
+- `_adapter_extra_body()` (`adapter.py:2686`) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
+- `_chat_reasoning_kwargs(thinking, model)` (`adapter.py:2668`) — override to own a provider-specific reasoning wire shape on the CC path. The default body is the long-standing generic mapping, preserved byte-for-byte: the `"default"` sentinel emits nothing, `high` maps to flat `reasoning_effort="high"`, and every other explicit value maps to `"low"`. `model` is accepted so subclasses can gate on model capability and is deliberately ignored by the base — the generic contract is not model-aware and must not become so implicitly. No provider name appears in this file; Zhipu/GLM overrides the hook to emit its two-axis `thinking` + `reasoning_effort` pair via `extra_body`.
 - `_default_prompt_cache_key(model)` (`adapter.py:2196`) — override to give a provider a clean cache namespace (DeepSeek/Zhipu/MiMo/Codex do).
 
 ### `send(None)` contract — continue from wire

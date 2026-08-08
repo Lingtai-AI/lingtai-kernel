@@ -665,3 +665,46 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
     # consultation_discarded_state event.
     agent._tc_inbox.enqueue.assert_not_called()
     assert any(name == "consultation_fire" for name, _ in agent._logs)
+
+
+# ---------------------------------------------------------------------------
+# Soul x GLM fail-closed model gate (issue #1197)
+#
+# Both soul sites hard-code thinking="high". For a GLM-5.2 agent that stays a
+# valid explicit value and the sites are byte-unchanged. On a non-5.2 GLM model
+# the new fail-closed capability gate makes it an out-of-capability value, so
+# session construction raises. This pins that the EXISTING try/except degrades
+# to None instead of crashing the agent — no soul production branch is added.
+# ---------------------------------------------------------------------------
+
+
+def test_soul_inquiry_degrades_to_none_when_thinking_is_out_of_capability():
+    from lingtai.tools.soul.inquiry import soul_inquiry
+
+    agent = MagicMock()
+    agent._config.model = "GLM-5.1"
+    agent.service.model = "GLM-5.1"
+    agent.interface.entries = []
+    agent.service.create_session.side_effect = ValueError(
+        "manifest.llm.thinking for provider 'zhipu'/'glm': explicit "
+        "none, high, max requires one of glm-5.2"
+    )
+
+    assert soul_inquiry(agent, "what am I missing?") is None
+    agent._log.assert_called_once()
+    assert agent._log.call_args[0][0] == "soul_whisper_error"
+
+
+def test_soul_inquiry_still_requests_high_thinking_unchanged():
+    """The hard-coded soul value is untouched by this slice."""
+    from lingtai.tools.soul.inquiry import soul_inquiry
+
+    agent = MagicMock()
+    agent._config.model = "GLM-5.2"
+    agent._config.retry_timeout = 30.0
+    agent.service.model = "GLM-5.2"
+    agent.interface.entries = []
+
+    soul_inquiry(agent, "what am I missing?")
+
+    assert agent.service.create_session.call_args.kwargs["thinking"] == "high"

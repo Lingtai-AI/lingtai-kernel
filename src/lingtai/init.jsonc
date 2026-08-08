@@ -58,6 +58,14 @@
       // "api_compat": "openai",
       // "wire_api": "responses",
       // "thinking": "minimal",
+      //
+      // Zhipu/GLM (provider "zhipu" or "glm") has its own vocabulary:
+      // none/high/max. "none" disables thinking, "high"/"max" enable it at
+      // that effort, and explicit values require model glm-5.2. Omit thinking
+      // to send no reasoning fields and let GLM apply its enabled/max default.
+      // "provider": "zhipu",
+      // "model": "GLM-5.2",
+      // "thinking": "max",
       "base_url": "https://api.minimaxi.com/anthropic"
     },
 
