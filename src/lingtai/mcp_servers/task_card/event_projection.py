@@ -127,7 +127,33 @@ class TaskCardEventProjection:
                 ts = None
             if ts is not None and math.isfinite(ts):
                 row["_ts"] = ts
+        usage = cls._project_current_call_usage(event)
+        if usage:
+            row["_usage"] = usage
         return row
+
+    @staticmethod
+    def _project_current_call_usage(
+        event: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Extract per-call LLM usage (output tokens, cache miss, cache rate)."""
+        envelope = event.get("_meta")
+        if not isinstance(envelope, dict):
+            return None
+        agent_meta = envelope.get("agent_meta")
+        if not isinstance(agent_meta, dict):
+            return None
+        state = agent_meta.get("agent_state")
+        if not isinstance(state, dict):
+            return None
+        token_usage = state.get("token_usage")
+        if not isinstance(token_usage, dict):
+            return None
+        current = token_usage.get("current_call")
+        if not isinstance(current, dict):
+            return None
+        supported = ("output", "cache_miss", "cache_rate")
+        return {key: current[key] for key in supported if key in current} or None
 
     @classmethod
     def project_event(
@@ -212,6 +238,7 @@ class TaskCardEventProjection:
                     row.pop("group_id", None)
                     row.pop("_tool_call_id", None)
                     row.pop("_ts", None)
+                    row.pop("_usage", None)
                 if row.get("kind") == "tool":
                     row.pop("kind", None)
                 rows.append(row)
@@ -302,15 +329,22 @@ class TaskCardEventProjection:
         for group in groups[-normal_rows:]:
             rows.append({"kind": "divider", "text": cls.API_CALL_DIVIDER})
             # The group's API delay is the LLM round-trip gap since the previous
-            # progress; show it just below the divider, not inside tool rows.
+            # progress; the per-call usage rides the same divider line, both kept
+            # out of tool rows.
             api_delay_s: float | None = None
+            usage: dict[str, Any] | None = None
             for row in group.get("events", []):
                 v = row.get("api_delay_s")
-                if type(v) in (int, float) and not isinstance(v, bool) and v >= 0:
+                if api_delay_s is None and type(v) in (int, float) and not isinstance(v, bool) and v >= 0:
                     api_delay_s = float(v)
-                break
-            if api_delay_s is not None and api_delay_s > 0:
-                rows.append({"kind": "text", "text": f"API {api_delay_s:.1f}s"})
+                u = row.get("_usage")
+                if usage is None and isinstance(u, dict) and u:
+                    usage = u
+                if api_delay_s is not None and usage is not None:
+                    break
+            info = cls.format_divider_info(api_delay_s, usage)
+            if info:
+                rows.append({"kind": "text", "text": info})
             rows.extend(group.get("events", []))
         text = cls.format_task_card_text(
             "",
@@ -322,6 +356,38 @@ class TaskCardEventProjection:
             now=now,
         )
         return text[: cls.TEXT_LIMIT] if len(text) > cls.TEXT_LIMIT else text
+
+    @classmethod
+    def format_divider_info(
+        cls,
+        api_delay_s: float | None,
+        usage: dict[str, Any] | None,
+    ) -> str:
+        """Compact divider line: `API x s` plus `↓out ↑miss cache%` per-call usage.
+
+        The down arrow denotes output tokens, the up arrow denotes cache miss
+        (the two token flows that grow with each call); the trailing percentage
+        is that call's cache rate. Any piece missing from the event degrades
+        silently, so old events without usage still render the delay alone.
+        """
+        parts: list[str] = []
+        if api_delay_s is not None and api_delay_s > 0:
+            parts.append(f"API {api_delay_s:.1f}s")
+        if isinstance(usage, dict) and usage:
+            out = usage.get("output")
+            miss = usage.get("cache_miss")
+            rate = usage.get("cache_rate")
+            if type(out) is int and out >= 0:
+                parts.append(f"\u2193{cls.format_count(out)}")
+            if type(miss) is int and miss >= 0:
+                parts.append(f"\u2191{cls.format_count(miss)}")
+            if (
+                type(rate) in {int, float}
+                and not isinstance(rate, bool)
+                and 0 <= rate <= 1
+            ):
+                parts.append(f"{float(rate):.0%}")
+        return " ".join(parts)
 
     @classmethod
     def format_task_card_text(

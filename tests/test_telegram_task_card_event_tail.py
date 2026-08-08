@@ -513,6 +513,65 @@ def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
     assert "3.4s api" not in rendered
 
 
+def test_divider_renders_compact_per_call_usage_arrows(tmp_path):
+    """The group divider carries per-call LLM usage: down arrow = output tokens,
+    up arrow = cache miss, trailing percentage = cache rate."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    def line(ts, out, miss, rate):
+        event = json.loads(_tool_call_line(call_id=f"c{int(ts)}", ts=ts))
+        event["_meta"] = {
+            "agent_meta": {
+                "agent_state": {
+                    "token_usage": {
+                        "current_call": {
+                            "output": out,
+                            "cache_miss": miss,
+                            "cache_rate": rate,
+                        }
+                    }
+                }
+            }
+        }
+        return json.dumps(event)
+
+    _write_lines(_events_path(tmp_path), [
+        line(100.0, 412, 31_000, 0.97716),
+        line(103.4, 1_234, 512_345, 0.55),
+    ])
+
+    manager._poll_event_tail()
+
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    # The visible tail (last group) carries its own API delay + arrows + rate.
+    assert "API 3.4s" in rendered
+    assert "\u21931.2k" in rendered    # ↓1.2k output tokens
+    assert "\u2191512.3k" in rendered  # ↑512.3k cache miss
+    assert "55%" in rendered           # cache rate
+    # Usage is private per-row state: projected for rendering but never
+    # leaked into the public window rows.
+    assert all("_usage" not in row for row in manager._task_card_event_window())
+    assert all("_ts" not in row for row in manager._task_card_event_window())
+
+
+def test_divider_usage_degrades_when_event_lacks_usage(tmp_path):
+    """Old tool_call events without usage still render the API delay alone."""
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    _write_lines(_events_path(tmp_path), [
+        _tool_call_line(tool_name="first", call_id="c1", ts=100.0),
+        _tool_call_line(tool_name="second", call_id="c2", ts=103.4),
+    ])
+    manager._poll_event_tail()
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "API 3.4s" in rendered
+    assert "\u2191" not in rendered
+    assert "\u2193" not in rendered
+
+
 def test_sub_second_tool_elapsed_renders_milliseconds_not_zero_seconds(tmp_path):
     """CHANGE B: a 412ms tool result renders ``412ms``, never the useless ``0s``."""
     acct = FakeAccount()
