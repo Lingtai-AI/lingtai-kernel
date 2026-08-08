@@ -2184,7 +2184,9 @@ class TelegramManager:
         # the reader can tell exactly which agent on which machine produced
         # this card, and where its durable state lives. ``socket.gethostname``
         # returns the short host name (no FQDN suffix); failures degrade to
-        # omitting the key so no line is fabricated.
+        # omitting the key so no line is fabricated. ``shell_kind`` is carried
+        # from the agent's resolved dialect when available so the card also
+        # shows which shell the agent runs on.
         try:
             snapshot["device_short_name"] = socket.gethostname()
         except (OSError, ValueError):
@@ -2195,6 +2197,18 @@ class TelegramManager:
             working_dir = None
         if working_dir:
             snapshot["working_dir"] = working_dir
+        shell_kind = os.environ.get("LINGTAI_SHELL", "").strip()
+        if not shell_kind:
+            try:
+                raw = (self._working_dir / "init.json").read_text(encoding="utf-8")
+                data = json.loads(raw)
+                shell_kind = str(
+                    (data.get("manifest", {}).get("capabilities", {}).get("shell", {}) or {}).get("shell_kind", "")
+                ).strip()
+            except (OSError, ValueError, json.JSONDecodeError, AttributeError):
+                shell_kind = ""
+        if shell_kind:
+            snapshot["shell_name"] = shell_kind
         return snapshot or None
 
     def _task_card_current_model(self) -> str | None:

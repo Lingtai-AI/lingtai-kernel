@@ -403,16 +403,20 @@ class TaskCardEventProjection:
         if context_line:
             lines.append(context_line)
 
-        # Device identity line: physical path + short host name make the card
-        # self-identifying. Both values pass through the same machine-identifier
-        # allowlist used for API error rows so path/name content stays printable
-        # and bounded. Missing or malformed values simply omit the line.
+        # Device identity line: short host name, shell dialect, and physical
+        # path make the card self-identifying. All values pass through the
+        # same machine-identifier allowlist used for API error rows so
+        # path/name content stays printable and bounded. Missing or malformed
+        # values simply omit the line (partial identity still renders).
         device_parts: list[str] = []
         device = cls.machine_identifier(
             metadata.get("device_short_name"), limit=64
         )
         if device is not None:
             device_parts.append(device)
+        shell_name = cls.machine_identifier(metadata.get("shell_name"), limit=48)
+        if shell_name is not None:
+            device_parts.append(f"shell {shell_name}")
         working_dir = cls.machine_identifier(metadata.get("working_dir"), limit=180)
         if working_dir is not None:
             device_parts.append(working_dir)
