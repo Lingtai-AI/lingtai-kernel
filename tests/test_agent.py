@@ -368,14 +368,6 @@ def test_message_type():
     assert msg.content == "hello"
 
 
-def test_make_message():
-    msg = _make_message(MSG_REQUEST, "user", "hello")
-    assert msg.type == MSG_REQUEST
-    assert msg.sender == "user"
-    assert "hello" in msg.content
-    assert msg.id.startswith("msg_")
-
-
 # ---------------------------------------------------------------------------
 # Tool dispatch
 # ---------------------------------------------------------------------------

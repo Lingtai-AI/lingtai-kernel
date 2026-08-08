@@ -12,6 +12,8 @@ import textwrap
 import time
 from pathlib import Path
 
+import pytest
+
 from lingtai.mcp_servers.feishu import account
 
 
@@ -224,6 +226,10 @@ def _read_child_line(
             stderr_lines.append(decoded)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="selectors on Windows cannot register subprocess pipes (WinError 10038)",
+)
 def test_real_child_mcp_stdio_has_only_protocol_stdout_and_lark_stderr():
     """The actual Lark import and MCP v2 stdio exchange stay fd-separated."""
     source_root = Path(__file__).resolve().parents[1] / "src"

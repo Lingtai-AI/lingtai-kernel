@@ -224,7 +224,6 @@ related_files:
   - tests/test_mcp_skill_manuals.py
   - tests/test_mcp_structured_result.py
   - tests/test_mcp_v2_adapter_metadata.py
-  - tests/test_message.py
   - tests/test_messaging_notification_format.py
   - tests/test_meta_block.py
   - tests/test_mimo_adapter.py
@@ -301,7 +300,6 @@ related_files:
   - tests/test_soul.py
   - tests/test_soul_consultation.py
   - tests/test_source_drift.py
-  - tests/test_state.py
   - tests/test_status_snapshot.py
   - tests/test_streaming.py
   - tests/test_sync_gitee_mirror.py
@@ -328,8 +326,6 @@ related_files:
   - tests/test_telegram_send_media_contract.py
   - tests/test_telegram_slash_commands.py
   - tests/test_telegram_task_card.py
-  - tests/test_telegram_task_card_api_error.py
-  - tests/test_telegram_task_card_batch.py
   - tests/test_telegram_task_card_blockers.py
   - tests/test_telegram_task_card_event_tail.py
   - tests/test_telegram_task_card_in_place.py
@@ -382,7 +378,6 @@ related_files:
   - tests/test_trace_redaction.py
   - tests/test_turn_boundary_housekeeping.py
   - tests/test_two_axis_meta_contract.py
-  - tests/test_types.py
   - tests/test_unified_web_capability.py
   - tests/test_utf8_read_text.py
   - tests/test_utf8_write_text.py
