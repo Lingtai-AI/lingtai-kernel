@@ -2150,7 +2150,9 @@ class TelegramManager:
     # Latest final-carrier session telemetry is projected separately. There is no
     # durable cursor: startup and log replacement rehydrate from the bounded tail.
     _TASK_CARD_EVENT_WINDOW = TaskCardEventProjection.EVENT_WINDOW
-    _TASK_CARD_EVENT_POLL_INTERVAL = 5.0
+    _TASK_CARD_EVENT_POLL_INTERVAL = float(
+        os.environ.get("LINGTAI_TASKCARD_POLL_INTERVAL", "5.0")
+    )
     _TASK_CARD_EVENT_TAIL_CHUNK = 65536
     _TASK_CARD_EVENT_REASONING_CAP = TaskCardEventProjection.EVENT_REASONING_CAP
     _TASK_CARD_EVENT_TEXT_CAP = TaskCardEventProjection.EVENT_TEXT_CAP
