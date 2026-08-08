@@ -3,8 +3,12 @@
 Mirrors ``tests/test_telegram_toolfamily_ltpv2.py``'s family-schema coverage
 for the WhatsApp curated MCP: strict envelope validation for all 13 actions,
 cross-branch input rejection, manual-action parity, Result/Error typed-object
-parity (including ``INVALID_PARAMS`` for an unknown resource/tool), and
-webhook/notification behavior unaffected by the migration.
+parity (including ``INVALID_PARAMS`` for an unknown resource/tool), and inbound
+notification behavior unaffected by the tool envelope.
+
+The action set is the *personal-account* one (whatsapp-web.js bridge). The
+Meta Cloud API surface — ``accounts``, ``templates``, ``ingest_webhook`` — was
+removed with the personal-account migration and is asserted gone here.
 """
 from __future__ import annotations
 
@@ -34,38 +38,56 @@ class _CountingManager:
         return {"status": "ok", "action": args.get("action")}
 
 
+class _StubBridge:
+    """Local stand-in so no test ever spawns Node/Chromium."""
+
+    alive = False
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[tuple[str, dict]] = []
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def request(self, method: str, params: dict | None = None, timeout: float = 30.0) -> dict:
+        self.calls.append((method, dict(params or {})))
+        if self.error is not None:
+            raise self.error
+        return {}
+
+
 def _branches(schema: dict) -> dict[str, dict]:
     inputs = schema["properties"]["input"]
     branches = inputs.get("oneOf") or inputs.get("anyOf")
     return {branch["title"].removesuffix(" input"): branch for branch in branches}
 
 
-def _real_manager(tmp_path: Path) -> WhatsAppManager:
-    return WhatsAppManager(
-        accounts_config=[
-            {
-                "alias": "default",
-                "phone_number_id": "10001",
-                "access_token": "secret-token",
-                "app_secret": "secret-app-secret",
-            }
-        ],
+def _real_manager(tmp_path: Path, *, bridge: _StubBridge | None = None) -> WhatsAppManager:
+    manager = WhatsAppManager(
+        # autostart=False keeps the test hermetic: no Node bridge subprocess.
+        {"store_dir": str(tmp_path / "store"), "autostart": False},
         working_dir=tmp_path,
     )
+    manager.bridge = bridge if bridge is not None else _StubBridge()
+    return manager
 
 
 _VALID_INPUT_BY_ACTION = {
     "send": {"to": "15551234567", "text": "hi"},
     "check": {},
     "read": {"wa_id": "15551234567"},
-    "reply": {"message_id": "default:15551234567:wamid.1", "text": "hi"},
+    "reply": {"message_id": "true_15551234567@c.us_ABC", "to": "15551234567", "text": "hi"},
     "search": {"query": "hi"},
-    "react": {"message_id": "default:15551234567:wamid.1", "emoji": "\U0001F44D"},
+    "react": {"message_id": "true_15551234567@c.us_ABC", "emoji": "\U0001F44D"},
     "contacts": {},
     "add_contact": {"wa_id": "15551234567", "name": "Bob"},
     "remove_contact": {"wa_id": "15551234567"},
-    "templates": {},
-    "accounts": {},
+    "get_qr": {},
+    "logout": {},
     "status": {},
     "manual": {},
 }
@@ -78,11 +100,17 @@ _VALID_INPUT_BY_ACTION = {
 
 def test_all_thirteen_actions_present_in_stable_order():
     assert WHATSAPP_ACTIONS == (
-        "send", "check", "read", "reply", "search", "react", "contacts",
-        "add_contact", "remove_contact", "templates", "accounts", "status",
+        "send", "check", "read", "reply", "react", "search", "contacts",
+        "add_contact", "remove_contact", "get_qr", "logout", "status",
         "manual",
     )
     assert WHATSAPP_SCHEMA["properties"]["action"]["enum"] == list(WHATSAPP_ACTIONS)
+
+
+def test_meta_cloud_actions_are_gone_from_the_personal_surface():
+    assert "accounts" not in WHATSAPP_ACTIONS
+    assert "templates" not in WHATSAPP_ACTIONS
+    assert not hasattr(WhatsAppManager, "ingest_webhook")
 
 
 def test_root_schema_shape_requires_action_input_reasoning():
@@ -110,6 +138,11 @@ def test_every_action_dispatches_with_its_valid_input():
     assert [call["action"] for call in manager.calls] == list(WHATSAPP_ACTIONS)
 
 
+def test_every_action_resolves_to_a_manager_method():
+    for action in WHATSAPP_ACTIONS:
+        assert callable(getattr(WhatsAppManager, f"_{action}", None)), action
+
+
 def test_malformed_and_legacy_flat_shape_calls_are_rejected():
     manager = _CountingManager()
     invalid = [
@@ -122,19 +155,23 @@ def test_malformed_and_legacy_flat_shape_calls_are_rejected():
         # input not an object.
         {"action": "send", "input": "not-an-object", "reasoning": "x"},
         # Unknown root field.
-        {"action": "accounts", "input": {}, "reasoning": "x", "unknown": 1},
+        {"action": "status", "input": {}, "reasoning": "x", "unknown": 1},
         # Legacy internal envelope field leaking through.
-        {"action": "accounts", "input": {}, "reasoning": "x", "_reasoning": "legacy"},
+        {"action": "status", "input": {}, "reasoning": "x", "_reasoning": "legacy"},
         # non-boolean summarize.
-        {"action": "accounts", "input": {}, "reasoning": "x", "summarize": "yes"},
+        {"action": "status", "input": {}, "reasoning": "x", "summarize": "yes"},
         # Unknown action.
         {"action": "delete", "input": {}, "reasoning": "x"},
+        # Removed Meta Cloud actions.
+        {"action": "accounts", "input": {}, "reasoning": "x"},
+        {"action": "templates", "input": {}, "reasoning": "x"},
         {"action": "", "input": {}, "reasoning": "x"},
         {"input": {}, "reasoning": "x"},
     ]
     for args in invalid:
         result = handle_whatsapp(manager, args)
         assert result["status"] == "failed", args
+        assert result["error_code"] in {"ACTION_REQUIRED", "INVALID_ARGUMENT"}, args
         assert manager.calls == [], args
 
 
@@ -150,10 +187,10 @@ def test_cross_branch_input_is_rejected_before_manager_io():
         {"action": "send", "input": {"message_id": "a:b:c", "emoji": "x"}, "reasoning": "x"},
         # send's fields under react.
         {"action": "react", "input": {"to": "1", "text": "hi"}, "reasoning": "x"},
-        # reply's message_id under accounts (accounts takes no fields at all).
-        {"action": "accounts", "input": {"message_id": "a:b:c"}, "reasoning": "x"},
-        # search's query under templates.
-        {"action": "templates", "input": {"query": "hi"}, "reasoning": "x"},
+        # reply's message_id under get_qr (get_qr takes no fields at all).
+        {"action": "get_qr", "input": {"message_id": "a:b:c"}, "reasoning": "x"},
+        # search's query under logout.
+        {"action": "logout", "input": {"query": "hi"}, "reasoning": "x"},
         # add_contact's name under remove_contact.
         {"action": "remove_contact", "input": {"wa_id": "1", "name": "Bob"}, "reasoning": "x"},
         # status takes no input at all.
@@ -189,6 +226,16 @@ def test_send_reply_require_a_message_variant_and_reject_multiple_recipients():
     assert not _basic_validate({"message_id": "a:b:c"}, reply)  # no message variant
 
 
+def test_reply_accepts_an_explicit_recipient():
+    """B5: SKILL.md documents message_id + to + text; the schema must allow it."""
+    reply = _branches(WHATSAPP_SCHEMA)["reply"]
+    assert {"to", "wa_id"} <= set(reply["properties"])
+    assert _basic_validate({"message_id": "a:b:c", "to": "1", "text": "hi"}, reply)
+    assert _basic_validate({"message_id": "a:b:c", "wa_id": "1", "text": "hi"}, reply)
+    # ...and still rejects a field belonging to another action's branch.
+    assert not _basic_validate({"message_id": "a:b:c", "text": "hi", "emoji": "x"}, reply)
+
+
 def test_add_contact_remove_contact_require_wa_id_or_to_but_not_both():
     add_contact = _branches(WHATSAPP_SCHEMA)["add_contact"]
     assert _basic_validate({"wa_id": "1", "name": "Bob"}, add_contact)
@@ -209,21 +256,20 @@ def test_react_requires_message_id_and_emoji():
     assert not _basic_validate({"emoji": "x"}, react)
 
 
-def test_status_accounts_manual_take_no_input_at_all():
-    for action in ("status", "accounts", "manual"):
+def test_get_qr_logout_status_manual_take_no_input_at_all():
+    for action in ("get_qr", "logout", "status", "manual"):
         branch = _branches(WHATSAPP_SCHEMA)[action]
         assert branch.get("properties", {}) == {}
         assert _basic_validate({}, branch)
         assert not _basic_validate({"account": "x"}, branch)
 
 
-def test_templates_contacts_take_only_an_optional_account():
-    for action in ("templates", "contacts"):
-        branch = _branches(WHATSAPP_SCHEMA)[action]
-        assert set(branch.get("properties", {})) == {"account"}
-        assert _basic_validate({}, branch)
-        assert _basic_validate({"account": "default"}, branch)
-        assert not _basic_validate({"account": "default", "anything": 1}, branch)
+def test_contacts_takes_only_an_optional_account():
+    branch = _branches(WHATSAPP_SCHEMA)["contacts"]
+    assert set(branch.get("properties", {})) == {"account"}
+    assert _basic_validate({}, branch)
+    assert _basic_validate({"account": "default"}, branch)
+    assert not _basic_validate({"account": "default", "anything": 1}, branch)
 
 
 # ---------------------------------------------------------------------------
@@ -278,12 +324,29 @@ def test_server_constructs_without_a_manager():
     assert server is not None
 
 
+def test_server_constructs_with_no_argument_at_all():
+    from lingtai.mcp_servers.whatsapp.server import build_server
+
+    assert build_server() is not None
+
+
 def test_server_constructs_with_a_real_manager(tmp_path):
     from lingtai.mcp_servers.whatsapp.server import build_server
 
     manager = _real_manager(tmp_path)
     server = build_server(manager)
     assert server is not None
+
+
+def test_serve_is_an_awaitable_entry_point():
+    """B1: serve() must be constructible — the module used to raise on import."""
+    import inspect
+
+    from lingtai.mcp_servers.whatsapp.server import serve
+
+    assert inspect.iscoroutinefunction(serve)
+    coro = serve()
+    coro.close()
 
 
 @pytest.mark.anyio
@@ -306,7 +369,7 @@ def anyio_backend():
 
 
 # ---------------------------------------------------------------------------
-# 5. Resources still work (webhook resource handlers unaffected).
+# 5. Resources still work.
 # ---------------------------------------------------------------------------
 
 
@@ -317,6 +380,8 @@ async def test_resources_list_and_read_still_work_with_new_family(tmp_path):
     from lingtai.mcp_servers.whatsapp.server import build_server
 
     manager = _real_manager(tmp_path)
+    # A secret-looking key must not survive into the status resource.
+    manager.config["access_token"] = "secret-token"
     async with Client(build_server(manager)) as client:
         listing = await client.list_resources()
         assert listing.resources
@@ -327,9 +392,15 @@ async def test_resources_list_and_read_still_work_with_new_family(tmp_path):
         status_contents = (await client.read_resource("lingtai://status")).contents
         payload = json.loads(status_contents[0].text)
         assert payload["status"] == "ok"
+        assert payload["ready"] is False
         # Redaction must still hold: no secret material in the resource.
         assert "secret-token" not in status_contents[0].text
-        assert "secret-app-secret" not in status_contents[0].text
+
+        manifest = json.loads(
+            (await client.read_resource("lingtai://manifest")).contents[0].text
+        )
+        assert manifest["backend"] == "personal_account_whatsapp_web"
+        assert manifest["tools"]["actions"] == list(WHATSAPP_ACTIONS)
 
 
 @pytest.mark.anyio
@@ -348,7 +419,7 @@ async def test_unknown_resource_uri_is_invalid_params():
 
 # ---------------------------------------------------------------------------
 # 6. Result/Error typed-object parity, including INVALID_PARAMS for unknown
-#    action and unknown contact/resource lookups.
+#    tool names.
 # ---------------------------------------------------------------------------
 
 
@@ -377,7 +448,7 @@ async def test_call_tool_success_and_failure_paths_are_typed_correctly(tmp_path)
     async with Client(build_server(manager)) as client:
         ok = await client.call_tool(
             "whatsapp",
-            {"action": "accounts", "input": {}, "reasoning": "list accounts"},
+            {"action": "manual", "input": {}, "reasoning": "read the manual"},
         )
         assert ok.is_error is False
         assert ok.structured_content["status"] == "ok"
@@ -393,8 +464,8 @@ async def test_call_tool_success_and_failure_paths_are_typed_correctly(tmp_path)
         assert bad_action.structured_content["status"] == "failed"
         assert bad_action.structured_content["error_code"] == "ACTION_REQUIRED"
 
-        # Business-logic failure surfaced by the manager itself (unknown
-        # contact target omitted -> add_contact business validation).
+        # Business-logic success surfaced by the manager itself (removing a
+        # contact that was never added is a no-op, not an error).
         remove_missing = await client.call_tool(
             "whatsapp",
             {
@@ -404,8 +475,55 @@ async def test_call_tool_success_and_failure_paths_are_typed_correctly(tmp_path)
             },
         )
         assert remove_missing.is_error is False
-        assert remove_missing.structured_content["status"] == "ok"
-        assert remove_missing.structured_content["removed"] is None
+        assert remove_missing.structured_content["ok"] is True
+
+
+@pytest.mark.anyio
+async def test_call_tool_reads_input_not_args_and_reaches_the_manager(tmp_path):
+    """B2: the envelope key is `input`; `args` was never schema-conformant."""
+    from mcp import Client
+
+    from lingtai.mcp_servers.whatsapp.server import build_server
+
+    bridge = _StubBridge()
+    manager = _real_manager(tmp_path, bridge=bridge)
+    async with Client(build_server(manager)) as client:
+        result = await client.call_tool(
+            "whatsapp",
+            {
+                "action": "send",
+                "input": {"to": "15551234567", "text": "hi there"},
+                "reasoning": "prove the envelope reaches the manager",
+            },
+        )
+    assert result.is_error is False
+    assert bridge.calls, "the manager never reached the bridge"
+    method, params = bridge.calls[0]
+    assert method == "send"
+    assert params["to"] == "15551234567"
+    assert params["text"] == "hi there"
+
+
+@pytest.mark.anyio
+async def test_manager_side_failure_is_a_readable_typed_tool_error(tmp_path):
+    from mcp import Client
+
+    from lingtai.mcp_servers.whatsapp.client import BridgeError
+    from lingtai.mcp_servers.whatsapp.server import build_server
+
+    manager = _real_manager(tmp_path, bridge=_StubBridge(BridgeError("bridge exited")))
+    async with Client(build_server(manager)) as client:
+        result = await client.call_tool(
+            "whatsapp",
+            {
+                "action": "send",
+                "input": {"to": "15551234567", "text": "hi"},
+                "reasoning": "bridge is down",
+            },
+        )
+    assert result.is_error is True
+    assert result.structured_content["status"] == "error"
+    assert result.structured_content["error_type"] == "BridgeError"
 
 
 @pytest.mark.anyio
@@ -417,7 +535,7 @@ async def test_manager_not_initialized_is_a_readable_tool_error():
     async with Client(build_server(None)) as client:
         result = await client.call_tool(
             "whatsapp",
-            {"action": "accounts", "input": {}, "reasoning": "probe uninitialized"},
+            {"action": "status", "input": {}, "reasoning": "probe uninitialized"},
         )
     assert result.is_error is True
     assert result.structured_content["status"] == "error"
@@ -425,41 +543,35 @@ async def test_manager_not_initialized_is_a_readable_tool_error():
 
 
 # ---------------------------------------------------------------------------
-# 7. Webhook/notification behavior unchanged — smoke check that ingest_webhook
-#    (exercised in full by test_whatsapp_notification_metadata.py) is
-#    reachable independent of the new tool-call envelope.
+# 7. Inbound notification behavior is independent of the tool envelope
+#    (exercised in full by test_whatsapp_notification_metadata.py).
 # ---------------------------------------------------------------------------
 
 
-def test_ingest_webhook_unaffected_by_tool_envelope_migration(tmp_path):
+def test_bridge_inbound_event_unaffected_by_tool_envelope(tmp_path, monkeypatch):
+    import lingtai.mcp_servers.whatsapp.manager as manager_mod
+
     manager = _real_manager(tmp_path)
-    events = []
-    manager.on_inbound = events.append
-    payload = {
-        "entry": [
-            {
-                "changes": [
-                    {
-                        "value": {
-                            "metadata": {"phone_number_id": "10001"},
-                            "messages": [
-                                {
-                                    "from": "15551234567",
-                                    "id": "wamid.A",
-                                    "timestamp": "1752000000",
-                                    "type": "text",
-                                    "text": {"body": "hello"},
-                                }
-                            ],
-                        }
-                    }
-                ]
-            }
-        ]
-    }
-    manager.ingest_webhook("default", payload)
+    events: list[dict] = []
+
+    def _spy(sender, subject, body, *, metadata=None, wake=True, event_id=None):
+        events.append({"metadata": metadata, "body": body})
+        return True
+
+    monkeypatch.setattr(manager_mod, "push_inbox_event", _spy)
+    manager._on_bridge_event({
+        "type": "message",
+        "data": {
+            "id": "true_15551234567@c.us_ABC",
+            "from": "15551234567@c.us",
+            "body": "hello",
+            "type": "chat",
+            "timestamp": 1752000000,
+        },
+    })
     assert len(events) == 1
-    assert events[0]["metadata"]["platform"] == "whatsapp"
+    assert events[0]["metadata"]["conversation_ref"] == "whatsapp:15551234567@c.us"
+    assert events[0]["body"].endswith("**Newest WhatsApp message**\nhello")
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +613,7 @@ def test_reasoning_and_summarize_never_reach_a_child_handler():
     handle_whatsapp(
         _Capturing(),
         {
-            "action": "accounts",
+            "action": "status",
             "input": {},
             "reasoning": "must not leak",
             "summarize": True,
@@ -509,4 +621,4 @@ def test_reasoning_and_summarize_never_reach_a_child_handler():
     )
     assert "reasoning" not in captured
     assert "summarize" not in captured
-    assert captured == {"action": "accounts"}
+    assert captured == {"action": "status"}

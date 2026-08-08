@@ -20,8 +20,8 @@ _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(
 )
 
 _ACTIONS = (
-    "send", "check", "read", "reply", "search", "react", "contacts",
-    "add_contact", "remove_contact", "templates", "accounts", "status",
+    "send", "check", "read", "reply", "react", "search", "contacts",
+    "add_contact", "remove_contact", "get_qr", "logout", "status",
     "manual",
 )
 
@@ -54,7 +54,7 @@ def _object(
 def _whatsapp_input_schemas() -> dict[str, dict[str, Any]]:
     template = {"type": "object", "description": "Approved message template: {name, language: {code}, ...}."}
     media = {"type": "object", "description": "Media attachment: {type: 'image'|'document'|'audio'|'video', ...}."}
-    message_variants = any_of = [
+    message_variants = [
         {"required": ["text"]},
         {"required": ["media"]},
         {"required": ["template"]},
@@ -72,9 +72,15 @@ def _whatsapp_input_schemas() -> dict[str, dict[str, Any]]:
         one_of=[{"required": ["to"]}, {"required": ["wa_id"]}],
         any_of=message_variants,
     )
+    # ``to``/``wa_id`` are optional on reply: the manager recovers the
+    # conversation from the stored message when they are omitted, but the
+    # bridge needs a recipient, so an explicit target must be expressible
+    # (SKILL.md documents message_id + to + text as the reliable form).
     reply = _object(
         {
-            "message_id": {"type": "string", "description": "compound account:wa_id:wamid id"},
+            "message_id": {"type": "string", "description": "whatsapp-web.js serialized message id"},
+            "to": _nullable({"type": "string", "description": "WhatsApp wa_id to reply into."}),
+            "wa_id": _nullable({"type": "string", "description": "WhatsApp wa_id to reply into (alias of to)."}),
             "text": _nullable({"type": "string"}),
             "media": _nullable(media),
             "template": _nullable(template),
@@ -85,7 +91,7 @@ def _whatsapp_input_schemas() -> dict[str, dict[str, Any]]:
     )
     react = _object(
         {
-            "message_id": {"type": "string", "description": "compound account:wa_id:wamid id"},
+            "message_id": {"type": "string", "description": "whatsapp-web.js serialized message id"},
             "emoji": {"type": "string"},
         },
         required=["message_id", "emoji"],
@@ -103,7 +109,7 @@ def _whatsapp_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "account": _nullable({"type": "string"}),
                 "wa_id": _nullable({"type": "string"}),
-                "message_id": _nullable({"type": "string", "description": "compound account:wa_id:wamid id"}),
+                "message_id": _nullable({"type": "string", "description": "whatsapp-web.js serialized message id"}),
                 "limit": _nullable({"type": "integer"}),
                 "mark_read": _nullable({"type": "boolean"}),
             },
@@ -136,8 +142,8 @@ def _whatsapp_input_schemas() -> dict[str, dict[str, Any]]:
             },
             one_of=contact_target,
         ),
-        "templates": _object({"account": _nullable({"type": "string"})}),
-        "accounts": _object({}),
+        "get_qr": _object({}),
+        "logout": _object({}),
         "status": _object({}),
         "manual": _object({}),
     }
@@ -168,9 +174,7 @@ def whatsapp_schema() -> dict[str, Any]:
     schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
     schema["properties"]["action"]["description"] = (
         "WhatsApp action. Each action owns a strict input branch. WhatsApp "
-        "Cloud API allows free-form business replies only inside the 24-hour "
-        "customer-service window; outside that window use an approved "
-        "message template. Call manual "
+        "Call manual "
         + _skill.manual_action_description(_SKILL_FRONTMATTER, _SKILL_NAME)
     )
     return schema

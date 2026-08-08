@@ -1,26 +1,37 @@
-"""WhatsAppManager — tool dispatch + local filesystem persistence."""
+"""Manager for the LingTai WhatsApp MCP (personal-account mode).
+
+The manager owns the bridge lifecycle, message persistence, LICC inbound
+notification, and the validated tool dispatch. The Meta Cloud API surface
+(accounts/webhook/templates) is gone; this module talks to the local Node
+bridge (whatsapp-web.js) over the newline-JSON protocol.
+"""
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
-import threading
+import time
+import uuid
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
-from typing import Any, Callable
-from uuid import uuid4
+from typing import Any
 
-from . import _family
-from .client import WhatsAppClient
-from .redaction import redact_account
-from .webhook import extract_events
-from .. import _identity, _skill
+from . import client as bridge_client
+from . import redaction
+from .licc import push_inbox_event
+
 
 log = logging.getLogger(__name__)
 
+from lingtai.kernel._frontmatter import strip_frontmatter  # noqa: E402
+from lingtai.mcp_servers import _config, _identity, _skill  # noqa: E402
+from ._family import WHATSAPP_ACTIONS, WHATSAPP_SCHEMA  # noqa: E402
 
-from lingtai.kernel._frontmatter import strip_frontmatter
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _load_notification_header_template() -> str:
@@ -28,324 +39,326 @@ def _load_notification_header_template() -> str:
     return strip_frontmatter(text)
 
 
+# Shared cross-channel preview/responsiveness guidance prepended to every
+# inbound LICC notification body, exactly as telegram/feishu/wechat do.
 _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
 
-# Bundled usage manual (skill format) — SKILL.md ships in this package folder.
-# action='manual' reads the full body; the YAML frontmatter name/description are
-# injected into the tool schema as a progressive-disclosure catalog entry.
 _SKILL_NAME = "whatsapp-mcp-manual"
 _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(__package__)
 
-_CS_WINDOW_NOTE = (
-    "WhatsApp Cloud API allows free-form business replies only inside the "
-    "24-hour customer-service window. Outside that window use an approved "
-    "message template."
+SCHEMA = WHATSAPP_SCHEMA
+
+DESCRIPTION = (
+    "WhatsApp MCP: connect a personal WhatsApp account via a local "
+    "whatsapp-web.js bridge (QR-code pairing). Send, read, search, "
+    "reply, react, manage contacts, and receive inbound messages "
+    "pushed into the agent inbox."
 )
 
-# Bounds for the structured conversation context attached to LICC event
-# metadata (kernel projects it into _meta.agent_meta.notifications.persistent.mcp.whatsapp).
-# The MCP inbox drops structured metadata above a 20k JSON cap, so keep the
-# per-message text and message count comfortably under it.
-_CONVERSATION_CONTEXT_MESSAGES = 10
-_STRUCTURED_MESSAGE_TEXT_CAP = 500
+DEFAULT_STORE = "whatsapp"
 
-DESCRIPTION = "WhatsApp Cloud API client for LingTai. Official Meta API only; no WhatsApp Web bridge."
+# whatsapp-web.js message types that carry no usable text body. Every other
+# type — notably ``chat``, the value the library emits for a plain text
+# message — is treated as text. The bridge already normalizes ``chat`` to
+# ``text``; this set is the Python-side backstop for stored history written
+# by an older bridge and for types the bridge does not know about.
+_MEDIA_TYPES = frozenset({
+    "image", "video", "audio", "ptt", "document", "sticker", "gif",
+    "location", "vcard", "multi_vcard", "contact_card", "contact_card_multi",
+})
 
-# Public callers receive the strict LTP-v2 family schema. Manager dispatch
-# remains the internal flat action boundary after family validation.
-ACTIONS = _family.WHATSAPP_ACTIONS
-SCHEMA = _family.WHATSAPP_SCHEMA
+# Filesystem-safety cap for a single path component built from remote input.
+_MAX_COMPONENT = 120
 
 
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _safe_component(value: Any, fallback: str = "unknown") -> str:
+    """Reduce an untrusted id to one safe path component.
+
+    Message ids are chosen by the *sending* client, so ``msg.id._serialized``
+    is remote input and must never reach the filesystem verbatim (it can carry
+    ``/`` and ``..``). Same treatment for wa_ids.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", text)[:_MAX_COMPONENT]
+    # ``.``/``..`` survive the character filter but still mean "parent dir".
+    if not safe.strip("."):
+        return fallback
+    return safe
+
+
+def normalize_wa_id(value: Any) -> str:
+    """Canonicalize a wa_id so config and inbound JIDs compare equal.
+
+    ``15551234567`` (the form ``send`` accepts and the form humans write in
+    ``allowed_users``) and ``15551234567@c.us`` (the form the bridge always
+    reports) are the same user.
+    """
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if "@" in text:
+        return text
+    digits = re.sub(r"[^0-9]", "", text)
+    return f"{digits}@c.us" if digits else text
+
+
+def _is_text_type(msg_type: Any) -> bool:
+    """True when a message type carries a readable body."""
+    if not msg_type:
+        return True
+    return str(msg_type).lower() not in _MEDIA_TYPES
+
+
+def _display_text(msg: dict[str, Any]) -> str:
+    """Body for text messages, ``[<type>]`` placeholder for media."""
+    if _is_text_type(msg.get("type")):
+        return msg.get("body") or ""
+    return f"[{msg.get('type') or 'media'}]"
 
 
 class WhatsAppManager:
-    def __init__(self, *, accounts_config: list[dict[str, Any]], working_dir: Path, on_inbound: Callable[[dict[str, Any]], None] | None = None, config_source: str | None = None) -> None:
-        self.accounts = {a.get("alias") or "default": dict(a) for a in accounts_config}
-        if not self.accounts:
-            raise ValueError("config must contain at least one WhatsApp account")
-        self.working_dir = Path(working_dir)
-        self.root = self.working_dir / "whatsapp"
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.on_inbound = on_inbound
-        self.config_source = config_source
-        self._last_verified_at = _utcnow()
-        self._contacts_lock = threading.Lock()
+    """Personal-account WhatsApp manager.
 
-    def _account_alias(self, alias: str | None) -> str:
-        if alias:
-            if alias not in self.accounts:
-                raise ValueError(f"unknown WhatsApp account: {alias}")
-            return alias
-        return next(iter(self.accounts))
+    ``config`` is a dict with optional keys:
+      - node_path: Node executable (default: node on PATH)
+      - bridge_dir: path to the Node bridge directory (default: bundled)
+      - session_dir: path to store the whatsapp-web.js session (default: <workdir>/.wwebjs_auth)
+      - store_dir: path to store message/contact metadata (default: <workdir>/whatsapp)
+      - allowed_users: optional allowlist of wa_ids / @c.us ids for inbound push
+      - autostart: start the Node bridge on construction (default: true)
+    """
 
-    def default_account(self) -> dict[str, Any]:
-        return self.accounts[self._account_alias(None)]
+    def __init__(self, config: dict[str, Any] | None = None, working_dir: str | Path | None = None) -> None:
+        self.config = dict(config or {})
+        self.working_dir = Path(working_dir or os.environ.get("LINGTAI_AGENT_DIR", os.getcwd()))
+        self.store_dir = Path(self.config.get("store_dir") or self.working_dir / DEFAULT_STORE)
+        self.session_dir = Path(self.config.get("session_dir") or self.working_dir / ".wwebjs_auth")
+        # Both sides of the allowlist go through one normalizer so bare digits
+        # in config match the ``@c.us`` JIDs the bridge reports.
+        self.allowed_users: set[str] = {
+            normalize_wa_id(u) for u in (self.config.get("allowed_users") or []) if normalize_wa_id(u)
+        }
+        self.contacts_path = self.store_dir / "contacts.json"
+        self._contacts: dict[str, dict[str, Any]] = {}
+        self._load_contacts()
+        # Public, non-secret identity facts for the shared MCP identity file.
+        self._me: str | None = None
+        self._last_verified_at: str | None = None
+        self.bridge = bridge_client.WhatsAppBridge(
+            node_path=self.config.get("node_path"),
+            bridge_dir=self.config.get("bridge_dir"),
+            session_dir=self.session_dir,
+            on_event=self._on_bridge_event,
+        )
+        # Inbound push must not depend on the agent happening to call an
+        # unrelated action first: start the listener eagerly. A missing Node /
+        # bridge install is a degraded state, not a construction failure — the
+        # error resurfaces on the first action that needs the bridge.
+        if self.config.get("autostart", True):
+            try:
+                self.bridge.start()
+            except Exception as e:
+                log.warning("whatsapp bridge autostart failed (%s); will retry on first action", e)
 
-    def account_alias_for_phone_number_id(self, phone_number_id: str | None) -> str:
-        if phone_number_id:
-            for alias, account in self.accounts.items():
-                if str(account.get("phone_number_id") or "") == str(phone_number_id):
-                    return alias
-        return self._account_alias(None)
+    # ------------------------------------------------------------------ helpers
 
-    def match_account_alias_for_phone_number_id(self, phone_number_id: str | None) -> str | None:
-        if not phone_number_id:
-            return None
-        for alias, account in self.accounts.items():
-            if str(account.get("phone_number_id") or "") == str(phone_number_id):
-                return alias
-        return None
+    def _load_contacts(self) -> None:
+        if self.contacts_path.is_file():
+            try:
+                loaded = json.loads(self.contacts_path.read_text(encoding="utf-8"))
+            except Exception:
+                loaded = None
+            # A list-shaped contacts.json would blow up later on .pop/index.
+            self._contacts = loaded if isinstance(loaded, dict) else {}
 
-    def _account_dir(self, alias: str) -> Path:
-        d = self.root / alias
-        for sub in ("inbox", "sent"):
-            (d / sub).mkdir(parents=True, exist_ok=True)
-        return d
+    def _save_contacts(self) -> None:
+        self.store_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.contacts_path.write_text(json.dumps(self._contacts, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _contacts_path(self, alias: str) -> Path:
-        return self._account_dir(alias) / "contacts.json"
+    def _conversation_dir(self, wa_id: str) -> Path:
+        return self.store_dir / _safe_component(wa_id)
 
-    def _load_contacts(self, alias: str) -> dict[str, Any]:
-        p = self._contacts_path(alias)
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-
-    def _save_contacts(self, alias: str, contacts: dict[str, Any]) -> None:
-        path = self._contacts_path(alias)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(contacts, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
-
-    def _compound(self, alias: str, wa_id: str, wamid: str) -> str:
-        return f"{alias}:{wa_id}:{wamid}"
-
-    def _split_compound(self, compound: str) -> tuple[str, str, str]:
-        parts = compound.split(":", 2)
-        if len(parts) != 3:
-            raise ValueError("message_id must be account:wa_id:wamid")
-        return parts[0], parts[1], parts[2]
-
-    def _store_message(self, alias: str, folder: str, msg: dict[str, Any]) -> dict[str, Any]:
-        d = self._account_dir(alias) / folder / str(uuid4())
-        d.mkdir(parents=True, exist_ok=True)
-        msg = dict(msg)
-        msg.setdefault("stored_at", _utcnow())
-        (d / "message.json").write_text(json.dumps(msg, ensure_ascii=False, indent=2), encoding="utf-8")
-        return msg
-
-    def _iter_messages(self, alias: str, folder: str | None = None) -> list[dict[str, Any]]:
-        base = self._account_dir(alias)
-        folders = [folder] if folder else ["inbox", "sent"]
-        out: list[dict[str, Any]] = []
-        for f in folders:
-            for p in sorted((base / f).glob("*/message.json")):
-                try:
-                    m = json.loads(p.read_text(encoding="utf-8"))
-                    m.setdefault("_folder", f)
-                    out.append(m)
-                except Exception:
-                    continue
-        out.sort(key=lambda m: m.get("stored_at", ""), reverse=True)
-        return out
-
-    def handle(self, args: dict[str, Any]) -> dict[str, Any]:
-        action = args.get("action")
-        if action not in ACTIONS:
-            return {"status": "error", "error": f"unknown action: {action}"}
-        try:
-            return getattr(self, f"_{action}")(args)
-        except Exception as e:
-            return {"status": "error", "error": str(e), "error_type": type(e).__name__}
-
-    def _manual(self, args: dict[str, Any]) -> dict[str, Any]:
-        # The manual lives in this package's bundled SKILL.md (standard skill
-        # format: YAML frontmatter + markdown body), loaded at import time.
-        # action='manual' returns the full skill markdown plus parsed metadata
-        # and the resolved path; the frontmatter is also injected into the
-        # schema's 'action' description as a catalog entry. Bundled
-        # asset/reference sidecars, if any, are documented inside SKILL.md and
-        # are not returned as structured tool fields.
-        return _skill.manual_payload(
-            _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH, _SKILL_NAME
+    def _message_path(self, wa_id: str, direction: str, msg_id: str) -> Path:
+        # Every component is remote-influenced; sanitize all of them.
+        return (
+            self._conversation_dir(wa_id)
+            / _safe_component(direction, "inbox")
+            / f"{_safe_component(msg_id)}.json"
         )
 
-    def _client(self, alias: str) -> WhatsAppClient:
-        a = self.accounts[alias]
-        return WhatsAppClient(access_token=a.get("access_token", ""), phone_number_id=a.get("phone_number_id", ""), api_version=a.get("api_version", "v23.0"))
-
-    def _message_payload(self, args: dict[str, Any], to: str) -> dict[str, Any]:
-        if args.get("template"):
-            t = dict(args["template"])
-            if not t.get("name") or not ((t.get("language") or {}).get("code")):
-                raise ValueError("template requires name and language.code")
-            return {"messaging_product": "whatsapp", "to": to, "type": "template", "template": t}
-        if args.get("media"):
-            media = dict(args["media"])
-            mtype = media.pop("type", None)
-            if not mtype:
-                raise ValueError("media requires type")
-            return {"messaging_product": "whatsapp", "to": to, "type": mtype, mtype: media}
-        text = args.get("text")
-        if not text:
-            raise ValueError("send/reply requires text, media, or template")
-        body = {"body": text}
-        if "preview_url" in args:
-            body["preview_url"] = bool(args["preview_url"])
-        return {"messaging_product": "whatsapp", "to": to, "type": "text", "text": body}
-
-    def _send(self, args: dict[str, Any]) -> dict[str, Any]:
-        alias = self._account_alias(args.get("account"))
-        to = args.get("to") or args.get("wa_id")
-        if not to:
-            return {"status": "error", "error": "send requires to or wa_id"}
-        payload = self._message_payload(args, to)
+    def _store_message(self, wa_id: str, direction: str, msg: dict[str, Any]) -> str:
+        msg_id = msg.get("id") or uuid.uuid4().hex
+        path = self._message_path(wa_id, direction, msg_id)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        payload = dict(msg)
+        payload["id"] = msg_id
+        payload["direction"] = direction
+        payload["stored_at"] = time.time()
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
-            response = self._client(alias).post_message(payload)
-            wamid = (((response.get("messages") or [{}])[0]).get("id") or f"local-{uuid4()}")
-            stored = self._store_message(alias, "sent", {"id": self._compound(alias, to, wamid), "wa_id": to, "message_id": wamid, "text": args.get("text"), "payload": payload, "response": response, "direction": "outgoing"})
-            return {"status": "sent", "message_id": stored["id"], "response": response}
-        except Exception as e:
-            return {"status": "error", "error": str(e), "note": _CS_WINDOW_NOTE}
+            # The archive is plaintext personal correspondence.
+            path.chmod(0o600)
+        except OSError:
+            pass
+        return msg_id
 
-    def _reply(self, args: dict[str, Any]) -> dict[str, Any]:
-        if not args.get("message_id"):
-            return {"status": "error", "error": "reply requires message_id"}
-        alias, wa_id, wamid = self._split_compound(args["message_id"])
-        send_args = dict(args)
-        send_args["account"] = alias
-        send_args["to"] = wa_id
-        payload = self._message_payload(send_args, wa_id)
-        payload["context"] = {"message_id": wamid}
-        # Inline send to preserve context override.
+    @staticmethod
+    def _sort_key(entry: tuple[Path, dict[str, Any]]) -> tuple[float, str]:
+        """Order by the message's own timestamp, file name as tiebreaker.
+
+        mtime is wrong twice over: re-writing a file (the dedup mechanism)
+        would jump an old message to the end of history, and mtime ties would
+        silently place every inbox message before every sent one.
+        """
+        path, msg = entry
+        raw = msg.get("timestamp")
         try:
-            response = self._client(alias).post_message(payload)
-            new_id = (((response.get("messages") or [{}])[0]).get("id") or f"local-{uuid4()}")
-            stored = self._store_message(alias, "sent", {"id": self._compound(alias, wa_id, new_id), "wa_id": wa_id, "message_id": new_id, "reply_to": wamid, "text": args.get("text"), "payload": payload, "response": response, "direction": "outgoing"})
-            return {"status": "sent", "message_id": stored["id"], "response": response}
-        except Exception as e:
-            return {"status": "error", "error": str(e), "note": _CS_WINDOW_NOTE}
+            ts = float(raw)
+        except (TypeError, ValueError):
+            ts = float(msg.get("stored_at") or 0.0)
+        return (ts, path.name)
 
-    def _react(self, args: dict[str, Any]) -> dict[str, Any]:
-        if not args.get("message_id") or not args.get("emoji"):
-            return {"status": "error", "error": "react requires message_id and emoji"}
-        alias, wa_id, wamid = self._split_compound(args["message_id"])
-        payload = {"messaging_product": "whatsapp", "to": wa_id, "type": "reaction", "reaction": {"message_id": wamid, "emoji": args["emoji"]}}
-        try:
-            response = self._client(alias).post_message(payload)
-            return {"status": "sent", "response": response}
-        except Exception as e:
-            return {"status": "error", "error": str(e)}
-
-    def _check(self, args: dict[str, Any]) -> dict[str, Any]:
-        alias = self._account_alias(args.get("account"))
-        limit = int(args.get("limit") or 10)
-        return {"status": "ok", "messages": self._iter_messages(alias, "inbox")[:limit]}
-
-    def _read(self, args: dict[str, Any]) -> dict[str, Any]:
-        alias = self._account_alias(args.get("account")) if not args.get("message_id") else self._split_compound(args["message_id"])[0]
-        wa_id = args.get("wa_id") or (self._split_compound(args["message_id"])[1] if args.get("message_id") else None)
-        msgs = [m for m in self._iter_messages(alias) if not wa_id or m.get("wa_id") == wa_id]
-        selected = msgs[: int(args.get("limit") or 20)]
-        result: dict[str, Any] = {"status": "ok", "messages": selected}
-        if args.get("mark_read", True):
-            marked: list[str] = []
-            errors: list[dict[str, str]] = []
-            client = self._client(alias)
-            for msg in selected:
-                if msg.get("_folder") != "inbox" or not msg.get("message_id"):
-                    continue
+    def _read_dir(self, base: Path, direction: str | None) -> list[tuple[Path, dict[str, Any]]]:
+        directions = (direction,) if direction else ("inbox", "sent")
+        out: list[tuple[Path, dict[str, Any]]] = []
+        for d in directions:
+            sub = base / _safe_component(d, "inbox")
+            if not sub.is_dir():
+                continue
+            for p in sub.glob("*.json"):
                 try:
-                    client.mark_message_read(str(msg["message_id"]))
-                    marked.append(str(msg["message_id"]))
-                except Exception as e:
-                    errors.append({"message_id": str(msg.get("message_id")), "error": str(e), "error_type": type(e).__name__})
-            result["marked_read"] = marked
-            if errors:
-                result["mark_read_errors"] = errors
-        return result
+                    loaded = json.loads(p.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if isinstance(loaded, dict):
+                    out.append((p, loaded))
+        return out
 
-    def _search(self, args: dict[str, Any]) -> dict[str, Any]:
-        alias = self._account_alias(args.get("account"))
-        q = args.get("query") or ""
-        try:
-            rx = re.compile(q, re.I)
-        except re.error as e:
-            return {"status": "error", "error": f"invalid regex: {e}"}
-        matches = [m for m in self._iter_messages(alias) if rx.search(json.dumps(m, ensure_ascii=False))]
-        return {"status": "ok", "messages": matches[: int(args.get("limit") or 20)]}
-
-    def _contacts(self, args: dict[str, Any]) -> dict[str, Any]:
-        alias = self._account_alias(args.get("account"))
-        return {"status": "ok", "contacts": self._load_contacts(alias)}
-
-    def _add_contact(self, args: dict[str, Any]) -> dict[str, Any]:
-        alias = self._account_alias(args.get("account"))
-        wa_id = args.get("wa_id") or args.get("to")
+    def _iter_messages(self, wa_id: str, direction: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         if not wa_id:
-            return {"status": "error", "error": "add_contact requires wa_id"}
-        with self._contacts_lock:
-            contacts = self._load_contacts(alias)
-            contacts[wa_id] = {"wa_id": wa_id, "name": args.get("name") or wa_id}
-            self._save_contacts(alias, contacts)
-            contact = contacts[wa_id]
-        return {"status": "ok", "contact": contact}
+            # A conversation scan needs a conversation; the store is laid out
+            # as store_dir/<wa_id>/{inbox,sent}/. Use _iter_all_messages for a
+            # cross-conversation scan.
+            return []
+        base = self._conversation_dir(wa_id)
+        if not base.is_dir():
+            return []
+        entries = sorted(self._read_dir(base, direction), key=self._sort_key)
+        return [msg for _path, msg in entries[-limit:]]
 
-    def _remove_contact(self, args: dict[str, Any]) -> dict[str, Any]:
-        alias = self._account_alias(args.get("account"))
-        wa_id = args.get("wa_id") or args.get("to")
-        if not wa_id:
-            return {"status": "error", "error": "remove_contact requires wa_id"}
-        with self._contacts_lock:
-            contacts = self._load_contacts(alias)
-            removed = contacts.pop(wa_id, None)
-            self._save_contacts(alias, contacts)
-        return {"status": "ok", "removed": removed}
+    def _iter_all_messages(self, direction: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        """Scan every conversation directory under the store."""
+        if not self.store_dir.is_dir():
+            return []
+        entries: list[tuple[Path, dict[str, Any]]] = []
+        for conversation in self.store_dir.iterdir():
+            if conversation.is_dir():
+                entries += self._read_dir(conversation, direction)
+        entries.sort(key=self._sort_key)
+        return [msg for _path, msg in entries[-limit:]]
 
-    def _templates(self, args: dict[str, Any]) -> dict[str, Any]:
-        alias = self._account_alias(args.get("account"))
-        return {"status": "ok", "templates": self.accounts[alias].get("templates", [])}
-
-    def _accounts(self, args: dict[str, Any]) -> dict[str, Any]:
+    def _conversation_context(self, wa_id: str, latest: dict[str, Any]) -> dict[str, Any]:
+        history = self._iter_messages(wa_id, limit=10)
+        recent = []
+        for m in history:
+            recent.append({
+                "id": m.get("id"),
+                "fromMe": m.get("direction") == "sent",
+                "text": _display_text(m)[:500],
+                "timestamp": m.get("timestamp"),
+            })
+        latest_text = _display_text(latest)
         return {
-            "status": "ok",
-            "accounts": [redact_account(a) for a in self.accounts.values()],
-            "details": self.account_details(),
-            "identity_path": str(self.identity_path()),
+            "platform": "whatsapp",
+            "conversation_ref": f"whatsapp:{wa_id}",
+            "recent_messages": recent[-10:],
+            "latest_incoming": {
+                "id": latest.get("id"),
+                "from": latest.get("from"),
+                "text": (latest_text or "")[:500],
+                "timestamp": latest.get("timestamp"),
+                "type": latest.get("type"),
+            },
         }
 
-    def _status(self, args: dict[str, Any]) -> dict[str, Any]:
-        accounts = [redact_account(a) for a in self.accounts.values()]
-        return {
-            "status": "ok",
-            "transport": "official_meta_cloud_api",
-            "webhook": "required_for_inbound",
-            "customer_service_window_hours": 24,
-            "accounts": accounts,
-            "identity_path": str(self.identity_path()),
-        }
+    # ------------------------------------------------------------------ bridge events
+
+    def _on_bridge_event(self, event: dict[str, Any]) -> None:
+        if not isinstance(event, dict):
+            log.debug("whatsapp bridge: dropped non-dict event frame")
+            return
+        etype = event.get("type")
+        data = event.get("data")
+        if not isinstance(data, dict):
+            # A malformed payload is a clean drop, not a logged traceback.
+            if data is not None:
+                log.debug("whatsapp bridge: dropped %s event with non-object data", etype)
+            data = {}
+        if etype == "message":
+            self._handle_incoming(data)
+        elif etype == "qr":
+            log.info("whatsapp bridge: QR available (type=%s)", "data-url" if data.get("qr_base64") else "ascii")
+        elif etype == "ready":
+            self._me = data.get("me")
+            self._last_verified_at = _utcnow()
+            log.info("whatsapp bridge: ready me=%s", data.get("me"))
+        elif etype == "disconnected":
+            log.warning("whatsapp bridge disconnected: %s", data.get("reason"))
+        elif etype == "error":
+            log.error("whatsapp bridge error: %s", data.get("error"))
+        else:
+            log.debug("whatsapp bridge event: %s", etype)
+
+    def _handle_incoming(self, msg: dict[str, Any]) -> None:
+        if not isinstance(msg, dict):
+            return
+        from_id = msg.get("from")
+        if not from_id:
+            return
+        if self.allowed_users and normalize_wa_id(from_id) not in self.allowed_users:
+            log.info("whatsapp: ignored inbound from non-allowed %s", from_id)
+            return
+        msg_id = self._store_message(from_id, "inbox", msg)
+        ctx = self._conversation_context(from_id, msg)
+        header = _NOTIFICATION_HEADER_TEMPLATE.format(channel="WhatsApp").rstrip("\n")
+        newest = (_display_text(msg) or f"[{msg.get('type')}]")[:2000]
+        push_inbox_event(
+            sender="whatsapp",
+            subject=f"whatsapp message from {from_id}",
+            body=f"{header}\n\n**Newest WhatsApp message**\n{newest}",
+            # Downstream LICC code may use the event id as a file name, so the
+            # remote-controlled components are sanitized here too.
+            event_id=f"wa:{_safe_component(from_id)}:{_safe_component(msg_id)}",
+            metadata={
+                "conversation_ref": ctx["conversation_ref"],
+                "message_id": msg_id,
+                "from": from_id,
+                "timestamp": msg.get("timestamp"),
+                "type": msg.get("type"),
+                "recent_messages": ctx["recent_messages"],
+                "latest_incoming": ctx["latest_incoming"],
+            },
+        )
+
+    # ------------------------------------------------------------------ identity
 
     def account_details(self) -> list[dict[str, Any]]:
-        """Return non-secret public identity details for each account."""
-        details: list[dict[str, Any]] = []
-        for alias, account in self.accounts.items():
-            contacts = self._load_contacts(alias)
-            item: dict[str, Any] = {
-                "alias": alias,
-                "phone_number_id": account.get("phone_number_id"),
-                "waba_id": account.get("waba_id") or account.get("business_account_id"),
-                "business_account_id": account.get("business_account_id"),
-                "display_phone_number": account.get("display_phone_number"),
-                "api_version": account.get("api_version"),
-                "last_verified_at": self._last_verified_at,
-                "template_count": len(account.get("templates") or []),
-                "contact_count": len(contacts),
-            }
-            if self.config_source:
-                item["config_source"] = self.config_source
-            details.append({k: v for k, v in item.items() if v is not None})
-        return details
+        """Non-secret public identity details for the paired personal account.
+
+        Personal mode has exactly one "account" — the linked device session —
+        so this is a one-element list. No credential-bearing field exists in
+        this mode (the session lives in ``session_dir``, never in the payload).
+        """
+        item: dict[str, Any] = {
+            "alias": "personal",
+            "backend": "personal_account_whatsapp_web",
+            "wa_id": self._me,
+            "contact_count": len(self._contacts),
+            "last_verified_at": self._last_verified_at,
+        }
+        return [{k: v for k, v in item.items() if v is not None}]
 
     def identity_payload(self) -> dict[str, Any]:
         """Build the non-secret MCP identity document for this service."""
@@ -362,109 +375,169 @@ class WhatsAppManager:
             self.identity_path(), self.identity_payload()
         )
 
-    def _structured_message(self, message: dict[str, Any], *, current_compound_id: str | None = None) -> dict[str, Any]:
-        """Build a bounded, secret-free structured view of a stored message.
+    # ------------------------------------------------------------------ actions
 
-        Only stable identity/content fields are copied — never the raw Cloud
-        API ``payload``/``response``/webhook ``metadata`` objects. Text is
-        capped so the LICC structured-metadata JSON stays bounded; non-text
-        messages carry only their ``type`` (the local store keeps no media
-        payload) and the producer remains the source of truth.
+    def handle(self, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Legacy manager entrypoint used by ``_family.build_whatsapp_family``.
+
+        The family passes the flattened ``{"action": ..., **input}`` shape;
+        the LTP-v2 envelope has already been validated by ``handle_whatsapp``.
         """
-        text = message.get("text")
-        text_truncated = False
-        if isinstance(text, str) and len(text) > _STRUCTURED_MESSAGE_TEXT_CAP:
-            text = text[:_STRUCTURED_MESSAGE_TEXT_CAP]
-            text_truncated = True
-        direction = message.get("direction") or (
-            "outgoing" if message.get("_folder") == "sent" else "incoming"
-        )
-        message_type = message.get("type") or (
-            (message.get("payload") or {}).get("type") if isinstance(message.get("payload"), dict) else None
-        )
-        item: dict[str, Any] = {
-            "id": message.get("id"),
-            "direction": direction,
-            "wa_id": message.get("wa_id"),
-            "type": message_type,
-            "text": text,
-            "text_truncated": text_truncated,
-        }
-        for key in ("timestamp", "stored_at"):
-            value = message.get(key)
-            if value:
-                item[key] = value
-        reply_to = message.get("reply_to")
-        if reply_to:
-            item["reply_to"] = reply_to
-        if current_compound_id and item["id"] == current_compound_id:
-            item["is_current"] = True
-        return item
+        raw = dict(args or {})
+        name = raw.pop("action", None)
+        if not isinstance(name, str):
+            raise ValueError("whatsapp action is required")
+        return self.action(name, raw)
 
-    def _conversation_context(
-        self, alias: str, wa_id: str, current_compound_id: str,
-    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-        """Return (recent_messages, latest_incoming) structured context for *wa_id*.
+    def action(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        if name not in WHATSAPP_ACTIONS:
+            raise ValueError(f"unknown whatsapp action: {name}")
+        method = getattr(self, f"_{name}", None)
+        if method is None:
+            raise ValueError(f"unknown whatsapp action: {name}")
+        return method(args or {})
 
-        ``recent_messages`` is the last ``_CONVERSATION_CONTEXT_MESSAGES``
-        stored messages with this contact (both directions, oldest first);
-        ``latest_incoming`` is the current/new incoming message.
-        """
-        conversation = [
-            m for m in self._iter_messages(alias) if m.get("wa_id") == wa_id
-        ][:_CONVERSATION_CONTEXT_MESSAGES]
-        conversation.reverse()  # _iter_messages is newest-first; context reads oldest-first
-        structured = [
-            self._structured_message(m, current_compound_id=current_compound_id)
-            for m in conversation
-        ]
-        latest_incoming = next(
-            (
-                item
-                for item in reversed(structured)
-                if item.get("direction") == "incoming" and item.get("is_current")
-            ),
-            None,
-        ) or next(
-            (item for item in reversed(structured) if item.get("direction") == "incoming"),
-            None,
+    def _manual(self, args: dict[str, Any]) -> dict[str, Any]:
+        return _skill.manual_payload(
+            _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH, _SKILL_NAME
         )
-        return structured, latest_incoming
 
-    def ingest_webhook(self, alias: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        events = extract_events(payload)
-        for ev in events:
-            if ev.get("kind") == "message":
-                wa_id = ev.get("wa_id") or "unknown"
-                wamid = ev.get("message_id") or f"local-{uuid4()}"
-                msg = {"id": self._compound(alias, wa_id, wamid), "wa_id": wa_id, "message_id": wamid, "text": ev.get("text"), "type": ev.get("type"), "direction": "incoming", "metadata": ev.get("metadata"), "timestamp": ev.get("timestamp"), "stored_at": _utcnow()}
-                self._store_message(alias, "inbox", msg)
-                if self.on_inbound:
-                    header = _NOTIFICATION_HEADER_TEMPLATE.format(channel="WhatsApp").rstrip("\n")
-                    message_body = ev.get("text") or f"[{ev.get('type')}]"
-                    body = f"{header}\n\n**Newest WhatsApp message**\n{message_body}"
-                    # Routing keys plus structured recent-message context ride on
-                    # LICC metadata; the kernel projects them into the durable
-                    # _meta.agent_meta.notifications.persistent.mcp.whatsapp lane and keeps
-                    # the transient notification as an identity-only hook.
-                    event_metadata: dict[str, Any] = {
-                        "mcp": "whatsapp",
-                        "account": alias,
-                        "wa_id": wa_id,
-                        "message_id": msg["id"],
-                        "platform": "whatsapp",
-                        "conversation_ref": f"{alias}:{wa_id}",
-                        "message_ref": msg["id"],
-                    }
-                    try:
-                        recent_messages, latest_incoming = self._conversation_context(
-                            alias, wa_id, msg["id"],
-                        )
-                        if recent_messages:
-                            event_metadata["recent_messages"] = recent_messages
-                        if latest_incoming is not None:
-                            event_metadata["latest_incoming"] = latest_incoming
-                    except Exception as exc:
-                        log.warning("whatsapp conversation context failed: %s", exc)
-                    self.on_inbound({"from": f"whatsapp:{wa_id}", "subject": "WhatsApp message", "body": body, "metadata": event_metadata, "wake": True})
-        return events
+    def _status(self, args: dict[str, Any]) -> dict[str, Any]:
+        alive = self.bridge.alive
+        status = {"bridge_alive": alive, "session_dir": str(self.session_dir)}
+        if alive:
+            try:
+                # Short deadline: status is also served as an MCP resource.
+                st = self.bridge.request("status", timeout=10)
+                status.update({"ready": st.get("ready", False), "me": st.get("me"), "qr_available": st.get("qr_available", False)})
+            except Exception as e:
+                status["error"] = str(e)
+        else:
+            status["ready"] = False
+        return redaction.safe_status(status)
+
+    def _get_qr(self, args: dict[str, Any]) -> dict[str, Any]:
+        self.bridge.start()
+        try:
+            st = self.bridge.request("status")
+            if st.get("ready"):
+                return {"ready": True, "me": st.get("me")}
+        except Exception:
+            pass
+        try:
+            result = self.bridge.request("get_qr")
+        except Exception as e:
+            return {"ready": False, "error": str(e), "hint": "If no QR yet, wait for the bridge to emit a qr event, then retry."}
+        return {"ready": False, "qr_base64": result.get("qr_base64")}
+
+    def _send(self, args: dict[str, Any]) -> dict[str, Any]:
+        to = args.get("to") or args.get("wa_id")
+        if not to:
+            raise ValueError("send requires to or wa_id")
+        result = self.bridge.request("send", {"to": to, "text": args.get("text"), "media": args.get("media")})
+        media = args.get("media") if isinstance(args.get("media"), dict) else None
+        sent_type = "text" if args.get("text") else ((media or {}).get("type") or "media")
+        msg = {"id": result.get("id"), "to": result.get("wa_id"), "body": args.get("text"), "type": sent_type, "timestamp": time.time(), "fromMe": True}
+        self._store_message(result.get("wa_id") or to, "sent", msg)
+        return result
+
+    def _check(self, args: dict[str, Any]) -> dict[str, Any]:
+        limit = int(args.get("limit") or 10)
+        result = self.bridge.request("read", {"limit": limit})
+        return result
+
+    def _read(self, args: dict[str, Any]) -> dict[str, Any]:
+        wa_id = args.get("wa_id") or args.get("to")
+        if wa_id:
+            msgs = self._iter_messages(wa_id, limit=int(args.get("limit") or 50))
+            return {"messages": [{"id": m.get("id"), "fromMe": m.get("direction") == "sent", "body": m.get("body"), "type": m.get("type"), "timestamp": m.get("timestamp")} for m in msgs]}
+        limit = int(args.get("limit") or 20)
+        return self.bridge.request("read", {"limit": limit})
+
+    def _reply(self, args: dict[str, Any]) -> dict[str, Any]:
+        message_id = args.get("message_id")
+        to = args.get("to") or args.get("wa_id")
+        text = args.get("text")
+        if not message_id or not text:
+            raise ValueError("reply requires message_id and text")
+        if not to:
+            # Recover the conversation by scanning every stored conversation
+            # directory (store_dir/<wa_id>/{inbox,sent}/) for the quoted id.
+            for msg in reversed(self._iter_all_messages(limit=500)):
+                if msg.get("id") == message_id:
+                    to = msg.get("from") or msg.get("to")
+                    break
+        if not to:
+            raise ValueError("reply requires to or wa_id (message not found in store)")
+        result = self.bridge.request("reply", {"to": to, "message_id": message_id, "text": text})
+        self._store_message(to, "sent", {"id": result.get("id"), "to": to, "body": text, "type": "text", "timestamp": time.time(), "fromMe": True})
+        return result
+
+    def _react(self, args: dict[str, Any]) -> dict[str, Any]:
+        message_id = args.get("message_id")
+        emoji = args.get("emoji")
+        if not message_id or not emoji:
+            raise ValueError("react requires message_id and emoji")
+        return self.bridge.request("react", {"message_id": message_id, "emoji": emoji})
+
+    def _search(self, args: dict[str, Any]) -> dict[str, Any]:
+        query = args.get("query")
+        if not query:
+            raise ValueError("search requires query")
+        limit = int(args.get("limit") or 20)
+        return self.bridge.request("search", {"query": query, "limit": limit})
+
+    def _contacts(self, args: dict[str, Any]) -> dict[str, Any]:
+        result = self.bridge.request("contacts")
+        contacts = result.get("contacts") or []
+        self._contacts = {c.get("id"): c for c in contacts if c.get("id")}
+        self._save_contacts()
+        return {"contacts": contacts[: int(args.get("limit") or 500)]}
+
+    def _add_contact(self, args: dict[str, Any]) -> dict[str, Any]:
+        wa_id = args.get("wa_id") or args.get("to")
+        name = args.get("name")
+        if not wa_id:
+            raise ValueError("add_contact requires wa_id")
+        self._contacts[wa_id] = {"id": wa_id, "name": name}
+        self._save_contacts()
+        return {"ok": True, "wa_id": wa_id}
+
+    def _remove_contact(self, args: dict[str, Any]) -> dict[str, Any]:
+        wa_id = args.get("wa_id") or args.get("to")
+        if not wa_id:
+            raise ValueError("remove_contact requires wa_id")
+        self._contacts.pop(wa_id, None)
+        self._save_contacts()
+        return {"ok": True, "wa_id": wa_id}
+
+    def _logout(self, args: dict[str, Any]) -> dict[str, Any]:
+        if self.bridge.alive:
+            try:
+                self.bridge.request("logout", timeout=10)
+            except Exception:
+                pass
+        # An unauthenticated bridge (and its Chromium) has nothing left to do;
+        # the next action restarts it.
+        self.bridge.stop()
+        return {"ok": True}
+
+    def close(self) -> None:
+        self.bridge.stop()
+
+
+# --------------------------------------------------------------------------- config
+
+def load_config() -> tuple[dict[str, Any], Path]:
+    """Load LINGTAI_WHATSAPP_CONFIG (JSON file) into ``(config, path)``.
+
+    Shares the curated-MCP loader contract: a missing env var is a ``ValueError``
+    and a bad path a ``FileNotFoundError``, both with the shared message shape.
+    Personal mode works without a config file, so ``build_manager`` treats the
+    missing-env case as "use defaults" rather than a boot failure.
+    """
+    return _config.load_config_file(
+        "LINGTAI_WHATSAPP_CONFIG",
+        label="WhatsApp",
+        missing_env_msg="LINGTAI_WHATSAPP_CONFIG env var not set",
+    )
