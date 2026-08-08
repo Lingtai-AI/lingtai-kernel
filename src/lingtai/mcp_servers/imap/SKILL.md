@@ -50,7 +50,9 @@ a list of ids.
 
 - `email_id` is a compound key: `account:folder:uid` (e.g.
   `me@example.com:INBOX:1234`). Use the ids returned by `check`/`search`; do not
-  construct them by hand.
+  construct them by hand. Every action response includes `account` set to the
+  explicitly requested or default-resolved account, while returned compound ids
+  retain their own account prefix.
 - An empty or whitespace-only `folder` (check/search) or `account` (any action)
   is treated as omitted: `folder` defaults to `INBOX`, and `account` uses the
   default/sole account rather than failing with `Unknown account`. Most actions

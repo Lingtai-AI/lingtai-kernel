@@ -168,6 +168,7 @@ related_files:
   - tests/test_how_to_change_name.py
   - tests/test_how_to_change_name_e2e.py
   - tests/test_i18n.py
+  - tests/test_imap_account_metadata.py
   - tests/test_imap_empty_args.py
   - tests/test_imap_outlook_oauth.py
   - tests/test_imap_read_attachment_sanitization.py
