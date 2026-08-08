@@ -41,6 +41,8 @@ from .. import _skill
 from . import _family
 from . import updates as tg_updates
 from .account import TelegramRateLimitError
+from .receipts import ReceiptStore, ReceiptWorker, extract_opened_message_ids
+from .task_card_revisions import TaskCardRevisionStore
 
 if TYPE_CHECKING:
     from lingtai.kernel.notification_store import NotificationStorePort
@@ -616,6 +618,11 @@ class TelegramManager:
         self._task_card_tail_stop = threading.Event()
         self._programmable_task_card_thread: threading.Thread | None = None
         self._programmable_task_card_stop = threading.Event()
+        self._receipt_store: ReceiptStore | None = None
+        self._receipt_worker: ReceiptWorker | None = None
+        self._receipt_tail_thread: threading.Thread | None = None
+        self._receipt_tail_stop = threading.Event()
+        self._revision_store: TaskCardRevisionStore | None = None
 
     @property
     def _task_card_channels(self) -> dict[str, dict[str, str]]:
@@ -691,8 +698,10 @@ class TelegramManager:
         self._service.start()
         self._start_task_card_tail()
         self._start_programmable_task_card_poller()
+        self._start_receipt_path()
 
     def stop(self) -> None:
+        self._stop_receipt_path()
         self._stop_programmable_task_card_poller()
         self._stop_task_card_tail()
         self._service.stop()
@@ -863,13 +872,6 @@ class TelegramManager:
             # Issue #8: Start typing indicator immediately
             if account:
                 _typing_manager.start_typing(account, chat_id)
-
-            # Issue #8: Add "seen" reaction (👀)
-            if account:
-                try:
-                    account.set_message_reaction(chat_id, tg_message_id, REACTION_SEEN)
-                except Exception as e:
-                    log.debug("Failed to add 'seen' reaction: %s", e)
 
             # Issue #6: Transcribe voice messages
             if payload.get("media") and payload["media"].get("type") in ("voice", "audio"):
@@ -1199,6 +1201,7 @@ class TelegramManager:
         except Exception as e:
             log.error("on_inbound callback failed for telegram msg %s: %s",
                       payload.get("id"), e)
+            raise
         # Note: typing indicator continues until _send() is called by the agent.
         # _send() stops typing when it sends the response.
 
@@ -2066,11 +2069,20 @@ class TelegramManager:
         *, error: str, resident_id: str | None = None,
         empty_fallback: str | None = None,
     ) -> dict:
-        """Project via the single resident owner."""
-        return self._resident.project(
+        """Project via the resident owner and persist desired/applied revision."""
+        text = self._resident.compose(account, chat_id, channel=channel, frame=frame)
+        if not text and empty_fallback is not None:
+            text = empty_fallback
+        route_key = self._resident.key(account, chat_id)
+        if text:
+            self._ensure_revision_store().propose(route_key, text, time.time())
+        outcome = self._resident.project(
             account, chat_id, channel, frame, error=error,
             resident_id=resident_id, empty_fallback=empty_fallback,
         )
+        if text and outcome.get("status") == "ok":
+            self._ensure_revision_store().applied(route_key, time.time())
+        return outcome
 
     def _deliver_channel_frame_locked(
         self, account: str, chat_id: int, channel: str, frame: str | None,
@@ -2606,6 +2618,129 @@ class TelegramManager:
                 tool_results,
             )
         return bool(projected_events) or metadata_changed or result_changed
+
+    def _ensure_receipt_store(self) -> ReceiptStore:
+        if self._receipt_store is None:
+            self._receipt_store = ReceiptStore(
+                self._working_dir / "telegram" / "receipts.sqlite3"
+            )
+            self._receipt_worker = ReceiptWorker(
+                self._receipt_store, apply=self._apply_opened_receipt
+            )
+        return self._receipt_store
+
+    def _apply_opened_receipt(self, message_id: str) -> None:
+        account_alias, chat_id, telegram_message_id = self._parse_compound_id(
+            message_id.removeprefix("telegram:")
+        )
+        self._service.get_account(account_alias).set_message_reaction(
+            chat_id, telegram_message_id, REACTION_SEEN
+        )
+
+    def _poll_receipt_events(self) -> None:
+        store = self._ensure_receipt_store()
+        path = self._task_card_events_path()
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+        offset, _, stored_identity = store.cursor()
+        identity = self._event_file_identity(stat)
+        identity_token = ":".join(map(str, identity)) if identity is not None else None
+        if stat.st_size < offset or (
+            stored_identity is not None
+            and identity_token is not None
+            and stored_identity != identity_token
+        ):
+            store.reset_cursor()
+            offset = 0
+        if stat.st_size <= offset:
+            return
+        try:
+            with open(path, "rb") as stream:
+                stream.seek(offset)
+                data = stream.read(min(
+                    stat.st_size - offset, self._TASK_CARD_EVENT_TAIL_CHUNK
+                ))
+        except OSError:
+            return
+        last_newline = data.rfind(b"\n")
+        if last_newline < 0:
+            return
+        complete = data[:last_newline + 1]
+        opened_ids: list[str] = []
+        for raw in complete.split(b"\n"):
+            event = TaskCardEventProjection.decode_event_line(raw)
+            if event is not None:
+                opened_ids.extend(extract_opened_message_ids(event))
+        store.enqueue_many_and_advance(
+            opened_ids,
+            offset + len(complete),
+            stat.st_size,
+            time.time(),
+            identity_token,
+        )
+
+    def _start_receipt_path(self) -> None:
+        self._ensure_receipt_store()
+        if self._receipt_tail_thread is not None and self._receipt_tail_thread.is_alive():
+            return
+        self._resume_pending_task_card_revisions()
+        self._receipt_tail_stop.clear()
+
+        def run() -> None:
+            while not self._receipt_tail_stop.is_set():
+                try:
+                    self._poll_receipt_events()
+                except Exception as exc:
+                    log.debug("Receipt event tail poll failed: %s", exc)
+                if self._receipt_tail_stop.wait(self._TASK_CARD_EVENT_POLL_INTERVAL):
+                    return
+
+        self._receipt_tail_thread = threading.Thread(
+            target=run, name="telegram-receipt-tail", daemon=True
+        )
+        self._receipt_tail_thread.start()
+        if self._receipt_worker is not None:
+            self._receipt_worker.start()
+
+    def _stop_receipt_path(self) -> None:
+        self._receipt_tail_stop.set()
+        if self._receipt_tail_thread is not None:
+            self._receipt_tail_thread.join(timeout=5)
+        self._receipt_tail_thread = None
+        if self._receipt_worker is not None:
+            self._receipt_worker.stop()
+        if self._receipt_store is not None:
+            self._receipt_store.close()
+        if self._revision_store is not None:
+            self._revision_store.close()
+        self._receipt_store = self._receipt_worker = self._revision_store = None
+
+    def _ensure_revision_store(self) -> TaskCardRevisionStore:
+        if self._revision_store is None:
+            self._revision_store = TaskCardRevisionStore(
+                self._working_dir / "telegram" / "taskcard_revisions.sqlite3"
+            )
+        return self._revision_store
+
+    def _resume_pending_task_card_revisions(self) -> None:
+        store = self._ensure_revision_store()
+        for route_key, _, text in store.pending_routes():
+            account, separator, chat_raw = route_key.partition(":")
+            if not separator:
+                continue
+            try:
+                chat_id = int(chat_raw)
+                outcome = self._resident.ensure(
+                    account, chat_id, text,
+                    error="Failed to resume pending task card revision",
+                )
+            except Exception as exc:
+                log.debug("Pending task card resume failed for %s: %s", route_key, exc)
+                continue
+            if outcome.get("status") == "ok":
+                store.applied(route_key, time.time())
 
     def _resident_task_card_targets(self) -> list[tuple[str, int]]:
         """Enumerate every ``(account, chat_id)`` with a resident Task Card.

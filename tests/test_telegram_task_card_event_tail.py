@@ -1021,8 +1021,7 @@ def test_start_stop_run_exactly_one_tail_worker(tmp_path):
         assert service.start_calls == 1
         new_threads = set(threading.enumerate()) - before_threads
         tail_threads = [
-            t for t in new_threads if "task_card" in t.name.lower()
-            or "event_tail" in t.name.lower() or "tail" in t.name.lower()
+            t for t in new_threads if t.name.lower() == "telegram-task-card-event-tail"
         ]
         assert len(tail_threads) == 1, f"expected exactly one tail worker, got {new_threads}"
     finally:
@@ -1051,8 +1050,12 @@ def test_start_called_twice_does_not_start_a_second_worker(tmp_path):
     manager.start()
     try:
         new_threads = set(threading.enumerate()) - before_threads
-        tail_threads = [t for t in new_threads if "tail" in t.name.lower()]
+        tail_threads = [
+            t for t in new_threads if t.name.lower() == "telegram-task-card-event-tail"
+        ]
         assert len(tail_threads) == 1
+        assert len([t for t in new_threads if t.name == "telegram-receipt-tail"]) == 1
+        assert len([t for t in new_threads if t.name == "telegram-receipt-worker"]) == 1
     finally:
         manager.stop()
 

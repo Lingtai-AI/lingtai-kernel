@@ -47,6 +47,20 @@ def test_inbound_message_bumps_last_message_id(tmp_path):
     assert seen
 
 
+def test_failed_delivery_does_not_commit_update_offset(tmp_path):
+    def fail(_alias, _update):
+        raise RuntimeError("inbox unavailable")
+
+    acct = _account(tmp_path, on_message=fail)
+    with pytest.raises(RuntimeError, match="inbox unavailable"):
+        acct._process_update({
+            "update_id": 7,
+            "message": {"message_id": 42, "chat": {"id": 555},
+                        "from": {"id": 9}, "text": "retry me"},
+        })
+    assert acct._last_update_id == 0
+
+
 def test_last_message_id_is_monotonic_per_chat(tmp_path):
     acct = _account(tmp_path)
     acct._note_chat_message_id(555, 10)
