@@ -39,7 +39,17 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from .config import THINKING_LEVELS, THINKING_PROVIDERS, llm_supports_thinking
+from .config import (
+    DEEPSEEK_CAPABILITY_SOURCE,
+    DEEPSEEK_RESPONSES_MODELS,
+    DEEPSEEK_THINKING_PROVIDERS,
+    THINKING_LEVELS,
+    THINKING_PROVIDERS,
+    deepseek_responses_model_supported,
+    deepseek_thinking_levels,
+    llm_supports_thinking,
+    resolve_deepseek_wire,
+)
 
 log = logging.getLogger(__name__)
 
@@ -362,11 +372,33 @@ def load_preset(
             raise ValueError(
                 f"preset {name!r} ({p}): manifest.llm.thinking is currently "
                 "supported only for the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)}) or custom "
+                f"({', '.join(THINKING_PROVIDERS)}), DeepSeek, or custom "
                 "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+        if str(llm.get("provider") or "").lower() in DEEPSEEK_THINKING_PROVIDERS:
+            # Same per-wire DeepSeek contract as init_schema: Chat takes the
+            # canonical four, Responses the upstream seven on Flash only.
+            wire = resolve_deepseek_wire(llm.get("wire_api"))
+            levels = deepseek_thinking_levels(llm.get("wire_api"))
+            if not isinstance(thinking, str) or thinking not in levels:
+                raise ValueError(
+                    f"preset {name!r} ({p}): manifest.llm.thinking for provider "
+                    f"deepseek on the {wire} wire must be one of "
+                    f"{', '.join(levels)} (got {thinking!r})"
+                )
+            if wire == "responses" and not deepseek_responses_model_supported(
+                llm.get("model")
+            ):
+                raise ValueError(
+                    f"preset {name!r} ({p}): manifest.llm.thinking for provider "
+                    "deepseek on the responses wire currently supports only "
+                    f"{', '.join(DEEPSEEK_RESPONSES_MODELS)}; model "
+                    f"{llm.get('model')!r} has no documented Responses support "
+                    f"(capability source {DEEPSEEK_CAPABILITY_SOURCE}). "
+                    "Use wire_api=chat_completions for this model."
+                )
+        elif not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
             raise ValueError(
                 f"preset {name!r} ({p}): manifest.llm.thinking must be one of "
                 f"{', '.join(THINKING_LEVELS)}"

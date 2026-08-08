@@ -19,11 +19,127 @@ THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 # ``llm_supports_thinking`` so validators share the complete rule.
 THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 
+# --- DeepSeek reasoning vocabulary (provider-local; issue #1197) -------------
+#
+# DeepSeek V4 is TWO-AXIS (mode + effort) and TWO-WIRE, so it cannot share the
+# cross-provider ``THINKING_LEVELS`` tuple above: that tuple lacks DeepSeek's
+# ``max`` and conflates mode-off vocabulary with effort tiers. Adding ``max``
+# there would silently widen every other provider's accepted set, so DeepSeek
+# keeps its own per-wire tuples and the global tuple stays byte-identical.
+#
+# Chat Completions carries mode as ``thinking: {"type": enabled|disabled}`` and
+# effort as the flat canonical ``reasoning_effort``; only the canonical values
+# are accepted, so a Chat alias fails loudly instead of being coerced.
+# Responses carries one nested ``reasoning: {"effort": ...}`` accepting the
+# exact upstream seven, where ``none`` encodes disabled.
+#
+# ``model_verified=false``: these are documentation-derived capability claims
+# read on 2026-08-05, not server conformance tests. ``DEEPSEEK_CAPABILITY_SOURCE``
+# stamps that provenance into ``llm_call`` observability so a later docs change
+# is traceable.
+DEEPSEEK_THINKING_PROVIDERS = ("deepseek",)
+DEEPSEEK_CHAT_THINKING_LEVELS = ("none", "low", "high", "max")
+DEEPSEEK_RESPONSES_THINKING_LEVELS = (
+    "none", "minimal", "low", "medium", "high", "xhigh", "max",
+)
+# Responses is currently documented as Flash-only; Pro is explicitly not
+# supported. Widen this tuple (not the mapping code) when upstream ships it.
+DEEPSEEK_RESPONSES_MODELS = ("deepseek-v4-flash",)
+DEEPSEEK_CAPABILITY_SOURCE = "deepseek_docs_20260805"
+
+# Internal omission sentinel shared with the adapter layer: an omitted
+# ``manifest.llm.thinking`` becomes this token and DeepSeek then emits NO mode
+# or effort field, so the documented upstream default (enabled/high) applies.
+# It is never a user-configurable literal — both validators reject it.
+THINKING_DEFAULT_SENTINEL = "default"
+
+
+class _OmittedThinking(str):
+    """``str`` marker for a constructor-omitted ``AgentConfig.thinking``.
+
+    Equal to (and serializes as) ``"high"``, so every existing consumer —
+    including ``session.py``'s legacy ``or "high"`` — behaves byte-identically.
+    Identity is what carries the extra bit: ``thinking_omitted()`` can tell a
+    caller who never set the field from one who explicitly asked for ``"high"``,
+    which DeepSeek needs to distinguish honest omission from explicit high.
+    Note it does not survive serialize/rehydrate; the manifest hydration path
+    (``agent.py:build_agent_config``) sets ``"default"`` explicitly instead.
+    """
+
+    __slots__ = ()
+
+
+THINKING_OMITTED = _OmittedThinking("high")
+
+
+def thinking_omitted(value: object) -> bool:
+    """Return whether *value* is the constructor-omitted thinking sentinel."""
+    return isinstance(value, _OmittedThinking)
+
+
+def resolve_deepseek_wire(wire_api: object) -> str:
+    """Resolve a DeepSeek ``manifest.llm.wire_api`` to its effective wire.
+
+    Absent / ``auto`` selects Chat Completions: the DeepSeek adapter's
+    ``auto`` branch requires ``use_responses``, which is not a manifest
+    pass-through field, so only an explicit ``responses`` reaches that wire.
+    """
+    return "responses" if str(wire_api or "auto").lower() == "responses" else "chat_completions"
+
+
+def deepseek_thinking_levels(wire_api: object) -> tuple[str, ...]:
+    """Return the accepted DeepSeek thinking vocabulary for a wire."""
+    if resolve_deepseek_wire(wire_api) == "responses":
+        return DEEPSEEK_RESPONSES_THINKING_LEVELS
+    return DEEPSEEK_CHAT_THINKING_LEVELS
+
+
+def deepseek_responses_model_supported(model: object) -> bool:
+    """Return whether *model* is a documented DeepSeek Responses model.
+
+    Source-dated: the Responses wire is currently Flash-only and Pro is
+    explicitly not supported. Matching is case-insensitive on the exact
+    documented ids — a fuzzy ``"flash" in model`` test would let an
+    undocumented id through as if it had been verified.
+    """
+    return str(model or "").strip().lower() in DEEPSEEK_RESPONSES_MODELS
+
+
+def deepseek_reasoning_log_fields(thinking: object) -> dict:
+    """Return safe ``llm_call`` reasoning fields for a DeepSeek session.
+
+    Derived ONLY from the construction-frozen thinking value — no credential,
+    session id, prompt content, or request body. DeepSeek performs no silent
+    alias normalization, so requested/normalized/actual are the same exact
+    token (or ``omitted``); the split is kept so a later slice that surfaces
+    documented effective tiers has somewhere truthful to put them, and the wire
+    is deliberately NOT an input because it would not change any of them today.
+
+    One nuance on the Chat wire: ``none`` is the *mode* axis, so the request
+    carries ``thinking:{"type":"disabled"}`` and no effort token at all.
+    ``reasoning_actual`` reports ``none`` — the configured two-axis value —
+    rather than the absent effort field.
+    """
+    omitted = thinking is None or thinking == THINKING_DEFAULT_SENTINEL
+    token = "omitted" if omitted else str(thinking)
+    return {
+        "reasoning_requested": token,
+        "reasoning_normalized": token,
+        "reasoning_actual": token,
+        "reasoning_source": "lingtai_deepseek_omitted" if omitted else "explicit_config",
+        "reasoning_capability_source": DEEPSEEK_CAPABILITY_SOURCE,
+    }
+
 
 def llm_supports_thinking(llm: dict) -> bool:
     """Return whether a manifest LLM block accepts explicit thinking effort."""
     provider = str(llm.get("provider") or "").lower()
     if provider in THINKING_PROVIDERS:
+        return True
+    # DeepSeek accepts thinking on BOTH wires; the per-wire vocabulary and the
+    # Responses model guard are enforced downstream by the validators, so this
+    # gate stays wire-independent.
+    if provider in DEEPSEEK_THINKING_PROVIDERS:
         return True
     return (
         provider == "custom"
@@ -131,7 +247,7 @@ class AgentConfig:
     max_aed_attempts: int = 3   # max AED retry attempts per inbox message turn
     max_rpm: int = 60  # API requests-per-minute cap for this agent's provider; 0 = no gating. Shared across all agents in the same process that use the same (provider, base_url) pair (adapter cache key).
     thinking_budget: int | None = None
-    thinking: str = "high"  # reasoning/thinking tier passed to the main persistent LLM session
+    thinking: str = THINKING_OMITTED  # reasoning/thinking tier passed to the main persistent LLM session; the default is an == "high" sentinel that also records "constructor omitted" (see THINKING_OMITTED)
     data_dir: str | None = None  # for cache files (e.g., model context windows)
     soul_delay: float = DEFAULT_SOUL_DELAY_SECONDS  # seconds idle before soul whispers; large value = effectively off
     language: str = "en"  # legacy language field retained for compatibility; prompt.py no longer injects prose from it

@@ -864,3 +864,79 @@ def test_deepseek_wire_api_responses_allowed():
     data["manifest"]["llm"]["base_url"] = "https://api.deepseek.com"
     data["manifest"]["llm"]["wire_api"] = "responses"
     validate_init(data)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# DeepSeek configured-effort contract (issue #1197): per-wire vocabulary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["none", "low", "high", "max"])
+def test_llm_thinking_valid_for_deepseek_chat(value):
+    """Chat Completions takes DeepSeek's canonical four (mode + effort)."""
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {"provider": "deepseek", "model": "deepseek-v4-pro", "thinking": value}
+    )
+
+    validate_init(data)
+
+
+@pytest.mark.parametrize("value", ["minimal", "medium", "xhigh", "default", "High", "ultra", 1, None])
+def test_llm_thinking_invalid_for_deepseek_chat(value):
+    """Chat aliases are rejected, not silently normalized to low."""
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {"provider": "deepseek", "model": "deepseek-v4-pro", "thinking": value}
+    )
+
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize(
+    "value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+)
+def test_llm_thinking_valid_for_deepseek_responses_flash(value):
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "wire_api": "responses",
+            "thinking": value,
+        }
+    )
+
+    validate_init(data)
+
+
+def test_llm_thinking_rejects_deepseek_responses_on_pro():
+    """Responses is Flash-only upstream today — reject the combination."""
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "wire_api": "responses",
+            "thinking": "high",
+        }
+    )
+
+    with pytest.raises(ValueError, match="deepseek-v4-flash"):
+        validate_init(data)
+
+
+def test_llm_thinking_deepseek_chat_error_names_provider_and_wire():
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {"provider": "deepseek", "model": "deepseek-v4-pro", "thinking": "xhigh"}
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_init(data)
+
+    message = str(exc_info.value)
+    assert "deepseek" in message
+    assert "chat_completions" in message
+    assert "none, low, high, max" in message

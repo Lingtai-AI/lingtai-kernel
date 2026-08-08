@@ -21,6 +21,10 @@ from .config import (
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,  # back-compat alias for the above
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
+    DEEPSEEK_THINKING_PROVIDERS,
+    THINKING_DEFAULT_SENTINEL,
+    deepseek_reasoning_log_fields,
+    thinking_omitted,
 )
 from .llm import (
     ChatSession,
@@ -173,6 +177,10 @@ class SessionManager:
         # Persistent LLM session
         self._chat: ChatSession | None = None
         self._interaction_id: str | None = None
+        # Provider-neutral reasoning observability, frozen when the chat is
+        # constructed/rebuilt and stamped onto every llm_call. Empty for
+        # providers that have no configured-effort contract yet.
+        self._reasoning_log_fields: dict[str, str] = {}
 
         # Token tracking
         self._total_input_tokens = 0
@@ -286,14 +294,52 @@ class SessionManager:
     # LLM communication
     # ------------------------------------------------------------------
 
+    def _resolve_session_thinking(self) -> str:
+        """Resolve the thinking value frozen into a chat at construction time.
+
+        Provider-aware only for DeepSeek: a constructor-omitted
+        ``AgentConfig.thinking`` must reach the DeepSeek adapter as the
+        ``"default"`` sentinel so NO mode/effort field goes on the wire and the
+        documented upstream default (enabled/high) applies. Promoting it to the
+        legacy ``"high"`` would send an explicit flat effort that merely
+        happens to match (issue #1197). An explicit DeepSeek value passes
+        through verbatim — the adapter validates it per wire.
+
+        Every other provider keeps the legacy ``or "high"`` behavior verbatim.
+        """
+        provider = str(
+            self._config.provider or getattr(self._llm_service, "provider", "") or ""
+        ).lower()
+        if provider in DEEPSEEK_THINKING_PROVIDERS:
+            if thinking_omitted(self._config.thinking) or not self._config.thinking:
+                return THINKING_DEFAULT_SENTINEL
+            return self._config.thinking
+        return self._config.thinking or "high"
+
+    def _capture_reasoning_log_fields(self, thinking: str) -> None:
+        """Freeze provider-neutral reasoning observability for ``llm_call``.
+
+        Derived only from the construction-time thinking value and the
+        provider — never a credential, session id, prompt, or request body.
+        """
+        provider = str(
+            self._config.provider or getattr(self._llm_service, "provider", "") or ""
+        ).lower()
+        if provider in DEEPSEEK_THINKING_PROVIDERS:
+            self._reasoning_log_fields = deepseek_reasoning_log_fields(thinking)
+        else:
+            self._reasoning_log_fields = {}
+
     def ensure_session(self) -> ChatSession:
         """Ensure a persistent LLM session exists, creating one if needed."""
         if self._chat is None:
+            thinking = self._resolve_session_thinking()
+            self._capture_reasoning_log_fields(thinking)
             self._chat = self._llm_service.create_session(
                 system_prompt=self._build_system_prompt_fn(),
                 tools=self._build_tool_schemas_fn() or None,
                 model=self._config.model or self._llm_service.model,
-                thinking=self._config.thinking or "high",
+                thinking=thinking,
                 agent_type=self._display_name,
                 tracked=True,
                 interaction_id=self._interaction_id,
@@ -306,11 +352,13 @@ class SessionManager:
         self, interface: "ChatInterface", tracked: bool = True,
     ) -> None:
         """Create a new chat session with current config, preserving history."""
+        thinking = self._resolve_session_thinking()
+        self._capture_reasoning_log_fields(thinking)
         self._chat = self._llm_service.create_session(
             system_prompt=self._build_system_prompt_fn(),
             tools=self._build_tool_schemas_fn() or None,
             model=self._config.model or self._llm_service.model,
-            thinking=self._config.thinking or "high",
+            thinking=thinking,
             agent_type=self._display_name,
             tracked=tracked,
             provider=self._config.provider,
@@ -397,6 +445,10 @@ class SessionManager:
             "model": self._config.model or self._llm_service.model or "unknown",
             "api_call_id": api_call_id,
         }
+        # Mechanically exact: these come from the session's frozen construction
+        # value, not from the current config, so they cannot drift from what
+        # the provider actually received.
+        llm_call_fields.update(self._reasoning_log_fields)
         self._log("llm_call", **llm_call_fields)
 
         retry_timeout = self._config.retry_timeout
