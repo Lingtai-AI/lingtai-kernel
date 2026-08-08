@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from lingtai.mcp_servers.telegram.account import TelegramAccount
-from lingtai.mcp_servers.telegram.manager import TelegramManager
+from lingtai.mcp_servers.telegram.manager import SCHEMA, TelegramManager
 from lingtai.mcp_servers.telegram.render import (
     build_rich_message,
     plain_text_preview,
@@ -134,6 +134,17 @@ def _manager(tmp_path: Path) -> tuple[TelegramManager, _Account]:
         notification_store=FakeNotificationStore(),
     )
     return manager, account
+
+
+def test_public_schema_exposes_rich_message_without_requiring_text():
+    send = next(
+        branch
+        for branch in SCHEMA["properties"]["input"]["anyOf"]
+        if branch.get("title") == "send input"
+    )
+    assert "structured_message" in send["properties"]
+    assert "rich" in send["properties"]["rendering_mode"]["enum"]
+    assert {"required": ["structured_message"]} in send["anyOf"]
 
 
 def test_builder_uses_native_blocks_and_semantic_emphasis():

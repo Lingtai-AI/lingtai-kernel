@@ -4,12 +4,13 @@ description: |
   Progressive-disclosure usage manual for the Telegram MCP tool. Read this when
   you need detail beyond the one-line action descriptions: media.type='document'
   vs 'photo' for charts/reports/generated artifacts, placeholder/live-status
-  messages, reply vs send, read/check/search, rendering_mode/entities, chat_action, dynamic slash commands,
+  messages, reply vs send, read/check/search, rendering_mode/entities/native rich
+  messages, chat_action, dynamic slash commands,
   the programmable Task Card (task_card tool) — including task-specific watcher
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
-version: 1.5.8
-last_changed_at: 2026-08-03T00:00:00Z
+version: 1.6.0
+last_changed_at: 2026-08-08T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/task_card/event_projection.py
@@ -17,12 +18,15 @@ related_files:
 - src/lingtai/mcp_servers/local_commands/ANATOMY.md
 - src/lingtai/mcp_servers/local_commands/core.py
 - src/lingtai/mcp_servers/telegram/manager.py
+- src/lingtai/mcp_servers/telegram/account.py
+- src/lingtai/mcp_servers/telegram/render.py
 - src/lingtai/mcp_servers/telegram/server.py
 - src/lingtai/mcp_servers/telegram/_family.py
 - src/lingtai/mcp_servers/telegram/task_card/_family.py
 - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
 - src/lingtai/mcp_servers/telegram/reference/rate-limits/SKILL.md
+- tests/test_telegram_structured_rendering.py
 maintenance: |
   Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
@@ -130,13 +134,28 @@ setup readiness checklist are **not** here — they belong to `mcp-manual`
 
 - Every content-bearing `send`, `reply`, and `edit` must include
   `rendering_mode`; there is no default. Choose exactly one of `plain_text`,
-  `HTML`, `Markdown`, `MarkdownV2`, or `entities`.
+  `HTML`, `Markdown`, `MarkdownV2`, `entities`, or `rich`.
 - `plain_text` maps to an omitted Bot API `parse_mode`; the other three named
   formats map to Telegram `parse_mode`. The agent must still provide the label
   even when no formatting is wanted.
 - `entities` selects explicit `MessageEntity[]` formatting. Pass `entities` for
   message text or `caption_entities` for media captions; do not combine entity
   fields with a parse-mode rendering choice.
+- `rich` sends a native Telegram Rich Message. Pass `structured_message`
+  instead of `text` or `media`; its semantic fields are `title`, optional
+  `summary`, `facts` (`label`/`value`), `bullets`, ordered `steps`, `code`
+  (`text` plus optional `language`), `next` (`label`/`text`), and `footer`.
+  The renderer maps those fields to native heading, paragraph, list,
+  preformatted, divider, and footer blocks. Rich messages can also be used by
+  `reply` and to edit a text/rich message, but not to edit a media caption.
+- Rich-message expression is agent-directed, not a fixed decoration template.
+  Use emoji as semantic signposts wherever they genuinely improve scanning —
+  for example in a title, field label, or an occasional bullet. There is no
+  hard count or title-only rule. Let message density and meaning decide; avoid
+  repeating decorative emoji that add no information. Use facts for compact
+  label/value emphasis, bullets for parallel ideas, and steps only for ordered
+  actions. Ordinary conversational prose should remain ordinary text rather
+  than being forced into a card.
 - For `send` with only `chat_action` and no text/media, use `plain_text` because
   no message body is rendered. `rendering_mode` is still required by the strict
   public branch.

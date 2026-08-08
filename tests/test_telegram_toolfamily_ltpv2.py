@@ -73,11 +73,12 @@ def test_telegram_send_requires_rendering_mode_before_manager_io():
 def test_telegram_send_schema_requires_rendering_mode_and_preserves_content_alternatives():
     send = _branches(TELEGRAM_SCHEMA)["send"]
     assert "rendering_mode" in send["required"]
-    assert send["properties"]["rendering_mode"]["enum"] == ["plain_text", "HTML", "MarkdownV2", "Markdown", "entities"]
-    assert send["anyOf"] == [{"required": ["text"]}, {"required": ["media"]}, {"required": ["chat_action"]}]
+    assert send["properties"]["rendering_mode"]["enum"] == ["plain_text", "HTML", "MarkdownV2", "Markdown", "entities", "rich"]
+    assert send["anyOf"] == [{"required": ["text"]}, {"required": ["media"]}, {"required": ["chat_action"]}, {"required": ["structured_message"]}]
     assert _basic_validate({"chat_id": 3, "rendering_mode": "plain_text", "text": "hello"}, send)
     assert _basic_validate({"chat_id": 3, "rendering_mode": "plain_text", "media": {"type": "photo", "path": "x"}}, send)
     assert _basic_validate({"chat_id": 3, "rendering_mode": "plain_text", "chat_action": "typing"}, send)
+    assert _basic_validate({"chat_id": 3, "rendering_mode": "rich", "structured_message": {"title": "✅ Done"}}, send)
     assert not _basic_validate({"chat_id": 3, "text": "hello"}, send)
     assert not _basic_validate({"chat_id": 3, "rendering_mode": "plain_text"}, send)
     assert not _basic_validate({"text": "missing chat", "rendering_mode": "plain_text"}, send)

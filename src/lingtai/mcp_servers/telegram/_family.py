@@ -25,7 +25,7 @@ _ACTIONS = (
     "contacts", "add_contact", "remove_contact", "accounts", "manual",
 )
 
-_RENDERING_MODES = ("plain_text", "HTML", "MarkdownV2", "Markdown", "entities")
+_RENDERING_MODES = ("plain_text", "HTML", "MarkdownV2", "Markdown", "entities", "rich")
 
 
 def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
@@ -71,6 +71,29 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
         },
         required=["type", "path"],
     )
+    fact = _object(
+        {"label": {"type": "string"}, "value": {"type": "string"}},
+        required=["label", "value"],
+    )
+    structured_message = _object(
+        {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "facts": {"type": "array", "items": fact},
+            "bullets": {"type": "array", "items": {"type": "string"}},
+            "steps": {"type": "array", "items": {"type": "string"}},
+            "code": _object(
+                {"text": {"type": "string"}, "language": {"type": "string"}},
+                required=["text"],
+            ),
+            "next": _object(
+                {"label": {"type": "string"}, "text": {"type": "string"}},
+                required=["label", "text"],
+            ),
+            "footer": {"type": "string"},
+        },
+        required=["title"],
+    )
     send = _object(
         {
             "account": _nullable({"type": "string"}),
@@ -88,11 +111,12 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             },
             "entities": _nullable({"type": "array"}),
             "caption_entities": _nullable({"type": "array"}),
-            "structured_blocks": _nullable({
-                "type": "array",
+            "structured_message": _nullable({
+                **structured_message,
                 "description": (
-                    "System-generated structured content rendered deterministically "
-                    "into escaped Telegram HTML."
+                    "System-generated semantic content sent as native Telegram Rich "
+                    "Message blocks. Agent-authored emoji are preserved wherever they "
+                    "improve scanning; use rendering_mode='rich' and omit text/media."
                 ),
             }),
             "link_preview_options": _nullable({"type": "object"}),
@@ -103,6 +127,7 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             {"required": ["text"]},
             {"required": ["media"]},
             {"required": ["chat_action"]},
+            {"required": ["structured_message"]},
         ],
     )
     send["properties"]["media"]["description"] = (
@@ -115,9 +140,9 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
     )
     send["properties"]["rendering_mode"]["description"] = (
         "Required rendering choice for every send. Choose plain_text for unformatted "
-        "text or chat actions, HTML/Markdown/MarkdownV2 for Telegram parse_mode, or "
-        "entities when supplying MessageEntity data. There is no default; do not "
-        "combine entities with a parse-mode choice."
+        "text or chat actions, HTML/Markdown/MarkdownV2 for Telegram parse_mode, "
+        "entities when supplying MessageEntity data, or rich for a native structured "
+        "message. There is no default; do not combine the modes."
     )
     send["properties"]["entities"]["anyOf"][0]["description"] = (
         "Telegram MessageEntity[] for rendering_mode='entities' on message text."
@@ -150,16 +175,14 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
                     "type": "string", "enum": list(_RENDERING_MODES),
                     "description": (
                         "Required rendering choice: plain_text, HTML, Markdown, "
-                        "MarkdownV2, or entities. There is no default."
+                        "MarkdownV2, entities, or rich. There is no default."
                     ),
                 },
                 "entities": _nullable({"type": "array"}),
-                "structured_blocks": _nullable({
-                    "type": "array",
-                    "description": "System-generated blocks rendered as escaped Telegram HTML.",
-                }),
+                "structured_message": _nullable(structured_message),
             },
-            required=["message_id", "text", "rendering_mode"],
+            required=["message_id", "rendering_mode"],
+            any_of=[{"required": ["text"]}, {"required": ["structured_message"]}],
         ),
         "search": _object(
             {
@@ -179,16 +202,14 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
                     "type": "string", "enum": list(_RENDERING_MODES),
                     "description": (
                         "Required rendering choice: plain_text, HTML, Markdown, "
-                        "MarkdownV2, or entities. There is no default."
+                        "MarkdownV2, entities, or rich. There is no default."
                     ),
                 },
                 "entities": _nullable({"type": "array"}),
-                "structured_blocks": _nullable({
-                    "type": "array",
-                    "description": "System-generated blocks rendered as escaped Telegram HTML.",
-                }),
+                "structured_message": _nullable(structured_message),
             },
-            required=["message_id", "text", "rendering_mode"],
+            required=["message_id", "rendering_mode"],
+            any_of=[{"required": ["text"]}, {"required": ["structured_message"]}],
         ),
         "contacts": _object({"account": _nullable({"type": "string"})}),
         "add_contact": _object(
@@ -237,7 +258,7 @@ def telegram_schema() -> dict[str, Any]:
     schema["properties"]["action"]["description"] = (
         "Telegram action. Each action owns a strict input branch. Content-bearing "
         "send/reply/edit calls must provide rendering_mode explicitly: plain_text, "
-        "HTML, Markdown, MarkdownV2, or entities; there is no default. For charts, "
+        "HTML, Markdown, MarkdownV2, entities, or rich; there is no default. For charts, "
         "reports, generated artifacts, and other files the user should open intact, "
         "prefer media.type='document'; use media.type='photo' only for an inline "
         "preview because photo previews may crop or compress text-heavy graphics. "
