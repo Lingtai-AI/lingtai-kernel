@@ -29,6 +29,63 @@ from lingtai.kernel.logging import get_logger
 logger = get_logger()
 
 _JSON_PARSE_FAILED = object()
+_HOST_PRIVATE_TOOL_ARGUMENTS = frozenset({"_reasoning"})
+_LTP_V2_FAMILY_ROOT_FIELDS = frozenset(
+    {"action", "input", "reasoning", "summarize"}
+)
+_LTP_V2_FAMILY_REQUIRED_FIELDS = frozenset({"action", "input", "reasoning"})
+
+
+def is_strict_ltp_v2_family_schema(schema: Any) -> bool:
+    """Recognize the canonical closed root used by native MCP ToolFamilies."""
+    if not isinstance(schema, dict):
+        return False
+    properties = schema.get("properties")
+    required = schema.get("required")
+    return (
+        schema.get("type") == "object"
+        and schema.get("additionalProperties") is False
+        and isinstance(properties, dict)
+        and set(properties) == _LTP_V2_FAMILY_ROOT_FIELDS
+        and isinstance(required, list)
+        and set(required) == _LTP_V2_FAMILY_REQUIRED_FIELDS
+        and isinstance(properties.get("reasoning"), dict)
+        and properties["reasoning"].get("type") == "string"
+    )
+
+
+def prepare_mcp_tool_arguments(
+    arguments: dict[str, Any] | None,
+    input_schema: Any,
+) -> dict[str, Any]:
+    """Adapt host-private arguments to one MCP server's advertised schema.
+
+    ``ToolExecutor`` retains model rationale under ``_reasoning`` for kernel
+    logging. That private key must not cross the MCP boundary unless the server
+    explicitly declares it. Native strict LTP-v2 ToolFamilies are the existing
+    exception: their closed public envelope requires ``reasoning``, so restore
+    that key before dispatch. Other unknown arguments are intentionally left
+    untouched for server-side schema validation.
+
+    A fresh dictionary is always returned so adapter normalization cannot
+    mutate the ToolCall or a caller-owned argument mapping.
+    """
+    prepared = dict(arguments or {})
+    if "_reasoning" not in prepared:
+        return prepared
+
+    if is_strict_ltp_v2_family_schema(input_schema):
+        reasoning = prepared.pop("_reasoning")
+        prepared.setdefault("reasoning", reasoning)
+        return prepared
+
+    properties = (
+        input_schema.get("properties") if isinstance(input_schema, dict) else None
+    )
+    declared = properties if isinstance(properties, dict) else {}
+    for field in _HOST_PRIVATE_TOOL_ARGUMENTS - declared.keys():
+        prepared.pop(field, None)
+    return prepared
 
 
 def _first_text_content(result: Any) -> str | None:

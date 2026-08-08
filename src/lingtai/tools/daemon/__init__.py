@@ -2058,16 +2058,21 @@ class DaemonManager:
                     tool_name = tool["name"]
                     if tool_name in schemas:
                         raise ValueError(f"duplicate MCP tool name: {tool_name}")
-                    schema = dict(tool.get("schema", {}) or {})
-                    # Intentional normalization, matching the agent adapter.
+                    server_schema = tool.get("schema", {}) or {}
+                    schema = dict(server_schema)
+                    # Existing task FunctionSchema normalization; the original
+                    # server schema remains the argument-boundary authority.
                     schema.pop("additionalProperties", None)
                     # Captured pre-normalization, deep-copied by the service
                     # helper so the sidecar never aliases the client's record.
                     metadata[tool_name] = mcp_service.tool_metadata(tool)
 
-                    def _make_handler(c, tn: str):
+                    def _make_handler(c, tn: str, input_schema):
                         def handler(tool_args: dict) -> dict:
-                            return c.call_tool(tn, tool_args)
+                            prepared = mcp_service.prepare_mcp_tool_arguments(
+                                tool_args, input_schema
+                            )
+                            return c.call_tool(tn, prepared)
                         return handler
 
                     schemas[tool_name] = FunctionSchema(
@@ -2075,7 +2080,9 @@ class DaemonManager:
                         description=tool.get("description", ""),
                         parameters=schema,
                     )
-                    handlers[tool_name] = _make_handler(client, tool_name)
+                    handlers[tool_name] = _make_handler(
+                        client, tool_name, server_schema
+                    )
         except Exception:
             self._close_task_mcp_clients(clients)
             # Publish nothing for a surface that never came up.

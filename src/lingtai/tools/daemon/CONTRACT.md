@@ -8,7 +8,7 @@ description: >
   terminal notifications, and compaction boundaries.
 status: active
 contract_version: 8
-last_changed_at: "2026-07-27"
+last_changed_at: "2026-08-08"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
@@ -20,6 +20,7 @@ related_files:
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/services/mcp.py
   - src/lingtai/kernel/llm/base.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/llm/service.py
@@ -53,11 +54,13 @@ related_files:
   - tests/test_daemon_windows_lock.py
   - tests/test_daemon_windows_process_port.py
   - tests/test_daemon_windows_supervisor.py
+  - tests/test_mcp_v2_adapter_metadata.py
 review_triggers:
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py
   - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/kernel/meta_block.py
+  - src/lingtai/services/mcp.py
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/ANATOMY.md
@@ -72,6 +75,7 @@ review_triggers:
   - tests/test_daemon_run_dir.py
   - tests/test_daemon_codex_usage.py
   - tests/test_codex_standalone_compaction.py
+  - tests/test_mcp_v2_adapter_metadata.py
 maintenance: |
   Keep this unified daemon Contract in the same maintenance graph as the daemon
   ANATOMY.md and manual files listed under related_files. If behavior and this
@@ -290,6 +294,13 @@ registrations as actual tools only when its daemon runner has a verified
 run-scoped native MCP config or client path. The LingTai backend starts
 task-scoped MCP clients directly. CLI backends must not claim native MCP
 availability from the prompt catalog alone.
+
+The LingTai task-scoped client copies provider-bound arguments and applies the
+server's original advertised input schema only to kernel-owned private fields.
+It removes `_reasoning` when the server does not declare it, preserves it when
+explicitly declared, and restores public `reasoning` for the exact strict
+LTP-v2 family schema. Other unknown business fields pass through so the server
+remains authoritative for closed-schema validation.
 
 ### 3. daemon_common is the completion capability for MCP-capable backends
 
@@ -718,6 +729,9 @@ change must prove all applicable items:
 5. Native MCP config includes parent registrations only for transports and
    backends with a verified run-scoped loader; unsupported transports are
    omitted or reported honestly.
+   LingTai task-scoped calls additionally prove that undeclared host-private
+   arguments do not cross the provider boundary, without filtering unknown
+   business arguments or weakening strict LTP-v2 restoration.
 6. `daemon_common` is available for MCP-capable daemon backends, and terminal
    success is gated by valid `finish(status="done")`.
 7. Unsupported backends remain documented as prompt-catalog-only or fail
@@ -764,6 +778,7 @@ Re-check this contract when touching:
 | Token rows are written to both the daemon and parent ledgers, tagged | `src/lingtai/tools/daemon/run_dir.py` | `tests/test_daemon_run_dir.py::test_append_tokens_writes_daemon_ledger`, `::test_append_tokens_writes_parent_ledger_tagged` |
 | `context_token_limit` is validated, reaches Codex and native `mimo`, and is inert for every other provider and every external CLI backend | `src/lingtai/tools/daemon/__init__.py` | `tests/test_codex_standalone_compaction.py`, `tests/test_mimo_responses_compaction.py` |
 | LingTai daemon tool results carry daemon-local `_meta.agent_meta`, omit parent notifications/guidance, and carry the exact warning only while current usage is >=90% | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_agent_meta_is_local_and_warning_tracks_current_usage` |
+| LingTai task-scoped MCP calls remove server-undeclared `_reasoning`, retain ordinary unknown business fields, and preserve strict LTP-v2 restoration | `src/lingtai/services/mcp.py`, `src/lingtai/tools/daemon/__init__.py` | `tests/test_mcp_v2_adapter_metadata.py::test_task_daemon_adapts_host_private_arguments_at_mcp_boundary` |
 | `_DaemonMetaState.snapshot` carries `agent_state.context.system_prompt` only while this daemon's own local rendered prompt is strictly above the effective `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` threshold (default 40%) of its own resolved window, never the parent's | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_meta_state_system_prompt_warning_is_local_not_parent` |
 | `compact.action` is required; `manual` is read-only, omission is refused, and explicit `run` resets with fresh post-compact metadata | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_compact_schema_requires_explicit_run_or_manual_action`, `::test_compact_missing_action_is_refused_without_reset`, `::test_compact_success_prunes_to_system_call_and_result` |
 | `reclaim` cancels running emanations; agent stop shuts the daemon down first | `src/lingtai/tools/daemon/__init__.py` | `tests/test_lifecycle_daemon_shutdown.py::test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock` |
@@ -779,6 +794,7 @@ Re-check this contract when touching:
 | Reclaim kills every tracked CLI proc; each run's own detached supervisor kills only its own exact child on timeout | `tests/test_daemon_cli_watchdog_scope.py`, `tests/test_lifecycle_daemon_shutdown.py` | Emanate two runs, reclaim, confirm both are killed; let one run time out and confirm only its own child dies | Reclaim misses a tracked proc, or one run's timeout kills an unrelated run's child |
 | Dual-ledger token accounting stays correct | `tests/test_daemon_run_dir.py::test_append_tokens_writes_parent_ledger_tagged` | Inspect both token_ledger.jsonl files after a run | Daemon spend double-counted or lost in totals |
 | `context_token_limit` stays Codex/native-mimo-only and inert everywhere else; native `mimo` compaction failure is a HARD failure | `tests/test_codex_standalone_compaction.py`, `tests/test_mimo_responses_compaction.py` | Emanate a `backend='lingtai'` Codex task with an explicit `context_token_limit`, then repeat with native `mimo` | A bad value silently breaks unrelated providers/backends or swallows a hard MiMo failure |
+| Task-scoped MCP host-private argument isolation preserves server schema authority | `tests/test_mcp_v2_adapter_metadata.py::test_task_daemon_adapts_host_private_arguments_at_mcp_boundary` | Mount a closed-schema MCP tool, invoke it with model reasoning, and inspect provider-bound arguments | Kernel rationale leaks to providers or business schema errors are silently masked |
 
 Run before merging daemon tool-surface changes:
 
