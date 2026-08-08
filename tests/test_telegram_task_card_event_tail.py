@@ -438,7 +438,7 @@ def test_only_safe_bounded_fields_are_projected(tmp_path):
     window = manager._task_card_event_window()
     assert len(window) == 1
     row = window[0]
-    assert set(row.keys()) <= {"tool", "tool_action", "reasoning", "started_at", "status"}
+    assert set(row.keys()) <= {"tool", "tool_action", "reasoning", "started_at", "status", "api_delay_s"}
     assert row["tool"] == "bash"
     assert row["tool_action"] == "run"
     assert row["reasoning"] == "safe text"
@@ -459,7 +459,7 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
 
     _write_lines(path, [_tool_call_line(tool_name="read", action="read", call_id="c1")])
     manager._poll_event_tail()
-    assert "(0s, ???)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "(0.0s api, 0ms, ???)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
 
     _write_lines(path, [json.dumps({
         "type": "tool_result", "tool_call_id": "c1", "status": "ok",
@@ -467,7 +467,7 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
     })])
     manager._poll_event_tail()
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    assert "(2s, success)" in rendered
+    assert "(0.0s api, 2300ms, success)" in rendered
     assert "RESULT_SECRET" not in rendered
 
     _write_lines(path, [
@@ -478,7 +478,58 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
         }),
     ])
     manager._poll_event_tail()
-    assert "(0s, error)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "(0.0s api, 400ms, error)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+
+
+def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
+    """CHANGE A: the second tool call row carries ``api_delay_s`` equal to the
+    ts gap since the previous tool call, and the render shows it distinctly
+    from the tool-result elapsed (``3.4s api``)."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [
+        _tool_call_line(tool_name="first", call_id="c1", ts=100.0),
+        _tool_call_line(tool_name="second", call_id="c2", ts=103.4),
+    ])
+
+    manager._poll_event_tail()
+
+    window = manager._task_card_event_window()
+    assert [row["tool"] for row in window] == ["first", "second"]
+    # First tool call of the stream has no prior progress: 0.0 baseline.
+    assert window[0]["api_delay_s"] == 0.0
+    # Second tool call: exact ts delta.
+    assert window[1]["api_delay_s"] == 3.4
+    # The raw ts stays private and never leaks into the public window.
+    assert all("_ts" not in row for row in window)
+
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    second_line = next(ln for ln in rendered.splitlines() if "second" in ln)
+    assert "3.4s api" in second_line
+    assert "0.0s api" not in second_line
+
+
+def test_sub_second_tool_elapsed_renders_milliseconds_not_zero_seconds(tmp_path):
+    """CHANGE B: a 412ms tool result renders ``412ms``, never the useless ``0s``."""
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+
+    _write_lines(path, [_tool_call_line(tool_name="fast", call_id="c1")])
+    manager._poll_event_tail()
+    _write_lines(path, [json.dumps({
+        "type": "tool_result", "tool_call_id": "c1", "status": "ok",
+        "elapsed_ms": 412, "result": "RESULT_SECRET",
+    })])
+    manager._poll_event_tail()
+
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "(0.0s api, 412ms, success)" in rendered
+    assert "RESULT_SECRET" not in rendered
 
 
 def test_tool_call_action_is_rendered_as_tool_action():

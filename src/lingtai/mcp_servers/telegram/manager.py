@@ -3387,7 +3387,8 @@ class TelegramManager:
         When ``rows`` is supplied (the batched multi-row form) each parallel or
         sequential call renders as its own row showing ``tool.action``, its
         redacted reasoning excerpt, its own captured start stamp, its own
-        whole-second elapsed, and a ``✓`` marker once it has completed.  The
+        millisecond elapsed (plus the LLM API round-trip gap since the previous
+        progress event), and a ``✓`` marker once it has completed.  The
         scalar ``tool``/``action``/``reasoning`` path is retained for
         backward-compatible single-tool callers and does not render the footer
         (it is the legacy transient-step form).

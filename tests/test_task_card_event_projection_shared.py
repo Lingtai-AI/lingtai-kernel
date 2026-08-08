@@ -128,7 +128,7 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         "📋 ACTIVITIES\n"
         "──────────\n"
         "• public response\n"
-        "• bash.run: build (0s, ???) · 12:00:00 UTC+00\n"
+        "• bash.run: build (0ms, ???) · 12:00:00 UTC+00\n"
         "\n"
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
         "/taskcard N sets normal rows (1-10, current: 1).\n"
@@ -160,3 +160,48 @@ def test_metadata_omits_device_line_when_only_bad_values() -> None:
     lines = TaskCardEventProjection.format_metadata(metadata)
     assert not any("device · " in line for line in lines)
     assert not any("path · " in line for line in lines)
+
+
+def test_group_events_sets_api_delay_s_delta_from_previous_tool_ts() -> None:
+    """CHANGE A: tool rows carry ``api_delay_s`` = ts gap since the previous
+    tool_call (0.0 for the very first), and the private raw ``_ts`` never leaks
+    into the flattened public window."""
+    events = [
+        {"type": "tool_call", "api_call_id": "api-1", "ts": 100.0,
+         "tool_name": "bash", "tool_call_id": "call-1",
+         "tool_args": {"action": "run", "_reasoning": "a"}},
+        {"type": "tool_call", "api_call_id": "api-1", "ts": 103.4,
+         "tool_name": "read", "tool_call_id": "call-2",
+         "tool_args": {"action": "read", "_reasoning": "b"}},
+    ]
+    projected = [
+        (event, TaskCardEventProjection.project_event(event)) for event in events
+    ]
+    groups = TaskCardEventProjection.group_events(projected)
+    rows = TaskCardEventProjection.flatten_groups(groups)
+    assert [row["api_delay_s"] for row in rows] == [0.0, 3.4]
+    assert all("_ts" not in row for row in rows)
+    assert all("api_delay_s" in row for row in rows)
+
+
+def test_format_elapsed_ms_renders_milliseconds_defensively() -> None:
+    """CHANGE B: sub-second durations render as whole ms (``412ms``), with a
+    sane floor/ceiling and no crash on junk payloads."""
+    assert TaskCardEventProjection.format_elapsed_ms(412) == "412ms"
+    assert TaskCardEventProjection.format_elapsed_ms(0) == "0ms"
+    assert TaskCardEventProjection.format_elapsed_ms(2300) == "2300ms"
+    # A legacy elapsed_s value converts to ms through row_elapsed_ms.
+    assert TaskCardEventProjection.row_elapsed_ms({"elapsed_s": 0.412}) == 412.0
+    assert TaskCardEventProjection.format_elapsed_ms(
+        TaskCardEventProjection.row_elapsed_ms({"elapsed_s": 0.412})
+    ) == "412ms"
+    # raw elapsed_ms wins over the converted elapsed_s.
+    row = {"elapsed_ms": 412, "elapsed_s": 2.3}
+    assert TaskCardEventProjection.row_elapsed_ms(row) == 412.0
+    # Defensive: junk, negatives, non-finite, and runaway values degrade safely.
+    assert TaskCardEventProjection.format_elapsed_ms("junk") == "0ms"
+    assert TaskCardEventProjection.format_elapsed_ms(-5) == "0ms"
+    assert TaskCardEventProjection.format_elapsed_ms(float("nan")) == "0ms"
+    assert TaskCardEventProjection.format_elapsed_ms(10**12) == (
+        f"{TaskCardEventProjection.MAX_ELAPSED_MS}ms"
+    )

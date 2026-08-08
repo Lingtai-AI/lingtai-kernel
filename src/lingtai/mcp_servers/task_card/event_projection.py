@@ -31,6 +31,7 @@ class TaskCardEventProjection:
     EVENT_REASONING_CAP = 300
     EVENT_TEXT_CAP = 500
     MAX_EVENTS_PER_CALL = 24
+    MAX_ELAPSED_MS = 9_999_999
     API_CALL_DIVIDER = "──────────"
 
     @classmethod
@@ -118,6 +119,14 @@ class TaskCardEventProjection:
         started_at = cls.format_row_timestamp(event.get("ts"))
         if started_at:
             row["started_at"] = started_at
+        raw_ts = event.get("ts")
+        if type(raw_ts) in (int, float) and not isinstance(raw_ts, bool):
+            try:
+                ts = float(raw_ts)
+            except (OverflowError, ValueError):
+                ts = None
+            if ts is not None and math.isfinite(ts):
+                row["_ts"] = ts
         return row
 
     @classmethod
@@ -159,6 +168,7 @@ class TaskCardEventProjection:
             if max_events_per_call is None
             else max_events_per_call
         )
+        last_tool_ts: float | None = None
         for index, (event, row) in enumerate(projected):
             group_id = cls.event_group_id(event, index)
             group = by_id.get(group_id)
@@ -167,6 +177,19 @@ class TaskCardEventProjection:
                 by_id[group_id] = group
                 groups.append(group)
             events = group["events"]
+            # The LLM API round trip Jason watches as ``active (N sec)`` is the
+            # gap between consecutive progress events: the previous tool_call's
+            # own ``ts`` (stream order, so a group's first row still sees the
+            # previous group's last tool call; only the very first tool row of
+            # the stream has no prior progress and reads 0.0).
+            raw_ts = row.get("_ts")
+            if type(raw_ts) in (int, float) and not isinstance(raw_ts, bool):
+                ts = float(raw_ts)
+                if last_tool_ts is None:
+                    row["api_delay_s"] = 0.0
+                else:
+                    row["api_delay_s"] = max(0.0, round(ts - last_tool_ts, 2))
+                last_tool_ts = ts
             if len(events) < limit:
                 events.append(row)
         count = cls.EVENT_WINDOW if window is None else window
@@ -188,6 +211,7 @@ class TaskCardEventProjection:
                 else:
                     row.pop("group_id", None)
                     row.pop("_tool_call_id", None)
+                    row.pop("_ts", None)
                 if row.get("kind") == "tool":
                     row.pop("kind", None)
                 rows.append(row)
@@ -259,6 +283,9 @@ class TaskCardEventProjection:
                 elapsed_ms = result.get("elapsed_ms")
                 if type(elapsed_ms) in (int, float) and elapsed_ms >= 0:
                     row["elapsed_s"] = elapsed_ms / 1000
+                    # Keep the raw ms so sub-second durations render exactly
+                    # (e.g. ``412ms``) instead of rounding to ``0s``.
+                    row["elapsed_ms"] = elapsed_ms
                 changed = True
         return changed
 
@@ -472,14 +499,29 @@ class TaskCardEventProjection:
             action = str(row.get("tool_action", ""))
             label = f"{tool}.{action}" if action else tool
             redacted = redact_text(str(row.get("reasoning", "")))
-            elapsed = cls.format_elapsed(row.get("elapsed_s", 0))
             done = bool(row.get("done", False))
             started_at = row.get("started_at", "")
             started_at = started_at if isinstance(started_at, str) else ""
             status = row.get("status")
             status = status if status in {"success", "error", "???"} else None
+            # Duration in whole milliseconds (sub-second tool results were
+            # useless as ``0s``); api_delay_s is the LLM round-trip gap since
+            # the previous progress event, rendered distinctly from the
+            # tool-result elapsed.
+            elapsed = cls.format_elapsed_ms(cls.row_elapsed_ms(row))
+            api_delay_s = row.get("api_delay_s")
+            if (
+                type(api_delay_s) in (int, float)
+                and not isinstance(api_delay_s, bool)
+                and api_delay_s >= 0
+            ):
+                api_part = f"{float(api_delay_s):.1f}s api, "
+            else:
+                api_part = ""
+            status_suffix = f", {status}" if status else ""
+            suffix = f" ({api_part}{elapsed}{status_suffix})"
             tool_prepared.append(
-                (idx, label, redacted, elapsed, done, started_at, status)
+                (idx, label, redacted, suffix, done, started_at, status)
             )
 
         metadata_lines = cls.format_metadata(metadata)
@@ -497,7 +539,7 @@ class TaskCardEventProjection:
             _,
             label,
             _redacted,
-            elapsed,
+            suffix,
             done,
             started_at,
             status,
@@ -505,13 +547,7 @@ class TaskCardEventProjection:
             marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
             stamp_suffix = f" · {started_at}" if started_at else ""
-            status_suffix = f", {status}" if status else ""
-            tool_scaffold += (
-                len(prefix)
-                + len(f" ({elapsed}s{status_suffix})")
-                + len(stamp_suffix)
-                + 2
-            )
+            tool_scaffold += len(prefix) + len(suffix) + len(stamp_suffix) + 2
         fixed = (
             len(cls.HEADER)
             + 1
@@ -529,7 +565,7 @@ class TaskCardEventProjection:
         per_row_cap = max(0, min(cls.REASONING_CAP, budget // divisor))
 
         by_idx: dict[int, str] = {}
-        for idx, label, redacted, elapsed, done, started_at, status in tool_prepared:
+        for idx, label, redacted, suffix, done, started_at, status in tool_prepared:
             excerpt = (
                 redacted[:per_row_cap] + "…"
                 if len(redacted) > per_row_cap
@@ -538,8 +574,7 @@ class TaskCardEventProjection:
             marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
             stamp_suffix = f" · {started_at}" if started_at else ""
-            status_suffix = f", {status}" if status else ""
-            by_idx[idx] = f"{prefix}{excerpt} ({elapsed}s{status_suffix}){stamp_suffix}"
+            by_idx[idx] = f"{prefix}{excerpt}{suffix}{stamp_suffix}"
         for idx, text in text_prepared:
             excerpt = text[:per_row_cap] + "…" if len(text) > per_row_cap else text
             by_idx[idx] = f"• {excerpt}"
@@ -618,3 +653,44 @@ class TaskCardEventProjection:
             return str(max(0, int(float(value))))
         except (TypeError, ValueError):
             return "0"
+
+    @staticmethod
+    def row_elapsed_ms(row: dict[str, Any]) -> float:
+        """Resolve a tool row's elapsed duration in whole milliseconds.
+
+        Prefers the raw ``elapsed_ms`` captured from the tool result so
+        sub-second durations are preserved exactly; falls back to converting
+        the legacy ``elapsed_s`` field. Missing/malformed values degrade to 0.
+        """
+        raw_ms = row.get("elapsed_ms")
+        if (
+            type(raw_ms) in (int, float)
+            and not isinstance(raw_ms, bool)
+            and raw_ms >= 0
+        ):
+            return float(raw_ms)
+        raw_s = row.get("elapsed_s")
+        if (
+            type(raw_s) in (int, float)
+            and not isinstance(raw_s, bool)
+            and raw_s >= 0
+        ):
+            return float(raw_s) * 1000
+        return 0.0
+
+    @classmethod
+    def format_elapsed_ms(cls, value: object) -> str:
+        """Render a tool row's elapsed duration as whole milliseconds (``412ms``).
+
+        The tool row suffix uses milliseconds so sub-second tool results stay
+        useful instead of rounding to ``0s``. Coerces defensively (floored,
+        junk/non-finite/negative degrade to ``0ms``) and caps the display at
+        ``MAX_ELAPSED_MS`` so a runaway timer cannot widen the row unboundedly.
+        """
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return "0ms"
+        if not math.isfinite(number) or number < 0:
+            return "0ms"
+        return f"{min(int(number), cls.MAX_ELAPSED_MS)}ms"

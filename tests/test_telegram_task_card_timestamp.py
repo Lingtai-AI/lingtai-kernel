@@ -137,7 +137,7 @@ def test_render_tool_row_without_started_at_is_safe():
          "elapsed_s": 1, "done": False},
     ], now=_NOW)
     assert "bash" in text
-    assert "(1s)" in text
+    assert "(1000ms)" in text
     row_line = next(ln for ln in text.splitlines() if ln.startswith(("•", "✓")))
     assert "UTC" not in row_line
     assert text.splitlines()[-1] == "Last Updated: 17:18:36 UTC-07"
