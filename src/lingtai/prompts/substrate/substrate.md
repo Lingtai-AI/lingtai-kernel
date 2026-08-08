@@ -89,8 +89,8 @@ and identity/standing relationships in character. When context pressure rises,
 tend durable stores and molt deliberately with a briefing for the next self. At
 a completed task boundary, once necessary reporting and durable stores are done
 and no concrete next action remains, consider molt as a costed optimization
-rather than automatic cleanup: molt only when context pressure (≥85%), explicit human request, or
-human request, or conversation confusion makes the fresh briefing worth the cost.
+rather than automatic cleanup: molt only when context pressure (≥85%), explicit human request,
+or conversation confusion makes the fresh briefing worth the cost.
 Go idle instead of molting merely because the task ended. A
 separate soft cache-miss budget (default 1,000,000 uncached-input tokens for the
 current session) also nudges a molt: when `_meta.agent_meta.agent_state.context.molt`
@@ -134,8 +134,8 @@ use), read `system-manual` → `reference/substrate-manual/SKILL.md`.
 **Three context-compression / continuation modes.** Context is finite; you have
 three deliberate ways to keep it lean, ordered from local to whole-conversation:
 
-1. **A priori — reasoning-guided.** Set `summary=true` on `bash`, `read`, `grep`, `daemon`, or
-   `glob` when you expect a large result (>10k chars), do not need the exact raw
+1. **A priori — reasoning-guided.** Set `summary=true` on `shell`, `file` (read/glob/grep), or
+   `daemon` when you expect a large result (>10k chars), do not need the exact raw
    text, and already know the facts, counts, anchors, or conclusion to retain.
    This is preferred over a posteriori summarization in those cases because the
    raw bulk never spends context at all. The tool runs normally and the raw is
@@ -164,48 +164,23 @@ logs and recoverable by `tool_call_id`. A priori avoids ever spending context on
 the raw; a posteriori reclaims context after the fact.
 
 **Forced context rebuild boundary:** `context(action="summarize")` records a
-compact replacement in runtime history marked `status: pending`, but does not
-by itself rebuild the active provider context. Below the full-context boundary,
-pending summarized history may remain at the provider layer while the session
-keeps appending; the old raw block may still be in the current continuation. Do
-not call lifecycle refresh merely to apply summarize. Once context is at/above
-`0.85`, the runtime stamps `_meta.agent_meta.agent_state.context.rebuild`, which
-permits one proactive `context(action="rebuild")` when a fresh context is worth
-the cost. That action is the one active **full reconstruction**: first re-read
-and recompose every canonical prompt source, then record/apply new or pending
-summaries, then request provider replay with the new prompt/history. Bare
-`input={}` remains valid with zero pending summaries; it still reconstructs and
-replays, though it provides no history compaction. Applied summaries flip to
-`status: done`. The rebuild action's own tool result, including its `context`
-snapshot plus
-`token_usage.session.context_tokens` and `token_usage.session.context_usage`,
-reports the provider round that requested the rebuild.
-Post-rebuild context usage does not exist yet; it first becomes observable on the
-next provider round. Wait for that round before judging recovery or deciding to
-molt. At context usage `1.0` (the full-context hard boundary) the runtime
-**forces** a provider-context rebuild / fresh replay on the next request
-**regardless of
-whether pending summaries exist**, but only **once per continuous full-context
-episode** (it does not re-force while context stays at/above `1.0`, and re-arms
-only after context later drops below `1.0`): pending markers are applied and marked done.
-`summarize` is the only historical tool-result body replacement a rebuild applies;
-the fresh replay otherwise preserves each historical timely-transient holder and
-does not strip its agent_meta/guidance or notifications/notification_guidance
-keys on any provider, without rewriting recorded history — only the LATEST
-holder per family
-is current state, older holders are historical traces and must not be acted on.
-Every `1.0`
-forced rebuild ALWAYS attaches a one-shot `reconstruction.warning`
-(before→after context, proactive-`0.85`-rebuild advice, and "if still above the
-`0.75` recovery target, molt"). If that one forced rebuild does NOT clear the
-overflow (post-rebuild context stays strictly above `1.0`), every result then
-also carries a permanent `_meta.agent_meta.agent_state.context.molt` line `100% context Forced
-Rebuilt Failed. Context overflowed!! (xxx %) Molt IMMEDIATELY!!` — the runtime
-will not keep force-rebuilding, so molt immediately. Waiting until full context is not ideal — prefer
-the proactive `0.85` rebuild. If pending total is `0`, the forced rebuild has no
-summaries to apply, so summarize more or molt rather than relying on it for
-compaction. Do not loop rebuild/summarize. Reference manuals explain why this
-boundary exists; this resident section states what to do.
+compact replacement (`status: pending`) but does not by itself rebuild the active
+provider context; below the full-context boundary keep working and do not use
+lifecycle refresh merely to apply it. Once context is at/above `0.85`, one
+proactive tactical `context(action="rebuild")` is permitted — it re-reads every
+canonical prompt source, applies pending summaries, and requests provider replay
+with the new prompt/history (bare `input={}` is valid). The rebuild action's own
+result reports the provider round that requested the rebuild;
+Post-rebuild context usage does not exist yet and only becomes observable on the
+next provider round. At usage `1.0` the
+runtime **forces** one rebuild per continuous full-context episode regardless of
+pending summaries. `summarize` is the only historical tool-result body
+replacement a rebuild applies; older `_meta.agent_meta` holders remain historical
+traces and must not be acted on. A forced rebuild that cannot clear the overflow
+(still above `1.0`) leaves a permanent `context.molt` "Molt IMMEDIATELY" line —
+molt, do not loop rebuild/summarize; if context cannot recover below
+`0.75 * context_window`, tend durable stores and molt. Full mechanics:
+`summarize-manual`.
 
 Both a-priori (`summary=true`) and a-posteriori (`context(action="summarize")`)
 summary are mini molts for tool results; molt is the stronger

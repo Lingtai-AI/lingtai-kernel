@@ -18,10 +18,6 @@ related_files:
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/bench_agent_session_rebuild.py
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py
   - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/nokv-workbench/SKILL.md
-  - src/lingtai/intrinsic_skills/nokv-workbench/assets/PREFLIGHT.md
-  - src/lingtai/intrinsic_skills/nokv-workbench/assets/init-snippet.json
-  - src/lingtai/intrinsic_skills/nokv-workbench/assets/mcp_registry.example.jsonl
   - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
   - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
   - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
@@ -87,9 +83,6 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   `scripts/bench_agent_session_rebuild.py`.
 - `lingtai-doctor/` — read-only health diagnostics for agents and bots, with a
   bundled `scripts/doctor.py` for layered local checks that expose no secrets.
-- `nokv-workbench/` — routing manual for NoKV-controlled workbenches, with
-  `assets/PREFLIGHT.md`, `assets/init-snippet.json`, and
-  `assets/mcp_registry.example.jsonl`.
 - Single-file bundles — `file-manual/`, `lingtai-manual/`, `pad-manual/`,
   `psyche-manual/`, `read-manual/`, and `soul-manual/`, each one `SKILL.md`
   documenting its namesake surface.

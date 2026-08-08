@@ -50,8 +50,8 @@ High-attention tool-result summarization guidance lives in the runtime
 guidance catalog as resident `meta_guidance`; reference/manual
 layers explain the rationale, edge cases, examples, and troubleshooting.
 
-**Summarize cadence.** Prefer a priori `summary=true` on `bash`, `read`,
-`grep`, `daemon`, or `glob` when you can predict bulky output and already know the facts, counts,
+**Summarize cadence.** Prefer a priori `summary=true` on `shell`, `file`
+(read/glob/grep), or `daemon` when you can predict bulky output and already know the facts, counts,
 anchors, or conclusion you need from the call; put that retention contract in
 `reasoning` so raw bulk never spends context. Leave it off when exact raw text or
 unknown high-information details may matter. After digesting a completed tool
@@ -61,40 +61,18 @@ Batch already-digested results when practical, and keep noisy/bulky work out of
 main context by using daemons before it lands here.
 
 **Forced context rebuild boundary.** `context(action="summarize")` records a
-compact replacement in runtime history (`status: pending`) but does not rebuild
-the active provider context. Below the full-context boundary, pending summaries
-are normal; keep working, do not assume the raw block has left the current
-continuation, and do not use lifecycle refresh merely to apply it. Once context
-is at/above `0.85`, the runtime stamps
-`_meta.agent_meta.agent_state.context.rebuild`; if a fresh provider context is
-worth the cost, make one proactive tactical `context(action="rebuild")` call.
-This is the one active **full reconstruction**: it first re-reads and recomposes
-all canonical prompt sources, then records/applies new or pending summaries,
-then requests provider replay with the new prompt/history. Bare `input={}` is
-valid even with zero pending summaries (it still reconstructs/replays, but does
-not compact history); applied summaries flip to `status: done`. At context
-usage `1.0` (the full-context hard boundary) the runtime **forces** a rebuild on
-the next request **regardless of whether pending summaries exist**, but only
-**once per continuous full-context episode** (it does not re-force while context
-stays at/above `1.0`, and re-arms only after context later drops below `1.0`) —
-pending markers are applied and marked done. `summarize` is the only historical
-tool-result body replacement a rebuild applies; the fresh replay otherwise
-preserves each historical timely-transient holder and does not strip its
-`agent_meta`/`guidance` or `notifications`/`notification_guidance` keys, on
-every provider, without rewriting recorded history — only the LATEST holder
-per family is
-current state, older holders are historical traces and must not be acted on.
-Every `1.0` forced rebuild ALWAYS attaches a
-one-shot `reconstruction.warning` (before→after context, proactive-`0.85`-rebuild
-advice, and "if still above the `0.75` recovery target, molt"). If that one forced
-rebuild does NOT clear the overflow (post-rebuild context stays strictly above
-`1.0`), every result then also carries a permanent `_meta.agent_meta.agent_state.context.molt`
-line `100% context Forced Rebuild Failed to Bring Usage Below 100%. Context overflowed!! (xxx %) Molt
-IMMEDIATELY!!` — molt immediately. Waiting until full
-context is not ideal — prefer the proactive `0.85` rebuild. If pending total is 0,
-the forced rebuild has nothing to apply, so summarize more or molt. Do not loop
-rebuild/summarize; if rebuild cannot recover below the `0.75` target, tend durable
-stores and molt.
+compact replacement (`status: pending`) but does not rebuild the active provider
+context; below the full-context boundary keep working and do not use lifecycle
+refresh merely to apply it. Once context is at/above `0.85`, one proactive
+tactical `context(action="rebuild")` is permitted (it re-reads all prompt
+sources, applies pending summaries, and replays provider history; bare `input={}`
+is valid). At context usage `1.0` the runtime **forces** one rebuild per
+continuous full-context episode regardless of pending summaries. `summarize` is
+the only historical tool-result body replacement a rebuild applies; older
+`_meta.agent_meta` holders remain historical traces and must not be acted on. Do
+not loop rebuild/summarize — if a rebuild cannot bring context below
+`0.75 * context_window`, tend durable stores and molt. Full mechanics live in
+`substrate` §VII and the `summarize-manual` skill.
 
 **Molt boundary.** At task completion, after necessary reporting and durable
 stores are tended, if no human reply or concrete next action remains, do not
