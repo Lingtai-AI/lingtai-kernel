@@ -616,9 +616,9 @@ class TelegramManager:
         self._task_card_event_metadata: dict | None = None
         self._task_card_event_lock = threading.Lock()
         # Blanket-delivery dedupe: the last automatic frame fingerprint seen per
-        # resident target. A 1s blanket rebuild only edits Telegram when the
+        # resident target. A 5s blanket rebuild only edits Telegram when the
         # frame actually changed (excluding the volatile ``Last Updated`` line),
-        # so bursty event tails coalesce into at most one edit per second
+        # so bursty event tails coalesce into at most one edit every 5s
         # instead of hammering the per-chat edit rate limit.
         self._task_card_automatic_fingerprints: dict[tuple[str, int], str] = {}
         self._task_card_tail_thread: threading.Thread | None = None
@@ -2150,7 +2150,7 @@ class TelegramManager:
     # Latest final-carrier session telemetry is projected separately. There is no
     # durable cursor: startup and log replacement rehydrate from the bounded tail.
     _TASK_CARD_EVENT_WINDOW = TaskCardEventProjection.EVENT_WINDOW
-    _TASK_CARD_EVENT_POLL_INTERVAL = 1.0
+    _TASK_CARD_EVENT_POLL_INTERVAL = 5.0
     _TASK_CARD_EVENT_TAIL_CHUNK = 65536
     _TASK_CARD_EVENT_REASONING_CAP = TaskCardEventProjection.EVENT_REASONING_CAP
     _TASK_CARD_EVENT_TEXT_CAP = TaskCardEventProjection.EVENT_TEXT_CAP
@@ -2844,7 +2844,7 @@ class TelegramManager:
             # Check + deliver + store are atomic per route (RLock is reentrant,
             # so the nested acquisition inside project() is free). This keeps the
             # fingerprint cache consistent with the actually-delivered frame even
-            # when the 1s blanket loop, the re-enable listener, and a rehydrate
+            # when the 5s blanket loop, the re-enable listener, and a rehydrate
             # race on the same route.
             with self._task_card_delivery_lock(account, chat_id):
                 if not force and self._task_card_automatic_fingerprints.get(key) == fingerprint:
@@ -2895,7 +2895,7 @@ class TelegramManager:
                 # Blanket rebuild: every tick re-renders the current window and
                 # the fingerprint dedupe inside the broadcast decides whether a
                 # Telegram edit is actually needed. This coalesces bursty event
-                # tails into at most one edit per second.
+                # tails into at most one edit every 5 seconds.
                 try:
                     self._broadcast_task_card_event_window()
                 except Exception as e:
@@ -2930,7 +2930,7 @@ class TelegramManager:
                     self._broadcast_programmable_task_card_file()
                 except Exception as e:
                     log.debug("Programmable task card poll failed: %s", e)
-                if self._programmable_task_card_stop.wait(1.0):
+                if self._programmable_task_card_stop.wait(self._TASK_CARD_EVENT_POLL_INTERVAL):
                     return
 
         thread = threading.Thread(
@@ -2991,7 +2991,7 @@ class TelegramManager:
         """Ensure the resident target for an established inbound chat.
 
         Renders the full automatic event window (not a sparse placeholder) so
-        the first card a human sees is already complete; the 1s blanket keeps
+        the first card a human sees is already complete; the 5s blanket keeps
         it fresh from there.
         """
         automatic = TaskCardEventProjection.render_event_groups(
