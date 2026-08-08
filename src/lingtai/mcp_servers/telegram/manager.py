@@ -2950,9 +2950,15 @@ class TelegramManager:
             return {"status": "error", "error": str(e)}
 
     def _ensure_task_card_resident(self, account: str, chat_id: int) -> dict:
-        """Ensure the resident target for an established inbound chat."""
-        automatic = self._format_task_card_text(
-            "", "", "", rows=[], metadata=None,
+        """Ensure the resident target for an established inbound chat.
+
+        Renders the full automatic event window (not a sparse placeholder) so
+        the first card a human sees is already complete; the 1s blanket keeps
+        it fresh from there.
+        """
+        automatic = TaskCardEventProjection.render_event_groups(
+            self._task_card_event_groups_snapshot(),
+            metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=self._taskcard_normal_rows(),
         )
         return self._resident.ensure(
