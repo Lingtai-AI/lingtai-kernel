@@ -32,7 +32,10 @@ class TaskCardEventProjection:
     EVENT_TEXT_CAP = 500
     MAX_EVENTS_PER_CALL = 24
     MAX_ELAPSED_MS = 9_999_999
-    API_CALL_DIVIDER = "──────────"
+    # Divider is deliberately shorter than the old full-width rule so the
+    # per-API-call wall-clock stamp can ride the same line after it (Jason
+    # 2026-08-09).
+    API_CALL_DIVIDER = "──────"
 
     @classmethod
     def footer(cls, normal_rows: int) -> str:
@@ -427,18 +430,29 @@ class TaskCardEventProjection:
     ) -> str:
         rows: list[dict[str, Any]] = []
         for group in groups[-normal_rows:]:
-            rows.append({"kind": "divider", "text": cls.API_CALL_DIVIDER})
-            # The group's API delay is the LLM round-trip gap since the previous
-            # progress; the per-call usage rides the same divider line, both kept
-            # out of tool rows.
-            api_delay_s: float | None = None
-            usage: dict[str, Any] | None = None
+            # One wall-clock stamp per API call rides the divider line (Jason
+            # 2026-08-09): the first progress row of the group marks the round
+            # trip's start, so the divider carries it — no separate timestamp
+            # line, no marker.
+            stamp = ""
             group_ts: float | None = None
             for row in group.get("events", []):
                 if group_ts is None:
                     v = row.get("_ts")
                     if type(v) in (int, float) and not isinstance(v, bool):
                         group_ts = float(v)
+                if group_ts is not None:
+                    stamp = cls.format_row_timestamp(group_ts)
+                    if stamp:
+                        stamp = f" {stamp}"
+                    break
+            rows.append({"kind": "divider", "text": f"{cls.API_CALL_DIVIDER}{stamp}"})
+            # The group's API delay is the LLM round-trip gap since the previous
+            # progress; the per-call usage rides the same divider line, both kept
+            # out of tool rows.
+            api_delay_s: float | None = None
+            usage: dict[str, Any] | None = None
+            for row in group.get("events", []):
                 v = row.get("api_delay_s")
                 if api_delay_s is None and type(v) in (int, float) and not isinstance(v, bool) and v >= 0:
                     api_delay_s = float(v)
@@ -447,15 +461,6 @@ class TaskCardEventProjection:
                     usage = u
                 if api_delay_s is not None and usage is not None:
                     break
-            # One wall-clock stamp per API call, above the API metadata line
-            # (Jason 2026-08-09): the first progress row of the group marks the
-            # round trip's start; Jason later asked for the stamp to sit above
-            # the metadata line and carry a leading marker — clock emoji was
-            # too flashy, so it settled on a subtle '@' (2026-08-09 follow-up).
-            if group_ts is not None:
-                stamp = cls.format_row_timestamp(group_ts)
-                if stamp:
-                    rows.append({"kind": "api_ts", "text": f"@ {stamp}"})
             info = cls.format_divider_info(api_delay_s, usage)
             if info:
                 rows.append({"kind": "api_info", "text": info})
@@ -710,7 +715,8 @@ class TaskCardEventProjection:
                 continue
             kind = row.get("kind")
             if kind == "divider":
-                api_prepared.append((idx, cls.API_CALL_DIVIDER))
+                divider = redact_text(str(row.get("text", cls.API_CALL_DIVIDER))).strip()
+                api_prepared.append((idx, divider[: cls.EVENT_TEXT_CAP]))
                 continue
             if kind == "api_info":
                 info = redact_text(str(row.get("text", ""))).strip()

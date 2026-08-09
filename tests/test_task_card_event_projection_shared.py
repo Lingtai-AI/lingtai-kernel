@@ -125,7 +125,7 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
     assert shared == telegram
     assert shared == (
         "📋 ACTIVITIES\n"
-        "──────────\n"
+        f"{TaskCardEventProjection.API_CALL_DIVIDER}\n"
         "• public response\n"
         "• bash.run: build (0ms, running)\n"
         "\n"
@@ -136,11 +136,11 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
     )
 
 
-def test_api_call_renders_single_timestamp_above_metadata() -> None:
-    """Each API-call group renders exactly one wall-clock stamp above its API
-    metadata line (Jason 2026-08-09, follow-up): per-tool-row stamps are gone,
-    and the group's first progress ts becomes the single per-API-call
-    timestamp."""
+def test_api_call_rides_single_timestamp_on_divider() -> None:
+    """Each API-call group rides exactly one wall-clock stamp on its divider
+    line (Jason 2026-08-09, follow-up): per-tool-row stamps are gone, and the
+    group's first progress ts becomes the single per-API-call timestamp that
+    sits on the divider itself — no separate timestamp row, no marker."""
     ts = datetime(2026, 8, 3, 2, 30, tzinfo=timezone(timedelta(hours=8))).timestamp()
     stamp = TaskCardEventProjection.format_row_timestamp(ts)
     groups = [
@@ -166,12 +166,14 @@ def test_api_call_renders_single_timestamp_above_metadata() -> None:
     assert "↻ 2.3s" in text
     tool_row = next(ln for ln in text.splitlines() if "bash.run" in ln)
     assert stamp not in tool_row
-    assert f"@ {stamp}" in text
-    # The single stamp sits above the API metadata line, before the tool row.
-    ts_idx = text.index(f"@ {stamp}")
+    divider = TaskCardEventProjection.API_CALL_DIVIDER
+    # The stamp rides the divider line, before the API metadata line.
+    divider_line = next(ln for ln in text.splitlines() if ln.startswith(divider))
+    assert f"{divider} {stamp}" == divider_line
+    divider_idx = text.index(divider_line)
     api_idx = text.index("↻ 2.3s")
     tool_idx = text.index("bash.run")
-    assert ts_idx < api_idx < tool_idx
+    assert divider_idx < api_idx < tool_idx
 
 
 def test_metadata_renders_device_and_working_dir_lines() -> None:
