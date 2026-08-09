@@ -1,23 +1,24 @@
 """Nudge: warn the agent when its working directory grows past a threshold.
 
-The agent loop runs this check once per heartbeat; the producer throttles
-itself to one probe per UTC day so a long-running agent doesn't pay the
-recursive directory walk on every heartbeat tick. When the total size of
-``agent._working_dir`` exceeds the limit set by ``LINGTAI_NUDGE_FOLDER_SIZE_GB``
-(default ``5``), a finding is upserted into the shared nudge channel. When the
-directory returns under the limit, the previously-emitted entry is cleared.
+The agent loop runs this check once per heartbeat. The recursive directory
+walk is throttled to one probe per UTC day (a bounded observation cost), while
+``upsert``/``remove`` are re-evaluated on every heartbeat against the persisted
+last observation and the current ``LINGTAI_NUDGE_FOLDER_SIZE_GB`` value. That
+keeps the shared global Nudge policy live: a dismissed finding returns once the
+global repeat interval expires, ``LINGTAI_NUDGE_ENABLED=off`` then ``on``
+restores the still-current finding the same day, and a transient store failure
+is retried on the next heartbeat without an extra directory walk.
 
-The threshold is read from the environment at every probe, so a changed value
-applies on the next daily probe without a restart; invalid values fail safe to
-the documented default of 5 GB and are reported as a bounded diagnostic log.
-
-The daily date gate is persisted under the shared per-kind state namespace so
-an agent that restarts mid-day does not re-walk a multi-GB directory; a probe
-still runs at most once per UTC day regardless of process lifetime.
+The threshold is read from the environment at every evaluation, so a changed
+value applies immediately without a restart; invalid or non-finite values fail
+safe to the documented default of 5 GB and are reported as a bounded
+diagnostic log. The finding is advisory only: it never grants deletion or
+cleanup authority.
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,37 +28,48 @@ _KIND = "folder_size"
 _STATE_FILE = Path(".notification") / ".nudge_state.json"
 DEFAULT_LIMIT_GB = 5.0
 LIMIT_ENV = "LINGTAI_NUDGE_FOLDER_SIZE_GB"
-_BYTES_PER_GB = 1024 * 1024 * 1024
+# Decimal gigabytes (10**9 bytes) to match the environment name and registry;
+# GiB (2**30) would silently shift a configured 5 GB threshold by ~7.4%.
+_BYTES_PER_GB = 1_000_000_000
 
 
 def check(agent) -> None:
-    """Emit or clear the folder-size nudge for ``agent`` (max once per UTC day)."""
+    """Evaluate the folder-size nudge for ``agent`` on every heartbeat.
+
+    The recursive walk runs at most once per UTC day; the upsert/remove decision
+    is re-evaluated every call against the persisted last observation so global
+    enable/dismiss/repeat/retry semantics stay live.
+    """
     persistent = _load_persistent_state(agent)
     folder_state = persistent.setdefault(_KIND, {})
-    if folder_state.get("last_check_date") == _today_utc():
-        return
 
     limit_gb, invalid = _read_limit_gb()
     if invalid:
         _safe_log(agent, "folder_size_limit_invalid", value=invalid)
 
-    try:
-        total_bytes = _dir_size(Path(agent._working_dir))
-    except Exception as e:  # pragma: no cover - defensive: nudge must be inert
-        _safe_log(agent, "folder_size_probe_error", error=str(e)[:200])
+    # Bounded observation gate: walk at most once per UTC day.
+    if folder_state.get("last_check_date") != _today_utc():
+        try:
+            total_bytes = _dir_size(Path(agent._working_dir))
+        except Exception as e:  # pragma: no cover - defensive: nudge must be inert
+            _safe_log(agent, "folder_size_probe_error", error=str(e)[:200])
+            return
+        folder_state.update(
+            {
+                "last_check_date": _today_utc(),
+                "size_bytes": total_bytes,
+                "limit_gb": limit_gb,
+            }
+        )
+        _save_persistent_state(agent, persistent)
+
+    # No observation yet (first walk failed); nothing to evaluate.
+    if "size_bytes" not in folder_state:
         return
 
     from . import remove, upsert
 
-    folder_state.update(
-        {
-            "last_check_date": _today_utc(),
-            "size_bytes": total_bytes,
-            "limit_gb": limit_gb,
-        }
-    )
-    _save_persistent_state(agent, persistent)
-
+    total_bytes = folder_state["size_bytes"]
     if total_bytes <= limit_gb * _BYTES_PER_GB:
         remove(agent, _KIND)
         return
@@ -71,22 +83,23 @@ def check(agent) -> None:
                 f"Working directory {agent._working_dir} is {_format_bytes(total_bytes)} "
                 f"({_format_gb(total_bytes / _BYTES_PER_GB)}), above the "
                 f"{_format_gb(limit_gb)} threshold from {LIMIT_ENV}. "
-                "Inspect scratch/, daemons/, logs/, and tmp/ for large artifacts; "
-                "remove or archive files you no longer need, then this nudge clears "
-                "on the next daily probe."
+                "This finding is advisory only and does not authorize deletion or "
+                "cleanup; remove or archive files only with the existing owner/human "
+                "authorization. Once back under the threshold, this nudge clears "
+                "on the next evaluation."
             ),
             "source": "working-directory-walk",
             "local_path": str(agent._working_dir),
             "size_bytes": total_bytes,
             "size_gb": round(total_bytes / _BYTES_PER_GB, 2),
             "limit_gb": limit_gb,
-            "checked_at_date": _today_utc(),
+            "checked_at_date": folder_state.get("last_check_date"),
         },
     )
 
 
 def _read_limit_gb(environ: Mapping[str, str] | None = None) -> tuple[float, str | None]:
-    """Read the GB threshold; invalid or missing values fall back to ``5``."""
+    """Read the GB threshold; invalid, non-finite, or missing values fall back to ``5``."""
     env = os.environ if environ is None else environ
     raw = str(env.get(LIMIT_ENV, "")).strip()
     if not raw:
@@ -95,7 +108,7 @@ def _read_limit_gb(environ: Mapping[str, str] | None = None) -> tuple[float, str
         value = float(raw)
     except ValueError:
         return DEFAULT_LIMIT_GB, raw
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         return DEFAULT_LIMIT_GB, raw
     return value, None
 

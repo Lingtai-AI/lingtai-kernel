@@ -60,9 +60,11 @@ the ordinary Notification Store channel; it does not create a second transport.
   publishes/clears the typed configuration-shape finding; it never reads
   `init.json` independently (`src/lingtai/kernel/nudge/init_config.py:1-74`).
 - `folder_size.py` — read-only recursive size walk of the agent working
-  directory, throttled to one probe per UTC day via the shared per-kind
-  persistent state; emits/clears a `storage_size` finding when the directory
-  crosses `LINGTAI_NUDGE_FOLDER_SIZE_GB` (default `5`) (`src/lingtai/kernel/nudge/folder_size.py:1-125`).
+  directory, throttled to one walk per UTC day via a per-kind persistent date
+  gate; every heartbeat re-evaluates the persisted observation through the
+  shared `upsert`/`remove` so global repeat/enable/retry semantics stay live.
+  Emits/clears a `storage_size` finding when the directory crosses
+  `LINGTAI_NUDGE_FOLDER_SIZE_GB` (default `5` decimal GB) (`src/lingtai/kernel/nudge/folder_size.py:1-182`).
 - `kernel_version.py` — read-only installed/running observation plus bounded
   GitHub/Gitee release-manifest comparison; it does not own a product repeat
   cadence (`src/lingtai/kernel/nudge/kernel_version.py:91-229`).
@@ -100,10 +102,13 @@ injection. Detailed environment semantics route to
 Persistent state is the shared `.notification/nudge.json` transport payload and
 an internal `.notification/.nudge_state.json` dismissal map keyed by a stable
 finding hash with an expiry. The latter stores no migration version, progress
-chain, per-kind UTC date, or process cadence. Producer observation throttles are
-bounded implementation cost only; global enabled/repeat values are product
-semantics. Goal source state remains protected `.notification/goal.json` and its
-reminder remains in `system.json`.
+chain, or process cadence. `folder_size` additionally keeps a per-kind UTC
+`last_check_date` plus its last observed `size_bytes`/`limit_gb` in the same
+file; that date gates only the recursive directory walk (bounded observation
+cost), never the upsert/remove decision, which is re-evaluated on every
+heartbeat so shared global enabled/repeat values stay product semantics. Goal
+source state remains protected `.notification/goal.json` and its reminder
+remains in `system.json`.
 
 Findings that exceed `INLINE_MAX_CHARS` also persist their complete original
 body to `<working_dir>/tmp/nudge-findings/<kind>-<sha256>.json`
