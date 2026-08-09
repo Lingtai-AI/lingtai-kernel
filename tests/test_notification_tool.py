@@ -109,11 +109,11 @@ def test_notification_wired_into_every_agent() -> None:
     assert callable(wired["notification"])
 
 
-_ACTIONS = ["check", "dismiss_channel", "dismiss_event", "dismiss_ref", "manual"]
+_ACTIONS = ["add", "drop", "edit", "list", "check", "dismiss_channel", "dismiss_event", "dismiss_ref", "manual"]
 
 
 def test_notification_schema_exposes_atomic_actions() -> None:
-    """The five action values survive migration, now as the family enum."""
+    """All action values survive migration, now as the family enum."""
     schema = notif_intrinsic.get_schema("en")
     assert schema["properties"]["action"]["enum"] == _ACTIONS
 
@@ -148,6 +148,28 @@ def test_each_action_input_branch_is_strict_and_exact() -> None:
     assert [b["title"] for b in branches] == [f"{a} input" for a in _ACTIONS]
 
     expected_props = {
+        "add": {
+            "name",
+            "channel",
+            "source",
+            "description",
+            "how_to_modify",
+            "how_to_cancel",
+            "version",
+            "instructions",
+        },
+        "drop": {"name"},
+        "edit": {
+            "name",
+            "version",
+            "source",
+            "description",
+            "channel",
+            "how_to_modify",
+            "how_to_cancel",
+            "instructions",
+        },
+        "list": set(),
         "check": set(),
         "dismiss_channel": {"channel", "force", "reason"},
         "dismiss_event": {"event_id", "channel", "force", "reason"},
@@ -222,7 +244,11 @@ def test_notification_schema_is_canonical_english() -> None:
     assert "notification(action='manual'" in adesc
     assert "read-only" in adesc.casefold()
     # Per-action prose now lives on each action's own input branch.
-    dismiss_channel_branch = base_schema["properties"]["input"]["oneOf"][1]
+    dismiss_channel_branch = next(
+        branch
+        for branch in base_schema["properties"]["input"]["oneOf"]
+        if branch["title"] == "dismiss_channel input"
+    )
     cdesc = dismiss_channel_branch["properties"]["channel"]["description"]
     assert cdesc and "channel" in cdesc.casefold()
 

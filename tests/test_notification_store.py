@@ -74,7 +74,7 @@ def conforming_store(request, tmp_path) -> NotificationStorePort:
 
 
 class TestSevenFamilyConformance:
-    def test_exact_seven_operation_families(self):
+    def test_exact_eight_operation_families(self):
         assert NotificationStorePort.__abstractmethods__ == {
             "snapshot",
             "fingerprint",
@@ -83,6 +83,8 @@ class TestSevenFamilyConformance:
             "compare_update_channel",
             "load_ack_refs",
             "update_ack_refs",
+            "load_hook_manifests",
+            "update_hook_manifests",
         }
 
     def test_snapshot_fingerprint_publish_and_clear(self, conforming_store):

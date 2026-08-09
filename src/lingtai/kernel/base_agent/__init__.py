@@ -1325,7 +1325,11 @@ class BaseAgent:
         the fingerprint stays at its prior value and the next heartbeat
         tick retries.
         """
-        from ..notifications import is_channel_allowed
+        from ..notifications import (
+            flag_unregistered_channel,
+            is_channel_allowed,
+            sync_hook_registry,
+        )
         from ..meta_block import skeletonize_notification_holder
         from .worker_recovery import (
             is_worker_interface_poisoned,
@@ -1352,10 +1356,30 @@ class BaseAgent:
 
         store = self._notification_store
 
+        # Seed the module-level hook-channel mirror from hooks.json so the
+        # allow predicate below sees registered external-hook channels.
+        sync_hook_registry(self)
+
         def _allow(channel: str) -> bool:
             return is_channel_allowed(channel)
 
         fp = store.fingerprint(_allow)
+
+        # Warn-and-flag (D2): detect present-but-unregistered channel files.
+        # The allow-filtered fingerprint above skips them, so enumerate the
+        # full directory once with an allow-all predicate and flag any stem
+        # that is not allowlisted. Best-effort; never blocks sync.
+        try:
+            present_fp = store.fingerprint(lambda ch: True)
+            for name, _, _ in present_fp:
+                if not name.endswith(".json"):
+                    continue
+                stem = name[: -len(".json")]
+                if not is_channel_allowed(stem):
+                    flag_unregistered_channel(self, stem)
+        except Exception:
+            pass
+
         if fp == self._notification_fp:
             return
 

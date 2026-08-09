@@ -22,8 +22,10 @@ from lingtai.kernel.notification_store import (
     NotificationStorePort,
     PureAckMutator,
     PureCoreMutator,
+    PureHookManifestMutator,
     UNCONDITIONAL,
     UpdateAckRefsResult,
+    UpdateHookManifestsResult,
 )
 from lingtai.kernel.notifications import is_channel_allowed
 
@@ -44,9 +46,12 @@ class FakeNotificationStore(NotificationStorePort):
         self._channels: dict[str, dict] = {}
         self._ack_refs: set[str] = set()
         self._ack_present = False
+        self._hook_manifests: list[dict] = []
+        self._hook_present = False
         self._lock = threading.RLock()
         self.channel_mutations: list[str] = []
         self.ack_mutations = 0
+        self.hook_mutations = 0
 
     def snapshot(self, allow_channel: AllowPredicate) -> dict[str, object]:
         with self._lock:
@@ -163,6 +168,29 @@ class FakeNotificationStore(NotificationStorePort):
             self._ack_present = True
             return UpdateAckRefsResult(changed=True, value=value)
 
+    def load_hook_manifests(self) -> list[dict]:
+        with self._lock:
+            return copy.deepcopy(self._hook_manifests)
+
+    def update_hook_manifests(
+        self, pure_core_manifest_mutator: PureHookManifestMutator
+    ) -> UpdateHookManifestsResult:
+        with self._lock:
+            manifests, requested_change, value = pure_core_manifest_mutator(
+                copy.deepcopy(self._hook_manifests)
+            )
+            self.hook_mutations += 1
+            if not requested_change:
+                return UpdateHookManifestsResult(changed=False, value=value)
+            if not manifests:
+                changed = self._hook_present
+                self._hook_manifests = []
+                self._hook_present = False
+                return UpdateHookManifestsResult(changed=changed, value=value)
+            self._hook_manifests = copy.deepcopy(manifests)
+            self._hook_present = True
+            return UpdateHookManifestsResult(changed=True, value=value)
+
 
 def notification_store_for(target: object) -> NotificationStorePort:
     """Return an explicitly composed Store for a test agent or workdir."""
@@ -203,4 +231,16 @@ def replace_ack_refs_for_test(target: object, refs: set[str]) -> None:
     """Seed exact ack state through atomic family seven for a test."""
     notification_store_for(target).update_ack_refs(
         lambda current: (set(refs), set(refs) != current, None)
+    )
+
+
+def load_hook_manifests_for_test(target: object) -> list[dict]:
+    """Read the hook-manifest registry through family eight for a test."""
+    return notification_store_for(target).load_hook_manifests()
+
+
+def replace_hook_manifests_for_test(target: object, manifests: list[dict]) -> None:
+    """Seed exact hook-manifest state through atomic family eight for a test."""
+    notification_store_for(target).update_hook_manifests(
+        lambda current: (list(manifests), list(manifests) != current, None)
     )

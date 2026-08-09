@@ -288,6 +288,72 @@ def _dismiss_ref(agent, args: dict) -> dict:
     )
 
 
+def _add_hook(agent, args: dict) -> dict:
+    """Register an external hook manifest (notification add)."""
+    from lingtai.kernel.notifications import add_hook
+
+    try:
+        manifest = {
+            "name": args["name"],
+            "version": args.get("version") or "1.0.0",
+            "channel": args["channel"],
+            "source": args["source"],
+            "description": args["description"],
+            "how_to_modify": args["how_to_modify"],
+            "how_to_cancel": args["how_to_cancel"],
+        }
+        if args.get("instructions"):
+            manifest["instructions"] = args["instructions"]
+        return add_hook(agent, manifest)
+    except (KeyError, ValueError) as exc:
+        return {
+            "status": "error",
+            "reason": "invalid_manifest",
+            "message": str(exc),
+        }
+
+
+def _drop_hook(agent, args: dict) -> dict:
+    """Unregister a hook by name (notification drop)."""
+    from lingtai.kernel.notifications import drop_hook
+
+    try:
+        return drop_hook(agent, args["name"])
+    except (KeyError, ValueError) as exc:
+        return {
+            "status": "error",
+            "reason": "invalid_name",
+            "message": str(exc),
+        }
+
+
+def _edit_hook(agent, args: dict) -> dict:
+    """Update a hook's fields by name (notification edit)."""
+    from lingtai.kernel.notifications import edit_hook
+
+    try:
+        name = args["name"]
+        fields = {
+            key: value
+            for key, value in args.items()
+            if key != "name" and value is not None
+        }
+        return edit_hook(agent, name, fields)
+    except (KeyError, ValueError) as exc:
+        return {
+            "status": "error",
+            "reason": "invalid_edit",
+            "message": str(exc),
+        }
+
+
+def _list_hooks(agent, args: dict) -> dict:
+    """Return the registered hook manifests (notification list)."""
+    from lingtai.kernel.notifications import list_hooks
+
+    return {"status": "ok", "hooks": list_hooks(agent)}
+
+
 def _build_family(agent) -> ToolFamily:
     """Build the per-call dispatching family with handlers bound to *agent*.
 
@@ -304,6 +370,10 @@ def _build_family(agent) -> ToolFamily:
     :func:`_adapt_manual_result` reshapes it afterwards in :func:`handle`.
     """
     dismiss_handlers = {
+        "add": _add_hook,
+        "drop": _drop_hook,
+        "edit": _edit_hook,
+        "list": _list_hooks,
         "check": _check,
         "dismiss_channel": _dismiss_channel,
         "dismiss_event": _dismiss_event,

@@ -2926,7 +2926,14 @@ def _collect_active_notifications_payload(agent) -> dict | None:
 
     """
     try:
-        from .notifications import is_channel_allowed
+        from .notifications import (
+            is_channel_allowed,
+            sync_hook_registry,
+        )
+
+        # Seed the module-level hook-channel mirror so registered external-hook
+        # channels are collected here exactly as in the main sync path.
+        sync_hook_registry(agent)
 
         notifications = agent._notification_store.snapshot(is_channel_allowed)
         if not notifications:

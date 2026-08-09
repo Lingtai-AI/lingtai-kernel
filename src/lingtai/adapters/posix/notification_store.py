@@ -20,8 +20,10 @@ from lingtai.kernel.notification_store import (
     NotificationStorePort,
     PureAckMutator,
     PureCoreMutator,
+    PureHookManifestMutator,
     UNCONDITIONAL,
     UpdateAckRefsResult,
+    UpdateHookManifestsResult,
     _applied_result,
     _conflict_result,
 )
@@ -30,6 +32,7 @@ from lingtai.kernel.notification_store._mutation_lock import (
 )
 
 _LARGE_RESULT_ACK_FILE = "large_result_acks.json"
+_HOOK_REGISTRY_FILE = "hooks.json"
 _DOT_NOTIFICATION = ".notification"
 
 
@@ -45,6 +48,10 @@ def _channel_path(workdir: Path, channel: str) -> Path:
 
 def _ack_path(workdir: Path) -> Path:
     return _notification_dir(workdir) / _LARGE_RESULT_ACK_FILE
+
+
+def _hook_registry_path(workdir: Path) -> Path:
+    return _notification_dir(workdir) / _HOOK_REGISTRY_FILE
 
 
 def _version_entry(path: Path, raw: bytes) -> list:
@@ -90,6 +97,8 @@ class PosixNotificationStoreAdapter(NotificationStorePort):
         for f in sorted(notif_dir.glob("*.json")):
             if f.name == _LARGE_RESULT_ACK_FILE:
                 continue
+            if f.name == _HOOK_REGISTRY_FILE:
+                continue
             if not allow_channel(f.stem):
                 continue
             try:
@@ -110,6 +119,8 @@ class PosixNotificationStoreAdapter(NotificationStorePort):
             if not (f.is_file() and f.suffix == ".json"):
                 continue
             if f.name == _LARGE_RESULT_ACK_FILE:
+                continue
+            if f.name == _HOOK_REGISTRY_FILE:
                 continue
             if not allow_channel(f.stem):
                 continue
@@ -255,3 +266,37 @@ class PosixNotificationStoreAdapter(NotificationStorePort):
                 ack_path, sorted(refs), ensure_ascii=False, indent=None
             )
             return UpdateAckRefsResult(changed=True, value=value)
+
+    def load_hook_manifests(self) -> list[dict]:
+        registry_path = _hook_registry_path(self._workdir)
+        try:
+            data = json.loads(registry_path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return [m for m in data if isinstance(m, dict)]
+        except (json.JSONDecodeError, OSError):
+            pass
+        return []
+
+    def update_hook_manifests(
+        self, pure_core_manifest_mutator: PureHookManifestMutator
+    ) -> UpdateHookManifestsResult:
+        registry_path = _hook_registry_path(self._workdir)
+        with self._exclusive_mutation():
+            current = self.load_hook_manifests()
+            manifests, requested_change, value = pure_core_manifest_mutator(
+                list(current)
+            )
+            if not requested_change:
+                return UpdateHookManifestsResult(changed=False, value=value)
+            if not manifests:
+                try:
+                    registry_path.unlink()
+                    changed = True
+                except OSError:
+                    changed = False
+                return UpdateHookManifestsResult(changed=changed, value=value)
+            registry_path.parent.mkdir(exist_ok=True)
+            atomic_write_json(
+                registry_path, manifests, ensure_ascii=False, indent=None
+            )
+            return UpdateHookManifestsResult(changed=True, value=value)
