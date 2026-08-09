@@ -18,7 +18,11 @@ from typing import Any
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
-from lingtai.kernel.config import AgentConfig, THINKING_PROVIDERS
+from lingtai.kernel.config import (
+    AgentConfig,
+    LEGACY_MAIN_SESSION_THINKING,
+    THINKING_PROVIDERS,
+)
 from lingtai.kernel.llm.base import ToolCall
 from lingtai.llm.service import (
     CONSERVATIVE_CONTEXT_WINDOW,
@@ -63,9 +67,68 @@ def load_preset(name: str, working_dir: "Path | None" = None) -> dict:
     """
     from lingtai.kernel.presets import load_preset as _core_load_preset
 
-    return _core_load_preset(
+    preset = _core_load_preset(
         name, working_dir=working_dir, run_migrations=_run_preset_library_migrations
     )
+    _validate_preset_provider_thinking(preset, name)
+    return preset
+
+
+def _validate_preset_provider_thinking(preset: dict, name: str) -> None:
+    """Enforce a provider-owned effort contract on a loaded preset.
+
+    The kernel's preset validator only decides whether ``manifest.llm.thinking``
+    is in scope at all — it must not import provider modules (the DAG is
+    lingtai -> tools -> lingtai.kernel, enforced by
+    tests/test_kernel_isolation.py). The exact per-model, per-wire accepted set
+    is owned by the provider and applied here, on the one shared preset-loading
+    path.
+    """
+    from lingtai.llm.deepseek.reasoning import (
+        owns_provider as _deepseek_route,
+        validate_configured_thinking as _validate_deepseek_thinking,
+        validate_supported_config as _validate_deepseek_config,
+        wire_for as _deepseek_wire,
+    )
+
+    llm = (preset or {}).get("manifest", {}).get("llm")
+    if not isinstance(llm, dict) or not _deepseek_route(llm.get("provider")):
+        return
+    try:
+        # Generic knobs this route has superseded fail loudly rather than
+        # silently doing nothing.
+        _validate_deepseek_config(llm)
+        if "thinking" in llm:
+            _validate_deepseek_thinking(
+                model=llm.get("model"),
+                wire=_deepseek_wire(llm),
+                thinking=llm["thinking"],
+            )
+    except ValueError as exc:
+        raise ValueError(f"preset {name!r}: {exc}") from exc
+
+
+def _omitted_thinking_default(llm: dict[str, Any], defaults: AgentConfig) -> str:
+    """Return what an OMITTED manifest ``llm.thinking`` hydrates to.
+
+    Routes that own their own omitted-effort default keep the ``"default"``
+    sentinel; everything else keeps the legacy cross-provider main-session
+    default. DeepSeek's answer comes from the DeepSeek descriptor, not from a
+    global provider table.
+    """
+    from lingtai.llm.deepseek.reasoning import OMITTED, owns_provider
+
+    provider = str(llm.get("provider") or "").lower()
+    if provider in THINKING_PROVIDERS:
+        return "default"
+    if owns_provider(provider):
+        return OMITTED
+    # Manifest hydration for non-owning routes keeps producing the legacy
+    # explicit level, unchanged. This is deliberately the named constant and
+    # NOT ``defaults.thinking``: the AgentConfig default is now the neutral
+    # omission (None), which is about *programmatic* construction and must not
+    # silently change what a manifest hydrates to.
+    return LEGACY_MAIN_SESSION_THINKING
 
 
 def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig:
@@ -94,16 +157,14 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         cache_miss_budget=manifest.get(
             "cache_miss_budget", defaults.cache_miss_budget
         ),
-        # Codex-family providers own their omitted-thinking default at the
-        # adapter (omitted -> reasoning.effort "xhigh"), so an omitted manifest
-        # value stays the "default" sentinel for them instead of being promoted
-        # to the legacy cross-provider "high" main-session default.
-        thinking=llm.get(
-            "thinking",
-            "default"
-            if str(llm.get("provider") or "").lower() in THINKING_PROVIDERS
-            else defaults.thinking,
-        ),
+        # Providers that own their omitted-thinking default keep the "default"
+        # sentinel instead of being promoted to the legacy cross-provider
+        # "high" main-session default: the Codex family (omitted ->
+        # reasoning.effort "xhigh") and DeepSeek (omitted -> no reasoning field
+        # at all, so DeepSeek's own default applies). This is also the native
+        # LingTai daemon's initial-omission route — it builds its agent config
+        # through this same function.
+        thinking=llm.get("thinking", _omitted_thinking_default(llm, defaults)),
         # Molt thresholds and the context.molt message are kernel-fixed runtime
         # constants and are NOT agent-configurable. Stale manifest
         # molt_notice/molt_pressure/molt_urgency/molt_prompt values are

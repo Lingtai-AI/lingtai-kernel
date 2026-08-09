@@ -43,6 +43,7 @@ from lingtai.kernel.llm.base import (
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
+from lingtai.llm.openai.reasoning_control import ReasoningApplication, ReasoningController
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
 from ..interface_converters import to_openai, to_responses_input
 from lingtai.kernel.llm.streaming import StreamingAccumulator
@@ -2576,6 +2577,7 @@ class OpenAIAdapter(LLMAdapter):
         inject_reasoning_fallback: bool | None = None,
         reasoning_effort_vocab: str = "openai",
         prompt_cache_namespace: str | None = None,
+        reasoning_controller: "ReasoningController | None" = None,
     ):
         self.base_url = base_url
         self._use_responses = use_responses
@@ -2630,6 +2632,13 @@ class OpenAIAdapter(LLMAdapter):
         # maps kernel levels onto OpenAI's high/low surface; ``seven_tier``
         # passes the kernel THINKING_LEVELS through unchanged (DeepSeek wire).
         self._reasoning_effort_vocab = reasoning_effort_vocab
+        # Optional provider-local reasoning owner (see
+        # ``lingtai/llm/openai/reasoning_control.py``). When a provider route
+        # installs one, it decides the reasoning fields for BOTH wires and the
+        # generic vocabulary projections below are bypassed entirely. When it
+        # is absent — every route except deepseek — this adapter behaves
+        # exactly as before.
+        self._reasoning_controller = reasoning_controller
         # Optional fixed provider namespace for the auto-derived
         # ``prompt_cache_key`` (e.g. ``deepseek`` -> ``lingtai-deepseek:{model}:v1``).
         self._prompt_cache_namespace = prompt_cache_namespace
@@ -2770,9 +2779,17 @@ class OpenAIAdapter(LLMAdapter):
         # Completions SDK's flat `reasoning_effort`. Sending the wrong shape
         # silently drops the field on the OpenAI Responses endpoint and 400s
         # on Codex's `/backend-api/codex/responses`.
-        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        #
+        # A provider route that installs a reasoning controller owns this
+        # decision entirely — including whether any field is sent at all — and
+        # may raise before the SDK is ever touched.
+        applied = self._apply_reasoning_control(
+            model=model, wire="responses", thinking=thinking, extra_kwargs=extra_kwargs
+        )
+        if applied is None:
+            extra_kwargs.update(_responses_reasoning_kwargs(thinking))
 
-        return OpenAIResponsesSession(
+        session = OpenAIResponsesSession(
             client=self._client,
             model=model,
             instructions=system_prompt,
@@ -2787,6 +2804,75 @@ class OpenAIAdapter(LLMAdapter):
             stateless_replay=self._responses_stateless_replay,
             inject_reasoning_fallback=self._inject_reasoning_fallback,
         )
+        return self._capture_reasoning_application(session, applied)
+
+    def resolve_configured_thinking(self, thinking: Any) -> Any:
+        """Delegate omission resolution to an installed reasoning controller.
+
+        A provider route that owns its effort contract also owns what an
+        omitted level means there; without a controller this is the inherited
+        legacy fallback, so every other OpenAI-compatible route (including
+        Codex) is unchanged.
+        """
+        controller = self._reasoning_controller
+        resolver = getattr(controller, "resolve_configured_thinking", None)
+        if resolver is None:
+            return super().resolve_configured_thinking(thinking)
+        return resolver(thinking)
+
+    def _apply_reasoning_control(
+        self,
+        *,
+        model: str,
+        wire: str,
+        thinking: Any,
+        extra_kwargs: dict[str, Any],
+    ) -> ReasoningApplication | None:
+        """Let an installed provider-local controller own the reasoning fields.
+
+        Returns the immutable application result and merges its exact payload,
+        or ``None`` when no controller is installed so the caller keeps the
+        generic OpenAI projection. Transport-neutral: this function knows
+        nothing about any provider's models, levels, aliases, or defaults.
+        """
+        controller = self._reasoning_controller
+        if controller is None:
+            return None
+        applied = controller.apply(model=model, wire=wire, thinking=thinking)
+        # Merge a deep MUTABLE copy: the SDK wants plain dicts, and this
+        # per-session kwargs dict stays editable afterwards. The captured
+        # application keeps its own frozen payload, so observation can never be
+        # rewritten by a later edit to the request kwargs.
+        payload = applied.request_kwargs()
+        # ``extra_body`` is a shared channel — a provider extension, a subclass
+        # contribution, and a caller override can all want a key in it — so it
+        # composes instead of overwriting: unrelated existing keys survive.
+        #
+        # For the keys the controller OWNS, the controller wins. The captured
+        # application is reported as the exact emitted decision, so letting a
+        # stale/conflicting existing entry override it would put a different
+        # value on the wire than ``llm_call`` observes — a silent lie about
+        # what the request actually asked for.
+        extra_body = payload.pop("extra_body", None)
+        extra_kwargs.update(payload)
+        if extra_body:
+            existing = extra_kwargs.get("extra_body") or {}
+            extra_kwargs["extra_body"] = {**existing, **extra_body}
+        return applied
+
+    @staticmethod
+    def _capture_reasoning_application(
+        session: Any, applied: ReasoningApplication | None
+    ) -> Any:
+        """Attach the one immutable application result to the session.
+
+        Observation reads this exact object, so what is reported is always the
+        patch that was really applied — never a recomputation from raw config.
+        Sessions on routes without a controller are left untouched.
+        """
+        if applied is not None:
+            session.reasoning_application = applied
+        return session
 
     def _create_completions_session(
         self,
@@ -2830,9 +2916,20 @@ class OpenAIAdapter(LLMAdapter):
         # the default ``openai`` vocab clamps ``xhigh``/``max`` to ``high`` and
         # omits the field for the omitted/``default`` sentinel so the upstream
         # v1 default applies).
-        effort = self._chat_reasoning_effort(thinking)
-        if effort is not None:
-            extra_kwargs["reasoning_effort"] = effort
+        # A provider route that installs a reasoning controller owns this
+        # decision entirely (DeepSeek, for instance, also emits its own
+        # ``thinking`` switch and rejects levels its model does not really
+        # have); the generic vocabulary projection is then never consulted.
+        applied = self._apply_reasoning_control(
+            model=model,
+            wire="chat_completions",
+            thinking=thinking,
+            extra_kwargs=extra_kwargs,
+        )
+        if applied is None:
+            effort = self._chat_reasoning_effort(thinking)
+            if effort is not None:
+                extra_kwargs["reasoning_effort"] = effort
 
         # Subclass-provided extra_body (e.g. OpenRouter's reasoning include).
         # Merge rather than overwrite so callers adding their own extra_body
@@ -2842,7 +2939,7 @@ class OpenAIAdapter(LLMAdapter):
             existing = extra_kwargs.get("extra_body") or {}
             extra_kwargs["extra_body"] = {**sub_extra_body, **existing}
 
-        return self._session_class(
+        session = self._session_class(
             client=self._client,
             model=model,
             interface=interface,
@@ -2854,6 +2951,7 @@ class OpenAIAdapter(LLMAdapter):
             prompt_cache_key=self._resolve_prompt_cache_key(model),
             inject_reasoning_fallback=self._inject_reasoning_fallback,
         )
+        return self._capture_reasoning_application(session, applied)
 
     def _adapter_extra_body(self) -> dict:
         """Return extra_body JSON fields to include on every request.

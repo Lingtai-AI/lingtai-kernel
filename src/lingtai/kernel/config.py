@@ -19,6 +19,21 @@ THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 # ``llm_supports_thinking`` so validators share the complete rule.
 THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 
+# Providers that own their own reasoning-effort contract on BOTH wires and
+# therefore accept manifest.llm.thinking outside the Responses-only rule below.
+# This is a coarse *scope* gate only — the kernel deliberately holds no
+# provider level vocabulary, model list, alias table, or default. What each
+# route really accepts is owned by that provider's own module and enforced by
+# the lingtai-layer validators (see ``lingtai/init_schema.py`` and
+# ``lingtai/agent.py``); the kernel cannot import them (see
+# tests/test_kernel_isolation.py).
+THINKING_PROVIDER_OWNED = ("deepseek",)
+
+# The legacy cross-provider main-session effort. Applied by the LLM layer to an
+# omitted/falsey configured value for every route that does NOT own its own
+# omitted-effort default, preserving pre-existing wire behavior exactly.
+LEGACY_MAIN_SESSION_THINKING = "high"
+
 
 def llm_supports_thinking(llm: dict) -> bool:
     """Return whether a manifest LLM block accepts explicit thinking effort.
@@ -28,9 +43,11 @@ def llm_supports_thinking(llm: dict) -> bool:
     ``wire_api == "responses"``) is accepted, regardless of provider. The
     Codex family remains accepted through ``THINKING_PROVIDERS`` (it owns its
     own wire/backend), as does any provider explicitly listed there.
+    Providers in ``THINKING_PROVIDER_OWNED`` own their effort contract on both
+    wires, so they are in scope regardless of the wire.
     """
     provider = str(llm.get("provider") or "").lower()
-    if provider in THINKING_PROVIDERS:
+    if provider in THINKING_PROVIDERS or provider in THINKING_PROVIDER_OWNED:
         return True
     return (
         str(llm.get("api_compat") or "").lower() == "openai"
@@ -137,7 +154,15 @@ class AgentConfig:
     max_aed_attempts: int = 3   # max AED retry attempts per inbox message turn
     max_rpm: int = 60  # API requests-per-minute cap for this agent's provider; 0 = no gating. Shared across all agents in the same process that use the same (provider, base_url) pair (adapter cache key).
     thinking_budget: int | None = None
-    thinking: str = "high"  # reasoning/thinking tier passed to the main persistent LLM session
+    # Reasoning/thinking tier passed to the main persistent LLM session.
+    # ``None`` means OMITTED — the caller expressed no preference — and is
+    # deliberately NOT the legacy ``high``: a provider that owns its own
+    # omitted-effort default (DeepSeek) must receive the omission itself rather
+    # than a fabricated level. Resolution is the LLM layer's job
+    # (the selected adapter's ``resolve_configured_thinking`` hook), which
+    # still maps an omitted value to ``LEGACY_MAIN_SESSION_THINKING`` for every
+    # other route, so no non-owning provider's wire bytes change.
+    thinking: str | None = None
     data_dir: str | None = None  # for cache files (e.g., model context windows)
     soul_delay: float = DEFAULT_SOUL_DELAY_SECONDS  # seconds idle before soul whispers; large value = effectively off
     language: str = "en"  # legacy language field retained for compatibility; prompt.py no longer injects prose from it

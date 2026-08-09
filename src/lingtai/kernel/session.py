@@ -64,6 +64,39 @@ def _elapsed_ms(start: float) -> int:
     return max(0, int((time.monotonic() - start) * 1000))
 
 
+#: Allowlisted ``llm_call`` reasoning-observation fields. Bounded plain
+#: strings only — never payloads, prompts, credentials, or arbitrary provider
+#: scalars.
+_REASONING_OBSERVATION_KEYS = (
+    "provider",
+    "wire",
+    "effort_requested",
+    "effort_normalized",
+    "effort_emitted",
+    "effort_provenance",
+)
+
+
+def _reasoning_observation_fields(chat: object) -> dict[str, str]:
+    """Return the reasoning observation for an ``llm_call``, if the session has one.
+
+    Read from the ONE immutable application result the adapter captured when
+    the session was constructed, so what is reported is exactly the patch the
+    request really carries. Nothing here recomputes anything from raw config,
+    and a session on a route that applies no reasoning control contributes no
+    fields at all.
+    """
+    applied = getattr(chat, "reasoning_application", None)
+    if applied is None:
+        return {}
+    fields = applied.observation_fields()
+    return {
+        key: str(fields[key])
+        for key in _REASONING_OBSERVATION_KEYS
+        if key in fields
+    }
+
+
 _SAFE_USAGE_EXTRA_EVENT_KEYS = {
     "codex_account_id_sha8",
     "codex_auth_path_sha8",
@@ -293,7 +326,14 @@ class SessionManager:
                 system_prompt=self._build_system_prompt_fn(),
                 tools=self._build_tool_schemas_fn() or None,
                 model=self._config.model or self._llm_service.model,
-                thinking=self._config.thinking or "high",
+                # Pass the configured value through verbatim. Resolving an
+                # omitted/falsey value is provider knowledge and belongs to the
+                # LLM layer (the selected adapter's
+                # ``resolve_configured_thinking`` hook): most routes still fall
+                # back to "high", while a route that owns its own
+                # omitted-effort default must receive the omission itself
+                # rather than a fabricated level.
+                thinking=self._config.thinking,
                 agent_type=self._display_name,
                 tracked=True,
                 interaction_id=self._interaction_id,
@@ -310,7 +350,9 @@ class SessionManager:
             system_prompt=self._build_system_prompt_fn(),
             tools=self._build_tool_schemas_fn() or None,
             model=self._config.model or self._llm_service.model,
-            thinking=self._config.thinking or "high",
+            # See ensure_session(): omitted-effort resolution is the LLM
+            # layer's call, not the kernel's.
+            thinking=self._config.thinking,
             agent_type=self._display_name,
             tracked=tracked,
             provider=self._config.provider,
@@ -397,6 +439,7 @@ class SessionManager:
             "model": self._config.model or self._llm_service.model or "unknown",
             "api_call_id": api_call_id,
         }
+        llm_call_fields.update(_reasoning_observation_fields(self._chat))
         self._log("llm_call", **llm_call_fields)
 
         retry_timeout = self._config.retry_timeout

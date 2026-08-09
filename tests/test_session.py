@@ -71,11 +71,24 @@ def test_ensure_session_passes_interaction_id():
     assert call_kwargs["interaction_id"] == "int-123"
 
 
-def test_ensure_session_defaults_thinking_to_high():
+def test_ensure_session_forwards_omitted_thinking_verbatim():
+    """An unset ``AgentConfig.thinking`` reaches the service as the omission.
+
+    Resolving an omitted level is provider knowledge and now belongs to the LLM
+    layer — specifically the selected adapter's ``resolve_configured_thinking``
+    hook, which still applies the legacy ``high`` for every route that does not
+    own its own omitted-effort default. The kernel no longer fabricates a level
+    of its own, and the generic service holds no provider branch.
+
+    End-to-end proof that a non-DeepSeek route still reaches its adapter as
+    ``high`` lives in
+    tests/test_deepseek_reasoning_effort.py::test_programmatic_agentconfig_omission_keeps_legacy_high_off_deepseek
+    (real ``LLMService`` + real adapter, asserting the emitted wire field).
+    """
     sm, svc, _ = make_session_manager()
     sm.ensure_session()
     call_kwargs = svc.create_session.call_args.kwargs
-    assert call_kwargs["thinking"] == "high"
+    assert call_kwargs["thinking"] is None
 
 
 def test_ensure_session_uses_configured_thinking():
@@ -526,7 +539,9 @@ def test_rebuild_session_uses_current_prompt_and_tools():
     assert call_kw["system_prompt"] == "test prompt"
     assert call_kw["tools"] is None  # [] is falsy → or None
     assert call_kw["model"] == "test-model"
-    assert call_kw["thinking"] == "high"
+    # Omitted config level forwarded verbatim; the LLM layer resolves it.
+    # See test_ensure_session_forwards_omitted_thinking_verbatim.
+    assert call_kw["thinking"] is None
     assert call_kw["tracked"] is True
     assert call_kw["agent_type"] == "test"
     assert call_kw["provider"] is None

@@ -11,6 +11,8 @@ related_files:
   - src/lingtai/llm/openai/codex_quota.py
   - src/lingtai/llm/openai/codex_ws.py
   - src/lingtai/llm/openai/defaults.py
+  - src/lingtai/llm/openai/reasoning_control.py
+  - src/lingtai/llm/deepseek/reasoning.py
   - src/lingtai/auth/codex_pool.py
   - tests/test_codex_quota.py
   - tests/test_codex_pool_quota_exclusion.py
@@ -46,6 +48,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `adapter.py` | large | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
 | `codex_quota.py` | ~330 | `read_remaining_percent(auth_path)` — translates LingTai's flat OAuth file into a process-owned native Codex CLI auth envelope, then reads the CLI's own OAuth rate-limit via `codex app-server`'s `account/rateLimits/read` stdio JSON-RPC call; returns the main window's remaining percent or `None` on any failure/malformed field. Used by `lingtai.auth.codex_pool`'s quota-aware pool exclusion. Tests: `tests/test_codex_quota.py`. |
 | `defaults.py` | 12 | `DEFAULTS` dict: `api_compat="openai"`, `use_responses_api=True`, `wire_api="auto"` |
+| `reasoning_control.py` | 127 | Transport-neutral reasoning seam: the frozen `ReasoningApplication` carrier (provider/wire/requested/normalized/emitted/provenance plus the exact request payload) and the `ReasoningController` protocol. `__post_init__` deep-freezes the payload via `_freeze` (mappings → `MappingProxyType`, sequences → tuples, recursively), so the captured result is immutable all the way down; `request_kwargs()` returns a `_thaw`-ed deep MUTABLE copy for the OpenAI SDK, which the wire builder merges — mutating those kwargs cannot alter the capture or its observation. Both helpers are structural only and carry no provider semantics. The generic transport merely *invokes* an installed controller and attaches its result; it holds no provider models, levels, aliases, or defaults. `OpenAIAdapter._apply_reasoning_control` merges the thawed payload but composes `extra_body` key-by-key instead of overwriting: unrelated existing/subclass keys survive, while keys the controller owns stay authoritative (a conflicting pre-existing `thinking` cannot put `disabled` on the wire while `llm_call` observes `enabled`). A provider body extension, a subclass `_adapter_extra_body()` contribution, and a caller override therefore coexist — required because DeepSeek's `thinking` is not a declared SDK parameter and must ride `extra_body`. Sole implementor today: `src/lingtai/llm/deepseek/reasoning.py`. |
 
 ### adapter.py class map
 

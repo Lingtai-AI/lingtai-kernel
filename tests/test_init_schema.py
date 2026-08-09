@@ -300,17 +300,52 @@ def test_llm_thinking_valid_for_custom_openai_responses(value):
     validate_init(data)
 
 
-@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+@pytest.mark.parametrize("value", ["low", "high", "max"])
 def test_llm_thinking_valid_for_deepseek_responses(value):
-    # DeepSeek is OpenAI-compatible; Responses wire accepts thinking by default.
+    """DeepSeek owns its effort contract; Responses accepts exactly low|high|max.
+
+    This route used to inherit the generic "any kernel level on the Responses
+    wire" rule. DeepSeek's Responses guide documents no thinking-disable and no
+    compatibility alias, and notes that unsupported parameters may be silently
+    ignored — so anything else now fails locally instead of being sent and
+    quietly dropped. See tests/test_deepseek_reasoning_effort.py.
+    """
     data = _valid_init()
     data["manifest"]["llm"].update(
         {
             "provider": "deepseek",
+            "model": "deepseek-v4-flash",
             "api_compat": "openai",
             "wire_api": "responses",
             "thinking": value,
         }
+    )
+    validate_init(data)
+
+
+@pytest.mark.parametrize("value", ["none", "minimal", "medium", "xhigh"])
+def test_llm_thinking_outside_deepseek_responses_set_is_rejected(value):
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "api_compat": "openai",
+            "wire_api": "responses",
+            "thinking": value,
+        }
+    )
+    with pytest.raises(ValueError, match="deepseek"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("value", ["none", "low", "high", "max", "medium", "xhigh"])
+def test_llm_thinking_valid_for_deepseek_chat_completions(value):
+    """The default DeepSeek wire is Chat Completions, which was previously
+    rejected outright even for levels the model really has."""
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {"provider": "deepseek", "model": "deepseek-v4-flash", "thinking": value}
     )
     validate_init(data)
 

@@ -5,13 +5,15 @@ description: >
   named adapter is, how it is configured and dispatched, its special transport
   or protocol behaviors, and the environment variables that control it.
 version: 0.1.0
-last_changed_at: "2026-08-06T00:00:00Z"
+last_changed_at: "2026-08-09T00:00:00Z"
 related_files:
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/service.py
 - src/lingtai/llm/openai/adapter.py
 - src/lingtai/llm/openai/codex_ws.py
 - src/lingtai/llm/custom/adapter.py
+- src/lingtai/llm/deepseek/reasoning.py
+- src/lingtai/llm/openai/reasoning_control.py
 - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep one entry per named adapter. Add a section when a new adapter ships;
@@ -40,7 +42,7 @@ LingTai registers the following provider keys (each usable in presets / `init.js
 | `anthropic` | `AnthropicAdapter` | REST | Anthropic Messages API |
 | `gemini` | `GeminiAdapter` | REST | Google Gemini API |
 | `minimax` | `MiniMaxAdapter` | REST | MiniMax API |
-| `deepseek` | `OpenAIAdapter` (generic; `inject_reasoning_fallback=True`, `reasoning_effort_vocab="seven_tier"`, `prompt_cache_namespace="deepseek"`) | REST | DeepSeek API |
+| `deepseek` | `OpenAIAdapter` (generic; no subclass) + provider-local reasoning controller (`deepseek/reasoning.py`); `inject_reasoning_fallback=True`, `prompt_cache_namespace="deepseek"` (no `reasoning_effort_vocab` — superseded) | REST (Chat Completions default; Responses via `wire_api`) | DeepSeek API; owns its per-model/per-wire reasoning-effort contract — see the DeepSeek adapter section |
 | `glm`, `zhipu` | `ZhipuAdapter` | REST | Zhipu / GLM API |
 | `mimo` | `MimoAdapter` | REST | Xiaomi MiMo API |
 | `custom`, `grok`, `qwen`, `kimi` | `create_custom_adapter` (in `custom/adapter.py`) | REST | Generic OpenAI-compatible endpoint (`custom` is the canonical key; `grok`/`qwen`/`kimi` are custom-backed aliases) |
@@ -107,13 +109,76 @@ The Responses API can be selected with `wire_api=responses` or the legacy
 compaction threshold can be passed via the `compact_threshold` provider
 default (see `_register.py`).
 
-## Anthropic / Gemini / MiniMax / DeepSeek / Zhipu / MiMo
+## Anthropic / Gemini / MiniMax / Zhipu / MiMo
 
 Each of these adapters is a straightforward REST provider adapter in
 `src/lingtai/llm/<provider>/adapter.py`. They are configured through the
 standard provider fields (model, api_key / auth, base_url where applicable) and
 have no transport env-var selectors today. See the per-provider source for
 constructor details.
+
+## DeepSeek adapter
+
+DeepSeek has **no adapter class of its own**. It runs on the generic
+`OpenAIAdapter`; what is DeepSeek-specific is a provider-local reasoning
+controller that `_register._deepseek` injects into that generic transport
+(`src/lingtai/llm/deepseek/reasoning.py`). The transport itself holds no
+DeepSeek model names, levels, aliases, or defaults.
+
+**Reasoning effort.** DeepSeek owns its effort contract per model and per wire.
+The controller decides the reasoning fields for both wires; the generic
+`reasoning_effort_vocab` projection is not consulted on this route.
+
+| Model | Wire | Real canonical levels | Accepted compatibility aliases |
+|---|---|---|---|
+| `deepseek-v4-flash` | Chat Completions | `none`, `low`, `high`, `max` | `medium`→`high`, `xhigh`→`high` |
+| `deepseek-v4-pro` | Chat Completions | `none`, `high`, `max` | `medium`→`high`, `xhigh`→`max` |
+| `deepseek-v4-flash` | Responses | `low`, `high`, `max` | none documented |
+| `deepseek-v4-pro` | Responses | *unsupported — rejected* | — |
+
+Aliases are accepted on input and normalized, but are **not** capability
+choices: they never appear in the advertised level list
+(`canonical_levels()`). `minimal` is never accepted anywhere.
+
+**Omission means omission.** An omitted/`None` configured level is Auto: no
+`thinking` switch and no effort field are sent, and DeepSeek applies its own
+default. It is never turned into `high`. Explicit Chat `none` is different — it
+is a real requested value that sends `thinking: {"type": "disabled"}` and no
+effort.
+
+**Wire shapes.** Chat Completions sends a `thinking` enable/disable switch plus
+a flat `reasoning_effort`. `reasoning_effort` is a native OpenAI SDK parameter,
+but `thinking` is a DeepSeek body extension the SDK does not declare (and it
+takes no `**kwargs`), so it is passed via `extra_body` — the SDK merges that
+into the top level of the request JSON, which is the body DeepSeek documents.
+Passing `thinking` as a direct keyword would raise `TypeError` before any
+request. The merge composes with caller/subclass `extra_body` rather than
+replacing it. Responses sends nested `reasoning: {effort: ...}` and carries no
+`thinking` switch.
+
+**Superseded knob.** `reasoning_effort_vocab` selects the *generic* Chat effort
+projection. The DeepSeek route no longer consults it, so the factory neither
+defaults nor lifts it, and supplying it in a DeepSeek `init.json` / preset block
+is a validation error with an actionable message rather than a silent no-op. The
+field is unchanged for `openai` / `custom` routes. `inject_reasoning_fallback`
+and `prompt_cache_namespace` remain live for DeepSeek.
+
+**Fail-closed.** Unsupported values and unsupported routes raise before any SDK
+or network call: `low` on Pro, anything outside `low|high|max` on Responses,
+Pro on Responses (**including when the effort is omitted** — an impossible
+route cannot be made possible by omitting the level), and any explicit effort
+on a model DeepSeek is not known to publish. An *unknown* future model with an
+omitted effort still works and adds no reasoning fields.
+
+**Observation.** Each session captures one immutable application result, and
+the `llm_call` event reports exactly that applied patch as six bounded strings:
+`provider`, `wire`, `effort_requested`, `effort_normalized`, `effort_emitted`,
+`effort_provenance` (`omitted` | `explicit_config` | `compat_alias`).
+
+Source: `src/lingtai/llm/deepseek/reasoning.py` (capability, normalization,
+payloads), `src/lingtai/llm/openai/reasoning_control.py` (neutral carrier and
+hook protocol), `src/lingtai/llm/_register.py` (`_deepseek` injection),
+`src/lingtai/kernel/session.py` (observation).
 
 ## Custom / OpenRouter adapters
 

@@ -239,6 +239,7 @@ def register_all_adapters() -> None:
 
     def _deepseek(*, model=None, defaults=None, **kw):
         from .openai.adapter import OpenAIAdapter
+        from .deepseek.reasoning import DeepSeekReasoningController
         kw.pop("model", None)
         adapter_kw = {k: v for k, v in kw.items() if v is not None}
         d = defaults or {}
@@ -252,10 +253,15 @@ def register_all_adapters() -> None:
         if "compact_threshold" in d:
             # Preserve explicit None after the general None-pruning pass above.
             adapter_kw["compact_threshold"] = d["compact_threshold"]
-        # Lift the generic reasoning knobs from manifest defaults so DeepSeek
-        # users get the manifest-level off switch too (fable R2 M); the
-        # setdefaults below then only fill gaps for programmatic callers.
-        for _k in ("inject_reasoning_fallback", "reasoning_effort_vocab", "prompt_cache_namespace"):
+        # Lift the still-live generic reasoning knobs from manifest defaults so
+        # DeepSeek users get the manifest-level off switch too (fable R2 M);
+        # the setdefaults below then only fill gaps for programmatic callers.
+        #
+        # ``reasoning_effort_vocab`` is deliberately NOT lifted: it selects the
+        # generic Chat effort projection, which this route no longer consults —
+        # the provider-local controller below owns model/wire semantics. It is
+        # rejected at DeepSeek ingress validation rather than silently ignored.
+        for _k in ("inject_reasoning_fallback", "prompt_cache_namespace"):
             if _k in d:
                 adapter_kw[_k] = d[_k]
         # DeepSeek defaults collapsed into generic OpenAIAdapter params.
@@ -263,7 +269,6 @@ def register_all_adapters() -> None:
         # matching the neighbouring wire_api/compact_threshold lines (fable F3).
         adapter_kw.setdefault("base_url", "https://api.deepseek.com")
         adapter_kw.setdefault("inject_reasoning_fallback", True)
-        adapter_kw.setdefault("reasoning_effort_vocab", "seven_tier")
         adapter_kw.setdefault("prompt_cache_namespace", "deepseek")
         # Preserve the old DeepSeekAdapter Responses-wire fidelity: stateless
         # replay (no server-side response storage) and no generic
@@ -271,6 +276,12 @@ def register_all_adapters() -> None:
         # precedent). Chat Completions ignores both.
         adapter_kw.setdefault("responses_stateless_replay", True)
         adapter_kw.setdefault("compact_threshold", None)
+        # DeepSeek's reasoning-effort contract is genuinely provider-specific
+        # (per-model canonical levels, a ``thinking`` enable/disable switch,
+        # official compatibility aliases, and an omitted-means-provider-default
+        # rule), so DeepSeek owns it in its own package and injects it here.
+        # The generic transport stays neutral; no adapter subclass is involved.
+        adapter_kw.setdefault("reasoning_controller", DeepSeekReasoningController())
         return OpenAIAdapter(**adapter_kw)
 
     LLMService.register_adapter("deepseek", _deepseek)

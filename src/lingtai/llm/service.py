@@ -419,7 +419,10 @@ class LLMService(LLMServiceABC):
             model=session_model,
             system_prompt=system_prompt,
             tools=tools,
-            thinking=thinking,
+            # What an omitted level means belongs to the route, so the already
+            # selected adapter resolves it. This service holds no provider
+            # name, import, or branch of its own.
+            thinking=adapter.resolve_configured_thinking(thinking),
             interaction_id=interaction_id,
             json_schema=json_schema,
             force_tool_call=force_tool_call,

@@ -123,6 +123,23 @@ class LLMAdapter(ABC):
             return session
         return _GatedSession(session, self._gate)  # type: ignore[return-value]
 
+    def resolve_configured_thinking(self, thinking: Any) -> Any:
+        """Resolve a configured thinking value for THIS adapter's route.
+
+        The selected adapter already exists before ``create_chat``, so it — not
+        the generic service — is the neutral place to decide what an omitted
+        level means. The default is the long-standing cross-provider rule and
+        keeps every route that does not own an omitted-effort default
+        behaviorally unchanged.
+
+        A provider whose route owns its own default overrides this (see
+        ``OpenAIAdapter``, which delegates to an installed reasoning
+        controller). Nothing here knows any provider's name.
+        """
+        from lingtai.kernel.config import LEGACY_MAIN_SESSION_THINKING
+
+        return thinking or LEGACY_MAIN_SESSION_THINKING
+
     def static_adapter_comment(self) -> dict[str, Any] | None:
         """Return static, prompt-safe adapter guidance before chat creation.
 

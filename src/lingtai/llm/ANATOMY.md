@@ -14,8 +14,12 @@ related_files:
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/llm/minimax/ANATOMY.md
   - src/lingtai/llm/mimo/ANATOMY.md
+  - src/lingtai/llm/deepseek/__init__.py
+  - src/lingtai/llm/deepseek/reasoning.py
   - src/lingtai/llm/openai/ANATOMY.md
   - src/lingtai/llm/openai/adapter.py
+  - src/lingtai/llm/openai/reasoning_control.py
+  - tests/test_deepseek_reasoning_effort.py
   - src/lingtai/llm/openrouter/ANATOMY.md
   - src/lingtai/llm/service.py
   - src/lingtai/kernel/llm/ANATOMY.md
@@ -52,11 +56,12 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 | `identity_headers.py` | 53 | Shared non-secret LingTai HTTP identity/version header helper for SDK-backed LLM adapters. |
 | `claude_code/` | — | `claude-code` provider: drives the local `claude` CLI on a Claude subscription, preserving canonical LingTai history while resuming a successful CLI session for incremental prompts (`adapter.py:ClaudeCodeAdapter`). `claude_code/__init__.py` carries the provider's rationale — it is the Claude analogue of the Codex provider, calling the CLI binary rather than the Anthropic API with a key. |
 | `kimi_code/` | — | `kimi-code` provider: drives the local `kimi` CLI as a LingTai brain. Deliberately distinct from both the generic HTTP `kimi` provider and the `kimicode` daemon backend — the adapter owns canonical history, requires LingTai JSON actions back from the CLI, and uses the CLI's opaque resume identity for provider cache affinity (`kimi_code/__init__.py:1-6`). |
+| `deepseek/` | — | `deepseek` provider-local behavior. DeepSeek runs on the generic OpenAI-compatible transport (there is **no** `DeepSeekAdapter` subclass); `deepseek/reasoning.py` (324 LOC) owns the one thing that is genuinely DeepSeek-specific — per-model/per-wire canonical effort levels, the `thinking` enable/disable switch, the officially documented compatibility aliases, the omitted-means-provider-default rule, and each wire's exact payload shape. `_KNOWN_MODELS` separates a *known-unsupported* route (Pro on Responses — rejected even when the effort is omitted) from an *unknown future model* (omission still allowed, explicit effort rejected). Chat emits native flat `reasoning_effort` plus the `thinking` switch through `extra_body` (the installed OpenAI SDK declares no `thinking` parameter and no `**kwargs`, so a direct keyword would `TypeError` before any request; `extra_body` still lands at the JSON top level). `_register._deepseek` injects `DeepSeekReasoningController` into the generic adapter and deliberately no longer defaults/lifts the superseded `reasoning_effort_vocab` — explicit use fails DeepSeek ingress validation; the transport itself holds no DeepSeek vocabulary. |
 | `zhipu/` | — | Zhipu (GLM) provider: a thin OpenAI-compat wrapper whose sole deviation is a `_build_messages` session override merging consecutive same-role messages, because GLM rejects them with error 1214. The workaround is provider-local by design and must not migrate into the generic OpenAI adapter (`zhipu/adapter.py:1-8`). |
 | `api_gate.py` | 112 | `APICallGate` — RPM rate limiter with deque timestamps, `ThreadPoolExecutor`, daemon gate thread |
-| `base.py` | 150 | `LLMAdapter` ABC (4 abstract methods), `_GatedSession` proxy |
+| `base.py` | 218 | `LLMAdapter` ABC (4 abstract methods), `_GatedSession` proxy, and the non-abstract `resolve_configured_thinking` hook — the neutral seam where the ALREADY-SELECTED adapter decides what an omitted thinking level means on its own route. Default is the legacy `configured or LEGACY_MAIN_SESSION_THINKING`, so every non-owning provider is unchanged; `OpenAIAdapter` overrides it to delegate to an installed reasoning controller. |
 | `interface_converters.py` | 335 | Bidirectional converters: `to_*` / `from_*` for Anthropic, OpenAI, OpenAI Responses API, Gemini |
-| `service.py` | 454 | `LLMService` concrete class — adapter registry, session management, one-shot generation |
+| `service.py` | 491 | `LLMService` concrete class — adapter registry, session management, one-shot generation. `create_session` resolves a configured thinking level by calling ONLY the selected adapter's `resolve_configured_thinking` hook: this module deliberately holds no provider import, name, or branch, so per-provider effort rules cannot accumulate here (pinned by source/AST assertions in `tests/test_deepseek_reasoning_effort.py`). |
 
 ## Connections
 

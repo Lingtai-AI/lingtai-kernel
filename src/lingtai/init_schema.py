@@ -433,20 +433,43 @@ def validate_init(data: dict) -> list[str]:
                     f"provider={llm.get('provider')!r}"
                     + (f" api_compat={llm.get('api_compat')!r}" if llm.get("api_compat") else "")
                 )
+    # DeepSeek owns its own effort surface: what a manifest may carry depends on
+    # the exact model and wire, so validation delegates to the DeepSeek
+    # descriptor rather than to the kernel-global level tuple. The tuple is
+    # deliberately NOT extended with DeepSeek vocabulary.
+    from lingtai.llm.deepseek.reasoning import (
+        owns_provider as _deepseek_route,
+        validate_configured_thinking as _validate_deepseek_thinking,
+        validate_supported_config as _validate_deepseek_config,
+        wire_for as _deepseek_wire,
+    )
+
+    if _deepseek_route(llm.get("provider")):
+        # Reject generic knobs this route has superseded, so a setting that
+        # would silently do nothing fails loudly instead.
+        _validate_deepseek_config(llm)
+
     if "thinking" in llm:
-        if not llm_supports_thinking(llm):
-            raise ValueError(
-                "manifest.llm.thinking is currently supported only for "
-                "the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)}) or custom "
-                "OpenAI-compatible Responses"
+        if _deepseek_route(llm.get("provider")):
+            _validate_deepseek_thinking(
+                model=llm.get("model"),
+                wire=_deepseek_wire(llm),
+                thinking=llm["thinking"],
             )
-        thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
-            raise ValueError(
-                "manifest.llm.thinking: expected one of "
-                f"{', '.join(THINKING_LEVELS)}"
-            )
+        else:
+            if not llm_supports_thinking(llm):
+                raise ValueError(
+                    "manifest.llm.thinking is currently supported only for "
+                    "the Codex providers "
+                    f"({', '.join(THINKING_PROVIDERS)}), deepseek, or custom "
+                    "OpenAI-compatible Responses"
+                )
+            thinking = llm["thinking"]
+            if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+                raise ValueError(
+                    "manifest.llm.thinking: expected one of "
+                    f"{', '.join(THINKING_LEVELS)}"
+                )
     for key in llm:
         if key not in LLM_KNOWN:
             warnings.append(f"unknown field in manifest.llm: {key}")

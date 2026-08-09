@@ -584,24 +584,29 @@ def test_provider_defaults_lift_new_reasoning_keys():
     assert a._reasoning_effort_vocab == "seven_tier"
     assert a._prompt_cache_namespace == "custom-ns"
 
-    # fable R3-L2: the deepseek factory must lift the same keys from
+    # fable R3-L2: the deepseek factory must lift the STILL-LIVE keys from
     # defaults (its lift sits ABOVE the setdefault block; a reorder would
     # silently regress manifest opt-out back to True with all tests green).
+    #
+    # ``reasoning_effort_vocab`` is deliberately absent here: it selects the
+    # GENERIC Chat projection, which the DeepSeek route no longer consults —
+    # model/wire semantics are owned by the provider-local controller
+    # (src/lingtai/llm/deepseek/reasoning.py). Supplying it explicitly on a
+    # DeepSeek route is now a validation error rather than a live knob; see
+    # tests/test_deepseek_reasoning_effort.py A7 coverage.
     ds_defaults = build_provider_defaults_from_manifest_llm(
         {
             "provider": "deepseek",
             "inject_reasoning_fallback": False,
-            "reasoning_effort_vocab": "seven_tier",
             "prompt_cache_namespace": "custom-ns",
         },
         max_rpm=0,
     )
     assert ds_defaults is not None
     assert ds_defaults["deepseek"]["inject_reasoning_fallback"] is False
-    assert ds_defaults["deepseek"]["reasoning_effort_vocab"] == "seven_tier"
     assert ds_defaults["deepseek"]["prompt_cache_namespace"] == "custom-ns"
     ds_factory = LLMService._adapter_registry["deepseek"]
     dsa = ds_factory(model="deepseek-chat", api_key="sk-test", defaults=ds_defaults["deepseek"])
     assert dsa._inject_reasoning_fallback is False
-    assert dsa._reasoning_effort_vocab == "seven_tier"
     assert dsa._prompt_cache_namespace == "custom-ns"
+    assert dsa._reasoning_effort_vocab != "seven_tier"
