@@ -27,13 +27,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple
 
 
 if TYPE_CHECKING:
     from lingtai.agent import Agent
 
-from lingtai.kernel._fsutil import atomic_write_json
+from lingtai.kernel._fsutil import atomic_write_json, read_json
 from lingtai.kernel.i18n import t as _t
 from lingtai.kernel.llm.base import FunctionSchema, is_all_empty_response
 from lingtai.kernel.loop_guard import LoopGuard
@@ -134,6 +134,50 @@ def _kill_process_group(proc, *, term_timeout: float = 5.0, kill_timeout: float 
 # Agents may request a smaller per-batch value via daemon(max_turns=...), but
 # larger values are capped here.
 DEFAULT_MAX_TURNS = 1000
+# Per-agent daemon capability config, mirroring the sibling task_card
+# capability's ``<workdir>/taskcard/taskcard.json`` pattern: this capability's
+# own config lives at ``<workdir>/daemon/daemon.json``. Today it supports a
+# single ``max_turns`` field: a configured positive integer becomes the parent
+# ceiling (and therefore the emanation default) when ``setup()`` is called
+# without an explicit ``max_turns``. A missing file, a malformed/undecodable
+# file, or an invalid field all fall back to ``DEFAULT_MAX_TURNS``, so agents
+# without a config file behave exactly as before.
+_DAEMON_CONFIG_DIR = "daemon"
+_CONFIG_FILENAME = "daemon.json"
+
+
+class _Config(NamedTuple):
+    """Resolved agent-wide daemon defaults for new emanations."""
+
+    max_turns: int
+
+
+_BUILTIN_CONFIG = _Config(DEFAULT_MAX_TURNS)
+
+
+def _config_max_turns(value: Any) -> int:
+    """Coerce a configured ``max_turns``; any non-positive-integer falls back."""
+    return value if type(value) is int and value > 0 else DEFAULT_MAX_TURNS
+
+
+def _load_config(agent_working_dir: str | os.PathLike[str]) -> _Config:
+    """Load this agent's persisted daemon defaults (``<workdir>/daemon/daemon.json``).
+
+    Mirrors ``task_card``'s config contract: a file that is missing, malformed,
+    undecodable, or the wrong top-level type falls back to the built-in
+    defaults (``DEFAULT_MAX_TURNS``) without raising, so a broken config file
+    never breaks agent startup. Each field falls back independently.
+    """
+    config_path = Path(agent_working_dir) / _DAEMON_CONFIG_DIR / _CONFIG_FILENAME
+    if not config_path.is_file():
+        return _BUILTIN_CONFIG
+    try:
+        data = read_json(config_path, expect=dict)
+    except (OSError, ValueError, TypeError):
+        return _BUILTIN_CONFIG
+    return _Config(_config_max_turns(data.get("max_turns")))
+
+
 DAEMON_CONTEXT_COUNTDOWN_ROUNDS = 9
 DAEMON_CONTEXT_WARNING = (
     "Daemon context is at or above 90%. {remaining} proactive round(s) remain "
@@ -8251,11 +8295,21 @@ assert _FAMILY_CHECK_LAST_MAX == DaemonManager._CHECK_LAST_MAX
 
 
 def setup(agent: "Agent", max_emanations: int = 100,
-          max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
+          max_turns: int | None = None, timeout: float = 3600.0,
           notify_threshold: int = 20,
           process_port: DaemonProcessPort | None = None,
           interactive_terminal_port: InteractiveTerminalPort | None = None) -> DaemonManager:
-    """Set up the daemon capability on an agent."""
+    """Set up the daemon capability on an agent.
+
+    ``max_turns`` is the parent ceiling (and therefore the per-emanation
+    default when ``emanate`` omits it). When the caller omits it here, it
+    resolves from the agent's per-agent config file
+    (``<workdir>/daemon/daemon.json``, ``max_turns`` field) and falls back to
+    ``DEFAULT_MAX_TURNS`` (1000) when the file is missing or the value is
+    invalid. An explicit ``max_turns`` always wins over the config file.
+    """
+    if max_turns is None:
+        max_turns = _load_config(agent._working_dir).max_turns
     if process_port is None:
         if os.name == "posix":
             process_port = PosixDaemonProcessPort()

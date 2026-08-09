@@ -205,7 +205,7 @@ def _emanate_input_schema(backend_enum: list[str]) -> dict[str, Any]:
                 "type": ["integer", "null"],
                 "minimum": 1,
                 "maximum": DEFAULT_MAX_TURNS,
-                "description": "For 'emanate': max LLM tool-loop turns per emanation. Default: parent ceiling (1000). Use a smaller value to keep simple emanations bounded. Null for the default.",
+                "description": "For 'emanate': max LLM tool-loop turns per emanation. Default: parent ceiling (1000, or the agent's daemon/daemon.json max_turns when set). Use a smaller value to keep simple emanations bounded. Null for the default.",
             },
             "timeout": {
                 "type": ["number", "null"],

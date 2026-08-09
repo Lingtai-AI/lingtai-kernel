@@ -180,6 +180,74 @@ def test_daemon_max_emanations_override_reaches_manager(tmp_path):
     assert mgr._handle_list()["max_emanations"] == 30
 
 
+# -- per-agent daemon config: <workdir>/daemon/daemon.json -----------------
+
+
+def _write_daemon_config(agent_dir: Path, payload: dict) -> Path:
+    path = agent_dir / "daemon" / "daemon.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_daemon_default_max_turns_is_1000_without_config(tmp_path):
+    """No config file: the built-in 1000 ceiling applies unchanged."""
+    assert daemon_tool.DEFAULT_MAX_TURNS == 1000
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    assert mgr._max_turns == 1000
+
+
+def test_daemon_config_max_turns_overrides_default(tmp_path):
+    """daemon/daemon.json max_turns becomes the ceiling when setup omits it."""
+    _write_daemon_config(tmp_path / "daemon-agent", {"max_turns": 2500})
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    assert mgr._max_turns == 2500
+
+
+def test_daemon_explicit_max_turns_beats_config_file(tmp_path):
+    """An explicit capability/init.json max_turns wins over the config file."""
+    _write_daemon_config(tmp_path / "daemon-agent", {"max_turns": 2500})
+    agent = _make_agent(tmp_path, {"daemon": {"max_turns": 500}})
+    mgr = agent.get_capability("daemon")
+    assert mgr._max_turns == 500
+
+
+def test_daemon_invalid_config_max_turns_falls_back_to_1000(tmp_path):
+    """Non-positive-integer max_turns falls back to the built-in default."""
+    for i, bad in enumerate(("lots", 0, -5, 3.5, True)):
+        workdir_name = f"daemon-agent-{i}"
+        _write_daemon_config(tmp_path / workdir_name, {"max_turns": bad})
+        agent = _make_agent(tmp_path, ["daemon"], working_dir_name=workdir_name)
+        mgr = agent.get_capability("daemon")
+        assert mgr._max_turns == 1000, bad
+
+
+def test_daemon_malformed_config_falls_back_to_1000(tmp_path):
+    """A config file that cannot be read as a JSON object falls back safely."""
+    path = tmp_path / "daemon-agent" / "daemon" / "daemon.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    assert mgr._max_turns == 1000
+
+
+def test_daemon_load_config_coercion(tmp_path):
+    """The loader itself: per-field fallback without raising."""
+    assert daemon_tool._load_config(tmp_path).max_turns == 1000
+    _write_daemon_config(tmp_path, {"max_turns": 42})
+    assert daemon_tool._load_config(tmp_path).max_turns == 42
+    for bad in (0, -1, "x", 2.5, None):
+        _write_daemon_config(tmp_path, {"max_turns": bad})
+        assert daemon_tool._load_config(tmp_path).max_turns == 1000, bad
+    # Wrong top-level type (a list) also falls back to built-in defaults.
+    path = tmp_path / "daemon" / "daemon.json"
+    path.write_text(json.dumps([1, 2]), encoding="utf-8")
+    assert daemon_tool._load_config(tmp_path).max_turns == 1000
+
+
 def test_daemon_setup_reaps_dead_parent_running_record(tmp_path, monkeypatch):
     """Startup marks stale running daemon.json records failed."""
     from lingtai.tools import daemon as daemon_mod
