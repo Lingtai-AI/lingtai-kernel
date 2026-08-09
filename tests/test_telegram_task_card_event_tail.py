@@ -724,10 +724,13 @@ def test_row_started_at_is_derived_from_event_ts_and_rendered(tmp_path):
     expected = f"{local:%H:%M:%S} UTC{local:%z}"[:-2]
     window = manager._task_card_event_window()
     assert len(window) == 1
-    assert window[0]["started_at"] == expected
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert edits
-    assert f" · {expected}" in edits[-1][3]
+    # The row itself carries no inline stamp; the single per-API-call stamp is
+    # rendered below the API metadata line (Jason 2026-08-09).
+    row_line = next(ln for ln in edits[-1][3].splitlines() if "bash.run" in ln)
+    assert "UTC" not in row_line
+    assert f"\n{expected}\n" in f"\n{edits[-1][3]}"
 
 
 def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tmp_path):
@@ -796,7 +799,10 @@ def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tm
     assert edits
     rendered = edits[-1][3]
     assert "• bash.run: event-log row" in rendered
-    assert f" · {expected_stamp}" in rendered
+    assert f"· {expected_stamp}" not in rendered
+    # The single per-API-call stamp renders as its own line below the API
+    # metadata line (Jason 2026-08-09), not inline on the tool row.
+    assert f"\n{expected_stamp}\n" in f"\n{rendered}"
     assert "cache 87.8% · miss 170.6k/1.0M · calls 13" in rendered
     assert "ctx 63% · 171.2k/272.0k" in rendered
     assert "calls 888" not in rendered

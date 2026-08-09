@@ -134,9 +134,9 @@ class TaskCardEventProjection:
         action = tool_args.get("action")
         if isinstance(action, str) and action:
             row["tool_action"] = action
-        started_at = cls.format_row_timestamp(event.get("ts"))
-        if started_at:
-            row["started_at"] = started_at
+        # No per-row wall-clock stamp: each API-call group renders exactly one
+        # timestamp below its API metadata line (Jason 2026-08-09), so tool rows
+        # stay compact and the API-call timeline is uncluttered.
         raw_ts = event.get("ts")
         if type(raw_ts) in (int, float) and not isinstance(raw_ts, bool):
             try:
@@ -433,7 +433,12 @@ class TaskCardEventProjection:
             # out of tool rows.
             api_delay_s: float | None = None
             usage: dict[str, Any] | None = None
+            group_ts: float | None = None
             for row in group.get("events", []):
+                if group_ts is None:
+                    v = row.get("_ts")
+                    if type(v) in (int, float) and not isinstance(v, bool):
+                        group_ts = float(v)
                 v = row.get("api_delay_s")
                 if api_delay_s is None and type(v) in (int, float) and not isinstance(v, bool) and v >= 0:
                     api_delay_s = float(v)
@@ -445,6 +450,13 @@ class TaskCardEventProjection:
             info = cls.format_divider_info(api_delay_s, usage)
             if info:
                 rows.append({"kind": "api_info", "text": info})
+            # One wall-clock stamp per API call, below the API metadata line
+            # (Jason 2026-08-09): the first progress row of the group marks the
+            # round trip's start.
+            if group_ts is not None:
+                stamp = cls.format_row_timestamp(group_ts)
+                if stamp:
+                    rows.append({"kind": "api_ts", "text": stamp})
             rows.extend(group.get("events", []))
         text = cls.format_task_card_text(
             "",
@@ -688,7 +700,7 @@ class TaskCardEventProjection:
         now: datetime | None = None,
     ) -> str:
         footer = cls.footer(normal_rows)
-        tool_prepared: list[tuple[int, str, str, str, bool, str, str | None]] = []
+        tool_prepared: list[tuple[int, str, str, str, bool, str | None]] = []
         text_prepared: list[tuple[int, str]] = []
         api_prepared: list[tuple[int, str]] = []
         for idx, row in enumerate(rows):
@@ -703,6 +715,11 @@ class TaskCardEventProjection:
                 if info:
                     api_prepared.append((idx, info[: cls.EVENT_TEXT_CAP]))
                 continue
+            if kind == "api_ts":
+                stamp = redact_text(str(row.get("text", ""))).strip()
+                if stamp:
+                    api_prepared.append((idx, stamp[: cls.EVENT_TEXT_CAP]))
+                continue
             if kind == "text":
                 text = redact_text(str(row.get("text", ""))).strip()
                 if text:
@@ -716,8 +733,6 @@ class TaskCardEventProjection:
             label = f"{tool}.{action}" if action else tool
             redacted = redact_text(str(row.get("reasoning", "")))
             done = bool(row.get("done", False))
-            started_at = row.get("started_at", "")
-            started_at = started_at if isinstance(started_at, str) else ""
             status = row.get("status")
             status = status if status in {"success", "error", "???"} else None
             # Duration in whole milliseconds (sub-second tool results were
@@ -732,9 +747,7 @@ class TaskCardEventProjection:
             else:
                 status_suffix = f", {status}" if status else ""
                 suffix = f" ({elapsed}{status_suffix})"
-            tool_prepared.append(
-                (idx, label, redacted, suffix, done, started_at, status)
-            )
+            tool_prepared.append((idx, label, redacted, suffix, done, status))
 
         metadata_lines = cls.format_metadata(metadata)
         time_line = f"{cls.TIME_PREFIX}{cls.render_time(now)}"
@@ -753,13 +766,11 @@ class TaskCardEventProjection:
             _redacted,
             suffix,
             done,
-            started_at,
             status,
         ) in tool_prepared:
             marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
-            stamp_suffix = f" · {started_at}" if started_at else ""
-            tool_scaffold += len(prefix) + len(suffix) + len(stamp_suffix) + 2
+            tool_scaffold += len(prefix) + len(suffix) + 2
         fixed = (
             len(cls.HEADER)
             + 1
@@ -777,7 +788,7 @@ class TaskCardEventProjection:
         per_row_cap = max(0, min(cls.REASONING_CAP, budget // divisor))
 
         by_idx: dict[int, str] = {}
-        for idx, label, redacted, suffix, done, started_at, status in tool_prepared:
+        for idx, label, redacted, suffix, done, status in tool_prepared:
             excerpt = (
                 redacted[:per_row_cap] + "…"
                 if len(redacted) > per_row_cap
@@ -785,8 +796,7 @@ class TaskCardEventProjection:
             )
             marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
-            stamp_suffix = f" · {started_at}" if started_at else ""
-            by_idx[idx] = f"{prefix}{excerpt}{suffix}{stamp_suffix}"
+            by_idx[idx] = f"{prefix}{excerpt}{suffix}"
         for idx, text in text_prepared:
             excerpt = text[:per_row_cap] + "…" if len(text) > per_row_cap else text
             by_idx[idx] = f"• {excerpt}"

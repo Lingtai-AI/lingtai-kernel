@@ -96,7 +96,6 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
                     "tool_action": "run",
                     "reasoning": "build",
                     "status": "???",
-                    "started_at": "12:00:00 UTC+00",
                 },
             ],
         }
@@ -128,13 +127,49 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         "📋 ACTIVITIES\n"
         "──────────\n"
         "• public response\n"
-        "• bash.run: build (0ms, running) · 12:00:00 UTC+00\n"
+        "• bash.run: build (0ms, running)\n"
         "\n"
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
         "/taskcard N sets normal rows (1-10, current: 1).\n"
         "active · calls 2\n"
         "Last Updated: 02:30:00 UTC+08"
     )
+
+
+def test_api_call_renders_single_timestamp_below_metadata() -> None:
+    """Each API-call group renders exactly one wall-clock stamp below its API
+    metadata line (Jason 2026-08-09): per-tool-row stamps are gone, and the
+    group's first progress ts becomes the single per-API-call timestamp."""
+    ts = datetime(2026, 8, 3, 2, 30, tzinfo=timezone(timedelta(hours=8))).timestamp()
+    stamp = TaskCardEventProjection.format_row_timestamp(ts)
+    groups = [
+        {
+            "api_call_id": "api-1",
+            "events": [
+                {
+                    "kind": "tool",
+                    "tool": "bash",
+                    "tool_action": "run",
+                    "reasoning": "build",
+                    "status": "success",
+                    "_ts": ts,
+                    "api_delay_s": 2.3,
+                },
+            ],
+        }
+    ]
+    now = datetime(2026, 8, 3, 3, 0, tzinfo=timezone(timedelta(hours=8)))
+    text = TaskCardEventProjection.render_event_groups(
+        groups, normal_rows=1, metadata=None, now=now,
+    )
+    assert "↻ 2.3s" in text
+    assert f"· {stamp}" not in text
+    assert stamp in text
+    # The single stamp sits below the API metadata line, before the tool row.
+    api_idx = text.index("↻ 2.3s")
+    ts_idx = text.index(stamp)
+    tool_idx = text.index("bash.run")
+    assert api_idx < ts_idx < tool_idx
 
 
 def test_metadata_renders_device_and_working_dir_lines() -> None:
