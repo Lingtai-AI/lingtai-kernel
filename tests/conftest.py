@@ -45,6 +45,46 @@ def _isolate_notification_dismiss_guards():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_notification_hook_registry():
+    """Keep the module-level hook registry mirror test-local.
+
+    Hook add/drop/edit actions and ``sync_hook_registry`` mutate the
+    process-global ``_REGISTERED_HOOK_CHANNELS`` / ``_HOOK_REGISTRY_SEEDED`` /
+    ``_BLOCKED_CHANNEL_WARNED`` state (mirrored from each agent's
+    ``.notification/hooks.json``).  Without isolation a hook registered by one
+    test would keep its channel allowlisted (and the warn-and-flag dedupe
+    marker set) for every later test in the same process.
+    """
+
+    from lingtai.kernel.notifications import (
+        _BLOCKED_CHANNEL_WARNED,
+        _HOOK_REGISTRY_SEEDED,
+        _REGISTERED_HOOK_CHANNELS,
+        _invalidate_allow_predicate,
+    )
+
+    snapshot_channels = {
+        key: set(channels) for key, channels in _REGISTERED_HOOK_CHANNELS.items()
+    }
+    snapshot_seeded = set(_HOOK_REGISTRY_SEEDED)
+    snapshot_warned = {
+        key: set(channels) for key, channels in _BLOCKED_CHANNEL_WARNED.items()
+    }
+    yield
+    _REGISTERED_HOOK_CHANNELS.clear()
+    _REGISTERED_HOOK_CHANNELS.update(
+        {key: set(channels) for key, channels in snapshot_channels.items()}
+    )
+    _HOOK_REGISTRY_SEEDED.clear()
+    _HOOK_REGISTRY_SEEDED.update(snapshot_seeded)
+    _BLOCKED_CHANNEL_WARNED.clear()
+    _BLOCKED_CHANNEL_WARNED.update(
+        {key: set(channels) for key, channels in snapshot_warned.items()}
+    )
+    _invalidate_allow_predicate()
+
+
+@pytest.fixture(autouse=True)
 def _reset_package_logging():
     """Keep stdlib-logging handler state from leaking across tests.
 

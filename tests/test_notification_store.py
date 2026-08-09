@@ -28,6 +28,7 @@ from lingtai.kernel.notification_store import (
     NotificationStorePort,
     UNCONDITIONAL,
     UpdateAckRefsResult,
+    UpdateHookManifestsResult,
 )
 from lingtai.kernel.notifications import (
     ack_large_result_refs,
@@ -187,6 +188,56 @@ class TestSevenFamilyConformance:
         )
         assert noop == UpdateAckRefsResult(False, "already-present")
 
+    def test_atomic_hook_manifest_result_and_value(self, conforming_store):
+        store = conforming_store
+        manifest = {
+            "name": "comm_watcher",
+            "version": "1.0.0",
+            "channel": "comm_watcher",
+            "source": "G:",
+            "description": "poll relay",
+        }
+        result = store.update_hook_manifests(
+            lambda current: (
+                current + [dict(manifest)],
+                True,
+                ("append", "comm_watcher"),
+            )
+        )
+        assert isinstance(result, UpdateHookManifestsResult)
+        assert result.changed is True
+        assert result.value == ("append", "comm_watcher")
+        assert store.load_hook_manifests() == [manifest]
+        noop = store.update_hook_manifests(
+            lambda current: (current, False, "already-present")
+        )
+        assert noop == UpdateHookManifestsResult(False, "already-present")
+
+    def test_atomic_hook_manifest_append_and_clear(self, conforming_store):
+        store = conforming_store
+        manifest = {
+            "name": "comm_watcher",
+            "channel": "comm_watcher",
+            "source": "G:",
+            "description": "poll relay",
+        }
+        seeded = store.update_hook_manifests(
+            lambda current: ([dict(manifest)], True, "seed")
+        )
+        assert seeded == UpdateHookManifestsResult(True, "seed")
+        assert store.load_hook_manifests() == [manifest]
+        # Clearing through the atomic family reports presence and empties the
+        # registry; clearing again is an idempotent no-change.
+        cleared = store.update_hook_manifests(
+            lambda current: ([], True, "clear")
+        )
+        assert cleared == UpdateHookManifestsResult(True, "clear")
+        assert store.load_hook_manifests() == []
+        again = store.update_hook_manifests(
+            lambda current: ([], True, "clear")
+        )
+        assert again == UpdateHookManifestsResult(False, "clear")
+
 
 class TestPosixContractErrorsAndEnvelope:
     def test_missing_state_contract(self, tmp_path):
@@ -194,6 +245,7 @@ class TestPosixContractErrorsAndEnvelope:
         assert store.snapshot(_allow_all) == {}
         assert store.fingerprint(_allow_all) == ()
         assert store.load_ack_refs() == set()
+        assert store.load_hook_manifests() == []
         assert store.clear("email") is False
         result = store.compare_update_channel(
             "email", None, lambda current: ({**current, "new": True}, True, None)
@@ -225,6 +277,38 @@ class TestPosixContractErrorsAndEnvelope:
         ack.parent.mkdir(parents=True)
         ack.write_text("not-json", encoding="utf-8")
         assert _posix_store(tmp_path / "malformed-ack").load_ack_refs() == set()
+
+    def test_malformed_hook_manifests_is_legacy_empty(self, tmp_path):
+        registry = tmp_path / "malformed-hooks" / ".notification" / "hooks.json"
+        registry.parent.mkdir(parents=True)
+        registry.write_text("not-json", encoding="utf-8")
+        assert _posix_store(tmp_path / "malformed-hooks").load_hook_manifests() == []
+
+    def test_malformed_hook_manifests_survives_atomic_add(self, tmp_path):
+        """A malformed registry file is treated as empty, not as a write block."""
+        registry = tmp_path / "malformed-hooks-add" / ".notification" / "hooks.json"
+        registry.parent.mkdir(parents=True)
+        registry.write_text("{not-json", encoding="utf-8")
+        store = _posix_store(tmp_path / "malformed-hooks-add")
+        result = store.update_hook_manifests(
+            lambda current: (
+                current
+                + [
+                    {
+                        "name": "comm_watcher",
+                        "channel": "comm_watcher",
+                        "source": "G:",
+                        "description": "poll relay",
+                    }
+                ],
+                True,
+                "appended",
+            )
+        )
+        assert result == UpdateHookManifestsResult(True, "appended")
+        manifests = store.load_hook_manifests()
+        assert len(manifests) == 1
+        assert manifests[0]["name"] == "comm_watcher"
 
     def test_unreadable_entries_skip_reads_but_compare_propagates(
         self, tmp_path, monkeypatch
@@ -432,6 +516,40 @@ class TestAtomicCoreRedCounterexamples:
         for thread in threads:
             thread.join(timeout=5)
         assert store.load_ack_refs() == {f"ref-{i}" for i in range(16)}
+
+    def test_concurrent_hook_manifest_appends_use_atomic_family_eight(
+        self, tmp_path
+    ):
+        store = _posix_store(tmp_path / "hook-appends")
+        barrier = threading.Barrier(17)
+
+        def append(index: int) -> None:
+            barrier.wait()
+            store.update_hook_manifests(
+                lambda current: (
+                    current
+                    + [
+                        {
+                            "name": f"hook-{index}",
+                            "channel": f"hook_{index}",
+                            "source": "G:",
+                            "description": "poll relay",
+                        }
+                    ],
+                    True,
+                    None,
+                )
+            )
+
+        threads = [threading.Thread(target=append, args=(i,)) for i in range(16)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=5)
+        manifests = store.load_hook_manifests()
+        assert len(manifests) == 16
+        assert {m["name"] for m in manifests} == {f"hook-{i}" for i in range(16)}
 
     def test_concurrent_ack_union_and_purge_has_serial_result(self, tmp_path):
         store = _posix_store(tmp_path / "ack-union-purge")

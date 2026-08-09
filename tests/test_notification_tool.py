@@ -36,16 +36,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
 from lingtai.tools import (
     notification as notif_intrinsic,
     system as sys_intrinsic,
     context as context_intrinsic,
 )
+from lingtai.kernel.notifications import (
+    clear_blocked_channel_warning,
+    flag_unregistered_channel,
+    is_channel_allowed,
+    reset_hook_registry_for_tests,
+    submit,
+    sync_hook_registry,
+)
 from tests._notification_store_helpers import (
+    FakeNotificationStore,
     fingerprint_notifications,
+    load_hook_manifests_for_test,
     notification_store_for,
     publish_test_payload,
+    replace_hook_manifests_for_test,
     snapshot_notifications,
 )
 
@@ -1006,6 +1019,235 @@ def test_reserved_manual_collision_fails_loudly() -> None:
         pass
     else:  # pragma: no cover - the constructor must refuse
         raise AssertionError("duplicate reserved manual child must fail loudly")
+
+
+# ---------------------------------------------------------------------------
+# Hook registry lifecycle (add/drop/edit/list) + whitelist gate.
+# ---------------------------------------------------------------------------
+
+
+def _hook_manifest(
+    name: str = "comm_watcher",
+    channel: str = "comm_watcher",
+    **overrides: Any,
+) -> dict:
+    """Return a valid hook manifest with test defaults."""
+    manifest = {
+        "name": name,
+        "version": "1.0.0",
+        "channel": channel,
+        "source": "G:",
+        "description": "poll relay",
+        "how_to_modify": "notification(action='edit', input={'name': ...})",
+        "how_to_cancel": "notification(action='drop', input={'name': ...}) and stop the watcher",
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+class _WarnFlagAgent(_StubAgent):
+    """Stub agent with an ``_enqueue_system_notification`` recorder."""
+
+    def __init__(self, workdir: Path) -> None:
+        super().__init__(workdir)
+        self.system_notifications: list[dict[str, Any]] = []
+
+    def _enqueue_system_notification(self, **kwargs: Any) -> str:
+        self.system_notifications.append(kwargs)
+        return "evt_blocked"
+
+
+class TestHookLifecycle:
+    """Hook registry lifecycle through the notification family + whitelist gate."""
+
+    def test_add_shows_manifest_in_list(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        res = _call(agent, "add", **_hook_manifest())
+        assert res["status"] == "ok", res
+        assert res["reason"] == "added"
+        assert load_hook_manifests_for_test(tmp_path) == [_hook_manifest()]
+
+    def test_add_duplicate_name_errors(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        res = _call(agent, "add", **_hook_manifest())
+        assert res["status"] == "error"
+        assert res["reason"] == "duplicate_name"
+        assert res["name"] == "comm_watcher"
+        assert len(load_hook_manifests_for_test(tmp_path)) == 1
+
+    def test_add_channel_in_use_errors(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        res = _call(
+            agent, "add", **_hook_manifest(name="second_hook", channel="comm_watcher")
+        )
+        assert res["status"] == "error"
+        assert res["reason"] == "channel_in_use"
+        assert res["channel"] == "comm_watcher"
+        assert res["name"] == "comm_watcher"
+        assert len(load_hook_manifests_for_test(tmp_path)) == 1
+
+    def test_edit_changes_fields(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        res = _call(
+            agent,
+            "edit",
+            name="comm_watcher",
+            description="updated relay",
+            channel="comm_watcher_v2",
+        )
+        assert res["status"] == "ok", res
+        assert res["reason"] == "edited"
+        manifests = load_hook_manifests_for_test(tmp_path)
+        assert manifests[0]["description"] == "updated relay"
+        assert manifests[0]["channel"] == "comm_watcher_v2"
+        assert manifests[0]["name"] == "comm_watcher"
+
+    def test_edit_channel_in_use_errors(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        assert _call(
+            agent, "add", **_hook_manifest(name="second", channel="comm_watcher2")
+        )["status"] == "ok"
+        res = _call(agent, "edit", name="second", channel="comm_watcher")
+        assert res["status"] == "error"
+        assert res["reason"] == "channel_in_use"
+        assert res["channel"] == "comm_watcher"
+        # The first hook's manifest is untouched.
+        manifests = load_hook_manifests_for_test(tmp_path)
+        assert manifests[0]["channel"] == "comm_watcher"
+        assert manifests[1]["channel"] == "comm_watcher2"
+
+    def test_edit_unknown_name_errors(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        res = _call(agent, "edit", name="missing", description="x")
+        assert res["status"] == "error"
+        assert res["reason"] == "not_found"
+
+    def test_drop_removes_and_revokes_allowlist(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        sync_hook_registry(agent)
+        assert is_channel_allowed("comm_watcher") is True
+
+        res = _call(agent, "drop", name="comm_watcher")
+        assert res["status"] == "ok", res
+        assert res["reason"] == "dropped"
+        assert load_hook_manifests_for_test(tmp_path) == []
+        assert is_channel_allowed("comm_watcher") is False
+
+    def test_drop_unknown_name_errors(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        res = _call(agent, "drop", name="missing")
+        assert res["status"] == "error"
+        assert res["reason"] == "not_found"
+
+    def test_add_edit_drop_list_round_trip_dispatches_through_family(
+        self, tmp_path: Path
+    ) -> None:
+        """add → edit → drop → list round trip through the real dispatcher."""
+        agent = _StubAgent(tmp_path)
+
+        added = _call(agent, "add", **_hook_manifest())
+        assert added["status"] == "ok" and added["reason"] == "added"
+        listed = _call(agent, "list")
+        assert listed["status"] == "ok"
+        assert [m["name"] for m in listed["hooks"]] == ["comm_watcher"]
+
+        edited = _call(agent, "edit", name="comm_watcher", description="edited relay")
+        assert edited["status"] == "ok" and edited["reason"] == "edited"
+        listed = _call(agent, "list")
+        assert listed["hooks"][0]["description"] == "edited relay"
+
+        dropped = _call(agent, "drop", name="comm_watcher")
+        assert dropped["status"] == "ok" and dropped["reason"] == "dropped"
+        listed = _call(agent, "list")
+        assert listed["status"] == "ok" and listed["hooks"] == []
+        assert load_hook_manifests_for_test(tmp_path) == []
+
+    def test_registered_hook_channel_becomes_allowed_after_sync(
+        self, tmp_path: Path
+    ) -> None:
+        """Registering a hook allowlists its channel; unregistered stay blocked."""
+        agent = _StubAgent(tmp_path)
+        assert is_channel_allowed("comm_watcher") is False
+
+        replace_hook_manifests_for_test(tmp_path, [_hook_manifest()])
+        sync_hook_registry(agent)
+
+        assert is_channel_allowed("comm_watcher") is True
+        assert is_channel_allowed("some_other_hook") is False
+
+    def test_unregistered_channels_stay_not_allowed(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        sync_hook_registry(agent)
+        assert is_channel_allowed("comm_watcher") is False
+        # Kernel-side publishing refuses the unregistered channel entirely.
+        with pytest.raises(ValueError, match="not allowlisted"):
+            submit(agent, "comm_watcher", data={}, header="x")
+
+    def test_flag_unregistered_channel_warns_once_then_after_clear(
+        self, tmp_path: Path
+    ) -> None:
+        """Warn-and-flag dedupes per workdir+channel until cleared."""
+        agent = _WarnFlagAgent(tmp_path)
+
+        flag_unregistered_channel(agent, "comm_watcher")
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 1
+        enqueued = agent.system_notifications[0]
+        assert enqueued["source"] == "notification_hook"
+        assert enqueued["ref_id"] == "blocked_channel:comm_watcher"
+        assert "not registered" in enqueued["body"]
+
+        clear_blocked_channel_warning(agent, "comm_watcher")
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 2
+
+        # An allowlisted channel never flags.
+        flag_unregistered_channel(agent, "system")
+        assert len(agent.system_notifications) == 2
+
+    def test_sync_hook_registry_seeds_from_fake_store(self, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        store = FakeNotificationStore()
+        agent = SimpleNamespace(
+            _working_dir=tmp_path / "fake-agent",
+            _notification_store=store,
+        )
+        replace_hook_manifests_for_test(agent, [_hook_manifest()])
+
+        sync_hook_registry(agent)
+
+        assert is_channel_allowed("comm_watcher") is True
+
+    def test_reset_hook_registry_for_tests_isolation(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        replace_hook_manifests_for_test(tmp_path, [_hook_manifest()])
+        sync_hook_registry(agent)
+        assert is_channel_allowed("comm_watcher") is True
+
+        reset_hook_registry_for_tests()
+
+        assert is_channel_allowed("comm_watcher") is False
+        # Re-sync re-seeds from the still-persisted registry (mirror is lazy).
+        sync_hook_registry(agent)
+        assert is_channel_allowed("comm_watcher") is True
+
+    def test_malformed_store_registry_syncs_to_empty(self, tmp_path: Path) -> None:
+        """A broken hooks.json seeds no channels instead of crashing the sync."""
+        agent = _StubAgent(tmp_path)
+        (tmp_path / ".notification").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".notification" / "hooks.json").write_text(
+            "{not-json", encoding="utf-8"
+        )
+
+        sync_hook_registry(agent)
+
+        assert is_channel_allowed("comm_watcher") is False
 
 
 # ---------------------------------------------------------------------------
