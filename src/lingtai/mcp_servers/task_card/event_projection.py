@@ -450,11 +450,12 @@ class TaskCardEventProjection:
             # One wall-clock stamp per API call, above the API metadata line
             # (Jason 2026-08-09): the first progress row of the group marks the
             # round trip's start; Jason later asked for the stamp to sit above
-            # the metadata line (2026-08-09 follow-up).
+            # the metadata line and carry a leading symbol (2026-08-09
+            # follow-up).
             if group_ts is not None:
                 stamp = cls.format_row_timestamp(group_ts)
                 if stamp:
-                    rows.append({"kind": "api_ts", "text": stamp})
+                    rows.append({"kind": "api_ts", "text": f"· {stamp}"})
             info = cls.format_divider_info(api_delay_s, usage)
             if info:
                 rows.append({"kind": "api_info", "text": info})
