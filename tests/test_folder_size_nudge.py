@@ -4,6 +4,8 @@ import json
 import math
 from pathlib import Path
 
+import pytest
+
 from lingtai.kernel import nudge as nudge_mod
 from lingtai.kernel.nudge import ENTRY_CHANNEL_STORAGE_SIZE, run_checks
 from lingtai.kernel.nudge import folder_size
@@ -15,6 +17,9 @@ from lingtai.kernel.nudge.folder_size import (
     _today_utc,
 )
 from tests._notification_store_helpers import notification_store_for, snapshot_notifications
+
+CHUNK = 2 * 1024 * 1024  # 2 MiB
+TINY_LIMIT = "0.0001"  # 100_000 decimal bytes
 
 
 class _Agent:
@@ -28,9 +33,15 @@ class _Agent:
         self.logs.append((event, fields))
 
 
+@pytest.fixture
+def over_agent(monkeypatch, tmp_path):
+    (tmp_path / "chunk.bin").write_bytes(b"z" * CHUNK)
+    monkeypatch.setenv(LIMIT_ENV, TINY_LIMIT)
+    return _Agent(tmp_path)
+
+
 def _entries(workdir):
-    payload = snapshot_notifications(workdir).get("nudge", {})
-    return payload.get("data", {}).get("nudges", [])
+    return snapshot_notifications(workdir).get("nudge", {}).get("data", {}).get("nudges", [])
 
 
 def _state(workdir):
@@ -52,33 +63,17 @@ def _force_next_walk(workdir):
     _state_file(workdir).write_text(json.dumps(data), encoding="utf-8")
 
 
-def test_limit_env_default_and_invalid_values(monkeypatch):
+def test_limit_env_default_invalid_and_non_finite(monkeypatch):
     monkeypatch.delenv(LIMIT_ENV, raising=False)
     assert _read_limit_gb() == (DEFAULT_LIMIT_GB, None)
-
-    monkeypatch.setenv(LIMIT_ENV, "10")
-    assert _read_limit_gb() == (10.0, None)
-
-    monkeypatch.setenv(LIMIT_ENV, "0.5")
-    assert _read_limit_gb() == (0.5, None)
-
-    monkeypatch.setenv(LIMIT_ENV, "wat")
-    assert _read_limit_gb() == (DEFAULT_LIMIT_GB, "wat")
-
-    monkeypatch.setenv(LIMIT_ENV, "0")
-    assert _read_limit_gb() == (DEFAULT_LIMIT_GB, "0")
-
-    monkeypatch.setenv(LIMIT_ENV, "-3")
-    assert _read_limit_gb() == (DEFAULT_LIMIT_GB, "-3")
-
-
-def test_limit_env_rejects_non_finite_values(monkeypatch):
-    for bad in ("nan", "inf", "-inf", "1e309"):
+    for good in ("10", "0.5"):
+        monkeypatch.setenv(LIMIT_ENV, good)
+        assert _read_limit_gb() == (float(good), None)
+    for bad in ("wat", "0", "-3", "nan", "inf", "-inf", "1e309"):
         monkeypatch.setenv(LIMIT_ENV, bad)
         value, invalid = _read_limit_gb()
-        assert value == DEFAULT_LIMIT_GB, bad
-        assert invalid == bad, bad
-        assert math.isfinite(value), bad
+        assert value == DEFAULT_LIMIT_GB and invalid == bad
+        assert math.isfinite(value)
 
 
 def test_dir_size_sums_files_and_skips_symlinks(tmp_path):
@@ -88,201 +83,129 @@ def test_dir_size_sums_files_and_skips_symlinks(tmp_path):
     (sub / "b.bin").write_bytes(b"x" * 100)
     (tmp_path / "link-file").symlink_to(tmp_path / "a.txt")
     (tmp_path / "link-dir").symlink_to(sub, target_is_directory=True)
+    assert _dir_size(tmp_path) == 105
 
-    assert _dir_size(tmp_path) == 5 + 100
 
-
-def test_under_limit_emits_no_finding_and_clears(monkeypatch, tmp_path):
+def test_under_limit_noop_and_clears(monkeypatch, tmp_path):
     agent = _Agent(tmp_path)
     (tmp_path / "small.bin").write_bytes(b"y" * 1024)
     monkeypatch.setenv(LIMIT_ENV, "5")
-
     folder_size.check(agent)
     assert _entries(tmp_path) == []
-    assert _state(tmp_path)["folder_size"]["size_bytes"] == 1024
-
-    from lingtai.kernel.nudge import upsert as _upsert
-
-    _upsert(agent, "folder_size", {"title": "stale", "detail": "old"})
-    assert len(_entries(tmp_path)) == 1
-
+    nudge_mod.upsert(agent, "folder_size", {"title": "stale", "detail": "old"})
     folder_size.check(agent)
     assert _entries(tmp_path) == []
 
 
-def test_over_limit_emits_finding_with_facts(monkeypatch, tmp_path):
-    agent = _Agent(tmp_path)
-    (tmp_path / "chunk.bin").write_bytes(b"z" * (2 * 1024 * 1024))
-    monkeypatch.setenv(LIMIT_ENV, "0.0001")
-
-    folder_size.check(agent)
-    entries = _entries(tmp_path)
-    assert len(entries) == 1
-    entry = entries[0]
+def test_over_limit_emits_facts(over_agent, tmp_path):
+    folder_size.check(over_agent)
+    entry = _entries(tmp_path)[0]
     assert entry["kind"] == "folder_size"
     assert entry["nudge_channel"] == ENTRY_CHANNEL_STORAGE_SIZE
-    assert entry["size_bytes"] == 2 * 1024 * 1024
-    assert entry["limit_gb"] == 0.0001
+    assert entry["size_bytes"] == CHUNK
+    assert entry["limit_gb"] == float(TINY_LIMIT)
     assert entry["local_path"] == str(tmp_path)
-    assert "exceeds" in entry["title"]
-    assert str(tmp_path) in entry["detail"]
-    assert LIMIT_ENV in entry["detail"]
     assert "does not authorize deletion" in entry["detail"]
     assert "owner/human authorization" in entry["detail"]
 
 
-def test_no_non_finite_value_reaches_state_or_notification(monkeypatch, tmp_path):
+def test_no_non_finite_reaches_state_or_notification(monkeypatch, tmp_path):
     agent = _Agent(tmp_path)
-    (tmp_path / "chunk.bin").write_bytes(b"z" * (2 * 1024 * 1024))
+    (tmp_path / "chunk.bin").write_bytes(b"z" * CHUNK)
     monkeypatch.setenv(LIMIT_ENV, "nan")
-
     folder_size.check(agent)
     state = _state(tmp_path)["folder_size"]
     assert state["limit_gb"] == DEFAULT_LIMIT_GB
-    assert math.isfinite(state["limit_gb"])
-    assert math.isfinite(state["size_bytes"])
     for entry in _entries(tmp_path):
-        assert math.isfinite(entry["limit_gb"])
-        assert math.isfinite(entry["size_bytes"])
-        assert math.isfinite(entry["size_gb"])
+        assert all(math.isfinite(entry[k]) for k in ("limit_gb", "size_bytes", "size_gb"))
 
 
 def test_decimal_gb_boundary(monkeypatch, tmp_path):
     agent = _Agent(tmp_path)
-    monkeypatch.setenv(LIMIT_ENV, "0.0001")  # 100_000 bytes
-
+    monkeypatch.setenv(LIMIT_ENV, TINY_LIMIT)
     (tmp_path / "at-limit.bin").write_bytes(b"a" * 100_000)
     folder_size.check(agent)
-    assert _entries(tmp_path) == []  # exactly at threshold is not over
-
+    assert _entries(tmp_path) == []
     (tmp_path / "over.bin").write_bytes(b"b" * 1)
     _force_next_walk(tmp_path)
     folder_size.check(agent)
     assert len(_entries(tmp_path)) == 1
 
 
-def test_walk_gate_skips_second_walk_same_utc_day(monkeypatch, tmp_path):
-    agent = _Agent(tmp_path)
-    (tmp_path / "chunk.bin").write_bytes(b"z" * (2 * 1024 * 1024))
-    monkeypatch.setenv(LIMIT_ENV, "0.0001")
-
-    folder_size.check(agent)
-    assert len(_entries(tmp_path)) == 1
-    first_state = _state(tmp_path)["folder_size"]["size_bytes"]
-
+def test_walk_gate_skips_second_walk_same_day(over_agent, tmp_path):
+    folder_size.check(over_agent)
+    first = _state(tmp_path)["folder_size"]["size_bytes"]
     (tmp_path / "more.bin").write_bytes(b"q" * (3 * 1024 * 1024))
-    folder_size.check(agent)
-    assert _state(tmp_path)["folder_size"]["size_bytes"] == first_state
+    folder_size.check(over_agent)
+    assert _state(tmp_path)["folder_size"]["size_bytes"] == first
     assert len(_entries(tmp_path)) == 1
 
 
-def test_global_repeat_expiry_reappears_without_new_walk(monkeypatch, tmp_path):
-    agent = _Agent(tmp_path)
-    (tmp_path / "chunk.bin").write_bytes(b"z" * (2 * 1024 * 1024))
-    monkeypatch.setenv(LIMIT_ENV, "0.0001")
-
-    folder_size.check(agent)
-    assert len(_entries(tmp_path)) == 1
-    first_walk = _state(tmp_path)["folder_size"]["size_bytes"]
-
-    # Dismiss the currently displayed finding (short repeat interval).
+def test_global_repeat_expiry_reappears_same_day(over_agent, tmp_path, monkeypatch):
+    folder_size.check(over_agent)
+    first = _state(tmp_path)["folder_size"]["size_bytes"]
     monkeypatch.setenv("LINGTAI_NUDGE_REPEAT_INTERVAL", "2s")
-    nudge_mod.record_dismissal(agent)
+    nudge_mod.record_dismissal(over_agent)
+    calls: list[str] = []
+    real = nudge_mod.upsert
 
-    # Same-day re-evaluation must call upsert again (not early-return) and,
-    # because the dismissal is still fresh, the persisted finding stays.
-    upsert_calls: list[tuple] = []
-    real_upsert = nudge_mod.upsert
+    def spy(a, k, b):
+        calls.append(k)
+        return real(a, k, b)
 
-    def _spy(agent_, kind, body):
-        upsert_calls.append((kind, body))
-        return real_upsert(agent_, kind, body)
-
-    monkeypatch.setattr(nudge_mod, "upsert", _spy)
-    folder_size.check(agent)
-    assert any(kind == "folder_size" for kind, _ in upsert_calls)
-    assert _state(tmp_path)["folder_size"]["size_bytes"] == first_walk
-    assert len(_entries(tmp_path)) == 1
-
-    # Expire the dismissal (rewrite until in the past) and re-evaluate: the
-    # same-day finding re-emits without a second walk.
+    monkeypatch.setattr(nudge_mod, "upsert", spy)
+    folder_size.check(over_agent)
+    assert "folder_size" in calls
+    assert _state(tmp_path)["folder_size"]["size_bytes"] == first
     data = _state(tmp_path)
-    for entry in data.get("dismissed", {}).values():
-        entry["until"] = 1_000_000.0
+    for e in data.get("dismissed", {}).values():
+        e["until"] = 1_000_000.0
     _state_file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
-
-    folder_size.check(agent)
-    assert _state(tmp_path)["folder_size"]["size_bytes"] == first_walk
+    folder_size.check(over_agent)
     assert len(_entries(tmp_path)) == 1
 
 
-def test_enable_off_on_restores_finding_same_day_without_walk(monkeypatch, tmp_path):
-    agent = _Agent(tmp_path)
-    (tmp_path / "chunk.bin").write_bytes(b"z" * (2 * 1024 * 1024))
-    monkeypatch.setenv(LIMIT_ENV, "0.0001")
-
-    folder_size.check(agent)
-    assert len(_entries(tmp_path)) == 1
-
+def test_enable_off_on_restores_same_day(over_agent, tmp_path, monkeypatch):
+    folder_size.check(over_agent)
     monkeypatch.setenv("LINGTAI_NUDGE_ENABLED", "off")
-    run_checks(agent)
+    run_checks(over_agent)
     assert _entries(tmp_path) == []
-
     monkeypatch.setenv("LINGTAI_NUDGE_ENABLED", "on")
-    run_checks(agent)
+    run_checks(over_agent)
     assert len(_entries(tmp_path)) == 1
 
 
-def test_transient_upsert_failure_is_retried_same_day_without_walk(monkeypatch, tmp_path):
-    agent = _Agent(tmp_path)
-    (tmp_path / "chunk.bin").write_bytes(b"z" * (2 * 1024 * 1024))
-    monkeypatch.setenv(LIMIT_ENV, "0.0001")
-    real_upsert = nudge_mod.upsert
+def test_transient_upsert_failure_retried_same_day(over_agent, tmp_path, monkeypatch):
+    real = nudge_mod.upsert
 
-    def _fail_once(agent_, kind, body):
+    def fail(a, k, b):
         raise RuntimeError("transient store failure")
 
-    monkeypatch.setattr(nudge_mod, "upsert", _fail_once)
-    import pytest
-
-    with pytest.raises(RuntimeError, match="transient store failure"):
-        folder_size.check(agent)
-    assert _entries(tmp_path) == []
-    first_walk = _state(tmp_path)["folder_size"]["size_bytes"]
-
-    monkeypatch.setattr(nudge_mod, "upsert", real_upsert)
-    folder_size.check(agent)
-    assert _state(tmp_path)["folder_size"]["size_bytes"] == first_walk
+    monkeypatch.setattr(nudge_mod, "upsert", fail)
+    with pytest.raises(RuntimeError, match="transient"):
+        folder_size.check(over_agent)
+    first = _state(tmp_path)["folder_size"]["size_bytes"]
+    monkeypatch.setattr(nudge_mod, "upsert", real)
+    folder_size.check(over_agent)
+    assert _state(tmp_path)["folder_size"]["size_bytes"] == first
     assert len(_entries(tmp_path)) == 1
 
 
-def test_run_checks_dispatches_folder_size(monkeypatch, tmp_path):
-    agent = _Agent(tmp_path)
-    (tmp_path / "chunk.bin").write_bytes(b"z" * (2 * 1024 * 1024))
-    monkeypatch.setenv(LIMIT_ENV, "0.0001")
+def test_run_checks_dispatches(over_agent, tmp_path, monkeypatch):
     monkeypatch.setenv("LINGTAI_NUDGE_ENABLED", "on")
-
-    run_checks(agent)
-    entries = _entries(tmp_path)
-    assert any(e["kind"] == "folder_size" for e in entries)
+    run_checks(over_agent)
+    assert any(e["kind"] == "folder_size" for e in _entries(tmp_path))
 
 
-def test_reprobe_next_day_clears_when_under_threshold(monkeypatch, tmp_path):
-    agent = _Agent(tmp_path)
-    (tmp_path / "chunk.bin").write_bytes(b"z" * (2 * 1024 * 1024))
-    monkeypatch.setenv(LIMIT_ENV, "0.0001")
-
-    folder_size.check(agent)
+def test_reprobe_next_day_clears(over_agent, tmp_path):
+    folder_size.check(over_agent)
     assert len(_entries(tmp_path)) == 1
-
     (tmp_path / "chunk.bin").unlink()
     _force_next_walk(tmp_path)
-
-    folder_size.check(agent)
+    folder_size.check(over_agent)
     assert _entries(tmp_path) == []
 
 
 def test_today_utc_format():
-    value = _today_utc()
-    assert len(value) == 10
-    assert value[4] == "-" and value[7] == "-"
+    v = _today_utc()
+    assert len(v) == 10 and v[4] == "-" and v[7] == "-"

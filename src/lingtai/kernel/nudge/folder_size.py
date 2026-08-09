@@ -1,19 +1,10 @@
-"""Nudge: warn the agent when its working directory grows past a threshold.
+"""Nudge when the agent working directory grows past a threshold.
 
-The agent loop runs this check once per heartbeat. The recursive directory
-walk is throttled to one probe per UTC day (a bounded observation cost), while
-``upsert``/``remove`` are re-evaluated on every heartbeat against the persisted
-last observation and the current ``LINGTAI_NUDGE_FOLDER_SIZE_GB`` value. That
-keeps the shared global Nudge policy live: a dismissed finding returns once the
-global repeat interval expires, ``LINGTAI_NUDGE_ENABLED=off`` then ``on``
-restores the still-current finding the same day, and a transient store failure
-is retried on the next heartbeat without an extra directory walk.
-
-The threshold is read from the environment at every evaluation, so a changed
-value applies immediately without a restart; invalid or non-finite values fail
-safe to the documented default of 5 GB and are reported as a bounded
-diagnostic log. The finding is advisory only: it never grants deletion or
-cleanup authority.
+The recursive size walk runs at most once per UTC day (bounded observation
+cost); upsert/remove are re-evaluated every heartbeat against the persisted
+observation and current ``LINGTAI_NUDGE_FOLDER_SIZE_GB`` (default ``5``
+decimal GB), so global dismiss/repeat/enable/retry semantics stay live.
+Threshold is advisory only; invalid/non-finite values fall back to 5.
 """
 from __future__ import annotations
 
@@ -28,18 +19,11 @@ _KIND = "folder_size"
 _STATE_FILE = Path(".notification") / ".nudge_state.json"
 DEFAULT_LIMIT_GB = 5.0
 LIMIT_ENV = "LINGTAI_NUDGE_FOLDER_SIZE_GB"
-# Decimal gigabytes (10**9 bytes) to match the environment name and registry;
-# GiB (2**30) would silently shift a configured 5 GB threshold by ~7.4%.
 _BYTES_PER_GB = 1_000_000_000
 
 
 def check(agent) -> None:
-    """Evaluate the folder-size nudge for ``agent`` on every heartbeat.
-
-    The recursive walk runs at most once per UTC day; the upsert/remove decision
-    is re-evaluated every call against the persisted last observation so global
-    enable/dismiss/repeat/retry semantics stay live.
-    """
+    """Evaluate the folder-size nudge on every heartbeat (walk max once/day)."""
     persistent = _load_persistent_state(agent)
     folder_state = persistent.setdefault(_KIND, {})
 
@@ -47,23 +31,15 @@ def check(agent) -> None:
     if invalid:
         _safe_log(agent, "folder_size_limit_invalid", value=invalid)
 
-    # Bounded observation gate: walk at most once per UTC day.
     if folder_state.get("last_check_date") != _today_utc():
         try:
             total_bytes = _dir_size(Path(agent._working_dir))
-        except Exception as e:  # pragma: no cover - defensive: nudge must be inert
+        except Exception as e:  # pragma: no cover - defensive
             _safe_log(agent, "folder_size_probe_error", error=str(e)[:200])
             return
-        folder_state.update(
-            {
-                "last_check_date": _today_utc(),
-                "size_bytes": total_bytes,
-                "limit_gb": limit_gb,
-            }
-        )
+        folder_state.update({"last_check_date": _today_utc(), "size_bytes": total_bytes, "limit_gb": limit_gb})
         _save_persistent_state(agent, persistent)
 
-    # No observation yet (first walk failed); nothing to evaluate.
     if "size_bytes" not in folder_state:
         return
 
@@ -84,7 +60,7 @@ def check(agent) -> None:
                 f"({_format_gb(total_bytes / _BYTES_PER_GB)}), above the "
                 f"{_format_gb(limit_gb)} threshold from {LIMIT_ENV}. "
                 "This finding is advisory only and does not authorize deletion or "
-                "cleanup; remove or archive files only with the existing owner/human "
+                "cleanup; remove or archive files only with existing owner/human "
                 "authorization. Once back under the threshold, this nudge clears "
                 "on the next evaluation."
             ),
@@ -99,7 +75,7 @@ def check(agent) -> None:
 
 
 def _read_limit_gb(environ: Mapping[str, str] | None = None) -> tuple[float, str | None]:
-    """Read the GB threshold; invalid, non-finite, or missing values fall back to ``5``."""
+    """Read GB threshold; invalid/non-finite/missing fall back to ``5``."""
     env = os.environ if environ is None else environ
     raw = str(env.get(LIMIT_ENV, "")).strip()
     if not raw:
@@ -114,18 +90,15 @@ def _read_limit_gb(environ: Mapping[str, str] | None = None) -> tuple[float, str
 
 
 def _dir_size(path: Path) -> int:
-    """Recursively sum regular-file sizes under ``path`` (best-effort)."""
+    """Recursively sum regular-file sizes, skipping symlinks (cycle-safe)."""
     total = 0
     for root, dirs, files in os.walk(path, topdown=True):
-        # Never descend through symlinked directories (cycle protection) and
-        # skip symlinked files (avoid double counting outside the tree).
         dirs[:] = [d for d in dirs if not (Path(root) / d).is_symlink()]
         for name in files:
             try:
                 p = Path(root) / name
-                if p.is_symlink():
-                    continue
-                total += p.stat().st_size
+                if not p.is_symlink():
+                    total += p.stat().st_size
             except OSError:
                 continue
     return total
