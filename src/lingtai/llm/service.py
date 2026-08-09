@@ -117,6 +117,12 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     # ``chat_completions``/``responses`` explicitly select the wire path even
     # for custom base URLs. Scoped to OpenAI-compatible adapters.
     "wire_api",
+    # Generic reasoning_content round-trip knobs (fable R2 F2). Manifest llm:
+    # values must reach the adapter, not be dropped by this safelist. Scoped
+    # to OpenAI-compatible adapters; other adapters ignore them.
+    "inject_reasoning_fallback",
+    "reasoning_effort_vocab",
+    "prompt_cache_namespace",
 )
 _PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS = ("compact_threshold",)
 

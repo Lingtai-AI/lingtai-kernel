@@ -40,7 +40,7 @@ LingTai registers the following provider keys (each usable in presets / `init.js
 | `anthropic` | `AnthropicAdapter` | REST | Anthropic Messages API |
 | `gemini` | `GeminiAdapter` | REST | Google Gemini API |
 | `minimax` | `MiniMaxAdapter` | REST | MiniMax API |
-| `deepseek` | `DeepSeekAdapter` | REST | DeepSeek API |
+| `deepseek` | `OpenAIAdapter` (generic; `inject_reasoning_fallback=True`, `reasoning_effort_vocab="seven_tier"`, `prompt_cache_namespace="deepseek"`) | REST | DeepSeek API |
 | `glm`, `zhipu` | `ZhipuAdapter` | REST | Zhipu / GLM API |
 | `mimo` | `MimoAdapter` | REST | Xiaomi MiMo API |
 | `custom`, `grok`, `qwen`, `kimi` | `create_custom_adapter` (in `custom/adapter.py`) | REST | Generic OpenAI-compatible endpoint (`custom` is the canonical key; `grok`/`qwen`/`kimi` are custom-backed aliases) |

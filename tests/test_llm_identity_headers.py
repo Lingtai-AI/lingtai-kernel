@@ -92,7 +92,7 @@ def test_gemini_adapter_builds_client_with_identity_headers(monkeypatch):
 
 def test_openai_compatible_subclasses_forward_identity_headers(monkeypatch):
     from lingtai.llm.openai import adapter as openai_mod
-    from lingtai.llm.deepseek.adapter import DeepSeekAdapter
+    from lingtai.llm.openai.adapter import OpenAIAdapter
     from lingtai.llm.mimo.adapter import MimoAdapter
     from lingtai.llm.openrouter.adapter import OpenRouterAdapter
     from lingtai.llm.zhipu.adapter import ZhipuAdapter
@@ -106,7 +106,7 @@ def test_openai_compatible_subclasses_forward_identity_headers(monkeypatch):
     monkeypatch.setattr(openai_mod.openai, "OpenAI", FakeOpenAI)
     monkeypatch.setattr("lingtai.llm.identity_headers.lingtai_version", lambda: "9.8.7")
 
-    for adapter_cls in (DeepSeekAdapter, MimoAdapter, OpenRouterAdapter, ZhipuAdapter):
+    for adapter_cls in (OpenAIAdapter, MimoAdapter, OpenRouterAdapter, ZhipuAdapter):
         adapter_cls(api_key="sk-test", default_headers={"X-Test": "1"})
         headers = captured[-1]["default_headers"]
         assert headers["User-Agent"] == "LingTai/9.8.7"

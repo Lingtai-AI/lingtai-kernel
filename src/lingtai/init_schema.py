@@ -176,6 +176,18 @@ LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # ``chat_completions``/``responses`` force the respective wire path even
     # for custom base URLs. Scoped to OpenAI-compatible providers.
     "wire_api": str,
+    # Generic OpenAI-compatible ``reasoning_content`` round-trip fallback:
+    # default-on per-turn-unique stub injection on assistant turns after the
+    # first tool_call that lack real thinking (env LINGTAI_INJECT_REASONING_FALLBACK
+    # to disable; explicit config wins). Honored by the openai, custom
+    # (api_compat=openai), and deepseek factories; openrouter/zhipu/mimo
+    # currently ignore these manifest keys.
+    "inject_reasoning_fallback": (bool, NoneType),
+    # Chat Completions ``reasoning_effort`` vocabulary: ``openai`` (high/low
+    # mapping) or ``seven_tier`` (kernel THINKING_LEVELS passthrough, DeepSeek).
+    "reasoning_effort_vocab": (str, NoneType),
+    # Fixed provider namespace for the auto-derived ``prompt_cache_key``.
+    "prompt_cache_namespace": (str, NoneType),
     # Common Codex service tier; the factory validates supported values.
     "service_tier": str,
 }

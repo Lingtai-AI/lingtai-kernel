@@ -94,6 +94,11 @@ def register_all_adapters() -> None:
             adapter_kw["wire_api"] = d["wire_api"]
         if "use_responses_api" in d:
             adapter_kw["use_responses"] = d["use_responses_api"]
+        # Generic reasoning_content round-trip knobs, lifted from provider
+        # defaults so manifest llm: config is not dead schema (fable F2).
+        for _k in ("inject_reasoning_fallback", "reasoning_effort_vocab", "prompt_cache_namespace"):
+            if _k in d:
+                adapter_kw[_k] = d[_k]
         return OpenAIAdapter(**adapter_kw)
 
     def _minimax(*, model=None, defaults=None, **kw):
@@ -124,6 +129,14 @@ def register_all_adapters() -> None:
             adapter_kw["wire_api"] = d["wire_api"]
         if "use_responses_api" in d:
             adapter_kw["use_responses"] = d["use_responses_api"]
+        # Generic reasoning_content round-trip knobs, lifted from provider
+        # defaults so manifest llm: config is not dead schema (fable F2).
+        # Only meaningful for the openai-compat branch; other compat modes
+        # (gemini/anthropic) ignore them inside create_custom_adapter.
+        if compat == "openai":
+            for _k in ("inject_reasoning_fallback", "reasoning_effort_vocab", "prompt_cache_namespace"):
+                if _k in d:
+                    adapter_kw[_k] = d[_k]
         return create_custom_adapter(api_compat=compat, **adapter_kw)
 
     LLMService.register_adapter("gemini", _gemini)
@@ -225,7 +238,7 @@ def register_all_adapters() -> None:
         LLMService.register_adapter(name, _kimi_code)
 
     def _deepseek(*, model=None, defaults=None, **kw):
-        from .deepseek.adapter import DeepSeekAdapter
+        from .openai.adapter import OpenAIAdapter
         kw.pop("model", None)
         adapter_kw = {k: v for k, v in kw.items() if v is not None}
         d = defaults or {}
@@ -239,7 +252,26 @@ def register_all_adapters() -> None:
         if "compact_threshold" in d:
             # Preserve explicit None after the general None-pruning pass above.
             adapter_kw["compact_threshold"] = d["compact_threshold"]
-        return DeepSeekAdapter(**adapter_kw)
+        # Lift the generic reasoning knobs from manifest defaults so DeepSeek
+        # users get the manifest-level off switch too (fable R2 M); the
+        # setdefaults below then only fill gaps for programmatic callers.
+        for _k in ("inject_reasoning_fallback", "reasoning_effort_vocab", "prompt_cache_namespace"):
+            if _k in d:
+                adapter_kw[_k] = d[_k]
+        # DeepSeek defaults collapsed into generic OpenAIAdapter params.
+        # setdefault (not plain =) so an explicit caller override wins,
+        # matching the neighbouring wire_api/compact_threshold lines (fable F3).
+        adapter_kw.setdefault("base_url", "https://api.deepseek.com")
+        adapter_kw.setdefault("inject_reasoning_fallback", True)
+        adapter_kw.setdefault("reasoning_effort_vocab", "seven_tier")
+        adapter_kw.setdefault("prompt_cache_namespace", "deepseek")
+        # Preserve the old DeepSeekAdapter Responses-wire fidelity: stateless
+        # replay (no server-side response storage) and no generic
+        # context_management unless explicitly configured (MiMo/Codex
+        # precedent). Chat Completions ignores both.
+        adapter_kw.setdefault("responses_stateless_replay", True)
+        adapter_kw.setdefault("compact_threshold", None)
+        return OpenAIAdapter(**adapter_kw)
 
     LLMService.register_adapter("deepseek", _deepseek)
 

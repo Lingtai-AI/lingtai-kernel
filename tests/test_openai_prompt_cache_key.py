@@ -32,7 +32,6 @@ from lingtai.llm.openai.adapter import (
     OpenAIChatSession,
     OpenAIResponsesSession,
 )
-from lingtai.llm.deepseek.adapter import DeepSeekAdapter
 from lingtai.llm.zhipu.adapter import ZhipuAdapter
 from lingtai.llm.mimo.adapter import MimoAdapter
 from lingtai.kernel.llm.base import FunctionSchema
@@ -215,7 +214,13 @@ def test_responses_sends_default_prompt_cache_key():
 
 
 def test_deepseek_chat_sends_provider_scoped_key():
-    adapter = DeepSeekAdapter(api_key="fake")
+    # DeepSeek defaults collapsed into generic OpenAIAdapter params.
+    adapter = OpenAIAdapter(
+        api_key="fake",
+        inject_reasoning_fallback=True,
+        reasoning_effort_vocab="seven_tier",
+        prompt_cache_namespace="deepseek",
+    )
     adapter._client = _chat_client()
     session = adapter.create_chat("deepseek-v4", "system prompt")
 

@@ -52,6 +52,23 @@ from lingtai.kernel.token_counter import count_tokens
 logger = get_logger()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse an env var as a boolean with a default when unset/invalid.
+
+    Accepts 1/true/yes/on (case-insensitive) as true and
+    0/false/no/off as false; anything else falls back to ``default``.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    v = raw.strip().lower()
+    if v in {"1", "true", "yes", "on"}:
+        return True
+    if v in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 class _OpenAIToolPairingError(ValueError):
     """Sanitized structural failure at the Chat Completions wire boundary."""
 
@@ -1535,6 +1552,110 @@ def _consume_responses_stream(
 # ---------------------------------------------------------------------------
 
 
+def _fallback_reasoning_for(msg: dict, turn_idx: int) -> str:
+    """Build a per-turn-unique reasoning stub for an assistant message.
+
+    Used only when an assistant turn carries no real reasoning_content
+    (typically: history entries that predate the ThinkingBlock-preservation
+    fix, or turns where the provider returned no reasoning text). The
+    string must be byte-different per turn — a constant placeholder
+    triggers DeepSeek's cache fast-path to collapse onto it and emit
+    empty responses (issue #9).
+
+    DeepSeek validates field presence, not content, so any non-empty
+    string is accepted. We inline tool names and the call ids to keep
+    the stub naturally unique per turn.
+    """
+    tool_calls = msg.get("tool_calls") or []
+    if tool_calls:
+        names = ",".join(
+            (tc.get("function", {}) or {}).get("name", "") for tc in tool_calls
+        )
+        ids = ",".join(tc.get("id", "") for tc in tool_calls)
+        return f"call {names} [{ids}] (turn {turn_idx})"
+    # Plain-text post-tool-call turn — content is per-turn unique by nature.
+    content = msg.get("content") or ""
+    snippet = content[:64].replace("\n", " ")
+    return f"reply [{snippet}] (turn {turn_idx})"
+
+
+def _fallback_responses_reasoning_item(role_text: str, turn_idx: int) -> dict:
+    """Build a per-turn-unique Responses ``reasoning`` input item.
+
+    ``role_text`` is the assistant plain-text content for the turn being
+    repaired (empty for a tool-call turn). The stub is inline-suffixed
+    with the turn index so consecutive missing turns stay byte-different.
+    """
+    snippet = (role_text or "")[:64].replace("\n", " ")
+    label = f"reply [{snippet}]" if snippet else "call"
+    return {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": f"{label} (turn {turn_idx})"}],
+    }
+
+
+def _inject_responses_reasoning_fallback(items: list[dict]) -> list[dict]:
+    """Inject per-turn-unique ``reasoning`` item fallbacks into a Responses input list.
+
+    Responses items are a flat list; a single assistant turn can span
+    multiple items (reasoning, text, function_call). After the first
+    ``function_call`` item we must ensure every later assistant turn
+    carries a ``reasoning`` item — the Responses analogue of
+    ``_inject_chat_reasoning_fallback``. We walk the list, track
+    whether a ``function_call`` has been seen, and for each ``assistant``
+    text item that follows a call without an immediately-preceding
+    reasoning item, insert one before it.
+    """
+    seen_function_call = False
+    turn_idx = 0
+    out: list[dict] = []
+    for item in items:
+        if item.get("type") == "function_call":
+            seen_function_call = True
+            out.append(item)
+            continue
+        if seen_function_call and item.get("role") == "assistant":
+            turn_idx += 1
+            # Insert a fallback reasoning item before this assistant text
+            # item unless the immediately preceding item already carries
+            # reasoning (real thinking was preserved).
+            if not (out and out[-1].get("type") == "reasoning"):
+                out.append(
+                    _fallback_responses_reasoning_item(
+                        item.get("content") or "", turn_idx
+                    )
+                )
+            out.append(item)
+            continue
+        out.append(item)
+    return out
+
+
+def _inject_chat_reasoning_fallback(messages: list[dict]) -> list[dict]:
+    """Inject per-turn-unique ``reasoning_content`` fallbacks into Chat messages.
+
+    Generic default-on version of the former DeepSeek-specific loop: walk the
+    messages, track whether an assistant ``tool_calls`` turn has been seen,
+    and for assistant turns AFTER the first tool_call that lack
+    ``reasoning_content``, set a per-turn-unique fallback stub. Assistant
+    turns BEFORE the first tool_call must NOT carry the field (providers
+    reject it), and real captured reasoning is never overwritten. Returns
+    the same list, mutated in place.
+    """
+    seen_tool_call = False
+    turn_idx = 0
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        if msg.get("tool_calls"):
+            seen_tool_call = True
+        if seen_tool_call:
+            turn_idx += 1
+            if not msg.get("reasoning_content"):
+                msg["reasoning_content"] = _fallback_reasoning_for(msg, turn_idx)
+    return messages
+
+
 class OpenAIChatSession(ChatSession):
     """Client-managed chat session for OpenAI-compatible APIs.
 
@@ -1552,6 +1673,7 @@ class OpenAIChatSession(ChatSession):
         client_kwargs: dict | None = None,
         context_window: int = 0,
         prompt_cache_key: str | None = None,
+        inject_reasoning_fallback: bool = False,
     ):
         self._client = client
         self._model = model
@@ -1568,6 +1690,12 @@ class OpenAIChatSession(ChatSession):
         # ``prompt_cache_retention`` is deliberately never sent (Codex rejects
         # it; we keep the whole OpenAI-compatible surface uniform).
         self._prompt_cache_key = prompt_cache_key
+        # Generic ``reasoning_content`` round-trip fallback (the former
+        # DeepSeek-specific behavior, now available to any OpenAI-compatible
+        # provider): inject a per-turn-unique stub on assistant turns after
+        # the first tool_call that lack real reasoning. Default on (env
+        # LINGTAI_INJECT_REASONING_FALLBACK to disable); explicit param wins.
+        self._inject_reasoning_fallback = bool(inject_reasoning_fallback)
         # Per-request HTTP timeout (seconds). Set by send_with_timeout before
         # dispatching the worker so the HTTP client aborts at the same moment
         # the main-thread watchdog gives up. Prevents a race where the worker
@@ -1584,12 +1712,16 @@ class OpenAIChatSession(ChatSession):
         """Return the message list to send to the API.
 
         Default: the canonical OpenAI serialization of the current
-        interface. Subclasses override to mutate or wrap — e.g. the
-        DeepSeek session injects ``reasoning_content`` onto assistant
-        turns that carry tool calls, which DeepSeek V4 thinking mode
-        requires for the round-trip.
+        interface. When ``inject_reasoning_fallback`` is enabled, assistant
+        turns after the first tool_call that carry no real
+        ``reasoning_content`` get a per-turn-unique fallback stub — the
+        generic version of the former DeepSeek-specific behavior, required
+        by any thinking-mode provider that demands the field on replay.
         """
-        return to_openai(self._interface)
+        messages = to_openai(self._interface)
+        if self._inject_reasoning_fallback:
+            return _inject_chat_reasoning_fallback(messages)
+        return messages
 
     @staticmethod
     def _is_context_overflow_error(exc: Exception) -> bool:
@@ -1825,6 +1957,7 @@ class OpenAIChatSession(ChatSession):
                 client_kwargs=self._client_kwargs,
                 context_window=self._context_window,
                 prompt_cache_key=self._prompt_cache_key,
+                inject_reasoning_fallback=self._inject_reasoning_fallback,
             )
             self.__dict__.update(new_session.__dict__)
 
@@ -2084,6 +2217,7 @@ class OpenAIResponsesSession(ChatSession):
         prompt_cache_key: str | None = None,
         context_window: int = 0,
         stateless_replay: bool = False,
+        inject_reasoning_fallback: bool = False,
     ):
         self._client = client
         self._model = model
@@ -2093,6 +2227,13 @@ class OpenAIResponsesSession(ChatSession):
         self._extra_kwargs = extra_kwargs
         self._response_id: str | None = previous_response_id
         self._stateless_replay = bool(stateless_replay)
+        # Generic ``reasoning`` item fallback (the former DeepSeek
+        # behavior, now available to any OpenAI-compatible provider): inject
+        # a per-turn-unique ``reasoning`` input item on assistant turns after
+        # the first ``function_call`` that lack preserved thinking. Default
+        # on (env LINGTAI_INJECT_REASONING_FALLBACK to disable); explicit
+        # param wins.
+        self._inject_reasoning_fallback = bool(inject_reasoning_fallback)
         self._compact_threshold = _validate_compact_threshold(compact_threshold)
         self._interface = interface or ChatInterface()
         # Optional OpenAI Responses ``prompt_cache_key`` — opts the request
@@ -2231,9 +2372,16 @@ class OpenAIResponsesSession(ChatSession):
         ``MimoResponsesSession``) can substitute the opaque compacted-prefix-
         plus-delta representation here instead of a full re-conversion —
         without duplicating ``send``/``send_stream``. Plain (non-compacting)
-        Responses sessions keep the original full-conversion behavior.
+        Responses sessions keep the original full-conversion behavior. When
+        ``inject_reasoning_fallback`` is enabled, assistant turns after the
+        first ``function_call`` that lack a preserved ``reasoning`` item get
+        a per-turn-unique fallback item injected (generic version of the
+        former DeepSeek behavior).
         """
-        return to_responses_input(self._interface)
+        items = to_responses_input(self._interface)
+        if self._inject_reasoning_fallback:
+            return _inject_responses_reasoning_fallback(items)
+        return items
 
     def _request_input(self, message) -> list[dict]:
         if not self._stateless_replay:
@@ -2425,6 +2573,9 @@ class OpenAIAdapter(LLMAdapter):
         compact_threshold: int | None = 100_000,
         prompt_cache_key: str | bool | None = None,
         responses_stateless_replay: bool = False,
+        inject_reasoning_fallback: bool | None = None,
+        reasoning_effort_vocab: str = "openai",
+        prompt_cache_namespace: str | None = None,
     ):
         self.base_url = base_url
         self._use_responses = use_responses
@@ -2460,6 +2611,28 @@ class OpenAIAdapter(LLMAdapter):
         # read from a global module — see lingtai.kernel.config's contract.
         self._compact_threshold = _validate_compact_threshold(compact_threshold)
         self._responses_stateless_replay = bool(responses_stateless_replay)
+        # Generic ``reasoning_content`` round-trip fallback (the former
+        # DeepSeek-specific behavior, now available to any OpenAI-compatible
+        # provider). On by default: real thinking is already passed back via
+        # ThinkingBlock, and this only injects a per-turn-unique stub on
+        # assistant tool-call turns that lack preserved thinking — required
+        # by thinking-mode endpoints (DeepSeek V4, opencode.ai zen/go) and
+        # harmlessly ignored by endpoints that don't know the field. The
+        # explicit bool param (from provider config) wins; when unset, the
+        # LINGTAI_INJECT_REASONING_FALLBACK env var controls it (default on).
+        # Forwarded into both session classes.
+        if inject_reasoning_fallback is None:
+            inject_reasoning_fallback = _env_bool(
+                "LINGTAI_INJECT_REASONING_FALLBACK", default=True
+            )
+        self._inject_reasoning_fallback = bool(inject_reasoning_fallback)
+        # Chat Completions ``reasoning_effort`` vocabulary: ``openai`` (default)
+        # maps kernel levels onto OpenAI's high/low surface; ``seven_tier``
+        # passes the kernel THINKING_LEVELS through unchanged (DeepSeek wire).
+        self._reasoning_effort_vocab = reasoning_effort_vocab
+        # Optional fixed provider namespace for the auto-derived
+        # ``prompt_cache_key`` (e.g. ``deepseek`` -> ``lingtai-deepseek:{model}:v1``).
+        self._prompt_cache_namespace = prompt_cache_namespace
         kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
@@ -2475,13 +2648,16 @@ class OpenAIAdapter(LLMAdapter):
         """Return the auto-derived, namespaced default prompt_cache_key.
 
         Namespacing keeps incompatible endpoints from sharing a cache slot:
+          * explicit ``prompt_cache_namespace`` -> ``lingtai-{namespace}:{model}:v1``
           * official OpenAI (no base_url) -> ``lingtai-openai:{model}:v1``
           * custom/compatible base_url    -> ``lingtai-openai-compat:{host}:{model}:v1``
 
-        Subclasses with a fixed provider identity (DeepSeek, Zhipu, MiMo,
-        Codex) override this to use a clean provider namespace instead of the
-        base_url host.
+        A configured ``prompt_cache_namespace`` gives a fixed provider identity
+        (DeepSeek, Zhipu, MiMo, Codex) a clean provider namespace instead of
+        the base_url host, without needing a subclass override.
         """
+        if self._prompt_cache_namespace:
+            return f"lingtai-{self._prompt_cache_namespace}:{model}:v1"
         if not self.base_url:
             return f"lingtai-openai:{model}:v1"
         return f"lingtai-openai-compat:{_base_url_namespace(self.base_url)}:{model}:v1"
@@ -2609,6 +2785,7 @@ class OpenAIAdapter(LLMAdapter):
             prompt_cache_key=self._resolve_prompt_cache_key(model),
             context_window=context_window,
             stateless_replay=self._responses_stateless_replay,
+            inject_reasoning_fallback=self._inject_reasoning_fallback,
         )
 
     def _create_completions_session(
@@ -2673,6 +2850,7 @@ class OpenAIAdapter(LLMAdapter):
             client_kwargs=self._client_kwargs,
             context_window=context_window,
             prompt_cache_key=self._resolve_prompt_cache_key(model),
+            inject_reasoning_fallback=self._inject_reasoning_fallback,
         )
 
     def _adapter_extra_body(self) -> dict:
@@ -2687,12 +2865,27 @@ class OpenAIAdapter(LLMAdapter):
     def _chat_reasoning_effort(self, thinking: str) -> str | None:
         """Map a kernel thinking level to the Chat Completions reasoning_effort value.
 
-        Default maps ``high`` to ``high`` and every other explicit level to
-        ``low`` (OpenAI o-series compatibility), and returns ``None`` for the
-        omitted/``default`` sentinel so the field is not sent. Subclasses with
-        a wider wire vocabulary (e.g. DeepSeek seven-tier passthrough)
-        override this hook.
+        The vocabulary is selected by ``reasoning_effort_vocab``:
+          * ``openai`` (default) maps ``high`` to ``high`` and every other
+            explicit level to ``low`` (OpenAI o-series compatibility).
+          * ``seven_tier`` passes the kernel THINKING_LEVELS through unchanged
+            (the DeepSeek wire accepts ``none | minimal | low | medium | high |
+            xhigh | max``); ``default`` maps to ``None`` so no field is sent.
+
+        Returns ``None`` for the omitted/``default`` sentinel so the field is
+        not sent and the upstream default applies.
         """
+        from lingtai.kernel.config import THINKING_LEVELS
+
+        if self._reasoning_effort_vocab == "seven_tier":
+            if thinking == "default":
+                return None
+            if thinking not in THINKING_LEVELS:
+                raise ValueError(
+                    "thinking must be one of "
+                    f"{', '.join(THINKING_LEVELS)}, or default"
+                )
+            return thinking
         if thinking == "default":
             return None
         return "high" if thinking == "high" else "low"

@@ -287,9 +287,20 @@ def _build_openai_compatible_subclass(session_class) -> tuple[Any, Any]:
 
 
 def _build_deepseek_chat() -> tuple[Any, Any]:
-    from lingtai.llm.deepseek.adapter import DeepSeekChatSession
+    from lingtai.llm.openai.adapter import OpenAIChatSession
 
-    return _build_openai_compatible_subclass(DeepSeekChatSession)
+    client = _mock_openai_completions_client()
+    session = OpenAIChatSession(
+        client=client,
+        model="deepseek-v4-pro",
+        interface=ChatInterface(),
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        client_kwargs={},
+        inject_reasoning_fallback=True,
+    )
+    return session, client
 
 
 def _build_mimo_chat() -> tuple[Any, Any]:
@@ -748,7 +759,7 @@ REGISTRY_EDGES: list[RegistryEdge] = [
     ),
     # --- OpenAI-compatible single-session providers ---------------------
     RegistryEdge("openrouter", "OpenRouterAdapter", "OpenAIChatSession"),
-    RegistryEdge("deepseek", "DeepSeekAdapter", "DeepSeekChatSession"),
+    RegistryEdge("deepseek", "OpenAIAdapter", "OpenAIChatSession"),
     # MiMo defaults to the native Responses wire; Chat Completions remains an explicit escape hatch.
     RegistryEdge("mimo", "MimoAdapter", "MimoResponsesSession"),
     RegistryEdge("glm", "ZhipuAdapter", "ZhipuChatSession"),

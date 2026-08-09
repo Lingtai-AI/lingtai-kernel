@@ -98,6 +98,33 @@ The adapter forks at `create_chat()` (`adapter.py:2243`) via `_should_use_respon
 
 Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting. Canonical `wire_api` wins over legacy `use_responses`/`force_responses`; when `wire_api` is absent/`auto`, existing behavior is preserved.
 
+### Generic `reasoning_content` round-trip fallback
+
+The per-turn-unique reasoning fallback that used to live in the DeepSeek adapter
+(`src/lingtai/llm/deepseek/adapter.py`, now removed) is a **generic default-on**
+mechanism on `OpenAIAdapter` / `OpenAIChatSession` / `OpenAIResponsesSession`:
+
+- `inject_reasoning_fallback` (`bool | None`, default from env `LINGTAI_INJECT_REASONING_FALLBACK`, on) — on the Chat wire,
+  `_inject_chat_reasoning_fallback` walks `to_openai`'s messages and, after the
+  first assistant `tool_calls` turn, sets `reasoning_content` on assistant turns
+  that lack it (per-turn-unique stub via `_fallback_reasoning_for`; real captured
+  `ThinkingBlock`s are never overwritten). On the Responses wire,
+  `_inject_responses_reasoning_fallback` inserts per-turn-unique `reasoning`
+  input items after the first `function_call` for assistant turns that lack one.
+  On by default (env `LINGTAI_INJECT_REASONING_FALLBACK` to disable); an
+  explicit constructor/provider-config value wins over the env.
+- `reasoning_effort_vocab` (`str`, default `openai`) — `openai` maps kernel
+  thinking levels to high/low; `seven_tier` passes the kernel `THINKING_LEVELS`
+  through unchanged (DeepSeek wire vocabulary).
+- `prompt_cache_namespace` (`str | None`) — fixed provider namespace for the
+  auto-derived `prompt_cache_key` (e.g. `deepseek` →
+  `lingtai-deepseek:{model}:v1`) instead of the base_url host.
+
+The `deepseek` provider factory in `_register.py` now builds `OpenAIAdapter`
+directly with these three options set (plus `base_url=https://api.deepseek.com`);
+the dedicated DeepSeek adapter module is gone. `create_custom_adapter` forwards
+the three options to `OpenAIAdapter` when present.
+
 ### One-shot generation (`OpenAIAdapter.generate`, `adapter.py:2404`)
 
 `generate()` follows the same wire selection as `create_chat()` via `_should_use_responses()`: Chat Completions by default/legacy, or Responses API when `wire_api="responses"` (or legacy `use_responses=True` without a custom base URL / with `force_responses=True`). This keeps service-level one-shot calls consistent with multi-turn sessions. `CodexOpenAIAdapter.generate` is the native exception to the generic Responses helper: it creates a context-owned `CodexResponsesSession` and sends one real streamed request, preserving `service_tier`, `store=false`, Codex identity/cache/account headers, normal temperature/output/schema arguments, and safe pool selection metadata.
