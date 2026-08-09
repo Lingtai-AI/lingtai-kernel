@@ -29,6 +29,7 @@ related_files:
   - tests/test_imap_toolfamily_ltpv2.py
   - src/lingtai/mcp_servers/telegram/account.py
   - src/lingtai/mcp_servers/telegram/manager.py
+  - src/lingtai/mcp_servers/telegram/render.py
   - src/lingtai/mcp_servers/telegram/server.py
   - src/lingtai/mcp_servers/telegram/_family.py
   - src/lingtai/mcp_servers/telegram/service.py
@@ -46,6 +47,7 @@ related_files:
   - tests/test_mcp_skill_manuals.py
   - tests/test_telegram_account_last_message_id.py
   - tests/test_telegram_rich_formatting.py
+  - tests/test_telegram_structured_rendering.py
   - tests/test_telegram_task_card_in_place.py
   - tests/test_telegram_task_card_last_message.py
   - tests/test_feishu_control_cards.py
@@ -142,6 +144,7 @@ Curated and built-in MCP server package implementations shipped inside the `ling
 | `daemon_common/` | Built-in daemon lifecycle MCP. `daemon_common/server.py` exposes `finish(action='finish', input={status, summary?, reason?, artifacts?}, reasoning)` in the LTP v2 envelope every daemon MCP tool uses, validates the call, and atomically writes the internal per-run `daemon_completion.json` file named by `LINGTAI_DAEMON_COMPLETION_FILE`; daemon runners validate that file before allowing success. |
 | `daemon_email/` | Built-in daemon `email` MCP — the exact `lingtai.tools.email` LTP v2 tool family (unmodified schema/description/dispatch) hosted on a lightweight duck-typed `DaemonEmailAgentShim` (`agent_shim.py`) instead of a live `BaseAgent`, so a daemon subprocess never contends for the parent's workdir lease. Bound to `LINGTAI_AGENT_DIR` (the *parent* agent's own working directory — the daemon's own nested run-dir has no `.agent.json`/heartbeat and cannot pass the mail handshake), so a daemon speaks with the parent's own already-live mailbox address; a daemon, its parent, and any sibling daemon of that same parent are therefore all reachable at that one address. Auto-mounted per task only when `tools` explicitly includes `"email"` (`daemon/__init__.py` `_daemon_email_mcp_registration`/`_with_daemon_email_mcp`), mirroring exactly how `daemon_common` is auto-mounted for `finish` — a `tools=[]` result-only daemon never gets this registration. |
 | `telegram/`, `imap/`, `feishu/`, `wechat/`, `whatsapp/`, `cloud_mail/` | Curated messaging MCPs. TelegramManager requires an injected `NotificationStorePort`; `telegram/server.py` constructs one POSIX adapter, and handled-mirror policy runs against the current payload in one compare-update so newer mirrors survive (`src/lingtai/mcp_servers/telegram/manager.py:415-425`, `src/lingtai/mcp_servers/telegram/manager.py:1239-1281`, `src/lingtai/mcp_servers/telegram/server.py:655-663`). The external LICC path/envelope and persistent-message lanes remain unchanged. `whatsapp/_family.py` mirrors `telegram/_family.py`'s native LTP-v2 tool family: one strict root envelope (`action`/`input`/`reasoning`/`summarize`) with an action-correlated `input` branch per action, dispatched through `handle_whatsapp()`; `manager.py`'s `SCHEMA`/`ACTIONS` now alias `_family.py`'s, and the manager stays the internal flat action/business boundary behind it. |
+| `telegram/render.py` | Converts the model-facing `structured_message` semantic object into Telegram Bot API `InputRichMessage.blocks` and a searchable plain-text preview. It preserves agent-authored wording and emoji while assigning native heading, list, bold-label, code, divider, and footer semantics; `TelegramManager` owns conflict validation and send/reply/edit routing. |
 | `telegram/task_card/` | Telegram-owned **adapter + programmable projection** unit (governed component with paired `ANATOMY.md`/`CONTRACT.md` + packaged docs). Its `resident.py` is a compatibility re-export of the shared core; `TelegramManager` supplies compound-ID binding, last-message high-water policy, Telegram error classification, transport, and persistence callbacks. The public `task_card` tool lives in `src/lingtai/tools/task_card/`; Telegram reads the intrinsic artifact and projects it read-only. |
 | `feishu/task_card.py` | Feishu-owned resident bindings plus lifecycle workers for the shared automatic event projection and the read-only intrinsic programmable artifact projection. `FeishuManager` supplies account+chat+optional-thread routing, conservative process-local high-water policy, Feishu card transport, and exact resident persistence. |
 | `feishu/control_cards.py` | Feishu-owned schema-2.0 renderer and bounded hashed-event claim store for local `/help`, `/status`, `/kanban`, `/system`, `/brief`, `/refresh`, `/sleep`, `/clear`, and `/taskcard` cards. Shared command semantics stay in `local_commands/core.py`; actor admission, routing, callback dispatch, and transport stay in the account/manager adapter. |

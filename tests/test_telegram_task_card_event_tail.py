@@ -881,7 +881,7 @@ def test_automatic_footer_label_is_last_updated(tmp_path):
 
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     rendered = edits[-1][3]
-    assert "Last Updated: " in rendered
+    assert "最后更新: " in rendered
     assert "Current Time: " not in rendered
 
 
@@ -898,7 +898,7 @@ def test_programmable_frame_includes_its_own_last_updated_line(tmp_path):
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     rendered = edits[-1][3]
     assert "watch line" in rendered
-    assert "Last Updated: " in rendered
+    assert "最后更新: " in rendered
 
 
 def test_programmable_update_leaves_automatic_frame_unchanged(tmp_path):
@@ -1071,7 +1071,7 @@ def test_normal_rows_limits_rendered_event_tail_without_shrinking_buffer(tmp_pat
     # exact tool-row prefix, not a bare substring, because the metadata path
     # line may legitimately contain "older" inside words like "folders").
     assert "\u2022 older." not in rendered
-    assert "current: 1" in rendered
+    assert "当前: 1" in rendered
 
 
 def test_no_resident_targets_means_no_transport_calls(tmp_path):
@@ -1417,9 +1417,9 @@ def test_fingerprint_ignores_last_updated_line_only(tmp_path):
     """The volatile Last Updated line must not change the fingerprint; any
     other content change must."""
     manager, _ = _manager(tmp_path, FakeAccount())
-    a = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:00 U+8"
-    b = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:01 U+8"
-    c = "\u2699 WORKING\n\u2022 other\n\nfooter\nLast Updated: 10:00:00 U+8"
+    a = "\u2699 WORKING\n\u2022 row\n\nfooter\n最后更新: 10:00:00 U+8"
+    b = "\u2699 WORKING\n\u2022 row\n\nfooter\n最后更新: 10:00:01 U+8"
+    c = "\u2699 WORKING\n\u2022 other\n\nfooter\n最后更新: 10:00:00 U+8"
     assert manager._task_card_automatic_fingerprint(a) == \
         manager._task_card_automatic_fingerprint(b)
     assert manager._task_card_automatic_fingerprint(a) != \

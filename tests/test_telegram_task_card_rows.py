@@ -26,8 +26,8 @@ def _fmt(rows):
 
 def test_footer_constant_exact_text():
     assert _TASK_CARD_FOOTER == (
-        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
-        "/taskcard N sets normal rows (1-10"
+        "请勿回复此任务卡片。使用 /taskcard on|off 切换；"
+        "/taskcard N 设置显示组数 (1-10"
     )
 
 
@@ -37,8 +37,8 @@ def test_footer_renders_with_current_row_count_suffix():
          "elapsed_s": 3, "done": False},
     ])
     assert (
-        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
-        "/taskcard N sets normal rows (1-10, current: 1)."
+        "请勿回复此任务卡片。使用 /taskcard on|off 切换；"
+        "/taskcard N 设置显示组数 (1-10，当前: 1)。"
     ) in text
 
 
@@ -48,7 +48,7 @@ def test_running_render_has_footer():
          "elapsed_s": 3, "done": False},
     ])
     assert _TASK_CARD_FOOTER in text
-    assert "📋 ACTIVITIES" in text
+    assert "📋 活动" in text
 
 
 def test_frozen_render_has_footer():
@@ -336,7 +336,7 @@ def test_metadata_is_two_lines_bounded_and_between_footer_and_timestamp():
     )
     lines = text.splitlines()
     footer_idx = next(i for i, line in enumerate(lines) if _TASK_CARD_FOOTER in line)
-    time_idx = next(i for i, line in enumerate(lines) if line.startswith("Last Updated: "))
+    time_idx = next(i for i, line in enumerate(lines) if line.startswith("最后更新: "))
     metadata_lines = lines[footer_idx + 1:time_idx]
     assert metadata_lines == [
         "ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
@@ -411,12 +411,12 @@ def test_metadata_renders_active_seconds_only_when_active():
 
 def test_metadata_renders_stuck_with_refresh_hint():
     lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": "stuck"})
-    assert lines == ["agent · stuck · try /refresh"]
+    assert lines == ["agent · stuck · 尝试 /refresh"]
 
 
 def test_metadata_renders_offline_with_refresh_hint():
     lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": "offline"})
-    assert lines == ["agent · offline · try /refresh"]
+    assert lines == ["agent · offline · 尝试 /refresh"]
 
 
 def test_metadata_suspended_never_gets_refresh_hint():
@@ -466,9 +466,9 @@ def test_metadata_stuck_hint_and_ctx_both_survive_full_metadata():
     # The 2-line cap holds; the hint leads line 1 (safe from end-truncation)
     # and ctx survives as line 2 instead of being dropped by the cap.
     assert lines == [
-        "agent · stuck · try /refresh · ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "agent · stuck · 尝试 /refresh · ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
     ]
-    assert lines[0].startswith("agent · stuck · try /refresh ·")
+    assert lines[0].startswith("agent · stuck · 尝试 /refresh ·")
     assert len(lines) == 1
     assert len(lines[0]) <= 500
 
