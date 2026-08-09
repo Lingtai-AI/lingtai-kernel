@@ -31,18 +31,19 @@ The Notification Store is the Core-owned persistence boundary for current
 
 ## Components
 
-- `NotificationStorePort` defines exactly seven persistence families, with
-  specialized pure channel and acknowledgement mutators
-  (`src/lingtai/kernel/notification_store/__init__.py:115-197`).
-- `CompareUpdateResult` and `UpdateAckRefsResult` carry typed operational and
-  policy evidence (`src/lingtai/kernel/notification_store/__init__.py:59-75`).
+- `NotificationStorePort` defines exactly eight persistence families, with
+  specialized pure channel, acknowledgement, and hook-manifest mutators
+  (`src/lingtai/kernel/notification_store/__init__.py:115-234`).
+- `CompareUpdateResult`, `UpdateAckRefsResult`, and `UpdateHookManifestsResult`
+  carry typed operational and policy evidence
+  (`src/lingtai/kernel/notification_store/__init__.py:66-90`).
 - `NotificationMutationLockPort` is the Store-private cross-process transaction
   seam (`src/lingtai/kernel/notification_store/_mutation_lock.py:1-13`). Its
   platform selector composes native POSIX and Windows implementations
   (`src/lingtai/adapters/notification_store_lock.py:1-28`).
 - `PosixNotificationStoreAdapter` maps the Port onto the established
   `.notification/` layout and owns both in-process and native cross-process
-  mutation serialization (`src/lingtai/adapters/posix/notification_store.py:62-257`).
+  mutation serialization (`src/lingtai/adapters/posix/notification_store.py:69-302`).
 - Notification Core owns channel policy, atomic acknowledgement union/purge, and
   current-payload dismiss decisions (`src/lingtai/kernel/notifications.py:129-186`,
   `src/lingtai/kernel/notifications.py:297-312`,
@@ -69,8 +70,10 @@ and outer roots inject the Store Port.
 
 ## State
 
-Persistent protocol state is the existing `.notification/<channel>.json` plus
-`.notification/large_result_acks.json`. The adapter holds its workdir, an
+Persistent protocol state is the existing `.notification/<channel>.json`, the
+acknowledgement registry `.notification/large_result_acks.json`, and the
+hook-manifest registry `.notification/hooks.json` (a single non-channel file,
+invisible to snapshot/fingerprint). The adapter holds its workdir, an
 in-process mutex, and a platform-selected mutation lock. Native adapters lock
 `.notification/.store.lock` using `flock` on POSIX or byte 0 on Windows
 (`src/lingtai/adapters/posix/notification_store_lock.py:1-29`,

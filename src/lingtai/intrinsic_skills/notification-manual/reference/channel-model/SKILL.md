@@ -6,8 +6,8 @@ description: >
   kernel sync, voluntary check behavior, and canonical producer state versus
   notification mirrors. Read after notification-manual when interpreting,
   producing, or debugging notification payloads; skip for dismissal policy.
-version: 0.2.0
-tags: [lingtai, notifications, channels, protocol, sync, nudge]
+version: 0.3.0
+tags: [lingtai, notifications, channels, protocol, sync, nudge, hooks, whitelist]
 last_changed_at: "2026-07-27T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
@@ -31,10 +31,17 @@ A channel is the filename stem in `.notification/<channel>.json`:
 
 The kernel accepts built-in channels including `email`, `system`, `soul`,
 `nudge`, `post-molt`, `tool_loop_guard`, `bash`, `btw`, `cron`, `molt`, and
-`goal`; MCP bridge channels use the `mcp.` prefix. Unknown JSON filenames are
+`goal`; MCP bridge channels use the `mcp.` prefix. The **effective allowlist** is
+the static set ∪ the `mcp.` prefix ∪ registered hook channels: external hooks
+register manifests via `notification(action='add', ...)`, which appends to
+`.notification/hooks.json` and allowlists the manifest's `channel` (see the
+parent manual's `Hooks & whitelist` section). Unknown JSON filenames are
 ignored by collection, and kernel publish/dismiss helpers reject names outside
-the allowlist, so arbitrary workdir files cannot enter the model-visible
-notification lane.
+the effective allowlist, so arbitrary workdir files cannot enter the
+model-visible notification lane. Blocked attempts by unregistered channels are
+now observable: the kernel emits a deduped `notification_hook` system
+warn-and-flag event (`ref_id: blocked_channel:<channel>`) so the agent can
+investigate and register the hook if legitimate.
 
 `nudge` is the formal channel for mechanical, throttled checks: runtime update
 checks publish `data.nudges[]` entries with `kind: kernel_version`, and
@@ -100,7 +107,10 @@ producer's own schema and lifecycle.
 ## Footprint
 
 The protocol footprint is `.notification/<channel>.json` plus kernel-owned
-notification metadata such as legacy acknowledgement state. Inspect it read-only
+notification metadata such as legacy acknowledgement state
+(`.notification/large_result_acks.json`) and the hook-manifest registry
+(`.notification/hooks.json`, a single non-channel file invisible to
+collection). Inspect it read-only
 before diagnosing a producer. Never delete the directory or bulk-remove files —
 that bypasses the guards and stale checks that only the producer verb or an
 atomic notification action honor.

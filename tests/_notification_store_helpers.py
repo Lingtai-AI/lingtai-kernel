@@ -1,6 +1,6 @@
 """Notification Store test doubles and explicit test composition helpers.
 
-The fake implements the final seven-family Port exactly.  POSIX helpers are
+The fake implements the final eight-family Port exactly.  POSIX helpers are
 intentionally test-only: they keep old filesystem-oriented assertions useful
 without restoring removed Path-based production APIs.
 """

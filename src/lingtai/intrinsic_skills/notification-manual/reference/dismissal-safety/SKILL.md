@@ -7,8 +7,8 @@ description: >
   reminder escape hatches. Read after notification-manual before clearing a
   channel or diagnosing a dismissal refusal; summarization mechanics live in
   summarize-manual instead.
-version: 0.2.0
-tags: [lingtai, notifications, dismiss, force, stale, safety]
+version: 0.3.0
+tags: [lingtai, notifications, dismiss, force, stale, safety, hooks]
 last_changed_at: "2026-07-27T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
@@ -67,6 +67,23 @@ The kernel-owned `post-molt` continuation channel requires a non-empty reason
 recording the decision in `continue|defer|obsolete` form — e.g.
 `reason='continue: recovered the pending work'` on
 `dismiss_channel(channel='post-molt')`.
+
+## Hook channels and producer-guard interplay
+
+A registered hook channel (see the parent manual's `Hooks & whitelist`
+section) is dismissed exactly like any other allowlisted channel: the atomic
+dismiss actions clear only the `.notification/<channel>.json` mirror. Hook
+registration widens the **allowlist**, not the dismissal policy — a hook
+producer whose notification mirrors canonical state should still register a
+generic-dismiss guard and teach its producer-specific verb in `instructions`,
+and the guarded refusal still applies.
+
+`notification(action='drop', input={'name': ...})` removes the hook's manifest
+and revokes its channel from the allowlist; it does **not** kill the hook
+process. Stopping the hook is the owner's job, documented in the manifest's
+`how_to_cancel` field. After a drop, an unregistered channel's notifications
+stop passing through and the kernel's warn-and-flag event may reappear if the
+process keeps publishing.
 
 ## Large results and legacy reminder escape hatch
 

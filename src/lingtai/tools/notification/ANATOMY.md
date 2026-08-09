@@ -35,18 +35,20 @@ maintenance: |
 # Notification Tool Anatomy
 
 `src/lingtai/tools/notification/` is the mandatory agent-callable notification
-surface. It composes five actions: `check`, three atomic dismissal actions, and
-the strictly read-only `manual` action. Notification Core owns mirror guards and
-Store use; the tool owns only schema composition, envelope dispatch, the check
-placeholder, argument adaptation, and installed-manual presentation.
+surface. It composes nine actions: four hook-registry actions (`add`, `drop`,
+`edit`, `list`), `check`, three atomic dismissal actions, and the strictly
+read-only `manual` action. Notification Core owns mirror guards and Store use;
+the tool owns only schema composition, envelope dispatch, the check
+placeholder, argument adaptation, hook-manifest forwarding, and installed-manual
+presentation.
 
 Since the LTP v2 migration the public model-facing shape is the closed
 `action` + `input` + `reasoning` + `summarize` envelope, with each action's
 arguments in its own strict `input` object. Schema composition and envelope
 dispatch delegate to the generic `tool_family` infrastructure; this package
 retains ownership of the action implementations, the per-action schemas, and
-the manual presentation shape. The public tool name and all five action values
-are unchanged.
+the manual presentation shape. The public tool name and the five pre-existing
+action values are unchanged; the four hook-registry actions are new.
 
 ## Components
 
@@ -59,18 +61,18 @@ are unchanged.
   no `get_schema`.
 - `_schema_only_family()` / `_FAMILY` build the import-time `ToolFamily` used
   only to compose the schema; constructing it at import proves the fixed
-  five-child registry has no duplicate or reserved-`manual` collision
+  nine-child registry has no duplicate or reserved-`manual` collision
   (`src/lingtai/tools/notification/__init__.py:95-122`).
 - `get_schema()` returns the composed family schema and substitutes
   notification's own action prose for the generic composer's neutral
   placeholder (`src/lingtai/tools/notification/__init__.py:125-140`).
 - `_build_family()` builds the per-call dispatching `ToolFamily` with handlers
   bound to the calling `agent`, registering the shared `manual` child directly
-  and unwrapped (`src/lingtai/tools/notification/__init__.py:282-325`).
+  and unwrapped (`src/lingtai/tools/notification/__init__.py:357-405`).
 - `handle()` strips kernel-injected `_tc_id`, delegates envelope validation and
   dispatch to that family, adapts the `manual` child result, and normalizes the
   generic `ACTION_REQUIRED` error back to the pinned unknown-action shape
-  (`src/lingtai/tools/notification/__init__.py:328-367`).
+  (`src/lingtai/tools/notification/__init__.py:407-446`).
 - `_strip_nulls()` converts explicit `null` optionals back to absent so the
   handlers' `args.get(..., default)` defaulting is preserved
   (`src/lingtai/tools/notification/__init__.py:143-153`).
@@ -87,7 +89,13 @@ are unchanged.
   no-I/O rejection (`src/lingtai/tools/notification/__init__.py:200-239`).
 - `_dismiss_event()` and `_dismiss_ref()` adapt targeted system-event removal
   while defaulting the channel to `system`
-  (`src/lingtai/tools/notification/__init__.py:242-279`).
+  (`src/lingtai/tools/notification/__init__.py:245-288`).
+- `_add_hook()`, `_drop_hook()`, `_edit_hook()`, and `_list_hooks()` adapt the
+  hook-registry actions and delegate to
+  `lingtai.kernel.notifications.add_hook` / `drop_hook` / `edit_hook` /
+  `list_hooks`, which validate manifests, enforce name/channel uniqueness, and
+  write `.notification/hooks.json` through Store family 8
+  (`src/lingtai/tools/notification/__init__.py:291-354`).
 - `registry.INTRINSICS` registers `notification` as a mandatory intrinsic next
   to email, system, context, pad, lingtai, and soul
   (`src/lingtai/tools/registry.py:48-69`).
@@ -106,7 +114,11 @@ are unchanged.
   `lingtai.kernel.notifications.dismiss_channel(...,
   invoked_by="notification")`; Core owns allowlists, producer guards,
   stale-version checks, protected channels, post-molt acknowledgement, and
-  targeted event/ref removal (`src/lingtai/kernel/notifications.py:469`).
+  targeted event/ref removal (`src/lingtai/kernel/notifications.py:785`).
+  The four hook-registry handlers delegate to Core's
+  `add_hook`/`drop_hook`/`edit_hook`/`list_hooks`, which own manifest
+  validation, uniqueness, and the family-8 Store writes
+  (`src/lingtai/kernel/notifications.py:284-393`).
 - `Agent._install_intrinsic_manuals()` copies the kernel-shipped
   `system-manual` skill tree into the per-agent intrinsic library that the
   `manual` child reads through `tool_family.manual.build_manual_child` and the
@@ -133,7 +145,10 @@ are unchanged.
   per-Agent manager, this intrinsic builds its dispatching family per call
   because `agent` only arrives per call.
 - **Core dependency:** `src/lingtai/kernel/notifications.py` and the notification
-  Store behind it. This tool does not add a Store operation.
+  Store behind it. The four hook-registry actions (`add`/`drop`/`edit`/`list`)
+  mutate the Store's family-8 hook-manifest registry
+  (`load_hook_manifests`/`update_hook_manifests`, `.notification/hooks.json`);
+  the read and dismiss actions add no Store operation.
 - **Turn-loop adapter:** `src/lingtai/kernel/base_agent/turn.py` completes the
   `check` placeholder with model-visible state.
 - **Installed-resource adapter:** `src/lingtai/agent.py` installs the intrinsic
@@ -153,6 +168,11 @@ are unchanged.
 - Dismiss handlers own no state directly. Through notification Core they clear
   notification mirrors or remove targeted system events while leaving producer
   canonical state untouched.
+- Hook-registry handlers own no state directly either. Through notification
+  Core they read/mutate `.notification/hooks.json` (Store family 8) and refresh
+  the module-level registered-hook channel mirror that widens the allow
+  predicate; `drop` revokes the channel and `edit` moves it. Read-only `list`
+  never mutates.
 
 ## Notes
 
