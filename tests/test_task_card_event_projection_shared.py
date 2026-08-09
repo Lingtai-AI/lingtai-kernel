@@ -166,9 +166,9 @@ def test_api_call_renders_single_timestamp_above_metadata() -> None:
     assert "↻ 2.3s" in text
     tool_row = next(ln for ln in text.splitlines() if "bash.run" in ln)
     assert stamp not in tool_row
-    assert f"· {stamp}" in text
+    assert f"🕐 {stamp}" in text
     # The single stamp sits above the API metadata line, before the tool row.
-    ts_idx = text.index(f"· {stamp}")
+    ts_idx = text.index(f"🕐 {stamp}")
     api_idx = text.index("↻ 2.3s")
     tool_idx = text.index("bash.run")
     assert ts_idx < api_idx < tool_idx
