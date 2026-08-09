@@ -1170,7 +1170,6 @@ class Agent(BaseAgent):
         """Restore canonical reasoning only for mounted strict MCP ToolFamilies.
 
         ``ToolExecutor`` deliberately renames model-facing ``reasoning`` to the
-<<<<<<< HEAD
         private ``_reasoning`` audit key before every dispatch.  Ordinary
         in-process and legacy MCP handlers consume that existing shape.  A native
         MCP ToolFamily instead validates the original closed LTP-v2 envelope, so
