@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from . import init_config, kernel_version, goal, source_drift
+from . import folder_size, init_config, kernel_version, goal, source_drift
 
 
 DEFAULT_ENABLED = True
@@ -56,10 +56,12 @@ ENVIRONMENT_MANUAL = "system-manual/reference/environment-variables/SKILL.md"
 ENTRY_CHANNEL_RELEASE_VERSION = "release_version"
 ENTRY_CHANNEL_SOURCE_INTEGRITY = "source_integrity"
 ENTRY_CHANNEL_CONFIG_STALENESS = "configuration_staleness"
+ENTRY_CHANNEL_STORAGE_SIZE = "storage_size"
 _ENTRY_CHANNEL_BY_KIND = {
     "kernel_version": ENTRY_CHANNEL_RELEASE_VERSION,
     "source_drift": ENTRY_CHANNEL_SOURCE_INTEGRITY,
     "init_config_shape": ENTRY_CHANNEL_CONFIG_STALENESS,
+    "folder_size": ENTRY_CHANNEL_STORAGE_SIZE,
 }
 
 # Hard maximum for one nudge entry's inline, model-visible JSON serialization.
@@ -187,6 +189,7 @@ __all__ = [
     "ENTRY_CHANNEL_CONFIG_STALENESS",
     "ENTRY_CHANNEL_RELEASE_VERSION",
     "ENTRY_CHANNEL_SOURCE_INTEGRITY",
+    "ENTRY_CHANNEL_STORAGE_SIZE",
     "ENVIRONMENT_MANUAL",
     "INLINE_MAX_CHARS",
     "NudgeExternalizationError",
@@ -220,6 +223,7 @@ def run_checks(agent) -> None:
     _run_one(agent, "kernel_version", kernel_version.check)
     _run_one(agent, "source_drift", source_drift.check)
     _run_one(agent, "init_config_shape", init_config.check)
+    _run_one(agent, "folder_size", folder_size.check)
 
 
 def run_system_notifications(agent) -> None:
