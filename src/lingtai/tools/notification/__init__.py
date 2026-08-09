@@ -101,7 +101,7 @@ def _schema_only_family() -> ToolFamily:
     off.  The real handlers need an ``agent``, which only arrives per call,
     so :func:`handle` builds a per-call family with bound handlers and this
     module-level one never dispatches.  Constructing it at import time is
-    still load-bearing: it proves the fixed five-child registry has no
+    still load-bearing: it proves the fixed nine-child registry has no
     duplicate and no reserved-name collision on ``manual``
     (``ToolFamilyError`` raises here, at import, rather than shipping
     silently).
