@@ -22,6 +22,13 @@ _SECRET_PLACEHOLDER = "<REDACTED:secret>"
 # redacted mechanically before trajectory writes.
 _TOKEN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b"), "<REDACTED:telegram_bot_token>"),
+    # Telegram Bot API URLs embed the token in the request path itself
+    # (https://api.telegram.org/bot<id>:<secret>/<method> and the
+    # /file/bot<id>:<secret>/... download form). The generic pattern above
+    # cannot match there: the digit run directly follows "/bot", so the leading
+    # word boundary is missing. Match the URL form explicitly and keep the
+    # "/bot" prefix so the redaction is recognizable in context.
+    (re.compile(r"(/bot)\d{6,12}:[A-Za-z0-9_-]{30,}(?![A-Za-z0-9_-])"), r"\1<REDACTED:telegram_bot_token>"),
     (re.compile(r"\bsk-proj-[A-Za-z0-9_-]{40,}\b"), "<REDACTED:openai_project_key>"),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"), "<REDACTED:api_key>"),
     (re.compile(r"\bghp_[A-Za-z0-9]{30,}\b"), "<REDACTED:github_token>"),

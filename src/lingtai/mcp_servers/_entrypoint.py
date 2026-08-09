@@ -14,6 +14,11 @@ credential leakage:
 2. A redaction filter is attached to the root logger so any record that still
    contains a Telegram bot token or a ``api.telegram.org/bot<TOKEN>/...`` URL
    is rewritten to a fixed placeholder before any handler renders it.
+
+Additional per-logger filters (``_protect_http_loggers``, #1298) attach the
+same Telegram credential redaction directly to the HTTP client loggers for
+belt-and-braces coverage when those loggers are reconfigured independently of
+the root.
 """
 from __future__ import annotations
 
@@ -61,6 +66,38 @@ class _RedactTelegramCredentials(logging.Filter):
 _telegram_credential_filter = _RedactTelegramCredentials()
 
 
+# Matches the Telegram Bot API URL path segment that embeds the bot token
+# (https://api.telegram.org/bot<id>:<secret>/<method> and the
+# /file/bot<id>:<secret>/... download form). Keeps the "/bot" prefix visible so
+# the redacted record remains recognizable. Mirrors the trajectory redactor in
+# ``lingtai.kernel.trace_redaction``.
+_TELEGRAM_BOT_URL_RE_SEGMENT = re.compile(
+    r"(/bot)\d{6,12}:[A-Za-z0-9_-]{30,}(?![A-Za-z0-9_-])"
+)
+_TELEGRAM_BOT_URL_REDACTED = r"\1<REDACTED:telegram_bot_token>"
+
+
+class _HttpUrlCredentialFilter(logging.Filter):
+    """Redact credential-bearing URL path segments from HTTP client logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True  # malformed record: leave it to the normal formatter
+        redacted = _TELEGRAM_BOT_URL_RE_SEGMENT.sub(_TELEGRAM_BOT_URL_REDACTED, message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+def _protect_http_loggers() -> None:
+    """Attach the credential-redacting filter to HTTP client loggers."""
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).addFilter(_HttpUrlCredentialFilter())
+
+
 def configure_stdio_logging() -> None:
     """Configure INFO stderr logging for a curated MCP stdio server.
 
@@ -86,6 +123,7 @@ def configure_stdio_logging() -> None:
     for handler in root_logger.handlers:
         if _telegram_credential_filter not in handler.filters:
             handler.addFilter(_telegram_credential_filter)
+    _protect_http_loggers()
 
 
 def run_stdio_server_main(serve: Callable[[], Awaitable[None]]) -> None:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,64 @@ def test_run_stdio_server_main_swallows_keyboard_interrupt(monkeypatch):
     monkeypatch.setattr(_entrypoint.asyncio, "run", boom)
     # Must not propagate — Ctrl-C is a clean shutdown.
     assert _entrypoint.run_stdio_server_main(lambda: None) is None
+
+
+# ---------------------------------------------------------------------------
+# HTTP client credential logging (issue Lingtai-AI/lingtai#680)
+# ---------------------------------------------------------------------------
+
+def test_http_url_credential_filter_redacts_telegram_token():
+    token = "1234567890:" + "A" * 35
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg=f"HTTP Request: GET https://api.telegram.org/bot{token}/getUpdates",
+        args=(),
+        exc_info=None,
+    )
+    assert _entrypoint._HttpUrlCredentialFilter().filter(record) is True
+    assert token not in record.getMessage()
+    assert "/bot<REDACTED:telegram_bot_token>/getUpdates" in record.getMessage()
+
+
+def test_http_url_credential_filter_passes_ordinary_records(caplog):
+    filt = _entrypoint._HttpUrlCredentialFilter()
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="HTTP Request: GET https://api.example.com/ping",
+        args=(),
+        exc_info=None,
+    )
+    assert filt.filter(record) is True
+    assert record.getMessage() == "HTTP Request: GET https://api.example.com/ping"
+
+
+def test_run_stdio_server_main_attaches_http_credential_filter():
+    # The entrypoint must attach the filter to httpx/httpcore loggers so HTTP
+    # client INFO lines never reach stderr with a token-bearing URL.
+    _entrypoint._protect_http_loggers()
+    for name in ("httpx", "httpcore"):
+        logger = logging.getLogger(name)
+        assert any(
+            isinstance(f, _entrypoint._HttpUrlCredentialFilter)
+            for f in logger.filters
+        ), name
+
+
+def test_run_stdio_server_main_logs_redact_telegram_urls(caplog):
+    _entrypoint._protect_http_loggers()
+    token = "987654321:" + "B" * 40
+    with caplog.at_level(logging.INFO, logger="httpx"):
+        logging.getLogger("httpx").info(
+            "HTTP Request: GET https://api.telegram.org/bot%s/getUpdates", token
+        )
+    assert token not in caplog.text
+    assert "<REDACTED:telegram_bot_token>" in caplog.text
 
 
 # ---------------------------------------------------------------------------
