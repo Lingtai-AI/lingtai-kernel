@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.kernel.base_agent import BaseAgent
-from lingtai.agent import Agent
+from lingtai.agent import Agent, _schema_declares_reasoning_param
 from lingtai.kernel.message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.types import UnknownToolError
@@ -405,6 +405,77 @@ def test_execute_single_tool_unknown(tmp_path):
     tc = ToolCall(name="nonexistent_tool", args={})
     with pytest.raises(UnknownToolError):
         agent._dispatch_tool(tc)
+
+
+def _dispatch_agent(tmp_path):
+    """Full Agent instance (the class that owns the reasoning restore wrapper)."""
+    return Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
+
+
+def _capturing_tool(agent, name, schema, seen):
+    agent.add_tool(name, schema=schema, handler=lambda args: (seen.update(args=dict(args)), {"status": "ok"})[1])
+    agent._mcp_tool_names = {name}
+
+
+def test_dispatch_drops_reasoning_for_flat_third_party_mcp_tool(tmp_path):
+    """_reasoning must never reach a flat third-party tool that didn't declare it (#1237)."""
+    from lingtai.kernel.llm.base import ToolCall
+    agent = _dispatch_agent(tmp_path)
+    seen = {}
+    flat = {"type": "object", "properties": {"source": {"type": "string"}, "tags": {"type": "array"}}, "required": ["source"]}
+    _capturing_tool(agent, "add_item", flat, seen)
+
+    result = agent._dispatch_tool(ToolCall(name="add_item", args={"source": "x", "_reasoning": "audit"}))
+    assert result["status"] == "ok"
+    assert seen["args"] == {"source": "x"}
+
+
+def test_dispatch_keeps_reasoning_restore_for_strict_ltp_v2_family(tmp_path):
+    """Strict LTP-v2 envelope tools still get _reasoning renamed back to reasoning (#1237)."""
+    from lingtai.kernel.llm.base import ToolCall
+    agent = _dispatch_agent(tmp_path)
+    seen = {}
+    envelope = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "action": {"type": "string"},
+            "input": {"type": "object"},
+            "reasoning": {"type": "string"},
+            "summarize": {"type": "boolean"},
+        },
+        "required": ["action", "input", "reasoning"],
+    }
+    _capturing_tool(agent, "family_tool", envelope, seen)
+
+    result = agent._dispatch_tool(ToolCall(name="family_tool", args={"action": "go", "input": {}, "_reasoning": "audit"}))
+    assert result["status"] == "ok"
+    assert seen["args"]["reasoning"] == "audit"
+    assert "_reasoning" not in seen["args"]
+
+
+def test_dispatch_forwards_reasoning_when_third_party_tool_declares_it(tmp_path):
+    """A non-envelope tool that declares its own reasoning param keeps the key (#1237)."""
+    from lingtai.kernel.llm.base import ToolCall
+    agent = _dispatch_agent(tmp_path)
+    seen = {}
+    custom = {"type": "object", "properties": {"reasoning": {"type": "string"}, "x": {"type": "integer"}}}
+    _capturing_tool(agent, "custom_tool", custom, seen)
+
+    result = agent._dispatch_tool(ToolCall(name="custom_tool", args={"x": 1, "_reasoning": "audit"}))
+    assert result["status"] == "ok"
+    assert seen["args"] == {"x": 1, "_reasoning": "audit"}
+
+
+def test_schema_declares_reasoning_param():
+    """Unit checks for the third-party schema probe used by _dispatch_tool (#1237)."""
+    assert _schema_declares_reasoning_param({"type": "object", "properties": {"reasoning": {"type": "string"}}})
+    assert _schema_declares_reasoning_param({"type": "object", "properties": {"_reasoning": {"type": "string"}}})
+    assert not _schema_declares_reasoning_param({"type": "object", "properties": {"source": {"type": "string"}}})
+    assert not _schema_declares_reasoning_param({"type": "object"})
+    assert not _schema_declares_reasoning_param({})
+    assert not _schema_declares_reasoning_param(None)
+    assert not _schema_declares_reasoning_param("nope")
 
 
 # ---------------------------------------------------------------------------

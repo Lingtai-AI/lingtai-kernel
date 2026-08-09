@@ -84,6 +84,67 @@ def test_telegram_send_schema_requires_rendering_mode_and_preserves_content_alte
     assert not _basic_validate({"text": "missing chat", "rendering_mode": "plain_text"}, send)
     assert not _basic_validate({"chat_id": 3, "rendering_mode": "plain_text", "text": 17}, send)
 
+
+def test_telegram_send_accepts_explicit_nulls_for_optional_fields():
+    """send must accept the model's own nulls for media/reply_markup (issue #1237)."""
+    manager = _CountingManager()
+    result = handle_telegram(manager, {
+        "action": "send",
+        "input": {
+            "chat_id": 2,
+            "text": "hi",
+            "media": None,
+            "reply_markup": None,
+            "rendering_mode": "plain_text",
+        },
+        "reasoning": "schema probe",
+    })
+    assert result["status"] == "ok"
+    assert manager.calls == [{
+        "action": "send",
+        "chat_id": 2,
+        "text": "hi",
+        "media": None,
+        "reply_markup": None,
+        "rendering_mode": "plain_text",
+    }]
+
+
+def test_telegram_edit_accepts_null_reply_markup():
+    """edit must accept reply_markup: null like every other optional field (#1237)."""
+    manager = _CountingManager()
+    result = handle_telegram(manager, {
+        "action": "edit",
+        "input": {
+            "message_id": "acct:1:2",
+            "text": "x",
+            "reply_markup": None,
+            "rendering_mode": "plain_text",
+        },
+        "reasoning": "schema probe",
+    })
+    assert result["status"] == "ok"
+
+
+def test_telegram_send_nullable_schema_keeps_validation_strictness():
+    """Nullable media/reply_markup must not loosen required/type validation (#1237)."""
+    send = _branches(TELEGRAM_SCHEMA)["send"]
+    assert "anyOf" in send["properties"]["media"]
+    assert "anyOf" in send["properties"]["reply_markup"]
+    assert send["properties"]["media"]["anyOf"][0]["description"]
+    assert _basic_validate(
+        {"chat_id": 3, "rendering_mode": "plain_text", "text": "hi", "media": None, "reply_markup": None},
+        send,
+    )
+    # Wrong media type is still rejected even though media itself is nullable.
+    assert not _basic_validate(
+        {"chat_id": 3, "rendering_mode": "plain_text", "text": "hi", "media": {"type": "bogus", "path": "x"}},
+        send,
+    )
+    # Missing required fields are still rejected.
+    assert not _basic_validate({"chat_id": 3, "rendering_mode": "plain_text", "text": "hi", "media": "not-an-object"}, send)
+
+
 def test_taskcard_refresh_setting_defaults_invalid_values_preserves_valid_siblings(
     tmp_path, caplog
 ):

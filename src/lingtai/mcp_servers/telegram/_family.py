@@ -99,8 +99,8 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             "account": _nullable({"type": "string"}),
             "chat_id": _chat_id(),
             "text": {"type": "string"},
-            "media": media,
-            "reply_markup": {"type": "object"},
+            "media": _nullable(media),
+            "reply_markup": _nullable({"type": "object"}),
             "placeholder": _nullable({"type": "boolean"}),
             "chat_action": _nullable({
                 "type": "string",
@@ -130,7 +130,7 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             {"required": ["structured_message"]},
         ],
     )
-    send["properties"]["media"]["description"] = (
+    send["properties"]["media"]["anyOf"][0]["description"] = (
         "Media attachment: {type: 'photo'|'document', path: '/path/to/file'}. "
         "For charts, HTML/SVG/PNG reports, CSVs, PDFs, and other generated artifacts "
         "that should arrive as an intact file, use type='document'. Use type='photo' "
@@ -197,7 +197,7 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "message_id": {"type": "string"},
                 "text": {"type": "string"},
-                "reply_markup": {"type": "object"},
+                "reply_markup": _nullable({"type": "object"}),
                 "rendering_mode": {
                     "type": "string", "enum": list(_RENDERING_MODES),
                     "description": (

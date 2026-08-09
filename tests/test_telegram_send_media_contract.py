@@ -52,7 +52,10 @@ def test_send_schema_advertises_exactly_runtime_supported_media_types():
         branch for branch in SCHEMA["properties"]["input"].get("oneOf", SCHEMA["properties"]["input"]["anyOf"])
         if branch.get("title") == "send input"
     )
-    advertised = send["properties"]["media"]["properties"]["type"]["enum"]
+    # media is nullable (anyOf wrapper, object branch first) since #1237.
+    media_schema = send["properties"]["media"]
+    assert {"type": "null"} in media_schema["anyOf"]
+    advertised = media_schema["anyOf"][0]["properties"]["type"]["enum"]
 
     assert advertised == list(SUPPORTED_SEND_MEDIA_TYPES) == ["photo", "document"]
 
