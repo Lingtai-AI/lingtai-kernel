@@ -60,7 +60,7 @@ from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 # from the package ``__init__`` would be circular (``__init__`` imports this
 # module), so the two literals are restated here with an import-time assertion
 # in ``__init__.py`` proving they still match the engine's own values.
-DEFAULT_MAX_TURNS = 1000
+DEFAULT_MAX_TURNS = 5000
 CHECK_LAST_MAX = 1000
 
 #: The canonical action order, model-facing enum order, and dispatch order.
@@ -205,7 +205,7 @@ def _emanate_input_schema(backend_enum: list[str]) -> dict[str, Any]:
                 "type": ["integer", "null"],
                 "minimum": 1,
                 "maximum": DEFAULT_MAX_TURNS,
-                "description": "For 'emanate': max LLM tool-loop turns per emanation. Default: parent ceiling (1000, or the agent's daemon/daemon.json max_turns when set). Use a smaller value to keep simple emanations bounded. Null for the default.",
+                "description": "For 'emanate': max LLM tool-loop turns per emanation. Default: parent ceiling (5000, or the agent's daemon/daemon.json max_turns when set). Use a smaller value to keep simple emanations bounded. Null for the default.",
             },
             "timeout": {
                 "type": ["number", "null"],

@@ -133,7 +133,7 @@ def _kill_process_group(proc, *, term_timeout: float = 5.0, kill_timeout: float 
 # Default and author ceiling for per-emanation LLM tool-loop turns.
 # Agents may request a smaller per-batch value via daemon(max_turns=...), but
 # larger values are capped here.
-DEFAULT_MAX_TURNS = 1000
+DEFAULT_MAX_TURNS = 5000
 # Per-agent daemon capability config, mirroring the sibling task_card
 # capability's ``<workdir>/taskcard/taskcard.json`` pattern: this capability's
 # own config lives at ``<workdir>/daemon/daemon.json``. Today it supports a
@@ -8305,7 +8305,7 @@ def setup(agent: "Agent", max_emanations: int = 100,
     default when ``emanate`` omits it). When the caller omits it here, it
     resolves from the agent's per-agent config file
     (``<workdir>/daemon/daemon.json``, ``max_turns`` field) and falls back to
-    ``DEFAULT_MAX_TURNS`` (1000) when the file is missing or the value is
+    ``DEFAULT_MAX_TURNS`` (5000) when the file is missing or the value is
     invalid. An explicit ``max_turns`` always wins over the config file.
     """
     if max_turns is None:
