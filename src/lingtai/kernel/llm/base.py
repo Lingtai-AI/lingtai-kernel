@@ -13,6 +13,11 @@ from typing import Any
 from lingtai.kernel.logging import get_logger
 
 from .interface import ChatInterface
+from .reasoning_effort import (
+    UNAVAILABLE_CAPABILITY,
+    ReasoningEffortCapability,
+    ReasoningEffortSnapshot,
+)
 
 logger = get_logger()
 
@@ -271,6 +276,48 @@ class ChatSession(ABC):
     # Default ``None`` — adapters that don't install a hook treat the
     # call as a no-op, preserving the legacy zero-hook behavior.
     pre_request_hook: "Callable[[ChatInterface], None] | None" = None
+
+    # -- Runtime reasoning-effort port ------------------------------------
+    #
+    # A neutral, technology-ignorant seam for "this session's route can change
+    # its reasoning effort between dispatches". It is deliberately SEPARATE from
+    # ``pre_request_hook`` (single-slot, already owned by the kernel's Task Card
+    # inbox drain): a session may have both, and installing one never disturbs
+    # the other. Adapters with no such route inherit the defaults below and stay
+    # truthfully unavailable — Core never branches on a concrete provider.
+
+    def reasoning_effort_capability(self) -> ReasoningEffortCapability:
+        """Describe this session's real, currently active effort route.
+
+        Default: unavailable. An adapter that owns an exact authorized route
+        (integration + model + endpoint + wire) returns a populated capability
+        with its exact ordered values, provider catalog default evidence,
+        construction baseline, and route fingerprint.
+        """
+        return UNAVAILABLE_CAPABILITY
+
+    def set_reasoning_effort_policy(
+        self,
+        provider: "Callable[[], ReasoningEffortSnapshot | None] | None",
+    ) -> bool:
+        """Install the owner's per-dispatch policy-snapshot provider.
+
+        The session calls ``provider()`` at most once per logical dispatch and
+        reuses that one immutable snapshot for every retry/fallback of the same
+        dispatch. Returns True when the session actually bound it (i.e. it has a
+        real route); False means the session stays unchanged.
+        """
+        return False
+
+    def last_reasoning_effort_dispatch(self) -> dict | None:
+        """Return safe evidence about the most recent dispatch's effort.
+
+        Recorded at dispatch start (before any wire send) and marked completed
+        only once the provider actually completed the request, so a rejected
+        attempt keeps truthful evidence instead of disappearing. Default: no
+        such machinery, so ``None``.
+        """
+        return None
 
     def adapter_comment(self):
         """Optional legacy combined adapter note for ``_meta.agent_meta``.

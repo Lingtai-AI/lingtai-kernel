@@ -6,10 +6,12 @@ related_files:
   - src/lingtai/kernel/llm/__init__.py
   - src/lingtai/kernel/llm/base.py
   - src/lingtai/kernel/llm/interface.py
+  - src/lingtai/kernel/llm/reasoning_effort.py
   - src/lingtai/kernel/llm/service.py
   - src/lingtai/kernel/llm/streaming.py
   - tests/test_llm_service.py
   - tests/test_wire_tool_description.py
+  - tests/test_codex_live_effort.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -32,6 +34,36 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
   - `ChatSession` requires an `interface` property and `send()` accepting text, tool results, or `None` (`llm/base.py:240-418`), then supplies default helpers for history/state, usage totals, streaming fallback, tool-result commits, tool/system updates, reset, interaction id, context window, and context-overflow recovery (`llm/base.py:240-654`).
   - **`send()` signature contract** — adapters accept three message shapes: `str` (new user text → `add_user_message`), `list[ToolResultBlock]` (tool returns → `add_tool_results`), and `None` (the "continue from wire" signal — caller has already pre-staged the canonical interface, e.g. via `_inject_notification_pair`; the adapter must skip the input-append step and send the wire as-is). On API error the error-path `drop_trailing` must be guarded so a `None` send does not corrupt the pre-staged wire. See `lingtai/llm/openai/ANATOMY.md` and `lingtai/llm/anthropic/ANATOMY.md` for adapter-side details, and `base_agent/turn.py:_handle_tc_wake` for the call site that drives a turn off the existing wire.
   - **`pre_request_hook`** (`llm/base.py:273`) — optional callable adapters fire after committing the message to the canonical `ChatInterface` but before the API call. Historically the kernel installed `BaseAgent._drain_tc_inbox_for_hook` here to drain the involuntary tool-call inbox mid-turn. Post-`.notification/`-redesign (`fadbabf` / `d2da97e`) the hook is still installed but the queue is always empty in production — ACTIVE notifications now defer to the post-turn IDLE synthetic-pair path instead of a send-time prefix hook. Default `None` — adapters that don't install treat the call as a no-op. Phase 3 will remove the hook. See root `ANATOMY.md` "Notifications" for the full picture, including the canonical-vs-server-state regime distinction.
+  - **Runtime reasoning-effort port** (`llm/base.py`, added beside
+    `pre_request_hook`) — `reasoning_effort_capability()`,
+    `set_reasoning_effort_policy(provider)`, and
+    `last_reasoning_effort_dispatch()`. A DEDICATED seam, deliberately not the
+    single-slot `pre_request_hook` (owned by the Task Card inbox drain): a
+    session may carry both and installing one never disturbs the other.
+    Defaults are fail-closed — unavailable capability, `False` binding, no
+    dispatch evidence — so every adapter without such a route is unchanged and
+    Core never branches on a concrete provider. Today only
+    `CodexResponsesSession` implements it (`src/lingtai/llm/openai/ANATOMY.md`).
+- `llm/reasoning_effort.py` — Core-owned neutral value objects and controller for
+  the port above: `ReasoningEffortCapability` (available/route/values/
+  provider_default/baseline/settable/fingerprint/evidence_revision, plus the
+  shared `UNAVAILABLE_CAPABILITY` singleton), `ReasoningEffortSnapshot` (the one
+  immutable per-dispatch decision: effective/source/revision/fingerprint/
+  baseline/requested), `ReasoningEffortResult`, and
+  `ReasoningEffortController`. The controller holds only
+  `{capability (fingerprint + baseline), optional override, monotonic revision}`
+  and owns `status()` / `set()` / `clear()` / `snapshot()`. `route` and
+  `fingerprint` are opaque adapter-owned tokens that Core stores and compares
+  but never parses. `bind_capability()` keeps the override across a rebind to
+  the SAME fingerprint (what makes an in-process session rebuild transparent)
+  and drops it on route drift. An unavailable route is get-only, an invalid
+  `set` never mutates state, and `clear` restores the capability's `baseline`
+  rather than any provider value. **`baseline` means the adapter session's
+  ACTUAL construction value**, so binding a controller reproduces the unchanged
+  wire and can never move a request on its own; a provider that also has a fixed
+  omitted/default policy reports that separately (see
+  `src/lingtai/llm/openai/ANATOMY.md`). `SessionManager` owns the instance
+  (`kernel/ANATOMY.md`); tests: `tests/test_codex_live_effort.py`.
 - `llm/interface.py` — canonical conversation representation.
   - Content blocks: `TextBlock`, `ToolCallBlock`, `ToolResultBlock`, `ThinkingBlock`; `ContentBlock` union and `content_block_from_dict()` (`llm/interface.py:35-228`).
   - `InterfaceEntry` is one role+content row with id, role, timestamp, provider metadata, model/provider, usage, and optional tool snapshot (`llm/interface.py:230-294`).

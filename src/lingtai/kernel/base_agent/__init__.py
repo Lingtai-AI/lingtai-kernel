@@ -2292,6 +2292,28 @@ class BaseAgent:
         """
         return self.get_runtime_session_token_usage()
 
+    # ------------------------------------------------------------------
+    # Runtime reasoning effort — in-process, self-facing (issue #1197 K1a)
+    # ------------------------------------------------------------------
+    #
+    # These are the agent's own get/set/clear entry points. There is
+    # deliberately NO system tool action, file protocol, CLI command, TUI
+    # command, or daemon control behind them: this slice is the in-process
+    # vertical only. A set/clear affects the next not-yet-captured dispatch —
+    # never one already in flight — and never propagates to any daemon.
+
+    def reasoning_effort_status(self) -> dict:
+        """Return the current effort route/capability and controller state."""
+        return self._session.reasoning_effort_status()
+
+    def set_reasoning_effort(self, value: str):
+        """Request a process-local effort override for the next dispatch."""
+        return self._session.set_reasoning_effort(value)
+
+    def clear_reasoning_effort(self):
+        """Drop the override and restore the route's construction baseline."""
+        return self._session.clear_reasoning_effort()
+
     def runtime_session(self):
         """Return the current RUNTIME-SESSION object (live lifecycle segment).
 

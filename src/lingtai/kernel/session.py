@@ -33,6 +33,7 @@ from .llm_utils import (
     send_with_timeout_stream,
     track_llm_usage,
 )
+from .llm.reasoning_effort import ReasoningEffortController, ReasoningEffortResult
 from .agent_session import AgentSession, RuntimeSession, new_runtime_session
 from .logging import get_logger
 from .reminders.context_pressure import ContextPressureReminder
@@ -84,6 +85,12 @@ _SAFE_USAGE_EXTRA_EVENT_KEYS = {
     "codex_store",
     "codex_fallback_error_type",
     "codex_fallback_error_message",
+    # Runtime reasoning-effort evidence (issue #1197): the exact value the wire
+    # actually emitted, whether it came from the construction baseline or a
+    # process-local override, and the controller revision it was captured at.
+    "codex_reasoning_effort",
+    "codex_reasoning_effort_source",
+    "codex_reasoning_effort_revision",
 }
 
 
@@ -228,6 +235,14 @@ class SessionManager:
         self._intermediate_text_streamed = False
         self._message_seq = 0
 
+        # Process-local runtime reasoning-effort control (issue #1197 K1a).
+        # Owned HERE — not by a cached adapter, a module global, or the
+        # replaceable chat session — so it survives an in-process
+        # ``_rebuild_session()``. It deliberately does NOT survive a process
+        # refresh / restart / molt / suspend; durability is a separate concern.
+        # Providers with no such route leave it truthfully unavailable.
+        self._reasoning_effort = ReasoningEffortController()
+
         # Timeout pool for LLM calls
         self._timeout_pool = ThreadPoolExecutor(max_workers=1)
 
@@ -244,6 +259,7 @@ class SessionManager:
     def chat(self, value: ChatSession | None) -> None:
         self._chat = value
         self._attach_tool_result_recovery_lookup(value)
+        self._bind_reasoning_effort(value)
 
     @property
     def token_decomp_dirty(self) -> bool:
@@ -300,6 +316,7 @@ class SessionManager:
                 provider=self._config.provider,
             )
             self._attach_tool_result_recovery_lookup(self._chat)
+            self._bind_reasoning_effort(self._chat)
         return self._chat
 
     def _rebuild_session(
@@ -317,6 +334,63 @@ class SessionManager:
             interface=interface,
         )
         self._attach_tool_result_recovery_lookup(self._chat)
+        self._bind_reasoning_effort(self._chat)
+
+    # ------------------------------------------------------------------
+    # Runtime reasoning effort (process-local, self-facing)
+    # ------------------------------------------------------------------
+
+    def _bind_reasoning_effort(self, chat: ChatSession | None) -> None:
+        """Re-bind the effort controller to ``chat``.
+
+        Called at EVERY session-assignment site (``ensure_session``,
+        ``_rebuild_session``, and the ``chat`` setter) so an in-process rebuild
+        keeps the override and the new session gets the snapshot callback. The
+        binding goes through a METHOD, not an attribute write, so it lands on
+        the real adapter even behind the rate-gate session proxy.
+
+        Route drift (a rebuilt session on a different model/endpoint) is handled
+        inside the controller: a changed capability fingerprint drops the
+        override instead of re-applying it to a different route.
+        """
+        if chat is None:
+            self._reasoning_effort.bind_capability(None)
+            return
+        capability = None
+        capability_fn = getattr(chat, "reasoning_effort_capability", None)
+        if callable(capability_fn):
+            try:
+                capability = capability_fn()
+            except Exception:
+                capability = None
+        self._reasoning_effort.bind_capability(capability)
+        bind = getattr(chat, "set_reasoning_effort_policy", None)
+        if callable(bind):
+            try:
+                bind(self._reasoning_effort.snapshot)
+            except Exception:
+                logger.warning("reasoning_effort_bind_failed", exc_info=True)
+
+    def reasoning_effort_status(self) -> dict:
+        """Truthful query status for the current route and controller state."""
+        return self._reasoning_effort.status()
+
+    def set_reasoning_effort(self, value: str) -> ReasoningEffortResult:
+        """Request a process-local override for the NEXT dispatch."""
+        return self._reasoning_effort.set(value)
+
+    def clear_reasoning_effort(self) -> ReasoningEffortResult:
+        """Remove the override and restore the route's construction baseline."""
+        return self._reasoning_effort.clear()
+
+    def last_reasoning_effort_dispatch(self) -> dict | None:
+        """Safe evidence about the most recent dispatch's effort, if any."""
+        if self._chat is None:
+            return None
+        getter = getattr(self._chat, "last_reasoning_effort_dispatch", None)
+        if not callable(getter):
+            return None
+        return getter()
 
     def _attach_tool_result_recovery_lookup(self, chat: ChatSession | None) -> None:
         if chat is None or self._tool_result_recovery_lookup_fn is None:

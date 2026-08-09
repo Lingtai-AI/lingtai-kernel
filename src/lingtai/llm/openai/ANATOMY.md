@@ -9,8 +9,10 @@ related_files:
   - src/lingtai/llm/openai/__init__.py
   - src/lingtai/llm/openai/adapter.py
   - src/lingtai/llm/openai/codex_quota.py
+  - src/lingtai/llm/openai/codex_effort.py
   - src/lingtai/llm/openai/codex_ws.py
   - src/lingtai/llm/openai/defaults.py
+  - tests/test_codex_live_effort.py
   - src/lingtai/auth/codex_pool.py
   - tests/test_codex_quota.py
   - tests/test_codex_pool_quota_exclusion.py
@@ -46,6 +48,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `adapter.py` | large | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
 | `codex_quota.py` | ~330 | `read_remaining_percent(auth_path)` — translates LingTai's flat OAuth file into a process-owned native Codex CLI auth envelope, then reads the CLI's own OAuth rate-limit via `codex app-server`'s `account/rateLimits/read` stdio JSON-RPC call; returns the main window's remaining percent or `None` on any failure/malformed field. Used by `lingtai.auth.codex_pool`'s quota-aware pool exclusion. Tests: `tests/test_codex_quota.py`. |
 | `defaults.py` | 12 | `DEFAULTS` dict: `api_compat="openai"`, `use_responses_api=True`, `wire_api="auto"` |
+| `codex_effort.py` | ~200 | Codex provider-local **active-route descriptor** for runtime reasoning effort (issue #1197). `resolve_codex_effort_descriptor(model=, base_url=, construction_effort=, wire=)` returns a frozen `CodexEffortDescriptor` only when EVERY invariant axis matches — native `codex` integration + exact model `gpt-5.6-sol` + a non-empty normalized endpoint actually selected for that session + the Responses wire + a `construction_effort` inside the route's exact values — and `None` (fail closed) otherwise. `None` base URL resolves to the official default; an explicit proxy/custom/pool-selected endpoint is normalized and retained in the per-SESSION descriptor. It owns the exact ordered values `low\|medium\|high\|xhigh\|max\|ultra`, the emitted field `reasoning.effort`, an evidence revision, an alias-independent but endpoint-sensitive `fingerprint`, and **three separate default-ish facts that are never merged**: `provider_default` (`low`, provider catalog evidence), `omitted_default_policy` (`xhigh`, the adapter's fixed policy for an OMITTED/`default` thinking level), and `construction_baseline` (the effort THIS session actually constructed with). Only the last is the capability baseline, and it is part of the fingerprint. `to_capability()` projects it onto the neutral kernel `ReasoningEffortCapability`. Tests: `tests/test_codex_live_effort.py`. |
 
 ### adapter.py class map
 
@@ -264,6 +267,81 @@ standalone compaction is active, `codex_compacted` (`"true"`) and
 `codex_compacted_delta_entries` (the additive entry count since compaction)
 are also recorded — safe structural metadata only, never opaque content
 (`adapter.py:2955-2959`, `_usage_extra`).
+
+### Codex runtime reasoning effort — K1a process-local vertical (issue #1197)
+
+The ONE real wire seam for main-agent effort is the per-dispatch request-kwargs
+construction inside `CodexResponsesSession.send_stream`. `reasoning.effort`
+enters `_extra_kwargs` once at construction (`_create_responses_session`
+normalizes the `thinking` level, mapping only an omitted/`default` sentinel to
+`xhigh`), but every dispatch re-expands it, so one immutable snapshot captured
+per dispatch covers REST, the WebSocket frame, the encrypted-reasoning self-heal
+retry, and the incremental fallback.
+
+**The baseline is the session's ACTUAL construction effort, not `xhigh`.** A
+stock main agent has no manifest `thinking`, so `AgentConfig().thinking` is
+`"high"`, `SessionManager` passes `self._config.thinking or "high"`, and the
+constructed wire is `reasoning.effort="high"`. Treating the adapter's
+omitted/`default` policy (`xhigh`) as every session's baseline would make merely
+binding a controller move the next no-override dispatch `high` → `xhigh` — a
+silent behavior change this vertical must never make. See the three separate
+default-ish facts in the `codex_effort.py` row above.
+
+Structure:
+
+- `_create_responses_session` resolves this session's route once via
+  `resolve_codex_effort_descriptor(model=, base_url=self.base_url,
+  construction_effort=…)`, reading the construction effort back out of
+  `extra_kwargs["reasoning"]["effort"]` so it is the already-normalized wire
+  value, and passes the result as `effort_descriptor`. The descriptor retains
+  the normalized endpoint selected before session construction (including a
+  `codex_base_urls` choice), so endpoint drift changes its fingerprint. Off the
+  authorized route — unknown model, empty endpoint, or a construction effort
+  outside the route's exact values (`none`/`minimal`) — it is `None` and every
+  request stays byte-identical to before.
+- Session state: `_effort_descriptor`, `_effort_policy_provider` (installed by
+  the owner through `set_reasoning_effort_policy`, never through an attribute
+  write — that would land in the rate-gate proxy's `__dict__`), and
+  `_last_effort_dispatch` (safe evidence only).
+- `_capture_effort_snapshot()` runs EXACTLY ONCE per logical dispatch, after the
+  `pre_request_hook` stage and BEFORE `_maybe_reset_ws_epoch()` /
+  `_codex_refresh_account_for_request()` / any request-kwargs construction. It
+  calls the policy provider at most once, rejects a snapshot whose fingerprint
+  does not match this session's descriptor or whose value is outside the
+  descriptor's exact values, and records dispatch-start evidence for every
+  on-route branch. Off route (`_effort_descriptor is None`) it creates NO record
+  and leaves `_last_effort_dispatch` at `None`: an unavailable route stays
+  unchanged **and unexposed**, including through the self-facing
+  `last_reasoning_effort_dispatch()` query.
+- The captured value is written into `kwargs["reasoning"]` as a FRESH dict.
+  `**self._extra_kwargs` aliases the construction object, so an in-place
+  mutation would permanently rewrite the session baseline; assigning a copy also
+  means the `dict(kwargs)` shallow copies in the self-heal retry
+  (`retry_kwargs`) and incremental fallback (`fallback_kwargs`) inherit exactly
+  this snapshot without re-reading the controller.
+- The WebSocket path needs no second seam: `_codex_ws_open` receives the same
+  `kwargs`, and `_ws_frame_request` copies every non-transport key, so the frame
+  carries the identical effort. Because `_codex_incremental_diagnose` compares
+  ALL non-input request fields, a changed effort yields
+  `reason="non_input_fields_changed"` with `reasoning` in `changed_fields` — i.e.
+  the turn after a change is deliberately a full frame (`ws_full` / `rest_full`),
+  one full replay, not a correctness change.
+- Standalone compaction is untouched: `_compact_now` builds its own
+  `responses.compact` request and never sends `reasoning`.
+- Completion evidence rides the existing provider-owned `_usage_extra` seam via
+  `_effort_usage_extra()`: `codex_reasoning_effort`,
+  `codex_reasoning_effort_source` (`construction` / `baseline` / `override`), and
+  `codex_reasoning_effort_revision`. A REJECTED dispatch produces no completion
+  usage at all, so its truthful attempt evidence stays on
+  `last_reasoning_effort_dispatch()` with `completed` false; the adapter never
+  auto-downgrades or retries at a different effort.
+
+Ownership lives outside this file: the neutral controller is
+`lingtai.kernel.llm.reasoning_effort.ReasoningEffortController`, owned by
+`SessionManager` (see `src/lingtai/kernel/llm/ANATOMY.md` and
+`src/lingtai/kernel/ANATOMY.md`). This slice is in-process only — no persistence
+across refresh/restart/molt, no tool action, no file protocol, no CLI/TUI
+command, no daemon control, and no propagation to any running daemon.
 
 ### Standalone Codex compaction (`context_token_limit`)
 

@@ -45,7 +45,13 @@ from lingtai.kernel.llm.base import (
     safe_exception_description,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
+from lingtai.kernel.llm.reasoning_effort import (
+    UNAVAILABLE_CAPABILITY,
+    ReasoningEffortCapability,
+    ReasoningEffortSnapshot,
+)
 from lingtai.llm.base import LLMAdapter
+from .codex_effort import CodexEffortDescriptor, resolve_codex_effort_descriptor
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
 from ..interface_converters import to_openai, to_responses_input
 from lingtai.kernel.llm.streaming import StreamingAccumulator
@@ -3475,9 +3481,24 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         base_url: str | None = None,
         api_key: str | None = None,
         compact_token_limit: int | None = None,
+        effort_descriptor: "CodexEffortDescriptor | None" = None,
         **kwargs,
     ):
         super().__init__(*args, base_url=base_url, **kwargs)
+        # Runtime reasoning-effort route (issue #1197 K1a). ``None`` -> this
+        # session is NOT on the one authorized active route (wrong model, empty
+        # endpoint, wrong wire, or invalid construction effort), so the capability
+        # stays unavailable and request kwargs are never touched. See ``codex_effort.py``.
+        self._effort_descriptor = effort_descriptor
+        # Owner-installed per-dispatch policy provider. Called at most ONCE per
+        # logical dispatch, from the single capture point in ``send_stream``.
+        self._effort_policy_provider: (
+            "Callable[[], ReasoningEffortSnapshot | None] | None"
+        ) = None
+        # Safe evidence for the most recent dispatch (see
+        # ``last_reasoning_effort_dispatch``). Never carries prompts, bodies,
+        # auth material, or raw provider objects.
+        self._last_effort_dispatch: dict[str, Any] | None = None
         # Standalone Codex compaction (daemon task ``context_token_limit``).
         # Distinct axis from ``compact_threshold``/``context_management``,
         # which Codex never receives (see ``_create_responses_session``).
@@ -3737,6 +3758,128 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             return "full"
         return None
 
+    # -- Runtime reasoning effort (issue #1197 K1a) --------------------------
+
+    def reasoning_effort_capability(self) -> ReasoningEffortCapability:
+        """This session's exact active effort route, or truthfully unavailable."""
+        if self._effort_descriptor is None:
+            return UNAVAILABLE_CAPABILITY
+        return self._effort_descriptor.to_capability()
+
+    def set_reasoning_effort_policy(
+        self,
+        provider: "Callable[[], ReasoningEffortSnapshot | None] | None",
+    ) -> bool:
+        """Bind the owner's snapshot provider; no-op off the authorized route.
+
+        Deliberately a dedicated slot: the single ``pre_request_hook`` is owned
+        by the kernel Task Card inbox drain and is neither read nor overwritten
+        here.
+        """
+        if self._effort_descriptor is None:
+            return False
+        self._effort_policy_provider = provider
+        return True
+
+    def last_reasoning_effort_dispatch(self) -> dict | None:
+        return dict(self._last_effort_dispatch) if self._last_effort_dispatch else None
+
+    def _construction_effort(self) -> str | None:
+        """The effort this session was CONSTRUCTED with (the aliased baseline)."""
+        reasoning = self._extra_kwargs.get("reasoning")
+        if isinstance(reasoning, dict):
+            value = reasoning.get("effort")
+            if isinstance(value, str):
+                return value
+        return None
+
+    def _capture_effort_snapshot(self) -> str | None:
+        """Capture exactly ONE immutable effort decision for this dispatch.
+
+        Called once per logical dispatch, after the pre-request stage and before
+        any request-kwargs / interface / account mutation. Returns the value to
+        emit, or ``None`` to leave the request exactly as it is today.
+
+        Everything downstream (REST, the WebSocket frame, the encrypted-reasoning
+        self-heal retry, and the incremental fallback) reuses the returned value
+        through the request kwargs, so a concurrent set/clear can only affect the
+        NEXT not-yet-captured dispatch — never this one or its retries.
+        """
+        descriptor = self._effort_descriptor
+        if descriptor is None:
+            # Off the authorized route: create NO record at all. An unavailable
+            # route must stay unchanged AND unexposed — it may not start
+            # answering the self-facing dispatch query just because the feature
+            # exists elsewhere.
+            self._last_effort_dispatch = None
+            return None
+        construction = self._construction_effort()
+        record: dict[str, Any] = {
+            "route": descriptor.to_capability().route,
+            "fingerprint": descriptor.fingerprint,
+            "baseline": descriptor.construction_baseline,
+            "requested": None,
+            "effective": construction,
+            "source": "construction",
+            "revision": None,
+            "applied": False,
+            "completed": False,
+        }
+        provider = self._effort_policy_provider
+        if provider is None:
+            self._last_effort_dispatch = record
+            return None
+        try:
+            snapshot = provider()
+        except Exception:
+            # A broken owner policy must never break the request; fall back to
+            # the construction baseline and say so.
+            logger.warning("codex.effort.policy_provider_failed", exc_info=True)
+            record["rejected_reason"] = "policy_error"
+            self._last_effort_dispatch = record
+            return None
+        if snapshot is None:
+            self._last_effort_dispatch = record
+            return None
+        if snapshot.fingerprint != descriptor.fingerprint:
+            # Route drift: the snapshot was chosen for a different route.
+            record["rejected_reason"] = "route_fingerprint_mismatch"
+            self._last_effort_dispatch = record
+            return None
+        if not descriptor.supports(snapshot.effective):
+            record["rejected_reason"] = "unsupported_value"
+            self._last_effort_dispatch = record
+            return None
+        record.update(
+            effective=snapshot.effective,
+            source=snapshot.source,
+            revision=snapshot.revision,
+            requested=snapshot.requested,
+            applied=True,
+        )
+        self._last_effort_dispatch = record
+        return snapshot.effective
+
+    def _effort_usage_extra(self) -> dict[str, str]:
+        """Safe completion-side evidence for the token ledger / event seam.
+
+        Route-scoped: a session that is NOT on the one authorized active route
+        contributes nothing, so its usage extra (and the kernel event derived
+        from it) stays byte-identical to before this feature existed.
+        """
+        if self._effort_descriptor is None:
+            return {}
+        record = self._last_effort_dispatch
+        if not record or not record.get("effective"):
+            return {}
+        extra = {
+            "codex_reasoning_effort": str(record["effective"]),
+            "codex_reasoning_effort_source": str(record.get("source") or "construction"),
+        }
+        if record.get("revision") is not None:
+            extra["codex_reasoning_effort_revision"] = str(record["revision"])
+        return extra
+
     def _usage_extra(
         self,
         affinity_headers: dict[str, str],
@@ -3848,6 +3991,9 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             extra["codex_compacted_delta_entries"] = str(
                 max(len(self._interface.entries) - self._compacted_at_entry_count, 0)
             )
+        # Exact emitted effort / source / controller revision for THIS request,
+        # taken from the same immutable snapshot the wire actually used.
+        extra.update(self._effort_usage_extra())
         return extra
 
     def send(self, message) -> LLMResponse:
@@ -5214,6 +5360,15 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
 
+        # Capture EXACTLY ONE immutable runtime-effort decision for this logical
+        # dispatch — after the pre-request stage above, before any request
+        # kwargs / interface / account mutation below. Every downstream path
+        # (REST, the WebSocket frame, the encrypted-reasoning self-heal retry,
+        # the incremental fallback) reads the captured value from the request
+        # kwargs and never re-reads the controller, so a concurrent set/clear
+        # only reaches the NEXT dispatch.
+        effort_effective = self._capture_effort_snapshot()
+
         # Resolve hard/explicit provider-context boundaries before account
         # binding.  A 100% forced rebuild is a true rebuild even when no summary
         # marker exists, so its own request must receive the fresh account draw.
@@ -5286,6 +5441,17 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             # continuation planners exclude it (``_WS_NON_FRAME_KEYS``).
             if self._request_timeout is not None:
                 kwargs["timeout"] = _build_http_timeout(self._request_timeout)
+            # Apply the captured effort snapshot to the ONE request-kwargs seam.
+            # A FRESH dict is assigned: ``**self._extra_kwargs`` above aliases
+            # the session's construction ``reasoning`` object, and mutating it
+            # in place would permanently rewrite the construction baseline for
+            # every later turn. ``dict(kwargs)`` copies in the retry/fallback
+            # paths below therefore inherit exactly this object.
+            if effort_effective is not None:
+                kwargs["reasoning"] = {
+                    **(self._extra_kwargs.get("reasoning") or {}),
+                    "effort": effort_effective,
+                }
             # Ensure reasoning.encrypted_content is requested so the raw
             # reasoning item can be preserved for prompt-cache-stable replay.
             existing_include = kwargs.get("include") or []
@@ -5708,6 +5874,13 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
 
         try:
             result = acc.finalize(usage=usage)
+            # The provider dispatch actually completed. A rejected attempt
+            # deliberately does NOT reach here, so its dispatch-start evidence
+            # stays on record with ``completed`` false rather than vanishing
+            # because no completion usage was ever produced. Mark only after
+            # fresh-main's fail-closed finalization succeeds.
+            if self._last_effort_dispatch is not None:
+                self._last_effort_dispatch["completed"] = True
         except Exception as exc:
             if not self._codex_token_expired_recovery_attempted:
                 raise
@@ -6708,4 +6881,19 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             base_url=self.base_url,
             api_key=getattr(context.client, "api_key", None),
             compact_token_limit=self._codex_compact_token_limit,
+            # The runtime-effort active route for THIS session (issue #1197).
+            # Resolved per session from the exact model, the endpoint this
+            # session will actually talk to, AND the effort it is actually being
+            # constructed with — read back from ``extra_kwargs`` so it is the
+            # already-normalized wire value (the omitted/``default`` sentinel has
+            # become ``xhigh`` above; an explicit ``high`` stays ``high``). That
+            # value becomes the capability baseline, so binding a controller can
+            # never move an otherwise-unchanged request. ``None`` off that route
+            # — or for a construction effort this route does not authorize —
+            # leaves every request byte-identical to today.
+            effort_descriptor=resolve_codex_effort_descriptor(
+                model=model,
+                base_url=self.base_url,
+                construction_effort=(extra_kwargs.get("reasoning") or {}).get("effort"),
+            ),
         )
