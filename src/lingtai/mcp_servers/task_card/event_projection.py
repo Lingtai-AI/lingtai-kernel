@@ -32,10 +32,10 @@ class TaskCardEventProjection:
     EVENT_TEXT_CAP = 500
     MAX_EVENTS_PER_CALL = 24
     MAX_ELAPSED_MS = 9_999_999
-    # Divider is deliberately shorter than the old full-width rule so the
-    # per-API-call wall-clock stamp can ride the same line after it (Jason
-    # 2026-08-09).
-    API_CALL_DIVIDER = "──────"
+    # One symmetric dash run on each side of the per-API-call wall-clock stamp:
+    # the divider becomes a log-style section header `──── 00:22:02 U-7 ────`
+    # (Jason 2026-08-09).
+    API_CALL_DIVIDER = "────"
 
     @classmethod
     def footer(cls, normal_rows: int) -> str:
@@ -43,14 +43,18 @@ class TaskCardEventProjection:
 
     @staticmethod
     def format_current_time(now: datetime) -> str:
-        """Render ``HH:MM:SS UTC±HH`` or empty text for a naive instant."""
+        """Render ``HH:MM:SS U±H`` (e.g. ``00:22:02 U-7``) or empty text.
+
+        The offset is deliberately compact (Jason 2026-08-09): ``UTC-07``
+        became ``U-7`` so the symmetric divider header stays short.
+        """
         offset = now.utcoffset()
         if offset is None:
             return ""
         total = offset.total_seconds()
         sign = "-" if total < 0 else "+"
         hours = int(abs(total) // 3600)
-        return f"{now.strftime('%H:%M:%S')} UTC{sign}{hours:02d}"
+        return f"{now.strftime('%H:%M:%S')} U{sign}{hours}"
 
     @classmethod
     def format_row_timestamp(cls, ts: object) -> str:
@@ -430,10 +434,10 @@ class TaskCardEventProjection:
     ) -> str:
         rows: list[dict[str, Any]] = []
         for group in groups[-normal_rows:]:
-            # One wall-clock stamp per API call rides the divider line (Jason
-            # 2026-08-09): the first progress row of the group marks the round
-            # trip's start, so the divider carries it — no separate timestamp
-            # line, no marker.
+            # One wall-clock stamp per API call sits centered in the divider
+            # line (Jason 2026-08-09): the first progress row of the group
+            # marks the round trip's start, so the symmetric divider carries it
+            # `──── 00:22:02 U-7 ────` — no separate timestamp line, no marker.
             stamp = ""
             group_ts: float | None = None
             for row in group.get("events", []):
@@ -443,10 +447,13 @@ class TaskCardEventProjection:
                         group_ts = float(v)
                 if group_ts is not None:
                     stamp = cls.format_row_timestamp(group_ts)
-                    if stamp:
-                        stamp = f" {stamp}"
                     break
-            rows.append({"kind": "divider", "text": f"{cls.API_CALL_DIVIDER}{stamp}"})
+            if stamp:
+                rows.append(
+                    {"kind": "divider", "text": f"{cls.API_CALL_DIVIDER} {stamp} {cls.API_CALL_DIVIDER}"}
+                )
+            else:
+                rows.append({"kind": "divider", "text": cls.API_CALL_DIVIDER})
             # The group's API delay is the LLM round-trip gap since the previous
             # progress; the per-call usage rides the same divider line, both kept
             # out of tool rows.

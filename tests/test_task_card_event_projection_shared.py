@@ -132,15 +132,16 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
         "/taskcard N sets normal rows (1-10, current: 1).\n"
         "active · calls 2\n"
-        "Last Updated: 02:30:00 UTC+08"
+        "Last Updated: 02:30:00 U+8"
     )
 
 
-def test_api_call_rides_single_timestamp_on_divider() -> None:
-    """Each API-call group rides exactly one wall-clock stamp on its divider
-    line (Jason 2026-08-09, follow-up): per-tool-row stamps are gone, and the
-    group's first progress ts becomes the single per-API-call timestamp that
-    sits on the divider itself — no separate timestamp row, no marker."""
+def test_api_call_embeds_single_timestamp_in_symmetric_divider() -> None:
+    """Each API-call group embeds exactly one wall-clock stamp centered in its
+    divider line (Jason 2026-08-09, follow-up): per-tool-row stamps are gone,
+    and the group's first progress ts becomes the single per-API-call timestamp
+    rendered as a symmetric log-style section header `──── 00:22:02 U-7 ────`
+    — no separate timestamp row, no marker."""
     ts = datetime(2026, 8, 3, 2, 30, tzinfo=timezone(timedelta(hours=8))).timestamp()
     stamp = TaskCardEventProjection.format_row_timestamp(ts)
     groups = [
@@ -167,9 +168,10 @@ def test_api_call_rides_single_timestamp_on_divider() -> None:
     tool_row = next(ln for ln in text.splitlines() if "bash.run" in ln)
     assert stamp not in tool_row
     divider = TaskCardEventProjection.API_CALL_DIVIDER
-    # The stamp rides the divider line, before the API metadata line.
+    # The stamp sits centered between the symmetric dash runs, before the API
+    # metadata line.
     divider_line = next(ln for ln in text.splitlines() if ln.startswith(divider))
-    assert f"{divider} {stamp}" == divider_line
+    assert f"{divider} {stamp} {divider}" == divider_line
     divider_idx = text.index(divider_line)
     api_idx = text.index("↻ 2.3s")
     tool_idx = text.index("bash.run")

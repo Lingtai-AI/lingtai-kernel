@@ -245,7 +245,9 @@ def test_provider_groups_count_calls_and_exclude_unprojected_fields(tmp_path):
     manager._poll_event_tail()
     rendered = [call for call in acct.calls if call[0] == "edit_message"][-1][3]
     divider = manager._TASK_CARD_API_CALL_DIVIDER
-    assert rendered.count(divider) == 2
+    # Two API groups → two symmetric divider header lines (each line carries the
+    # dash run twice, once per side, so count lines, not substring occurrences).
+    assert sum(ln.startswith(divider) for ln in rendered.splitlines()) == 2
     assert all(value in rendered for value in ("text one", "• bash.run:", "text two", "• read.read:"))
     assert len(rendered) <= manager._TASK_CARD_TEXT_LIMIT
     assert all(secret not in rendered for secret in (
@@ -255,7 +257,7 @@ def test_provider_groups_count_calls_and_exclude_unprojected_fields(tmp_path):
     service.normal_rows = 1
     manager._broadcast_task_card_event_window()
     latest = acct.calls[-1][3]
-    assert latest.count(divider) == 1 and "text two" in latest and "• read.read:" in latest
+    assert sum(ln.startswith(divider) for ln in latest.splitlines()) == 1 and "text two" in latest and "• read.read:" in latest
     assert "text one" not in latest and "• bash.run:" not in latest
 
 
@@ -721,17 +723,22 @@ def test_row_started_at_is_derived_from_event_ts_and_rendered(tmp_path):
     manager._poll_event_tail()
 
     local = datetime.fromtimestamp(event_ts).astimezone()
-    expected = f"{local:%H:%M:%S} UTC{local:%z}"[:-2]
+    off = local.utcoffset()
+    sign = "-" if off.total_seconds() < 0 else "+"
+    hours = int(abs(off.total_seconds()) // 3600)
+    expected = f"{local:%H:%M:%S} U{sign}{hours}"
     window = manager._task_card_event_window()
     assert len(window) == 1
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert edits
     # The row itself carries no inline stamp; the single per-API-call stamp is
-    # rendered above the API metadata line with a leading '@' marker (Jason
-    # 2026-08-09).
+    # embedded centered in the symmetric divider line (Jason 2026-08-09).
     row_line = next(ln for ln in edits[-1][3].splitlines() if "bash.run" in ln)
     assert "UTC" not in row_line
-    assert f"\n{manager._TASK_CARD_API_CALL_DIVIDER} {expected}\n" in f"\n{edits[-1][3]}"
+    assert (
+        f"\n{manager._TASK_CARD_API_CALL_DIVIDER} {expected} {manager._TASK_CARD_API_CALL_DIVIDER}\n"
+        in f"\n{edits[-1][3]}"
+    )
 
 
 def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tmp_path):
@@ -795,17 +802,22 @@ def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tm
     manager._poll_event_tail()
 
     local = datetime.fromtimestamp(event_ts).astimezone()
-    expected_stamp = f"{local:%H:%M:%S} UTC{local:%z}"[:-2]
+    off = local.utcoffset()
+    sign = "-" if off.total_seconds() < 0 else "+"
+    hours = int(abs(off.total_seconds()) // 3600)
+    expected_stamp = f"{local:%H:%M:%S} U{sign}{hours}"
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert edits
     rendered = edits[-1][3]
     assert "• bash.run: event-log row" in rendered
     tool_row = next(ln for ln in rendered.splitlines() if "bash.run" in ln)
     assert expected_stamp not in tool_row
-    # The single per-API-call stamp renders as its own line above the API
-    # metadata line with a leading '@' marker (Jason 2026-08-09), not inline
-    # on the tool row.
-    assert f"\n{manager._TASK_CARD_API_CALL_DIVIDER} {expected_stamp}\n" in f"\n{rendered}"
+    # The single per-API-call stamp renders centered in the symmetric divider
+    # line (Jason 2026-08-09), not inline on the tool row.
+    assert (
+        f"\n{manager._TASK_CARD_API_CALL_DIVIDER} {expected_stamp} {manager._TASK_CARD_API_CALL_DIVIDER}\n"
+        in f"\n{rendered}"
+    )
     assert "cache 87.8% · miss 170.6k/1.0M · calls 13" in rendered
     assert "ctx 63% · 171.2k/272.0k" in rendered
     assert "calls 888" not in rendered
@@ -1405,9 +1417,9 @@ def test_fingerprint_ignores_last_updated_line_only(tmp_path):
     """The volatile Last Updated line must not change the fingerprint; any
     other content change must."""
     manager, _ = _manager(tmp_path, FakeAccount())
-    a = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:00 UTC+08"
-    b = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:01 UTC+08"
-    c = "\u2699 WORKING\n\u2022 other\n\nfooter\nLast Updated: 10:00:00 UTC+08"
+    a = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:00 U+8"
+    b = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:01 U+8"
+    c = "\u2699 WORKING\n\u2022 other\n\nfooter\nLast Updated: 10:00:00 U+8"
     assert manager._task_card_automatic_fingerprint(a) == \
         manager._task_card_automatic_fingerprint(b)
     assert manager._task_card_automatic_fingerprint(a) != \
