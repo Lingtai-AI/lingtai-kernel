@@ -113,9 +113,15 @@ mechanism on `OpenAIAdapter` / `OpenAIChatSession` / `OpenAIResponsesSession`:
   input items after the first `function_call` for assistant turns that lack one.
   On by default (env `LINGTAI_INJECT_REASONING_FALLBACK` to disable); an
   explicit constructor/provider-config value wins over the env.
-- `reasoning_effort_vocab` (`str`, default `openai`) — `openai` maps kernel
-  thinking levels to high/low; `seven_tier` passes the kernel `THINKING_LEVELS`
-  through unchanged (DeepSeek wire vocabulary).
+- `reasoning_effort_vocab` (`str`, default `openai`) — selects the Chat
+  Completions projection of the Responses reasoning semantics. `openai`
+  projects the Responses vocabulary onto OpenAI v1's official set
+  (`minimal|low|medium|high`): explicit `minimal`/`low`/`medium`/`high` pass
+  through, `xhigh`/`max` clamp to `high`, `none` omits the field, and the
+  omitted/`default` sentinel omits it too (v1 has no `xhigh`, so omission lets
+  the upstream v1 default apply). `seven_tier` passes the kernel
+  `THINKING_LEVELS` through unchanged and projects the omitted/`default`
+  sentinel to explicit `xhigh`, matching the Responses wire (DeepSeek).
 - `prompt_cache_namespace` (`str | None`) — fixed provider namespace for the
   auto-derived `prompt_cache_key` (e.g. `deepseek` →
   `lingtai-deepseek:{model}:v1`) instead of the base_url host.

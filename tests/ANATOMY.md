@@ -72,6 +72,7 @@ related_files:
   - tests/test_chat_interface_remove_pair_by_notif_id.py
   - tests/test_check_caps.py
   - tests/test_claude_code_adapter.py
+  - tests/test_claude_code_effort.py
   - tests/test_cli.py
   - tests/test_cli_integration.py
   - tests/test_cli_runtime_env.py

@@ -20,6 +20,13 @@ Auth is owned entirely by the ``claude`` CLI (its stored OAuth credentials or
 token — it only strips ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN`` from the
 child env so the subprocess cannot fall back to API-key billing. This keeps
 usage on the sanctioned Claude Code / subscription channel.
+
+Reasoning effort is the one Claude Code special case: the CLI controls
+reasoning depth through its own ``--effort <level>`` flag, so a configured
+thinking level is normalized to ``--effort`` argv exactly once per session
+(vocabulary ``low | medium | high | xhigh | max``; omitted/default sends no
+flag, and a caller-supplied ``--effort`` in ``extra_argv`` is never
+duplicated). No other provider shares this wire.
 """
 
 from __future__ import annotations

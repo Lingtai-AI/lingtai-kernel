@@ -331,9 +331,11 @@ def test_codex_responses_default_thinking_sends_xhigh(thinking_kwargs):
     assert "reasoning_effort" not in sent
 
 
-@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}])
-def test_openai_responses_default_thinking_omits_reasoning(thinking_kwargs):
-    """Generic OpenAI keeps omit-on-default; the xhigh default is Codex-only."""
+@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}, {"thinking": None}])
+def test_openai_responses_default_thinking_sends_xhigh(thinking_kwargs):
+    """Generic OpenAI Responses maps an omitted/``default`` thinking level to
+    explicit ``reasoning.effort = "xhigh"`` on the wire (the Responses
+    semantics: the user did not specify an effort, so xhigh is sent)."""
     adapter = OpenAIAdapter(api_key="fake", use_responses=True)
     adapter._client = FakeClient([_completed()])
     session = adapter.create_chat("gpt-5.5", "system prompt", **thinking_kwargs)
@@ -341,7 +343,27 @@ def test_openai_responses_default_thinking_omits_reasoning(thinking_kwargs):
     session.send_stream("hello")
 
     sent = adapter._client.responses.kwargs[-1]
-    assert "reasoning" not in sent
+    assert sent["reasoning"] == {"effort": "xhigh"}
+    assert "reasoning_effort" not in sent
+
+
+@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}])
+def test_custom_openai_responses_default_thinking_sends_xhigh(thinking_kwargs):
+    """Custom/OpenAI-compatible Responses (base_url + ``wire_api="responses"``)
+    shares the same explicit ``xhigh`` default as generic OpenAI."""
+    adapter = OpenAIAdapter(
+        api_key="fake",
+        base_url="https://custom.example/v1",
+        wire_api="responses",
+    )
+    adapter._client = FakeClient([_completed()])
+    session = adapter.create_chat("gpt-5.5", "system prompt", **thinking_kwargs)
+
+    session.send_stream("hello")
+
+    sent = adapter._client.responses.kwargs[-1]
+    assert sent["reasoning"] == {"effort": "xhigh"}
+    assert "reasoning_effort" not in sent
 
 
 @pytest.mark.parametrize("adapter_cls", [OpenAIAdapter, CodexOpenAIAdapter])

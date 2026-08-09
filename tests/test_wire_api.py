@@ -266,6 +266,83 @@ def test_auto_custom_base_url_creates_chat_session():
 
 
 # ---------------------------------------------------------------------------
+# v1 Chat Completions reasoning projection
+# ---------------------------------------------------------------------------
+# The Responses semantics are canonical (``reasoning.effort`` verbatim,
+# omitted/default -> explicit ``xhigh``); the Chat Completions wire is a
+# projection of that vocabulary onto ``reasoning_effort``.
+
+
+def _chat_session_kwargs(*, thinking=None, reasoning_effort_vocab=None):
+    kwargs = {"api_key": "fake", "base_url": "https://custom.example/v1"}
+    if reasoning_effort_vocab is not None:
+        kwargs["reasoning_effort_vocab"] = reasoning_effort_vocab
+    adapter = OpenAIAdapter(**kwargs)
+    adapter._client = _both_client()
+    session = adapter.create_chat(
+        "gpt-5.5", "system prompt", thinking=thinking or "default"
+    )
+    session.send("hello")
+    return adapter._client.chat.completions.create.call_args.kwargs
+
+
+@pytest.mark.parametrize(
+    ("thinking", "expected"),
+    [
+        ("minimal", "minimal"),
+        ("low", "low"),
+        ("medium", "medium"),
+        ("high", "high"),
+        ("xhigh", "high"),  # OpenAI v1 has no xhigh; clamp to the v1 ceiling
+        ("max", "high"),
+    ],
+)
+def test_chat_completions_projects_explicit_thinking(thinking, expected):
+    """Explicit levels project faithfully onto the v1 ``reasoning_effort``
+    field (the old mapping collapsed every non-high level to ``low``)."""
+    assert _chat_session_kwargs(thinking=thinking)["reasoning_effort"] == expected
+
+
+@pytest.mark.parametrize("thinking", [None, "default"])
+def test_chat_completions_omits_reasoning_effort_on_default(thinking):
+    """OpenAI v1 has no ``xhigh``; the omitted/``default`` sentinel omits the
+    field so the upstream v1 default applies (the graceful v1 projection of
+    the Responses xhigh default)."""
+    assert "reasoning_effort" not in _chat_session_kwargs(thinking=thinking)
+
+
+def test_chat_completions_none_omits_reasoning_effort():
+    """``none`` means no reasoning; on v1 there is no ``none`` effort, so the
+    field is omitted."""
+    assert "reasoning_effort" not in _chat_session_kwargs(thinking="none")
+
+
+def test_chat_completions_rejects_invalid_thinking():
+    with pytest.raises(ValueError, match="thinking must be one of"):
+        _chat_session_kwargs(thinking="ultra")
+
+
+def test_chat_completions_seven_tier_projects_xhigh_default():
+    """Endpoints whose v1 wire accepts the full seven-tier set (e.g. DeepSeek,
+    ``reasoning_effort_vocab="seven_tier"``) project the Responses xhigh
+    default explicitly instead of omitting it."""
+    kwargs = _chat_session_kwargs(
+        thinking="default", reasoning_effort_vocab="seven_tier"
+    )
+    assert kwargs["reasoning_effort"] == "xhigh"
+
+
+@pytest.mark.parametrize(
+    "thinking", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+)
+def test_chat_completions_seven_tier_passes_levels_verbatim(thinking):
+    kwargs = _chat_session_kwargs(
+        thinking=thinking, reasoning_effort_vocab="seven_tier"
+    )
+    assert kwargs["reasoning_effort"] == thinking
+
+
+# ---------------------------------------------------------------------------
 # One-shot generate() consistency
 # ---------------------------------------------------------------------------
 

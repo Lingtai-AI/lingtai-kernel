@@ -2823,11 +2823,13 @@ class OpenAIAdapter(LLMAdapter):
                 },
             }
 
-        # Reasoning effort for o-series models. Subclasses override
-        # ``_chat_reasoning_effort`` to map the kernel thinking levels to
-        # their Chat Completions wire value (e.g. DeepSeek passes the
-        # seven-tier value through unchanged; ``default`` is omitted here and
-        # the upstream default applies).
+        # Reasoning effort for o-series models: the v1 projection of the
+        # Responses semantics. Subclasses override ``_chat_reasoning_effort``
+        # to map the kernel thinking levels to their Chat Completions wire
+        # value (e.g. DeepSeek passes the seven-tier value through unchanged;
+        # the default ``openai`` vocab clamps ``xhigh``/``max`` to ``high`` and
+        # omits the field for the omitted/``default`` sentinel so the upstream
+        # v1 default applies).
         effort = self._chat_reasoning_effort(thinking)
         if effort is not None:
             extra_kwargs["reasoning_effort"] = effort
@@ -2862,33 +2864,48 @@ class OpenAIAdapter(LLMAdapter):
         """
         return {}
 
-    def _chat_reasoning_effort(self, thinking: str) -> str | None:
+    def _chat_reasoning_effort(self, thinking: str | None) -> str | None:
         """Map a kernel thinking level to the Chat Completions reasoning_effort value.
 
-        The vocabulary is selected by ``reasoning_effort_vocab``:
-          * ``openai`` (default) maps ``high`` to ``high`` and every other
-            explicit level to ``low`` (OpenAI o-series compatibility).
+        This is the v1 projection of the Responses semantics (which sends
+        ``reasoning: {effort: <level>}`` verbatim and maps an omitted/default
+        level to explicit ``xhigh``). The vocabulary is selected by
+        ``reasoning_effort_vocab``:
+
+          * ``openai`` (default) projects the Responses vocabulary onto OpenAI
+            v1's official set ``minimal | low | medium | high``: explicit
+            ``minimal``/``low``/``medium``/``high`` pass through, ``xhigh`` and
+            ``max`` clamp to ``high`` (v1 has no higher tier), ``none`` maps to
+            ``None`` so the field is omitted (no reasoning control), and the
+            omitted/``default`` sentinel maps to ``None`` so the upstream v1
+            default applies (OpenAI v1 has no ``xhigh``; omission is the
+            graceful v1 projection of the Responses xhigh default).
           * ``seven_tier`` passes the kernel THINKING_LEVELS through unchanged
             (the DeepSeek wire accepts ``none | minimal | low | medium | high |
-            xhigh | max``); ``default`` maps to ``None`` so no field is sent.
+            xhigh | max``) and projects the omitted/``default`` sentinel to the
+            explicit ``xhigh`` default, matching the Responses wire.
 
-        Returns ``None`` for the omitted/``default`` sentinel so the field is
-        not sent and the upstream default applies.
+        Returns ``None`` so the field is not sent.
         """
         from lingtai.kernel.config import THINKING_LEVELS
 
         if self._reasoning_effort_vocab == "seven_tier":
-            if thinking == "default":
-                return None
+            if thinking in (None, "default"):
+                return "xhigh"
             if thinking not in THINKING_LEVELS:
                 raise ValueError(
                     "thinking must be one of "
                     f"{', '.join(THINKING_LEVELS)}, or default"
                 )
             return thinking
-        if thinking == "default":
+        if thinking in (None, "default", "none"):
             return None
-        return "high" if thinking == "high" else "low"
+        if thinking not in THINKING_LEVELS:
+            raise ValueError(
+                "thinking must be one of "
+                f"{', '.join(THINKING_LEVELS)}, or default"
+            )
+        return "high" if thinking in ("xhigh", "max") else thinking
 
     def generate(
         self,
@@ -6090,11 +6107,12 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 },
             }
 
-        # Codex-only default: an omitted/``default`` thinking level sends an
-        # explicit ``reasoning.effort = "xhigh"`` instead of omitting the field
+        # Omitted/``default`` thinking sends an explicit
+        # ``reasoning.effort = "xhigh"`` instead of omitting the field
         # (omitting it would fall back to the Codex backend's own, lower
-        # default). Explicit levels pass through unchanged, and the generic
-        # OpenAI Responses path keeps its omit-on-default behavior.
+        # default). Explicit levels pass through unchanged; the generic OpenAI
+        # Responses path shares the same explicit ``xhigh`` default (see
+        # ``_responses_reasoning_kwargs``).
         if thinking in (None, "default"):
             thinking = "xhigh"
         extra_kwargs.update(_responses_reasoning_kwargs(thinking))

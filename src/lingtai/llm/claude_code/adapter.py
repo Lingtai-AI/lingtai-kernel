@@ -82,6 +82,36 @@ _OVERFLOW_MARKERS = (
 _UNSET = object()
 
 
+# Provider-local: the installed ``claude`` CLI's own ``--effort`` vocabulary
+# (the daemon claude-p submanual documents ``--effort max``). Deliberately NOT
+# the kernel THINKING_LEVELS: Claude has no ``none``/``minimal`` and the
+# Responses vocabulary has no ``max``. The flag belongs to the installed CLI;
+# per-model/account acceptance is not verified here.
+CLAUDE_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
+def _claude_effort_argv(thinking: str | None) -> list[str]:
+    """Map a kernel thinking level to the ``claude`` CLI ``--effort`` argv fragment.
+
+    Claude Code is the one provider with its own reasoning-control flag, so the
+    thinking level is normalized to argv here and nowhere else. ``None`` /
+    ``"default"`` (omitted) maps to ``[]`` — no ``--effort`` flag, the CLI's
+    own default applies, and the command stays byte-identical to today. An
+    explicit level must be in ``CLAUDE_EFFORT_LEVELS`` (the installed CLI's
+    vocabulary); anything else raises ``ValueError`` here, before any
+    subprocess is dispatched.
+    """
+    if thinking is None or thinking == "default":
+        return []
+    if not isinstance(thinking, str) or thinking not in CLAUDE_EFFORT_LEVELS:
+        raise ValueError(
+            "claude-code effort must be one of "
+            f"{', '.join(CLAUDE_EFFORT_LEVELS)} "
+            f"(omit the field for no --effort flag); got {thinking!r}"
+        )
+    return ["--effort", thinking]
+
+
 class ClaudeCodeError(RuntimeError):
     """A ``claude`` CLI invocation failed (non-zero exit, no output, etc.)."""
 
@@ -198,6 +228,7 @@ class ClaudeCodeChatSession(ChatSession):
         tools: list[FunctionSchema],
         interface: ChatInterface,
         context_window: int,
+        effort_argv: list[str] | None = None,
     ) -> None:
         self._adapter = adapter
         self._model = model
@@ -205,6 +236,11 @@ class ClaudeCodeChatSession(ChatSession):
         self._tools = tools
         self._interface = interface
         self._context_window = context_window
+        # Frozen at construction, never re-read from mutable adapter state.
+        # Every physical CLI invocation this session makes — first call,
+        # ``--resume`` call, and each overflow-recovery retry inside one
+        # logical send — carries this one effort decision (or none).
+        self._effort_argv = list(effort_argv or [])
         # Remote state is an acceleration only. The canonical interface remains
         # the recovery source whenever this continuation cannot be trusted.
         self._remote_session_id: str | None = None
@@ -250,6 +286,7 @@ class ClaudeCodeChatSession(ChatSession):
                         prompt,
                         self._model,
                         resume_session_id=self._remote_session_id,
+                        effort_argv=self._effort_argv,
                     )
                 except ClaudeCodeContextOverflow:
                     # A locally trimmed retry cannot safely continue a remote
@@ -581,6 +618,11 @@ class ClaudeCodeAdapter(LLMAdapter):
         interaction_id: str | None = None,
         context_window: int = 0,
     ) -> ChatSession:
+        # Claude Code is the one provider with its own reasoning-control flag:
+        # the thinking level becomes the CLI's ``--effort`` argv, normalized
+        # exactly once here (an out-of-vocabulary level raises before any
+        # interface mutation or subprocess) and frozen for the session's life.
+        effort_argv = _claude_effort_argv(thinking)
         iface = interface or ChatInterface()
         tool_list = list(tools) if tools else []
         if interface is None:
@@ -595,6 +637,7 @@ class ClaudeCodeAdapter(LLMAdapter):
             tools=tool_list,
             interface=iface,
             context_window=context_window or self._context_window,
+            effort_argv=effort_argv,
         )
         return self._wrap_with_gate(session)
 
@@ -668,6 +711,7 @@ class ClaudeCodeAdapter(LLMAdapter):
         model: str,
         system_prompt_file: Any = _UNSET,
         resume_session_id: str | None = None,
+        effort_argv: list[str] | None = None,
     ) -> tuple[str, UsageMetadata, dict]:
         """Run ``claude -p`` once. Returns (result_text, usage, envelope).
 
@@ -675,6 +719,11 @@ class ClaudeCodeAdapter(LLMAdapter):
         file (the chat path). Pass ``None`` to omit the flag entirely — used
         by the one-shot ``generate`` path, which has no cross-turn cache to
         protect and must not reuse (or poison) the chat system-prompt file.
+
+        ``effort_argv`` is the session's already-frozen Claude effort decision
+        (``["--effort", <level>]``, or empty for omitted). Defaults to
+        ``None`` so callers with no session contract — notably the one-shot
+        ``generate`` path — build exactly the pre-change command.
         """
         cmd = [self._cli_path, "-p", "--output-format", "json"]
         if model:
@@ -687,6 +736,13 @@ class ClaudeCodeAdapter(LLMAdapter):
             system_prompt_file = self._system_prompt_file
         if system_prompt_file:
             cmd += ["--append-system-prompt-file", str(system_prompt_file)]
+        # Claude Code's dedicated reasoning control: one ``--effort`` flag,
+        # appended exactly once, and only when the caller hasn't supplied its
+        # own ``--effort`` via extra_argv (never a duplicate flag).
+        if effort_argv and not any(
+            t == "--effort" or t.startswith("--effort=") for t in self._extra_argv
+        ):
+            cmd += effort_argv
         cmd += self._extra_argv
 
         try:
@@ -774,12 +830,14 @@ class ClaudeCodeAdapter(LLMAdapter):
         model: str,
         *,
         resume_session_id: str | None = None,
+        effort_argv: list[str] | None = None,
     ) -> tuple[dict, UsageMetadata, dict]:
         """Run the CLI and parse one JSON *action* from its result."""
         result_str, usage, envelope = self._invoke_raw(
             prompt,
             model,
             resume_session_id=resume_session_id,
+            effort_argv=effort_argv,
         )
         action = _extract_json_object(result_str)
         if action is None:
