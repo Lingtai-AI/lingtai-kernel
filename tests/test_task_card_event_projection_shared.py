@@ -136,10 +136,11 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
     )
 
 
-def test_api_call_renders_single_timestamp_below_metadata() -> None:
-    """Each API-call group renders exactly one wall-clock stamp below its API
-    metadata line (Jason 2026-08-09): per-tool-row stamps are gone, and the
-    group's first progress ts becomes the single per-API-call timestamp."""
+def test_api_call_renders_single_timestamp_above_metadata() -> None:
+    """Each API-call group renders exactly one wall-clock stamp above its API
+    metadata line (Jason 2026-08-09, follow-up): per-tool-row stamps are gone,
+    and the group's first progress ts becomes the single per-API-call
+    timestamp."""
     ts = datetime(2026, 8, 3, 2, 30, tzinfo=timezone(timedelta(hours=8))).timestamp()
     stamp = TaskCardEventProjection.format_row_timestamp(ts)
     groups = [
@@ -165,11 +166,11 @@ def test_api_call_renders_single_timestamp_below_metadata() -> None:
     assert "↻ 2.3s" in text
     assert f"· {stamp}" not in text
     assert stamp in text
-    # The single stamp sits below the API metadata line, before the tool row.
-    api_idx = text.index("↻ 2.3s")
+    # The single stamp sits above the API metadata line, before the tool row.
     ts_idx = text.index(stamp)
+    api_idx = text.index("↻ 2.3s")
     tool_idx = text.index("bash.run")
-    assert api_idx < ts_idx < tool_idx
+    assert ts_idx < api_idx < tool_idx
 
 
 def test_metadata_renders_device_and_working_dir_lines() -> None:

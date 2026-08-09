@@ -176,7 +176,7 @@ def test_timestamped_moderate_rows_stay_under_text_limit():
         assert f"tool{i}" in text
     assert _TASK_CARD_FOOTER in text
     # Tool rows no longer carry inline stamps (Jason 2026-08-09: one timestamp
-    # per API call below the API metadata line), so the stamp text is never
+    # per API call above the API metadata line), so the stamp text is never
     # rendered into a row even when supplied.
     for ln in text.splitlines():
         if ln.startswith(("•", "✓")):

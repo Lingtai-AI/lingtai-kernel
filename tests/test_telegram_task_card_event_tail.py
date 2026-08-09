@@ -727,7 +727,7 @@ def test_row_started_at_is_derived_from_event_ts_and_rendered(tmp_path):
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert edits
     # The row itself carries no inline stamp; the single per-API-call stamp is
-    # rendered below the API metadata line (Jason 2026-08-09).
+    # rendered above the API metadata line (Jason 2026-08-09).
     row_line = next(ln for ln in edits[-1][3].splitlines() if "bash.run" in ln)
     assert "UTC" not in row_line
     assert f"\n{expected}\n" in f"\n{edits[-1][3]}"

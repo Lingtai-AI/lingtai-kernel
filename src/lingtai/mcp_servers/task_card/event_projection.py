@@ -135,7 +135,7 @@ class TaskCardEventProjection:
         if isinstance(action, str) and action:
             row["tool_action"] = action
         # No per-row wall-clock stamp: each API-call group renders exactly one
-        # timestamp below its API metadata line (Jason 2026-08-09), so tool rows
+        # timestamp above its API metadata line (Jason 2026-08-09), so tool rows
         # stay compact and the API-call timeline is uncluttered.
         raw_ts = event.get("ts")
         if type(raw_ts) in (int, float) and not isinstance(raw_ts, bool):
@@ -447,16 +447,17 @@ class TaskCardEventProjection:
                     usage = u
                 if api_delay_s is not None and usage is not None:
                     break
-            info = cls.format_divider_info(api_delay_s, usage)
-            if info:
-                rows.append({"kind": "api_info", "text": info})
-            # One wall-clock stamp per API call, below the API metadata line
+            # One wall-clock stamp per API call, above the API metadata line
             # (Jason 2026-08-09): the first progress row of the group marks the
-            # round trip's start.
+            # round trip's start; Jason later asked for the stamp to sit above
+            # the metadata line (2026-08-09 follow-up).
             if group_ts is not None:
                 stamp = cls.format_row_timestamp(group_ts)
                 if stamp:
                     rows.append({"kind": "api_ts", "text": stamp})
+            info = cls.format_divider_info(api_delay_s, usage)
+            if info:
+                rows.append({"kind": "api_info", "text": info})
             rows.extend(group.get("events", []))
         text = cls.format_task_card_text(
             "",

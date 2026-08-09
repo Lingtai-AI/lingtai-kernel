@@ -2,7 +2,7 @@
 
 Presentation contract (manager render, Jason 2026-08-09): per-tool-row inline
 stamps are retired — each API-call group renders exactly ONE wall-clock stamp,
-below its API metadata line (``api_ts``), and the card's final standalone line
+above its API metadata line (``api_ts``), and the card's final standalone line
 reports the RENDER instant (not any row's start instant) as ``Last Updated:
 HH:MM:SS UTC±HH``, always present. An injected ``now`` keeps these assertions
 deterministic.
