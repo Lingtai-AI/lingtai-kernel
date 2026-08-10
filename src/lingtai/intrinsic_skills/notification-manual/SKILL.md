@@ -9,7 +9,7 @@ description: >
   `context-manual` → `reference/summarize-manual/SKILL.md`.
 version: 0.8.0
 tags: [lingtai, notifications, channels, dismiss, manual, force, stale, nudge, hooks, whitelist]
-last_changed_at: "2026-08-07T00:00:00Z"
+last_changed_at: "2026-08-10T00:00:00Z"
 related_files:
 - src/lingtai/tools/notification/__init__.py
 - src/lingtai/tools/notification/schema.py
