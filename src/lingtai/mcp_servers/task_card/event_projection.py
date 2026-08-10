@@ -16,16 +16,74 @@ class TaskCardEventProjection:
 
     REASONING_CAP = 500
     TEXT_LIMIT = 3500
-    HEADER = "📋 活动"
+    # English is the canonical default surface; ``zh`` is an opt-in per-agent
+    # locale (set via ``/taskcard lang zh|en``), never a hard-coded channel
+    # behavior. The class attributes stay the English surface for backward
+    # compatibility; render paths resolve text through the locale helpers below
+    # (Jason 2026-08-10: revert #1209 hard-coded Chinese, make it configurable).
+    HEADER = "📋 ACTIVITIES"
     FOOTER = (
-        "请勿回复此任务卡片。使用 /taskcard on|off 切换；"
-        "/taskcard N 设置显示组数 (1-10"
+        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+        "/taskcard N sets normal rows (1-10"
     )
     DEFAULT_NORMAL_ROWS = 1
     METADATA_MAX_CHARS = 500
     METADATA_MAX_LINES = 2
-    TIME_PREFIX = "最后更新: "
+    TIME_PREFIX = "Last Updated: "
     AGENT_STATES = frozenset(state.value for state in AgentState)
+
+    SUPPORTED_LOCALES = frozenset({"en", "zh"})
+    _LOCALE_TEXTS: dict[str, dict[str, str]] = {
+        "en": {
+            "header": "📋 ACTIVITIES",
+            "time_prefix": "Last Updated: ",
+            "footer_prefix": (
+                "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+                "/taskcard N sets normal rows (1-10"
+            ),
+            "footer_current": "current",
+            "try_refresh": "try /refresh",
+            "api_error": "API error",
+            "recovered": "recovered",
+            "failed": "failed",
+            "retrying": "retrying",
+            "retrying_attempt": "retrying (attempt {n})",
+        },
+        "zh": {
+            "header": "📋 活动",
+            "time_prefix": "最后更新: ",
+            "footer_prefix": (
+                "请勿回复此任务卡片。使用 /taskcard on|off 切换；"
+                "/taskcard N 设置显示组数 (1-10"
+            ),
+            "footer_current": "当前",
+            "try_refresh": "尝试 /refresh",
+            "api_error": "API 错误",
+            "recovered": "已恢复",
+            "failed": "失败",
+            "retrying": "重试中",
+            "retrying_attempt": "重试中 (第 {n} 次)",
+        },
+    }
+
+    @classmethod
+    def normalize_locale(cls, locale: object) -> str:
+        """Coerce a locale to the supported set; unknown values fall back to en."""
+        if isinstance(locale, str) and locale in cls.SUPPORTED_LOCALES:
+            return locale
+        return "en"
+
+    @classmethod
+    def header(cls, locale: str = "en") -> str:
+        return cls._locale_text("header", locale)
+
+    @classmethod
+    def time_prefix(cls, locale: str = "en") -> str:
+        return cls._locale_text("time_prefix", locale)
+
+    @classmethod
+    def _locale_text(cls, key: str, locale: str = "en") -> str:
+        return cls._LOCALE_TEXTS[cls.normalize_locale(locale)][key]
 
     EVENT_WINDOW = 10
     EVENT_REASONING_CAP = 300
@@ -38,8 +96,10 @@ class TaskCardEventProjection:
     API_CALL_DIVIDER = "────"
 
     @classmethod
-    def footer(cls, normal_rows: int) -> str:
-        return f"{cls.FOOTER}，当前: {normal_rows})。"
+    def footer(cls, normal_rows: int, locale: str = "en") -> str:
+        if cls.normalize_locale(locale) == "zh":
+            return f"{cls._locale_text('footer_prefix', locale)}，{cls._locale_text('footer_current', locale)}: {normal_rows})。"
+        return f"{cls.FOOTER}, current: {normal_rows})."
 
     @staticmethod
     def format_current_time(now: datetime) -> str:
@@ -431,6 +491,7 @@ class TaskCardEventProjection:
         normal_rows: int,
         metadata: dict[str, Any] | None = None,
         now: datetime | None = None,
+        locale: str = "en",
     ) -> str:
         rows: list[dict[str, Any]] = []
         for group in groups[-normal_rows:]:
@@ -480,6 +541,7 @@ class TaskCardEventProjection:
             metadata=metadata,
             normal_rows=normal_rows,
             now=now,
+            locale=locale,
         )
         return text[: cls.TEXT_LIMIT] if len(text) > cls.TEXT_LIMIT else text
 
@@ -536,14 +598,16 @@ class TaskCardEventProjection:
         metadata: dict[str, Any] | None = None,
         normal_rows: int = DEFAULT_NORMAL_ROWS,
         now: datetime | None = None,
+        locale: str = "en",
     ) -> str:
         if rows is None:
-            return cls.format_scalar_task_card_text(tool, action, reasoning)
+            return cls.format_scalar_task_card_text(tool, action, reasoning, locale=locale)
         return cls.format_rows_task_card_text(
             rows,
             metadata=metadata,
             normal_rows=normal_rows,
             now=now,
+            locale=locale,
         )
 
     @classmethod
@@ -552,6 +616,8 @@ class TaskCardEventProjection:
         tool: str,
         action: str,
         reasoning: str,
+        *,
+        locale: str = "en",
     ) -> str:
         redacted = redact_text(reasoning)
         if len(redacted) > cls.REASONING_CAP:
@@ -559,9 +625,10 @@ class TaskCardEventProjection:
         else:
             excerpt = redacted
         label = f"{tool}.{action}" if action else tool
+        header = cls.header(locale)
         if label:
-            return f"{cls.HEADER}\n{label}: {excerpt}"
-        return f"{cls.HEADER}\n{excerpt}" if excerpt else cls.HEADER
+            return f"{header}\n{label}: {excerpt}"
+        return f"{header}\n{excerpt}" if excerpt else header
 
     @staticmethod
     def format_count(value: object) -> str | None:
@@ -581,7 +648,7 @@ class TaskCardEventProjection:
         return str(value)
 
     @classmethod
-    def format_metadata(cls, metadata: object) -> list[str]:
+    def format_metadata(cls, metadata: object, locale: str = "en") -> list[str]:
         if not isinstance(metadata, dict):
             return []
 
@@ -635,7 +702,7 @@ class TaskCardEventProjection:
         agent_part: str | None = None
         lifecycle = metadata.get("agent_lifecycle")
         if lifecycle in (AgentState.STUCK.value, "offline"):
-            agent_part = f"agent · {lifecycle} · 尝试 /refresh"
+            agent_part = f"agent · {lifecycle} · {cls._locale_text('try_refresh', locale)}"
         elif lifecycle == AgentState.ACTIVE.value:
             active_seconds = metadata.get("agent_active_seconds")
             if (
@@ -712,8 +779,9 @@ class TaskCardEventProjection:
         metadata: dict[str, Any] | None = None,
         normal_rows: int = DEFAULT_NORMAL_ROWS,
         now: datetime | None = None,
+        locale: str = "en",
     ) -> str:
-        footer = cls.footer(normal_rows)
+        footer = cls.footer(normal_rows, locale)
         tool_prepared: list[tuple[int, str, str, str, bool, str | None]] = []
         text_prepared: list[tuple[int, str]] = []
         api_prepared: list[tuple[int, str]] = []
@@ -741,7 +809,7 @@ class TaskCardEventProjection:
                     text_prepared.append((idx, text[: cls.EVENT_TEXT_CAP]))
                 continue
             if kind == "api_error":
-                api_prepared.append((idx, cls.format_api_error_line(row)))
+                api_prepared.append((idx, cls.format_api_error_line(row, locale)))
                 continue
             tool = str(row.get("tool", ""))
             action = str(row.get("tool_action", ""))
@@ -764,10 +832,10 @@ class TaskCardEventProjection:
                 suffix = f" ({elapsed}{status_suffix})"
             tool_prepared.append((idx, label, redacted, suffix, done, status))
 
-        metadata_lines = cls.format_metadata(metadata)
-        time_line = f"{cls.TIME_PREFIX}{cls.render_time(now)}"
+        metadata_lines = cls.format_metadata(metadata, locale)
+        time_line = f"{cls.time_prefix(locale)}{cls.render_time(now)}"
         if not tool_prepared and not text_prepared and not api_prepared:
-            lines = [cls.HEADER, "", footer]
+            lines = [cls.header(locale), "", footer]
             lines.extend(metadata_lines)
             lines.append(time_line)
             return "\n".join(lines)
@@ -787,7 +855,7 @@ class TaskCardEventProjection:
             prefix = f"{marker}{label}: " if label else marker
             tool_scaffold += len(prefix) + len(suffix) + 2
         fixed = (
-            len(cls.HEADER)
+            len(cls.header(locale))
             + 1
             + 1
             + len(footer)
@@ -818,7 +886,7 @@ class TaskCardEventProjection:
         for idx, line in api_prepared:
             by_idx[idx] = line
 
-        lines = [cls.HEADER]
+        lines = [cls.header(locale)]
         lines.extend(by_idx[index] for index in sorted(by_idx))
         lines.append("")
         lines.append(footer)
@@ -847,9 +915,9 @@ class TaskCardEventProjection:
         return value
 
     @classmethod
-    def format_api_error_line(cls, row: dict[str, Any]) -> str:
+    def format_api_error_line(cls, row: dict[str, Any], locale: str = "en") -> str:
         state = row.get("state")
-        parts = ["API 错误"]
+        parts = [cls._locale_text("api_error", locale)]
         error_type = cls.machine_identifier(row.get("error_type"), limit=48)
         if error_type is not None:
             parts.append(error_type)
@@ -868,9 +936,9 @@ class TaskCardEventProjection:
         summary = " · ".join(parts)
 
         if state == "recovered":
-            return f"✓ {summary} · 已恢复"
+            return f"✓ {summary} · {cls._locale_text('recovered', locale)}"
         if state == "error":
-            return f"⚠️ {summary} · 失败"
+            return f"⚠️ {summary} · {cls._locale_text('failed', locale)}"
         attempt = row.get("attempt")
         max_attempts = row.get("max_attempts")
         if (
@@ -879,10 +947,10 @@ class TaskCardEventProjection:
             and attempt > 0
             and max_attempts > 0
         ):
-            return f"⚠️ {summary} · 重试中 {attempt}/{max_attempts}"
+            return f"⚠️ {summary} · {cls._locale_text('retrying', locale)} {attempt}/{max_attempts}"
         if type(attempt) is int and attempt > 0:
-            return f"⚠️ {summary} · 重试中 (第 {attempt} 次)"
-        return f"⚠️ {summary} · 重试中"
+            return f"⚠️ {summary} · {cls._locale_text('retrying_attempt', locale).format(n=attempt)}"
+        return f"⚠️ {summary} · {cls._locale_text('retrying', locale)}"
 
     @staticmethod
     def format_elapsed(value: object) -> str:

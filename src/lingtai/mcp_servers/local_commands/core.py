@@ -61,6 +61,10 @@ class TaskCardSettingsPort:
     set_enabled: Callable[[bool], None] | None
     normal_rows: Callable[[], int]
     set_normal_rows: Callable[[int], None] | None
+    # Optional locale surface (en|zh) for the shared Task Card projection;
+    # None/absent keeps the channel on its own default without touching locale.
+    locale: Callable[[], str] | None = None
+    set_locale: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,7 @@ class TaskCardCommandResult:
     status: str
     enabled: bool | None = None
     normal_rows: int | None = None
+    locale: str | None = None
 
 
 class LocalCommandCore:
@@ -87,8 +92,29 @@ class LocalCommandCore:
         text: str,
         settings: TaskCardSettingsPort,
     ) -> TaskCardCommandResult:
-        """Parse/update Task Card preferences without rendering a response."""
+        """Parse/update Task Card preferences without rendering a response.
+
+        Supports ``on|off``, ``N`` (1-10), and ``lang zh|en`` (when the
+        settings port exposes a locale getter/setter; otherwise the lang
+        sub-command degrades to ``usage`` so an older double stays honest).
+        """
         args = text.split()[1:]
+        if args and args[0].lower() == "lang":
+            if len(args) != 2 or settings.set_locale is None or settings.locale is None:
+                return TaskCardCommandResult("usage")
+            locale = args[1].lower()
+            if locale not in {"en", "zh"}:
+                return TaskCardCommandResult("usage")
+            try:
+                settings.set_locale(locale)
+            except Exception:  # noqa: BLE001 - provider-owned setter boundary
+                return TaskCardCommandResult("update_failed")
+            return TaskCardCommandResult(
+                "ok",
+                enabled=settings.enabled(),
+                normal_rows=settings.normal_rows(),
+                locale=settings.locale(),
+            )
         if len(args) > 1:
             return TaskCardCommandResult("usage")
         if args:
@@ -109,10 +135,17 @@ class LocalCommandCore:
                 setter(value)
             except Exception:  # noqa: BLE001 - provider-owned setter boundary
                 return TaskCardCommandResult("update_failed")
+        locale: str | None = None
+        if settings.locale is not None:
+            try:
+                locale = settings.locale()
+            except Exception:  # noqa: BLE001 - provider-owned getter boundary
+                locale = None
         return TaskCardCommandResult(
             "ok",
             enabled=settings.enabled(),
             normal_rows=settings.normal_rows(),
+            locale=locale,
         )
 
     def send_signal(self, signal: str, *, source: str) -> SignalResult:

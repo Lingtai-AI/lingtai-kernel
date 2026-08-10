@@ -29,6 +29,10 @@ _TASKCARD_MAX_NORMAL_ROWS = 10
 _TASKCARD_DEFAULT_MAX_REFRESHES = 1000
 _TASKCARD_MIN_MAX_REFRESHES = 1
 _TASKCARD_MAX_MAX_REFRESHES = 1000
+# Task Card projection language (locale). ``en`` is the canonical default;
+# ``zh`` is the opt-in Chinese surface (set via ``/taskcard lang zh|en``).
+_TASKCARD_DEFAULT_LOCALE = "en"
+_TASKCARD_SUPPORTED_LOCALES = frozenset({"en", "zh"})
 
 
 class TelegramService:
@@ -54,6 +58,7 @@ class TelegramService:
             self._taskcard,
             self._taskcard_normal_rows,
             self._taskcard_max_refreshes,
+            self._taskcard_locale,
         ) = self._load_taskcard_state()
         self._taskcard_listener: Callable[[bool], None] | None = None
         local_command_core = LocalCommandCore(self._working_dir)
@@ -73,20 +78,32 @@ class TelegramService:
                 set_taskcard_enabled=self.set_taskcard_enabled,
                 taskcard_normal_rows=self.taskcard_normal_rows,
                 set_taskcard_normal_rows=self.set_taskcard_normal_rows,
+                taskcard_locale=self.taskcard_locale,
+                set_taskcard_locale=self.set_taskcard_locale,
                 local_command_core=local_command_core,
             )
             self._accounts[alias] = acct
             self._account_order.append(alias)
 
-    def _load_taskcard_state(self) -> tuple[bool, int, int]:
+    def _load_taskcard_state(self) -> tuple[bool, int, int, str]:
         """Load preferences; one invalid field never erases valid sibling fields."""
         if not self._taskcard_path.is_file():
-            return True, _TASKCARD_DEFAULT_NORMAL_ROWS, _TASKCARD_DEFAULT_MAX_REFRESHES
+            return (
+                True,
+                _TASKCARD_DEFAULT_NORMAL_ROWS,
+                _TASKCARD_DEFAULT_MAX_REFRESHES,
+                _TASKCARD_DEFAULT_LOCALE,
+            )
         try:
             data = read_json(self._taskcard_path, expect=dict)
         except (OSError, ValueError, TypeError):
             logger.warning("Invalid or unreadable Telegram taskcard state; using defaults")
-            return True, _TASKCARD_DEFAULT_NORMAL_ROWS, _TASKCARD_DEFAULT_MAX_REFRESHES
+            return (
+                True,
+                _TASKCARD_DEFAULT_NORMAL_ROWS,
+                _TASKCARD_DEFAULT_MAX_REFRESHES,
+                _TASKCARD_DEFAULT_LOCALE,
+            )
         enabled = data.get("taskcard")
         if type(enabled) is not bool:
             logger.warning("Invalid Telegram taskcard state field; defaulting enabled to True")
@@ -105,12 +122,24 @@ class TelegramService:
         ):
             logger.warning("Invalid Telegram taskcard max_refreshes; using default")
             max_refreshes = _TASKCARD_DEFAULT_MAX_REFRESHES
-        return enabled, normal_rows, max_refreshes
+        locale = data.get("locale")
+        if locale not in _TASKCARD_SUPPORTED_LOCALES:
+            if locale is not None:
+                logger.warning("Invalid Telegram taskcard locale; using default")
+            locale = _TASKCARD_DEFAULT_LOCALE
+        return enabled, normal_rows, max_refreshes, locale
 
-    def _persist_taskcard_state(self, enabled: bool, normal_rows: int, max_refreshes: int) -> None:
+    def _persist_taskcard_state(
+        self, enabled: bool, normal_rows: int, max_refreshes: int, locale: str
+    ) -> None:
         atomic_write_json(
             self._taskcard_path,
-            {"taskcard": enabled, "normal_rows": normal_rows, "max_refreshes": max_refreshes},
+            {
+                "taskcard": enabled,
+                "normal_rows": normal_rows,
+                "max_refreshes": max_refreshes,
+                "locale": locale,
+            },
             fsync=True,
         )
 
@@ -131,7 +160,10 @@ class TelegramService:
         with self._taskcard_lock:
             changed = self._taskcard != enabled
             self._persist_taskcard_state(
-                enabled, self._taskcard_normal_rows, self._taskcard_max_refreshes
+                enabled,
+                self._taskcard_normal_rows,
+                self._taskcard_max_refreshes,
+                self._taskcard_locale,
             )
             self._taskcard = enabled
             listener = self._taskcard_listener if changed else None
@@ -155,7 +187,10 @@ class TelegramService:
             raise ValueError("normal_rows must be an integer from 1 through 10")
         with self._taskcard_lock:
             self._persist_taskcard_state(
-                self._taskcard, normal_rows, self._taskcard_max_refreshes
+                self._taskcard,
+                normal_rows,
+                self._taskcard_max_refreshes,
+                self._taskcard_locale,
             )
             self._taskcard_normal_rows = normal_rows
 
@@ -182,9 +217,38 @@ class TelegramService:
             )
         with self._taskcard_lock:
             self._persist_taskcard_state(
-                self._taskcard, self._taskcard_normal_rows, max_refreshes
+                self._taskcard,
+                self._taskcard_normal_rows,
+                max_refreshes,
+                self._taskcard_locale,
             )
             self._taskcard_max_refreshes = max_refreshes
+
+    def taskcard_locale(self) -> str:
+        """Return the current agent-wide Task Card projection language."""
+        with self._taskcard_lock:
+            return self._taskcard_locale
+
+    def set_taskcard_locale(self, locale: str) -> None:
+        """Durably set the Task Card projection language (en|zh).
+
+        Defaults to English. This is the configurable replacement for the
+        hard-coded Chinese surface attempted in #1209 (Jason 2026-08-10): the
+        shared projection stays English by default, and a Chinese-first agent
+        opts in per agent via ``/taskcard lang zh``.
+        """
+        if locale not in _TASKCARD_SUPPORTED_LOCALES:
+            raise ValueError(
+                f"locale must be one of {sorted(_TASKCARD_SUPPORTED_LOCALES)}"
+            )
+        with self._taskcard_lock:
+            self._persist_taskcard_state(
+                self._taskcard,
+                self._taskcard_normal_rows,
+                self._taskcard_max_refreshes,
+                locale,
+            )
+            self._taskcard_locale = locale
 
     def get_account(self, alias: str) -> TelegramAccount:
         """Get account by alias. Raises KeyError if not found."""

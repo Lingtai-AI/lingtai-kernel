@@ -129,7 +129,7 @@ def test_active_body_composes_with_automatic_and_updates_diff_only(
     assert [call[0] for call in account.calls] == ["edit"]
     assert account.calls[0][1] == resident_message
     frame = _card_frame(account.calls[0])
-    assert "📋 活动" in frame
+    assert "📋 ACTIVITIES" in frame
     assert frame.endswith("— TASK CARD —\none truthful frame")
     assert manager._resident.frames[route.key]["programmable"] == ("one truthful frame")
 

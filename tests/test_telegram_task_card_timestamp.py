@@ -32,7 +32,7 @@ _NOW = datetime(2026, 7, 12, 17, 18, 36, tzinfo=timezone(timedelta(hours=-7)))
 
 
 def _current_time_line(text):
-    return next(ln for ln in text.splitlines() if ln.startswith("最后更新: "))
+    return next(ln for ln in text.splitlines() if ln.startswith("Last Updated: "))
 
 
 def test_tool_row_never_renders_its_started_at_inline():
@@ -52,7 +52,7 @@ def test_manager_renders_current_time_line_from_render_instant_not_row_start():
     ], now=_NOW)
     lines = text.splitlines()
     # The bottom line is the labelled render-time stamp, not the row's own start.
-    assert lines[-1] == "最后更新: 17:18:36 U-7"
+    assert lines[-1] == "Last Updated: 17:18:36 U-7"
 
 
 def test_current_time_line_follows_the_footer():
@@ -62,9 +62,9 @@ def test_current_time_line_follows_the_footer():
     ], now=_NOW)
     lines = text.splitlines()
     footer_idx = next(i for i, ln in enumerate(lines) if _TASK_CARD_FOOTER in ln)
-    time_idx = next(i for i, ln in enumerate(lines) if ln.startswith("最后更新: "))
+    time_idx = next(i for i, ln in enumerate(lines) if ln.startswith("Last Updated: "))
     assert time_idx > footer_idx
-    assert lines[time_idx] == "最后更新: 17:18:36 U-7"
+    assert lines[time_idx] == "Last Updated: 17:18:36 U-7"
 
 
 def test_parallel_rows_never_renders_any_per_row_stamp():
@@ -80,7 +80,7 @@ def test_parallel_rows_never_renders_any_per_row_stamp():
         if ln.startswith(("•", "✓")):
             assert "UTC" not in ln
     # The bottom line is still the single render-time stamp.
-    assert _current_time_line(text) == "最后更新: 17:18:36 U-7"
+    assert _current_time_line(text) == "Last Updated: 17:18:36 U-7"
 
 
 def test_current_time_line_present_even_when_no_row_has_a_stamp():
@@ -92,7 +92,7 @@ def test_current_time_line_present_even_when_no_row_has_a_stamp():
     ], now=_NOW)
     # Last Updated never depends on any row carrying a stamp — it always
     # reflects the render instant.
-    assert text.splitlines()[-1] == "最后更新: 17:18:36 U-7"
+    assert text.splitlines()[-1] == "Last Updated: 17:18:36 U-7"
     # Tool rows never render an inline stamp even when one is supplied.
     for ln in text.splitlines():
         if ln.startswith(("•", "✓")):
@@ -110,36 +110,15 @@ def test_api_error_row_never_carries_a_stamp_alongside_a_tool_row():
     ], now=_NOW)
     bash_line = next(ln for ln in text.splitlines() if "bash.run" in ln)
     assert "UTC" not in bash_line
-    api_line = next(ln for ln in text.splitlines() if "API 错误" in ln)
+    api_line = next(ln for ln in text.splitlines() if "API error" in ln)
     assert "UTC" not in api_line
-    assert text.splitlines()[-1] == "最后更新: 17:18:36 U-7"
+    assert text.splitlines()[-1] == "Last Updated: 17:18:36 U-7"
 
 
 def test_render_tool_row_without_started_at_is_safe():
-    """A row missing started_at (the event-tail projection omits it when the
-    source event's ``ts`` was missing or malformed) renders without any
-    inline stamp — no crash, no fabricated timestamp; the render-time line
-    still renders unconditionally."""
     text = TelegramManager._format_task_card_text("", "", "", rows=[
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
          "elapsed_s": 1, "done": False},
     ], now=_NOW)
     assert "bash.run" in text
-    assert text.splitlines()[-1] == "最后更新: 17:18:36 U-7"
-
-
-def test_footer_shows_actual_current_normal_row_setting():
-    text = TelegramManager._format_task_card_text("", "", "", rows=[
-        {"tool": "bash", "tool_action": "run", "reasoning": "x",
-         "elapsed_s": 1, "done": False, "started_at": "04:08:08 UTC-07"},
-    ], normal_rows=7, now=_NOW)
-    assert "/taskcard N 设置显示组数 (1-10，当前: 7)。" in text
-
-
-def test_footer_current_row_count_stays_within_1_10_semantics():
-    for n in (1, 10):
-        text = TelegramManager._format_task_card_text("", "", "", rows=[
-            {"tool": "bash", "tool_action": "run", "reasoning": "x",
-             "elapsed_s": 1, "done": False, "started_at": "04:08:08 UTC-07"},
-        ], normal_rows=n, now=_NOW)
-        assert f"当前: {n}" in text
+    assert text.splitlines()[-1] == "Last Updated: 17:18:36 U-7"

@@ -158,13 +158,14 @@ _TASK_CARD_AGENT_STATES = TaskCardEventProjection.AGENT_STATES
 _TASK_CARD_TIME_PREFIX = TaskCardEventProjection.TIME_PREFIX
 
 
-def _task_card_footer(normal_rows: int) -> str:
+def _task_card_footer(normal_rows: int, locale: str = "en") -> str:
     """Build the fixed footer with the live normal-row setting appended.
 
     ``normal_rows`` is trusted to already be validated to ``1-10`` by the
     caller (``TelegramManager._taskcard_normal_rows``); this only formats it.
+    ``locale`` selects the projection language (en default, zh opt-in).
     """
-    return TaskCardEventProjection.footer(normal_rows)
+    return TaskCardEventProjection.footer(normal_rows, locale)
 
 
 def _format_task_card_current_time(now: datetime) -> str:
@@ -801,6 +802,17 @@ class TelegramManager:
         if type(value) is not int or not 1 <= value <= 10:
             return _TASK_CARD_DEFAULT_NORMAL_ROWS
         return value
+
+    def _taskcard_locale(self) -> str:
+        """Read the current Task Card projection language at projection time.
+
+        Falls back to English when the service double does not expose the
+        durable getter (compat for narrow tests/third-party doubles).
+        """
+        getter = getattr(self._service, "taskcard_locale", None)
+        if not callable(getter):
+            return "en"
+        return TaskCardEventProjection.normalize_locale(getter())
 
     @staticmethod
     def _parse_compound_id(compound_id: str) -> tuple[str, int, int]:
@@ -3021,12 +3033,17 @@ class TelegramManager:
 
         The volatile ``Last Updated:`` line is excluded — it changes on every
         render and must not force a Telegram edit when the actual content
-        (events, footer, metadata) is unchanged.
+        (events, footer, metadata) is unchanged. Every supported locale prefix
+        is excluded so the dedupe stays correct after ``/taskcard lang`` flips.
         """
+        prefixes = tuple(
+            TaskCardEventProjection.time_prefix(locale)
+            for locale in sorted(TaskCardEventProjection.SUPPORTED_LOCALES)
+        )
         stable = "\n".join(
             line
             for line in automatic.splitlines()
-            if not line.startswith(_TASK_CARD_TIME_PREFIX)
+            if not line.startswith(prefixes)
         )
         return hashlib.sha256(stable.encode("utf-8", "replace")).hexdigest()
 
@@ -3049,6 +3066,7 @@ class TelegramManager:
             self._task_card_event_groups_snapshot(),
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=normal_rows,
+            locale=self._taskcard_locale(),
         )
         fingerprint = self._task_card_automatic_fingerprint(automatic)
         for account, chat_id in self._resident_task_card_targets():
@@ -3210,6 +3228,7 @@ class TelegramManager:
             self._task_card_event_groups_snapshot(),
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=self._taskcard_normal_rows(),
+            locale=self._taskcard_locale(),
         )
         return self._resident.ensure(
             account, chat_id, automatic, error="Failed to ensure task card resident",
@@ -3642,21 +3661,23 @@ class TelegramManager:
         return TaskCardEventProjection.format_count(value)
 
     @classmethod
-    def _format_task_card_metadata(cls, metadata: object) -> list[str]:
+    def _format_task_card_metadata(cls, metadata: object, locale: str = "en") -> list[str]:
         """Render at most two compact session lines within a 150-char budget."""
-        return TaskCardEventProjection.format_metadata(metadata)
+        return TaskCardEventProjection.format_metadata(metadata, locale)
 
     @classmethod
     def _format_rows_task_card_text(
         cls, rows: list, *, metadata: dict | None = None,
         normal_rows: int = _TASK_CARD_DEFAULT_NORMAL_ROWS,
         now: datetime | None = None,
+        locale: str = "en",
     ) -> str:
         return TaskCardEventProjection.format_rows_task_card_text(
             rows,
             metadata=metadata,
             normal_rows=normal_rows,
             now=now,
+            locale=locale,
         )
 
     @staticmethod
@@ -3669,7 +3690,7 @@ class TelegramManager:
         return TaskCardEventProjection.machine_identifier(value, limit=limit)
 
     @classmethod
-    def _format_api_error_line(cls, row: dict) -> str:
+    def _format_api_error_line(cls, row: dict, locale: str = "en") -> str:
         """Render a sanitized LLM/provider API-error row.
 
         Shows only bounded machine identifiers supplied by the kernel (exception
@@ -3677,7 +3698,7 @@ class TelegramManager:
         lifecycle state. Opaque external identifiers and raw exception text are
         deliberately absent, so there is no free-form field to leak.
         """
-        return TaskCardEventProjection.format_api_error_line(row)
+        return TaskCardEventProjection.format_api_error_line(row, locale)
 
     @staticmethod
     def _format_elapsed(value: object) -> str:
