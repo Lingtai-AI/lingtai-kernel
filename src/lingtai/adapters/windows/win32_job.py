@@ -15,7 +15,11 @@ The bounded output drain (``drain_pipes``) mirrors Codex's ``io_drain_timeout``
 (``codex-rs/core/src/exec.rs``): after a kill, stdout/stderr pipes are drained
 for only a bounded window, because a grandchild that inherited the pipe write
 ends and survived the kill keeps them open and would block an unbounded reader
-forever (Goose PR #7689).
+forever (Goose PR #7689).  The drain never ``close()``s a stream whose reader
+thread is still alive: on CPython the reader thread holds the buffered-IO lock
+for the duration of a blocking ``read()``, so ``close()`` would wait on that
+same lock forever.  The pipe reader threads are daemon threads and finish on
+their own once the killed tree releases the write ends.
 
 Importing this module is safe on every platform; every Job Object helper raises
 ``OSError`` on non-Windows at call time.  ``taskkill_tree_best_effort`` is the
@@ -344,7 +348,7 @@ def taskkill_tree_best_effort(pid: int) -> None:
     try:
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=_TASKKILL_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL,
             creationflags=CREATE_NO_WINDOW,
         )
@@ -375,8 +379,15 @@ def drain_pipes(process, timeout_seconds: float = IO_DRAIN_TIMEOUT_SECONDS):
 
     Returns ``(stdout, stderr)``.  When EOF has not arrived within the bound (a
     grandchild survived the kill and still holds the pipe write ends), the
-    partial output is returned and the pipe reader threads are aborted by
-    closing the handles — the caller must never block on EOF forever.
+    partial output is returned and the pipe reader threads are detached --
+    the caller must never block on EOF forever.
+
+    The streams are never ``close()``-d from this side: CPython's Windows
+    reader threads are daemon threads blocked in ``read()`` holding the
+    buffered-IO lock, and ``stream.close()`` would wait on that same lock
+    forever.  Detaching ``process.stdout``/``process.stderr`` prevents any
+    later ``communicate()`` re-entry and lets the reader threads finish on
+    their own once the killed tree releases the pipe write ends.
     """
     try:
         return process.communicate(timeout=timeout_seconds)
@@ -387,12 +398,14 @@ def drain_pipes(process, timeout_seconds: float = IO_DRAIN_TIMEOUT_SECONDS):
         # surfaces OSError/ValueError instead of TimeoutExpired.  Same bounded
         # outcome: hand back what we have and never block on EOF.
         partial = (None, None)
-    for stream in (getattr(process, "stdout", None), getattr(process, "stderr", None)):
-        if stream is not None:
-            try:
-                stream.close()
-            except OSError:
-                pass
+    # Detach instead of close(): see docstring.  The reader threads are daemon
+    # threads and close their own handle when EOF arrives; forcing close()
+    # here would block on the buffered-IO lock held by the blocked read.
+    try:
+        process.stdout = None
+        process.stderr = None
+    except (AttributeError, TypeError):
+        pass
     return partial
 
 

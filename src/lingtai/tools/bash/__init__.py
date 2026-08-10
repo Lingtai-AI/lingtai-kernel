@@ -908,14 +908,22 @@ class ShellManager:
                 returncode = process.returncode
             except subprocess.TimeoutExpired as exc:
                 win32_job.terminate_owned_tree(job, process.pid)
-                # Bounded drain: a grandchild that survived the kill and still
-                # holds the pipe write ends must not block this supervisor on
-                # EOF forever (Codex io_drain_timeout; Goose PR #7689).  The
-                # process is never ``wait()``-ed on this double-timeout path;
-                # the bounded drain plus handle close is the documented bound.
-                win32_job.drain_pipes(process, win32_job.IO_DRAIN_TIMEOUT_SECONDS)
+                # Wait briefly for the killed tree to actually exit before the
+                # pipe drain: in the common case the real EOF then arrives
+                # within the drain bound and the drain returns the full output
+                # instead of the partial from the timeout exception.  The
+                # bound is structural (wait_job_empty never waits longer than
+                # its own timeout), and the drain itself never blocks on EOF.
+                win32_job.wait_job_empty(job, win32_job.IO_DRAIN_TIMEOUT_SECONDS)
+                partial_out, partial_err = win32_job.drain_pipes(
+                    process, win32_job.IO_DRAIN_TIMEOUT_SECONDS
+                )
+                # Windows ``communicate`` raises the bare TimeoutExpired (no
+                # ``output=``/``stderr=`` args), so ``exc.stdout``/``exc.stderr``
+                # are always None here and the no-output signal must come from
+                # the partial the bounded drain actually collected.
                 return _timeout_error(
-                    command, timeout, no_output=not (exc.stdout or exc.stderr)
+                    command, timeout, no_output=not (partial_out or partial_err)
                 )
         finally:
             # Closing the last job handle fires KILL_ON_JOB_CLOSE, terminating

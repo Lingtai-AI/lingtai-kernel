@@ -212,6 +212,11 @@ def test_taskkill_fallback_invokes_hidden_tree_kill(monkeypatch):
     assert kwargs["creationflags"] == win32_job.CREATE_NO_WINDOW
     assert kwargs["timeout"] == 10.0
     assert kwargs["stdin"] is subprocess.DEVNULL
+    # taskkill output is discarded; DEVNULL keeps this fallback free of pipe
+    # reader threads so it can never deadlock on the same buffered-IO close
+    # as the bounded drain fix addresses.
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
 
 
 def test_taskkill_fallback_is_safe_noop_when_unavailable(monkeypatch):
@@ -246,20 +251,78 @@ class _FakeProcess:
         raise self._communicate_result
 
 
-def test_drain_pipes_returns_partial_output_and_closes_streams_on_timeout():
+def test_drain_pipes_returns_partial_output_and_detaches_streams_on_timeout():
     exc = subprocess.TimeoutExpired(cmd="pwsh", timeout=0.5, output="partial-out", stderr="partial-err")
     process = _FakeProcess(exc)
     stdout, stderr = win32_job.drain_pipes(process, 0.5)
     assert stdout == "partial-out"
     assert stderr == "partial-err"
-    assert process.stdout.closed and process.stderr.closed
+    # The reader threads are detached, never close()d: closing a stream whose
+    # reader thread is blocked in read() would deadlock on the buffered-IO
+    # lock (win32_job drain deadlock), so the fix clears the references and
+    # lets the daemon reader threads finish on their own.
+    assert process.stdout is None and process.stderr is None
 
 
 def test_drain_pipes_passes_full_output_when_eof_arrives(monkeypatch):
     process = _FakeProcess(None)
     monkeypatch.setattr(process, "communicate", lambda timeout=None: ("out", "err"))
     assert win32_job.drain_pipes(process, 0.5) == ("out", "err")
-    assert not process.stdout.closed
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+
+def test_drain_pipes_never_blocks_on_live_reader_stream():
+    """Regression: a real pipe whose reader thread is blocked in read() must
+    not deadlock ``drain_pipes``.  CPython's reader thread holds the
+    buffered-IO lock while blocked in ``read()``, and ``stream.close()``
+    would wait on that same lock forever.  This is the exact state reached
+    when a grandchild survives the kill and still holds the pipe write ends.
+    The drain is run on a worker thread so the old close()-based
+    implementation fails this test instead of hanging the suite.
+    """
+    import io
+    import threading
+    import time
+
+    def _live_stream():
+        r_fd, w_fd = os.pipe()
+        stream = io.TextIOWrapper(io.open(r_fd, "rb", -1), encoding="utf-8")
+        # A reader thread blocked in read() while w_fd stays open (the
+        # surviving-grandchild equivalent).
+        thread = threading.Thread(target=stream.read, daemon=True)
+        thread.start()
+        return stream, w_fd
+
+    out_stream, out_w = _live_stream()
+    err_stream, err_w = _live_stream()
+
+    class _LiveReaderProcess:
+        def communicate(self, timeout=None):
+            raise subprocess.TimeoutExpired(
+                cmd="pwsh", timeout=timeout, output=None, stderr=None
+            )
+
+    process = _LiveReaderProcess()
+    process.stdout = out_stream
+    process.stderr = err_stream
+    result = {}
+    started = time.monotonic()
+
+    def _drain():
+        result["value"] = win32_job.drain_pipes(process, 0.05)
+
+    worker = threading.Thread(target=_drain, daemon=True)
+    worker.start()
+    worker.join(timeout=2.0)
+    elapsed = time.monotonic() - started
+    assert not worker.is_alive(), f"drain_pipes blocked {elapsed:.2f}s on live readers"
+    assert elapsed < 2.0
+    stdout, stderr = result["value"]
+    assert stdout is None and stderr is None
+    assert process.stdout is None and process.stderr is None
+    os.close(out_w)
+    os.close(err_w)
 
 
 def test_wait_job_empty_polls_active_count(monkeypatch):
@@ -324,6 +387,10 @@ def test_sync_timeout_kills_whole_tree_and_drains_boundedly(monkeypatch, tmp_pat
         lambda job, pid: events.append(("terminate", job, pid)),
     )
     monkeypatch.setattr(
+        win32_job, "wait_job_empty",
+        lambda job, timeout: events.append(("wait_empty", job, timeout)) or True,
+    )
+    monkeypatch.setattr(
         win32_job, "drain_pipes",
         lambda proc, timeout: events.append(("drain", timeout)) or ("p", "e"),
     )
@@ -336,8 +403,12 @@ def test_sync_timeout_kills_whole_tree_and_drains_boundedly(monkeypatch, tmp_pat
     assert result == {"status": "error", "message": "Command timed out after 5.0s"}
     assert events[0][0] == "spawn"
     assert events[1] == ("terminate", 99, 4242)
-    assert events[2] == ("drain", win32_job.IO_DRAIN_TIMEOUT_SECONDS)
-    assert events[3] == ("close", 99)
+    # The supervisor waits for the killed tree to actually exit before the
+    # pipe drain so real EOF arrives in the common case; the drain bound is
+    # structural either way.
+    assert events[2] == ("wait_empty", 99, win32_job.IO_DRAIN_TIMEOUT_SECONDS)
+    assert events[3] == ("drain", win32_job.IO_DRAIN_TIMEOUT_SECONDS)
+    assert events[4] == ("close", 99)
 
 
 def test_sync_success_caps_output(monkeypatch, tmp_path):
