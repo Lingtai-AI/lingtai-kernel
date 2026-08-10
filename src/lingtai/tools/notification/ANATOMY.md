@@ -68,11 +68,11 @@ action values are unchanged; the four hook-registry actions are new.
   placeholder (`src/lingtai/tools/notification/__init__.py:125-140`).
 - `_build_family()` builds the per-call dispatching `ToolFamily` with handlers
   bound to the calling `agent`, registering the shared `manual` child directly
-  and unwrapped (`src/lingtai/tools/notification/__init__.py:357-405`).
+  and unwrapped (`src/lingtai/tools/notification/__init__.py:362-410`).
 - `handle()` strips kernel-injected `_tc_id`, delegates envelope validation and
   dispatch to that family, adapts the `manual` child result, and normalizes the
   generic `ACTION_REQUIRED` error back to the pinned unknown-action shape
-  (`src/lingtai/tools/notification/__init__.py:407-446`).
+  (`src/lingtai/tools/notification/__init__.py:412-451`).
 - `_strip_nulls()` converts explicit `null` optionals back to absent so the
   handlers' `args.get(..., default)` defaulting is preserved
   (`src/lingtai/tools/notification/__init__.py:143-153`).
@@ -95,7 +95,7 @@ action values are unchanged; the four hook-registry actions are new.
   `lingtai.kernel.notifications.add_hook` / `drop_hook` / `edit_hook` /
   `list_hooks`, which validate manifests, enforce name/channel uniqueness, and
   write `.notification/hooks.json` through Store family 8
-  (`src/lingtai/tools/notification/__init__.py:291-354`).
+  (`src/lingtai/tools/notification/__init__.py:291-359`).
 - `registry.INTRINSICS` registers `notification` as a mandatory intrinsic next
   to email, system, context, pad, lingtai, and soul
   (`src/lingtai/tools/registry.py:48-69`).
@@ -114,11 +114,11 @@ action values are unchanged; the four hook-registry actions are new.
   `lingtai.kernel.notifications.dismiss_channel(...,
   invoked_by="notification")`; Core owns allowlists, producer guards,
   stale-version checks, protected channels, post-molt acknowledgement, and
-  targeted event/ref removal (`src/lingtai/kernel/notifications.py:785`).
+  targeted event/ref removal (`src/lingtai/kernel/notifications.py:923`).
   The four hook-registry handlers delegate to Core's
   `add_hook`/`drop_hook`/`edit_hook`/`list_hooks`, which own manifest
   validation, uniqueness, and the family-8 Store writes
-  (`src/lingtai/kernel/notifications.py:284-393`).
+  (`src/lingtai/kernel/notifications.py:358-512`).
 - `Agent._install_intrinsic_manuals()` copies the kernel-shipped
   `system-manual` skill tree into the per-agent intrinsic library that the
   `manual` child reads through `tool_family.manual.build_manual_child` and the
