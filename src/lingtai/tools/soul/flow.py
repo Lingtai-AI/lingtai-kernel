@@ -88,7 +88,7 @@ def _soul_whisper(agent) -> None:
     cycle instead of waiting indefinitely.
     """
     from lingtai.kernel.state import AgentState
-    from lingtai.kernel.notifications import is_channel_allowed
+    from lingtai.kernel.notifications import _workdir_key, is_channel_allowed
 
     agent._soul_timer = None
     try:
@@ -97,9 +97,13 @@ def _soul_whisper(agent) -> None:
             # This ensures messages are seen within one soul delay cycle
             try:
                 store = agent._notification_store
-                fp = store.fingerprint(is_channel_allowed)
+                fp = store.fingerprint(
+                    lambda ch: is_channel_allowed(ch, workdir=_workdir_key(agent))
+                )
                 if fp != agent._notification_fp:
-                    notifications = store.snapshot(is_channel_allowed)
+                    notifications = store.snapshot(
+                        lambda ch: is_channel_allowed(ch, workdir=_workdir_key(agent))
+                    )
                     if notifications:
                         agent._log("soul_flow_notification_check",
                                    sources=list(notifications.keys()))
