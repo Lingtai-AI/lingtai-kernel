@@ -1330,6 +1330,32 @@ class TestHookLifecycle:
 
         assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is False
 
+    def test_sync_hook_registry_workdir_less_agent_skips_seeding(
+        self, tmp_path: Path
+    ) -> None:
+        """R4-F6: sync_hook_registry for a workdir-less agent must not crash
+        and must never write a None-keyed entry into the mirror books (the
+        r3-F5 early return) — hook channels are never allowlisted without a
+        real workdir."""
+        from types import SimpleNamespace
+
+        from lingtai.kernel.notifications import (
+            _HOOK_REGISTRY_SEEDED,
+            _HOOK_REGISTRY_STAT,
+            _REGISTERED_HOOK_CHANNELS,
+        )
+
+        agent = SimpleNamespace(
+            _working_dir=None,
+            _notification_store=notification_store_for(tmp_path),
+        )
+
+        sync_hook_registry(agent)  # must not crash
+
+        assert None not in _REGISTERED_HOOK_CHANNELS
+        assert None not in _HOOK_REGISTRY_SEEDED
+        assert None not in _HOOK_REGISTRY_STAT
+
 
 class TestHookRegistryFableFixes:
     """Regression tests from fable r1 (PR review findings F1-F5)."""
