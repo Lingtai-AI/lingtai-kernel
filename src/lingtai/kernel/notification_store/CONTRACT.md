@@ -1,6 +1,6 @@
 ---
 name: notification-store
-contract_version: 2
+contract_version: 3
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/notification_store/ANATOMY.md
@@ -63,8 +63,9 @@ Core construction, ninth operation family, or caller-held transaction lock.
 5. `compare_update_channel(channel, expected_version, pure_core_mutator)`;
 6. read-only `load_ack_refs() -> set[str]`;
 7. `update_ack_refs(pure_core_set_mutator) -> UpdateAckRefsResult`;
-8. read-only `load_hook_manifests() -> list[dict]` and
-   `update_hook_manifests(pure_core_manifest_mutator) -> UpdateHookManifestsResult`.
+8. read-only `load_hook_manifests() -> list[dict]`,
+   `update_hook_manifests(pure_core_manifest_mutator) -> UpdateHookManifestsResult`,
+   and read-only `stat_hook_registry() -> tuple[int, int] | None`.
 
 `UNCONDITIONAL` is distinct from `None`: `None` means expected absence. A
 fingerprint tuple means the exact delivered version. Channel mutators return
@@ -118,6 +119,16 @@ envelope.
   write. Non-empty write failures propagate. Empty-list clear preserves legacy
   best effort by swallowing every unlink `OSError`; typed `changed/value`
   evidence still returns, with `changed=False` when no unlink succeeds.
+- `stat_hook_registry()` returns the cheap `(st_mtime_ns, st_size)` staleness
+  fingerprint of the hook-registry file, or `None` when absent. Core uses it to
+  re-seed its in-memory hook mirror when another process (sibling CLI, Telegram
+  server, hook installer) wrote `hooks.json` out-of-band, without re-reading the
+  file on every sync tick.
+- `STORE_RESERVED_NON_CHANNEL_STEMS` is `{"hooks", "large_result_acks"}`: the
+  Store-owned registry and acknowledgement files are never channels. Core
+  validation rejects these stems as hook channels, so a registered hook can
+  never publish over or clear Store-owned files. Adapters MUST keep their
+  snapshot/fingerprint skip lists in sync with this set.
 - Core hook add/edit/drop MUST use family 8, never split family 8's read from a
   later write. The registry file `.notification/hooks.json` is a single
   non-channel registry, invisible to snapshot/fingerprint and to the allow
