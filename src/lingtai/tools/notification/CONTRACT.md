@@ -146,8 +146,8 @@ Observable action contracts are:
   (`system`/`email`/`soul`/`goal`/`molt`/`nudge`/`post-molt`/`bash`/`btw`/`cron`/`tool_loop_guard`)
   or a Store-reserved non-channel stem (`hooks`/`large_result_acks`) is refused
   with `reason: "invalid_manifest"` and a clear message.
-  Guards [B002](BEHAVIORS.md#behavior-b002) (registered channel passes through)
-  and [B003](BEHAVIORS.md#behavior-b003) (lifecycle validation).
+  Guards [N002](BEHAVIORS.md#behavior-n002) (registered channel passes through)
+  and [N003](BEHAVIORS.md#behavior-n003) (lifecycle validation).
 - `edit` updates the named hook's fields. Success returns
   `{status: "ok", reason: "edited", name}`; unknown names return
   `reason: "not_found"` and a channel move onto another hook's channel returns
@@ -164,7 +164,7 @@ Observable action contracts are:
   `reason: "invalid_manifest"`, exactly as `add` refuses an empty manifest
   name. Dropping registration never kills the hook process —
   cancellation is the owner's job, documented in the manifest's
-  `how_to_cancel`. Guards [B003](BEHAVIORS.md#behavior-b003) (lifecycle
+  `how_to_cancel`. Guards [N003](BEHAVIORS.md#behavior-n003) (lifecycle
   validation).
 - `list` returns `{status: "ok", hooks: [...]}` with the persisted manifests
   in registry order, or an empty list when the registry is absent. When the
@@ -258,8 +258,8 @@ is not a second inbound adapter.
   consult the mirror keyed by the agent's workdir, and every kernel call site
   passes that workdir. Without a workdir (no agent context) hook channels are
   NOT allowed — only the static set and the `mcp.*` prefix pass.
-  Guards [B001](BEHAVIORS.md#behavior-b001) (unregistered channel blocked +
-  warn-and-flag) and [B002](BEHAVIORS.md#behavior-b002) (registered channel
+  Guards [N001](BEHAVIORS.md#behavior-n001) (unregistered channel blocked +
+  warn-and-flag) and [N002](BEHAVIORS.md#behavior-n002) (registered channel
   passes through).
 - Envelope validation MUST precede action I/O. Cross-action input, unknown root
   fields, and unknown actions MUST be rejected with a stable typed failure and

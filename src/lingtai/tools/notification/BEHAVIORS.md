@@ -25,9 +25,9 @@ LingTai Agent Behavior Tasks proving the notification hook-registry whitelist
 contract does not drift. Each LABT is self-contained: an agent can execute it
 verbatim against a real runtime and judge pass/fail from observable evidence.
 
-## Behavior B001 — unregistered channel is blocked and flagged
+## Behavior N001 — unregistered channel is blocked and flagged
 
-- **id**: B001
+- **id**: N001
 - **title**: unregistered channels are blocked with a visible warning
 - **guards**: `notification-tool` § Behavior / Contract rules
   (warn-and-flag: unregistered channels do not pass through)
@@ -67,9 +67,9 @@ blocked payload did not surface. Fail if the payload passes through, the event
 is missing, or the event names the wrong channel. No forbidden side effect:
 `add`/`drop`/`edit`/`list` are not invoked by this LABT.
 
-## Behavior B002 — registered hook channel passes through
+## Behavior N002 — registered hook channel passes through
 
-- **id**: B002
+- **id**: N002
 - **title**: registered hook channels pass through without warning
 - **guards**: `notification-tool` § add / Contract rules
   (registered hook channels enter the effective allowlist)
@@ -111,9 +111,9 @@ Pass when the registered channel's payload surfaces without a warning event.
 Fail if the payload is blocked, a warning is emitted, or `add`/`drop` return an
 error. Forbidden side effect: the hook must not outlive the test (drop it).
 
-## Behavior B003 — hook registry lifecycle: add/drop/edit/list
+## Behavior N003 — hook registry lifecycle: add/drop/edit/list
 
-- **id**: B003
+- **id**: N003
 - **title**: add/drop/edit/list lifecycle returns contract-matching reasons
 - **guards**: `notification-tool` § add / § edit / § drop / § list
   (manifest validation, uniqueness, empty-name and reserved-stem refusals)
