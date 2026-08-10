@@ -222,9 +222,12 @@ class NotificationStorePort(ABC):
     def load_hook_manifests(self) -> list[dict]:
         """Return the persisted hook-manifest list.
 
-        Absent or malformed registry file → empty list (legacy best effort).
-        The file is ``.notification/hooks.json`` — a single non-channel
-        registry, invisible to snapshot/fingerprint.
+        An absent ``hooks.json`` yields an empty list; a corrupt (invalid
+        JSON) or unreadable registry raises, which the tool layer surfaces as
+        a structured ``hook_registry_load_failed`` error so "registry broken"
+        is never reported as "nothing registered". The file is
+        ``.notification/hooks.json`` — a single non-channel registry,
+        invisible to snapshot/fingerprint.
         """
         ...
 
