@@ -58,9 +58,10 @@ _NOTIFICATION_CHANNEL_PREFIX_ALLOWLIST: tuple[str, ...] = ("mcp.",)
 # state through call sites.
 _REGISTERED_HOOK_CHANNELS: dict[str, set[str]] = {}
 
-# Serializes all three mirror books (channels, stat cache, seeded set) so
-# heartbeat-thread seeding and tool-call-thread mutation cannot interleave
-# and leave the mirror reflecting an older committed registry.
+# Serializes all four mirror books (channels, stat cache, seeded set,
+# blocked-channel warned set) so heartbeat-thread seeding and
+# tool-call-thread mutation cannot interleave and leave the mirror
+# reflecting an older committed registry.
 _HOOK_REGISTRY_LOCK = threading.Lock()
 
 # Workdirs already seeded from disk this process (avoids re-reading hooks.json
@@ -481,10 +482,11 @@ def flag_unregistered_channel(agent, channel: str) -> None:
     workdir = _workdir_key(agent)
     if is_channel_allowed(channel, workdir=workdir):
         return
-    warned = _BLOCKED_CHANNEL_WARNED.setdefault(workdir, set())
-    if channel in warned:
-        return
-    warned.add(channel)
+    with _HOOK_REGISTRY_LOCK:
+        warned = _BLOCKED_CHANNEL_WARNED.setdefault(workdir, set())
+        if channel in warned:
+            return
+        warned.add(channel)
     try:
         agent._enqueue_system_notification(
             source="notification_hook",
@@ -524,9 +526,10 @@ def is_present_channel_flagable(name: str) -> bool:
 
 def clear_blocked_channel_warning(agent, channel: str) -> None:
     """Drop the warn-and-flag dedupe marker when a channel registers."""
-    warned = _BLOCKED_CHANNEL_WARNED.get(_workdir_key(agent))
-    if warned:
-        warned.discard(channel)
+    with _HOOK_REGISTRY_LOCK:
+        warned = _BLOCKED_CHANNEL_WARNED.get(_workdir_key(agent))
+        if warned:
+            warned.discard(channel)
 
 
 def reset_hook_registry_for_tests() -> None:
