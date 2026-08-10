@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/tools/notification/CONTRACT.md
+  - src/lingtai/tools/notification/BEHAVIORS.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - src/lingtai/tools/notification/__init__.py

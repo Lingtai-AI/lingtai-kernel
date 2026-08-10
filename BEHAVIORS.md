@@ -17,6 +17,7 @@ related_files:
   - src/lingtai/tools/file/BEHAVIORS.md
   - src/lingtai/tools/feishu/BEHAVIORS.md
   - src/lingtai/tools/web_search/BEHAVIORS.md
+  - src/lingtai/tools/notification/BEHAVIORS.md
 maintenance: |
   This file is the normative root of the distributed behavior-test definition
   system: it owns the LingTai Agent Behavior Task (LABT) specification, its
