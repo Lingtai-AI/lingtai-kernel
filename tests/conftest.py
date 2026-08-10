@@ -59,14 +59,16 @@ def _isolate_notification_hook_registry():
     from lingtai.kernel.notifications import (
         _BLOCKED_CHANNEL_WARNED,
         _HOOK_REGISTRY_SEEDED,
+        _HOOK_REGISTRY_STAT,
         _REGISTERED_HOOK_CHANNELS,
-        _invalidate_allow_predicate,
+        _invalidate_allow_predicates,
     )
 
     snapshot_channels = {
         key: set(channels) for key, channels in _REGISTERED_HOOK_CHANNELS.items()
     }
     snapshot_seeded = set(_HOOK_REGISTRY_SEEDED)
+    snapshot_stat = dict(_HOOK_REGISTRY_STAT)
     snapshot_warned = {
         key: set(channels) for key, channels in _BLOCKED_CHANNEL_WARNED.items()
     }
@@ -77,11 +79,13 @@ def _isolate_notification_hook_registry():
     )
     _HOOK_REGISTRY_SEEDED.clear()
     _HOOK_REGISTRY_SEEDED.update(snapshot_seeded)
+    _HOOK_REGISTRY_STAT.clear()
+    _HOOK_REGISTRY_STAT.update(snapshot_stat)
     _BLOCKED_CHANNEL_WARNED.clear()
     _BLOCKED_CHANNEL_WARNED.update(
         {key: set(channels) for key, channels in snapshot_warned.items()}
     )
-    _invalidate_allow_predicate()
+    _invalidate_allow_predicates()
 
 
 @pytest.fixture(autouse=True)

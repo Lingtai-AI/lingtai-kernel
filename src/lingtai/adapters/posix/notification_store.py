@@ -277,6 +277,14 @@ class PosixNotificationStoreAdapter(NotificationStorePort):
             pass
         return []
 
+    def stat_hook_registry(self) -> tuple[int, int] | None:
+        registry_path = _hook_registry_path(self._workdir)
+        try:
+            st = registry_path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
     def update_hook_manifests(
         self, pure_core_manifest_mutator: PureHookManifestMutator
     ) -> UpdateHookManifestsResult:

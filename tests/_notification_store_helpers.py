@@ -172,6 +172,12 @@ class FakeNotificationStore(NotificationStorePort):
         with self._lock:
             return copy.deepcopy(self._hook_manifests)
 
+    def stat_hook_registry(self) -> tuple[int, int] | None:
+        with self._lock:
+            if not self._hook_present:
+                return None
+            return (self.hook_mutations, len(self._hook_manifests))
+
     def update_hook_manifests(
         self, pure_core_manifest_mutator: PureHookManifestMutator
     ) -> UpdateHookManifestsResult:

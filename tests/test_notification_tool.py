@@ -46,8 +46,10 @@ from lingtai.tools import (
 )
 from lingtai.kernel.notifications import (
     clear_blocked_channel_warning,
+    dismiss_channel,
     flag_unregistered_channel,
     is_channel_allowed,
+    is_present_channel_flagable,
     reset_hook_registry_for_tests,
     submit,
     sync_hook_registry,
@@ -122,7 +124,7 @@ def test_notification_wired_into_every_agent() -> None:
     assert callable(wired["notification"])
 
 
-_ACTIONS = ["add", "drop", "edit", "list", "check", "dismiss_channel", "dismiss_event", "dismiss_ref", "manual"]
+_ACTIONS = ["check", "dismiss_channel", "dismiss_event", "dismiss_ref", "add", "drop", "edit", "list", "manual"]
 
 
 def test_notification_schema_exposes_atomic_actions() -> None:
@@ -1130,13 +1132,13 @@ class TestHookLifecycle:
         agent = _StubAgent(tmp_path)
         assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
         sync_hook_registry(agent)
-        assert is_channel_allowed("comm_watcher") is True
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
 
         res = _call(agent, "drop", name="comm_watcher")
         assert res["status"] == "ok", res
         assert res["reason"] == "dropped"
         assert load_hook_manifests_for_test(tmp_path) == []
-        assert is_channel_allowed("comm_watcher") is False
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is False
 
     def test_drop_unknown_name_errors(self, tmp_path: Path) -> None:
         agent = _StubAgent(tmp_path)
@@ -1172,18 +1174,18 @@ class TestHookLifecycle:
     ) -> None:
         """Registering a hook allowlists its channel; unregistered stay blocked."""
         agent = _StubAgent(tmp_path)
-        assert is_channel_allowed("comm_watcher") is False
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is False
 
         replace_hook_manifests_for_test(tmp_path, [_hook_manifest()])
         sync_hook_registry(agent)
 
-        assert is_channel_allowed("comm_watcher") is True
-        assert is_channel_allowed("some_other_hook") is False
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
+        assert is_channel_allowed("some_other_hook", workdir=str(agent._working_dir)) is False
 
     def test_unregistered_channels_stay_not_allowed(self, tmp_path: Path) -> None:
         agent = _StubAgent(tmp_path)
         sync_hook_registry(agent)
-        assert is_channel_allowed("comm_watcher") is False
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is False
         # Kernel-side publishing refuses the unregistered channel entirely.
         with pytest.raises(ValueError, match="not allowlisted"):
             submit(agent, "comm_watcher", data={}, header="x")
@@ -1222,20 +1224,20 @@ class TestHookLifecycle:
 
         sync_hook_registry(agent)
 
-        assert is_channel_allowed("comm_watcher") is True
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
 
     def test_reset_hook_registry_for_tests_isolation(self, tmp_path: Path) -> None:
         agent = _StubAgent(tmp_path)
         replace_hook_manifests_for_test(tmp_path, [_hook_manifest()])
         sync_hook_registry(agent)
-        assert is_channel_allowed("comm_watcher") is True
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
 
         reset_hook_registry_for_tests()
 
-        assert is_channel_allowed("comm_watcher") is False
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is False
         # Re-sync re-seeds from the still-persisted registry (mirror is lazy).
         sync_hook_registry(agent)
-        assert is_channel_allowed("comm_watcher") is True
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
 
     def test_malformed_store_registry_syncs_to_empty(self, tmp_path: Path) -> None:
         """A broken hooks.json seeds no channels instead of crashing the sync."""
@@ -1247,7 +1249,128 @@ class TestHookLifecycle:
 
         sync_hook_registry(agent)
 
-        assert is_channel_allowed("comm_watcher") is False
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is False
+
+
+class TestHookRegistryFableFixes:
+    """Regression tests from fable r1 (PR review findings F1-F5)."""
+
+    def test_d2_never_flags_kernel_private_dotfiles(self) -> None:
+        """F1: .nudge_state.json and invalid stems are not flaggable channels."""
+        assert is_present_channel_flagable(".nudge_state.json") is False
+        # Store-owned registry files are excluded by the adapter fingerprint
+        # itself, so the D2 loop never sees them; the pure helper still treats
+        # valid stems as flaggable when present through another enumeration.
+        assert is_present_channel_flagable("hooks.json") is True
+        assert is_present_channel_flagable("large_result_acks.json") is True
+        assert is_present_channel_flagable("comm_watcher.json") is True
+        assert is_present_channel_flagable("not json") is False
+        assert is_present_channel_flagable("has..dots.json") is False
+
+    def test_add_rejects_store_reserved_channels(self, tmp_path: Path) -> None:
+        """F2: hooks / large_result_acks can never be hook channels."""
+        agent = _StubAgent(tmp_path)
+        for reserved in ("hooks", "large_result_acks"):
+            res = _call(agent, "add", **_hook_manifest(channel=reserved))
+            assert res["status"] == "error", res
+            assert res["reason"] == "invalid_manifest", res
+            assert "reserved" in res["message"], res
+
+    def test_add_rejects_builtin_channels(self, tmp_path: Path) -> None:
+        """F2/F12: built-in static allowlist channels are not hook channels."""
+        agent = _StubAgent(tmp_path)
+        res = _call(agent, "add", **_hook_manifest(channel="system"))
+        assert res["status"] == "error", res
+        assert "built-in" in res["message"], res
+
+    def test_hooks_json_survives_force_dismiss_of_registered_channel(
+        self, tmp_path: Path
+    ) -> None:
+        """F2 regression: a force dismiss can never delete the registry file."""
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        assert load_hook_manifests_for_test(tmp_path) != []
+        # Force-dismiss the hook's own channel: must clear the channel file
+        # only, never hooks.json.
+        from lingtai.kernel.notifications import dismiss_channel
+
+        res = dismiss_channel(agent, "comm_watcher", invoked_by="test", force=True)
+        assert res["status"] == "ok", res
+        assert load_hook_manifests_for_test(tmp_path) != []
+        assert _call(agent, "list")["hooks"] != []
+
+    def test_two_agents_hook_allowlists_are_isolated(self, tmp_path: Path) -> None:
+        """F3: one agent's hook channel is not allowlisted for another."""
+        agent_a = _StubAgent(tmp_path / "agent-a")
+        agent_b = _StubAgent(tmp_path / "agent-b")
+        assert _call(agent_a, "add", **_hook_manifest())["status"] == "ok"
+        sync_hook_registry(agent_a)
+        sync_hook_registry(agent_b)
+
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(agent_a._working_dir)
+        ) is True
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(agent_b._working_dir)
+        ) is False
+
+    def test_add_clears_warning_then_drop_reblocks(self, tmp_path: Path) -> None:
+        """F4: warn is cleared on register; drop re-enables a later warning."""
+        agent = _WarnFlagAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        sync_hook_registry(agent)
+
+        # After add, a publish on the registered channel must not warn.
+        assert _call(agent, "drop", name="comm_watcher")["status"] == "ok"
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 1, agent.system_notifications
+        assert agent.system_notifications[0]["ref_id"] == "blocked_channel:comm_watcher"
+
+    def test_d2_integration_present_file_blocked_and_flagged_once(
+        self, tmp_path: Path
+    ) -> None:
+        """F5: a present-but-unregistered channel file is not delivered and
+        produces exactly one notification_hook event; a kernel-private dotfile
+        produces none."""
+        from lingtai.adapters.posix.notification_store import (
+            PosixNotificationStoreAdapter,
+        )
+        from lingtai.kernel.notifications import (
+            _BLOCKED_CHANNEL_WARNED,
+            flag_unregistered_channel,
+            is_present_channel_flagable,
+        )
+
+        agent = _WarnFlagAgent(tmp_path)
+        store = PosixNotificationStoreAdapter(tmp_path)
+        store.publish("comm_watcher", {"header": "blocked"})
+        (tmp_path / ".notification" / ".nudge_state.json").write_text(
+            "{}", encoding="utf-8"
+        )
+
+        workdir = str(agent._working_dir)
+        snapshot = store.snapshot(
+            lambda ch: is_channel_allowed(ch, workdir=workdir)
+        )
+        assert "comm_watcher" not in snapshot
+        assert ".nudge_state" not in snapshot
+
+        # D2 loop as _sync_notifications does it: only flaggable stems.
+        present_fp = store.fingerprint(lambda ch: True)
+        for name, _, _ in present_fp:
+            if not is_present_channel_flagable(name):
+                continue
+            stem = name[: -len(".json")]
+            if not is_channel_allowed(stem, workdir=workdir):
+                flag_unregistered_channel(agent, stem)
+
+        refs = [ev["ref_id"] for ev in agent.system_notifications]
+        assert refs == ["blocked_channel:comm_watcher"], refs
+
+        # Deduped: second scan emits nothing new.
+        _BLOCKED_CHANNEL_WARNED.clear()
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 2
 
 
 # ---------------------------------------------------------------------------

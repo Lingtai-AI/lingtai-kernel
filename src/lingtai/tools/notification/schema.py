@@ -45,15 +45,17 @@ LARGE_RESULT_FORCE_NOTE = (
 # The canonical action order. This is the single source for the schema's
 # ``action`` enum order, the ``input.oneOf``/``allOf`` branch order, and the
 # child registration order in ``__init__.py`` — one list, not three.
+# Read/clear actions keep the pre-existing prefix stable; hook-registry
+# management (add/drop/edit/list) is administrative and follows.
 ACTION_ORDER = (
-    "add",
-    "drop",
-    "edit",
-    "list",
     "check",
     "dismiss_channel",
     "dismiss_event",
     "dismiss_ref",
+    "add",
+    "drop",
+    "edit",
+    "list",
     "manual",
 )
 
@@ -245,35 +247,44 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 ACTION_ENUM_DESCRIPTION = (
-    "add: register an external hook (input={'name', 'channel', 'source', "
-    "'description', 'how_to_modify', 'how_to_cancel', ...}). Writes the hook "
-    "manifest to .notification/hooks.json and allowlists its channel. Agent "
-    "self-service: add your own hooks.\n\n"
-    "drop: unregister a hook by name (input={'name': ...}). Removes its "
-    "manifest and revokes the channel from the effective allowlist. Never "
-    "kills the hook process itself \u2014 use the manifest's how_to_cancel.\n\n"
-    "edit: update one hook's fields by name (input={'name': ..., ...fields}). "
-    "Channel edits re-validate uniqueness.\n\n"
-    "list: return the registered hook manifests (input={}). Shows what is "
-    "whitelisted and how each hook is modified/cancelled.\n\n"
-    "check: read all notification channels. Returns a placeholder; the live "
-    "payload is stamped onto this same result under "
-    "`_meta.agent_meta.notifications.attention` and `_meta.agent_meta.guidance.transient`. "
-    "Replace-only — do not call voluntarily after handling; dismiss instead. "
-    "Prefer coalescing the dismiss with other tool work you already need this "
-    "turn when safe; dismiss alone only when there is no useful coalesced "
-    "work or safety requires it.\n\n"
-    "dismiss_channel: clear one notification channel whole "
-    "(input={'channel': '<name>', ...}). Use producer-specific verbs first "
-    "(for email, use email(read/dismiss)); guarded channels require "
-    "force=true only for stale mirrors. Does not accept event_id/ref_id — "
-    "use dismiss_event/dismiss_ref for those.\n\n"
-    "dismiss_event: remove a single system event by event_id from "
-    ".notification/system.json (channel defaults to 'system' when null).\n\n"
-    "dismiss_ref: remove system event(s) by ref_id from "
-    ".notification/system.json (channel defaults to 'system' when null).\n\n"
-    "manual: call notification(action='manual', input={}) to return the "
-    "installed notification-manual skill body. This action is strictly "
+    "check: read all notification channels. Returns a placeholder; the live " +
+    "payload is stamped onto this same result under " +
+    "`_meta.agent_meta.notifications.attention` and " +
+    "`_meta.agent_meta.guidance.transient`. Replace-only — do not call " +
+    "voluntarily after handling; dismiss instead. Prefer coalescing the " +
+    "dismiss with other tool work you already need this turn when safe; " +
+    "dismiss alone only when there is no useful coalesced work or safety " +
+    "requires it." +
+
+    "dismiss_channel: clear one notification channel whole (input={'channel': " +
+    "'<name>', ...}). Use producer-specific verbs first (for email, use " +
+    "email(read/dismiss)); guarded channels require force=true only for stale " +
+    "mirrors. Does not accept event_id/ref_id — use dismiss_event/dismiss_ref " +
+    "for those." +
+
+    "dismiss_event: remove a single system event by event_id from " +
+    ".notification/system.json (channel defaults to 'system' when null)." +
+
+    "dismiss_ref: remove system event(s) by ref_id from " +
+    ".notification/system.json (channel defaults to 'system' when null)." +
+
+    "add: register an external hook (input={'name', 'channel', 'source', " +
+    "'description', 'how_to_modify', 'how_to_cancel', ...}). Writes the hook " +
+    "manifest to .notification/hooks.json and allowlists its channel. Agent " +
+    "self-service: add your own hooks." +
+
+    "drop: unregister a hook by name (input={'name': ...}). Removes its " +
+    "manifest and revokes the channel from the effective allowlist. Never " +
+    "kills the hook process itself \\u2014 use the manifest's how_to_cancel." +
+
+    "edit: update one hook's fields by name (input={'name': ..., ...fields}). " +
+    "Channel edits re-validate uniqueness." +
+
+    "list: return the registered hook manifests (input={}). Shows what is " +
+    "whitelisted and how each hook is modified/cancelled." +
+
+    "manual: call notification(action='manual', input={}) to return the " +
+    "installed notification-manual skill body. This action is strictly " +
     "read-only and does not read or change notification state."
 ) + "\n\n" + LARGE_RESULT_DISMISS_ACTION_NOTE
 

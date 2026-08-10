@@ -40,6 +40,14 @@ PureHookManifestMutator = Callable[
     [list[dict]], tuple[list[dict], bool, object]
 ]
 
+# Store-owned non-channel filenames under .notification/. These are registry
+# / acknowledgement files, never channels; Core validation rejects them as
+# hook channels so a registered hook can never publish over or clear them.
+# Adapters MUST keep this set in sync with their own skip lists.
+STORE_RESERVED_NON_CHANNEL_STEMS: frozenset[str] = frozenset(
+    {"hooks", "large_result_acks"}
+)
+
 # Expected version: UNCONDITIONAL, None for expected absence, or a
 # fingerprint tuple for one delivered version.
 
@@ -230,5 +238,17 @@ class NotificationStorePort(ABC):
         across the complete read/mutate/write cycle under the same in-process
         and cross-process Store locks. An empty returned list clears the
         registry file (best-effort on unlink, like ack refs).
+        """
+        ...
+
+    @abstractmethod
+    def stat_hook_registry(self) -> tuple[int, int] | None:
+        """Return a cheap staleness fingerprint of the hook registry file.
+
+        Returns ``(st_mtime_ns, st_size)`` when the registry file exists,
+        ``None`` when absent. Core uses this to re-seed its in-memory hook
+        mirror when another process (sibling CLI, Telegram server, hook
+        installer) wrote ``hooks.json`` out-of-band, without re-reading the
+        file on every sync tick.
         """
         ...

@@ -203,7 +203,10 @@ def _aed_origin_route(agent) -> tuple[str, int] | None:
         store = getattr(agent, "_notification_store", None)
         if store is None:
             return None
-        notifications = store.snapshot(is_channel_allowed)
+        workdir = str(getattr(agent, "_working_dir", "") or "") or None
+        notifications = store.snapshot(
+            lambda ch: is_channel_allowed(ch, workdir=workdir)
+        )
         telegram_data = notifications.get("mcp.telegram")
         if not telegram_data or not isinstance(telegram_data, dict):
             return None
@@ -1103,9 +1106,14 @@ def _run_loop(agent) -> None:
                 try:
                     from ..notifications import is_channel_allowed
                     store = agent._notification_store
-                    fp = store.fingerprint(is_channel_allowed)
+                    workdir = str(getattr(agent, "_working_dir", "") or "") or None
+                    fp = store.fingerprint(
+                        lambda ch: is_channel_allowed(ch, workdir=workdir)
+                    )
                     if fp != agent._notification_fp:
-                        notifications = store.snapshot(is_channel_allowed)
+                        notifications = store.snapshot(
+                            lambda ch: is_channel_allowed(ch, workdir=workdir)
+                        )
                         if notifications:
                             agent._log("idle_notification_check",
                                        sources=list(notifications.keys()))

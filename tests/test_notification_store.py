@@ -86,6 +86,7 @@ class TestSevenFamilyConformance:
             "update_ack_refs",
             "load_hook_manifests",
             "update_hook_manifests",
+            "stat_hook_registry",
         }
 
     def test_snapshot_fingerprint_publish_and_clear(self, conforming_store):

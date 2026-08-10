@@ -1328,6 +1328,7 @@ class BaseAgent:
         from ..notifications import (
             flag_unregistered_channel,
             is_channel_allowed,
+            is_present_channel_flagable,
             sync_hook_registry,
         )
         from ..meta_block import skeletonize_notification_holder
@@ -1361,24 +1362,31 @@ class BaseAgent:
         sync_hook_registry(self)
 
         def _allow(channel: str) -> bool:
-            return is_channel_allowed(channel)
+            return is_channel_allowed(
+                channel, workdir=str(getattr(self, "_working_dir", "") or "") or None
+            )
 
-        fp = store.fingerprint(_allow)
+        # One allow-all fingerprint pass; the allow-filtered view is derived
+        # from it so the steady-state sync does a single hash pass, not two.
+        present_fp = store.fingerprint(lambda ch: True)
+        fp = tuple(e for e in present_fp if _allow(e[0][: -len(".json")]))
 
         # Warn-and-flag (D2): detect present-but-unregistered channel files.
-        # The allow-filtered fingerprint above skips them, so enumerate the
-        # full directory once with an allow-all predicate and flag any stem
-        # that is not allowlisted. Best-effort; never blocks sync.
-        try:
-            present_fp = store.fingerprint(lambda ch: True)
+        # Iterates only when the allow-all view changed (cache), and skips
+        # kernel-private dotfiles (e.g. .nudge_state.json) and syntactically
+        # invalid stems so no unresolvable "register this hook" event is
+        # emitted. Best-effort; never blocks sync.
+        if present_fp != getattr(self, "_notification_present_fp", ()):
+            self._notification_present_fp = present_fp
             for name, _, _ in present_fp:
-                if not name.endswith(".json"):
+                if not is_present_channel_flagable(name):
                     continue
                 stem = name[: -len(".json")]
-                if not is_channel_allowed(stem):
+                if not is_channel_allowed(
+                    stem,
+                    workdir=str(getattr(self, "_working_dir", "") or "") or None,
+                ):
                     flag_unregistered_channel(self, stem)
-        except Exception:
-            pass
 
         if fp == self._notification_fp:
             return
@@ -2494,7 +2502,10 @@ class BaseAgent:
         from ..notifications import is_channel_allowed
 
         store = self._notification_store
-        fp = store.fingerprint(is_channel_allowed)
+        workdir = str(getattr(self, "_working_dir", "") or "") or None
+        fp = store.fingerprint(
+            lambda ch: is_channel_allowed(ch, workdir=workdir)
+        )
         last_fp = getattr(self, "_last_telegram_card_fingerprint", None)
         if fp == last_fp:
             return

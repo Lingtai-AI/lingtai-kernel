@@ -84,10 +84,10 @@ def _message_preview(msg: Message) -> dict:
 def _collect_notification_metadata(agent) -> dict:
     """Safe metadata about live notifications (sources + ref ids only)."""
     try:
-        from ..notifications import _get_allow_predicate
+        from ..notifications import _get_allow_predicate, _workdir_key
 
         store = agent._notification_store
-        allow = _get_allow_predicate()
+        allow = _get_allow_predicate(workdir=_workdir_key(agent))
         notifications = store.snapshot(allow)
     except Exception:
         return {"notification_sources": [], "notification_ref_ids": []}

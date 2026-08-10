@@ -2929,13 +2929,17 @@ def _collect_active_notifications_payload(agent) -> dict | None:
         from .notifications import (
             is_channel_allowed,
             sync_hook_registry,
+            _workdir_key,
         )
 
         # Seed the module-level hook-channel mirror so registered external-hook
         # channels are collected here exactly as in the main sync path.
         sync_hook_registry(agent)
+        workdir = _workdir_key(agent)
 
-        notifications = agent._notification_store.snapshot(is_channel_allowed)
+        notifications = agent._notification_store.snapshot(
+            lambda ch: is_channel_allowed(ch, workdir=workdir)
+        )
         if not notifications:
             return None
         return build_notification_payload(notifications)
@@ -3059,10 +3063,11 @@ def _commit_notification_fp(agent) -> None:
     forever-retry against the IDLE sync path.
     """
     try:
-        from .notifications import is_channel_allowed
+        from .notifications import is_channel_allowed, _workdir_key
 
+        workdir = _workdir_key(agent)
         agent._notification_fp = agent._notification_store.fingerprint(
-            is_channel_allowed
+            lambda ch: is_channel_allowed(ch, workdir=workdir)
         )
     except Exception:
         pass
