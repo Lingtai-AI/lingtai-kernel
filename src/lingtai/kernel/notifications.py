@@ -512,11 +512,6 @@ def list_hooks(agent) -> list[dict] | dict[str, object]:
         return _hook_registry_load_failed(exc)
 
 
-def _agent_workdir_channels(agent) -> set[str]:
-    workdir = _workdir_key(agent)
-    return _REGISTERED_HOOK_CHANNELS.get(workdir, set())
-
-
 def flag_unregistered_channel(agent, channel: str) -> None:
     """Emit a warn-and-flag system event for a blocked unregistered channel.
 
