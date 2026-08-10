@@ -222,7 +222,7 @@ adapter owns the internal `threading.Lock` (set in `__init__`,
 `src/lingtai/adapters/posix/notification_store.py:68-76`) and the workdir path,
 and writes `.notification/<channel>.json` plus
 `.notification/large_result_acks.json` via `load_ack_refs`/`update_ack_refs`
-(`src/lingtai/adapters/posix/notification_store.py:238`, `:237-254`).
+(`src/lingtai/adapters/posix/notification_store.py:238`, `:248-268`).
 The migration-workspace adapter owns only its bound `(domain, root)` pair and
 writes the domain's `_kernel_meta.json` version file, `system/migrations/` archive
 artifacts, and best-effort `logs/events.jsonl` audit through PID-suffixed temp + replace; it holds no long-lived handle or lock.

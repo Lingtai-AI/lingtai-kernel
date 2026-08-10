@@ -52,9 +52,9 @@ The Notification Store is the Core-owned persistence boundary for current
   (`src/lingtai/adapters/notification_store_lock.py:1-28`).
 - `PosixNotificationStoreAdapter` maps the Port onto the established
   `.notification/` layout and owns both in-process and native cross-process
-  mutation serialization (`src/lingtai/adapters/posix/notification_store.py:69-310`).
+  mutation serialization (`src/lingtai/adapters/posix/notification_store.py:69-314`).
 - Notification Core owns channel policy, atomic acknowledgement union/purge, and
-  current-payload dismiss decisions (`src/lingtai/kernel/notifications.py:129-186`,
+  current-payload dismiss decisions (`src/lingtai/kernel/notifications.py:122-219`,
   `src/lingtai/kernel/notifications.py:704-788`,
   `src/lingtai/kernel/notifications.py:923-1341`).
 
