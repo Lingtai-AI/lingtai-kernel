@@ -1315,16 +1315,35 @@ class TestHookRegistryFableFixes:
         ) is False
 
     def test_add_clears_warning_then_drop_reblocks(self, tmp_path: Path) -> None:
-        """F4: warn is cleared on register; drop re-enables a later warning."""
-        agent = _WarnFlagAgent(tmp_path)
-        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
-        sync_hook_registry(agent)
+        """F4: warn is cleared on register; drop re-enables a later warning.
 
-        # After add, a publish on the registered channel must not warn.
-        assert _call(agent, "drop", name="comm_watcher")["status"] == "ok"
+        Real sequence: an unregistered channel warns once; registering its hook
+        clears the dedupe book (and allowlists the channel); dropping the hook
+        blocks it again, so a later publish re-warns. The warned book is never
+        cleared manually — every transition goes through the production paths.
+        """
+        agent = _WarnFlagAgent(tmp_path)
+
+        # Blocked before registration: exactly one warn event.
         flag_unregistered_channel(agent, "comm_watcher")
         assert len(agent.system_notifications) == 1, agent.system_notifications
         assert agent.system_notifications[0]["ref_id"] == "blocked_channel:comm_watcher"
+
+        # Registering the hook clears the warned book and allowlists the
+        # channel: re-flagging the now-registered channel emits nothing new.
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        sync_hook_registry(agent)
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 1, agent.system_notifications
+
+        # After drop the channel is blocked again; the cleared dedupe book
+        # means this re-block warns once more (count == 2). If add_hook had
+        # not cleared the marker, the re-flag would be deduped and count
+        # would stay 1.
+        assert _call(agent, "drop", name="comm_watcher")["status"] == "ok"
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 2, agent.system_notifications
+        assert agent.system_notifications[1]["ref_id"] == "blocked_channel:comm_watcher"
 
     def test_d2_integration_present_file_blocked_and_flagged_once(
         self, tmp_path: Path
