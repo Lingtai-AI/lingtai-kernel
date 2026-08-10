@@ -112,8 +112,11 @@ envelope.
   no write. Non-empty write failures propagate. Empty-set clear preserves legacy
   best effort by swallowing every unlink `OSError`; typed `changed/value`
   evidence still returns, with `changed=False` when no unlink succeeds.
-- Hook-manifest load preserves the same legacy best effort: absent, malformed,
-  or unreadable registry state yields an empty list. Atomic hook-manifest update
+- Hook-manifest load distinguishes an absent registry from a corrupt or
+  unreadable one: an absent `hooks.json` yields an empty list; an invalid-JSON
+  or unreadable registry raises, which the tool layer surfaces as a structured
+  `hook_registry_load_failed` error so "registry broken" is never reported as
+  "nothing registered". Atomic hook-manifest update
   holds the same in-process and cross-process Store locks across that read, one
   pure Core list mutation, and store-or-clear. `changed=False` performs no
   write. Non-empty write failures propagate. Empty-list clear preserves legacy

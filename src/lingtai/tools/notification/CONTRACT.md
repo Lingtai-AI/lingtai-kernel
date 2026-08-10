@@ -155,7 +155,10 @@ Observable action contracts are:
   cancellation is the owner's job, documented in the manifest's
   `how_to_cancel`.
 - `list` returns `{status: "ok", hooks: [...]}` with the persisted manifests
-  in registry order, or an empty list when absent or malformed.
+  in registry order, or an empty list when the registry is absent. When the
+  registry exists but is corrupt (invalid JSON) or unreadable, `list` returns
+  a `hook_registry_load_failed` error result instead of reporting "nothing
+  registered".
 - Unknown or absent actions return `{status: "error", message}` naming the
   unknown notification action.
 - An invalid envelope — a non-object `input`, a non-boolean `summarize`, an

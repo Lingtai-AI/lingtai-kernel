@@ -268,13 +268,17 @@ class PosixNotificationStoreAdapter(NotificationStorePort):
             return UpdateAckRefsResult(changed=True, value=value)
 
     def load_hook_manifests(self) -> list[dict]:
+        """Return the persisted hook manifests, or ``[]`` when the registry
+        is absent. A corrupt (invalid JSON) or unreadable registry raises so
+        the tool layer can surface a structured ``hook_registry_load_failed``
+        error instead of masquerading as "nothing registered"."""
         registry_path = _hook_registry_path(self._workdir)
         try:
             data = json.loads(registry_path.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                return [m for m in data if isinstance(m, dict)]
-        except (json.JSONDecodeError, OSError):
-            pass
+        except FileNotFoundError:
+            return []
+        if isinstance(data, list):
+            return [m for m in data if isinstance(m, dict)]
         return []
 
     def stat_hook_registry(self) -> tuple[int, int] | None:

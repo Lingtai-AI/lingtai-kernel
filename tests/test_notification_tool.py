@@ -1567,6 +1567,103 @@ class TestHookRegistryFableFixes:
         ) is True
 
 
+class TestHookRegistryCorruptVsAbsent:
+    """R10: a corrupt hooks.json must be distinguishable from an absent
+    registry, through the real POSIX adapter.
+
+    ``load_hook_manifests`` returns ``[]`` only for ``FileNotFoundError``;
+    invalid-JSON and unreadable registries propagate so ``list_hooks`` surfaces
+    the structured ``hook_registry_load_failed`` error (and
+    ``sync_hook_registry`` logs + leaves the mirror unseeded for retry)
+    instead of silently revoking every registered hook channel.
+    """
+
+    def test_list_hooks_corrupt_registry_returns_load_failed(
+        self, tmp_path: Path
+    ) -> None:
+        from types import SimpleNamespace
+
+        from lingtai.adapters.posix.notification_store import (
+            PosixNotificationStoreAdapter,
+        )
+        from lingtai.kernel.notifications import list_hooks
+
+        workdir = tmp_path / "agent-corrupt"
+        store = PosixNotificationStoreAdapter(workdir)
+        agent = SimpleNamespace(_notification_store=store)
+
+        # Write an invalid hooks.json through the real adapter's filesystem
+        # layout (as a corrupt sibling process would leave behind).
+        hooks_file = workdir / ".notification" / "hooks.json"
+        hooks_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks_file.write_text("{ not valid json", encoding="utf-8")
+
+        result = list_hooks(agent)
+
+        assert isinstance(result, dict)
+        assert result["status"] == "error"
+        assert result["reason"] == "hook_registry_load_failed"
+        assert "hooks.json" in result["message"]
+
+    def test_list_hooks_absent_registry_returns_empty_list(
+        self, tmp_path: Path
+    ) -> None:
+        from types import SimpleNamespace
+
+        from lingtai.adapters.posix.notification_store import (
+            PosixNotificationStoreAdapter,
+        )
+        from lingtai.kernel.notifications import list_hooks
+
+        workdir = tmp_path / "agent-absent"
+        store = PosixNotificationStoreAdapter(workdir)
+        agent = SimpleNamespace(_notification_store=store)
+
+        assert list_hooks(agent) == []
+
+    def test_sync_hook_registry_logs_and_keeps_mirror_unseeded_on_corrupt(
+        self, tmp_path: Path
+    ) -> None:
+        """A corrupt registry reaches sync_hook_registry's failure branch: it
+        must not crash, must log, and must not seed the mirror as if nothing
+        were registered (channels stay revoked and the next sync retries)."""
+        from types import SimpleNamespace
+
+        from lingtai.adapters.posix.notification_store import (
+            PosixNotificationStoreAdapter,
+        )
+        from lingtai.kernel.notifications import (
+            _HOOK_REGISTRY_SEEDED,
+            is_channel_allowed,
+            sync_hook_registry,
+        )
+
+        workdir = tmp_path / "agent-sync-corrupt"
+        hooks_file = workdir / ".notification" / "hooks.json"
+        hooks_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks_file.write_text("{ not valid json", encoding="utf-8")
+
+        agent = SimpleNamespace(
+            _working_dir=workdir,
+            _notification_store=PosixNotificationStoreAdapter(workdir),
+            _logs=[],
+        )
+        agent._log = lambda event_type, **fields: agent._logs.append(
+            (event_type, fields)
+        )
+
+        sync_hook_registry(agent)  # must not raise
+
+        assert str(workdir) not in _HOOK_REGISTRY_SEEDED
+        assert any(
+            event == "notification_hook_registry_error"
+            for event, _ in agent._logs
+        )
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(workdir)
+        ) is False
+
+
 # ---------------------------------------------------------------------------
 # Agent-facing guidance must teach a call shape the dispatcher accepts.
 #

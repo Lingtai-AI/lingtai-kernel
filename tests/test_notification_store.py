@@ -279,37 +279,42 @@ class TestPosixContractErrorsAndEnvelope:
         ack.write_text("not-json", encoding="utf-8")
         assert _posix_store(tmp_path / "malformed-ack").load_ack_refs() == set()
 
-    def test_malformed_hook_manifests_is_legacy_empty(self, tmp_path):
+    def test_malformed_hook_manifests_raises(self, tmp_path):
+        """R10: a corrupt registry raises instead of masquerading as empty."""
         registry = tmp_path / "malformed-hooks" / ".notification" / "hooks.json"
         registry.parent.mkdir(parents=True)
         registry.write_text("not-json", encoding="utf-8")
-        assert _posix_store(tmp_path / "malformed-hooks").load_hook_manifests() == []
+        with pytest.raises(json.JSONDecodeError):
+            _posix_store(tmp_path / "malformed-hooks").load_hook_manifests()
 
-    def test_malformed_hook_manifests_survives_atomic_add(self, tmp_path):
-        """A malformed registry file is treated as empty, not as a write block."""
+    def test_absent_hook_manifests_is_empty(self, tmp_path):
+        """Only an ABSENT registry yields an empty list (R10)."""
+        assert _posix_store(tmp_path / "absent-hooks").load_hook_manifests() == []
+
+    def test_malformed_hook_manifests_blocks_atomic_add(self, tmp_path):
+        """R10: a corrupt registry is never treated as empty — atomic add
+        propagates the load failure and leaves the file untouched."""
         registry = tmp_path / "malformed-hooks-add" / ".notification" / "hooks.json"
         registry.parent.mkdir(parents=True)
         registry.write_text("{not-json", encoding="utf-8")
         store = _posix_store(tmp_path / "malformed-hooks-add")
-        result = store.update_hook_manifests(
-            lambda current: (
-                current
-                + [
-                    {
-                        "name": "comm_watcher",
-                        "channel": "comm_watcher",
-                        "source": "G:",
-                        "description": "poll relay",
-                    }
-                ],
-                True,
-                "appended",
+        with pytest.raises(json.JSONDecodeError):
+            store.update_hook_manifests(
+                lambda current: (
+                    current
+                    + [
+                        {
+                            "name": "comm_watcher",
+                            "channel": "comm_watcher",
+                            "source": "G:",
+                            "description": "poll relay",
+                        }
+                    ],
+                    True,
+                    "appended",
+                )
             )
-        )
-        assert result == UpdateHookManifestsResult(True, "appended")
-        manifests = store.load_hook_manifests()
-        assert len(manifests) == 1
-        assert manifests[0]["name"] == "comm_watcher"
+        assert registry.read_text(encoding="utf-8") == "{not-json"
 
     def test_unreadable_entries_skip_reads_but_compare_propagates(
         self, tmp_path, monkeypatch
