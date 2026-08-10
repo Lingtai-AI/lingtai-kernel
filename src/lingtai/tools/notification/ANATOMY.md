@@ -147,7 +147,8 @@ action values are unchanged; the four hook-registry actions are new.
 - **Core dependency:** `src/lingtai/kernel/notifications.py` and the notification
   Store behind it. The four hook-registry actions (`add`/`drop`/`edit`/`list`)
   mutate the Store's family-8 hook-manifest registry
-  (`load_hook_manifests`/`update_hook_manifests`, `.notification/hooks.json`);
+  (`load_hook_manifests`/`update_hook_manifests`/`stat_hook_registry`,
+  `.notification/hooks.json`);
   the read and dismiss actions add no Store operation.
 - **Turn-loop adapter:** `src/lingtai/kernel/base_agent/turn.py` completes the
   `check` placeholder with model-visible state.
@@ -171,7 +172,11 @@ action values are unchanged; the four hook-registry actions are new.
 - Hook-registry handlers own no state directly either. Through notification
   Core they read/mutate `.notification/hooks.json` (Store family 8) and refresh
   the module-level registered-hook channel mirror that widens the allow
-  predicate; `drop` revokes the channel and `edit` moves it. Read-only `list`
+  predicate for THIS agent's workdir (hook channels are per-agent, not
+  process-global); `drop` revokes the channel and `edit` moves it. The mirror is
+  serialized under `_HOOK_REGISTRY_LOCK` and re-seeded by `sync_hook_registry`
+  whenever the registry's `(st_mtime_ns, st_size)` stat changes (cross-process),
+  with a workdir marked seeded only after a successful load. Read-only `list`
   never mutates.
 
 ## Notes

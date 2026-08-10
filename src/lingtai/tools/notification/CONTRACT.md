@@ -48,8 +48,13 @@ atomically clearing notification mirrors (`check` and the three atomic dismiss
 actions), plus one strictly read-only `manual` action for progressive
 disclosure. It owns no producer state. The hook-registry actions mutate the
 Notification Store's family-8 hook-manifest registry
-(`load_hook_manifests`/`update_hook_manifests`, `.notification/hooks.json`);
+(`load_hook_manifests`/`update_hook_manifests`/`stat_hook_registry`,
+`.notification/hooks.json`);
 the read and dismiss actions introduce no Store operation.
+
+Hook channels are **per-agent**: the effective allowlist is the static set ∪ the
+`mcp.` prefix ∪ the agent's own registered hook channels, and a hook channel is
+allowed only for the agent whose workdir registered it — never process-global.
 
 ## Behavior
 
@@ -72,8 +77,11 @@ The inbound agent-tool Port is named `notification`. It is a migrated LingTai
 Tool Protocol v2 family (`../CONTRACT.md`): its model-facing root is a closed
 object whose properties are exactly `action`, `input`, `reasoning`, and
 `summarize`, with `additionalProperties: false` and `action`, `input`, and
-`reasoning` required. The action domain, in order, is: `add`, `drop`, `edit`,
-`list`, `check`, `dismiss_channel`, `dismiss_event`, `dismiss_ref`, `manual`.
+`reasoning` required. The action domain, in order, is: `check`,
+`dismiss_channel`, `dismiss_event`, `dismiss_ref`, `add`, `drop`, `edit`,
+`list`, `manual`. Read/clear actions keep the pre-existing prefix stable;
+hook-registry management (`add`/`drop`/`edit`/`list`) is administrative and
+follows; `manual` closes the enum.
 Each action value
 is simultaneously the child's canonical name and its dispatch key; there is no
 mapping layer.
@@ -83,17 +91,17 @@ every action's exact input shape before invocation and MUST correlate the
 `action` const to that action's own input schema, on both the Chat Completions
 and Responses wires. Per-action inputs are:
 
+- `check` — strictly empty.
+- `dismiss_channel` — `channel` (required), plus nullable `force` and `reason`.
+  `event_id` and `ref_id` are absent from this branch.
+- `dismiss_event` — `event_id`, plus nullable `channel`, `force`, `reason`.
+- `dismiss_ref` — `ref_id`, plus nullable `channel`, `force`, `reason`.
 - `add` — `name`, `channel`, `source`, `description`, `how_to_modify`, and
   `how_to_cancel` (all required), plus nullable `version` and `instructions`.
 - `drop` — `name` (required).
 - `edit` — `name` (required), plus nullable `version`, `source`, `description`,
   `channel`, `how_to_modify`, `how_to_cancel`, and `instructions`.
 - `list` — strictly empty.
-- `check` — strictly empty.
-- `dismiss_channel` — `channel` (required), plus nullable `force` and `reason`.
-  `event_id` and `ref_id` are absent from this branch.
-- `dismiss_event` — `event_id`, plus nullable `channel`, `force`, `reason`.
-- `dismiss_ref` — `ref_id`, plus nullable `channel`, `force`, `reason`.
 - `manual` — strictly empty.
 
 Declared optional fields use the provider-compatible nullable representation.
@@ -132,11 +140,15 @@ Observable action contracts are:
 - `add` validates the manifest and appends it to the hook registry. Success
   returns `{status: "ok", reason: "added", name}`; `duplicate_name` and
   `channel_in_use` are `status: "error"` results that leave the registry
-  unchanged.
+  unchanged. A channel that is a built-in static channel
+  (`system`/`email`/`soul`/`goal`/`molt`/`nudge`/`post-molt`/`bash`/`btw`/`cron`/`tool_loop_guard`)
+  or a Store-reserved non-channel stem (`hooks`/`large_result_acks`) is refused
+  with `reason: "invalid_manifest"` and a clear message.
 - `edit` updates the named hook's fields. Success returns
   `{status: "ok", reason: "edited", name}`; unknown names return
   `reason: "not_found"` and a channel move onto another hook's channel returns
-  `reason: "channel_in_use"`.
+  `reason: "channel_in_use"`. An `edit` providing no non-null fields returns
+  `{status: "ok", reason: "no_change", name}` without touching the registry.
 - `drop` removes the named hook and revokes its channel. Success returns
   `{status: "ok", reason: "dropped", name}`; unknown names return
   `reason: "not_found"`. Dropping registration never kills the hook process —
@@ -174,7 +186,14 @@ stale checks, protected channels, acknowledgement policy, and Store use. The
 four hook-registry handlers adapt tool arguments into Core's
 `add_hook`/`drop_hook`/`edit_hook`/`list_hooks`, which validate manifests,
 enforce name/channel uniqueness, and write `.notification/hooks.json` through
-Store family 8.
+Store family 8. Core keeps a per-workdir module-level mirror of registered hook
+channels (`_REGISTERED_HOOK_CHANNELS`, keyed by the agent's working directory),
+serialized under `_HOOK_REGISTRY_LOCK`; `sync_hook_registry` re-seeds it
+whenever `hooks.json`'s `(st_mtime_ns, st_size)` stat changes — including
+out-of-band writes from another process (sibling CLI, Telegram server, hook
+installer) — and marks a workdir seeded only after a successful load, logging a
+transient failure (`notification_hook_registry_error`, `phase=...`) for retry on
+the next sync.
 
 The `manual` action is the reserved family child built by
 `tool_family.manual.build_manual_child` over the shared
@@ -220,6 +239,10 @@ is not a second inbound adapter.
   the registered-channel allowlist. The family MUST NOT present a posture
   weaker than its strongest action: a read-only annotation for the whole
   family would hide those mutations and is forbidden.
+- Hook channels are per-agent: `is_channel_allowed`/`validate_allowed_channel`
+  consult the mirror keyed by the agent's workdir, and every kernel call site
+  passes that workdir. Without a workdir (no agent context) hook channels are
+  NOT allowed — only the static set and the `mcp.*` prefix pass.
 - Envelope validation MUST precede action I/O. Cross-action input, unknown root
   fields, and unknown actions MUST be rejected with a stable typed failure and
   no notification read or write.
