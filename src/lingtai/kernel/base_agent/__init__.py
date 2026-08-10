@@ -2510,7 +2510,9 @@ class BaseAgent:
         if fp == last_fp:
             return
 
-        notifications = store.snapshot(is_channel_allowed)
+        notifications = store.snapshot(
+            lambda ch: is_channel_allowed(ch, workdir=workdir)
+        )
         telegram_data = notifications.get("mcp.telegram")
         if not telegram_data or not isinstance(telegram_data, dict):
             return
