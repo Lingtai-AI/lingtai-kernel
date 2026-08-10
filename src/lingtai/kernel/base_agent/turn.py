@@ -199,11 +199,11 @@ def _aed_origin_route(agent) -> tuple[str, int] | None:
     chat).  Fail-open — any anomaly returns ``None`` and never raises.
     """
     try:
-        from ..notifications import is_channel_allowed
+        from ..notifications import _workdir_key, is_channel_allowed
         store = getattr(agent, "_notification_store", None)
         if store is None:
             return None
-        workdir = str(getattr(agent, "_working_dir", "") or "") or None
+        workdir = _workdir_key(agent)
         notifications = store.snapshot(
             lambda ch: is_channel_allowed(ch, workdir=workdir)
         )
@@ -1104,9 +1104,9 @@ def _run_loop(agent) -> None:
             # synthetic notification pair + MSG_TC_WAKE path.
             if sleep_state == AgentState.IDLE and not agent._asleep.is_set():
                 try:
-                    from ..notifications import is_channel_allowed
+                    from ..notifications import _workdir_key, is_channel_allowed
                     store = agent._notification_store
-                    workdir = str(getattr(agent, "_working_dir", "") or "") or None
+                    workdir = _workdir_key(agent)
                     fp = store.fingerprint(
                         lambda ch: is_channel_allowed(ch, workdir=workdir)
                     )

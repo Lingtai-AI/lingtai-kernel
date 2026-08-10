@@ -1326,6 +1326,7 @@ class BaseAgent:
         tick retries.
         """
         from ..notifications import (
+            _workdir_key,
             flag_unregistered_channel,
             is_channel_allowed,
             is_present_channel_flagable,
@@ -1362,9 +1363,7 @@ class BaseAgent:
         sync_hook_registry(self)
 
         def _allow(channel: str) -> bool:
-            return is_channel_allowed(
-                channel, workdir=str(getattr(self, "_working_dir", "") or "") or None
-            )
+            return is_channel_allowed(channel, workdir=_workdir_key(self))
 
         # One allow-all fingerprint pass; the allow-filtered view is derived
         # from it so the steady-state sync does a single hash pass, not two.
@@ -1384,7 +1383,7 @@ class BaseAgent:
                 stem = name[: -len(".json")]
                 if not is_channel_allowed(
                     stem,
-                    workdir=str(getattr(self, "_working_dir", "") or "") or None,
+                    workdir=_workdir_key(self),
                 ):
                     flag_unregistered_channel(self, stem)
 
@@ -2499,10 +2498,10 @@ class BaseAgent:
         and Telegram independently projects that artifact read-only while its
         automatic slot remains manager-owned.
         """
-        from ..notifications import is_channel_allowed
+        from ..notifications import _workdir_key, is_channel_allowed
 
         store = self._notification_store
-        workdir = str(getattr(self, "_working_dir", "") or "") or None
+        workdir = _workdir_key(self)
         fp = store.fingerprint(
             lambda ch: is_channel_allowed(ch, workdir=workdir)
         )
