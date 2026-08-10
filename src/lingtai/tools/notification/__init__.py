@@ -322,7 +322,7 @@ def _drop_hook(agent, args: dict) -> dict:
     except (KeyError, ValueError) as exc:
         return {
             "status": "error",
-            "reason": "invalid_name",
+            "reason": "invalid_manifest",
             "message": str(exc),
         }
 
@@ -342,7 +342,7 @@ def _edit_hook(agent, args: dict) -> dict:
     except (KeyError, ValueError) as exc:
         return {
             "status": "error",
-            "reason": "invalid_edit",
+            "reason": "invalid_manifest",
             "message": str(exc),
         }
 

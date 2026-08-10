@@ -150,11 +150,15 @@ Observable action contracts are:
   `reason: "channel_in_use"`. A channel move onto a built-in static channel or
   a Store-reserved non-channel stem is refused with `reason:
   "invalid_manifest"` and a clear message, exactly as `add` refuses the same
-  channel. An `edit` providing no non-null fields returns
+  channel. An empty `name` is refused with `reason: "invalid_manifest"` too,
+  exactly as `add` refuses an empty manifest name. An `edit` providing no
+  non-null fields returns
   `{status: "ok", reason: "no_change", name}` without touching the registry.
 - `drop` removes the named hook and revokes its channel. Success returns
   `{status: "ok", reason: "dropped", name}`; unknown names return
-  `reason: "not_found"`. Dropping registration never kills the hook process —
+  `reason: "not_found"`. An empty `name` is refused with
+  `reason: "invalid_manifest"`, exactly as `add` refuses an empty manifest
+  name. Dropping registration never kills the hook process —
   cancellation is the owner's job, documented in the manifest's
   `how_to_cancel`.
 - `list` returns `{status: "ok", hooks: [...]}` with the persisted manifests

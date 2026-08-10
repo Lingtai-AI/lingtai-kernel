@@ -1606,6 +1606,20 @@ class TestHookRegistryFableFixes:
             "comm_watcher", workdir=str(agent._working_dir)
         ) is True
 
+    def test_drop_and_edit_empty_name_refuse_as_invalid_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """R5-F2: drop/edit refuse an empty name with the same
+        ``invalid_manifest`` reason ``add`` uses — never the bespoke
+        ``invalid_name``/``invalid_edit`` reasons."""
+        agent = _StubAgent(tmp_path)
+        dropped = _call(agent, "drop", name="")
+        assert dropped["status"] == "error", dropped
+        assert dropped["reason"] == "invalid_manifest", dropped
+        edited = _call(agent, "edit", name="", description="x")
+        assert edited["status"] == "error", edited
+        assert edited["reason"] == "invalid_manifest", edited
+
 
 class TestHookRegistryCorruptVsAbsent:
     """R10: a corrupt hooks.json must be distinguishable from an absent
