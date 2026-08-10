@@ -24,6 +24,7 @@ The basename is the *tool* whose namespace owns the notification.
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 from datetime import datetime, timezone
@@ -377,7 +378,14 @@ def add_hook(agent, manifest: dict) -> dict:
                 }
         return current + [dict(manifest)], True, {"reason": "added", "name": name}
 
-    value = _update_hook_registry(agent, _mutator)
+    try:
+        value = _update_hook_registry(agent, _mutator)
+    except (json.JSONDecodeError, OSError) as exc:
+        # A corrupt or unreadable registry must not be relabelled as an input
+        # error (JSONDecodeError is a ValueError, which the tool layer's
+        # validation catch would swallow) nor escape as a raw OSError —
+        # surface the same structured result ``list_hooks`` returns.
+        return _hook_registry_load_failed(exc)
     if value.get("reason") == "added":
         clear_blocked_channel_warning(agent, channel)
         return {"status": "ok", **value}
@@ -433,7 +441,12 @@ def edit_hook(agent, name: str, fields: dict) -> dict:
         next_manifests[idx] = updated
         return next_manifests, True, {"reason": "edited", "name": name}
 
-    value = _update_hook_registry(agent, _mutator)
+    try:
+        value = _update_hook_registry(agent, _mutator)
+    except (json.JSONDecodeError, OSError) as exc:
+        # Same structured result as ``list_hooks`` — never an input-validation
+        # error and never a raw raise (see add_hook).
+        return _hook_registry_load_failed(exc)
     if value.get("reason") == "edited":
         new_channel = provided.get("channel")
         if new_channel is not None:
@@ -459,10 +472,30 @@ def drop_hook(agent, name: str) -> dict:
         next_manifests.pop(idx)
         return next_manifests, True, {"reason": "dropped", "name": name}
 
-    value = _update_hook_registry(agent, _mutator)
+    try:
+        value = _update_hook_registry(agent, _mutator)
+    except (json.JSONDecodeError, OSError) as exc:
+        # Same structured result as ``list_hooks`` — never an input-validation
+        # error and never a raw raise (see add_hook).
+        return _hook_registry_load_failed(exc)
     if value.get("reason") == "dropped":
         return {"status": "ok", **value}
     return {"status": "error", **value}
+
+
+def _hook_registry_load_failed(exc: Exception) -> dict[str, object]:
+    """Structured error shared by list/add/drop/edit for a broken registry.
+
+    A corrupt (invalid-JSON) or unreadable ``hooks.json`` must never be
+    reported as "nothing registered" nor mislabelled as an input-validation
+    error (``json.JSONDecodeError`` is a ``ValueError``), nor escape as a raw
+    ``OSError``.
+    """
+    return {
+        "status": "error",
+        "reason": "hook_registry_load_failed",
+        "message": f"Could not load hooks.json: {str(exc)[:300]}",
+    }
 
 
 def list_hooks(agent) -> list[dict] | dict[str, object]:
@@ -475,11 +508,7 @@ def list_hooks(agent) -> list[dict] | dict[str, object]:
     try:
         return agent._notification_store.load_hook_manifests()
     except Exception as exc:
-        return {
-            "status": "error",
-            "reason": "hook_registry_load_failed",
-            "message": f"Could not load hooks.json: {str(exc)[:300]}",
-        }
+        return _hook_registry_load_failed(exc)
 
 
 def _agent_workdir_channels(agent) -> set[str]:

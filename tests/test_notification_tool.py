@@ -1663,6 +1663,54 @@ class TestHookRegistryCorruptVsAbsent:
             "comm_watcher", workdir=str(workdir)
         ) is False
 
+    def test_all_four_actions_report_load_failed_on_corrupt_registry(
+        self, tmp_path: Path
+    ) -> None:
+        """R4-F2: add/drop/edit must not mislabel a corrupt registry as an
+        input-validation error (``json.JSONDecodeError`` is a ``ValueError``
+        caught by the tool layer's validation handlers) and must return the
+        same ``hook_registry_load_failed`` result ``list`` does — through the
+        real PosixNotificationStoreAdapter."""
+        workdir = tmp_path / "agent-corrupt-all"
+        agent = _StubAgent(workdir)
+        hooks_file = workdir / ".notification" / "hooks.json"
+        hooks_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks_file.write_text("{ not valid json", encoding="utf-8")
+
+        for action, kwargs in (
+            ("list", {}),
+            ("add", dict(_hook_manifest())),
+            ("drop", {"name": "comm_watcher"}),
+            ("edit", {"name": "comm_watcher", "description": "updated"}),
+        ):
+            res = _call(agent, action, **kwargs)
+            assert res["status"] == "error", (action, res)
+            assert res["reason"] == "hook_registry_load_failed", (action, res)
+            assert "hooks.json" in res["message"], (action, res)
+
+    def test_all_four_actions_report_load_failed_on_unreadable_registry(
+        self, tmp_path: Path
+    ) -> None:
+        """R4-F2: a genuinely unreadable registry (a directory at the
+        hooks.json path) must not escape as a raw OSError from add/drop/edit
+        — all four actions return the structured ``hook_registry_load_failed``
+        result instead of raising."""
+        workdir = tmp_path / "agent-unreadable-all"
+        agent = _StubAgent(workdir)
+        hooks_file = workdir / ".notification" / "hooks.json"
+        hooks_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks_file.mkdir()  # directory at the registry path → IsADirectoryError
+
+        for action, kwargs in (
+            ("list", {}),
+            ("add", dict(_hook_manifest())),
+            ("drop", {"name": "comm_watcher"}),
+            ("edit", {"name": "comm_watcher", "description": "updated"}),
+        ):
+            res = _call(agent, action, **kwargs)
+            assert res["status"] == "error", (action, res)
+            assert res["reason"] == "hook_registry_load_failed", (action, res)
+
 
 class TestWorkdirAwareHookPredicates:
     """R1/R5/R6/R7 regression: the six workdir-aware hook-predicate fixes
