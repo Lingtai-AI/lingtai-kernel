@@ -50,8 +50,11 @@ def resolve_timeout_max_seconds(environ: Mapping[str, str] | None = None) -> flo
     """Resolve the hard sync-timeout ceiling from the environment.
 
     Reads ``LINGTAI_TOOL_TIMEOUT_MAX_SECONDS``; missing, empty, non-numeric,
-    non-positive, or non-finite values fall back to ``120.0``.  Reads at each
-    ``run`` call (no restart required), mirroring the Nudge policy controls.
+    non-positive, or non-finite values fall back to ``120.0``.  The returned
+    ceiling is never below the default sync timeout (30), so an operator who
+    sets the variable to e.g. 10 does not disable every default sync run
+    (fable r1 BLOCKING-1).  Reads at each ``run`` call (no restart required),
+    mirroring the Nudge policy controls.
     """
     raw = (os.environ if environ is None else environ).get(TIMEOUT_MAX_ENV)
     if raw is None or not raw.strip():
@@ -62,7 +65,7 @@ def resolve_timeout_max_seconds(environ: Mapping[str, str] | None = None) -> flo
         return _DEFAULT_TIMEOUT_MAX_SECONDS
     if not math.isfinite(value) or value <= 0:
         return _DEFAULT_TIMEOUT_MAX_SECONDS
-    return value
+    return max(value, float(_DEFAULT_TIMEOUT_SECONDS))
 
 RUN_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -76,9 +79,10 @@ RUN_INPUT_SCHEMA: dict[str, Any] = {
             "description": (
                 "Timeout in seconds, or null for the default 30. Only for sync "
                 "execution. Hard ceiling: "
-                f"{TIMEOUT_MAX_ENV} (default {_DEFAULT_TIMEOUT_MAX_SECONDS:g}); "
-                "a value above the ceiling is refused \u2014 use async=true "
-                "instead for work that may need longer."
+                f"{TIMEOUT_MAX_ENV} (default {_DEFAULT_TIMEOUT_MAX_SECONDS:g}; "
+                "the effective ceiling is read from the environment at call "
+                "time, floored at 30); a value above the ceiling is refused \u2014 "
+                "use async=true instead for work that may need longer."
             ),
             "default": _DEFAULT_TIMEOUT_SECONDS,
         },

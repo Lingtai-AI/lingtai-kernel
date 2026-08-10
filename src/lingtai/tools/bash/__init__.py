@@ -247,20 +247,13 @@ def _broad_scan_hint(command: str) -> str | None:
 
 
 def _timeout_error(command: str, timeout: float, no_output: bool = False) -> dict:
-    """Build the historical timeout result shape; shared by every sync path.
+    """Build the timeout result shape; shared by every sync path.
 
-    ``no_output`` is the OpenClaw ``no-output-timeout`` signal: the command was
-    killed by the timeout before it produced any output.  In that case the
-    message appends the background-discipline steering guidance so the model
-    learns to launch long/no-output work with ``async=true`` instead of a
-    foreground command (or a bare trailing ``&``).  Backward compatible: callers
-    that do not pass ``no_output`` (and timeouts that did capture output) keep
-    the exact historical message.
-
-    Jason 2026-08-10 tool-timeout redesign: the steering guidance is now
-    appended on *every* timeout result, not only the no-output case, so the
-    model always sees the async boundary instead of repeatedly raising a sync
-    timeout.
+    ``no_output`` is retained for signature compatibility only (OpenClaw
+    ``no-output-timeout`` heritage); the message is identical for both values.
+    Jason 2026-08-10 tool-timeout redesign: the async steering guidance is
+    appended on *every* timeout result, so the model always sees the async
+    boundary instead of repeatedly raising a sync timeout.
     """
     msg = f"Command timed out after {timeout}s"
     hint = _broad_scan_hint(command)
@@ -754,8 +747,29 @@ class ShellManager:
         # ceiling the call is refused and steered to ``async=true`` rather
         # than silently clamped, so the model learns the async boundary
         # instead of receiving a shorter timeout than it asked for.
+        #
+        # Defensive validation keeps the "never raise to the tool caller"
+        # invariant even for legacy-flat callers that bypass the family's
+        # schema stripping: ``None`` means *absent* (the default applies),
+        # non-numeric and non-finite values become a regular error result,
+        # and a negative value is rejected (``timeout: 0`` still flows
+        # through unchanged, preserving the CONTRACT falsy-passthrough).
         timeout = args.get("timeout", _DEFAULT_TIMEOUT_SECONDS)
-        cap = resolve_timeout_max_seconds()
+        if timeout is None:
+            timeout = _DEFAULT_TIMEOUT_SECONDS
+        try:
+            timeout = float(timeout)
+        except (TypeError, ValueError):
+            return {"status": "error", "message": "timeout must be a number of seconds"}
+        if not math.isfinite(timeout) or timeout < 0:
+            return {
+                "status": "error",
+                "message": "timeout must be a finite non-negative number of seconds",
+            }
+        # The ceiling is floored at the default timeout so an operator who
+        # sets the environment variable below 30 does not silently disable
+        # every default sync run (BLOCKING-1 in fable r1).
+        cap = max(resolve_timeout_max_seconds(), float(_DEFAULT_TIMEOUT_SECONDS))
         if timeout > cap:
             return {
                 "status": "error",

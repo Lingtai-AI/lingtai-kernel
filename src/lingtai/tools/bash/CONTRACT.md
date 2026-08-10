@@ -1,7 +1,7 @@
 ---
 name: bash-contract
 tool: shell
-contract_version: 4
+contract_version: 5
 related_files:
   - src/lingtai/tools/bash/__init__.py
   - src/lingtai/tools/bash/_tool_family.py
@@ -142,7 +142,7 @@ inside another action's result.
 
 | Action | Required `input` | Nullable-optional `input` | Success output | Error shapes |
 |---|---|---|---|---|
-| `run` (sync) | `command` | `working_dir`, `timeout` (default 30), `async`, `reminder` | `{status: "ok", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — empty command, policy-denied, cwd outside sandbox, timeout (with broad-scan hint), or spawn failure |
+| `run` (sync) | `command` | `working_dir`, `timeout` (default 30; hard ceiling `LINGTAI_TOOL_TIMEOUT_MAX_SECONDS`, default 120, floored at 30), `async`, `reminder` | `{status: "ok", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — empty command, policy-denied, cwd outside sandbox, invalid/non-finite timeout, timeout above the hard ceiling (steered to `async=true`), timeout (with broad-scan hint and async steering), or spawn failure |
 | `run` (async) | `command`, `async: true` | `working_dir`, `timeout`, `reminder` | `{status: "ok", job_id, pid, message, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `shell-manual` and `notification-manual` for details | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
 | `poll` | `job_id` | — | running: `{status: "running", job_id, pid?}` while the recorded supervisor may still commit; known finished: `{status: "done", exit_status_known: true, exit_code, stdout, stderr, ok, command_status, warning?}`; unrecoverable/legacy terminal: `{status: "done", exit_status_known: false, exit_code: null, stdout, stderr}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or an already terminal-consumed job |
 | `cancel` | `job_id` | — | `{status: "cancelled", job_id}` only after the supervisor has committed the held child's exact terminal status and cancellation atomically consumes/suppresses the job | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, terminal job, legacy job, or a durable cancellation request still awaiting a terminal commit (which remains pollable/remindable) |
@@ -416,6 +416,8 @@ for cancellation correctness.
 | Direct-manager fallback appends remain multi-event safe across managers | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_direct_manager_fallback_is_serialized_by_shared_store` |
 | `yolo=True` allows all commands and the registered public identity is `shell` | `src/lingtai/tools/bash/__init__.py` | `tests/test_layers_bash.py::test_add_capability_bash_yolo`, `tests/test_shell_pr1_contract.py::test_setup_registers_shell_and_advertises_selected_dialect` |
 | PowerShell argv/dialect policy and Windows selector composition stay behind shared Ports | `src/lingtai/adapters/windows/` and `src/lingtai/adapters/shell*.py` | `tests/test_shell_pr1_contract.py` (native Windows execution remains a separate acceptance gate) |
+| Sync `run.timeout` above the hard ceiling (`LINGTAI_TOOL_TIMEOUT_MAX_SECONDS`, default 120, floored at 30) is refused and steered to `async=true` | `src/lingtai/tools/bash/__init__.py`, `_tool_family.py` | `tests/test_bash_shell_dialect.py::test_sync_run_refuses_timeout_above_cap`, `::test_sync_run_accepts_timeout_at_cap`, `::test_sync_run_cap_follows_env_override`, `::test_cap_below_default_is_floored_at_default` |
+| Every sync timeout result carries the async steering guidance | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_shell_dialect.py::test_timeout_error_with_output_also_appends_guidance`, `::test_sync_timeout_with_captured_output_includes_guidance` |
 
 ## Verification matrix
 

@@ -181,7 +181,7 @@ def test_timeout_error_no_output_appends_background_guidance():
     }
 
 
-def test_timeout_error_with_output_keeps_historical_message():
+def test_timeout_error_with_output_also_appends_guidance():
     # Jason 2026-08-10 tool-timeout redesign: the async steering guidance is
     # now appended to *every* timeout result (not only no-output), so the
     # exact historical bare message no longer exists; the prefix is preserved
@@ -196,19 +196,6 @@ def test_timeout_error_with_output_keeps_historical_message():
         ),
     }
     assert _timeout_error("echo x", 5.0, no_output=False) == {
-        "status": "error",
-        "message": (
-            "Command timed out after 5.0s. Long-running or no-output work should "
-            "be launched with async=true (or as a daemon) rather than as a "
-            "foreground command; do not rely on shell backgrounding with a "
-            "trailing &."
-        ),
-    }
-
-
-def test_timeout_error_no_output_still_appends_guidance():
-    result = _timeout_error("sleep 5", 5.0, no_output=True)
-    assert result == {
         "status": "error",
         "message": (
             "Command timed out after 5.0s. Long-running or no-output work should "
@@ -309,3 +296,78 @@ def test_sync_run_cap_follows_env_override(tmp_path, monkeypatch):
     assert "exceeds the hard ceiling 30s" in result["message"]
     ok = mgr.handle({"command": "echo hi", "timeout": 30})
     assert ok["status"] == "ok"
+
+
+def test_cap_below_default_is_floored_at_default(tmp_path, monkeypatch):
+    # fable r1 BLOCKING-1: a ceiling configured below the 30s default must not
+    # refuse every default sync run (the overwhelmingly common case that omits
+    # ``timeout``).  The resolver and _handle_run both floor the ceiling at 30.
+    from lingtai.tools.bash._tool_family import (
+        TIMEOUT_MAX_ENV,
+        resolve_timeout_max_seconds,
+    )
+
+    monkeypatch.setenv(TIMEOUT_MAX_ENV, "10")
+    assert resolve_timeout_max_seconds() == 30.0
+    mgr = manager(tmp_path)
+    # Omitted timeout → default 30 → accepted because effective cap is 30.
+    ok = mgr.handle({"command": "echo hi"})
+    assert ok["status"] == "ok"
+    # An explicit timeout above the *floored* cap is still refused.
+    refused = mgr.handle({"command": "echo hi", "timeout": 31})
+    assert refused["status"] == "error"
+    assert "exceeds the hard ceiling 30s" in refused["message"]
+
+
+def test_sync_run_rejects_non_numeric_timeout_without_raising(tmp_path):
+    # fable r1 BLOCKING-2: a non-numeric timeout (a common LLM slip) must be a
+    # regular error result, never an uncaught TypeError out of handle().
+    mgr = manager(tmp_path)
+    result = mgr.handle({"command": "echo hi", "timeout": "abc"})
+    assert result == {"status": "error", "message": "timeout must be a number of seconds"}
+    # A numeric string is coerced (so "300" is a number, then refused by the
+    # ceiling), never an exception.
+    refused = mgr.handle({"command": "echo hi", "timeout": "300"})
+    assert refused["status"] == "error"
+    assert "exceeds the hard ceiling" in refused["message"]
+
+
+def test_sync_run_timeout_none_uses_default(tmp_path):
+    # ``None`` means *absent* (the family strips null); the default 30 applies
+    # and the call runs normally rather than raising.
+    mgr = manager(tmp_path)
+    result = mgr.handle({"command": "echo hi", "timeout": None})
+    assert result["status"] == "ok"
+
+
+def test_sync_run_rejects_negative_timeout(tmp_path):
+    mgr = manager(tmp_path)
+    result = mgr.handle({"command": "echo hi", "timeout": -5})
+    assert result == {
+        "status": "error",
+        "message": "timeout must be a finite non-negative number of seconds",
+    }
+
+
+def test_async_run_is_exempt_from_timeout_ceiling(tmp_path, monkeypatch):
+    # fable r1 NIT-9: async is the escape hatch the refusal message points at;
+    # it must stay exempt even with a huge timeout.
+    from lingtai.tools.bash._tool_family import TIMEOUT_MAX_ENV
+
+    monkeypatch.setenv(TIMEOUT_MAX_ENV, "120")
+    mgr = manager(tmp_path)
+    result = mgr.handle({"command": "echo hi", "async": True, "timeout": 9999})
+    assert result["status"] == "ok"
+    assert "job_id" in result
+
+
+def test_sync_run_cap_reads_real_process_env(tmp_path, monkeypatch):
+    # fable r1 NIT-9: the ``environ is None → os.environ`` branch is exercised
+    # through handle() with the real process env, not only injected mappings.
+    from lingtai.tools.bash._tool_family import TIMEOUT_MAX_ENV
+
+    monkeypatch.setenv(TIMEOUT_MAX_ENV, "50")
+    mgr = manager(tmp_path)
+    refused = mgr.handle({"command": "echo hi", "timeout": 51})
+    assert refused["status"] == "error"
+    assert "exceeds the hard ceiling 50s" in refused["message"]

@@ -4,7 +4,7 @@ description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
 version: 1.0.0
-last_changed_at: "2026-08-09"
+last_changed_at: "2026-08-10"
 related_files:
 - ANATOMY.md
 - CONTRACT.md
@@ -25,6 +25,7 @@ related_files:
 - src/lingtai/prompts/ANATOMY.md
 - src/lingtai/services/ANATOMY.md
 - src/lingtai/tools/ANATOMY.md
+- src/lingtai/tools/bash/ANATOMY.md
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/tools/mcp/ANATOMY.md
 - src/lingtai/tools/soul/ANATOMY.md
@@ -60,7 +61,7 @@ reports, prompts, or this registry.
 | `LINGTAI_RUNTIME_VENV` | unset | Local virtualenv directory path | Host-tool runtime hint | When a host tool is invoked; new process sees changes | Missing is tolerated when another interpreter is available | `src/lingtai/cli.py` | Do not infer package trust or freshness from an unrelated shell |
 | `LINGTAI_VERBOSE` | unset and off | `1` enables DEBUG console logging for `lingtai-agent run` | Agent boot file logging; the rotating `logs/agent.log` file handler is always DEBUG, the console handler is DEBUG only when set | Boot of `lingtai-agent run`; the `--verbose` flag is equivalent | Other values are treated as off | `src/lingtai/cli.py`, `src/lingtai/kernel/logging.py` | Console verbosity only; not an authorization boundary |
 | `LINGTAI_SHELL` | unset (platform default) | `posix`, `powershell`, `cmd`, `gitbash`, `wsl`; case-insensitive | Canonical shell tool dialect and spawn selection | Shell tool setup; restart to change | Unknown values fall back to the platform default | `src/lingtai/adapters/shell.py` | Only changes which shell program the model-driven shell tool spawns; it is not an authorization boundary |
-| `LINGTAI_TOOL_TIMEOUT_MAX_SECONDS` | `120` | Positive finite number of seconds | Hard ceiling for the shell tool's sync `run.timeout` parameter | Each sync `run` call; no restart | Missing, empty, non-numeric, zero, negative, or non-finite values fall back to `120` | `src/lingtai/tools/bash/_tool_family.py`, `src/lingtai/tools/bash/__init__.py` | Refusal above the ceiling only; work needing longer must be launched with `async=true`. The ceiling is an environment variable, not a per-config value |
+| `LINGTAI_TOOL_TIMEOUT_MAX_SECONDS` | `120` | Positive finite number of seconds; values below the default sync timeout (30) are floored to `30` | Hard ceiling for the shell tool's sync `run.timeout` parameter | Each sync `run` call; no restart | Missing, empty, non-numeric, zero, negative, or non-finite values fall back to `120`; values below `30` are raised to `30` so the default sync run is never refused | `src/lingtai/tools/bash/_tool_family.py`, `src/lingtai/tools/bash/__init__.py` | Refusal above the ceiling only; work needing longer must be launched with `async=true`. The ceiling is an environment variable, not a per-config value |
 | `LINGTAI_AGENT_DIR` | unset; normally launcher-injected | Existing local directory | Out-of-process MCP and client workdir | MCP/client process start; restart after change | Invalid path fails the MCP or client operation | `src/lingtai/mcp_servers/_config.py` | Keep private workdir contents out of model-facing output |
 | `LINGTAI_MCP_NAME` | unset | Registered MCP name | One MCP process identity | MCP process start; restart after change | Missing or unknown name fails closed | `src/lingtai/mcp_servers/_config.py` | Prevents arbitrary server selection; it is not a secret |
 | `LINGTAI_TUI_DIR` | unset | Local directory path | TUI-facing invocation and auth lookup | Invocation; restart caller after change | Invalid path fails the caller's lookup | TUI integration and `src/lingtai/venv_resolve.py` | May reveal local layout; do not treat as authorization |
