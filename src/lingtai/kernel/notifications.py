@@ -285,10 +285,6 @@ def _log_hook_registry_failure(agent, phase: str, exc: Exception) -> None:
         pass
 
 
-def _invalidate_allow_predicates() -> None:
-    _allow_predicates.clear()
-
-
 def _update_hook_registry(agent, mutator) -> object:
     """Run a pure manifest-list mutation under the store lock and re-mirror.
 
