@@ -156,6 +156,16 @@ that latest guidance first when it appears.
 For peers, prefer communication and diagnosis before force. Karma operations are
 administrative tools, not shortcuts around collaboration.
 
+**Cross-platform CPR limitation (documented, not a bug):** ``cpr`` relaunches
+the target using its configured ``venv_path``, and the venv executable layout is
+resolved from the *calling* runtime's platform.  A POSIX caller resolves a
+Windows target's venv as ``venv/bin/python`` (POSIX layout), but a Windows venv
+stores its launcher at ``Scripts/python.exe`` — so ``cpr`` of a Windows agent
+from a Linux/macOS agent fails with "Configured venv_path is not usable".
+Relaunch such an agent from the same platform it runs on (its own TUI/CLI, or
+``lingtai-agent run <working_dir>`` on the Windows host) instead of crossing
+platforms.  This is a documented limitation, not a defect to fix.
+
 ## 4. Communication and notifications
 
 Resident §III owns the rule (reply on the channel the message arrived on; text
