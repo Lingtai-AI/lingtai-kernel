@@ -1059,6 +1059,62 @@ class _WarnFlagAgent(_StubAgent):
         return "evt_blocked"
 
 
+def _make_sync_agent(tmp_path: Path) -> Any:
+    """Real-sync stub: drives ``_sync_notifications``' D2 loop for real.
+
+    Mirrors the ``_Agent`` stub in ``test_notification_sync.py``: a BaseAgent
+    subclass whose state is set directly so ``_sync_notifications`` executes
+    its real code (hook-registry seeding, present-fp cache, derived-fp filter,
+    flag-unregistered scan) without a full runtime.
+    """
+    import queue
+    from types import SimpleNamespace
+
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.state import AgentState
+
+    class _Agent(BaseAgent):
+        def __init__(self, workdir: Path) -> None:
+            self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
+            self._state = AgentState.IDLE
+            self._notification_fp = ()
+            self._notification_deferred_log_fp = ()
+            self._notification_block_id = None
+            self._chat_stub = SimpleNamespace(
+                interface=SimpleNamespace(entries=[])
+            )
+            self._logs: list[tuple[str, dict]] = []
+            self.agent_name = "sync-stub"
+            self.system_notifications: list[dict[str, Any]] = []
+            self.inbox = queue.Queue()
+
+        @property
+        def _chat(self):
+            return self._chat_stub
+
+        def _save_chat_history(self, *, ledger_source: str = "main") -> None:
+            pass
+
+        def _log(self, event_type: str, **fields: Any) -> None:
+            self._logs.append((event_type, fields))
+
+        def _enqueue_system_notification(self, **kwargs: Any) -> str:
+            self.system_notifications.append(kwargs)
+            return "evt_blocked"
+
+        def _wake_nap(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        def _set_state(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        def _reset_uptime(self) -> None:
+            pass
+
+    return _Agent(tmp_path)
+
+
 class TestHookLifecycle:
     """Hook registry lifecycle through the notification family + whitelist gate."""
 
@@ -1348,48 +1404,72 @@ class TestHookRegistryFableFixes:
     def test_d2_integration_present_file_blocked_and_flagged_once(
         self, tmp_path: Path
     ) -> None:
-        """F5: a present-but-unregistered channel file is not delivered and
-        produces exactly one notification_hook event; a kernel-private dotfile
-        produces none."""
-        from lingtai.adapters.posix.notification_store import (
-            PosixNotificationStoreAdapter,
-        )
-        from lingtai.kernel.notifications import (
-            _BLOCKED_CHANNEL_WARNED,
-            flag_unregistered_channel,
-            is_present_channel_flagable,
-        )
+        """F5: through the real D2 sync loop, a present-but-unregistered
+        channel file is not delivered and produces exactly one
+        notification_hook event; a kernel-private dotfile produces none.
 
-        agent = _WarnFlagAgent(tmp_path)
-        store = PosixNotificationStoreAdapter(tmp_path)
+        Unlike the earlier copy-pasted scan, this drives
+        ``agent._sync_notifications()`` for real, so the present-fp cache,
+        the derived-fp filter, the hook-registry seeding, and the
+        ``_notification_present_fp`` guard all execute.
+        """
+        from lingtai.kernel.notifications import is_channel_allowed
+
+        agent = _make_sync_agent(tmp_path)
+        store = agent._notification_store
+
+        # Register a hook for a DIFFERENT channel so the mirror is seeded
+        # with relay_channel while comm_watcher stays unregistered.
+        assert (
+            _call(
+                agent,
+                "add",
+                **_hook_manifest(name="relay", channel="relay_channel"),
+            )["status"]
+            == "ok"
+        )
         store.publish("comm_watcher", {"header": "blocked"})
         (tmp_path / ".notification" / ".nudge_state.json").write_text(
             "{}", encoding="utf-8"
         )
 
+        agent._sync_notifications()
+
+        # Exactly one warn event, emitted through the real loop.
+        refs = [ev["ref_id"] for ev in agent.system_notifications]
+        assert refs == ["blocked_channel:comm_watcher"], refs
+
+        # No delivery: the blocked channel stays out of the allow-filtered
+        # view, the dotfile is never surfaced, and the committed fingerprint
+        # is untouched (nothing was injected into the wire).
         workdir = str(agent._working_dir)
         snapshot = store.snapshot(
             lambda ch: is_channel_allowed(ch, workdir=workdir)
         )
         assert "comm_watcher" not in snapshot
         assert ".nudge_state" not in snapshot
+        assert "relay_channel" not in snapshot
+        assert agent._notification_fp == ()
+        assert agent._chat_stub.interface.entries == []
 
-        # D2 loop as _sync_notifications does it: only flaggable stems.
-        present_fp = store.fingerprint(lambda ch: True)
-        for name, _, _ in present_fp:
-            if not is_present_channel_flagable(name):
-                continue
-            stem = name[: -len(".json")]
-            if not is_channel_allowed(stem, workdir=workdir):
-                flag_unregistered_channel(agent, stem)
+    def test_flag_unregistered_channel_dedupes_without_manual_clear(
+        self, tmp_path: Path
+    ) -> None:
+        """D2 dedupe: a repeated flag for the same unregistered channel warns
+        once; the warned book is never cleared manually."""
+        agent = _WarnFlagAgent(tmp_path)
 
-        refs = [ev["ref_id"] for ev in agent.system_notifications]
-        assert refs == ["blocked_channel:comm_watcher"], refs
-
-        # Deduped: second scan emits nothing new.
-        _BLOCKED_CHANNEL_WARNED.clear()
         flag_unregistered_channel(agent, "comm_watcher")
-        assert len(agent.system_notifications) == 2
+        assert len(agent.system_notifications) == 1, agent.system_notifications
+
+        # Second scan/flag for the same channel emits nothing new.
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 1, agent.system_notifications
+        assert agent.system_notifications[0]["ref_id"] == "blocked_channel:comm_watcher"
+
+        # A different unregistered channel is its own dedupe key.
+        flag_unregistered_channel(agent, "other_watcher")
+        assert len(agent.system_notifications) == 2, agent.system_notifications
 
 
 # ---------------------------------------------------------------------------
