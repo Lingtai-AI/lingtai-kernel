@@ -6,7 +6,7 @@ description: >
   kernel sync, voluntary check behavior, and canonical producer state versus
   notification mirrors. Read after notification-manual when interpreting,
   producing, or debugging notification payloads; skip for dismissal policy.
-version: 0.3.0
+version: 0.4.0
 tags: [lingtai, notifications, channels, protocol, sync, nudge, hooks, whitelist]
 last_changed_at: "2026-07-27T00:00:00Z"
 related_files:
@@ -31,10 +31,13 @@ A channel is the filename stem in `.notification/<channel>.json`:
 
 The kernel accepts built-in channels including `email`, `system`, `soul`,
 `nudge`, `post-molt`, `tool_loop_guard`, `bash`, `btw`, `cron`, `molt`, and
-`goal`; MCP bridge channels use the `mcp.` prefix. The **effective allowlist** is
-the static set ∪ the `mcp.` prefix ∪ registered hook channels: external hooks
-register manifests via `notification(action='add', ...)`, which appends to
-`.notification/hooks.json` and allowlists the manifest's `channel` (see the
+`goal`; MCP bridge channels use the `mcp.` prefix. The **effective allowlist**
+is `static ∪ mcp.* ∪ the agent's own registered hook channels`, and it is
+**per-agent, not process-global**: a hook channel is allowed only for the agent
+whose workdir registered it (external hooks register manifests via
+`notification(action='add', ...)`, which appends to
+`.notification/hooks.json` and allowlists the manifest's `channel` for that
+workdir — see the
 parent manual's `Hooks & whitelist` section). Unknown JSON filenames are
 ignored by collection, and kernel publish/dismiss helpers reject names outside
 the effective allowlist, so arbitrary workdir files cannot enter the
@@ -42,6 +45,13 @@ model-visible notification lane. Blocked attempts by unregistered channels are
 now observable: the kernel emits a deduped `notification_hook` system
 warn-and-flag event (`ref_id: blocked_channel:<channel>`) so the agent can
 investigate and register the hook if legitimate.
+
+The D2 warn-and-flag scan runs only when a present channel file appears for a
+channel that is not on the effective allowlist, and only for stems that can
+actually become channels: kernel-private dotfiles (e.g. `.nudge_state.json`),
+non-`.json` entries, and syntactically invalid stems are skipped, so no
+unresolvable "register this hook" event is emitted for files that could never
+be a channel.
 
 `nudge` is the formal channel for mechanical, throttled checks: runtime update
 checks publish `data.nudges[]` entries with `kind: kernel_version`, and
