@@ -459,12 +459,21 @@ def drop_hook(agent, name: str) -> dict:
     return {"status": "error", **value}
 
 
-def list_hooks(agent) -> list[dict]:
-    """Return the registered hook manifests for this agent (notification list)."""
+def list_hooks(agent) -> list[dict] | dict[str, object]:
+    """Return the registered hook manifests for this agent (notification list).
+
+    A store load failure is surfaced as a structured ``status: error`` result
+    (instead of an empty list) so a corrupt ``hooks.json`` is distinguishable
+    from "nothing registered" while the agent debugs it.
+    """
     try:
         return agent._notification_store.load_hook_manifests()
-    except Exception:
-        return []
+    except Exception as exc:
+        return {
+            "status": "error",
+            "reason": "hook_registry_load_failed",
+            "message": f"Could not load hooks.json: {str(exc)[:300]}",
+        }
 
 
 def _agent_workdir_channels(agent) -> set[str]:

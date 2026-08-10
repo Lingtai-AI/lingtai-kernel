@@ -351,7 +351,12 @@ def _list_hooks(agent, args: dict) -> dict:
     """Return the registered hook manifests (notification list)."""
     from lingtai.kernel.notifications import list_hooks
 
-    return {"status": "ok", "hooks": list_hooks(agent)}
+    result = list_hooks(agent)
+    if isinstance(result, dict) and result.get("status") == "error":
+        # A corrupt hooks.json surfaces as a structured error instead of
+        # masquerading as an empty registry.
+        return result
+    return {"status": "ok", "hooks": result}
 
 
 def _build_family(agent) -> ToolFamily:
