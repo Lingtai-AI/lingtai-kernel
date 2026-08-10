@@ -52,10 +52,12 @@ import hashlib as _hashlib
 import json as _json
 import copy as _copy
 import os
+import time as _time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, NamedTuple
 
+from ._fsutil import atomic_write_json
 from .config import (
     CONTEXT_PRESSURE_HIGH_RATIO,
     CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
@@ -257,6 +259,41 @@ NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT = (
     "This legacy email body exceeded the current 50,000 character send-layer "
     "limit and was capped in the persistent notification lane. New oversize "
     "email sends are rejected."
+)
+
+# Hard cap on the model-visible persistent notification envelope
+# (``{"notification_persistent": ...}`` as serialized for provider context).
+# A busy hub agent (many unread emails plus several IM lanes) could otherwise
+# re-serialize a 20-40k character block into every turn, so context grows fast
+# and every provider call pays a large cache miss.  Over the cap the FULL block
+# is spilled to a file under the agent's ``logs/`` directory and the
+# model-visible copy is compacted until it fits; message ids are never dropped
+# so delivery tracking still sees every message.  Payloads at or under the cap
+# are returned completely unchanged (no spill file, no marker).
+NOTIFICATION_PERSISTENT_MAX_CHARS = 10_000
+NOTIFICATION_PERSISTENT_OVERFLOW_KEY = "overflow"
+NOTIFICATION_PERSISTENT_OVERFLOW_FILE_PREFIX = "notification-overflow-"
+# Heavy free-text fields compacted first, per lane family.  Structural fields
+# (ids, routing, subjects, dates) are never touched.
+NOTIFICATION_PERSISTENT_EMAIL_HEAVY_FIELDS = (
+    "message",
+    "body",
+    "text",
+    "preview",
+    "content",
+)
+NOTIFICATION_PERSISTENT_IM_HEAVY_FIELDS = ("text", "caption")
+# Successively tighter per-field character budgets, tried in order until the
+# envelope fits.
+NOTIFICATION_PERSISTENT_COMPACT_BUDGETS = (200, 100, 50, 0)
+# Per-record comments are repeated once per email, so they stay short: the
+# cap is a context-size fix and a long comment would spend the budget it saves.
+NOTIFICATION_PERSISTENT_OVERFLOW_COMMENT = (
+    "Truncated by the notification block size cap; full content in {path}."
+)
+NOTIFICATION_PERSISTENT_OVERFLOW_NO_SPILL_COMMENT = (
+    "Truncated by the notification block size cap; the overflow file could not "
+    "be written — use the producer tool for the full content."
 )
 
 # Per-result machine-generated guidance nested under ``tool_meta``.  ``comment``
@@ -2624,6 +2661,256 @@ def _build_im_notification_persistent_payload(
     return lane_payload
 
 
+def _notification_persistent_envelope_chars(persistent: dict) -> int:
+    """Return the serialized size of the model-visible persistent envelope.
+
+    Measures exactly what the provider sees (the ``notification_persistent``
+    wrapper key included).  An unserializable payload is reported as ``0`` so
+    the cap never turns a serialization problem into a spill/compaction.
+    """
+    try:
+        return len(
+            _json.dumps(
+                {NOTIFICATION_PERSISTENT_KEY: persistent},
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
+def _spill_notification_persistent(agent, envelope: dict) -> str | None:
+    """Write the full persistent envelope to the agent's ``logs/`` dir.
+
+    Returns the absolute spill path, or ``None`` when the agent has no working
+    directory or the write failed — the block is still compacted either way, the
+    agent just gets the producer tool instead of a file as the recovery handle.
+    """
+    workdir = getattr(agent, "_working_dir", None)
+    if not workdir:
+        return None
+    try:
+        logs_dir = Path(workdir) / "logs"
+        stamp = int(_time.time())
+        path = logs_dir / f"{NOTIFICATION_PERSISTENT_OVERFLOW_FILE_PREFIX}{stamp}.json"
+        # A second overflow inside the same second must not clobber the file the
+        # previous block already handed to the model as its recovery handle.
+        suffix = 1
+        while path.exists() and suffix <= 100:
+            path = logs_dir / (
+                f"{NOTIFICATION_PERSISTENT_OVERFLOW_FILE_PREFIX}{stamp}-{suffix}.json"
+            )
+            suffix += 1
+        # Atomic sibling-temp + os.replace, ensure_ascii=False, indent=2.
+        written = atomic_write_json(path, envelope, default=str)
+        if not written.is_absolute():
+            written = written.resolve()
+        return str(written)
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _truncate_persistent_value(value: object, budget: int) -> tuple[object, bool]:
+    """Return ``(value, changed)`` with a string *value* capped at *budget*."""
+    if not isinstance(value, str) or len(value) <= budget:
+        return value, False
+    if budget <= 0:
+        return "", True
+    return value[:budget] + "...", True
+
+
+def _compact_persistent_record(record: object, fields: tuple[str, ...], budget: int) -> object:
+    """Return a copy of *record* with its heavy string *fields* truncated."""
+    if not isinstance(record, dict):
+        return record
+    compacted = dict(record)
+    for field in fields:
+        value, changed = _truncate_persistent_value(compacted.get(field), budget)
+        if changed:
+            compacted[field] = value
+    return compacted
+
+
+def _compact_email_persistent_lane(
+    lane_payload: dict, budget: int, comment: str | None
+) -> dict:
+    """Compact the email lane: keep every email and its routing/id fields.
+
+    *comment* is the per-email spill note; it is ``None`` at the tighter budgets,
+    where repeating it once per email would cost more context than the
+    truncation saves (the spill path stays discoverable on the block's
+    top-level ``overflow`` marker).
+    """
+    compacted = dict(lane_payload)
+    emails = compacted.get("emails")
+    if not isinstance(emails, list):
+        return compacted
+    out: list = []
+    for item in emails:
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        email = _compact_persistent_record(
+            item, NOTIFICATION_PERSISTENT_EMAIL_HEAVY_FIELDS, budget
+        )
+        if comment is not None:
+            existing = item.get("comment")
+            email["comment"] = (
+                f"{existing} {comment}"
+                if isinstance(existing, str) and existing
+                else comment
+            )
+        out.append(email)
+    compacted["emails"] = out
+    return compacted
+
+
+def _compact_im_persistent_lane(lane_payload: dict, budget: int) -> dict:
+    """Compact one IM lane: keep every message and its identity fields."""
+    compacted = dict(lane_payload)
+    for key in ("messages", "referenced_messages"):
+        records = compacted.get(key)
+        if isinstance(records, list):
+            compacted[key] = [
+                _compact_persistent_record(
+                    record, NOTIFICATION_PERSISTENT_IM_HEAVY_FIELDS, budget
+                )
+                for record in records
+            ]
+    return compacted
+
+
+def _compact_notification_persistent(
+    persistent: dict, budget: int, overflow_marker: dict, comment: str | None
+) -> dict:
+    """Return a fresh compacted copy of *persistent* at one per-field budget."""
+    compacted: dict = {}
+    for key, value in persistent.items():
+        if key == NOTIFICATION_PERSISTENT_EMAIL_CHANNEL and isinstance(value, dict):
+            compacted[key] = _compact_email_persistent_lane(value, budget, comment)
+        elif key == NOTIFICATION_PERSISTENT_MCP_KEY and isinstance(value, dict):
+            compacted[key] = {
+                channel: (
+                    _compact_im_persistent_lane(lane, budget)
+                    if isinstance(lane, dict)
+                    else lane
+                )
+                for channel, lane in value.items()
+            }
+        else:
+            compacted[key] = value
+    # Kernel-owned marker: overwrite any producer key of the same name.
+    compacted[NOTIFICATION_PERSISTENT_OVERFLOW_KEY] = dict(overflow_marker)
+    return compacted
+
+
+def _stub_persistent_record(record: dict) -> dict:
+    """Return the id-only stub that stands in for a dropped message.
+
+    ``event_id`` rides along because it is the delivery identity preferred by
+    ``_im_message_identity``; without it a dropped message would be recorded
+    under the wrong identity and re-delivered forever.
+    """
+    stub: dict = {}
+    for key in ("id", "event_id"):
+        value = record.get(key)
+        if value is not None:
+            stub[key] = value
+    return stub
+
+
+def _drop_notification_persistent_records(persistent: dict) -> dict:
+    """Replace the oldest messages with id-only stubs until the envelope fits.
+
+    Pathological last resort, reached only when every heavy field is already
+    empty.  Messages are never removed from the list: each dropped message
+    leaves an ``{"id": ..., "event_id": ...}`` stub (so
+    ``record_notification_persistent_delivery`` still records it and the agent
+    never re-receives it forever) plus its id in the lane's ``dropped_ids``.
+    """
+    lanes: list[tuple[dict, str]] = []
+    email_lane = persistent.get(NOTIFICATION_PERSISTENT_EMAIL_CHANNEL)
+    if isinstance(email_lane, dict) and isinstance(email_lane.get("emails"), list):
+        lanes.append((email_lane, "emails"))
+    mcp = persistent.get(NOTIFICATION_PERSISTENT_MCP_KEY)
+    if isinstance(mcp, dict):
+        for lane_payload in mcp.values():
+            if isinstance(lane_payload, dict) and isinstance(
+                lane_payload.get("messages"), list
+            ):
+                lanes.append((lane_payload, "messages"))
+    if not lanes:
+        return persistent
+
+    cursors = [0] * len(lanes)
+    progressed = True
+    while progressed:
+        if _notification_persistent_envelope_chars(persistent) <= (
+            NOTIFICATION_PERSISTENT_MAX_CHARS
+        ):
+            return persistent
+        progressed = False
+        for slot, (lane_payload, key) in enumerate(lanes):
+            records = lane_payload[key]
+            index = cursors[slot]
+            while index < len(records) and not isinstance(records[index], dict):
+                index += 1
+            if index >= len(records):
+                cursors[slot] = index
+                continue
+            record = records[index]
+            records[index] = _stub_persistent_record(record)
+            dropped = lane_payload.setdefault("dropped_ids", [])
+            record_id = record.get("id")
+            if isinstance(record_id, str) and record_id and record_id not in dropped:
+                dropped.append(record_id)
+            cursors[slot] = index + 1
+            progressed = True
+    return persistent
+
+
+def _cap_notification_persistent(agent, persistent: dict) -> dict:
+    """Return *persistent* unchanged, or a compacted copy plus a spill file.
+
+    At or under ``NOTIFICATION_PERSISTENT_MAX_CHARS`` this is a no-op: no spill
+    file, no marker, byte-identical block.  Over the cap the full block is
+    spilled to disk and the returned copy carries an ``overflow`` marker with
+    the spill path, the original size, and truncated content.
+    """
+    full_chars = _notification_persistent_envelope_chars(persistent)
+    if full_chars <= NOTIFICATION_PERSISTENT_MAX_CHARS:
+        return persistent
+
+    spill_path = _spill_notification_persistent(
+        agent, {NOTIFICATION_PERSISTENT_KEY: persistent}
+    )
+    marker: dict = {
+        "path": spill_path,
+        "full_chars": full_chars,
+        "truncated": True,
+    }
+    if spill_path:
+        comment = NOTIFICATION_PERSISTENT_OVERFLOW_COMMENT.format(path=spill_path)
+    else:
+        marker["spill_failed"] = True
+        comment = NOTIFICATION_PERSISTENT_OVERFLOW_NO_SPILL_COMMENT
+
+    compacted = persistent
+    widest = NOTIFICATION_PERSISTENT_COMPACT_BUDGETS[0]
+    for budget in NOTIFICATION_PERSISTENT_COMPACT_BUDGETS:
+        compacted = _compact_notification_persistent(
+            persistent, budget, marker, comment if budget >= widest else None
+        )
+        if (
+            _notification_persistent_envelope_chars(compacted)
+            <= NOTIFICATION_PERSISTENT_MAX_CHARS
+        ):
+            return compacted
+    return _drop_notification_persistent_records(compacted)
+
+
 def build_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
     persistent: dict = {}
 
@@ -2644,7 +2931,10 @@ def build_notification_persistent_payload(agent, notification_payload: dict) -> 
 
     if not persistent:
         return None
-    return {NOTIFICATION_PERSISTENT_KEY: persistent}
+    # Single chokepoint for the model-visible size cap: both the ACTIVE
+    # (attach_active_notifications) and IDLE (_inject_notification_pair) paths
+    # build their block here.
+    return {NOTIFICATION_PERSISTENT_KEY: _cap_notification_persistent(agent, persistent)}
 
 
 def _record_im_persistent_delivery(
