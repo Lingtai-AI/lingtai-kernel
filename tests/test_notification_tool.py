@@ -133,6 +133,29 @@ def test_notification_schema_exposes_atomic_actions() -> None:
     assert schema["properties"]["action"]["enum"] == _ACTIONS
 
 
+def test_notification_action_order_is_pinned() -> None:
+    """ACTION_ORDER is the single source and cannot silently drift.
+
+    Mirrors the peer-family pins (email/system/context migrations): the exact
+    tuple is restated so a reorder of the canonical list fails loudly. Read and
+    clear actions keep their pre-existing prefix; hook management (add/drop/
+    edit/list) follows in ACTION_ORDER; manual is last.
+    """
+    from lingtai.tools.notification import ACTION_ORDER
+
+    assert ACTION_ORDER == (
+        "check",
+        "dismiss_channel",
+        "dismiss_event",
+        "dismiss_ref",
+        "add",
+        "drop",
+        "edit",
+        "list",
+        "manual",
+    )
+
+
 def test_notification_root_is_the_closed_ltp_v2_envelope() -> None:
     """Root is exactly action+input+reasoning+summarize and closed.
 
