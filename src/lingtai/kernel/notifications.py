@@ -250,6 +250,12 @@ def sync_hook_registry(agent) -> None:
     failure is logged and retried on the next sync.
     """
     workdir = _workdir_key(agent)
+    if workdir is None:
+        # Workdir-less agents can never consult the mirror (both
+        # _build_allow_predicate and is_channel_allowed short-circuit on a
+        # None workdir), so seeding it would only write dead entries keyed by
+        # None. Skip seeding entirely.
+        return
     store = getattr(agent, "_notification_store", None)
     try:
         current_stat = store.stat_hook_registry()
