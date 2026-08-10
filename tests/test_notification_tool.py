@@ -1471,6 +1471,78 @@ class TestHookRegistryFableFixes:
         flag_unregistered_channel(agent, "other_watcher")
         assert len(agent.system_notifications) == 2, agent.system_notifications
 
+    def test_sync_hook_registry_reseeds_on_stat_change(self, tmp_path: Path) -> None:
+        """F6: an out-of-band hooks.json rewrite (content + stat change)
+        re-seeds the mirror on the next sync."""
+        agent = _StubAgent(tmp_path)
+        replace_hook_manifests_for_test(agent, [_hook_manifest()])
+        sync_hook_registry(agent)
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
+
+        # Out-of-band write: bypass the store and rewrite hooks.json directly
+        # (as a sibling CLI or hook installer would). mtime_ns/size change.
+        hooks_file = tmp_path / ".notification" / "hooks.json"
+        hooks_file.write_text(
+            json.dumps(
+                [
+                    _hook_manifest(),
+                    _hook_manifest(name="relay", channel="relay_channel"),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        sync_hook_registry(agent)
+
+        assert is_channel_allowed(
+            "relay_channel", workdir=str(agent._working_dir)
+        ) is True
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(agent._working_dir)
+        ) is True
+
+    def test_sync_hook_registry_retry_after_transient_load_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F7: a transient load failure leaves the seeded marker unset and
+        does not crash; the next sync retries and seeds."""
+        from types import SimpleNamespace
+
+        store = FakeNotificationStore()
+        agent = SimpleNamespace(
+            _working_dir=tmp_path / "fake-agent",
+            _notification_store=store,
+        )
+        replace_hook_manifests_for_test(agent, [_hook_manifest()])
+
+        real_load = store.load_hook_manifests
+        calls = {"n": 0}
+
+        def _flaky_load():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("transient registry read failure")
+            return real_load()
+
+        monkeypatch.setattr(store, "load_hook_manifests", _flaky_load)
+
+        sync_hook_registry(agent)  # must not crash
+
+        from lingtai.kernel.notifications import _HOOK_REGISTRY_SEEDED
+
+        assert str(agent._working_dir) not in _HOOK_REGISTRY_SEEDED
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(agent._working_dir)
+        ) is False
+
+        monkeypatch.setattr(store, "load_hook_manifests", real_load)
+        sync_hook_registry(agent)
+
+        assert str(agent._working_dir) in _HOOK_REGISTRY_SEEDED
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(agent._working_dir)
+        ) is True
+
 
 # ---------------------------------------------------------------------------
 # Agent-facing guidance must teach a call shape the dispatcher accepts.
