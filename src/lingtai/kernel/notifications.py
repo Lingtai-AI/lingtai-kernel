@@ -56,7 +56,7 @@ _NOTIFICATION_CHANNEL_PREFIX_ALLOWLIST: tuple[str, ...] = ("mcp.",)
 # sync path) and mutated atomically by the add/edit/drop tool handlers, so the
 # module-global allow predicate can consult it without threading per-agent
 # state through call sites.
-_REGISTERED_HOOK_CHANNELS: dict[str, set[str]] = {}
+_REGISTERED_HOOK_CHANNELS: dict[str | None, set[str]] = {}
 
 # Serializes all four mirror books (channels, stat cache, seeded set,
 # blocked-channel warned set) so heartbeat-thread seeding and
@@ -66,18 +66,18 @@ _HOOK_REGISTRY_LOCK = threading.Lock()
 
 # Workdirs already seeded from disk this process (avoids re-reading hooks.json
 # on every sync tick).
-_HOOK_REGISTRY_SEEDED: set[str] = set()
+_HOOK_REGISTRY_SEEDED: set[str | None] = set()
 
 # Cheap staleness fingerprint per workdir: ``(st_mtime_ns, st_size)`` of the
 # registry file at last seed, so an out-of-band write from another process
 # (sibling CLI, Telegram server, hook installer) re-seeds the mirror without
 # re-reading on every tick.
-_HOOK_REGISTRY_STAT: dict[str, tuple[int, int] | None] = {}
+_HOOK_REGISTRY_STAT: dict[str | None, tuple[int, int] | None] = {}
 
 # Blocked-attempt warnings already emitted per workdir+channel, so a
 # repeatedly-present unregistered channel does not spam system events. Cleared
 # when the channel becomes registered (then a later re-block can warn again).
-_BLOCKED_CHANNEL_WARNED: dict[str, set[str]] = {}
+_BLOCKED_CHANNEL_WARNED: dict[str | None, set[str]] = {}
 
 # Channels that are valid notification surfaces but must not be cleared via
 # generic system.dismiss because they are source-of-truth files.
