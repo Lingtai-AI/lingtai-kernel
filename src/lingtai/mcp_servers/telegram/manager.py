@@ -3165,7 +3165,7 @@ class TelegramManager:
         (the automatic event tail and the intrinsic-artifact projector).
 
         Sub-actions:
-          - create:  Project the resident 📋 ACTIVITIES for the current batch —
+          - create:  Project the resident 📋 活动 for the current batch —
                      update-first, editing the persisted resident in place (same
                      id) and sending/deleting only as fail-open recovery.
           - update:  Edit the same card to show the current batch.
