@@ -1664,6 +1664,312 @@ class TestHookRegistryCorruptVsAbsent:
         ) is False
 
 
+class TestWorkdirAwareHookPredicates:
+    """R1/R5/R6/R7 regression: the six workdir-aware hook-predicate fixes
+    must stay pinned. Reverting any of them to a workdir-less predicate must
+    fail the suite (they closed r2's only BLOCKING finding — sleep refused
+    forever once a registered hook channel holds a live notification).
+    """
+
+    @staticmethod
+    def _make_sleep_sync_agent(tmp_path: Path) -> Any:
+        """BaseAgent subclass driving the REAL notification sync + sleep path.
+
+        Follows ``_make_sync_agent``: a BaseAgent subclass whose state is set
+        directly so ``_sync_notifications`` executes its real code (hook
+        registry seeding, allow-filtered fingerprint, commit) without a full
+        runtime. Adds the attributes ``karma._sleep`` needs (``_config``,
+        ``_asleep``, ``_cancel_event``, state recorder); notification
+        injection is stubbed exactly like ``_make_sync_agent``'s other runtime
+        surfaces.
+        """
+        import queue
+        import threading
+        from types import SimpleNamespace
+
+        from lingtai.kernel.base_agent import BaseAgent
+        from lingtai.kernel.state import AgentState
+
+        class _SleepSyncAgent(BaseAgent):
+            def __init__(self, workdir: Path) -> None:
+                self._working_dir = workdir
+                self._notification_store = notification_store_for(workdir)
+                self._state = AgentState.IDLE
+                self._notification_fp = ()
+                self._notification_deferred_log_fp = ()
+                self._notification_block_id = None
+                self._chat_stub = SimpleNamespace(
+                    interface=SimpleNamespace(entries=[])
+                )
+                self._logs: list[tuple[str, dict]] = []
+                self.agent_name = "sleep-sync-stub"
+                self.system_notifications: list[dict[str, Any]] = []
+                self.inbox = queue.Queue()
+                self._asleep = threading.Event()
+                self._cancel_event = threading.Event()
+                self._config = SimpleNamespace(language="en")
+                self._sleep_state: object = None
+                self._injected_sources: list[str] = []
+
+            @property
+            def _chat(self):
+                return self._chat_stub
+
+            def _save_chat_history(self, *, ledger_source: str = "main") -> None:
+                pass
+
+            def _log(self, event_type: str, **fields: Any) -> None:
+                self._logs.append((event_type, fields))
+
+            def _enqueue_system_notification(self, **kwargs: Any) -> str:
+                self.system_notifications.append(kwargs)
+                return "evt_blocked"
+
+            def _wake_nap(self, *_a: Any, **_kw: Any) -> None:
+                pass
+
+            def _set_state(self, state, **_kw: Any) -> None:
+                self._sleep_state = state
+
+            def _reset_uptime(self) -> None:
+                pass
+
+            def _inject_notification_pair(self, notifications: dict) -> bool:
+                self._injected_sources = list(notifications.keys())
+                return True
+
+        return _SleepSyncAgent(tmp_path)
+
+    def test_karma_sleep_allowed_with_live_registered_hook_channel(
+        self, tmp_path: Path
+    ) -> None:
+        """R1: with a live notification on a REGISTERED hook channel and
+        ``_notification_fp`` committed through the real sync path,
+        ``karma._sleep`` must NOT refuse the transition.
+
+        Reverting karma.py's predicate to workdir-less makes ``pending_fp``
+        exclude the hook channel while the committed fingerprint includes it
+        — the mismatch refuses sleep forever (r2's BLOCKING finding).
+        """
+        from lingtai.kernel.state import AgentState
+        from lingtai.tools.system.karma import _sleep as karma_sleep
+
+        agent = self._make_sleep_sync_agent(tmp_path)
+        replace_hook_manifests_for_test(agent, [_hook_manifest()])
+        sync_hook_registry(agent)
+        publish_test_payload(
+            agent,
+            "comm_watcher",
+            {"header": "hook ping", "priority": "normal", "data": {}},
+        )
+
+        # Commit the workdir-aware fingerprint through the real sync path.
+        agent._sync_notifications()
+        assert agent._notification_fp, (
+            "sync must have committed a fingerprint for the hook channel"
+        )
+
+        result = karma_sleep(agent, {"reason": "turn complete"})
+
+        assert "refused" not in result.get("message", "").lower()
+        assert agent._sleep_state == AgentState.ASLEEP
+
+    def test_setup_telegram_task_card_predicates_agree_on_hook_channel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R6: ``_setup_telegram_task_card`` must pass the SAME workdir-scoped
+        predicate to fingerprint and snapshot. With a registered hook channel
+        as the ONLY live channel, the fingerprint is non-empty and the
+        snapshot contains the channel; a workdir-less predicate would yield
+        an empty fingerprint/snapshot for the hook channel.
+        """
+        from types import SimpleNamespace
+
+        from lingtai.kernel.base_agent import BaseAgent
+
+        workdir = tmp_path / "agent-telegram"
+        agent = SimpleNamespace(
+            _working_dir=workdir,
+            _notification_store=notification_store_for(workdir),
+            _last_telegram_card_fingerprint=None,
+        )
+        replace_hook_manifests_for_test(
+            agent, [_hook_manifest(channel="hook_comm")]
+        )
+        sync_hook_registry(agent)
+        publish_test_payload(
+            agent,
+            "hook_comm",
+            {"header": "hook ping", "priority": "normal", "data": {}},
+        )
+
+        seen: dict[str, object] = {}
+        store = agent._notification_store
+        real_fp = store.fingerprint
+        real_snapshot = store.snapshot
+
+        def _fp_spy(pred):
+            seen["fp"] = pred
+            result = real_fp(pred)
+            seen["fp_result"] = result
+            return result
+
+        def _snapshot_spy(pred):
+            seen["snapshot"] = pred
+            result = real_snapshot(pred)
+            seen["snapshot_result"] = result
+            return result
+
+        monkeypatch.setattr(store, "fingerprint", _fp_spy)
+        monkeypatch.setattr(store, "snapshot", _snapshot_spy)
+
+        BaseAgent._setup_telegram_task_card(agent)
+
+        fp_pred = seen["fp"]
+        snapshot_pred = seen["snapshot"]
+        assert fp_pred("hook_comm") is True
+        assert snapshot_pred("hook_comm") is True
+        assert fp_pred("unrelated_channel") is False
+        assert snapshot_pred("unrelated_channel") is False
+        assert seen["fp_result"], (
+            "fingerprint must be non-empty when a hook channel is the "
+            "only live channel"
+        )
+        assert "hook_comm" in seen["snapshot_result"]
+
+    @pytest.mark.parametrize(
+        "site_name",
+        [
+            "karma_sleep",
+            "soul_flow",
+            "nudge_current_entries",
+            "nudge_goal_check",
+            "worker_recovery",
+            "telegram_task_card",
+        ],
+    )
+    def test_workdir_bearing_predicate_passed_at_call_site(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        site_name: str,
+    ) -> None:
+        """R1/R5/R6/R7: each of the six call sites must consult the channel
+        allow predicate with the agent's workdir. A spy records the
+        ``workdir`` argument; a reverted workdir-less predicate records
+        ``None`` and fails this test."""
+        from types import SimpleNamespace
+
+        from lingtai.kernel import notifications as notif_mod
+        from lingtai.kernel.nudge import goal as nudge_goal
+        from lingtai.kernel.state import AgentState
+
+        workdir = tmp_path / "agent-a"
+
+        if site_name == "karma_sleep":
+            agent = self._make_sleep_sync_agent(workdir)
+        elif site_name == "soul_flow":
+            agent = SimpleNamespace(
+                _state=AgentState.IDLE,
+                _soul_timer=None,
+                _working_dir=workdir,
+                _notification_store=notification_store_for(workdir),
+                _notification_fp=(),
+                _logs=[],
+            )
+            agent._log = lambda event_type, **fields: agent._logs.append(
+                (event_type, fields)
+            )
+            agent._sync_notifications = lambda: None
+            agent._run_consultation_fire = lambda: None
+        elif site_name == "nudge_current_entries":
+            agent = SimpleNamespace(
+                _working_dir=workdir,
+                _notification_store=notification_store_for(workdir),
+            )
+        elif site_name == "nudge_goal_check":
+            agent = SimpleNamespace(
+                _state=AgentState.IDLE,
+                _working_dir=workdir,
+                _notification_store=notification_store_for(workdir),
+                _goal_reminder_last_check_at=0.0,
+            )
+        elif site_name == "worker_recovery":
+            agent = SimpleNamespace(
+                _working_dir=workdir,
+                _notification_store=notification_store_for(workdir),
+            )
+        else:  # telegram_task_card
+            agent = SimpleNamespace(
+                _working_dir=workdir,
+                _notification_store=notification_store_for(workdir),
+                _last_telegram_card_fingerprint=None,
+            )
+
+        replace_hook_manifests_for_test(
+            agent, [_hook_manifest(channel="hook_comm")]
+        )
+        sync_hook_registry(agent)
+        publish_test_payload(
+            agent,
+            "hook_comm",
+            {"header": "hook ping", "priority": "normal", "data": {}},
+        )
+
+        seen: list[object] = []
+        real_ica = notif_mod.is_channel_allowed
+        real_gap = notif_mod._get_allow_predicate
+
+        def _spy_ica(channel, *, workdir=None):
+            seen.append(workdir)
+            return real_ica(channel, workdir=workdir)
+
+        def _spy_gap(workdir=None):
+            seen.append(workdir)
+            return real_gap(workdir)
+
+        if site_name in ("karma_sleep", "soul_flow", "telegram_task_card"):
+            monkeypatch.setattr(notif_mod, "is_channel_allowed", _spy_ica)
+        elif site_name == "nudge_goal_check":
+            # goal.py binds _get_allow_predicate at module import time.
+            monkeypatch.setattr(nudge_goal, "_get_allow_predicate", _spy_gap)
+        else:
+            monkeypatch.setattr(notif_mod, "_get_allow_predicate", _spy_gap)
+
+        if site_name == "karma_sleep":
+            from lingtai.tools.system.karma import _sleep as karma_sleep
+
+            karma_sleep(agent, {"reason": "test"})
+        elif site_name == "soul_flow":
+            from lingtai.tools.soul.flow import _soul_whisper
+
+            _soul_whisper(agent)
+        elif site_name == "nudge_current_entries":
+            from lingtai.kernel.nudge import _current_entries
+
+            _current_entries(agent)
+        elif site_name == "nudge_goal_check":
+            from lingtai.kernel.nudge.goal import check as goal_check
+
+            goal_check(agent)
+        elif site_name == "worker_recovery":
+            from lingtai.kernel.base_agent.worker_recovery import (
+                _collect_notification_metadata,
+            )
+
+            _collect_notification_metadata(agent)
+        else:
+            from lingtai.kernel.base_agent import BaseAgent
+
+            BaseAgent._setup_telegram_task_card(agent)
+
+        assert seen, f"{site_name} did not consult the channel predicate"
+        assert all(w == str(workdir) for w in seen), (
+            f"{site_name} must pass workdir={str(workdir)!r}, "
+            f"got {seen!r}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Agent-facing guidance must teach a call shape the dispatcher accepts.
 #
