@@ -7,7 +7,7 @@ description: >
   Routes channel/sync mechanics and dismissal safety into nested references;
   large-result compaction is owned by
   `context-manual` → `reference/summarize-manual/SKILL.md`.
-version: 0.7.0
+version: 0.8.0
 tags: [lingtai, notifications, channels, dismiss, manual, force, stale, nudge, hooks, whitelist]
 last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
@@ -70,6 +70,13 @@ Registering a hook is the whitelist gate: only registered hook channels pass
 through; everything else is ignored (and, when the kernel observes a blocked
 attempt, surfaced as a warn-and-flag system event so the agent can investigate).
 
+Hook channels are **per-agent**: registering a hook allowlists its channel for
+this agent's working directory only — a hook channel is not visible to other
+agents' workdirs. The registry (`.notification/hooks.json`) is re-read whenever
+its `(mtime, size)` stat changes, so an out-of-band write by another process (a
+sibling CLI, the Telegram server, or the hook installer itself) is picked up on
+the next sync without a restart.
+
 ### Setup flow
 
 1. **Write the hook script** that polls a source (a file, a service, a remote
@@ -93,7 +100,10 @@ attempt, surfaced as a warn-and-flag system event so the agent can investigate).
 
 - `name` — unique hook identifier (required).
 - `channel` — the `.notification/<channel>.json` stem this hook owns
-  (required; must be unique across hooks).
+  (required; must be unique across hooks). It must not be a built-in static
+  channel (`system`/`email`/`soul`/`goal`/`molt`/`nudge`/`post-molt`/`bash`/`btw`/`cron`/`tool_loop_guard`)
+  nor a Store-reserved non-channel stem (`hooks`/`large_result_acks`); `add`
+  refuses those with a clear error.
 - `source` — what the hook polls (required, e.g. `G:`).
 - `description` — one-line purpose (required).
 - `how_to_modify` / `how_to_cancel` — how the agent updates or stops the hook
@@ -106,7 +116,8 @@ attempt, surfaced as a warn-and-flag system event so the agent can investigate).
 - `list` — read-only; returns the registered manifests in registry order.
 - `edit` — update a manifest's fields by `name`; changing `channel` moves the
   allowlist entry (and is refused with `channel_in_use` if another hook owns
-  that channel).
+  that channel). An `edit` providing no non-null fields is a `no_change`
+  no-op.
 - `drop` — remove the manifest **and revoke its channel** from the allowlist;
   unknown names return `not_found`. `drop` is registration evidence only —
   stopping the hook process follows the manifest's `how_to_cancel`.
@@ -116,7 +127,10 @@ attempt, surfaced as a warn-and-flag system event so the agent can investigate).
 When a channel that is neither statically allowlisted nor registered attempts
 notification, the kernel emits one `notification_hook` system event
 (`ref_id: blocked_channel:<channel>`) per workdir+channel — deduped until the
-channel registers. If you see such an event, run `list` to inspect hooks and
+channel registers (then a later re-block can warn again). The scan only flags
+stems that can become channels: kernel-private dotfiles (`.nudge_state.json`),
+non-`.json` entries, and syntactically invalid stems are skipped. If you see
+such an event, run `list` to inspect hooks and
 `add` to register the hook if the producer is legitimate.
 
 ### Worked example: `comm_watcher`
