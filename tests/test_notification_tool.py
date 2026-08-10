@@ -1362,6 +1362,20 @@ class TestHookRegistryFableFixes:
         assert res["status"] == "error", res
         assert "built-in" in res["message"], res
 
+    def test_edit_rejects_reserved_and_builtin_channels_as_invalid_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """R4-F3: edit refuses reserved/built-in channels with the same
+        ``invalid_manifest`` reason ``add`` uses — never the undocumented
+        ``invalid`` — so the agent sees one consistent refusal code."""
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        for refused, marker in (("hooks", "reserved"), ("system", "built-in")):
+            res = _call(agent, "edit", name="comm_watcher", channel=refused)
+            assert res["status"] == "error", res
+            assert res["reason"] == "invalid_manifest", res
+            assert marker in res["message"], res
+
     def test_hooks_json_survives_force_dismiss_of_registered_channel(
         self, tmp_path: Path
     ) -> None:

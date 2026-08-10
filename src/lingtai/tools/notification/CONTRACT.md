@@ -147,7 +147,10 @@ Observable action contracts are:
 - `edit` updates the named hook's fields. Success returns
   `{status: "ok", reason: "edited", name}`; unknown names return
   `reason: "not_found"` and a channel move onto another hook's channel returns
-  `reason: "channel_in_use"`. An `edit` providing no non-null fields returns
+  `reason: "channel_in_use"`. A channel move onto a built-in static channel or
+  a Store-reserved non-channel stem is refused with `reason:
+  "invalid_manifest"` and a clear message, exactly as `add` refuses the same
+  channel. An `edit` providing no non-null fields returns
   `{status: "ok", reason: "no_change", name}` without touching the registry.
 - `drop` removes the named hook and revokes its channel. Success returns
   `{status: "ok", reason: "dropped", name}`; unknown names return
@@ -156,9 +159,9 @@ Observable action contracts are:
   `how_to_cancel`.
 - `list` returns `{status: "ok", hooks: [...]}` with the persisted manifests
   in registry order, or an empty list when the registry is absent. When the
-  registry exists but is corrupt (invalid JSON) or unreadable, `list` returns
-  a `hook_registry_load_failed` error result instead of reporting "nothing
-  registered".
+  registry exists but is corrupt (invalid JSON) or unreadable, `list`, `add`,
+  `drop`, and `edit` all return a `hook_registry_load_failed` error result
+  instead of misreporting the registry or raising.
 - Unknown or absent actions return `{status: "error", message}` naming the
   unknown notification action.
 - An invalid envelope — a non-object `input`, a non-boolean `summarize`, an

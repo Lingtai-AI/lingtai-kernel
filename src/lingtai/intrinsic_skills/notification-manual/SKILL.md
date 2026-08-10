@@ -7,9 +7,9 @@ description: >
   Routes channel/sync mechanics and dismissal safety into nested references;
   large-result compaction is owned by
   `context-manual` → `reference/summarize-manual/SKILL.md`.
-version: 0.8.0
+version: 0.9.0
 tags: [lingtai, notifications, channels, dismiss, manual, force, stale, nudge, hooks, whitelist]
-last_changed_at: "2026-08-10T00:00:00Z"
+last_changed_at: "2026-08-10T02:00:00Z"
 related_files:
 - src/lingtai/tools/notification/__init__.py
 - src/lingtai/tools/notification/schema.py
@@ -113,10 +113,13 @@ the next sync without a restart.
 
 ### drop / edit / list semantics
 
-- `list` — read-only; returns the registered manifests in registry order.
+- `list` — read-only; returns the registered manifests in registry order, or
+  `hook_registry_load_failed` when the registry is corrupt or unreadable.
 - `edit` — update a manifest's fields by `name`; changing `channel` moves the
   allowlist entry (and is refused with `channel_in_use` if another hook owns
-  that channel). An `edit` providing no non-null fields is a `no_change`
+  that channel). Moving `channel` onto a built-in static channel or a
+  Store-reserved stem (`hooks`/`large_result_acks`) is refused with
+  `invalid_manifest`. An `edit` providing no non-null fields is a `no_change`
   no-op.
 - `drop` — remove the manifest **and revoke its channel** from the allowlist;
   unknown names return `not_found`. `drop` is registration evidence only —

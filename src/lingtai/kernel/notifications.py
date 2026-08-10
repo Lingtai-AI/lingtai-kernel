@@ -426,7 +426,8 @@ def edit_hook(agent, name: str, fields: dict) -> dict:
         try:
             _validate_hook_manifest(updated)
         except ValueError as exc:
-            return current, False, {"reason": "invalid", "message": str(exc)}
+            # Same reason add_hook uses for the identical refusal.
+            return current, False, {"reason": "invalid_manifest", "message": str(exc)}
         new_channel = _manifest_channel(updated)
         for idx2, existing in enumerate(current):
             if idx2 == idx:
