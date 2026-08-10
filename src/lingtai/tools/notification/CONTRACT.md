@@ -126,7 +126,7 @@ Observable action contracts are:
   clear found the channel already empty) or `"no_matching_event"`
   (event_id/ref_id matched no pending event). The values are the Core constants
   `DISMISS_CAUSE_ALREADY_EMPTY`/`DISMISS_CAUSE_NO_MATCHING_EVENT`
-  (`src/lingtai/kernel/notifications.py:499-508`), stamped by the same branch
+  (`src/lingtai/kernel/notifications.py:911-920`), stamped by the same branch
   that decides each no-op — not recomputed in the tool layer. `cause` is absent
   on successful (`cleared: true`) dismissals, and stale-version refusals remain
   a `status: "error"` contract without `cause`.

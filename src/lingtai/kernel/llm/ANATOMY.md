@@ -40,7 +40,7 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
 
 ## Connections
 
-- `base_agent/` imports kernel LLM types for service injection, tool execution, and synthetic history repair (`base_agent/__init__.py:29-36`, `base_agent/__init__.py:773`, `base_agent/__init__.py:1034`, `base_agent/__init__.py:1375`).
+- `base_agent/` imports kernel LLM types for service injection, tool execution, and synthetic history repair (`base_agent/__init__.py:29-36`, `base_agent/__init__.py:773`, `base_agent/__init__.py:1034`, `base_agent/__init__.py:1406`).
 - `session.py` imports `ChatSession`, `FunctionSchema`, `LLMResponse`, and `LLMService` to own session lifecycle and token/context bookkeeping (`session.py:12-17`).
 - `tool_executor.py` consumes `ToolCall` (`tool_executor.py:8`); `tc_inbox.py` (legacy, dormant — preserved for back-compat until Phase 3) consumes `ToolCallBlock`/`ToolResultBlock` for synthetic pairs (`tc_inbox.py:33`). The same canonical block types are now used by `BaseAgent._inject_notification_pair` to splice synthesized `notification(action="check")` `(call, result)` pairs into the wire, replacing the legacy queue path.
 - `lingtai/tools/context/` and `lingtai/tools/soul/` use canonical blocks/interfaces for molt replay and soul-flow consultation (`src/lingtai/tools/context/_molt.py:14`, `src/lingtai/tools/soul/inquiry.py:16`, `src/lingtai/tools/soul/consultation.py:223`, `src/lingtai/tools/soul/consultation.py:454`, `src/lingtai/tools/soul/consultation.py:594`).

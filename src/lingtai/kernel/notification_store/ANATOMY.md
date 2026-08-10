@@ -55,8 +55,8 @@ The Notification Store is the Core-owned persistence boundary for current
   mutation serialization (`src/lingtai/adapters/posix/notification_store.py:69-310`).
 - Notification Core owns channel policy, atomic acknowledgement union/purge, and
   current-payload dismiss decisions (`src/lingtai/kernel/notifications.py:129-186`,
-  `src/lingtai/kernel/notifications.py:297-312`,
-  `src/lingtai/kernel/notifications.py:475-860`).
+  `src/lingtai/kernel/notifications.py:704-788`,
+  `src/lingtai/kernel/notifications.py:923-1341`).
 
 ## Connections
 

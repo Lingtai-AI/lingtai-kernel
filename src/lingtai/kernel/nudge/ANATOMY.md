@@ -80,7 +80,7 @@ the ordinary Notification Store channel; it does not create a second transport.
 - `prompts.py` — typed producer-fact to agent-facing payload renderer, including
   installer and mirror-mismatch guidance (`src/lingtai/kernel/nudge/prompts.py:17-154`).
 - `notifications.py` — ordinary Notification transport invokes Nudge's dismissal
-  policy hook before clearing the nudge channel (`src/lingtai/kernel/notifications.py:469-880`).
+  policy hook before clearing the nudge channel (`src/lingtai/kernel/notifications.py:923-1341`).
 
 ## Connections
 
