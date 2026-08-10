@@ -165,7 +165,7 @@ When you mention the sender in a reply body or in a summary you give the human, 
 
 ### `read` vs `dismiss` — when to use which
 
-Unread email bodies are injected in full into `_meta.agent_meta.notifications.persistent.email` (up to the 50,000-character send-layer cap below). You do **not** need `read` merely to see ordinary message text. After you have handled the visible content, prefer `dismiss`: same read-state effect, no body returned, and the unread notification clears once count reaches zero.
+Unread email bodies are injected in full into `_meta.agent_meta.notifications.persistent.email` (up to the 50,000-character send-layer cap below). You do **not** need `read` merely to see ordinary message text. When the whole persistent notification envelope exceeds its 10,000-character model-visible cap (`NOTIFICATION_PERSISTENT_MAX_CHARS`), the full block is spilled to `<workdir>/logs/notification-overflow-<ts>.json` and the block carries an `overflow` marker with the path; read that file (or the producer tool) for the full bodies. After you have handled the visible content, prefer `dismiss`: same read-state effect, no body returned, and the unread notification clears once count reaches zero.
 
 Use `read` when you need to refresh the source-of-truth mailbox record, inspect attachment/metadata details, or deliberately fetch the producer state before a reply/audit. Use `reply`/`reply_all` when answering. Failing to `dismiss`, `read`, `archive`, or `delete` a handled mail keeps the notification reminding you on every heartbeat.
 
