@@ -604,8 +604,10 @@ def _clear_dismissal(agent, fingerprint: str) -> None:
 
 def _current_entries(agent) -> list[dict]:
     try:
-        from ..notifications import _get_allow_predicate
-        snapshot = agent._notification_store.snapshot(_get_allow_predicate())
+        from ..notifications import _get_allow_predicate, _workdir_key
+        snapshot = agent._notification_store.snapshot(
+            _get_allow_predicate(_workdir_key(agent))
+        )
         payload = snapshot.get("nudge")
         data = payload.get("data") if isinstance(payload, dict) else None
         entries = data.get("nudges") if isinstance(data, dict) else None

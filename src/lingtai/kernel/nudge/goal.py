@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from ..notifications import _get_allow_predicate
+from ..notifications import _get_allow_predicate, _workdir_key
 from ..notification_store import UNCONDITIONAL
 from ..state import AgentState
 
@@ -36,7 +36,7 @@ def check(agent) -> None:
     agent._goal_reminder_last_check_at = check_now
 
     store = agent._notification_store
-    allow = _get_allow_predicate()
+    allow = _get_allow_predicate(_workdir_key(agent))
     notifications = store.snapshot(allow)
     goal = notifications.get("goal")
     if not isinstance(goal, dict) or not _is_active(goal):
