@@ -39,9 +39,13 @@ from lingtai.llm.interface_converters import _project_tool_result
 logger = get_logger()
 
 
-# Claude Code built-in tools we disable so the CLI behaves as a pure reasoning
-# core: it must only emit our JSON action, never go off and read/edit/run things.
-# Unknown names here are harmless (the CLI just warns on stderr).
+# Legacy explicit disallow list. The default no longer uses it: with
+# ``disallowed_tools=None`` the adapter passes ``--tools ""`` to disable EVERY
+# Claude Code built-in tool (a pure reasoning core that only emits our JSON
+# action), which also strips the remaining built-in tool schemas
+# (Workflow/PowerShell/DesignSync/Monitor etc.) from every API request. This
+# constant remains for callers that want a partial disallow. Unknown names are
+# harmless (the CLI just warns on stderr).
 DEFAULT_DISALLOWED_TOOLS = (
     "Bash",
     "BashOutput",
@@ -583,10 +587,14 @@ class ClaudeCodeAdapter(LLMAdapter):
         self._system_prompt_mode = system_prompt_mode
         self._model = model or "sonnet"
         self._cli_path = cli_path
+        # Default (disallowed_tools=None) disables EVERY Claude Code built-in
+        # tool via ``--tools ""`` — the CLI becomes a pure reasoning core and
+        # the remaining built-in tool schemas (Workflow/PowerShell/DesignSync/
+        # Monitor etc.) no longer inflate every request. A caller that wants a
+        # partial disallow passes an explicit tool list instead.
+        self._disable_all_builtin_tools = disallowed_tools is None
         self._disallowed = (
-            list(disallowed_tools)
-            if disallowed_tools is not None
-            else list(DEFAULT_DISALLOWED_TOOLS)
+            list(disallowed_tools) if disallowed_tools is not None else []
         )
         self._timeout_s = timeout_s
         self._strip_env = tuple(strip_env) if strip_env is not None else DEFAULT_STRIP_ENV
@@ -747,7 +755,14 @@ class ClaudeCodeAdapter(LLMAdapter):
             cmd += ["--model", model]
         if resume_session_id:
             cmd += ["--resume", resume_session_id]
-        if self._disallowed:
+        if self._disable_all_builtin_tools:
+            # Disable every Claude Code built-in tool. ``--tools ""`` removes
+            # all built-in tool schemas from the API request — a ~85% token cut
+            # on the stable prefix vs the old 14-name ``--disallowedTools``
+            # list, which left the large schemas (Workflow/PowerShell/
+            # DesignSync/Monitor) in the request.
+            cmd += ["--tools", ""]
+        elif self._disallowed:
             cmd += ["--disallowedTools", *self._disallowed]
         if system_prompt_file is _UNSET:
             system_prompt_file = self._system_prompt_file

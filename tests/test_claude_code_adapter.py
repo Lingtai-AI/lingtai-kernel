@@ -247,7 +247,7 @@ def test_tool_result_roundtrip_updates_interface():
 # ---------------------------------------------------------------------------
 
 
-def test_command_includes_print_json_model_and_disallowed_tools():
+def test_command_includes_print_json_model_and_disables_all_builtin_tools():
     ad = ClaudeCodeAdapter(model="opus")
     sess = ad.create_chat("opus", "sys", None)
     captured = {}
@@ -263,7 +263,12 @@ def test_command_includes_print_json_model_and_disallowed_tools():
     assert cmd[0] == "claude"
     assert "-p" in cmd and "--output-format" in cmd and "json" in cmd
     assert "--model" in cmd and "opus" in cmd
-    assert "--disallowedTools" in cmd and "Bash" in cmd
+    # Default: disable every Claude Code built-in tool via --tools "" so the
+    # CLI is a pure reasoning core and the built-in tool schemas (Workflow /
+    # PowerShell / DesignSync / Monitor etc.) do not inflate the request.
+    assert "--tools" in cmd
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert "--disallowedTools" not in cmd
     # prompt is piped via stdin, not argv
     assert captured["kw"]["input"]
     # Stable context (protocol/system/tools) lives in the system-prompt file
@@ -283,6 +288,25 @@ def test_command_includes_print_json_model_and_disallowed_tools():
     assert "(no tools available" in sp_content  # create_chat called with None
     assert "sys" in sp_content  # the system prompt text
     assert "You are the REASONING CORE" in sp_content  # the action protocol
+
+
+def test_explicit_disallowed_tools_keeps_disallowed_tools_flag():
+    ad = ClaudeCodeAdapter(model="opus", disallowed_tools=["Bash", "Read"])
+    sess = ad.create_chat("opus", "sys", None)
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        captured["kw"] = kw
+        return _FakeProc(stdout=_envelope('{"action":"final","text":"ok"}'))
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+        sess.send("hi")
+    cmd = captured["cmd"]
+    # An explicit disallow list keeps the legacy --disallowedTools flag.
+    assert "--disallowedTools" in cmd
+    assert "Bash" in cmd and "Read" in cmd
+    assert "--tools" not in cmd
 
 
 def test_append_system_prompt_mode_keeps_legacy_flag():
