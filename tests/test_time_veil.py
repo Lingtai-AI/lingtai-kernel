@@ -49,12 +49,20 @@ def test_scrub_time_fields_time_blind_blanks_listed_keys():
     payload = {
         "received_at": "2026-04-15T12:00:00Z",
         "sent_at": "2026-04-15T12:01:00Z",
+        "deliver_at": "2026-04-15T12:02:00Z",
+        "scheduled_at": "2026-04-15T12:03:00Z",
+        "last_sent_at": "2026-04-15T12:04:00Z",
+        "estimated_finish": "2026-04-15T12:05:00Z",
         "subject": "hi",
         "from": "alice",
     }
     out = scrub_time_fields(agent, payload)
     assert out["received_at"] == ""
     assert out["sent_at"] == ""
+    assert out["deliver_at"] == ""
+    assert out["scheduled_at"] == ""
+    assert out["last_sent_at"] == ""
+    assert out["estimated_finish"] == ""
     assert out["subject"] == "hi"  # non-time keys untouched
     assert out["from"] == "alice"
 

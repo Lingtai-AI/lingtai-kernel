@@ -105,6 +105,7 @@ def test_schema_composes_action_input_reasoning_summarize_root():
     assert spin_branch["additionalProperties"] is False
     assert manual_branch["properties"] == {}
     for branch in branches:
+        assert branch["additionalProperties"] is False
         assert "reasoning" not in branch.get("properties", {})
         assert "_reasoning" not in branch.get("properties", {})
         assert "summarize" not in branch.get("properties", {})

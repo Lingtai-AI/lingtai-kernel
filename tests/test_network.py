@@ -353,9 +353,9 @@ def test_mail_of(tmp_path):
     assert alice_mail[0].sender == alice_addr
 
 
-def test_mail_of_human_sender_and_recipient(tmp_path):
+@pytest.mark.parametrize("human_addr", ["../human", "dead@example.test"])
+def test_mail_of_human_sender_and_recipient(tmp_path, human_addr):
     agent_addr = _write_manifest(tmp_path / "agent", "agent")
-    human_addr = "../human"
     _write_mail(tmp_path / "agent", "inbox", [
         {
             "from": human_addr,

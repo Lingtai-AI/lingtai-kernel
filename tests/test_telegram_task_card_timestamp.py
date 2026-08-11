@@ -90,6 +90,7 @@ def test_current_time_line_present_even_when_no_row_has_a_stamp():
         {"tool": "read", "tool_action": "", "reasoning": "y",
          "elapsed_s": 2, "done": False},
     ], now=_NOW)
+    assert "bash.run" in text
     # Last Updated never depends on any row carrying a stamp — it always
     # reflects the render instant.
     assert text.splitlines()[-1] == "Last Updated: 17:18:36 U-7"

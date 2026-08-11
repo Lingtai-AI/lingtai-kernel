@@ -646,6 +646,7 @@ def test_lifecycle_trace_events_for_dispatch_exception():
     assert any("Do not blindly retry" in item for item in meta["guidance"])
     assert any("current state" in item for item in meta["guidance"])
     assert any("boom" in error for error in errors)
+    assert any(error.startswith("explode: ") for error in errors)
     events = _trace_events(logs, "err-trace")
     assert "tool_call_dispatch_failed" in events
     assert "tool_call_dispatch_done" not in events

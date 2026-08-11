@@ -350,6 +350,7 @@ def _notification_manual_path(workdir: Path) -> Path:
 def test_manual_returns_installed_notification_manual_without_state_mutation(
     tmp_path: Path,
 ) -> None:
+    """The installed manual result stays flat, never double-wrapped as ``content``."""
     agent = _StubAgent(tmp_path)
     manual_path = _notification_manual_path(tmp_path)
     manual_path.parent.mkdir(parents=True)

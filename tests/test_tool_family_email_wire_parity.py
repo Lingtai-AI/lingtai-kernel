@@ -78,6 +78,7 @@ def test_closed_root_survives_both_wires(tmp_path):
         assert params["additionalProperties"] is False
         assert set(params["required"]) == {"action", "input", "reasoning"}
         assert params["properties"]["action"]["enum"] == _PUBLIC_ACTIONS
+        assert params["properties"]["reasoning"]["type"] == "string"
 
 
 def test_action_input_all_of_correlation_survives_both_wires(tmp_path):

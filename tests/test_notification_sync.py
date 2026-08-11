@@ -2049,8 +2049,14 @@ def test_non_molt_batch_after_molt_can_consume_post_molt(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _make_stub_agent_for_block_log(tmp_path: Path):
-    """Build a minimal agent stub carrying _logs for notification_block_injected tests."""
+def _make_stub_agent_for_block_log(
+    tmp_path: Path,
+    *,
+    notification_deferred_log_fp=None,
+    asleep_evt=None,
+    cancel_event=None,
+):
+    """Build the shared notification-sync agent, preserving optional state fields."""
     from dataclasses import dataclass, field as dc_field
     from lingtai.kernel.base_agent import BaseAgent
     from lingtai.kernel.state import AgentState
@@ -2063,10 +2069,16 @@ def _make_stub_agent_for_block_log(tmp_path: Path):
             self._notification_store = notification_store_for(workdir)
             self._state = AgentState.IDLE
             self._notification_fp = ()
+            if notification_deferred_log_fp is not None:
+                self._notification_deferred_log_fp = notification_deferred_log_fp
             self._notification_block_id = None
             self._chat_stub = chat
             self._logs: list = []
             self.agent_name = "stub"
+            if asleep_evt is not None:
+                self._asleep_evt = asleep_evt
+            if cancel_event is not None:
+                self._cancel_event = cancel_event
             import queue
             self.inbox = queue.Queue()
 
