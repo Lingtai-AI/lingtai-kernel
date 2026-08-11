@@ -250,7 +250,7 @@ def test_email_read_shows_attachments(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_email_send_through_mailman(tmp_path):
-    """Email send goes through outbox → mailman → sent."""
+    """Email send goes through outbox → mailman → sent, retaining private BCC metadata."""
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     mail_svc = MagicMock()
     mail_svc.address = "me"
@@ -259,7 +259,7 @@ def test_email_send_through_mailman(tmp_path):
     mgr = agent._email_manager
     result = mgr.handle({
         "action": "send", "address": "someone",
-        "message": "hello", "subject": "test",
+        "message": "hello", "subject": "test", "bcc": ["hidden"],
     })
     assert result["status"] == "sent"
     assert result["delay"] == 0
@@ -270,6 +270,7 @@ def test_email_send_through_mailman(tmp_path):
     assert len(sent_items) == 1
     msg = json.loads((sent_items[0] / "message.json").read_text())
     assert msg["message"] == "hello"
+    assert msg["bcc"] == ["hidden"]
     assert msg["sent_at"]
 
 

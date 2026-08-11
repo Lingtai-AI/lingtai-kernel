@@ -142,8 +142,8 @@ def test_scan_dispatches_valid_event_to_notification(tmp_path):
     assert notif_file.exists(), "notification file not created"
     import json as _json
     notif = _json.loads(notif_file.read_text(encoding="utf-8"))
-    assert "telegram" in notif["header"]
-    assert "1 new event" in notif["header"]
+    assert notif["header"] == "1 new event from MCP 'telegram'"
+    assert notif["icon"] == "💬"
     assert notif["data"]["count"] == 1
     assert notif["data"]["source"] == "telegram"
     # Sender / subject / body must NOT be inlined; the agent learns them by

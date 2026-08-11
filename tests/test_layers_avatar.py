@@ -539,7 +539,9 @@ class TestUnifiedAvatarTool:
         assert "error" in result
         assert "bogus" in result["error"]
 
-    def test_missing_action_fails_deterministically_regardless_of_payload_shape(self, tmp_path):
+    def test_missing_action_fails_deterministically_regardless_of_payload_shape(
+        self, tmp_path, fake_avatar_launch,
+    ):
         """Missing 'action' must fail the same way no matter which action's
         fields happen to be present — it must never be inferred from payload
         shape, and must mutate nothing (no spawn, no ledger, no .rules)."""
@@ -548,24 +550,26 @@ class TestUnifiedAvatarTool:
                         working_dir=tmp_path / "test", capabilities=["avatar"],
                         admin={"karma": True})
         mgr = parent.get_capability("avatar")
+        expected_error = "unknown action: '', only 'spawn', 'rules', or 'manual' is supported"
 
         # Payload shaped like a valid rules call, but action omitted.
         rules_shaped = mgr.handle({"rules_content": "Be concise."})
-        assert "error" in rules_shaped
-        assert "unknown action: ''" in rules_shaped["error"]
+        assert rules_shaped["error"] == expected_error
+        assert rules_shaped.get("status") != "ok"
         assert not (parent._working_dir / ".rules").exists()
 
         # Payload shaped like a valid spawn call, but action omitted.
         spawn_shaped = mgr.handle({"name": "helper3", "confirm": True})
-        assert "error" in spawn_shaped
-        assert "unknown action: ''" in spawn_shaped["error"]
+        assert spawn_shaped["error"] == expected_error
+        assert spawn_shaped.get("status") != "ok"
         assert not (parent._working_dir.parent / "helper3").exists()
         assert not (parent._working_dir / "delegates" / "ledger.jsonl").exists()
 
         # Entirely empty payload.
         empty = mgr.handle({})
-        assert "error" in empty
-        assert "unknown action: ''" in empty["error"]
+        assert empty["error"] == expected_error
+        assert empty.get("status") != "ok"
+        fake_avatar_launch.poll.assert_not_called()
 
     def test_spawn_missing_name_fails_without_affecting_other_actions(self, tmp_path):
         from lingtai.agent import Agent
