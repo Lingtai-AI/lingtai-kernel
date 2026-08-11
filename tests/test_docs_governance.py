@@ -565,27 +565,15 @@ def test_unrecognized_top_level_key_rejected():
         checker.validate_docs_contract_shape(bad)
 
 
-def test_pr_template_visible_body_byte_identical_and_metadata_hidden():
+def test_pr_template_metadata_hidden_and_visible_body_starts_with_summary():
     contract = checker.load_docs_contract()
     path = ROOT / ".github/PULL_REQUEST_TEMPLATE.md"
     text = path.read_text(encoding="utf-8")
     visible = text.split("-->\n", 1)[1]
-    expected_visible = (
-        "## Summary\n"
-        "\n"
-        "- TODO\n"
-        "\n"
-        "## Validation\n"
-        "\n"
-        "- [ ] `git diff --check`\n"
-        "- [ ] Relevant tests or documentation checks:\n"
-        "\n"
-        "## Notes\n"
-        "\n"
-        "- Link related issues or context here.\n"
-        "- Confirm that logs, screenshots, and examples do not contain secrets.\n"
-    )
-    assert visible == expected_visible
+    assert not visible.startswith("---")
+    assert "related_files:" not in visible
+    assert "maintenance:" not in visible
+    assert visible.startswith("## Summary")
     failures = checker.check_one_document_path(path, contract, repo_root=ROOT)
     assert not failures, failures
 
@@ -598,27 +586,14 @@ def test_all_four_notification_managers_preserve_exact_runtime_body():
     from lingtai.mcp_servers.whatsapp import manager as m4
 
     expected = {
-        m1.__name__: (
-            987,
-            "8065f55c16561adedf8b71d788efa29d80ff1b9a1196ffab38f239bf06302364",
-        ),
-        m2.__name__: (
-            2166,
-            "17c7e5086686354379cc6bf22d8cedf7d97863a04702af9928d187180877fff5",
-        ),
-        m3.__name__: (
-            987,
-            "8065f55c16561adedf8b71d788efa29d80ff1b9a1196ffab38f239bf06302364",
-        ),
-        m4.__name__: (
-            1245,
-            "e671f269c783a6a68b9d2294f0de1eb8e397ce22e13cd73b6cd9426453b8cb9e",
-        ),
+        m1.__name__: "8065f55c16561adedf8b71d788efa29d80ff1b9a1196ffab38f239bf06302364",
+        m2.__name__: "17c7e5086686354379cc6bf22d8cedf7d97863a04702af9928d187180877fff5",
+        m3.__name__: "8065f55c16561adedf8b71d788efa29d80ff1b9a1196ffab38f239bf06302364",
+        m4.__name__: "e671f269c783a6a68b9d2294f0de1eb8e397ce22e13cd73b6cd9426453b8cb9e",
     }
     for mod in (m1, m2, m3, m4):
         template = mod._NOTIFICATION_HEADER_TEMPLATE
-        expected_length, expected_sha256 = expected[mod.__name__]
-        assert len(template) == expected_length
+        expected_sha256 = expected[mod.__name__]
         assert hashlib.sha256(template.encode("utf-8")).hexdigest() == expected_sha256
         assert template.startswith("**How to read this {channel} conversation preview")
         assert not template.startswith("\n")

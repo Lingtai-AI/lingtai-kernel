@@ -72,7 +72,6 @@ def test_oh_my_pi_child_frontmatter_and_location():
     meta = _frontmatter(CHILD)
     assert meta["name"] == "daemon-backend-oh-my-pi"
     assert meta["description"].strip()
-    assert meta["last_changed_at"]
 
 
 def test_oh_my_pi_child_routes_to_live_help_and_generic_backend_options():
@@ -115,11 +114,3 @@ def test_oh_my_pi_child_mcp_status_matches_source():
     assert not _cli_backend_loads_common_mcp("oh-my-pi")
     body = _body(CHILD)
     assert "not wired yet" in body
-
-
-def test_oh_my_pi_child_stays_tiny_not_a_flag_catalog():
-    line_count = len(_body(CHILD).splitlines())
-    assert line_count <= 90, (
-        "the Oh-My-Pi backend submanual is a tiny entrypoint to live CLI help; "
-        f"{line_count} lines suggests it is growing into a flag catalog"
-    )

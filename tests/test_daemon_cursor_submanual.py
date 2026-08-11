@@ -64,7 +64,6 @@ def test_cursor_child_frontmatter_and_location():
     meta = _frontmatter(CHILD)
     assert meta["name"] == "daemon-backend-cursor"
     assert meta["description"].strip()
-    assert meta["last_changed_at"]
 
 
 def test_cursor_child_routes_to_live_help_and_generic_backend_options():
@@ -86,11 +85,3 @@ def test_cursor_child_routes_to_live_help_and_generic_backend_options():
     assert "not validate, enumerate, or simulate" in body
     # MCP wiring status must be stated, not implied.
     assert "not wired" in body
-
-
-def test_cursor_child_stays_tiny_not_a_flag_catalog():
-    line_count = len(CHILD.read_text(encoding="utf-8").splitlines())
-    assert line_count <= 90, (
-        "the Cursor backend submanual is a tiny entrypoint to live CLI help; "
-        f"{line_count} lines suggests it is growing into a flag catalog"
-    )

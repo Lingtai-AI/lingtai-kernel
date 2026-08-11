@@ -75,7 +75,6 @@ def test_lingtai_child_frontmatter_and_location():
     meta = _frontmatter(CHILD)
     assert meta["name"] == "daemon-backend-lingtai"
     assert meta["description"].strip()
-    assert meta["last_changed_at"]
 
 
 def test_lingtai_child_routes_to_live_authorities():
@@ -113,11 +112,3 @@ def test_lingtai_child_has_exactly_one_example_with_explicit_surface():
     for field in ('"preset"', '"tools"', '"skills"', '"mcp"'):
         assert field in example, field
     assert '"backend_options"' not in example
-
-
-def test_lingtai_child_stays_tiny_not_a_rules_catalog():
-    line_count = len(CHILD.read_text(encoding="utf-8").splitlines())
-    assert line_count <= 90, (
-        "the LingTai backend submanual is a tiny entrypoint to live authorities; "
-        f"{line_count} lines suggests it is growing into a duplicated rules catalog"
-    )

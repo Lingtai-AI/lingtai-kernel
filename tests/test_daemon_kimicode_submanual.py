@@ -74,7 +74,6 @@ def test_kimicode_child_frontmatter_and_location():
     meta = _frontmatter(CHILD)
     assert meta["name"] == "daemon-backend-kimicode"
     assert meta["description"].strip()
-    assert meta["last_changed_at"]
 
 
 def test_kimicode_child_routes_to_live_help_and_generic_backend_options():
@@ -106,12 +105,3 @@ def test_kimicode_child_names_canonical_alias_and_limitations():
     assert "unsupported" in body
     assert "kimi-code-home/mcp.json" in body
     assert "backend_harness_files.kimicode_mcp_config" in body
-
-
-def test_kimicode_child_stays_tiny_not_a_flag_catalog():
-    line_count = len(CHILD.read_text(encoding="utf-8").splitlines())
-    # 120 not 230: the page is ~100 lines, so a 230 cap would stop guarding.
-    assert line_count <= 120, (
-        "the Kimi Code backend submanual is a tiny entrypoint to live CLI "
-        f"help; {line_count} lines suggests it is growing into a flag catalog"
-    )

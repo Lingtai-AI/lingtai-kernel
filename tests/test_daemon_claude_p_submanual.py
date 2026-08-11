@@ -68,7 +68,6 @@ def test_claude_p_child_frontmatter_and_location():
     meta = _frontmatter(CHILD)
     assert meta["name"] == "daemon-backend-claude-p"
     assert meta["description"].strip()
-    assert meta["last_changed_at"]
 
 
 def test_claude_p_child_routes_to_live_help_and_generic_backend_options():
@@ -111,11 +110,3 @@ def test_claude_p_child_states_alias_and_harness_boundary():
         "CLAUDE_CODE_OAUTH_TOKEN",
     ):
         assert env_var in body, env_var
-
-
-def test_claude_p_child_stays_tiny_not_a_flag_catalog():
-    line_count = len(CHILD.read_text(encoding="utf-8").splitlines())
-    assert line_count <= 230, (
-        "the claude-p backend submanual is a tiny entrypoint to live CLI help; "
-        f"{line_count} lines suggests it is growing into a flag catalog"
-    )

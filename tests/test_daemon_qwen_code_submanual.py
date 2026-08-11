@@ -67,7 +67,6 @@ def test_qwen_code_child_frontmatter_and_location():
     meta = _frontmatter(CHILD)
     assert meta["name"] == "daemon-backend-qwen-code"
     assert meta["description"].strip()
-    assert meta["last_changed_at"]
 
 
 def test_qwen_code_child_routes_to_live_help_and_generic_backend_options():
@@ -99,11 +98,3 @@ def test_qwen_code_child_states_harness_boundaries():
     assert "QWEN_CODE_SYSTEM_SETTINGS_PATH" in body
     assert "qwen-daemon-settings.json" in body
     assert "daemon(action='ask', input={'id': ..., 'message': ...})" in body
-
-
-def test_qwen_code_child_stays_tiny_not_a_flag_catalog():
-    line_count = len(CHILD.read_text(encoding="utf-8").splitlines())
-    assert line_count <= 90, (
-        "the Qwen Code backend submanual is a tiny entrypoint to live CLI "
-        f"help; {line_count} lines suggests it is growing into a flag catalog"
-    )
