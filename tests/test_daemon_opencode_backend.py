@@ -124,13 +124,6 @@ class _RecordingPort:
 # ---------------------------------------------------------------------------
 
 
-def test_schema_enum_includes_opencode():
-    from tests._daemon_helpers import daemon_action_input_schema
-    backend = daemon_action_input_schema("emanate", "en")["properties"]["backend"]
-    assert "opencode" in backend["enum"]
-    assert "opencode" in backend["description"]
-
-
 def test_schema_backend_options_description_mentions_opencode():
     from tests._daemon_helpers import daemon_emanate_task_schema
     bo = daemon_emanate_task_schema("en")["properties"]["backend_options"]

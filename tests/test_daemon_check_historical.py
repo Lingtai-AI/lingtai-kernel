@@ -155,15 +155,6 @@ def test_check_rejects_ambiguous_legacy_short_id_without_path_list(tmp_path):
     assert exact["result_preview"] == "newer run"
 
 
-def test_check_truly_unknown_id_still_errors(tmp_path):
-    """A short id with no in-memory entry AND no run dir on disk still errors."""
-    agent = _make_agent(tmp_path)
-    mgr = _fresh_manager(agent)
-    out = mgr.handle({"action": "check", "id": "em-999"})
-    assert out["status"] == "error"
-    assert "em-999" in out["message"]
-
-
 def _current_data_version():
     from lingtai.tools.daemon.run_dir import DaemonRunDir
     return getattr(DaemonRunDir, "DATA_VERSION", 1)

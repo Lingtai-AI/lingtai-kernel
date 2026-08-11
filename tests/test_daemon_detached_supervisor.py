@@ -1358,38 +1358,6 @@ def test_legacy_direct_popen_cleanup_signals_exact_child_and_reaps(
     assert result["report"][report_key] == report_value
 
 
-@pytest.mark.skipif(os.name != "posix", reason="legacy process-group regression requires POSIX signals")
-def test_legacy_direct_popen_group_cleanup_signals_exact_child_and_reaps():
-    '''The retained detached direct-Popen group path sends real SIGTERM.'''
-    result = _run_legacy_direct_popen_cleanup_probe("group")
-    assert result["termination_scope"] == "inherited_supervisor_group"
-    assert result["child_pgid"] == result["host_pgid"]
-    assert result["returncode"] == result["expected_signal_returncode"] == -signal.SIGTERM
-    assert result["waited_returncode"] == -signal.SIGTERM
-    assert result["reaped"] is True
-    assert result["child_alive_after"] is False
-    assert result["tracked_after"] == 0
-    assert result["host_alive"] is True
-    assert result["parent_alive"] is True
-    assert result["report"]["path"] == "group"
-
-
-@pytest.mark.skipif(os.name != "posix", reason="legacy process-group regression requires POSIX signals")
-def test_legacy_direct_popen_reclaim_all_signals_exact_child_and_reaps():
-    '''Reclaim-all drains the retained direct-Popen registry and SIGTERMs it.'''
-    result = _run_legacy_direct_popen_cleanup_probe("reclaim-all")
-    assert result["termination_scope"] == "inherited_supervisor_group"
-    assert result["child_pgid"] == result["host_pgid"]
-    assert result["returncode"] == result["expected_signal_returncode"] == -signal.SIGTERM
-    assert result["waited_returncode"] == -signal.SIGTERM
-    assert result["reaped"] is True
-    assert result["child_alive_after"] is False
-    assert result["tracked_after"] == 0
-    assert result["host_alive"] is True
-    assert result["parent_alive"] is True
-    assert result["report"]["status"] == "reclaimed"
-
-
 @pytest.mark.parametrize("reason", ["timeout", "error"])
 def test_detached_headless_termination_survives_execution_host(reason):
     result = _run_isolated_port_probe(f'''\

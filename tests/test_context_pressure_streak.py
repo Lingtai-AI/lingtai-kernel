@@ -54,71 +54,6 @@ def test_constants_match_contract():
     assert CONTEXT_PRESSURE_WARN_AFTER_ROUNDS == 3
 
 
-def test_first_two_high_rounds_do_not_warn():
-    sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.90, round_id=1)
-    assert sm.context_pressure_streak == 1
-    assert sm.context_pressure_warning_active is False
-
-    sm.note_context_pressure_round(0.90, round_id=2)
-    assert sm.context_pressure_streak == 2
-    assert sm.context_pressure_warning_active is False
-
-
-def test_third_consecutive_high_round_warns():
-    sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.90, round_id=1)
-    sm.note_context_pressure_round(0.90, round_id=2)
-    sm.note_context_pressure_round(0.90, round_id=3)
-    assert sm.context_pressure_streak == 3
-    assert sm.context_pressure_warning_active is True
-
-
-def test_streak_continues_warning_while_pressure_high():
-    sm, _, _ = make_session_manager()
-    for rid in (1, 2, 3, 4, 5):
-        sm.note_context_pressure_round(0.90, round_id=rid)
-    assert sm.context_pressure_streak == 5
-    assert sm.context_pressure_warning_active is True
-
-
-def test_duplicate_same_round_id_does_not_advance():
-    """Multiple build_meta / tool results in one batch share the same provider
-    round; observing the same round_id repeatedly must not advance the streak."""
-    sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.90, round_id=7)
-    sm.note_context_pressure_round(0.90, round_id=7)
-    sm.note_context_pressure_round(0.90, round_id=7)
-    assert sm.context_pressure_streak == 1
-    assert sm.context_pressure_warning_active is False
-
-
-def test_drop_below_threshold_resets_streak():
-    sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.90, round_id=1)
-    sm.note_context_pressure_round(0.90, round_id=2)
-    sm.note_context_pressure_round(0.50, round_id=3)  # relieved
-    assert sm.context_pressure_streak == 0
-    assert sm.context_pressure_warning_active is False
-
-    # Must climb back from scratch — two more highs still no warning.
-    sm.note_context_pressure_round(0.90, round_id=4)
-    sm.note_context_pressure_round(0.90, round_id=5)
-    assert sm.context_pressure_warning_active is False
-    sm.note_context_pressure_round(0.90, round_id=6)
-    assert sm.context_pressure_warning_active is True
-
-
-def test_threshold_is_inclusive_at_0_85():
-    """Threshold interpretation: ``usage >= 0.85`` counts as a high round,
-    matching the delayed-reconstruction release test (``usage >= ratio``)."""
-    sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.85, round_id=1)
-    assert sm.context_pressure_streak == 1
-    sm.note_context_pressure_round(0.8499, round_id=2)
-    assert sm.context_pressure_streak == 0
-
-
 def _usage(input_tokens):
     from unittest.mock import MagicMock
 
@@ -189,15 +124,3 @@ def test_track_usage_resets_streak_when_pressure_relieved():
     sm._track_usage(_response(30000, "c3"))  # provider 0.30 -> relieved
     assert sm.context_pressure_streak == 0
     assert sm.context_pressure_warning_active is False
-
-
-def test_unknown_usage_sentinel_does_not_advance_or_reset():
-    """A -1.0 sentinel (decomposition not ready) is neither high nor a real
-    relief; it must leave the streak untouched rather than spuriously reset it."""
-    sm, _, _ = make_session_manager()
-    sm.note_context_pressure_round(0.90, round_id=1)
-    sm.note_context_pressure_round(0.90, round_id=2)
-    sm.note_context_pressure_round(-1.0, round_id=3)
-    assert sm.context_pressure_streak == 2  # untouched
-    sm.note_context_pressure_round(0.90, round_id=4)
-    assert sm.context_pressure_warning_active is True

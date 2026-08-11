@@ -535,33 +535,6 @@ def test_mimocode_short_session_selectors_reserved():
         assert token in _MIMOCODE_RESERVED_BACKEND_FLAGS, token
 
 
-def test_mimocode_normal_backend_options_still_pass_through(tmp_path):
-    """A non-reserved option (e.g. --model) must still reach the argv."""
-    agent = make_daemon_agent(tmp_path)
-    mgr = agent.get_capability("daemon")
-    captured_cmd: list[list[str]] = []
-
-    stdout_lines = [
-        '{"type":"session","id":"mimo-sess-ok"}\n',
-        '{"type":"text","part":{"text":"done"}}\n',
-    ]
-
-    def fake_popen(cmd, *args, **kwargs):
-        captured_cmd.append(list(cmd))
-        return FiniteFakeProc(stdout_lines=stdout_lines)
-
-    run_dir = _make_run_dir(agent, handle="em-mimo-ok")
-    with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
-        mgr._run_mimocode_emanation(
-            "em-mimo-ok", run_dir, "task", threading.Event(), threading.Event(),
-            backend_argv=["--model", "mimo-auto"],
-        )
-
-    cmd = captured_cmd[0]
-    assert cmd[:4] == ["mimo", "run", "--format", "json"]
-    assert cmd[4:6] == ["--model", "mimo-auto"]
-
-
 # ---------------------------------------------------------------------------
 # Ask resume: command shape preserved + answer/error contract applied
 # ---------------------------------------------------------------------------

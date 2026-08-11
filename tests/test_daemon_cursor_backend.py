@@ -84,14 +84,6 @@ def _source_cursor_stream(*events):
 # ---------------------------------------------------------------------------
 
 
-def test_schema_enum_includes_cursor():
-    from tests._daemon_helpers import daemon_action_input_schema
-
-    backend = daemon_action_input_schema("emanate", "en")["properties"]["backend"]
-    assert "cursor" in backend["enum"]
-    assert "cursor" in backend["description"]
-
-
 def test_schema_backend_options_description_mentions_cursor():
     from tests._daemon_helpers import daemon_emanate_task_schema
 

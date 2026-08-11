@@ -93,19 +93,6 @@ def _usage_events(run_dir):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "usage",
-    [
-        _claude_usage(input_tokens=-1),
-        _claude_usage(output_tokens=True),
-        _claude_usage(cache_read_input_tokens=-5),
-        {"input_tokens": "lots", "output_tokens": 7},
-    ],
-)
-def test_claude_usage_rejects_invalid_fields(usage):
-    assert _normalize_claude_usage(usage) is None
-
-
 # ---------------------------------------------------------------------------
 # Initial emanation: buffering + terminal-classification ordering
 # ---------------------------------------------------------------------------

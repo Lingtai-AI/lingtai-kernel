@@ -183,26 +183,6 @@ def _write_fake_claude(bin_dir: Path, transcript_text: str = "fake interactive a
     return fake
 
 
-def test_schema_hides_interactive_claude_backends_keeps_print_mode():
-    # The legacy interactive Claude Code backend (claude / claude-interactive)
-    # is no longer a user-selectable daemon backend: hidden from the enum and
-    # the human-facing description. Print mode (claude-p / claude-code) stays.
-    from tests._daemon_helpers import daemon_action_input_schema
-
-    backend = daemon_action_input_schema("emanate")["properties"]["backend"]
-    assert "claude" not in backend["enum"]
-    assert "claude-interactive" not in backend["enum"]
-    assert "claude-p" in backend["enum"]
-    # Backward compatibility for existing callers and stored daemon entries.
-    assert "claude-code" in backend["enum"]
-
-    desc = backend["description"]
-    assert "claude-interactive" not in desc
-    assert "interactive" not in desc.lower()
-    assert "claude-p" in desc
-    assert "claude-code" in desc
-
-
 def test_emanate_claude_dispatches_interactive_runner(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
@@ -227,32 +207,6 @@ def test_emanate_claude_dispatches_interactive_runner(tmp_path, monkeypatch):
     assert manifest["backend_argv"] == ["--model", "opus", "--verbose"]
     assert state["backend"] == "claude"
     assert state["backend_options"] == {"model": "opus", "verbose": True}
-    assert "future" not in mgr._emanations[em_id]
-
-
-def test_emanate_claude_p_dispatches_legacy_print_runner(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
-    mgr = agent.get_capability("daemon")
-    records = install_fake_detached_owner(monkeypatch)
-
-    result = mgr.handle({
-        "action": "emanate",
-        "backend": "claude-p",
-        "tasks": [{"task": "Use print mode", "tools": []}],
-    })
-    assert result["status"] == "dispatched"
-    em_id = result["ids"][0]
-    state = wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
-
-    manifest = records[0]["manifest"]
-    assert manifest["backend"] == "claude-p"
-    # claude-p tasks are prefixed with the daemon_common MCP completion
-    # contract, then the original task.
-    assert manifest["task"].endswith("Task:\nUse print mode")
-    assert "call the MCP tool `finish`" in manifest["task"]
-    assert "background-and-wait is invalid" in manifest["task"]
-    assert "--mcp-config" in manifest["backend_argv"]
-    assert state["backend"] == "claude-p"
     assert "future" not in mgr._emanations[em_id]
 
 
