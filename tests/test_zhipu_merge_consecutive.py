@@ -237,7 +237,7 @@ def test_realistic_glm_scenario():
     merged = result[2]
     assert merged["role"] == "assistant"
     assert merged["content"] == "let me think..."
-    assert merged["tool_calls"][0]["id"] == "call_1"
+    assert merged["tool_calls"] == msgs[3]["tool_calls"]
     # tool and final assistant untouched
     assert result[3]["role"] == "tool"
     assert result[4]["role"] == "assistant"

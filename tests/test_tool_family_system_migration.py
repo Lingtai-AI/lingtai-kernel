@@ -303,6 +303,11 @@ def test_unknown_root_field_is_rejected(tmp_path: Path) -> None:
 
 def test_non_boolean_summarize_is_rejected(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
+    envelope = {"action": "presets", "input": {}, "reasoning": "list them"}
+    assert system_tool.handle(agent, dict(envelope, summarize=False)) == (
+        system_tool.handle(agent, dict(envelope))
+    )
+
     result = system_tool.handle(
         agent, {"action": "presets", "input": {}, "summarize": "yes"}
     )

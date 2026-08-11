@@ -227,6 +227,17 @@ class TestNestedReferenceValidation:
         passed_child, _ = validate_frontmatter(child_dir)
         assert passed_child
 
+        short_child_dir = parent_dir / "reference" / "tiny"
+        short_child_dir.mkdir()
+        (short_child_dir / "SKILL.md").write_text(
+            "---\nname: tiny\ndescription: short\n---\n\nBody.\n",
+            encoding="utf-8",
+        )
+        passed_short, short_msgs = validate_frontmatter(short_child_dir)
+        assert passed_short
+        short_warnings = [m for m in short_msgs if "very short" in m]
+        assert len(short_warnings) == 1
+
     def test_nested_child_short_description_warns(self, tmp_path):
         child_dir = tmp_path / "reference" / "tiny"
         child_dir.mkdir(parents=True)

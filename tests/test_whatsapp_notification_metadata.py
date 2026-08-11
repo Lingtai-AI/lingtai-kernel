@@ -58,6 +58,7 @@ def _collected_metadata(manager: WhatsAppManager, message: dict) -> dict:
 
 
 def test_incoming_attaches_routing_and_structured_context(manager: WhatsAppManager):
+    """B4: ``type: 'chat'`` is the producer's vocabulary for plain text."""
     captured = _collected_metadata(manager, _bridge_message("wamid.A", "hello"))
     meta = captured["metadata"]
     # event_id components are sanitized: a peer chooses the message id, and

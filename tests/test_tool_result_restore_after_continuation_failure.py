@@ -341,9 +341,11 @@ def test_process_response_third_identical_tool_error_still_continues(tmp_path):
 
     result = _process_response(agent, response, ledger_source="test")
 
-    assert result["failed"] is False
-    assert result["errors"] == ["same tool error", "same tool error", "same tool error"]
-    assert "reporting and stopping" in result["text"]
+    assert result == {
+        "text": "The bash call failed identically 3 times; reporting and stopping.",
+        "failed": False,
+        "errors": ["same tool error", "same tool error", "same tool error"],
+    }
 
     assert len(agent._session.sent) == 3
     assert all(isinstance(payload, list) for payload in agent._session.sent)

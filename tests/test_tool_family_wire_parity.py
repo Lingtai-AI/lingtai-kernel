@@ -69,6 +69,10 @@ def test_generic_family_schema_survives_chat_and_responses_wires():
             assert "_reasoning" not in branch["properties"]
             assert "summarize" not in branch["properties"]
 
+    assert fam.handle(
+        {"action": "spin", "input": {"speed": 4}, "reasoning": "r"}
+    ) == {"status": "ok", "action": "spin", "speed": 4}
+
 
 def test_generic_family_handler_parity_across_dispatch_and_child_registry():
     """The same family instance dispatches identically regardless of which
