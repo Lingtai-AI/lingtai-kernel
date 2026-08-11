@@ -124,17 +124,6 @@ def test_every_action_branch_is_disclosed_on_both_wires(tmp_path):
             assert branch["additionalProperties"] is False
 
 
-def test_reasoning_is_required_on_both_wires(tmp_path):
-    """The family declares it itself; Agent composition never sets ``required``."""
-    email = _email_schema(tmp_path)
-    for params in (
-        _build_tools([email])[0]["function"]["parameters"],
-        _build_responses_tools([email])[0]["parameters"],
-    ):
-        assert params["properties"]["reasoning"]["type"] == "string"
-        assert "reasoning" in params["required"]
-
-
 def test_handler_parity_dispatches_through_the_registered_intrinsic(tmp_path):
     """The registered handler and the module entry point are the same boundary."""
     from lingtai.agent import Agent

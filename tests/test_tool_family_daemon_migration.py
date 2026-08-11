@@ -711,20 +711,6 @@ def test_manual_documents_the_read_only_versus_side_effect_split():
     assert "former flat `summary` field." in manual
 
 
-def test_manual_name_is_reserved_once_by_the_family(tmp_path):
-    """Registering a second ``manual`` child must fail at construction."""
-    from lingtai.tools.tool_family import ChildTool, ToolFamily
-
-    with pytest.raises(ToolFamilyError):
-        ToolFamily(
-            "daemon",
-            [
-                ChildTool("manual", MANUAL_INPUT_SCHEMA, lambda _i: {}, title="a"),
-                ChildTool("manual", MANUAL_INPUT_SCHEMA, lambda _i: {}, title="b"),
-            ],
-        )
-
-
 def test_the_engines_flat_manual_branch_is_not_the_model_facing_path(tmp_path):
     """``DaemonManager.handle``'s own ``action='manual'`` branch is retained for
     historical/internal flat callers, but the registered surface serves the

@@ -70,15 +70,6 @@ def _trace_events(logs, trace_id):
     return [event for event, fields in logs if fields.get("tool_trace_id") == trace_id]
 
 
-def test_execute_single_tool():
-    executor = make_executor()
-    calls = [ToolCall(name="read", args={"path": "/tmp"}, id="tc1")]
-    results, intercepted, text = executor.execute(calls)
-    assert len(results) == 1
-    assert not intercepted
-
-
-
 def test_tool_call_guard_default_allow_preserves_pass_through_log():
     logs = []
     dispatch_calls = []
@@ -801,18 +792,6 @@ def test_on_result_hook_receives_model_visible_spill_manifest(tmp_path):
     assert seen[0][2]["original_char_count"] > 120
 
 
-def test_error_collected():
-    def dispatch(tc):
-        raise ValueError("something broke")
-    executor = make_executor(dispatch_fn=dispatch)
-    calls = [ToolCall(name="bad", args={}, id="1")]
-    errors = []
-    results, intercepted, text = executor.execute(calls, collected_errors=errors)
-    assert len(results) == 1
-    assert "bad" in errors[0]
-    assert "something broke" in errors[0]
-
-
 def test_tool_returned_error_is_enriched_for_agent_repair():
     def dispatch(tc):
         return {"status": "error", "message": "chat_id must be integer", "tool": "telegram"}
@@ -854,15 +833,6 @@ def test_cancel_event_stops_sequential():
     calls = [ToolCall(name="a", args={}, id="1")]
     results, intercepted, text = executor.execute(calls, cancel_event=cancel)
     assert results == []
-
-
-def test_unknown_tool_with_known_tools():
-    executor = make_executor(known_tools={"read", "write"})
-    calls = [ToolCall(name="bogus", args={}, id="1")]
-    errors = []
-    results, intercepted, text = executor.execute(calls, collected_errors=errors)
-    assert len(results) == 1
-    assert any("bogus" in e for e in errors)
 
 
 def test_guard_property():

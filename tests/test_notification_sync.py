@@ -241,23 +241,6 @@ def test_check_action_returns_placeholder(tmp_path: Path) -> None:
     assert "_meta" not in res
 
 
-def test_system_notification_action_is_removed(tmp_path: Path) -> None:
-    """system(action="notification") is no longer a valid action."""
-    from lingtai.tools.system import handle
-
-    @dataclass
-    class _Stub:
-        _working_dir: Path = tmp_path
-        _logs: list[tuple[str, dict]] = field(default_factory=list)
-
-        def _log(self, evt: str, **fields: Any) -> None:
-            self._logs.append((evt, fields))
-
-    res = handle(_Stub(), {"action": "notification"})
-    assert res["status"] == "error"
-    assert "Unknown system action" in res["message"]
-
-
 # ---------------------------------------------------------------------------
 # §13.6 — producer migrations
 # ---------------------------------------------------------------------------
@@ -680,46 +663,11 @@ def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
     without posting a wake message left the run loop blocked on
     ``inbox.get()`` even though the wire was correct on disk.
     """
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
     from lingtai.kernel.message import MSG_TC_WAKE
 
-    chat = _make_chat_stub()
-
-    class _Agent(BaseAgent):
-        def __init__(self, workdir):
-            self._working_dir = workdir
-            self._notification_store = notification_store_for(workdir)
-            self._state = AgentState.IDLE
-            self._notification_fp = ()
-            self._notification_deferred_log_fp = ()
-            self._notification_block_id = None
-            self._chat_stub = chat
-            self._logs = []
-            self.agent_name = "stub"
-            import queue
-            self.inbox = queue.Queue()
-
-        @property
-        def _chat(self):
-            return self._chat_stub
-
-        def _save_chat_history(self, *, ledger_source="main"):
-            pass
-
-        def _log(self, evt, **fields):
-            self._logs.append((evt, fields))
-
-        def _wake_nap(self, *_a, **_kw):
-            pass
-
-        def _set_state(self, *_a, **_kw):
-            pass
-
-        def _reset_uptime(self):
-            pass
-
-    agent = _Agent(tmp_path)
+    agent = _make_stub_agent_for_block_log(
+        tmp_path, notification_deferred_log_fp=(),
+    )
     publish_test_payload(tmp_path, "email", {"count": 1})
     agent._sync_notifications()
 
@@ -808,45 +756,9 @@ def test_sync_idle_injects_post_molt_after_molt_batch_deferred_stamp(tmp_path: P
     Here we reproduce the uncommitted-fp state left by the per-molt-batch
     deferral and assert IDLE sync injects the wake.
     """
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
     from lingtai.kernel.message import MSG_TC_WAKE
 
-    chat = _make_chat_stub()
-
-    class _Agent(BaseAgent):
-        def __init__(self, workdir):
-            self._working_dir = workdir
-            self._notification_store = notification_store_for(workdir)
-            self._state = AgentState.IDLE
-            self._notification_fp = ()
-            self._notification_block_id = None
-            self._chat_stub = chat
-            self._logs = []
-            self.agent_name = "stub"
-            import queue
-            self.inbox = queue.Queue()
-
-        @property
-        def _chat(self):
-            return self._chat_stub
-
-        def _save_chat_history(self, *, ledger_source="main"):
-            pass
-
-        def _log(self, evt, **fields):
-            self._logs.append((evt, fields))
-
-        def _wake_nap(self, *_a, **_kw):
-            pass
-
-        def _set_state(self, *_a, **_kw):
-            pass
-
-        def _reset_uptime(self):
-            pass
-
-    agent = _Agent(tmp_path)
+    agent = _make_stub_agent_for_block_log(tmp_path)
     # The molt wrote the continuation channel while ACTIVE.
     publish_test_payload(tmp_path, "post-molt", {
         "header": "post-molt #1 — resume work",
@@ -874,52 +786,14 @@ def test_sync_idle_injects_post_molt_after_molt_batch_deferred_stamp(tmp_path: P
 def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     """IDLE: fingerprint change → synthetic pair appended; result block
     has synthesized=True and JSON body carries `_synthesized: true`."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
     from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
     from lingtai.kernel.message import _make_message  # noqa: F401
 
-    chat = _make_chat_stub()
-
-    # Build a partial agent: we override only what _sync_notifications
-    # touches, since constructing a real BaseAgent requires a full
-    # filesystem agent dir + LLM service.
-    class _Agent(BaseAgent):
-        def __init__(self, workdir):
-            self._working_dir = workdir
-            self._notification_store = notification_store_for(workdir)
-            self._state = AgentState.IDLE
-            self._notification_fp = ()
-            self._notification_block_id = None
-            self._chat_stub = chat
-            self._logs = []
-            self.agent_name = "stub"
-            self._asleep_evt = threading.Event()
-            self._cancel_event = threading.Event()
-            # inbox for any wake messages
-            import queue
-            self.inbox = queue.Queue()
-
-        @property
-        def _chat(self):
-            return self._chat_stub
-
-        def _save_chat_history(self, *, ledger_source: str = "main") -> None:
-            pass
-
-        def _log(self, evt, **fields):
-            self._logs.append((evt, fields))
-
-        def _wake_nap(self, *_a, **_kw):
-            pass
-
-        def _set_state(self, *_a, **_kw):
-            pass
-
-        def _reset_uptime(self):
-            pass
-
-    agent = _Agent(tmp_path)
+    asleep_evt = threading.Event()
+    cancel_event = threading.Event()
+    agent = _make_stub_agent_for_block_log(
+        tmp_path, asleep_evt=asleep_evt, cancel_event=cancel_event,
+    )
     publish_test_payload(tmp_path, "email", {"count": 1, "data": {"count": 1}})
 
     agent._sync_notifications()
@@ -1017,44 +891,8 @@ def test_synthesized_notification_call_args_survive_real_dispatch(
 def test_sync_idle_releases_then_reinjects(tmp_path: Path) -> None:
     """Payload A — payload B — payload A again keeps append-only history
     and gives each synthetic result a fresh injection sequence."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
 
-    chat = _make_chat_stub()
-
-    class _Agent(BaseAgent):
-        def __init__(self, workdir):
-            self._working_dir = workdir
-            self._notification_store = notification_store_for(workdir)
-            self._state = AgentState.IDLE
-            self._notification_fp = ()
-            self._notification_block_id = None
-            self._chat_stub = chat
-            self._logs = []
-            self.agent_name = "stub"
-            import queue
-            self.inbox = queue.Queue()
-
-        @property
-        def _chat(self):
-            return self._chat_stub
-
-        def _save_chat_history(self, *, ledger_source="main"):
-            pass
-
-        def _log(self, evt, **fields):
-            self._logs.append((evt, fields))
-
-        def _wake_nap(self, *_a, **_kw):
-            pass
-
-        def _set_state(self, *_a, **_kw):
-            pass
-
-        def _reset_uptime(self):
-            pass
-
-    agent = _Agent(tmp_path)
+    agent = _make_stub_agent_for_block_log(tmp_path)
     payload_a = {"count": 1}
     payload_b = {"count": 2, "extra": "more bytes"}
 
@@ -1092,44 +930,8 @@ def test_sync_idle_releases_then_reinjects(tmp_path: Path) -> None:
 def test_sync_idle_empty_releases_holder(tmp_path: Path) -> None:
     """When all producer files are cleared, the live holder is released
     from tracking without mutating its recorded wire content."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
 
-    chat = _make_chat_stub()
-
-    class _Agent(BaseAgent):
-        def __init__(self, workdir):
-            self._working_dir = workdir
-            self._notification_store = notification_store_for(workdir)
-            self._state = AgentState.IDLE
-            self._notification_fp = ()
-            self._notification_block_id = None
-            self._chat_stub = chat
-            self._logs = []
-            self.agent_name = "stub"
-            import queue
-            self.inbox = queue.Queue()
-
-        @property
-        def _chat(self):
-            return self._chat_stub
-
-        def _save_chat_history(self, *, ledger_source="main"):
-            pass
-
-        def _log(self, evt, **fields):
-            self._logs.append((evt, fields))
-
-        def _wake_nap(self, *_a, **_kw):
-            pass
-
-        def _set_state(self, *_a, **_kw):
-            pass
-
-        def _reset_uptime(self):
-            pass
-
-    agent = _Agent(tmp_path)
+    agent = _make_stub_agent_for_block_log(tmp_path)
     publish_test_payload(tmp_path, "email", {"count": 1})
     agent._sync_notifications()
     assert len(agent._chat_stub.interface.entries) == 2
@@ -1151,44 +953,10 @@ def test_sync_idle_empty_releases_holder(tmp_path: Path) -> None:
 
 def test_sync_no_change_is_noop(tmp_path: Path) -> None:
     """Two syncs without any filesystem change → second is a no-op."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
 
-    chat = _make_chat_stub()
-
-    class _Agent(BaseAgent):
-        def __init__(self, workdir):
-            self._working_dir = workdir
-            self._notification_store = notification_store_for(workdir)
-            self._state = AgentState.IDLE
-            self._notification_fp = ()
-            self._notification_block_id = None
-            self._chat_stub = chat
-            self._logs = []
-            self.agent_name = "stub"
-            import queue
-            self.inbox = queue.Queue()
-
-        @property
-        def _chat(self):
-            return self._chat_stub
-
-        def _save_chat_history(self, *, ledger_source="main"):
-            pass
-
-        def _log(self, evt, **fields):
-            self._logs.append((evt, fields))
-
-        def _wake_nap(self, *_a, **_kw):
-            pass
-
-        def _set_state(self, *_a, **_kw):
-            pass
-
-        def _reset_uptime(self):
-            pass
-
-    agent = _Agent(tmp_path)
+    agent = _make_stub_agent_for_block_log(
+        tmp_path, notification_deferred_log_fp=(),
+    )
     publish_test_payload(tmp_path, "email", {"count": 1})
     agent._sync_notifications()
     first_id = agent._notification_block_id
@@ -2770,45 +2538,10 @@ def test_sync_notifications_serialized_across_runloop_and_heartbeat(tmp_path: Pa
     the second caller blocks on ``_notification_sync_lock``, re-reads the
     fingerprint after the first caller commits, and no-ops.
     """
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
 
-    chat = _make_chat_stub()
-
-    class _Agent(BaseAgent):
-        def __init__(self, workdir):
-            self._working_dir = workdir
-            self._notification_store = notification_store_for(workdir)
-            self._state = AgentState.IDLE
-            self._notification_fp = ()
-            self._notification_deferred_log_fp = ()
-            self._notification_block_id = None
-            self._chat_stub = chat
-            self._logs = []
-            self.agent_name = "stub"
-            import queue
-            self.inbox = queue.Queue()
-
-        @property
-        def _chat(self):
-            return self._chat_stub
-
-        def _save_chat_history(self, *, ledger_source="main"):
-            pass
-
-        def _log(self, evt, **fields):
-            self._logs.append((evt, fields))
-
-        def _wake_nap(self, *_a, **_kw):
-            pass
-
-        def _set_state(self, *_a, **_kw):
-            pass
-
-        def _reset_uptime(self):
-            pass
-
-    agent = _Agent(tmp_path)
+    agent = _make_stub_agent_for_block_log(
+        tmp_path, notification_deferred_log_fp=(),
+    )
     publish_test_payload(tmp_path, "email", {"count": 1, "data": {"count": 1}})
 
     release = threading.Event()

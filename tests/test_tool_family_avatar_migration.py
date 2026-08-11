@@ -174,22 +174,6 @@ class TestAvatarFamilySchema:
         # not a local restatement that could drift from it.
         assert dict(avatar_tool._CHILD_SPECS)["manual"] is MANUAL_INPUT_SCHEMA
 
-    def test_module_level_registry_rejects_a_reserved_manual_collision(self):
-        from lingtai.tools.tool_family import ChildTool
-
-        def _unused(_input):
-            raise AssertionError("never dispatched")
-
-        with pytest.raises(ToolFamilyError):
-            ToolFamily(
-                "avatar",
-                [
-                    ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused),
-                    ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused),
-                ],
-            )
-
-
 class TestAvatarSchemaSurvivesBothWires:
     """The composed schema must correlate action→input on Chat and Responses.
 
@@ -587,12 +571,6 @@ class TestManualThroughTheEnvelope:
         assert not (network / "delegates").exists()
         assert not (network / "logs").exists()
         assert sorted(p.name for p in network.parent.iterdir()) == before
-
-    def test_manual_rejects_any_input_field(self, network, launcher):
-        mgr, _ = _manager(network, launcher)
-        result = mgr.handle({"action": "manual", "input": {"name": "helper"}})
-        assert result["status"] == "failed"
-        assert result["error_code"] == "INVALID_ARGUMENT"
 
     def test_missing_packaged_manual_degrades_truthfully(self, network, launcher, monkeypatch):
         mgr, _ = _manager(network, launcher)

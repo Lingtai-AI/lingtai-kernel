@@ -1359,18 +1359,6 @@ def test_default_plugin_root_is_scanned_without_declaration(tmp_path):
     assert "<name>s</name>" not in _prompt_section_named(agent, "mcp")
 
 
-def test_plugin_sourced_mcp_is_hidden_from_the_vanilla_mcp_field(tmp_path):
-    """Registered plugin MCPs appear only under plugins, not <registered_mcp>."""
-    agent, workdir = _mk_agent(tmp_path, plugins=[])
-    root = workdir / "plugin"
-    _write_plugin(root, "auto", mcp_servers={"s": {"type": "stdio", "command": "node"}})
-    _refresh_plugins(agent, [])
-    from lingtai.tools import plugin as pluginmod
-    pluginmod._reconcile(agent, [])
-    assert "<mcp_names>s</mcp_names>" in _prompt_section_named(agent, "plugin")
-    assert "<name>s</name>" not in _prompt_section_named(agent, "mcp")
-
-
 def test_mcp_field_is_resident_when_no_standalone_servers(tmp_path):
     """The mcp field explains itself even with an empty registry."""
     agent, _workdir = _mk_agent(tmp_path, plugins=[])

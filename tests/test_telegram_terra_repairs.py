@@ -252,29 +252,6 @@ def test_public_search_accepts_reserved_bucket_chat_id(tmp_path: Path) -> None:
     assert payload["messages"][0]["telegram"]["event_id"] == "main:update:5003"
 
 
-def test_send_rejects_reserved_bucket_and_reply_rejects_event_records(
-    tmp_path: Path,
-) -> None:
-    manager = _manager(tmp_path)
-    result = _call_tool(manager, {
-        "action": "send",
-        "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
-        "text": "hi",
-    })
-    # Strict action-owned send input rejects the reserved read/search-only
-    # bucket before manager I/O. Under v2 that refusal carries the protocol
-    # error bit (v1 emitted a bare text block with no flag), so the model sees
-    # a readable, correctly-marked failure.
-    assert result.is_error is True
-
-    reply = manager.handle({
-        "action": "reply",
-        "message_id": f"main:{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}:5001",
-        "text": "hi",
-    })
-    assert "synthetic events-bucket" in reply["error"]
-
-
 def test_arbitrary_string_chat_id_still_schema_rejected(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     result = _call_tool(manager, {

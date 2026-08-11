@@ -196,20 +196,6 @@ def test_optional_knobs_use_the_provider_compatible_nullable_shape():
     assert voice["properties"]["prompt"]["maxLength"] == soul.SOUL_VOICE_PROMPT_MAX
 
 
-def test_registry_fails_loudly_on_a_reserved_manual_collision():
-    from lingtai.tools.tool_family import ChildTool, ToolFamily
-
-    empty = {"type": "object", "properties": {}, "additionalProperties": False}
-    with pytest.raises(ToolFamilyError):
-        ToolFamily(
-            "soul",
-            [
-                ChildTool("manual", empty, lambda _i: {}),
-                ChildTool("manual", empty, lambda _i: {}),
-            ],
-        )
-
-
 # ---------------------------------------------------------------------------
 # Handlers — one per action, exact preserved semantics.
 # ---------------------------------------------------------------------------

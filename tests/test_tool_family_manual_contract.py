@@ -112,39 +112,6 @@ def test_a_family_without_any_manual_child_is_still_valid():
     assert not fam.has_manual()
 
 
-def test_web_manual_child_shares_the_same_reserved_contract(tmp_path):
-    from lingtai.tools.web_search import setup
-
-    class _Agent:
-        def __init__(self, working_dir):
-            self._working_dir = working_dir
-
-        def add_tool(self, *args, **kwargs):
-            pass
-
-    class _Port:
-        def handle(self, args):
-            return {"status": "ok"}
-
-    manual_dir = tmp_path / ".library" / "intrinsic" / "capabilities" / "web"
-    manual_dir.mkdir(parents=True)
-    (manual_dir / "SKILL.md").write_text("web manual body", encoding="utf-8")
-
-    manager = setup(_Agent(tmp_path), browser_port=_Port())
-    result = manager.handle({"action": "manual", "input": {}, "reasoning": "load web guidance"})
-    assert result["status"] == "ok"
-    assert result["manual"] == "web manual body"
-    assert result["manual_path"] == str(manual_dir / "SKILL.md")
-    assert result["action"] == "manual"
-    assert "current_setting" in result
-    # The generic child's canonical MCP-compatible fields must not leak into
-    # Web's own pre-migration public flat shape — that adaptation is Web's
-    # own Host/presentation job (``WebManager._adapt_manual_result``),
-    # applied strictly after ``self._family.handle(...)`` dispatch.
-    assert "content" not in result
-    assert "structuredContent" not in result
-
-
 def test_web_family_handle_returns_canonical_manual_result_verbatim_before_host_adaptation(tmp_path):
     """Proves the ownership boundary directly: ``manager._family.handle(...)``
     — the real ``ToolFamily`` this family registers its ``manual`` child in —

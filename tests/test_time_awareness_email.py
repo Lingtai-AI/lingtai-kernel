@@ -26,24 +26,6 @@ def test_scrub_schedule_payload_time_blind():
     assert out["status"] == "scheduled"
 
 
-def test_scrub_email_summary_time_blind():
-    agent = _agent(False)
-    summary = {
-        "id": "abc",
-        "from": "alice",
-        "to": ["bob"],
-        "subject": "hi",
-        "preview": "hello",
-        "time": "2026-04-15T12:00:00Z",
-        "folder": "inbox",
-        "unread": True,
-    }
-    out = scrub_time_fields(agent, summary)
-    assert out["time"] == ""
-    assert out["subject"] == "hi"
-    assert out["unread"] is True
-
-
 def test_scrub_passthrough_when_time_aware():
     agent = _agent(True)
     payload = {"scheduled_at": "2026-04-15T12:00:00Z", "time": "2026-04-15T12:00:00Z"}

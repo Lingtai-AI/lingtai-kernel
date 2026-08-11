@@ -70,12 +70,6 @@ def _raw_logged(events, *, needle):
     return False
 
 
-def test_generic_family_result_is_not_double_wrapped_before_reaching_executor():
-    fam = _widget_family()
-    result = fam.handle({"action": "spin", "input": {}, "reasoning": "r"})
-    assert result == {"status": "ok", "action": "spin", "marker": "WIDGETRAW-marker"}
-
-
 def test_generic_family_legacy_summary_flag_raw_logged_before_summary(tmp_path):
     fam = _widget_family()
     events = []

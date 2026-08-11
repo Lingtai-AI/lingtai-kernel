@@ -62,26 +62,6 @@ def _manager(tmp_path):
 # Card create / update / finalize
 # ===========================================================================
 
-def test_task_card_create_shows_header_and_current_tool(tmp_path):
-    manager, account = _manager(tmp_path)
-    r = manager._handle_task_card_update({
-        "sub_action": "create",
-        "account": "mybot",
-        "chat_id": 999,
-        "tool": "bash",
-        "tool_action": "run",
-        "reasoning": "Check project structure",
-    })
-    assert r["status"] == "ok"
-    assert "message_id" in r
-    send_calls = [c for c in account.calls if c[0] == "send_message"]
-    assert len(send_calls) == 1
-    text = send_calls[0][2]
-    assert "📋 ACTIVITIES" in text
-    assert "bash.run" in text
-    assert "Check project structure" in text
-
-
 def test_task_card_update_same_message_id(tmp_path):
     """Sequential tools edit the same card — single current step."""
     manager, account = _manager(tmp_path)

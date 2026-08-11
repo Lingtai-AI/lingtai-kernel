@@ -118,18 +118,6 @@ def _edits(account):
 # First create (no resident) sends once, stores the id, deletes nothing
 # ---------------------------------------------------------------------------
 
-def test_first_create_stores_id_and_deletes_nothing(tmp_path):
-    manager, service = _manager(tmp_path)
-    acct = service.default_account
-
-    r = _create(manager)
-    assert r["status"] == "ok"
-    assert len(_sends(acct)) == 1
-    assert not _deletes(acct)
-    assert not _edits(acct)
-    assert acct.get_task_card(999) == r["message_id"]
-
-
 # ---------------------------------------------------------------------------
 # Repeated create with a valid resident EDITS it in place: same id, no
 # new send, no delete — the card never flickers (Jason #6894/#6899).

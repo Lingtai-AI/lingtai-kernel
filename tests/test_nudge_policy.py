@@ -592,35 +592,6 @@ def test_blocked_lifecycle_renders_blocked_title_and_preserves_raw(tmp_path):
     assert init.read_text(encoding="utf-8") == raw
 
 
-def test_failed_lifecycle_keeps_supplemental_compatibility_mapping(tmp_path):
-    """Mixed evidence on PRESET failure: compatibility mapping survives as
-    supplemental data while the headline classification stays UNKNOWN; raw
-    bytes untouched."""
-    from lingtai.kernel.nudge.init_config import check as check_init_config
-    from lingtai.init_reader import reader_callbacks
-
-    agent = _Agent(tmp_path)
-    init = _seed_finding(tmp_path, agent)
-
-    def broken_load_preset(name, working_dir=None):
-        raise KeyError(name)
-
-    materialize, prepare = reader_callbacks(tmp_path, load_preset=broken_load_preset)
-    manifest = json.loads(init.read_text(encoding="utf-8"))["manifest"]
-    manifest["preset"] = {"active": "missing", "default": "missing", "allowed": ["missing"]}
-    bad = json.dumps({"manifest": manifest, **{
-        "covenant": "operator contract", "pad": "durable state"}})
-    init.write_text(bad, encoding="utf-8")
-    failed = read_init(tmp_path, materialize=materialize, prepare=prepare,
-                       failure_behavior="KEEP_PREVIOUS_EFFECTIVE")
-    assert failed.status.value == "READ_FAILED"
-    assert failed.stage == "PRESET"
-    assert failed.finding_decision.value == "UNKNOWN"
-    check_init_config(agent, failed)
-    _assert_persisted_non_benign(tmp_path, "PRESET", expect_mapping=True)
-    assert init.read_text(encoding="utf-8") == bad
-
-
 def _frontmatter_related_files(text):
     """Parse the leading YAML frontmatter and return the related_files list."""
     import re

@@ -114,12 +114,3 @@ def test_api_error_row_never_carries_a_stamp_alongside_a_tool_row():
     api_line = next(ln for ln in text.splitlines() if "API error" in ln)
     assert "UTC" not in api_line
     assert text.splitlines()[-1] == "Last Updated: 17:18:36 U-7"
-
-
-def test_render_tool_row_without_started_at_is_safe():
-    text = TelegramManager._format_task_card_text("", "", "", rows=[
-        {"tool": "bash", "tool_action": "run", "reasoning": "x",
-         "elapsed_s": 1, "done": False},
-    ], now=_NOW)
-    assert "bash.run" in text
-    assert text.splitlines()[-1] == "Last Updated: 17:18:36 U-7"

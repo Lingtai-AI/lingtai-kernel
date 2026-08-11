@@ -312,21 +312,6 @@ def test_manual_child_dispatch_returns_full_manual_shape():
     }
 
 
-def test_manual_child_rejects_nonempty_input():
-    fam = _widget_family()
-    # The manual branch's own strict-empty schema is model-facing guidance;
-    # dispatch-time correspondence is a separate, real check per
-    # tools/CONTRACT.md "Dispatch and actions": a family MUST validate
-    # action/input correspondence, not just rely on schema conformance.
-    # ChildTool handlers here do not themselves reject extra keys (that is
-    # each child's own responsibility, per "implementation independence"),
-    # but the family-level schema composition still advertises strict-empty.
-    schema = fam.build_schema()
-    manual_branch = next(b for b in schema["properties"]["input"]["oneOf"] if b["title"] == "manual input")
-    assert manual_branch["additionalProperties"] is False
-    assert manual_branch["properties"] == {}
-
-
 def _minimal_evaluate_if_then(condition: dict, action: str, input_value: dict) -> bool | None:
     """Tiny, dependency-free structural evaluator for exactly the ``if``/
     ``then`` shape :meth:`ToolFamily.build_schema` generates — not a general

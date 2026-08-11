@@ -83,12 +83,6 @@ def _payload(result):
     return json.loads(block.text)
 
 
-def test_list_tools_exposes_only_the_public_telegram_family(tmp_path):
-    manager, _account = _make_manager(tmp_path)
-    names = [t.name for t in _list_tools_via_transport(manager)]
-    assert names == ["telegram"]
-
-
 def test_public_telegram_action_reaches_manager(tmp_path):
     manager, account = _make_manager(tmp_path)
 

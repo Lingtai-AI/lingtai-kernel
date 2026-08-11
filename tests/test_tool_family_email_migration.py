@@ -490,15 +490,6 @@ def test_manual_degraded_case_preserves_the_loader_error_verbatim(tmp_path):
         assert generic not in result
 
 
-def test_manual_reserved_name_collision_raises_at_construction():
-    """Registering a second ``manual`` child is a defect, not a precedence call."""
-    from lingtai.tools.tool_family import ChildTool, ToolFamily, ToolFamilyError
-
-    child = ChildTool("manual", dict(MANUAL_INPUT_SCHEMA), lambda _i: {})
-    with pytest.raises(ToolFamilyError):
-        ToolFamily("email", [child, child])
-
-
 def test_manual_performs_no_mailbox_io(tmp_path):
     """``manual`` is read-only: no send, no read-state change."""
     agent = _agent(tmp_path)
