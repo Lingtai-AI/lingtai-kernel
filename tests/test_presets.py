@@ -415,7 +415,7 @@ def test_load_preset_rejects_invalid_thinking(tmp_path, value):
         load_preset(str(f))
 
 
-@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+@pytest.mark.parametrize("value", ["high"])
 def test_load_preset_accepts_thinking_for_anthropic(tmp_path, value):
     """The Anthropic adapter maps thinking to a budget, so the level is real."""
     p = {

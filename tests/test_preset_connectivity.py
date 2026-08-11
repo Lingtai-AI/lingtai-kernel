@@ -6,19 +6,6 @@ from unittest.mock import patch
 import pytest
 
 
-def test_no_credentials_when_env_var_unset(monkeypatch):
-    """If api_key_env is set but the env var is not, return no_credentials immediately."""
-    monkeypatch.delenv("MISSING_KEY", raising=False)
-    from lingtai.kernel.preset_connectivity import check_connectivity
-    result = check_connectivity(
-        provider="minimax",
-        base_url="https://api.minimax.io",
-        api_key_env="MISSING_KEY",
-    )
-    assert result["status"] == "no_credentials"
-    assert "MISSING_KEY" in result.get("error", "")
-
-
 def test_no_credentials_does_not_make_network_call(monkeypatch):
     """When env var is missing, no socket/network call is attempted."""
     monkeypatch.delenv("MISSING_KEY", raising=False)
@@ -30,6 +17,7 @@ def test_no_credentials_does_not_make_network_call(monkeypatch):
             api_key_env="MISSING_KEY",
         )
         assert result["status"] == "no_credentials"
+        assert "MISSING_KEY" in result.get("error", "")
         probe.assert_not_called()
 
 

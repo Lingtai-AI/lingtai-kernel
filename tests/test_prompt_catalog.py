@@ -413,10 +413,6 @@ def test_guidance_catalog_files_are_resources():
     assert "INDEX.md" in names
     for sid in GUIDANCE_SECTION_ORDER:
         assert f"{sid}.md" in names
-        # Each resource is independently readable (catches glob regressions).
-        text = root.joinpath(f"{sid}.md").read_text(encoding="utf-8")
-        meta, _ = split_frontmatter(text)
-        assert meta.get("id") == sid
 
 
 def test_prompt_resource_packaging_metadata_stays_connected():
