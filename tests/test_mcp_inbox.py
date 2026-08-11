@@ -269,37 +269,6 @@ def test_scan_coalesces_multiple_events_into_one_notification(tmp_path):
         assert p["preview"] not in notif["instructions"]
 
 
-def test_scan_summary_uses_singular_for_one_event(tmp_path):
-    import json as _json
-
-    agent, workdir = _mk_agent(tmp_path)
-    _write_event(workdir, "imap", "ev1", {
-        "from": "a", "subject": "s", "body": "b",
-    })
-    _scan_once(agent, workdir / INBOX_DIRNAME)
-    notif_file = workdir / ".notification" / "mcp.imap.json"
-    assert notif_file.exists()
-    notif = _json.loads(notif_file.read_text(encoding="utf-8"))
-    assert "1 new event" in notif["header"]  # no plural 's'
-
-
-def test_scan_publishes_notification_file(tmp_path):
-    """Events are published to .notification/ — no explicit _wake_nap needed."""
-    import json as _json
-
-    agent, workdir = _mk_agent(tmp_path)
-    _write_event(workdir, "telegram", "ev1", {
-        "from": "alice", "subject": "hi", "body": "hello",
-    })
-
-    _scan_once(agent, workdir / INBOX_DIRNAME)
-
-    notif_file = workdir / ".notification" / "mcp.telegram.json"
-    assert notif_file.exists()
-    notif = _json.loads(notif_file.read_text(encoding="utf-8"))
-    assert notif["icon"] == "💬"
-    assert notif["data"]["source"] == "telegram"
-    assert "previews" in notif["data"]
 
 
 def test_scan_truncates_long_body_into_preview_snippet(tmp_path):

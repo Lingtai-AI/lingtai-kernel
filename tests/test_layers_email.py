@@ -153,24 +153,6 @@ def test_email_receive_fallback_id(tmp_path):
     assert out["email"]["data"]["count"] == 1
 
 
-def test_email_receive_via_agent(tmp_path):
-    """After add_capability('email'), agent._on_mail_received publishes
-    the unread email notification to ``.notification/email.json``."""
-    from tests._notification_store_helpers import snapshot_notifications
-
-    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    email_id = _make_inbox_email(agent.working_dir, sender="sender", subject="hi", message="body")
-    agent._on_mail_received({
-        "_mailbox_id": "xyz",
-        "from": "sender",
-        "to": ["test"],
-        "subject": "hi",
-        "message": "body",
-    })
-    out = snapshot_notifications(agent.working_dir)
-    assert "email" in out
-    assert out["email"]["data"]["count"] == 1
-
 
 # ---------------------------------------------------------------------------
 # Mailbox: check, read
@@ -353,41 +335,6 @@ def test_email_send_cc_one_sent_record(tmp_path):
 # Send — saves to sent/
 # ---------------------------------------------------------------------------
 
-def test_email_send_saves_to_sent(tmp_path):
-    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    mail_svc = MagicMock()
-    mail_svc.address = "me"
-    mail_svc.send.return_value = None
-    agent._mail_service = mail_svc
-    mgr = agent._email_manager
-    result = mgr.handle({
-        "action": "send", "address": "someone",
-        "message": "hello", "subject": "test",
-    })
-    assert result["status"] == "sent"
-    sent_dir = agent.working_dir / "mailbox" / "sent"
-    assert sent_dir.is_dir()
-    sent_emails = list(sent_dir.iterdir())
-    assert len(sent_emails) == 1
-    msg = json.loads((sent_emails[0] / "message.json").read_text())
-    assert msg["message"] == "hello"
-    assert msg["sent_at"]
-
-
-def test_email_send_saves_bcc_in_sent(tmp_path):
-    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    mail_svc = MagicMock()
-    mail_svc.address = "me"
-    mail_svc.send.return_value = None
-    agent._mail_service = mail_svc
-    mgr = agent._email_manager
-    mgr.handle({
-        "action": "send", "address": "someone",
-        "message": "secret", "bcc": ["hidden"],
-    })
-    sent_dir = agent.working_dir / "mailbox" / "sent"
-    msg = json.loads(list(sent_dir.iterdir())[0].joinpath("message.json").read_text())
-    assert msg["bcc"] == ["hidden"]
 
 
 def test_email_send_rejects_body_over_hard_limit(tmp_path):

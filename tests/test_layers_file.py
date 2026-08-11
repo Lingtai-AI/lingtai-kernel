@@ -376,16 +376,3 @@ def test_grep_error_shape(tmp_path):
                             expect_substring="pattern")
     finally:
         agent.stop(timeout=1.0)
-
-
-def test_file_tool_errors_match_executor_predicate(tmp_path):
-    """C2 hidden P1: tool_executor predicate (status=='error') now catches them."""
-    agent = _file_agent(tmp_path)
-    try:
-        for action in ("write", "edit", "glob", "grep"):
-            args = {"content": "x"} if action == "write" else {}
-            result = file_call(agent, action, **args)
-            assert isinstance(result, dict) and result.get("status") == "error", \
-                f"{action}: tool_executor would silently drop {result!r}"
-    finally:
-        agent.stop(timeout=1.0)

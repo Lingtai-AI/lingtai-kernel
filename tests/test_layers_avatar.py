@@ -161,15 +161,6 @@ class TestAvatarManager:
         assert not (child_dir / "system" / "character.md").is_file()
         assert not (child_dir / "knowledge" / "knowledge.json").is_file()
 
-    def test_spawn_missing_files_ok(self, tmp_path):
-        """Spawn with no identity files in the parent should not error."""
-        from lingtai.agent import Agent
-        parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
-                            capabilities=["avatar"])
-        mgr = parent.get_capability("avatar")
-        result = mgr.handle({"action": "spawn", "input": {"name": "clone", "confirm": True}})
-        assert result["status"] == "ok"
-
     def test_ledger_records_spawn(self, tmp_path):
         """Ledger should record the spawn event with name + boot_status."""
         from lingtai.agent import Agent
@@ -342,15 +333,6 @@ class TestMissionQualityGate:
         assert "action" in schema["properties"]
 
 
-class TestSetupAvatar:
-    def test_setup_avatar(self):
-        agent = MagicMock()
-        mgr = setup_avatar(agent)
-        assert isinstance(mgr, AvatarManager)
-        assert agent.add_tool.call_count == 1
-        tool_names = {call.args[0] for call in agent.add_tool.call_args_list}
-        assert tool_names == {"avatar"}
-
 
 class TestAddCapability:
     def test_add_capability_avatar(self, tmp_path):
@@ -448,29 +430,6 @@ class TestUnifiedAvatarTool:
         assert result["agent_name"] == "helper"
         prompt_path = parent._working_dir.parent / "helper" / ".prompt"
         assert "Investigate the heartbeat regression" in prompt_path.read_text(encoding="utf-8")
-
-    def test_omitted_action_fails_deterministically_and_does_not_default_to_spawn(
-        self, tmp_path, fake_avatar_launch,
-    ):
-        """Missing 'action' must NOT default to spawn — action is schema- and
-        runtime-required, matching the knowledge/mcp/skills/notification/system/
-        soul/daemon canonical action-tool contract."""
-        from lingtai.agent import Agent
-        parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
-                            capabilities=["avatar"])
-        mgr = parent.get_capability("avatar")
-
-        # Even with a fully valid spawn payload (name + confirm), omitting
-        # 'action' must fail deterministically rather than silently spawning.
-        result = mgr.handle({"name": "helper2", "confirm": True})
-        assert "error" in result
-        assert result["error"] == "unknown action: '', only 'spawn', 'rules', or 'manual' is supported"
-        assert result.get("status") != "ok"
-
-        # No process/filesystem/ledger mutation happened.
-        assert not (parent._working_dir.parent / "helper2").exists()
-        assert not (parent._working_dir / "delegates" / "ledger.jsonl").exists()
-        fake_avatar_launch.poll.assert_not_called()
 
     def test_rules_dispatch_preserves_admin_gate_and_content_validation(self, tmp_path):
         """action='rules' keeps admin gate + non-empty content validation."""

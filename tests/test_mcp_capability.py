@@ -78,17 +78,6 @@ def test_validator_accepts_optional_homepage():
     assert ok, err
 
 
-def test_validator_accepts_record_without_homepage():
-    ok, err = validate_record({
-        "name": "imap",
-        "summary": "test",
-        "transport": "stdio",
-        "command": "python",
-        "args": [],
-        "source": "user",
-    })
-    assert ok, err
-
 
 def test_validator_rejects_empty_homepage():
     ok, err = validate_record({

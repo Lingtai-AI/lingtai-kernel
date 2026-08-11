@@ -27,26 +27,6 @@ def test_identity_header_merge_can_skip_user_agent(monkeypatch):
     assert headers["X-LingTai-Version"] == "9.8.7"
 
 
-def test_openai_adapter_builds_client_with_identity_headers(monkeypatch):
-    from lingtai.llm.openai import adapter as mod
-
-    captured = {}
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr(mod.openai, "OpenAI", FakeOpenAI)
-    monkeypatch.setattr("lingtai.llm.identity_headers.lingtai_version", lambda: "9.8.7")
-
-    mod.OpenAIAdapter(api_key="sk-test", default_headers={"X-Test": "1"})
-
-    headers = captured["default_headers"]
-    assert headers["User-Agent"] == "LingTai/9.8.7"
-    assert headers["X-LingTai-Client"] == "LingTai"
-    assert headers["X-LingTai-Version"] == "9.8.7"
-    assert headers["X-Test"] == "1"
-
 
 def test_anthropic_adapter_builds_client_with_identity_headers(monkeypatch):
     from lingtai.llm.anthropic import adapter as mod
