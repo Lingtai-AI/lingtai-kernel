@@ -55,6 +55,7 @@ _BUILTIN_TOOLS = [
     "soul",
     "psyche",
     "system",
+    "task_card",
     "vision",
     "web_search",
     "browser",
