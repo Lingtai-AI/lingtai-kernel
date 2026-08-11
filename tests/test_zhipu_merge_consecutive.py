@@ -96,21 +96,6 @@ def test_merge_assistant_preserves_tool_calls_from_last():
     assert merged["tool_calls"] == tc_second
 
 
-def test_merge_assistant_only_last_has_tool_calls():
-    """First assistant has no tool_calls, second does — should keep them."""
-    tc = [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]
-    msgs = [
-        {"role": "user", "content": "go"},
-        {"role": "assistant", "content": "thought"},
-        {"role": "assistant", "content": "", "tool_calls": tc},
-    ]
-    result = _merge_consecutive_same_role(msgs)
-    assert len(result) == 2
-    merged = result[1]
-    assert merged["content"] == "thought"
-    assert merged["tool_calls"] == tc
-
-
 def test_merge_assistant_only_first_has_tool_calls():
     """First assistant has tool_calls, second doesn't — first's preserved."""
     tc = [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]

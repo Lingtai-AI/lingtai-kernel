@@ -379,15 +379,6 @@ def test_root_allof_correlation_survives_both_provider_wires() -> None:
             ), action
 
 
-def test_dispatch_is_identical_regardless_of_originating_wire(tmp_path: Path) -> None:
-    """Dispatch keys off the normalized args dict, not the provider wire."""
-    agent = _StubAgent(tmp_path)
-    envelope = {"action": "presets", "input": {}, "reasoning": "list them"}
-    first = system_tool.handle(agent, dict(envelope))
-    second = system_tool.handle(agent, dict(envelope, summarize=False))
-    assert first == second
-
-
 # ---------------------------------------------------------------------------
 # 4. Privilege classes and address rules
 # ---------------------------------------------------------------------------

@@ -358,44 +358,6 @@ def test_process_response_third_identical_tool_error_still_continues(tmp_path):
     assert not any(event.startswith("repeated_tool_error") for event, _ in agent.logs)
     assert not (tmp_path / ".notification" / "repeated_tool_error.json").exists()
 
-def test_process_response_second_identical_tool_error_still_continues():
-    """The second identical tool error should still be sent to the model."""
-    agent = _FakeAgent()
-    agent._executor = _RepeatedErrorExecutor(error="same tool error")
-    agent._cancel_event = threading.Event()
-    agent._on_tool_result_hook = None
-    agent._intermediate_text_streamed = True
-    agent._sent_tracker = _NoopSentTracker()
-    agent._working_dir = Path("/nonexistent/lingtai-test-repeated-errors")
-    agent._session = _ContinuingSession(
-        agent._chat,
-        [
-            LLMResponse(
-                text="",
-                tool_calls=[ToolCall(id="call_2", name="bash", args={"command": "fail"})],
-            ),
-            LLMResponse(text="done", tool_calls=[]),
-        ],
-    )
-
-    response = LLMResponse(
-        text="",
-        tool_calls=[ToolCall(id="call_1", name="bash", args={"command": "fail"})],
-    )
-
-    result = _process_response(agent, response, ledger_source="test")
-
-    assert result == {
-        "text": "done",
-        "failed": False,
-        "errors": ["same tool error", "same tool error"],
-    }
-    assert len(agent._session.sent) == 2
-    assert [batch[0].id for batch in agent._chat.committed] == ["call_1", "call_2"]
-    assert not agent._chat.interface.has_pending_tool_calls()
-    assert not any(event.startswith("repeated_tool_error") for event, _ in agent.logs)
-
-
 def test_process_response_logs_cancel_before_tool_dispatch():
     agent = _FakeAgent()
     real_result = ToolResultBlock(

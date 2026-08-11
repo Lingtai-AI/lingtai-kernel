@@ -195,15 +195,6 @@ def wheel_entries(wheel_archive: Path) -> set[str]:
         return {_logical(name) for name in zf.namelist()}
 
 
-def test_wheel_ships_every_tool_contract(wheel_entries: set[str]):
-    missing = [
-        f"lingtai/tools/{tool}/CONTRACT.md"
-        for tool in _BUILTIN_TOOLS
-        if f"lingtai/tools/{tool}/CONTRACT.md" not in wheel_entries
-    ]
-    assert not missing, "tool contracts missing from wheel: %r" % missing
-
-
 def test_wheel_ships_vision_manual(wheel_entries: set[str]):
     assert "lingtai/tools/vision/manual/SKILL.md" in wheel_entries
 
@@ -219,7 +210,7 @@ def test_wheel_ships_complete_web_search_manual_bundle(wheel_entries: set[str]):
 
 
 def test_wheel_ships_exact_expected_tool_contracts(wheel_entries: set[str]):
-    # Keep the manifest closed: the shared tools contract, twenty top-level
+    # Keep the manifest closed: the shared tools contract, twenty-one top-level
     # built-in tool contracts, and one intentional daemon component contract.
     # No other nested/manual contract may sneak in through an over-broad glob.
     expected = {

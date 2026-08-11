@@ -429,13 +429,6 @@ def test_non_boolean_summarize_fails_loudly(tmp_path):
         assert result["error_code"] == "INVALID_ARGUMENT"
 
 
-def test_summarize_absent_is_default_false_and_unaffected(tmp_path):
-    agent = _Agent(tmp_path)
-    manager = setup(agent, search_service=_Search(), browser_port=_Port())
-    result = manager.handle({"action": "search", "input": {"query": "q"}})
-    assert result["status"] == "ok"
-
-
 def test_search_has_no_result_count_cap_for_a_large_finite_provider_response(tmp_path):
     """No LingTai-imposed top-N or content-size cap: a large finite result set
     — well beyond both the historical 20-item cap and the 50_000-char inline

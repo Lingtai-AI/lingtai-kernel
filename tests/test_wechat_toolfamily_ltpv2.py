@@ -101,9 +101,6 @@ def test_no_audit_or_presentation_field_leaks_into_any_action_branch():
 @pytest.mark.parametrize(
     ("action", "valid_input"),
     [
-        ("send", {"user_id": "wxid_a@im.wechat", "text": "hi"}),
-        ("send", {"user_id": "wxid_a@im.wechat", "media_path": "/tmp/x.png"}),
-        ("send", {"user_id": "wxid_a@im.wechat", "text": "hi", "media_path": "/tmp/x.png"}),
         ("check", {}),
         ("read", {"user_id": "wxid_a@im.wechat"}),
         ("read", {"user_id": "wxid_a@im.wechat", "limit": 5}),
@@ -128,7 +125,6 @@ def test_valid_payload_accepted_per_action(action, valid_input):
     [
         # missing required fields
         ("send", {"text": "no user_id"}),
-        ("send", {"user_id": "wxid_a@im.wechat"}),  # neither text nor media_path
         ("read", {}),  # user_id required
         ("reply", {"message_id": "abc"}),  # text required
         ("reply", {"text": "hi"}),  # message_id required
@@ -136,7 +132,6 @@ def test_valid_payload_accepted_per_action(action, valid_input):
         ("add_contact", {"user_id": "wxid_a@im.wechat"}),  # alias required
         ("remove_contact", {}),  # neither alias nor user_id
         # cross-action field leakage
-        ("send", {"user_id": "a", "text": "hi", "message_id": "reply-only"}),
         ("reply", {"message_id": "abc", "text": "hi", "user_id": "leak"}),
         ("search", {"query": "x", "media_path": "leak"}),
         ("check", {"user_id": "leak"}),

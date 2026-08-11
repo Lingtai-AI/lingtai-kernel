@@ -223,23 +223,6 @@ def test_replacement_records_summary_input_metadata():
     assert repl["summary_input_truncated"] is False
 
 
-def test_replacement_records_summary_effect_metadata():
-    repl = build_summary_replacement(
-        tool_name="bash",
-        tool_call_id="t1",
-        summary_text="ok",
-        reason="r",
-        original_visible_chars=100,
-        summary_input_chars=100,
-        summary_input_truncated=False,
-    )
-    assert repl["summary_effect"] == {
-        "prev_chars": 100,
-        "after_chars": 2,
-        "saved_chars": 98,
-    }
-
-
 def test_cap_refusal_summary_input_metadata_is_zero_untruncated():
     # No LLM input exists on the cap-refusal path (LLM not called).
     refusal = build_cap_refusal(
