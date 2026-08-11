@@ -38,7 +38,10 @@ def _envelope(result_str):
     )
 
 
-def _run_claude(thinking="default", extra_argv=None):
+_OMITTED = object()
+
+
+def _run_claude(thinking=_OMITTED, extra_argv=None):
     captured = {}
     adapter = ClaudeCodeAdapter(extra_argv=extra_argv)
 
@@ -49,7 +52,12 @@ def _run_claude(thinking="default", extra_argv=None):
     with patch(
         "lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run
     ):
-        session = adapter.create_chat("opus", "sys", thinking=thinking)
+        if thinking is _OMITTED:
+            # Exercise create_chat with the kwarg genuinely absent, not merely
+            # forwarded as the default sentinel.
+            session = adapter.create_chat("opus", "sys")
+        else:
+            session = adapter.create_chat("opus", "sys", thinking=thinking)
         session.send("hello")
     return captured["cmd"]
 
@@ -61,10 +69,14 @@ def test_explicit_thinking_becomes_effort_flag(thinking):
     assert cmd[cmd.index("--effort") + 1] == thinking
 
 
-@pytest.mark.parametrize("thinking", [None, "default"])
+@pytest.mark.parametrize(
+    "thinking",
+    [None, "default", _OMITTED],
+    ids=["none", "default", "kwarg-absent"],
+)
 def test_omitted_thinking_sends_no_effort_flag(thinking):
-    """The omission sentinel emits no ``--effort`` flag; the CLI's own default
-    applies and the command stays byte-identical to pre-effort behavior."""
+    """Explicit sentinels and a genuinely absent ``thinking`` kwarg emit no
+    ``--effort`` flag, leaving the CLI's own default in force."""
     assert "--effort" not in _run_claude(thinking=thinking)
 
 

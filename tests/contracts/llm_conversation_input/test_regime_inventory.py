@@ -85,13 +85,26 @@ def test_registry_matrix_builds_expected_classes(edge: regimes.RegistryEdge) -> 
 
 
 def test_registry_matrix_covers_exactly_the_registered_providers() -> None:
-    """The union of exact provider names the registry matrix builds equals the
-    current registry key set. Adding a provider (a new registry key) or dropping
-    one from the matrix fails here — this is factory coverage, not a name union
-    that stays green when a provider is mapped to the wrong regime."""
-    registered = regimes.registered_provider_names()
-    built = regimes.registry_edge_provider_names()
+    """A fresh ``register_all_adapters()`` registry exactly matches the matrix.
 
+    Clear/re-register proves startup freshness rather than inheriting import-time
+    state; snapshot/restore keeps this stateful assertion isolated from siblings.
+    This is factory coverage, not a name union that stays green when a provider
+    is mapped to the wrong regime.
+    """
+    from lingtai.llm._register import register_all_adapters
+
+    registry = LLMService._adapter_registry  # type: ignore[attr-defined]
+    snapshot = dict(registry)
+    try:
+        registry.clear()
+        register_all_adapters()
+        registered = set(registry)
+    finally:
+        registry.clear()
+        registry.update(snapshot)
+
+    built = regimes.registry_edge_provider_names()
     missing = registered - built
     extra = built - registered
     assert not missing, (

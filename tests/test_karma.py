@@ -270,9 +270,12 @@ class TestSelfSleepPendingNotificationsGuard:
         return path
 
     def test_sleep_refused_when_notification_pending(self, tmp_path):
+        """Pin the exact kernel#112 race: the turn observed an empty queue,
+        mail arrived during the LLM call, then the agent requested sleep."""
         from lingtai.tools.system import handle
         agent = _make_agent(tmp_path)
-        # Simulate the pre-turn baseline: no notifications observed yet.
+        # Simulate the pre-turn baseline: no notifications observed yet; the
+        # payload below is the mail that arrives mid-turn.
         agent._notification_fp = ()
 
         self._write_notification(agent, "email.json", {
@@ -287,8 +290,10 @@ class TestSelfSleepPendingNotificationsGuard:
         assert result.get("status") == "ok"
         # Refusal message, not the sleep confirmation
         assert "refused" in result.get("message", "").lower()
-        # State must NOT have transitioned
-        assert agent.state != AgentState.ASLEEP
+        # State must NOT have transitioned.
+        assert agent.state != AgentState.ASLEEP, (
+            "kernel#112 regression: agent must not sleep with mail waiting"
+        )
         assert not agent._asleep.is_set()
 
     def test_sleep_refused_when_notification_arrived_mid_turn(self, tmp_path):

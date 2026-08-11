@@ -19,6 +19,34 @@ def test_build_system_prompt_with_sections():
     assert "Remember: user likes concise" in prompt
 
 
+def test_system_prompt_manager_section_metadata_round_trip():
+    mgr = SystemPromptManager()
+    mgr.write_section("role", "You are an orchestrator", protected=True)
+    mgr.write_section("pad", "User likes concise")
+
+    assert mgr.list_sections() == [
+        {"name": "role", "protected": True, "length": 23},
+        {"name": "pad", "protected": False, "length": 18},
+    ]
+    assert mgr.read_section("role") == "You are an orchestrator"
+    assert mgr.read_section("pad") == "User likes concise"
+
+
+def test_system_prompt_manager_delete_is_idempotent():
+    mgr = SystemPromptManager()
+    mgr.write_section("temp", "temporary content")
+
+    assert mgr.read_section("temp") == "temporary content"
+    assert mgr.delete_section("temp") is True
+    assert mgr.read_section("temp") is None
+    assert mgr.delete_section("temp") is False
+
+
+def test_system_prompt_manager_reads_never_written_section_as_none():
+    mgr = SystemPromptManager()
+    assert mgr.read_section("nonexistent") is None
+
+
 def test_rules_renders_after_covenant_and_tools():
     """Section order is grouped by mutation frequency for cache stability:
     Batch 1 (immovable, prefix-cacheable) — principle, covenant, tools, substrate, ...

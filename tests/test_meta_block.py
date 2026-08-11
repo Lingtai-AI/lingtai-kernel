@@ -270,6 +270,8 @@ def test_current_tool_result_chars_tail_omits_readme_and_resident_readme_describ
     assert "top_results" in readme
     assert "no preview" in readme
     assert "top 5" not in readme
+    assert "proactive summarization" in readme
+    assert "ids/previews" not in readme
 
 def test_current_tool_result_chars_readme_is_resident_not_tail_state():
     agent = SimpleNamespace(_conversation=[])
@@ -1636,10 +1638,14 @@ def test_render_meta_time_blind_with_context_present_emits_empty_time_slot():
 
 
 def test_build_meta_history_tokens_does_not_double_count_system_and_tools():
-    """Regression: history_tokens must NOT include the system prompt or tool
-    schema tokens (they belong to system_tokens). Computed from the server's
+    """Regression: after decomposition has run, numeric context stays absent
+    from ``build_meta`` while the local usage estimate remains correct.
+
+    ``history_tokens`` must NOT include the system prompt or tool schema tokens
+    (they belong to ``system_tokens``). It is computed from the server's
     authoritative input count minus system + tools, mirroring
-    SessionManager.get_token_usage's ctx_history_tokens."""
+    ``SessionManager.get_token_usage``'s ``ctx_history_tokens``.
+    """
     agent = _fake_agent_with_session(
         system_prompt_tokens=5000,
         tools_tokens=500,
@@ -1654,8 +1660,9 @@ def test_build_meta_history_tokens_does_not_double_count_system_and_tools():
 
 
 def test_build_meta_usage_matches_get_context_pressure_after_restore():
-    """Regression: on the very first turn after a restore (before the first
-    LLM call returns), the meta-prefix usage% must match what
+    """Regression: on the first post-refresh ``text_input`` after restoring
+    the wire conversation from ``chat_history.jsonl`` (before the first LLM call
+    returns), the meta-prefix usage% must match what
     SessionManager.get_context_pressure() would report for the same state.
     Otherwise the molt warning and the injected '[... | context: X%]'
     prefix show different numbers on the same turn, confusing the agent.

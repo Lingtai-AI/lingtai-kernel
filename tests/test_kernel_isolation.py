@@ -169,7 +169,8 @@ def test_kernel_import_only_loads_parent_and_kernel():
     )
     assert result.returncode == 0, f"Subprocess error:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "CLEAN" in result.stdout, (
-        f"The 'lingtai' or 'tools' package leaked into sys.modules after importing lingtai.kernel.\n"
+        f"The 'lingtai' or 'tools' package leaked into sys.modules after importing lingtai.kernel; "
+        f"lingtai.kernel must not eagerly load lingtai.tools.\n"
         f"stdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
     )

@@ -392,9 +392,10 @@ def test_started_at_format_consistent_across_tiers(tmp_path):
     t3 = _rebuild_via_full_scan(events_path, molt_count=2)
 
     expected = _expected_iso(BOUNDARY_TS)
-    assert t1.started_at == expected
-    assert t2.started_at == expected
-    assert t3.started_at == expected
+    for rebuilt in (t1, t2, t3):
+        assert rebuilt.started_at == expected
+        assert rebuilt.started_at.endswith("Z")
+        assert rebuilt.started_at != str(BOUNDARY_TS)
 
 
 def test_started_at_none_when_no_boundary(tmp_path):
