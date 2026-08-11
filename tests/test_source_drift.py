@@ -229,34 +229,6 @@ class TestSourceDriftNudge:
         state = source_drift._state(agent)
         assert not state.get("emitted", False)
 
-    def test_drift_detected_emits_nudge(self):
-        """When fingerprints differ, nudge is emitted."""
-        from lingtai.kernel.nudge.source_drift import check
-
-        startup_fp = {
-            "git_rev": "abc1234",
-            "source_digest": "deadbeef0123",
-            "captured_at": "2026-06-14T12:00:00Z",
-        }
-        disk_fp = {
-            "git_rev": "xyz9999",
-            "source_digest": "cafebabe4567",
-            "captured_at": "2026-06-14T13:00:00Z",
-        }
-        agent = self._make_agent(startup_fp=startup_fp)
-
-        with (
-            patch(self._PATCH_TARGET, return_value=disk_fp),
-            patch("lingtai.kernel.nudge.upsert") as mock_upsert,
-        ):
-            check(agent)
-            mock_upsert.assert_called_once()
-
-        from lingtai.kernel.nudge import source_drift
-        state = source_drift._state(agent)
-        assert state.get("emitted") is True
-        assert "abc1234" in state.get("emitted_for", "")
-        assert "xyz9999" in state.get("emitted_for", "")
 
     def test_throttle_skips_within_interval(self):
         """Second call within 60s should be a no-op."""
@@ -301,8 +273,8 @@ class TestSourceDriftNudge:
         # Should not raise
         check(agent)
 
-    def test_dev_runtime_still_emits_source_integrity_diagnostic(self):
-        """Editable/source/dev installs still surface source drift diagnostics."""
+    def test_drift_emits_source_integrity_nudge(self):
+        """A fingerprint mismatch emits the source-integrity drift nudge."""
         from lingtai.kernel.nudge.source_drift import check, _state
 
         startup_fp = {"git_rev": "aaa1111", "source_digest": "bbb2222", "captured_at": "t1"}

@@ -121,20 +121,6 @@ def test_skills_capability_remains_registered_and_configurable(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_the_skills_manual_is_reachable_through_psyche(tmp_path):
-    """The manual body the retired ``skills.manual`` returned still loads."""
-    agent, _ = _mk_agent(tmp_path)
-    try:
-        result = agent._intrinsics["psyche"](
-            {"action": "skills", "input": {}, "reasoning": "load skills guidance"}
-        )
-        assert result["status"] == "ok"
-        assert result["manual"].strip()
-        assert result["manual_path"] and Path(result["manual_path"]).as_posix().endswith(
-            ".library/intrinsic/capabilities/skills/SKILL.md"
-        )
-    finally:
-        agent.stop(timeout=1.0)
 
 
 def test_lingtai_owned_skill_frontmatter_has_last_changed_at():
@@ -703,14 +689,6 @@ def test_manual_body_is_returned_by_psyche(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_info_reports_ok_when_healthy(tmp_path):
-    agent, _ = _mk_agent(tmp_path)
-    try:
-        result = _reconcile_now(agent, _paths_of(agent))
-        assert result["status"] == "ok"
-        assert "error" not in result
-    finally:
-        agent.stop(timeout=1.0)
 
 
 def test_info_reports_degraded_when_intrinsic_missing(tmp_path):

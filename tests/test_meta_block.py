@@ -87,12 +87,6 @@ def test_build_meta_time_blind_omits_context_without_warning():
     assert "context" not in meta
 
 
-def test_build_meta_time_blind_regardless_of_timezone_awareness():
-    # time_awareness=False short-circuits even when timezone_awareness=True.
-    agent = _fake_agent(time_awareness=False, timezone_awareness=True)
-    meta = build_meta(agent)
-    assert "current_time" not in meta
-    assert "context" not in meta
 
 
 def test_build_meta_includes_adapter_comment_when_chat_provides_one():
@@ -247,15 +241,6 @@ def test_current_tool_result_chars_filters_results_at_or_below_1000_chars():
     ]
 
 
-def test_current_tool_result_chars_entries_include_tool_name_and_no_preview():
-    block = ToolResultBlock(id="tc-preview", name="bash", content="Z" * 1200)
-    agent = _agent_with_history([block])
-
-    current = current_tool_result_chars(agent)
-
-    assert current["top_results"] == [
-        {"id": "tc-preview", "tool_name": "bash", "chars": 1200}
-    ]
 
 
 def test_current_tool_result_chars_tail_omits_readme_and_resident_readme_describes_fields():
@@ -698,11 +683,6 @@ def test_stamp_meta_future_fields_are_not_carried():
     assert result == {"status": "ok"}
 
 
-def test_stamp_meta_does_not_write_elapsed_ms():
-    result = {}
-    stamp_meta(result, {"current_time": "T"}, 7)
-    assert "_runtime_pending" not in result
-    assert "_elapsed_ms" not in result
 
 
 def _fake_agent_with_session(

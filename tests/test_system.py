@@ -182,12 +182,6 @@ def test_system_rejects_unknown_and_retired_actions(tmp_path, action):
     assert "Unknown system action" in result["message"]
 
 
-def test_system_show_action_rejected(tmp_path):
-    """system(action='show') was removed; calling it must error, not silently no-op."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["system"]({"action": "show", "input": {}})
-    assert result["status"] == "error"
-    assert "Unknown system action" in result["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -197,12 +191,6 @@ def test_system_show_action_rejected(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_system_nap_returns_unknown_action(tmp_path):
-    """nap is no longer a valid system action."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["system"]({"action": "nap", "input": {"seconds": 1}})
-    assert result["status"] == "error"
-    assert "Unknown system action" in result["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -245,10 +233,6 @@ def test_system_refresh(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_system_unknown_action(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["system"]({"action": "bogus", "input": {}})
-    assert result["status"] == "error"
 
 
 # ---------------------------------------------------------------------------

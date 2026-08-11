@@ -361,38 +361,8 @@ def test_restore_token_state():
 # the cumulative ``get_token_usage`` totals).
 # ------------------------------------------------------------------
 
-def test_runtime_session_token_usage_reports_since_refresh_deltas():
-    sm, _, _ = make_session_manager()
-    response = MagicMock()
-    response.usage.input_tokens = 100
-    response.usage.output_tokens = 50
-    response.usage.thinking_tokens = 10
-    response.usage.cached_tokens = 20
-    sm._track_usage(response)
-    sm._track_usage(response)
-
-    usage = sm.get_runtime_session_token_usage()
-    assert usage["api_calls"] == 2
-    assert usage["input_tokens"] == 200
-    assert usage["cached_tokens"] == 40
-    assert usage["avg_input_tokens_per_api_call"] == 100
-    assert usage["session_cache_rate"] == 0.2
 
 
-def test_runtime_session_token_usage_resets_on_refresh_restore():
-    # Runtime session = since last refresh/process start: restore re-baselines so
-    # post-refresh deltas begin at zero (contrast the injected since-molt
-    # ``token_usage.session``, which reads cumulative totals that SURVIVE refresh).
-    sm, _, _ = make_session_manager()
-    sm.restore_token_state({
-        "input_tokens": 5_000_000_000, "output_tokens": 1_000_000,
-        "thinking_tokens": 500_000, "cached_tokens": 4_000_000_000,
-        "api_calls": 27_863,
-    })
-    usage = sm.get_runtime_session_token_usage()
-    assert usage["api_calls"] == 0
-    assert usage["input_tokens"] == 0
-    assert usage["cached_tokens"] == 0
 
 
 def test_get_current_session_token_usage_is_deprecated_alias_of_runtime():

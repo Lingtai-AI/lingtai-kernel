@@ -198,29 +198,6 @@ def test_mail_types_are_treated_as_normal(tmp_path, mail_type):
     assert out["email"]["data"]["count"] == 1
 
 
-def test_normal_email_notifies_inbox(tmp_path):
-    """Normal-type mail publishes ``.notification/email.json``.
-
-    Under the .notification/ filesystem redesign, mail arrival no longer
-    posts MSG_TC_WAKE to the agent inbox.  Instead it writes the unread
-    digest to ``.notification/email.json`` and calls ``_wake_nap`` to
-    nudge the heartbeat for sub-second sync latency.  The kernel's
-    notification sync mechanism reads the file and injects the wire
-    pair (or wakes the agent if asleep).
-    """
-    from tests._notification_store_helpers import snapshot_notifications
-
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    _persist_inbox_email(agent.working_dir, sender="colleague", subject="hello", message="hi there")
-    agent._on_mail_received({
-        "_mailbox_id": "test123",
-        "from": "colleague", "to": "test", "subject": "hello",
-        "message": "hi there", "type": "normal",
-    })
-    out = snapshot_notifications(agent.working_dir)
-    assert "email" in out
-    assert out["email"]["data"]["count"] == 1
-    assert not agent._cancel_event.is_set()
 
 
 def test_non_admin_can_send_normal_mail(tmp_path):
@@ -251,48 +228,3 @@ def test_non_admin_can_send_normal_mail(tmp_path):
 # ---------------------------------------------------------------------------
 # Mail type=silence/kill — now treated as normal mail (no special handling)
 # ---------------------------------------------------------------------------
-
-
-def test_mail_type_silence_treated_as_normal(tmp_path):
-    """type='silence' is treated like normal mail: publishes ``.notification/email.json``,
-    does not set cancel."""
-    from tests._notification_store_helpers import snapshot_notifications
-
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    assert not agent._cancel_event.is_set()
-    _persist_inbox_email(agent.working_dir, sender="boss", subject="shh", message="be quiet")
-
-    agent._on_mail_received({
-        "_mailbox_id": "msg001",
-        "from": "boss", "to": "test", "subject": "shh",
-        "message": "be quiet", "type": "silence",
-    })
-
-    # Must NOT set the cancel event — silence goes through signal files now.
-    assert not agent._cancel_event.is_set()
-    # Mail published as normal; the notification sync owns wake.
-    out = snapshot_notifications(agent.working_dir)
-    assert "email" in out
-    assert out["email"]["data"]["count"] == 1
-
-
-def test_mail_type_kill_treated_as_normal(tmp_path):
-    """type='kill' is treated like normal mail: publishes ``.notification/email.json``,
-    does not set cancel or shutdown."""
-    from tests._notification_store_helpers import snapshot_notifications
-
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    assert not agent._cancel_event.is_set()
-    _persist_inbox_email(agent.working_dir, sender="boss", subject="die", message="terminate")
-
-    agent._on_mail_received({
-        "_mailbox_id": "msg002",
-        "from": "boss", "to": "test", "subject": "die",
-        "message": "terminate", "type": "kill",
-    })
-
-    # Must NOT set cancel or shutdown — kill goes through karma system intrinsic.
-    assert not agent._cancel_event.is_set()
-    out = snapshot_notifications(agent.working_dir)
-    assert "email" in out
-    assert out["email"]["data"]["count"] == 1

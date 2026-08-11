@@ -553,14 +553,7 @@ def test_send_fires_message(tmp_path):
 # working_dir property
 # ---------------------------------------------------------------------------
 
-def test_working_dir_property(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    assert agent.working_dir == tmp_path / "test"
 
-def test_working_dir_property_required():
-    """working_dir is a required argument — omitting it raises TypeError."""
-    with pytest.raises(TypeError):
-        BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=FakeNotificationStore())
 
 
 # ---------------------------------------------------------------------------

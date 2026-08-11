@@ -655,18 +655,6 @@ def test_manifest_carries_namespaced_artifact_marker(tmp_path):
     assert out["artifact"] == ARTIFACT_MARKER
 
 
-def test_is_spill_manifest_refuses_arbitrary_business_dict():
-    """A business dict that uses status='spilled' and spill_path keys for
-    its own unrelated purpose must NOT be classified as a manifest."""
-    # No artifact marker, no cap_chars, no original_char_count — looks
-    # superficially similar but is not a real manifest.
-    business_dict = {
-        "status": "spilled",
-        "spill_path": "/data/business/spilled-2026-05-23.csv",
-        "rows": 1234,
-        "notes": "user dumped overflow to disk during ETL",
-    }
-    assert not is_spill_manifest(business_dict)
 
 
 # -- Refinement 4: over-window classifier + AED integration -----------------

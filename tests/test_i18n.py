@@ -21,13 +21,7 @@ class TestT:
         result = t("zh", "system.current_time", time="2026-03-19T00:00:00Z", ctx="CTX")
         assert "2026-03-19T00:00:00Z" in result
 
-    def test_template_substitution(self):
-        result = t("en", "system.current_time", time="2026-03-19T00:00:00Z", ctx="CTX")
-        assert "[Current time: 2026-03-19T00:00:00Z | context: CTX]" in result
 
-    def test_chinese_template(self):
-        result = t("zh", "system.current_time", time="2026-03-19T00:00:00Z", ctx="CTX")
-        assert "2026-03-19T00:00:00Z" in result
 
     def test_wen_key(self):
         result = t("wen", "system.current_time", time="2026-03-19T00:00:00Z", ctx="CTX")

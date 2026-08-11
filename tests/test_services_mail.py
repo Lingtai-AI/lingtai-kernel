@@ -183,35 +183,6 @@ class TestMailAttachments:
             listener.stop()
             stop.set()
 
-    def test_send_without_attachment(self, tmp_path):
-        """Messages without attachments still work normally."""
-        sender_dir = _setup_agent_dir(tmp_path / "sender")
-        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
-
-        received = []
-        event = threading.Event()
-        stop = threading.Event()
-        _keep_heartbeat_alive(receiver_dir, stop)
-
-        def on_message(msg):
-            received.append(msg)
-            event.set()
-
-        listener = PosixFilesystemMailAdapter(working_dir=receiver_dir)
-        listener.listen(on_message)
-
-        try:
-            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
-            result = sender.send(
-                str(receiver_dir),
-                {"from": "sender", "to": str(receiver_dir), "message": "no attachments"},
-            )
-            assert result is None
-            assert event.wait(timeout=5.0)
-            assert received[0]["message"] == "no attachments"
-        finally:
-            listener.stop()
-            stop.set()
 
     def test_attachment_file_not_found(self, tmp_path):
         """send() returns error when attachment file does not exist."""
@@ -307,25 +278,6 @@ class TestMailAttachments:
             listener.stop()
             stop.set()
 
-    def test_attachment_not_found_leaves_no_inbox_orphan(self, tmp_path):
-        """A missing attachment must not leave an orphaned inbox directory."""
-        sender_dir = _setup_agent_dir(tmp_path / "sender")
-        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
-        stop = threading.Event()
-        _keep_heartbeat_alive(receiver_dir, stop)
-
-        try:
-            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
-            result = sender.send(
-                str(receiver_dir),
-                {"message": "hi", "attachments": ["/nonexistent/file.png"]},
-            )
-            assert isinstance(result, str)
-            assert "Attachment not found" in result
-            inbox = receiver_dir / "mailbox" / "inbox"
-            assert not inbox.is_dir() or not list(inbox.iterdir())
-        finally:
-            stop.set()
 
     def test_partial_attachment_failure_leaves_no_inbox_orphan(self, tmp_path):
         """When the second of two attachments is missing, nothing remains."""

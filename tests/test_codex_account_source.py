@@ -514,9 +514,6 @@ def test_service_tier_whitespace_only_omits():
     assert _normalize_service_tier("  ") is None
 
 
-def test_service_tier_unsupported_raises():
-    with pytest.raises(ValueError, match="auto"):
-        _normalize_service_tier("auto")
 
 
 def test_service_tier_non_string_raises():

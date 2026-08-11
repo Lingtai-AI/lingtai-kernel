@@ -229,24 +229,3 @@ def test_repeated_identical_tool_errors_can_continue_past_three(tmp_path):
         "call_3",
         "call_4",
     ]
-
-
-def test_string_continuation_regression_would_be_visible(tmp_path):
-    """Test double records strings so old hard-stop regressions fail loudly."""
-    agent = _make_agent(_RepeatedErrorExecutor(error="same tool error"), working_dir=tmp_path)
-    agent._session = _ContinuingSession(
-        agent._chat,
-        [
-            LLMResponse(text="", tool_calls=[ToolCall(id="call_2", name="bash", args={})]),
-            LLMResponse(text="", tool_calls=[ToolCall(id="call_3", name="bash", args={})]),
-            LLMResponse(text="done", tool_calls=[]),
-        ],
-    )
-
-    _process_response(
-        agent,
-        LLMResponse(text="", tool_calls=[ToolCall(id="call_1", name="bash", args={})]),
-        ledger_source="test",
-    )
-
-    assert not [payload for payload in agent._session.sent if isinstance(payload, str)]

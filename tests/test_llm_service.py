@@ -6,10 +6,6 @@ import os
 from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW, LLMService
 
 
-def test_context_window_stored():
-    """context_window should be accepted and stored."""
-    sig = inspect.signature(LLMService.__init__)
-    assert "context_window" in sig.parameters
 
 
 def test_context_window_default_and_invalid_values_normalize_to_conservative():

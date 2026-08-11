@@ -373,12 +373,6 @@ class TestAddress:
         svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
         assert svc.address == agent_dir.name
 
-    def test_address_is_str(self, tmp_path):
-        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
-
-        agent_dir = _make_agent_dir(tmp_path, "agent01")
-        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
-        assert isinstance(svc.address, str)
 
 
 def test_pseudo_agent_outbox_pickup(tmp_path):

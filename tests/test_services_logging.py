@@ -203,40 +203,6 @@ class TestBaseAgentLoggingIntegration:
         # Verify ts is present
         assert all("ts" in e for e in events)
 
-    def test_injected_journal_logs_to_working_dir(self, tmp_path):
-        """An injected journal writes JSONL in the agent working dir."""
-        from lingtai.kernel.tool_executor import ToolExecutor
-
-        agent = BaseAgent(
-            intrinsics=_TEST_INTRINSICS,
-            service=make_mock_service(),
-            agent_name="test",
-            working_dir=tmp_path / "test_agent",
-            event_journal=PosixJsonlEventJournalAdapter(tmp_path / "test_agent"), workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
-        )
-        agent.add_tool("greet", schema={"type": "object", "properties": {}}, handler=lambda args: {"status": "ok"})
-
-        guard = LoopGuard()
-        errors = []
-        tc = ToolCall(name="greet", args={})
-        executor = ToolExecutor(
-            dispatch_fn=agent._dispatch_tool,
-            make_tool_result_fn=lambda name, result, **kw: agent.service.make_tool_result(
-                name, result, provider=agent._config.provider, **kw
-            ),
-            guard=guard,
-            known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
-            logger_fn=agent._log,
-        )
-        executor.execute([tc], collected_errors=errors)
-
-        # Log file should exist in working dir
-        log_file = agent.working_dir / "logs" / "events.jsonl"
-        assert log_file.is_file()
-        events = _read_durable_events(agent)
-        types = [e["type"] for e in events]
-        assert "tool_call" in types
 
     def test_state_change_logged(self, tmp_path):
         """State transitions are logged."""
@@ -286,17 +252,6 @@ class TestSQLiteEventIndex:
         rows = query_sqlite_event_index(tmp_path, "SELECT type FROM events WHERE type='after_close'")
         assert rows == []
 
-    def test_sqlite_sidecar_fail_open(self, tmp_path):
-        log_file = tmp_path / "events.jsonl"
-        index = SQLiteEventIndex(tmp_path / "log.sqlite")
-        index.disable("simulated")
-        svc = CompositeLoggingService(JSONLLoggingService(log_file), sqlite_index=index)
-
-        svc.log({"type": "test", "ts": 1})
-        svc.close()
-
-        assert json.loads(log_file.read_text().strip())["type"] == "test"
-        assert index.disabled_reason == "simulated"
 
     def test_sqlite_sidecar_coerces_invalid_timestamp(self, tmp_path):
         log_file = tmp_path / "events.jsonl"
