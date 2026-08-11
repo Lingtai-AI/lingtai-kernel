@@ -57,6 +57,7 @@ def test_missing_finish_result_discoverable_at_the_advertised_physical_route(
 
     message = str(excinfo.value)
     assert _GUIDANCE in message
+    assert "inspect the run's trace/result" in message
     assert _ROUTE in _normalized(message)
     # The guidance must name the physical file, not the result_path field —
     # daemon.json/artifacts.json/check all persist result_path=null here.
@@ -126,6 +127,7 @@ def test_daemon_context_carries_guidance_with_truthful_modal_wording():
 def test_manual_and_contract_name_the_physical_result_route():
     manual = _MANUAL.read_text(encoding="utf-8")
     assert "missing-finish failure" in manual
+    assert "inspect the run's trace/result" in manual
     assert _ROUTE in _normalized(manual)
     # The old route claim (`check`, `result_path`) advertised a field that is
     # null in the exact missing-finish state; it must not come back.

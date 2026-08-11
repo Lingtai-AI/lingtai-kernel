@@ -1,4 +1,6 @@
 """Unit tests for claude-p result usage normalization (no external `claude`)."""
+import pytest
+
 from lingtai.tools.daemon import _normalize_claude_usage
 
 
@@ -55,23 +57,25 @@ def test_normalize_claude_usage_returns_none_when_all_zero():
     }) is None
 
 
-def test_normalize_claude_usage_rejects_non_int_fields():
-    """A malformed (string/None) token count invalidates the whole event,
-    matching the strict Codex/Cursor normalizer contract."""
-    assert _normalize_claude_usage({
-        "input_tokens": "lots", "output_tokens": 7,
-        "cache_read_input_tokens": None,
-    }) is None
-
-
-def test_normalize_claude_usage_rejects_bool_fields():
-    """bool is an int subclass but is not a token count."""
-    assert _normalize_claude_usage({
-        "input_tokens": True, "output_tokens": 7,
-    }) is None
-
-
-def test_normalize_claude_usage_rejects_negative_fields():
-    assert _normalize_claude_usage({
-        "input_tokens": -1, "output_tokens": 7,
-    }) is None
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"input_tokens": -1, "output_tokens": 7},
+        {"input_tokens": 100, "output_tokens": True},
+        {"input_tokens": True, "output_tokens": 7},
+        {
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "cache_read_input_tokens": -5,
+        },
+        {"input_tokens": "lots", "output_tokens": 7},
+        {
+            "input_tokens": "lots",
+            "output_tokens": 7,
+            "cache_read_input_tokens": None,
+        },
+    ],
+)
+def test_normalize_claude_usage_rejects_invalid_fields(usage):
+    """Every consumed token field must be a non-negative, non-bool integer."""
+    assert _normalize_claude_usage(usage) is None

@@ -75,6 +75,13 @@ def test_third_consecutive_high_round_warns():
     assert r.streak == 3 and r.active is True
 
 
+def test_streak_continues_warning_while_pressure_high():
+    r = ContextPressureReminder()
+    for round_id in (1, 2, 3, 4, 5):
+        r.note_round(0.90, round_id=round_id)
+    assert r.streak == 5 and r.active is True
+
+
 def test_duplicate_round_id_is_noop():
     r = ContextPressureReminder()
     r.note_round(0.90, round_id=7)
@@ -89,6 +96,13 @@ def test_drop_below_ratio_resets_streak():
     r.note_round(0.90, round_id=2)
     r.note_round(0.50, round_id=3)  # relieved
     assert r.streak == 0 and r.active is False
+
+    # Relief restarts the consecutive-high requirement from scratch.
+    r.note_round(0.90, round_id=4)
+    r.note_round(0.90, round_id=5)
+    assert r.streak == 2 and r.active is False
+    r.note_round(0.90, round_id=6)
+    assert r.streak == 3 and r.active is True
 
 
 def test_threshold_is_inclusive_at_ratio():

@@ -1334,6 +1334,31 @@ def _run_legacy_direct_popen_cleanup_probe(cleanup: str) -> dict:
 
 
 @pytest.mark.skipif(os.name != "posix", reason="legacy process-group regression requires POSIX signals")
+@pytest.mark.parametrize(
+    ("cleanup", "report_key", "report_value"),
+    [
+        ("group", "path", "group"),
+        ("reclaim-all", "status", "reclaimed"),
+    ],
+)
+def test_legacy_direct_popen_cleanup_signals_exact_child_and_reaps(
+    cleanup, report_key, report_value,
+):
+    """Both detached legacy cleanup paths send real SIGTERM and reap."""
+    result = _run_legacy_direct_popen_cleanup_probe(cleanup)
+    assert result["termination_scope"] == "inherited_supervisor_group"
+    assert result["child_pgid"] == result["host_pgid"]
+    assert result["returncode"] == result["expected_signal_returncode"] == -signal.SIGTERM
+    assert result["waited_returncode"] == -signal.SIGTERM
+    assert result["reaped"] is True
+    assert result["child_alive_after"] is False
+    assert result["tracked_after"] == 0
+    assert result["host_alive"] is True
+    assert result["parent_alive"] is True
+    assert result["report"][report_key] == report_value
+
+
+@pytest.mark.skipif(os.name != "posix", reason="legacy process-group regression requires POSIX signals")
 def test_legacy_direct_popen_group_cleanup_signals_exact_child_and_reaps():
     '''The retained detached direct-Popen group path sends real SIGTERM.'''
     result = _run_legacy_direct_popen_cleanup_probe("group")

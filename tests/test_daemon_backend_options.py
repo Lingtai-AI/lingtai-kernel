@@ -500,6 +500,32 @@ def test_backend_schema_enum_matches_ordered_contract():
     )
 
 
+@pytest.mark.parametrize(
+    ("backend_label", "expected"),
+    [
+        ("MiMo Code", True),
+        ("Qwen Code", True),
+        ("Kimi Code", True),
+        ("Oh-My-Pi", True),
+        ("cursor", True),
+        ("opencode", True),
+        ("claude-p", True),
+        ("claude-code", True),
+        ("claude-interactive", False),
+        ("interactive", False),
+    ],
+)
+def test_backend_schema_description_matches_supported_surface(
+    backend_label, expected,
+):
+    from tests._daemon_helpers import daemon_action_input_schema
+
+    description = daemon_action_input_schema(
+        "emanate", "en"
+    )["properties"]["backend"]["description"]
+    assert (backend_label.lower() in description.lower()) is expected
+
+
 def test_backend_metadata_consistency_keeps_hidden_legacy_claude():
     hidden = {"claude", "claude-interactive"}
     assert set(_BACKEND_SCHEMA_ENUM) == (
