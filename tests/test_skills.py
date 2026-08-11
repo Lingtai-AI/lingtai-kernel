@@ -680,6 +680,7 @@ def test_reconcile_result_omits_the_manual_body(tmp_path):
         result = _reconcile_now(agent, _paths_of(agent))
         assert "skills_manual" in result  # the composer still reads it for health
         assert result["status"] == "ok"
+        assert "error" not in result
     finally:
         agent.stop(timeout=1.0)
 
@@ -693,7 +694,11 @@ def test_manual_body_is_returned_by_psyche(tmp_path):
         result = agent._intrinsics["psyche"](
             {"action": "skills", "input": {}, "reasoning": "test"}
         )
+        assert result["status"] == "ok"
         assert result["manual"] == expected
+        assert result["manual_path"] and Path(result["manual_path"]).as_posix().endswith(
+            ".library/intrinsic/capabilities/skills/SKILL.md"
+        )
     finally:
         agent.stop(timeout=1.0)
 

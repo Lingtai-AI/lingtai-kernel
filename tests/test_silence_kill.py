@@ -23,6 +23,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+import pytest
+
 from lingtai.agent import Agent
 from lingtai.kernel.base_agent import BaseAgent
 from tests._workdir_lease_helpers import make_test_lease
@@ -154,6 +156,46 @@ def test_sequential_execution_stops_on_cancel(tmp_path):
 # ---------------------------------------------------------------------------
 # Normal mail — unchanged behavior
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mail_type", ["normal", "silence", "kill"])
+def test_mail_types_are_treated_as_normal(tmp_path, mail_type):
+    """Legacy-looking mail types still publish normally and never cancel."""
+    from tests._notification_store_helpers import snapshot_notifications
+
+    agent = BaseAgent(
+        intrinsics=_TEST_INTRINSICS,
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=tmp_path / "test",
+        workdir_lease=make_test_lease(),
+        snapshot_port=make_test_snapshot_port(),
+        agent_presence=make_test_presence_store(),
+        lifecycle_clock=make_test_lifecycle_clock(),
+        source_revision_port=make_test_source_revision_port(),
+        notification_store=notification_store_for(tmp_path / "test"),
+    )
+    assert not agent._cancel_event.is_set()
+    _persist_inbox_email(
+        agent.working_dir,
+        sender="colleague",
+        subject="hello",
+        message="hi there",
+    )
+
+    agent._on_mail_received({
+        "_mailbox_id": f"mail-{mail_type}",
+        "from": "colleague",
+        "to": "test",
+        "subject": "hello",
+        "message": "hi there",
+        "type": mail_type,
+    })
+
+    assert not agent._cancel_event.is_set()
+    out = snapshot_notifications(agent.working_dir)
+    assert "email" in out
+    assert out["email"]["data"]["count"] == 1
 
 
 def test_normal_email_notifies_inbox(tmp_path):
