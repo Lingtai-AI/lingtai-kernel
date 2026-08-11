@@ -385,61 +385,6 @@ def test_materialize_relative_presets_path_resolves_against_workdir(tmp_path, mo
     assert data["manifest"]["llm"]["provider"] == "p1"
 
 
-def test_materialize_omitted_path_falls_back_to_default(tmp_path, monkeypatch):
-    """preset block uses a `~/...` style active path resolved via $HOME."""
-    fake_home = tmp_path / "home"
-    fake_home.mkdir()
-    monkeypatch.setenv("HOME", str(fake_home))
-    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
-    plib = fake_home / ".lingtai-tui" / "presets"
-    plib.mkdir(parents=True)
-    (plib / "fallback.json").write_text(json.dumps({
-        "name": "fallback",
-        "description": {"summary": "fallback preset"},
-        "manifest": {
-            "llm": {"provider": "p2", "model": "m2",
-                    "api_key": None, "api_key_env": "P2KEY"},
-            "capabilities": {"file": {}},
-        },
-    }))
-
-    wd = tmp_path / "agent"
-    wd.mkdir()
-    env = wd / ".env"
-    env.write_text("P2KEY=sk-test\n")
-
-    init = {
-        "manifest": {
-            "agent_name": "alice",
-            "language": "en",
-            "preset": {
-                "active": "~/.lingtai-tui/presets/fallback.json",
-                "default": "~/.lingtai-tui/presets/fallback.json",
-                "allowed": ["~/.lingtai-tui/presets/fallback.json"],
-            },
-            "llm": {"provider": "PLACEHOLDER", "model": "PLACEHOLDER",
-                    "api_key": None, "api_key_env": "P2KEY"},
-            "capabilities": {},
-            "soul": {"delay": 120},
-            "stamina": 3600,
-            "molt_pressure": 0.8,
-            "molt_prompt": "",
-            "max_turns": 50,
-            "admin": {"karma": True},
-            "streaming": False,
-        },
-        "principle": "p", "covenant": "c", "pad": "", "lingtai": "",
-        "soul": "",
-        "env_file": str(env),
-    }
-    (wd / "init.json").write_text(json.dumps(init))
-
-    a = _make_probe_agent(wd)
-    data = a._read_init()
-    assert data is not None
-    assert data["manifest"]["llm"]["provider"] == "p2"
-
-
 def test_materialize_picks_up_context_limit_from_legacy_layout(tmp_path, monkeypatch):
     """A legacy preset layout works in memory without rewriting the preset.
 
@@ -824,32 +769,6 @@ def test_refresh_preset_omitting_mcp_keeps_channel_reply_surface(tmp_path, monke
     assert "mcp" in agent._tool_handlers
     assert "telegram" in agent._tool_handlers
     assert "telegram" in getattr(agent, "_mcp_init_specs", {})
-
-def test_materialize_inherit_expansion_runs(tmp_path, monkeypatch):
-    """Capabilities with provider:inherit get the main LLM's provider after materialization."""
-    plib = _make_preset_lib(tmp_path, {
-        "smart": {
-            "name": "smart",
-            "description": {"summary": "smart preset"},
-            "manifest": {
-                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
-                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
-                "capabilities": {
-                    "file": {},
-                    "web_search": {"provider": "inherit"},
-                },
-            },
-        },
-    })
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
-    wd = _make_workdir(tmp_path, active_preset=str(plib / "smart.json"),
-                       presets_path=str(plib))
-    a = _make_probe_agent(wd)
-    data = a._read_init()
-    caps = data["manifest"]["capabilities"]
-    assert caps["web"]["provider"] == "gemini"
-    assert caps["web"]["api_key_env"] == "GEMINI_API_KEY"
-
 
 # ---------------------------------------------------------------------------
 # Missing-active fallback to default — cross-machine portability

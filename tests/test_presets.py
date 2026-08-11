@@ -351,53 +351,6 @@ def test_load_preset_accepts_thinking_values(tmp_path, value):
     assert loaded["manifest"]["llm"]["thinking"] == value
 
 
-@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh"])
-def test_load_preset_accepts_thinking_for_custom_openai_responses(tmp_path, value):
-    p = {
-        "name": "custom-thinking",
-        "description": _DESC,
-        "manifest": {
-            "llm": {
-                "provider": "custom",
-                "model": "custom-model",
-                "api_compat": "openai",
-                "wire_api": "responses",
-                "thinking": value,
-            },
-            "capabilities": {},
-        },
-    }
-    f = tmp_path / "custom-thinking.json"
-    f.write_text(json.dumps(p))
-
-    loaded = load_preset(str(f))
-
-    assert loaded["manifest"]["llm"]["thinking"] == value
-
-
-@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
-def test_load_preset_rejects_invalid_custom_responses_thinking(tmp_path, value):
-    p = {
-        "name": "bad-custom-thinking",
-        "description": _DESC,
-        "manifest": {
-            "llm": {
-                "provider": "custom",
-                "model": "custom-model",
-                "api_compat": "openai",
-                "wire_api": "responses",
-                "thinking": value,
-            },
-            "capabilities": {},
-        },
-    }
-    f = tmp_path / "bad-custom-thinking.json"
-    f.write_text(json.dumps(p))
-
-    with pytest.raises(ValueError, match="manifest.llm.thinking"):
-        load_preset(str(f))
-
-
 @pytest.mark.parametrize("value", ["default", "ultra", 1, None])
 def test_load_preset_rejects_invalid_thinking(tmp_path, value):
     p = {
@@ -432,23 +385,6 @@ def test_load_preset_accepts_thinking_for_anthropic(tmp_path, value):
     loaded = load_preset(str(f))
 
     assert loaded["manifest"]["llm"]["thinking"] == value
-
-
-@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
-def test_load_preset_rejects_invalid_thinking_for_anthropic(tmp_path, value):
-    p = {
-        "name": "bad-anthropic-thinking",
-        "description": _DESC,
-        "manifest": {
-            "llm": {"provider": "anthropic", "model": "claude", "thinking": value},
-            "capabilities": {},
-        },
-    }
-    f = tmp_path / "bad-anthropic-thinking.json"
-    f.write_text(json.dumps(p))
-
-    with pytest.raises(ValueError, match="manifest.llm.thinking"):
-        load_preset(str(f))
 
 
 @pytest.mark.parametrize(

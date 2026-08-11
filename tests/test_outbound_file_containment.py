@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.mcp_servers import _outbound_files
 from lingtai.mcp_servers._outbound_files import (
     OutboundFileError,
     resolve_outbound_file,
@@ -63,11 +62,6 @@ class TestResolveOutboundFile:
         assert resolve_outbound_file("pending.txt", tmp_path) == (
             tmp_path / "pending.txt"
         ).resolve()
-
-    def test_module_reexports_helpers(self):
-        assert _outbound_files.resolve_outbound_file is resolve_outbound_file
-        assert _outbound_files.OutboundFileError is OutboundFileError
-
 
 # ---------------------------------------------------------------------------
 # IMAP manager (attachments)

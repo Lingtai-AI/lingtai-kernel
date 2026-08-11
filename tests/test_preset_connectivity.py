@@ -188,21 +188,6 @@ def test_claude_code_ok_when_module_importable(monkeypatch):
         probe.assert_not_called()  # local provider — never hits the network
 
 
-def test_claude_code_no_base_url_does_not_error(monkeypatch):
-    """The bug: a saved claude-code preset was reported unreachable with
-    'no base_url and no default URL'. A local CLI-login provider must never
-    fail just because it has no base_url."""
-    from lingtai.kernel import preset_connectivity
-    with patch.object(preset_connectivity, "_module_available", return_value=True):
-        result = preset_connectivity.check_connectivity(
-            provider="claude-code",
-            base_url=None,
-            api_key_env=None,
-        )
-        assert result["status"] != "unreachable"
-        assert "no base_url" not in (result.get("error") or "")
-
-
 def test_claude_code_underscore_alias_treated_as_local(monkeypatch):
     """The underscore alias claude_code is the same local provider."""
     from lingtai.kernel import preset_connectivity

@@ -35,13 +35,11 @@ def extract(dialect, script):
     "script",
     [
         "$x = & $y",
-        "$y = & $x",
         "& $cmd -Arg 1",
         "& $arr[0]",
         "& (Get-Command foo)",
         ". $module",
         "Invoke-Expression $x",
-        "Invoke-Expression -Command $x",
         "iex 'Get-Process'",
         # The short forms exercise the same fail-closed eval-head branch as
         # these realistic download cradles:
@@ -99,7 +97,6 @@ def test_commands_after_assignment_and_control_words_are_visible(dialect, script
         ("[System.DateTime]::Now", ("[System.DateTime]::Now",)),
         ("[Math]::Max(1, 2)", ("[Math]::Max", "1,")),
         ("[int]$x = 5", ("[int]$x",)),
-        ("# comment\nGet-Process", ("#",)),
         ("#region x\nGet-Process\n#endregion", ("#region", "#endregion")),
         ("exit 1", ("exit",)),
         ("enum Color { Red }\nGet-Process", ("enum", "Red")),

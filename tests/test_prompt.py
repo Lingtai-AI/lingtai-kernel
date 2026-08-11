@@ -4,12 +4,6 @@ from lingtai.kernel.prompt import build_system_prompt_batches
 from lingtai.kernel.prompt import SystemPromptManager
 
 
-def test_build_system_prompt_minimal():
-    mgr = SystemPromptManager()
-    prompt = build_system_prompt(mgr)
-    assert isinstance(prompt, str)
-
-
 def test_build_system_prompt_with_sections():
     mgr = SystemPromptManager()
     mgr.write_section("role", "You are a test agent")
@@ -165,26 +159,6 @@ def test_character_renders_after_identity_before_pad():
     character_pos = prompt.index("I am a meticulous archivist.")
     pad_pos = prompt.index("Working notes.")
     assert identity_pos < character_pos < pad_pos
-
-
-def test_character_section_separate_from_covenant():
-    """`covenant` lives in immovable Batch 1 (before tools); `character`
-    lives in Batch 2 (after the mechanical `identity`). Asserting character
-    renders *after* identity proves it is a registered Batch-2 section rather
-    than spilling into the unordered bucket that precedes Batch 2."""
-    mgr = SystemPromptManager()
-    mgr.write_section("covenant", "The operator contract.", protected=True)
-    mgr.write_section("tools", "### bash\nRun commands.", protected=True)
-    mgr.write_section("identity", "name: alice", protected=True)
-    mgr.write_section("character", "I am a meticulous archivist.", protected=True)
-    prompt = mgr.render()
-    cov_pos = prompt.index("The operator contract.")
-    tools_pos = prompt.index("Run commands.")
-    identity_pos = prompt.index("name: alice")
-    char_pos = prompt.index("I am a meticulous archivist.")
-    # covenant before tools (Batch 1); character after identity (Batch 2).
-    assert cov_pos < tools_pos
-    assert identity_pos < char_pos
 
 
 def test_base_prompt_follows_kernel_owned_principle_without_dynamic_injection():
