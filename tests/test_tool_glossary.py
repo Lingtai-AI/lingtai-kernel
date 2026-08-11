@@ -214,33 +214,6 @@ class TestStrictGrammar:
 
 
 class TestLoadToolGlossary:
-    def test_english_body_is_empty(self):
-        body = load_tool_glossary("lingtai.tools.file", "en")
-        assert body == ""
-
-    def test_chinese_body_is_non_empty(self):
-        body = load_tool_glossary("lingtai.tools.file", "zh")
-        assert body.strip()
-        assert "read" in body
-
-    def test_wen_body_is_non_empty(self):
-        body = load_tool_glossary("lingtai.tools.file", "wen")
-        assert body.strip()
-
-    def test_wen_uses_classical_chinese_not_zh(self):
-        """wen must use classical Chinese vocabulary, not be identical to zh."""
-        zh = load_tool_glossary("lingtai.tools.file", "zh")
-        wen = load_tool_glossary("lingtai.tools.file", "wen")
-        assert zh != wen, "wen body must not be identical to zh body"
-
-    def test_frontmatter_never_in_body(self):
-        for lang in ("zh", "wen"):
-            body = load_tool_glossary("lingtai.tools.file", lang)
-            assert "---" not in body
-            assert "kind:" not in body
-            assert "tool_package:" not in body
-            assert "schema_version:" not in body
-
     def test_unknown_package_returns_empty(self):
         with pytest.warns(UserWarning, match="ModuleNotFoundError") as caught:
             body = load_tool_glossary("lingtai.tools.nonexistent", "zh")

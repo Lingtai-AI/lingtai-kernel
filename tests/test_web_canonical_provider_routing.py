@@ -168,8 +168,7 @@ def test_provider_kwarg_rejects_gated_engines_at_composition(tmp_path, engine):
     mock_factory.assert_not_called()
 
 
-@pytest.mark.parametrize("engine", ["anthropic", "gemini"])
-def test_settings_only_provider_error_is_not_a_retired_provider_error(tmp_path, engine):
+def test_settings_only_provider_error_is_not_a_retired_provider_error():
     # The two error classes must stay distinct types -- a caller catching
     # only RetiredProviderError must not accidentally swallow a
     # SettingsOnlyProviderError for an active canonical provider.

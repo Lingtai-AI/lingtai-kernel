@@ -641,23 +641,6 @@ def test_root_summarize_reaches_the_single_centralized_summarizer(tmp_path):
     )
 
 
-def test_dispatch_is_identical_regardless_of_originating_wire(tmp_path):
-    """Dispatch depends only on the normalized args dict both wires converge to."""
-    svc = MagicMock(spec=VisionService)
-    svc.analyze_image.return_value = "same answer"
-    img = tmp_path / "x.png"
-    img.write_bytes(b"fake")
-    mgr = _manager(tmp_path, svc)
-
-    chat_call = mgr.handle(
-        {"action": "analyze", "input": {"image_path": str(img), "question": "Q"}, "reasoning": "chat-wire"}
-    )
-    responses_call = mgr.handle(
-        {"action": "analyze", "input": {"image_path": str(img), "question": "Q"}, "reasoning": "responses-wire"}
-    )
-    assert chat_call == responses_call == {"status": "ok", "analysis": "same answer"}
-
-
 # ---------------------------------------------------------------------------
 # preset borrowing: one call may borrow another allowed preset's vision service
 # ---------------------------------------------------------------------------

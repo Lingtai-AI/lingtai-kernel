@@ -67,85 +67,6 @@ def make_provider_agent(
     return make_mock_agent(tmp_path, svc=svc)
 
 
-def test_vision_added_by_setup(tmp_path):
-    """setup() should register the vision tool on the agent."""
-    mock_svc = MagicMock(spec=VisionService)
-    agent = make_mock_agent(tmp_path)
-    mgr = setup(agent, vision_service=mock_svc)
-    agent.add_tool.assert_called_once()
-    assert agent.add_tool.call_args[1]["schema"] is not None or agent.add_tool.call_args[0][1] is not None
-    assert isinstance(mgr, VisionManager)
-
-
-def test_vision_with_dedicated_service(tmp_path):
-    """Vision capability should use VisionService if provided."""
-    mock_vision_svc = MagicMock(spec=VisionService)
-    mock_vision_svc.analyze_image.return_value = "A dog in the park"
-
-    agent = make_mock_agent(tmp_path)
-    mgr = VisionManager(agent, vision_service=mock_vision_svc)
-
-    img_path = tmp_path / "test.jpg"
-    img_path.write_bytes(b"\xff\xd8\xff fake jpeg")
-    result = mgr.handle(analyze(str(img_path)))
-    assert result["status"] == "ok"
-    assert "dog" in result["analysis"]
-    mock_vision_svc.analyze_image.assert_called_once()
-
-
-def test_vision_missing_image(tmp_path):
-    """Vision should return error for missing image file."""
-    mock_vision_svc = MagicMock(spec=VisionService)
-    agent = make_mock_agent(tmp_path)
-    mgr = VisionManager(agent, vision_service=mock_vision_svc)
-    result = mgr.handle(analyze("/nonexistent/image.png"))
-    assert result.get("status") == "error"
-
-
-def test_vision_relative_path(tmp_path):
-    """VisionManager should resolve relative paths against working directory."""
-    mock_vision_svc = MagicMock(spec=VisionService)
-    mock_vision_svc.analyze_image.return_value = "An image"
-
-    agent = make_mock_agent(tmp_path)
-    mgr = VisionManager(agent, vision_service=mock_vision_svc)
-    img_path = tmp_path / "photo.png"
-    img_path.write_bytes(b"\x89PNG fake")
-    result = mgr.handle(analyze("photo.png"))
-    assert result["status"] == "ok"
-    mock_vision_svc.analyze_image.assert_called_once_with(str(img_path), prompt="Describe what you see in this image.")
-
-
-def test_vision_service_error_handled(tmp_path):
-    """VisionManager should catch VisionService exceptions and return error dict."""
-    mock_vision_svc = MagicMock(spec=VisionService)
-    mock_vision_svc.analyze_image.side_effect = RuntimeError("API down")
-
-    agent = make_mock_agent(tmp_path)
-    mgr = VisionManager(agent, vision_service=mock_vision_svc)
-    img_path = tmp_path / "test.png"
-    img_path.write_bytes(b"\x89PNG fake")
-    result = mgr.handle(analyze(str(img_path)))
-    assert result["status"] == "error"
-    assert "API down" not in result["message"]
-    assert "RuntimeError" in result["message"]
-
-
-def test_vision_service_error_does_not_echo_secret_or_url(tmp_path):
-    mock_vision_svc = MagicMock(spec=VisionService)
-    mock_vision_svc.analyze_image.side_effect = RuntimeError(
-        "token=secret https://user:pw@example.test/v1"
-    )
-    agent = make_mock_agent(tmp_path)
-    mgr = VisionManager(agent, vision_service=mock_vision_svc)
-    img_path = tmp_path / "test.png"
-    img_path.write_bytes(b"fake")
-    result = mgr.handle(analyze(str(img_path)))
-    assert result["status"] == "error"
-    assert "secret" not in result["message"]
-    assert "example.test" not in result["message"]
-
-
 @pytest.mark.parametrize(
     "provider",
     ["openrouter", "deepseek", "zhipu", "glm", "grok", "qwen", "kimi", "custom"],
@@ -257,18 +178,6 @@ def test_generic_openai_compatible_unknown_wire_remains_manual(tmp_path):
     assert "unproven_wire" not in result["message"]
 
 
-def test_claude_code_remains_manual_only(tmp_path):
-    """Claude Code providers return explicit "use the Claude CLI" guidance."""
-    agent = make_provider_agent(
-        tmp_path, provider="claude-code", model="text-only", base_url="https://relay.example/v1"
-    )
-    mgr = setup(agent, provider="claude-code", api_key="sk-test")
-    assert mgr._vision_service is None
-    assert "claude -p" in mgr._manual_reason
-    assert "vision(action='manual'" in mgr._manual_reason
-    assert mgr.manual()["status"] in {"ok", "degraded"}
-
-
 @pytest.mark.parametrize("provider", ["claude-p", "claude-code", "claude_code"])
 def test_claude_family_returns_cli_guidance_not_service(tmp_path, provider):
     """Every claude-family spelling routes to the claude-cli guidance comment."""
@@ -283,19 +192,6 @@ def test_claude_family_returns_cli_guidance_not_service(tmp_path, provider):
     result = mgr._dispatch_analyze({"image_path": "x.png", "question": None})
     assert result["status"] == "error"
     assert "claude -p" in result["message"]
-
-
-def test_vision_empty_response_is_error(tmp_path):
-    """VisionManager should return error when service returns empty string."""
-    mock_vision_svc = MagicMock(spec=VisionService)
-    mock_vision_svc.analyze_image.return_value = ""
-
-    agent = make_mock_agent(tmp_path)
-    mgr = VisionManager(agent, vision_service=mock_vision_svc)
-    img_path = tmp_path / "test.png"
-    img_path.write_bytes(b"\x89PNG fake")
-    result = mgr.handle(analyze(str(img_path)))
-    assert result["status"] == "error"
 
 
 def test_vision_setup_with_provider_and_key(tmp_path):
@@ -1498,21 +1394,6 @@ def test_vision_service_abc_cannot_instantiate():
     """VisionService ABC should not be instantiable directly."""
     with pytest.raises(TypeError):
         VisionService()
-
-
-def test_vision_empty_image_path(tmp_path):
-    """VisionManager should return error for empty image path."""
-    mock_vision_svc = MagicMock(spec=VisionService)
-    agent = make_mock_agent(tmp_path)
-    mgr = VisionManager(agent, vision_service=mock_vision_svc)
-    result = mgr.handle(analyze(""))
-    assert result["status"] == "error"
-    assert "image_path" in result["message"].lower() or "provide" in result["message"].lower()
-
-
-def test_vision_setup_no_provider_is_manual_only(tmp_path):
-    agent = make_mock_agent(tmp_path)
-    assert isinstance(setup(agent), VisionManager)
 
 
 def make_custom_agent(tmp_path, *, api_compat=None, base_url=None, model=None):

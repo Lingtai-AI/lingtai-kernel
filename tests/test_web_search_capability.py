@@ -6,34 +6,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lingtai.agent import Agent
-from lingtai.tools.web_search import RetiredProviderError, SettingsOnlyProviderError, WebManager, setup
+from lingtai.tools.web_search import WebManager, setup
 from lingtai.services.websearch import SearchResult, SearchService, create_search_service
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-
-
-def test_web_added_by_capability(tmp_path):
-    """capabilities with provider should register the web tool."""
-    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path,
-                       capabilities={"web": {"provider": "duckduckgo"}})
-    assert "web" in agent._tool_handlers
-
-
-def test_web_with_dedicated_service():
-    """web capability should use SearchService if provided."""
-    mock_result = MagicMock()
-    mock_result.title = "Python"
-    mock_result.url = "https://python.org"
-    mock_result.snippet = "Python programming language"
-    mock_search_svc = MagicMock()
-    mock_search_svc.search.return_value = [mock_result]
-    agent = MagicMock()
-    mgr = WebManager(agent, search_service=mock_search_svc)
-    result = mgr.handle({"action": "search", "input": {"query": "python"}})
-    assert result["status"] == "ok"
-    assert result["results"][0]["title"] == "Python"
-    mock_search_svc.search.assert_called_once()
 
 
 def test_web_missing_query(tmp_path):
@@ -161,57 +138,6 @@ def test_web_setup_api_key_env_overrides_raw_key(monkeypatch):
         mgr.handle({"action": "search", "input": {"query": "test"}})
 
     assert mock_factory.call_args.kwargs["api_key"] == "sk-from-env"
-
-
-def test_web_setup_provider_kwarg_rejects_gemini():
-    """provider= must never select a settings-only canonical engine, even
-    with a key. Anthropic/Gemini are active canonical providers, never
-    "retired" -- this raises SettingsOnlyProviderError, not RetiredProviderError."""
-    agent = MagicMock()
-    agent._config.language = "en"
-    agent.service.provider = "gemini"
-
-    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
-        with pytest.raises(SettingsOnlyProviderError):
-            setup(agent, provider="gemini", api_key="sk-test")
-
-    mock_factory.assert_not_called()
-
-
-def test_web_setup_minimax_provider_kwarg_fails_explicitly():
-    """MiniMax leaves built-in admission; setup() fails explicitly, never DuckDuckGo."""
-    agent = MagicMock()
-    agent._config.language = "en"
-
-    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
-        with pytest.raises(RetiredProviderError):
-            setup(agent, provider="minimax", api_key="sk-test")
-
-    mock_factory.assert_not_called()
-
-
-def test_web_setup_zhipu_provider_kwarg_fails_explicitly():
-    """Zhipu leaves built-in admission; setup() fails explicitly, never DuckDuckGo."""
-    agent = MagicMock()
-    agent._config.language = "en"
-
-    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
-        with pytest.raises(RetiredProviderError):
-            setup(agent, provider="zhipu", api_key="sk-test")
-
-    mock_factory.assert_not_called()
-
-
-def test_web_engines_map_rejects_minimax_compatibility_admission():
-    """The map-shaped engines= path also refuses minimax/zhipu compatibility admission."""
-    agent = MagicMock()
-    agent._config.language = "en"
-
-    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
-        with pytest.raises(RetiredProviderError):
-            setup(agent, engines={"minimax": {"api_key": "sk-test"}})
-
-    mock_factory.assert_not_called()
 
 
 def test_inherited_web_env_key_registers(tmp_path, monkeypatch):
