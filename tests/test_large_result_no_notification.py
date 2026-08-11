@@ -52,18 +52,6 @@ def _add_tool_pair(iface: ChatInterface, call_id: str, tool_name: str, content):
     iface.add_tool_results([ToolResultBlock(id=call_id, name=tool_name, content=content)])
 
 
-def test_rescan_never_publishes_for_huge_result():
-    """A single result well over any old gate must NOT publish a notification."""
-    iface = ChatInterface()
-    # 80k chars — far above the old 50000-char total-length gate.
-    _add_tool_pair(iface, "tc-huge", "bash", {"output": "X" * 80000, "status": "ok"})
-    agent = _make_stub_agent(iface)
-
-    count = _rescan_large_tool_results(agent)
-
-    assert count == 0
-    assert agent._published == []
-
 
 def test_rescan_never_publishes_for_many_large_results():
     """Many large results together must still publish nothing."""

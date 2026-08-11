@@ -145,15 +145,11 @@ def test_extract_returns_none_on_garbage():
 # Registration
 # ---------------------------------------------------------------------------
 
-
-def test_claude_code_is_registered():
-    import lingtai.llm  # noqa: F401 — triggers register_all_adapters
-    from lingtai.llm.service import LLMService
-
-    # Both the dash and underscore spellings are registered (there is no
-    # dash/underscore normalization, and preset_connectivity aliases both).
-    assert "claude-code" in LLMService._adapter_registry
-    assert "claude_code" in LLMService._adapter_registry
+# Exact provider names, including both ``claude-code`` spellings, and their
+# concrete classes are owned by
+# ``tests/contracts/llm_conversation_input/test_regime_inventory.py``'s registry
+# matrix. Keep registration assertions there rather than regrowing a weaker
+# provider-local name-only copy.
 
 
 def test_service_builds_keyless():

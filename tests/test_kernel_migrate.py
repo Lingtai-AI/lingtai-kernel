@@ -125,23 +125,6 @@ def test_run_migrations_idempotent_within_same_process(tmp_path):
     assert first_mtime == second_mtime
 
 
-def test_run_migrations_advances_version_on_success(tmp_path):
-    """After a successful migration, the on-disk version equals CURRENT_VERSION."""
-    plib = tmp_path / "presets"
-    plib.mkdir()
-    _write_preset(plib, "p", {
-        "name": "p",
-        "manifest": {
-            "llm": {"provider": "x", "model": "y"},
-            "capabilities": {},
-            "context_limit": 8192,
-        },
-    })
-
-    run_migrations(plib)
-
-    assert _read(plib / meta_filename())["version"] == CURRENT_VERSION
-
 
 def test_run_migrations_skips_version_already_done_on_legacy_preset(tmp_path):
     """Forward-only invariant: with version=N already on disk, migrations

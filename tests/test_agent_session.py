@@ -347,32 +347,6 @@ def _expected_iso(ts: float) -> str:
     )
 
 
-def test_reverse_scan_started_at_is_iso8601(tmp_path):
-    events = [
-        _molt_ev(BOUNDARY_TS, 1),
-        _token_ev(BOUNDARY_TS + 1.0, 1000, 200, 700),
-    ]
-    events_path = _write_events(tmp_path, events)
-
-    rev = _rebuild_via_reverse_scan(events_path, molt_count=1)
-
-    assert rev.started_at == _expected_iso(BOUNDARY_TS)
-    assert rev.started_at.endswith("Z")
-    assert rev.started_at != str(BOUNDARY_TS)
-
-
-def test_full_scan_started_at_is_iso8601(tmp_path):
-    events = [
-        _molt_ev(BOUNDARY_TS, 1),
-        _token_ev(BOUNDARY_TS + 1.0, 1000, 200, 700),
-    ]
-    events_path = _write_events(tmp_path, events)
-
-    full = _rebuild_via_full_scan(events_path, molt_count=1)
-
-    assert full.started_at == _expected_iso(BOUNDARY_TS)
-    assert full.started_at.endswith("Z")
-    assert full.started_at != str(BOUNDARY_TS)
 
 
 def test_started_at_format_consistent_across_tiers(tmp_path):

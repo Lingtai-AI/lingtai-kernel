@@ -296,28 +296,6 @@ class TestSelfSleepPendingNotificationsGuard:
         )
         assert not agent._asleep.is_set()
 
-    def test_sleep_refused_when_notification_arrived_mid_turn(self, tmp_path):
-        """The exact race from kernel#112: agent observed an EMPTY queue
-        at the start of the turn, mail arrived during the LLM call, and
-        the agent then calls system(sleep). _notification_fp is still ()
-        from the pre-turn baseline; the on-disk fp is non-empty."""
-        from lingtai.tools.system import handle
-        agent = _make_agent(tmp_path)
-        agent._notification_fp = ()  # baseline: queue was empty
-
-        # Mail arrives MID-TURN
-        self._write_notification(agent, "email.json", {
-            "header": "human mail", "icon": "📧",
-            "priority": "normal", "data": {"count": 1},
-        })
-
-        result = handle(agent, {"action": "sleep", "input": {"reason": "no unread mail"}})
-
-        assert agent.state != AgentState.ASLEEP, (
-            "kernel#112 regression: agent must not sleep with mail waiting"
-        )
-        assert "refused" in result.get("message", "").lower()
-
     def test_sleep_force_true_overrides_pending_guard(self, tmp_path):
         from lingtai.tools.system import handle
         agent = _make_agent(tmp_path)

@@ -437,7 +437,7 @@ summary is accepted or a non-error result is returned.
   large-result compaction through the notification tool, and the kernel no
   longer publishes a `large_tool_result` source
   ([CONTRACT.md](../tools/notification/CONTRACT.md#behavior))
-- **supersedes**: `tests/test_large_result_no_notification.py::test_rescan_never_publishes_for_huge_result`,
+- **supersedes**: `tests/test_large_result_rescan.py::test_rescan_returns_zero_for_huge_history`,
   `tests/test_large_result_no_notification.py::test_large_result_still_reported_by_current_tool_result_chars`,
   `tests/test_large_result_no_notification.py::test_current_tool_result_chars_reports_threshold_and_over_count`
 - **runner**: any LingTai agent with `shell` and `file` tools at a checkout of

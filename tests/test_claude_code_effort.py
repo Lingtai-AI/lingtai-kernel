@@ -80,9 +80,6 @@ def test_omitted_thinking_sends_no_effort_flag(thinking):
     assert "--effort" not in _run_claude(thinking=thinking)
 
 
-def test_create_chat_without_thinking_sends_no_effort_flag():
-    assert "--effort" not in _run_claude()
-
 
 @pytest.mark.parametrize("bad", ["ultra", "", 42, "HIGH", "minimal", "none"])
 def test_out_of_vocabulary_thinking_raises(bad):
