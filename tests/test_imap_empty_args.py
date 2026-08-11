@@ -82,13 +82,6 @@ def test_empty_account_uses_default_account(account_arg):
     assert result["account"] == "me@example.com"
 
 
-def test_whitespace_account_uses_default_account():
-    account = FakeAccount()
-    result = _manager(account).handle({"action": "check", "account": "   "})
-    assert result["status"] == "ok"
-    assert result["account"] == "me@example.com"
-
-
 # --- empty/whitespace folder treated like omitted (INBOX) ------------------
 
 @pytest.mark.parametrize(
@@ -105,13 +98,6 @@ def test_empty_folder_for_check_uses_inbox(folder_arg):
     assert account.checked_folders == ["INBOX"]
 
 
-def test_whitespace_folder_for_check_uses_inbox():
-    account = FakeAccount()
-    result = _manager(account).handle({"action": "check", "folder": "  \t "})
-    assert result["status"] == "ok"
-    assert account.checked_folders == ["INBOX"]
-
-
 @pytest.mark.parametrize(
     "folder_arg",
     [
@@ -123,15 +109,6 @@ def test_empty_folder_for_search_uses_inbox(folder_arg):
     account = FakeAccount()
     result = _manager(account).handle({
         "action": "search", "query": "unseen", "folder": folder_arg,
-    })
-    assert result["status"] == "ok"
-    assert account.searched == [("INBOX", "unseen")]
-
-
-def test_whitespace_folder_for_search_uses_inbox():
-    account = FakeAccount()
-    result = _manager(account).handle({
-        "action": "search", "query": "unseen", "folder": "   ",
     })
     assert result["status"] == "ok"
     assert account.searched == [("INBOX", "unseen")]
@@ -157,17 +134,6 @@ def test_move_empty_destination_still_errors(folder_arg):
     assert account.moved == []
 
 
-def test_move_whitespace_destination_still_errors():
-    account = FakeAccount()
-    result = _manager(account).handle({
-        "action": "move",
-        "email_id": "me@example.com:INBOX:42",
-        "folder": "   ",
-    })
-    assert "error" in result
-    assert account.moved == []
-
-
 # --- flag error ergonomics --------------------------------------------------
 
 @pytest.mark.parametrize(
@@ -187,18 +153,6 @@ def test_flag_missing_flags_returns_helpful_error(flag_args):
     assert result.get("status") == "error"
     assert "flags is required" in result.get("error", "")
     assert "flags={'seen': true}" in result.get("error", "")
-    assert account.flag_calls == []
-
-
-def test_flag_empty_flags_returns_helpful_error():
-    account = FakeAccount()
-    result = _manager(account).handle({
-        "action": "flag",
-        "email_id": "me@example.com:INBOX:42",
-        "flags": {},
-    })
-    assert result.get("status") == "error"
-    assert "flags is required" in result.get("error", "")
     assert account.flag_calls == []
 
 

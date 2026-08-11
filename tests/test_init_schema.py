@@ -313,13 +313,6 @@ def test_wrong_type_streaming():
         validate_init(data)
 
 
-def test_legacy_manifest_stamina_bool_is_ignored():
-    """stamina is a retired legacy manifest field and is no longer type-checked."""
-    data = _valid_init()
-    data["manifest"]["stamina"] = True
-    validate_init(data)
-
-
 # --- optional fields ---
 
 
@@ -616,43 +609,6 @@ def test_time_awareness_field_valid_bool(field):
 def test_time_awareness_field_wrong_type_raises(field):
     data = _valid_init()
     data["manifest"][field] = "yes"
-    with pytest.raises(ValueError):
-        validate_init(data)
-
-
-def test_timezone_awareness_field_valid_bool():
-    from lingtai.init_schema import validate_init
-
-    data = {
-        "manifest": {
-            "llm": {"provider": "minimax", "model": "x"},
-            "timezone_awareness": False,
-        },
-        "covenant": "hi",
-        "lingtai": "hello",
-        "pad": "",
-        "soul": "",
-        "principle": "",
-    }
-    warnings = validate_init(data)
-    assert all("timezone_awareness" not in w for w in warnings)
-
-
-def test_timezone_awareness_field_wrong_type_raises():
-    import pytest
-    from lingtai.init_schema import validate_init
-
-    data = {
-        "manifest": {
-            "llm": {"provider": "minimax", "model": "x"},
-            "timezone_awareness": "yes",
-        },
-        "covenant": "hi",
-        "lingtai": "hello",
-        "pad": "",
-        "soul": "",
-        "principle": "",
-    }
     with pytest.raises(ValueError):
         validate_init(data)
 

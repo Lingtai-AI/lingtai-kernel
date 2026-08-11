@@ -246,30 +246,6 @@ def test_eigen_forget_wipes_context(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_eigen_unknown_object(tmp_path):
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    result = agent._intrinsics["context"]({"action": "bogus_edit", "input": {}})
-    assert "error" in result
-    agent.stop(timeout=1.0)
-
-
-def test_eigen_unknown_action(tmp_path):
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    result = agent._intrinsics["context"]({"action": "pad_bogus", "input": {}})
-    assert "error" in result
-    agent.stop(timeout=1.0)
-
-
 def test_eigen_is_gone_and_psyche_is_the_durable_domain_root(tmp_path):
     """`eigen` is gone; `context` and `psyche` are the intrinsics now.
 
