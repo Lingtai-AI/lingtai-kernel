@@ -1383,17 +1383,24 @@ class TestRenderCurrentDiary:
         assert "still good" in out
 
     def test_render_diary_format_has_now_and_entry_timestamps(self, tmp_path):
+        import re
+
         from lingtai.tools.soul import _render_current_diary
         agent = _FakeAgent(tmp_path, with_chat=False)
         self._write_events(tmp_path, [
             {"type": "diary", "text": "first", "ts": 1_700_000_000},
             {"type": "diary", "text": "second", "ts": 1_700_000_060},
+            {"type": "diary", "text": "third", "ts": 1_700_000_120},
         ])
         out = _render_current_diary(agent)
         assert out.startswith("[now: ")
         assert "\n\n[" in out
-        assert "first" in out and "second" in out
-        assert out.index("first") < out.index("second")
+        assert "first" in out and "second" in out and "third" in out
+        assert out.index("first") < out.index("second") < out.index("third")
+        timestamp_lines = re.findall(
+            r"^\[\d{2}:\d{2}:\d{2}\] diary$", out, re.MULTILINE
+        )
+        assert len(timestamp_lines) == 3
 
     def test_render_diary_tail_cap(self, tmp_path):
         from lingtai.tools.soul import _render_current_diary, _DIARY_CUE_TOKEN_CAP
@@ -1415,11 +1422,13 @@ class TestRenderCurrentDiary:
     def test_render_diary_single_oversized_entry(self, tmp_path):
         from lingtai.tools.soul import _render_current_diary
         agent = _FakeAgent(tmp_path, with_chat=False)
+        giant_text = "HUGE " + ("x " * 50_000)
         self._write_events(tmp_path, [
-            {"type": "diary", "text": "HUGE " + ("x " * 50_000), "ts": 1_700_000_000},
+            {"type": "diary", "text": giant_text, "ts": 1_700_000_000},
         ])
         out = _render_current_diary(agent)
         assert "HUGE" in out
+        assert giant_text.strip() in out
         assert out.startswith("[now: ")
 
     def test_render_includes_thinking_entries_with_kind_tag(self, tmp_path):
