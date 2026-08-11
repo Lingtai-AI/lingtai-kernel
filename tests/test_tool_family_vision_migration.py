@@ -136,7 +136,8 @@ def test_all_child_input_schemas_are_exposed_before_invocation():
     assert manual_branch["additionalProperties"] is False
 
 
-def test_reasoning_and_summarize_never_leak_into_child_input():
+@pytest.mark.parametrize("reasoning", ["chat-wire", "responses-wire"])
+def test_reasoning_and_summarize_never_leak_into_child_input(tmp_path, reasoning):
     schema = get_schema()
     for branch in schema["properties"]["input"]["oneOf"]:
         assert not {"reasoning", "_reasoning", "summarize", "action"} & set(
@@ -146,6 +147,22 @@ def test_reasoning_and_summarize_never_leak_into_child_input():
         assert not {"reasoning", "_reasoning", "summarize", "action"} & set(
             cond["then"]["properties"]["input"]["properties"]
         )
+
+    svc = MagicMock(spec=VisionService)
+    svc.analyze_image.return_value = "same answer"
+    img = tmp_path / "x.png"
+    img.write_bytes(b"fake")
+
+    result = _manager(tmp_path, svc).handle(
+        {
+            "action": "analyze",
+            "input": {"image_path": str(img), "question": "Q"},
+            "reasoning": reasoning,
+            "summarize": True,
+        }
+    )
+    assert result == {"status": "ok", "analysis": "same answer"}
+    svc.analyze_image.assert_called_once_with(str(img), prompt="Q")
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +256,7 @@ def test_analyze_success_shape_is_exact(tmp_path):
         }
     )
     assert result == {"status": "ok", "analysis": "A dog in the park"}
+    svc.analyze_image.assert_called_once_with(str(img), prompt="What animal?")
 
 
 def test_analyze_null_question_uses_the_unchanged_default_prompt(tmp_path):
@@ -281,11 +299,22 @@ def test_analyze_input_failures_keep_their_exact_messages(
     assert expected_fragment in result["message"]
 
 
-def test_analyze_request_failure_is_sanitized_and_points_to_manual(tmp_path):
+@pytest.mark.parametrize(
+    ("provider_error", "forbidden_fragments"),
+    [
+        pytest.param(
+            "token=secret https://user:pw@example.test/v1",
+            ("secret", "example.test"),
+            id="secret-shaped-error",
+        ),
+        pytest.param("API down", ("API down",), id="plain-provider-error"),
+    ],
+)
+def test_analyze_request_failure_is_sanitized_and_points_to_manual(
+    tmp_path, provider_error, forbidden_fragments
+):
     svc = MagicMock(spec=VisionService)
-    svc.analyze_image.side_effect = RuntimeError(
-        "token=secret https://user:pw@example.test/v1"
-    )
+    svc.analyze_image.side_effect = RuntimeError(provider_error)
     img = tmp_path / "x.png"
     img.write_bytes(b"fake")
 
@@ -298,8 +327,8 @@ def test_analyze_request_failure_is_sanitized_and_points_to_manual(tmp_path):
     # pre-migration bare shorthand the dispatcher now rejects.
     assert "vision(action='manual', input={}" in result["message"]
     assert "reasoning=" in result["message"]
-    assert "secret" not in result["message"]
-    assert "example.test" not in result["message"]
+    for fragment in forbidden_fragments:
+        assert fragment not in result["message"]
 
 
 def test_analyze_empty_response_is_an_error(tmp_path):

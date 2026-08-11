@@ -279,6 +279,7 @@ def test_claude_family_returns_cli_guidance_not_service(tmp_path, provider):
     assert mgr._vision_service is None
     assert "claude -p" in mgr._manual_reason
     assert "vision(action='manual'" in mgr._manual_reason
+    assert mgr.manual()["status"] in {"ok", "degraded"}
     result = mgr._dispatch_analyze({"image_path": "x.png", "question": None})
     assert result["status"] == "error"
     assert "claude -p" in result["message"]
@@ -1281,6 +1282,7 @@ def test_vision_setup_unsupported_provider_keeps_manual_route(tmp_path):
 def test_vision_setup_without_provider_keeps_manual_route(tmp_path):
     agent = make_mock_agent(tmp_path)
     mgr = setup(agent)
+    assert isinstance(mgr, VisionManager)
     assert mgr.manual()["status"] in {"ok", "degraded"}
 
 
