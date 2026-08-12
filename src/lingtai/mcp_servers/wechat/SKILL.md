@@ -125,5 +125,14 @@ ATTACHMENTS below), not a mutually exclusive choice.
 - `send` and `reply` deliver to real users — external side effects. Confirm
   recipient and content before sending unsolicited messages.
 - Actions return a result dict on success or `{'error': <message>}` on failure
-  (e.g. missing `user_id`, unreadable `media_path`). Check for the `'error'` key
-  and surface or act on it rather than assuming delivery.
+  (e.g. missing `user_id`, unreadable `media_path`). If a combined text+media
+  send delivers text and the later media step fails, the result instead has
+  `status: 'partial'`, `partial_delivery: true`, `text_status: 'sent'`,
+  `media_status: 'failed'`, a redacted `failure` stage, and
+  `automatic_retry_allowed: false`. Do not repeat the whole call automatically;
+  reconcile the delivered text before retrying media alone. The CDN upload step
+  itself makes at most three immediate attempts for transport/TLS failures,
+  HTTP 429/5xx, or a success response missing its encrypted media reference;
+  other 4xx responses are not retried. A local media deadline requests coroutine
+  cancellation, but an already accepted remote request cannot be revoked. Check
+  for the `'error'`/partial fields rather than assuming complete delivery.

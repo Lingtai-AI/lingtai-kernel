@@ -296,19 +296,25 @@ def test_wechat_send_accepts_media_path_inside_workdir(tmp_path, monkeypatch):
     media_path.write_bytes(b"PNG")
     seen: dict = {}
 
-    async def _fake_upload(path, base_url, token, user_id):
+    async def _fake_upload(
+        path, base_url, token, user_id, *, cdn_base_url,
+    ):
         seen["upload_path"] = str(path)
+        seen["cdn_base_url"] = cdn_base_url
         return {"media_id": "m1", "media_type": "image"}
 
     async def _fake_send_message(*args, **kwargs):
         seen["sent"] = True
+
+    def _fake_run_async(coro, **kwargs):
+        return asyncio.run(coro)
 
     monkeypatch.setattr(wx_media, "upload_media", _fake_upload)
     monkeypatch.setattr(
         wx_media, "make_media_item", lambda info, path: object()
     )
     monkeypatch.setattr(wx_api, "send_message", _fake_send_message)
-    monkeypatch.setattr(manager, "_run_async", asyncio.run)
+    monkeypatch.setattr(manager, "_run_async", _fake_run_async)
 
     result = manager._handle_send({
         "user_id": "wxid@im.wechat",
@@ -317,4 +323,5 @@ def test_wechat_send_accepts_media_path_inside_workdir(tmp_path, monkeypatch):
 
     assert result["status"] == "ok"
     assert seen["upload_path"] == str(media_path.resolve())
+    assert seen["cdn_base_url"] == manager._cdn_base_url
     assert seen["sent"] is True

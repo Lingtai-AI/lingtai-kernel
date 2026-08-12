@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from concurrent.futures import TimeoutError as FutureTimeoutError
 import logging
 import os
 import re
@@ -53,6 +54,20 @@ _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(__package__)
 
 TEXT_CHUNK_LIMIT = 4000
 SESSION_EXPIRED_ERRCODE = -14
+
+# A complete media upload can legitimately spend 15 seconds obtaining upload
+# parameters and 3 * 120 seconds in Tencent-style immediate CDN attempts. Give
+# encryption, parsing and scheduler cleanup a fixed 15-second local allowance.
+# Cancellation reconciliation is separately bounded; it cannot revoke a request
+# that a remote endpoint already accepted, but prevents queued coroutine work
+# from continuing after the synchronous caller returns whenever cancellation wins.
+_MEDIA_LOCAL_OVERHEAD_SECONDS = 15.0
+MEDIA_OPERATION_TIMEOUT_SECONDS = (
+    media_mod.GET_UPLOAD_URL_TIMEOUT_SECONDS
+    + media_mod.CDN_UPLOAD_MAX_ATTEMPTS * media_mod.CDN_UPLOAD_TIMEOUT_SECONDS
+    + _MEDIA_LOCAL_OVERHEAD_SECONDS
+)
+_ASYNC_CANCEL_RECONCILE_SECONDS = 1.0
 
 # LICC notification preview window and structured-message text cap. The
 # markdown preview and the structured ``recent_messages`` metadata are built
@@ -538,7 +553,9 @@ class WechatManager:
         if not text and not media_path:
             return {"error": "text or media_path is required"}
 
-        # Validate media_path before sending text to avoid partial sends.
+        # Validate media_path before sending text to avoid partial sends caused by
+        # local path errors. Network/upload failures can still happen after text
+        # delivery; those are returned and persisted as an explicit partial result.
         # Enforce the shared outbound-file containment policy first so a
         # prompt-injected path cannot exfiltrate files outside the workdir.
         if media_path:
@@ -552,6 +569,7 @@ class WechatManager:
                 return {"error": f"File not found: {media_path}"}
 
         results = []
+        delivered_text_chunks: list[str] = []
 
         # Snapshot context token under lock (poll thread may update it)
         with self._lock:
@@ -577,44 +595,124 @@ class WechatManager:
                     api.send_message(self._base_url, self._token, msg)
                 )
                 results.append(f"text ({len(chunk)} chars)")
+                delivered_text_chunks.append(chunk)
 
         # Send media (already validated above)
         if media_path:
             path = Path(media_path)
-            upload_info = self._run_async(
-                media_mod.upload_media(path, self._base_url, self._token, user_id)
-            )
-            media_item = media_mod.make_media_item(upload_info, path)
-            msg = WeixinMessage(
-                from_user_id="",
-                to_user_id=user_id,
-                client_id=f"lingtai-wechat-{uuid.uuid4().hex}",
-                message_type=2,   # BOT
-                message_state=2,  # FINISH
-                context_token=ctx_token,
-                item_list=[media_item],
-            )
-            self._run_async(
-                api.send_message(self._base_url, self._token, msg)
-            )
-            results.append(f"media ({path.name})")
+            try:
+                upload_info = self._run_async(
+                    media_mod.upload_media(
+                        path,
+                        self._base_url,
+                        self._token,
+                        user_id,
+                        cdn_base_url=self._cdn_base_url,
+                    ),
+                    timeout=MEDIA_OPERATION_TIMEOUT_SECONDS,
+                    timeout_error=media_mod.OutboundMediaError(
+                        stage="media_operation_timeout",
+                        message="The local WeChat media operation exceeded its deadline.",
+                        retryable=True,
+                    ),
+                )
+                media_item = media_mod.make_media_item(upload_info, path)
+                msg = WeixinMessage(
+                    from_user_id="",
+                    to_user_id=user_id,
+                    client_id=f"lingtai-wechat-{uuid.uuid4().hex}",
+                    message_type=2,   # BOT
+                    message_state=2,  # FINISH
+                    context_token=ctx_token,
+                    item_list=[media_item],
+                )
+                try:
+                    self._run_async(
+                        api.send_message(self._base_url, self._token, msg)
+                    )
+                except Exception as exc:
+                    raise media_mod.media_message_failure(exc) from None
+                results.append(f"media ({path.name})")
+            except media_mod.OutboundMediaError as exc:
+                failure = exc.as_dict()
+                if not delivered_text_chunks:
+                    return {
+                        "status": "failed",
+                        "error": exc.message,
+                        "media_status": "failed",
+                        "failure": failure,
+                        "automatic_retry_allowed": exc.retryable,
+                    }
 
-        # Persist to sent
+                msg_id = self._persist_sent(
+                    user_id=user_id,
+                    text="".join(delivered_text_chunks),
+                    status="partial",
+                    sent=results,
+                    media_name=path.name,
+                    failure=failure,
+                )
+                return {
+                    "status": "partial",
+                    "partial_delivery": True,
+                    "sent": results,
+                    "message_id": msg_id,
+                    "text_status": "sent",
+                    "media_status": "failed",
+                    "failure": failure,
+                    "automatic_retry_allowed": False,
+                    "warning": (
+                        "Text was already delivered. Do not retry the combined "
+                        "send automatically; reconcile first, then retry media alone."
+                    ),
+                }
+
+        msg_id = self._persist_sent(
+            user_id=user_id,
+            text=text,
+            status="sent",
+            sent=results,
+            media_name=Path(media_path).name if media_path else None,
+        )
+        return {"status": "ok", "sent": results, "message_id": msg_id}
+
+    def _persist_sent(
+        self,
+        *,
+        user_id: str,
+        text: str,
+        status: str,
+        sent: list[str],
+        media_name: str | None = None,
+        failure: dict[str, object] | None = None,
+    ) -> str:
+        """Persist delivered outbound state without retaining local file paths."""
         msg_id = str(uuid.uuid4())
         msg_dir = self._sent_dir / msg_id
         msg_dir.mkdir(parents=True, exist_ok=True)
-        sent_data = {
+        sent_data: dict[str, object] = {
             "id": msg_id,
             "to_user_id": user_id,
             "text": text,
-            "media_path": media_path,
             "date": datetime.now(timezone.utc).isoformat(),
+            "status": status,
+            "sent": list(sent),
         }
-        (msg_dir / "message.json").write_text(
-            json.dumps(sent_data, ensure_ascii=False, indent=2), encoding="utf-8",
+        if media_name:
+            sent_data["media_name"] = media_name
+        if failure is not None:
+            sent_data.update({
+                "partial_delivery": True,
+                "text_status": "sent",
+                "media_status": "failed",
+                "failure": failure,
+                "automatic_retry_allowed": False,
+            })
+        self._atomic_write(
+            msg_dir / "message.json",
+            json.dumps(sent_data, ensure_ascii=False, indent=2),
         )
-
-        return {"status": "ok", "sent": results, "message_id": msg_id}
+        return msg_id
 
     def _handle_check(self, args: dict) -> dict:
         """List conversations with unread counts.
@@ -634,7 +732,10 @@ class WechatManager:
             if not user:
                 continue
             msg_id = data.get("id", "")
-            preview = data.get("body") or data.get("text") or ""
+            preview = self._message_display_text({
+                **data,
+                "_direction": direction,
+            })
             if user not in conversations:
                 contact = self._find_contact_by_user_id(user)
                 conversations[user] = {
@@ -829,8 +930,11 @@ class WechatManager:
     def _message_display_text(message: dict) -> str:
         if message.get("_direction") == "outgoing":
             text = message.get("text") or message.get("body") or ""
-            if not text and message.get("media_path"):
-                text = f"[media: {message['media_path']}]"
+            media_label = message.get("media_name") or message.get("media_path")
+            if not text and media_label:
+                # New records persist basename-only media_name. Keep legacy
+                # media_path readable without exposing its historical directory.
+                text = f"[media: {Path(str(media_label)).name}]"
         else:
             text = message.get("body") or message.get("text") or ""
         return str(text).replace("\n", " ")
@@ -1324,16 +1428,41 @@ class WechatManager:
                 return {"alias": alias, **data}
         return None
 
-    def _run_async(self, coro):
-        """Run an async coroutine from the sync tool handler thread.
+    def _run_async(
+        self,
+        coro,
+        *,
+        timeout: float = 30,
+        timeout_error: Exception | None = None,
+    ):
+        """Run a coroutine on the poll loop with bounded timeout cancellation.
 
-        Schedules onto the poll loop's event loop via run_coroutine_threadsafe.
-        Raises RuntimeError if the addon has not been started.
+        On synchronous deadline expiry, request cancellation and wait briefly for
+        the thread-safe future to reconcile. Cancellation prevents later coroutine
+        work whenever it wins, but cannot revoke a remote request already accepted.
+        Callers with partial-delivery semantics provide a fixed redacted exception.
         """
         if not self._loop or not self._loop.is_running():
             raise RuntimeError("WeChat addon not started — call start() first")
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=30)
+        reconciled = threading.Event()
+
+        async def tracked_operation():
+            try:
+                return await coro
+            finally:
+                # Unlike the concurrent Future (which becomes cancelled as soon
+                # as cancel() is requested), this marks actual coroutine exit.
+                reconciled.set()
+
+        future = asyncio.run_coroutine_threadsafe(tracked_operation(), self._loop)
+        try:
+            return future.result(timeout=timeout)
+        except FutureTimeoutError:
+            future.cancel()
+            reconciled.wait(timeout=_ASYNC_CANCEL_RECONCILE_SECONDS)
+            if timeout_error is not None:
+                raise timeout_error from None
+            raise
 
 
 def _chunk_text(text: str, limit: int) -> list[str]:

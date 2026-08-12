@@ -410,6 +410,7 @@ related_files:
   - tests/test_web_search_capability.py
   - tests/test_wechat_config_resolution.py
   - tests/test_wechat_inbound_replay.py
+  - tests/test_wechat_media_upload_errors.py
   - tests/test_wechat_media_validation.py
   - tests/test_wechat_media_warning_integration.py
   - tests/test_wechat_notification_metadata.py

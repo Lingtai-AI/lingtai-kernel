@@ -7,6 +7,7 @@ import logging
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote, urlsplit
 
 import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -36,6 +37,138 @@ class UploadedMediaInfo:
     filekey: str
 
 log = logging.getLogger(__name__)
+
+# The iLink get-upload request uses api.DEFAULT_SEND_TIMEOUT (15 seconds).
+# Tencent v1.0.3 permits three immediate CDN attempts; each LingTai request is
+# independently bounded at 120 seconds. These constants also feed the manager's
+# complete-coroutine deadline rather than leaving mismatched magic numbers.
+GET_UPLOAD_URL_TIMEOUT_SECONDS = api.DEFAULT_SEND_TIMEOUT
+CDN_UPLOAD_TIMEOUT_SECONDS = 120.0
+CDN_UPLOAD_MAX_ATTEMPTS = 3
+
+
+@dataclass
+class OutboundMediaError(Exception):
+    """Redacted outbound upload failure with a machine-readable stage.
+
+    ``upload_media`` constructs or receives a secret-bearing CDN URL. This
+    exception intentionally retains only its hostname; path, query, fragment,
+    token, recipient ID, and local file path must never cross the tool boundary.
+    """
+
+    stage: str
+    message: str
+    endpoint_host: str | None = None
+    retryable: bool = False
+
+    def __post_init__(self) -> None:
+        Exception.__init__(self, self.message)
+
+    def as_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "stage": self.stage,
+            "message": self.message,
+            "retryable": self.retryable,
+        }
+        if self.endpoint_host:
+            result["endpoint_host"] = self.endpoint_host
+        return result
+
+
+def _safe_hostname(url: str) -> str | None:
+    """Return only a normalized hostname from a CDN URL."""
+    try:
+        return urlsplit(url).hostname
+    except (TypeError, ValueError):
+        return None
+
+
+def _valid_cdn_base_url(url: str) -> bool:
+    """Accept a configured HTTP(S) origin/path with no secret query material."""
+    if not isinstance(url, str) or not url or url != url.strip():
+        return False
+    try:
+        parsed = urlsplit(url)
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        parsed.scheme in {"http", "https"}
+        and parsed.hostname
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _valid_dynamic_upload_url(url: str) -> bool:
+    """Require an absolute HTTP(S) fallback while allowing its signed query."""
+    if not isinstance(url, str) or not url or url != url.strip():
+        return False
+    try:
+        parsed = urlsplit(url)
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        parsed.scheme in {"http", "https"}
+        and parsed.hostname
+        and not parsed.username
+        and not parsed.password
+        and not parsed.fragment
+    )
+
+
+def _official_cdn_upload_url(
+    cdn_base_url: str, upload_param: str, filekey: str,
+) -> str:
+    """Build Tencent's v1.0.3 upload route with exact component encoding."""
+    encode_uri_component_safe = "-_.!~*'()"
+    return (
+        f"{cdn_base_url.rstrip('/')}/upload?encrypted_query_param="
+        f"{quote(upload_param, safe=encode_uri_component_safe)}&filekey="
+        f"{quote(filekey, safe=encode_uri_component_safe)}"
+    )
+
+
+def _usable_encrypted_reference(value: object) -> str | None:
+    """Return only a nonblank string media reference from CDN metadata."""
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _cdn_transport_failure(exc: httpx.HTTPError, upload_url: str) -> OutboundMediaError:
+    """Map an httpx upload failure without retaining its secret request URL."""
+    if isinstance(exc, httpx.TimeoutException):
+        message = "Timed out while connecting to or uploading bytes to the WeChat CDN."
+    else:
+        message = "Could not connect to or upload bytes to the WeChat CDN."
+    return OutboundMediaError(
+        stage="cdn_upload_transport",
+        message=message,
+        endpoint_host=_safe_hostname(upload_url),
+        retryable=True,
+    )
+
+
+def media_message_failure(exc: Exception) -> OutboundMediaError:
+    """Redact a failure while sending the final iLink media message."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        return OutboundMediaError(
+            stage="media_message_http",
+            message=f"WeChat iLink rejected the media message (HTTP {status_code}).",
+            retryable=status_code >= 500 or status_code == 429,
+        )
+    if isinstance(exc, (httpx.HTTPError, TimeoutError)):
+        return OutboundMediaError(
+            stage="media_message_transport",
+            message="Could not reach WeChat iLink while sending the media message.",
+            retryable=True,
+        )
+    return OutboundMediaError(
+        stage="media_message_response",
+        message="WeChat iLink did not accept the media message.",
+        retryable=False,
+    )
 
 
 # ── Magic-byte validation ──────────────────────────────────────────────────
@@ -292,6 +425,8 @@ async def upload_media(
     base_url: str,
     token: str,
     to_user_id: str,
+    *,
+    cdn_base_url: str = api.CDN_BASE_URL,
 ) -> UploadedMediaInfo:
     """Upload a file to WeChat CDN.
 
@@ -328,59 +463,172 @@ async def upload_media(
     ciphertext = _aes128_ecb_encrypt(data, aeskey)
     filekey = secrets.token_hex(16)
 
-    # Get upload URL. filesize is ciphertext size, rawsize is plaintext size.
-    # Hermes/OpenClaw include filekey + no_need_thumb; without filekey iLink
-    # may return HTTP 200 but omit upload_full_url.
-    upload_resp = await api.get_upload_url(
-        base_url, token,
-        media_type=int(media_type),
-        to_user_id=to_user_id,
-        rawsize=len(data),
-        rawfilemd5=md5,
-        filesize=len(ciphertext),
-        aeskey=aeskey_hex,
-        filekey=filekey,
-        no_need_thumb=True,
-    )
-
-    upload_url = upload_resp.upload_full_url
-    if not upload_url:
-        raise RuntimeError("Server did not return an upload URL")
-
-    # Upload encrypted bytes to CDN. OpenClaw uses POST (not PUT) and reads
-    # the final download encrypted_query_param from the x-encrypted-param
-    # response header. Some CDN responses also embed it in a JSON body.
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            upload_url,
-            content=ciphertext,
-            headers={"Content-Type": "application/octet-stream"},
-            timeout=120.0,
+    # Get upload parameters. filesize is ciphertext size, rawsize is plaintext.
+    # Official Tencent v1.0.3 requires upload_param and constructs the CDN URL
+    # from the configured base. LingTai's extra upload_full_url is retained only
+    # as compatibility fallback when that official parameter is absent.
+    try:
+        upload_resp = await api.get_upload_url(
+            base_url, token,
+            media_type=int(media_type),
+            to_user_id=to_user_id,
+            rawsize=len(data),
+            rawfilemd5=md5,
+            filesize=len(ciphertext),
+            aeskey=aeskey_hex,
+            filekey=filekey,
+            no_need_thumb=True,
         )
-        resp.raise_for_status()
-        raw = resp.text
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        raise OutboundMediaError(
+            stage="get_upload_url_http",
+            message=f"WeChat iLink rejected the upload-URL request (HTTP {status_code}).",
+            retryable=status_code >= 500 or status_code == 429,
+        ) from None
+    except httpx.HTTPError as exc:
+        raise OutboundMediaError(
+            stage="get_upload_url_transport",
+            message="Could not reach WeChat iLink to obtain a media upload URL.",
+            retryable=True,
+        ) from None
+    except Exception:
+        raise OutboundMediaError(
+            stage="get_upload_url_response",
+            message="WeChat iLink returned an unusable upload-URL response.",
+            retryable=False,
+        ) from None
 
-    header_param = resp.headers.get("x-encrypted-param")
-    json_param: str | None = None
-    if raw and raw.strip().startswith("{"):
-        try:
-            body = resp.json()
-            json_param = (
-                body.get("encrypt_query_param")
-                or body.get("download_param")
+    raw_upload_param = upload_resp.upload_param
+    upload_full_url = (
+        upload_resp.upload_full_url
+        if isinstance(upload_resp.upload_full_url, str)
+        else ""
+    )
+    if raw_upload_param is not None:
+        if not isinstance(raw_upload_param, str) or not raw_upload_param:
+            raise OutboundMediaError(
+                stage="get_upload_url_response",
+                message="WeChat iLink returned unusable media upload parameters.",
+                retryable=False,
             )
-        except Exception:
-            json_param = None
+        if not _valid_cdn_base_url(cdn_base_url):
+            raise OutboundMediaError(
+                stage="get_upload_url_response",
+                message="WeChat iLink returned unusable media upload parameters.",
+                retryable=False,
+            )
+        upload_url = _official_cdn_upload_url(
+            cdn_base_url, raw_upload_param, filekey,
+        )
+    elif upload_full_url and _valid_dynamic_upload_url(upload_full_url):
+        upload_url = upload_full_url
+    else:
+        raise OutboundMediaError(
+            stage="get_upload_url_response",
+            message="WeChat iLink did not return usable media upload parameters.",
+            retryable=False,
+        )
 
-    download_param = header_param or json_param
-    if not download_param:
-        # Be strict here. The prior code fell back to upload_param/filekey,
-        # which made the function appear to succeed while producing media
-        # the WeChat client could not open. Better to raise loudly.
-        raise RuntimeError(
-            "CDN upload response missing x-encrypted-param header and "
-            "encrypt_query_param / download_param JSON field. The upload "
-            "may have failed silently — refusing to return media reference."
+    # Retry only this encrypted CDN POST, never the surrounding text+media send.
+    # Match Tencent v1.0.3's no-backoff behavior and retry HTTP 200 responses
+    # missing encrypted metadata: such a response is not a usable completion.
+    # Provider x-error-message and response bodies are never copied into errors.
+    download_param: str | None = None
+    last_failure: OutboundMediaError | None = None
+    try:
+        client_context = httpx.AsyncClient()
+    except Exception:
+        raise OutboundMediaError(
+            stage="cdn_upload_response",
+            message="The WeChat CDN upload request could not be prepared.",
+            endpoint_host=_safe_hostname(upload_url),
+            retryable=False,
+        ) from None
+    try:
+        async with client_context as client:
+            for attempt in range(1, CDN_UPLOAD_MAX_ATTEMPTS + 1):
+                try:
+                    resp = await client.post(
+                        upload_url,
+                        content=ciphertext,
+                        headers={"Content-Type": "application/octet-stream"},
+                        timeout=CDN_UPLOAD_TIMEOUT_SECONDS,
+                    )
+                except httpx.HTTPError as exc:
+                    last_failure = _cdn_transport_failure(exc, upload_url)
+                except Exception:
+                    # httpx.InvalidURL is not an HTTPError. Keep any unexpected
+                    # client/request construction detail behind the response stage.
+                    raise OutboundMediaError(
+                        stage="cdn_upload_response",
+                        message="The WeChat CDN upload request could not be prepared.",
+                        endpoint_host=_safe_hostname(upload_url),
+                        retryable=False,
+                    ) from None
+                else:
+                    status_code = resp.status_code
+                    if status_code != 200:
+                        retryable = status_code == 429 or status_code >= 500
+                        last_failure = OutboundMediaError(
+                            stage="cdn_upload_http",
+                            message=(
+                                "The WeChat CDN rejected the media upload "
+                                f"(HTTP {status_code})."
+                            ),
+                            endpoint_host=_safe_hostname(upload_url),
+                            retryable=retryable,
+                        )
+                        if not retryable:
+                            raise last_failure from None
+                    else:
+                        header_param = _usable_encrypted_reference(
+                            resp.headers.get("x-encrypted-param")
+                        )
+                        json_param: str | None = None
+                        raw = resp.text
+                        if raw and raw.strip().startswith("{"):
+                            try:
+                                body = resp.json()
+                                json_param = _usable_encrypted_reference(
+                                    body.get("encrypt_query_param")
+                                ) or _usable_encrypted_reference(
+                                    body.get("download_param")
+                                )
+                            except Exception:
+                                json_param = None
+                        download_param = header_param or json_param
+                        if download_param:
+                            break
+                        last_failure = OutboundMediaError(
+                            stage="cdn_upload_response",
+                            message=(
+                                "The WeChat CDN accepted the upload but did not "
+                                "return the required encrypted media reference."
+                            ),
+                            endpoint_host=_safe_hostname(upload_url),
+                            retryable=True,
+                        )
+
+                if attempt == CDN_UPLOAD_MAX_ATTEMPTS:
+                    assert last_failure is not None
+                    raise last_failure from None
+    except OutboundMediaError:
+        raise
+    except Exception:
+        raise OutboundMediaError(
+            stage="cdn_upload_response",
+            message="The WeChat CDN upload request could not be prepared.",
+            endpoint_host=_safe_hostname(upload_url),
+            retryable=False,
+        ) from None
+
+    if not download_param:  # defensive: loop exits only on a usable reference
+        raise OutboundMediaError(
+            stage="cdn_upload_response",
+            message="The WeChat CDN did not return a usable media reference.",
+            endpoint_host=_safe_hostname(upload_url),
+            retryable=False,
         )
 
     cdn_media = CDNMedia(
