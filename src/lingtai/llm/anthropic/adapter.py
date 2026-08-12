@@ -26,12 +26,18 @@ logger = get_logger()
 
 
 def _build_http_timeout(request_timeout: float | None):
-    """Build explicit per-phase HTTP timeout for SDK calls."""
+    """Build explicit per-phase HTTP timeout for SDK calls.
+
+    The read cap stays at least as long as the watchdog's ``retry_timeout``
+    (default 300s, config.py) so modern thinking models (DeepSeek/GLM
+    extended thinking, 60-180s) are not killed mid-thought before the
+    watchdog can decide.
+    """
     if request_timeout is None:
         return None
     return httpx.Timeout(
         connect=min(float(request_timeout), 30.0),
-        read=min(float(request_timeout), 60.0),
+        read=min(float(request_timeout), 300.0),
         write=min(float(request_timeout), 30.0),
         pool=10.0,
     )

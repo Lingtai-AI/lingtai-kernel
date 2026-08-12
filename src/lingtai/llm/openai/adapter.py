@@ -1093,13 +1093,16 @@ def _build_http_timeout(request_timeout: float | None):
 
     The main-thread watchdog controls total wall-clock time. SDK/httpx
     timeout values are per phase, so cap read waits to keep wedged sockets
-    from occupying the worker indefinitely.
+    from occupying the worker indefinitely. The read cap must stay at least
+    as long as the watchdog's ``retry_timeout`` (default 300s, config.py) so
+    modern thinking models (DeepSeek/GLM extended thinking, 60-180s) are not
+    killed mid-thought before the watchdog can decide.
     """
     if request_timeout is None:
         return None
     return httpx.Timeout(
         connect=min(float(request_timeout), 30.0),
-        read=min(float(request_timeout), 60.0),
+        read=min(float(request_timeout), 300.0),
         write=min(float(request_timeout), 30.0),
         pool=10.0,
     )

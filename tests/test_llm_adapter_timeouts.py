@@ -10,7 +10,7 @@ from lingtai.llm.anthropic.adapter import _build_http_timeout as anthropic_timeo
 def _assert_timeout(t: httpx.Timeout) -> None:
     assert isinstance(t, httpx.Timeout)
     assert t.connect == 30.0
-    assert t.read == 60.0
+    assert t.read == 300.0
     assert t.write == 30.0
     assert t.pool == 10.0
 
@@ -29,6 +29,15 @@ def test_timeout_respects_shorter_retry_timeout():
     assert t.read == 10.0
     assert t.write == 10.0
     assert t.pool == 10.0
+
+
+def test_timeout_read_cap_allows_thinking_models():
+    # Thinking models (DeepSeek/GLM extended thinking) can take 60-180s; the
+    # read phase must stay under the watchdog's retry_timeout (300s), not a
+    # 60s cap that kills mid-thought.
+    t = openai_timeout(300.0)
+    assert t.read == 300.0
+    assert anthropic_timeout(300.0).read == 300.0
 
 
 def test_timeout_none_passthrough():
