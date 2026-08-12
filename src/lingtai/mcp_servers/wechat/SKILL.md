@@ -125,14 +125,22 @@ ATTACHMENTS below), not a mutually exclusive choice.
 - `send` and `reply` deliver to real users — external side effects. Confirm
   recipient and content before sending unsolicited messages.
 - Actions return a result dict on success or `{'error': <message>}` on failure
-  (e.g. missing `user_id`, unreadable `media_path`). If a combined text+media
-  send delivers text and the later media step fails, the result instead has
-  `status: 'partial'`, `partial_delivery: true`, `text_status: 'sent'`,
-  `media_status: 'failed'`, a redacted `failure` stage, and
-  `automatic_retry_allowed: false`. Do not repeat the whole call automatically;
-  reconcile the delivered text before retrying media alone. The CDN upload step
-  itself makes at most three immediate attempts for transport/TLS failures,
-  HTTP 429/5xx, or a success response missing its encrypted media reference;
-  other 4xx responses are not retried. A local media deadline requests coroutine
-  cancellation, but an already accepted remote request cannot be revoked. Check
+  (e.g. missing `user_id`, unreadable `media_path`). If a later text chunk fails
+  after an earlier chunk was delivered, the result and sent history keep a
+  redacted partial record with delivered/total/failed chunk counts and only the
+  delivered text prefix; `automatic_retry_allowed` is false, so send only the
+  reconciled unsent suffix rather than repeating the whole message. If combined
+  text+media delivery reaches the media step and it fails, the result likewise
+  has `status: 'partial'`, `partial_delivery: true`, `text_status: 'sent'`, a
+  redacted `failure` stage, and `automatic_retry_allowed: false`. Final media
+  message transport failures and HTTP 429/5xx responses have
+  `remote_acceptance: 'unknown'` (and `media_status: 'unknown'`) because iLink
+  might have accepted the message before the response was lost; never retry
+  those automatically, including media-only sends. The CDN-byte upload step is
+  separate and makes at most three immediate attempts for transport/TLS
+  failures, HTTP 429/5xx, or a success response missing its encrypted media
+  reference; other 4xx responses are not retried. A local media deadline
+  requests cancellation and returns its terminal timeout only after the child
+  coroutine actually exits; cancellation cannot revoke a remote request already
+  accepted and a resistant child can extend the wall clock while it exits. Check
   for the `'error'`/partial fields rather than assuming complete delivery.

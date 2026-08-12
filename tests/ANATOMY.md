@@ -454,10 +454,13 @@ maintenance: |
 The kernel's single pytest suite and the repository's conformance evidence: a
 flat top-level package of ~380 `test_*.py` modules, a small set of shared
 `_`-prefixed helper modules and fake binaries they build on, and two focused
-sub-packages. It is a **validation surface, not an architectural component** —
-it exposes no Port, implements no promise, and nothing in `src/` imports it.
-This anatomy therefore exists to make the file inventory navigable and
-complete, not to pair with a governed contract.
+sub-packages. The WeChat outbound-media regressions include deterministic task
+cancellation/reconciliation, ambiguous final-message acceptance, and chunked
+text partial-delivery evidence without provider traffic. It is a **validation
+surface, not an architectural component** — it exposes no Port, implements no
+promise, and nothing in `src/` imports it. This anatomy therefore exists to make
+the file inventory navigable and complete, not to pair with a governed
+contract.
 
 ## Components
 

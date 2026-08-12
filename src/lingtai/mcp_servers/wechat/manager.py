@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from concurrent.futures import TimeoutError as FutureTimeoutError
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 import logging
 import os
 import re
@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from typing import Callable
+
+import httpx
 
 from .types import (
     MessageItemType, WeixinMessage, MessageItem, TextItem,
@@ -58,16 +60,17 @@ SESSION_EXPIRED_ERRCODE = -14
 # A complete media upload can legitimately spend 15 seconds obtaining upload
 # parameters and 3 * 120 seconds in Tencent-style immediate CDN attempts. Give
 # encryption, parsing and scheduler cleanup a fixed 15-second local allowance.
-# Cancellation reconciliation is separately bounded; it cannot revoke a request
-# that a remote endpoint already accepted, but prevents queued coroutine work
-# from continuing after the synchronous caller returns whenever cancellation wins.
+# On deadline expiry _run_async requests cancellation, then waits for actual task
+# exit before it reports a terminal timeout. A cancellation-resistant coroutine
+# can therefore extend the wall clock, but it can never continue invisibly after
+# the synchronous caller has been told the operation ended.
 _MEDIA_LOCAL_OVERHEAD_SECONDS = 15.0
+_ASYNC_TASK_START_TIMEOUT_SECONDS = 1.0
 MEDIA_OPERATION_TIMEOUT_SECONDS = (
     media_mod.GET_UPLOAD_URL_TIMEOUT_SECONDS
     + media_mod.CDN_UPLOAD_MAX_ATTEMPTS * media_mod.CDN_UPLOAD_TIMEOUT_SECONDS
     + _MEDIA_LOCAL_OVERHEAD_SECONDS
 )
-_ASYNC_CANCEL_RECONCILE_SECONDS = 1.0
 
 # LICC notification preview window and structured-message text cap. The
 # markdown preview and the structured ``recent_messages`` metadata are built
@@ -568,34 +571,80 @@ class WechatManager:
             if not Path(media_path).is_file():
                 return {"error": f"File not found: {media_path}"}
 
-        results = []
+        results: list[str] = []
         delivered_text_chunks: list[str] = []
+        chunks = _chunk_text(text, TEXT_CHUNK_LIMIT) if text else []
 
         # Snapshot context token under lock (poll thread may update it)
         with self._lock:
             ctx_token = self._context_tokens.get(user_id)
 
-        # Send text (chunked if needed)
-        if text:
-            chunks = _chunk_text(text, TEXT_CHUNK_LIMIT)
-            for chunk in chunks:
-                msg = WeixinMessage(
-                    from_user_id="",
-                    to_user_id=user_id,
-                    client_id=f"lingtai-wechat-{uuid.uuid4().hex}",
-                    message_type=2,   # BOT (matches Hermes/OpenClaw)
-                    message_state=2,  # FINISH
-                    context_token=ctx_token,
-                    item_list=[MessageItem(
-                        type=int(MessageItemType.TEXT),
-                        text_item=TextItem(text=chunk),
-                    )],
-                )
+        # Send text (chunked if needed). If a later chunk fails, preserve only
+        # the already delivered prefix and safe chunk counts; never persist the
+        # failed/unsent suffix or raw provider exception.
+        for chunk_number, chunk in enumerate(chunks, start=1):
+            msg = WeixinMessage(
+                from_user_id="",
+                to_user_id=user_id,
+                client_id=f"lingtai-wechat-{uuid.uuid4().hex}",
+                message_type=2,   # BOT (matches Hermes/OpenClaw)
+                message_state=2,  # FINISH
+                context_token=ctx_token,
+                item_list=[MessageItem(
+                    type=int(MessageItemType.TEXT),
+                    text_item=TextItem(text=chunk),
+                )],
+            )
+            try:
                 self._run_async(
                     api.send_message(self._base_url, self._token, msg)
                 )
-                results.append(f"text ({len(chunk)} chars)")
-                delivered_text_chunks.append(chunk)
+            except Exception as exc:
+                failure = self._text_message_failure(
+                    exc,
+                    failed_chunk=chunk_number,
+                    total_chunks=len(chunks),
+                )
+                if not delivered_text_chunks:
+                    return {
+                        "status": "failed",
+                        "error": failure["message"],
+                        "text_status": "failed",
+                        "failure": failure,
+                        "automatic_retry_allowed": failure["retryable"],
+                    }
+
+                msg_id = self._persist_sent(
+                    user_id=user_id,
+                    text="".join(delivered_text_chunks),
+                    status="partial",
+                    sent=results,
+                    failure=failure,
+                    text_status="partial",
+                    media_status="not_attempted" if media_path else None,
+                    delivered_text_chunks=len(delivered_text_chunks),
+                    total_text_chunks=len(chunks),
+                    failed_text_chunk=chunk_number,
+                )
+                return {
+                    "status": "partial",
+                    "partial_delivery": True,
+                    "sent": results,
+                    "message_id": msg_id,
+                    "text_status": "partial",
+                    **({"media_status": "not_attempted"} if media_path else {}),
+                    "delivered_text_chunks": len(delivered_text_chunks),
+                    "total_text_chunks": len(chunks),
+                    "failed_text_chunk": chunk_number,
+                    "failure": failure,
+                    "automatic_retry_allowed": False,
+                    "warning": (
+                        "A text prefix was already delivered. Do not retry the whole "
+                        "message automatically; reconcile and send only the unsent suffix."
+                    ),
+                }
+            results.append(f"text ({len(chunk)} chars)")
+            delivered_text_chunks.append(chunk)
 
         # Send media (already validated above)
         if media_path:
@@ -613,7 +662,8 @@ class WechatManager:
                     timeout_error=media_mod.OutboundMediaError(
                         stage="media_operation_timeout",
                         message="The local WeChat media operation exceeded its deadline.",
-                        retryable=True,
+                        retryable=False,
+                        remote_acceptance="unknown",
                     ),
                 )
                 media_item = media_mod.make_media_item(upload_info, path)
@@ -639,7 +689,7 @@ class WechatManager:
                     return {
                         "status": "failed",
                         "error": exc.message,
-                        "media_status": "failed",
+                        "media_status": "unknown" if exc.remote_acceptance == "unknown" else "failed",
                         "failure": failure,
                         "automatic_retry_allowed": exc.retryable,
                     }
@@ -651,6 +701,10 @@ class WechatManager:
                     sent=results,
                     media_name=path.name,
                     failure=failure,
+                    text_status="sent",
+                    media_status="unknown" if exc.remote_acceptance == "unknown" else "failed",
+                    delivered_text_chunks=len(delivered_text_chunks),
+                    total_text_chunks=len(chunks),
                 )
                 return {
                     "status": "partial",
@@ -658,7 +712,9 @@ class WechatManager:
                     "sent": results,
                     "message_id": msg_id,
                     "text_status": "sent",
-                    "media_status": "failed",
+                    "media_status": "unknown" if exc.remote_acceptance == "unknown" else "failed",
+                    "delivered_text_chunks": len(delivered_text_chunks),
+                    "total_text_chunks": len(chunks),
                     "failure": failure,
                     "automatic_retry_allowed": False,
                     "warning": (
@@ -673,8 +729,45 @@ class WechatManager:
             status="sent",
             sent=results,
             media_name=Path(media_path).name if media_path else None,
+            delivered_text_chunks=len(delivered_text_chunks) if chunks else None,
+            total_text_chunks=len(chunks) if chunks else None,
         )
         return {"status": "ok", "sent": results, "message_id": msg_id}
+
+    @staticmethod
+    def _text_message_failure(
+        exc: Exception,
+        *,
+        failed_chunk: int,
+        total_chunks: int,
+    ) -> dict[str, object]:
+        """Return a redacted stage/count record for one failed text chunk."""
+        remote_acceptance: str
+        if isinstance(exc, httpx.HTTPStatusError):
+            status_code = exc.response.status_code
+            ambiguous = status_code >= 500 or status_code == 429
+            retryable = False
+            remote_acceptance = "unknown" if ambiguous else "rejected"
+            stage = "text_message_http"
+            message = f"WeChat iLink rejected text chunk {failed_chunk} (HTTP {status_code})."
+        elif isinstance(exc, (httpx.HTTPError, TimeoutError)):
+            retryable = False
+            remote_acceptance = "unknown"
+            stage = "text_message_transport"
+            message = f"Could not reach WeChat iLink while sending text chunk {failed_chunk}."
+        else:
+            retryable = False
+            remote_acceptance = "rejected"
+            stage = "text_message_response"
+            message = f"WeChat iLink did not accept text chunk {failed_chunk}."
+        return {
+            "stage": stage,
+            "message": message,
+            "retryable": retryable,
+            "remote_acceptance": remote_acceptance,
+            "failed_text_chunk": failed_chunk,
+            "total_text_chunks": total_chunks,
+        }
 
     def _persist_sent(
         self,
@@ -685,6 +778,11 @@ class WechatManager:
         sent: list[str],
         media_name: str | None = None,
         failure: dict[str, object] | None = None,
+        text_status: str | None = None,
+        media_status: str | None = None,
+        delivered_text_chunks: int | None = None,
+        total_text_chunks: int | None = None,
+        failed_text_chunk: int | None = None,
     ) -> str:
         """Persist delivered outbound state without retaining local file paths."""
         msg_id = str(uuid.uuid4())
@@ -700,14 +798,21 @@ class WechatManager:
         }
         if media_name:
             sent_data["media_name"] = media_name
+        if delivered_text_chunks is not None:
+            sent_data["delivered_text_chunks"] = delivered_text_chunks
+        if total_text_chunks is not None:
+            sent_data["total_text_chunks"] = total_text_chunks
+        if failed_text_chunk is not None:
+            sent_data["failed_text_chunk"] = failed_text_chunk
         if failure is not None:
             sent_data.update({
                 "partial_delivery": True,
-                "text_status": "sent",
-                "media_status": "failed",
+                "text_status": text_status or "sent",
                 "failure": failure,
                 "automatic_retry_allowed": False,
             })
+            if media_status is not None:
+                sent_data["media_status"] = media_status
         self._atomic_write(
             msg_dir / "message.json",
             json.dumps(sent_data, ensure_ascii=False, indent=2),
@@ -1435,31 +1540,79 @@ class WechatManager:
         timeout: float = 30,
         timeout_error: Exception | None = None,
     ):
-        """Run a coroutine on the poll loop with bounded timeout cancellation.
+        """Run a coroutine on the poll loop within a truthful timeout boundary.
 
-        On synchronous deadline expiry, request cancellation and wait briefly for
-        the thread-safe future to reconcile. Cancellation prevents later coroutine
-        work whenever it wins, but cannot revoke a remote request already accepted.
+        On synchronous deadline expiry, request cancellation and wait for actual
+        coroutine exit before returning a terminal timeout. A coroutine that
+        resists cancellation can extend the wall clock, but cannot be detached to
+        continue invisibly after the caller receives an ended-operation result.
         Callers with partial-delivery semantics provide a fixed redacted exception.
         """
         if not self._loop or not self._loop.is_running():
+            coro.close()
             raise RuntimeError("WeChat addon not started — call start() first")
-        reconciled = threading.Event()
+        outcome: Future = Future()
+        task_ready = threading.Event()
+        start_lock = threading.Lock()
+        start_cancelled = False
+        task_holder: dict[str, asyncio.Task] = {}
 
         async def tracked_operation():
             try:
-                return await coro
-            finally:
-                # Unlike the concurrent Future (which becomes cancelled as soon
-                # as cancel() is requested), this marks actual coroutine exit.
-                reconciled.set()
+                result = await coro
+            except BaseException as exc:
+                if not outcome.done():
+                    outcome.set_exception(exc)
+            else:
+                if not outcome.done():
+                    outcome.set_result(result)
 
-        future = asyncio.run_coroutine_threadsafe(tracked_operation(), self._loop)
+        def start_operation() -> None:
+            nonlocal start_cancelled
+            with start_lock:
+                try:
+                    if start_cancelled:
+                        return
+                    tracked_coro = tracked_operation()
+                    try:
+                        task_holder["task"] = self._loop.create_task(tracked_coro)
+                    except BaseException as exc:
+                        tracked_coro.close()
+                        coro.close()
+                        outcome.set_exception(exc)
+                finally:
+                    task_ready.set()
+
         try:
-            return future.result(timeout=timeout)
+            self._loop.call_soon_threadsafe(start_operation)
+        except BaseException:
+            coro.close()
+            raise
+        if not task_ready.wait(timeout=_ASYNC_TASK_START_TIMEOUT_SECONDS):
+            start_timed_out = False
+            with start_lock:
+                if not task_ready.is_set():
+                    start_cancelled = True
+                    coro.close()
+                    start_timed_out = True
+            if start_timed_out:
+                if timeout_error is not None:
+                    raise timeout_error from None
+                raise FutureTimeoutError()
+        try:
+            return outcome.result(timeout=timeout)
         except FutureTimeoutError:
-            future.cancel()
-            reconciled.wait(timeout=_ASYNC_CANCEL_RECONCILE_SECONDS)
+            task = task_holder.get("task")
+            if task is not None:
+                self._loop.call_soon_threadsafe(task.cancel)
+                # This future is completed only by tracked_operation after the task
+                # actually returns or raises. It therefore cannot report cancellation
+                # merely because cancel() was requested, unlike
+                # run_coroutine_threadsafe.
+                try:
+                    outcome.result()
+                except BaseException:
+                    pass
             if timeout_error is not None:
                 raise timeout_error from None
             raise

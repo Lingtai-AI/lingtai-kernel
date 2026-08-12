@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 import ssl
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -706,18 +708,19 @@ def test_run_async_outer_timeout_cancels_reconciles_and_raises_structured_failur
     async def operation():
         started.set()
         try:
-            await asyncio.sleep(60)
+            await asyncio.Event().wait()
         finally:
             reconciled.set()
 
     expected = media.OutboundMediaError(
         stage="media_operation_timeout",
         message="The local WeChat media operation exceeded its deadline.",
-        retryable=True,
+        retryable=False,
+        remote_acceptance="unknown",
     )
     try:
         with pytest.raises(media.OutboundMediaError) as raised:
-            manager._run_async(operation(), timeout=0.05, timeout_error=expected)
+            manager._run_async(operation(), timeout=0, timeout_error=expected)
     finally:
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=1)
@@ -729,8 +732,158 @@ def test_run_async_outer_timeout_cancels_reconciles_and_raises_structured_failur
     assert raised.value.as_dict() == {
         "stage": "media_operation_timeout",
         "message": "The local WeChat media operation exceeded its deadline.",
-        "retryable": True,
+        "retryable": False,
+        "remote_acceptance": "unknown",
     }
+
+
+def test_run_async_timeout_waits_for_cancellation_resistant_child_exit(
+    tmp_path, monkeypatch,
+):
+    manager = _manager(tmp_path)
+    loop = asyncio.new_event_loop()
+    loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+    loop_thread.start()
+    manager._loop = loop
+    started = threading.Event()
+    cancellation_seen = threading.Event()
+    release_child = threading.Event()
+    child_exited = threading.Event()
+    reconciler_waiting = threading.Event()
+    late_side_effects: list[str] = []
+    expected = media.OutboundMediaError(
+        stage="media_operation_timeout",
+        message="The local WeChat media operation exceeded its deadline.",
+        retryable=False,
+        remote_acceptance="unknown",
+    )
+    real_future = manager_mod.Future
+
+    class ObservedFuture(real_future):
+        def result(self, timeout=None):
+            if timeout is None:
+                reconciler_waiting.set()
+            return super().result(timeout=timeout)
+
+    async def resistant_operation():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            while not release_child.is_set():
+                await asyncio.sleep(0)
+            late_side_effects.append("child-finished-before-return")
+        finally:
+            child_exited.set()
+
+    def invoke():
+        try:
+            manager._run_async(
+                resistant_operation(), timeout=0, timeout_error=expected,
+            )
+        except Exception as exc:
+            return exc
+        raise AssertionError("timeout call unexpectedly succeeded")
+
+    monkeypatch.setattr(manager_mod, "Future", ObservedFuture)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            returned = executor.submit(invoke)
+            assert started.wait(timeout=1)
+            assert cancellation_seen.wait(timeout=1)
+            assert reconciler_waiting.wait(timeout=1)
+            assert not returned.done()
+            assert not child_exited.is_set()
+            assert late_side_effects == []
+
+            release_child.set()
+            raised = returned.result(timeout=1)
+
+        assert raised is expected
+        assert child_exited.is_set()
+        assert late_side_effects == ["child-finished-before-return"]
+    finally:
+        release_child.set()
+        loop.call_soon_threadsafe(loop.stop)
+        loop_thread.join(timeout=1)
+        loop.close()
+
+
+def test_run_async_timeout_before_task_start_cannot_launch_late_work(tmp_path):
+    manager = _manager(tmp_path)
+    late_effects: list[str] = []
+
+    class AcceptingStoppedLoop:
+        def is_running(self):
+            return True
+
+        def call_soon_threadsafe(self, callback):
+            self.callback = callback
+
+    loop = AcceptingStoppedLoop()
+    manager._loop = loop
+    expected = media.OutboundMediaError(
+        stage="media_operation_timeout",
+        message="The local WeChat media operation exceeded its deadline.",
+        retryable=False,
+        remote_acceptance="unknown",
+    )
+
+    async def operation():
+        late_effects.append("started")
+
+    with pytest.raises(media.OutboundMediaError) as raised:
+        manager._run_async(operation(), timeout=0, timeout_error=expected)
+
+    assert raised.value is expected
+    assert late_effects == []
+    loop.callback()
+    assert late_effects == []
+
+
+def test_run_async_task_start_winning_handshake_boundary_is_reconciled(
+    tmp_path, monkeypatch,
+):
+    manager = _manager(tmp_path)
+    loop = asyncio.new_event_loop()
+    loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+    loop_thread.start()
+    manager._loop = loop
+    expected = media.OutboundMediaError(
+        stage="media_operation_timeout",
+        message="The local WeChat media operation exceeded its deadline.",
+        retryable=False,
+        remote_acceptance="unknown",
+    )
+    task_started = threading.Event()
+    child_exited = threading.Event()
+    real_event = manager_mod.threading.Event
+
+    class BoundaryEvent(real_event):
+        def wait(self, timeout=None):
+            assert super().wait(timeout=1)
+            return False
+
+    async def operation():
+        task_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            child_exited.set()
+
+    monkeypatch.setattr(manager_mod.threading, "Event", BoundaryEvent)
+    try:
+        with pytest.raises(media.OutboundMediaError) as raised:
+            manager._run_async(operation(), timeout=0, timeout_error=expected)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        loop_thread.join(timeout=1)
+        loop.close()
+
+    assert raised.value is expected
+    assert task_started.is_set()
+    assert child_exited.is_set()
 
 
 def _timeout_fake_run(calls: list[tuple[str, float, str | None]]):
@@ -764,12 +917,13 @@ def test_outer_timeout_after_text_delivery_persists_one_nonretryable_partial(
     assert result["status"] == "partial"
     assert result["partial_delivery"] is True
     assert result["text_status"] == "sent"
-    assert result["media_status"] == "failed"
+    assert result["media_status"] == "unknown"
     assert result["automatic_retry_allowed"] is False
     assert result["failure"] == {
         "stage": "media_operation_timeout",
         "message": "The local WeChat media operation exceeded its deadline.",
-        "retryable": True,
+        "retryable": False,
+        "remote_acceptance": "unknown",
     }
     assert calls == [
         ("send_message", 30, None),
@@ -804,13 +958,14 @@ def test_media_only_outer_timeout_is_not_persisted(tmp_path, monkeypatch):
     assert result == {
         "status": "failed",
         "error": "The local WeChat media operation exceeded its deadline.",
-        "media_status": "failed",
+        "media_status": "unknown",
         "failure": {
             "stage": "media_operation_timeout",
             "message": "The local WeChat media operation exceeded its deadline.",
-            "retryable": True,
+            "retryable": False,
+            "remote_acceptance": "unknown",
         },
-        "automatic_retry_allowed": True,
+        "automatic_retry_allowed": False,
     }
     assert manager._load_sent_messages() == []
     assert calls == [
@@ -894,8 +1049,10 @@ def test_final_media_message_failure_is_partial_and_redacted(tmp_path, monkeypat
     assert result["failure"] == {
         "stage": "media_message_transport",
         "message": "Could not reach WeChat iLink while sending the media message.",
-        "retryable": True,
+        "retryable": False,
+        "remote_acceptance": "unknown",
     }
+    assert result["media_status"] == "unknown"
     assert result["automatic_retry_allowed"] is False
     _assert_redacted(result, local_path=source)
 
@@ -915,7 +1072,8 @@ def test_final_media_message_failure_is_partial_and_redacted(tmp_path, monkeypat
             {
                 "stage": "media_message_http",
                 "message": "WeChat iLink rejected the media message (HTTP 503).",
-                "retryable": True,
+                "retryable": False,
+                "remote_acceptance": "unknown",
             },
         ),
         (
@@ -924,6 +1082,7 @@ def test_final_media_message_failure_is_partial_and_redacted(tmp_path, monkeypat
                 "stage": "media_message_response",
                 "message": "WeChat iLink did not accept the media message.",
                 "retryable": False,
+                "remote_acceptance": "rejected",
             },
         ),
     ],
@@ -932,6 +1091,226 @@ def test_final_media_message_http_and_response_stages_are_redacted(exc, expected
     failure = media.media_message_failure(exc).as_dict()
     assert failure == expected
     _assert_redacted(failure)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        httpx.ConnectError(
+            "RAW_PROVIDER_BODY SECRET_QUERY",
+            request=httpx.Request("POST", "https://ilink.example.invalid/send"),
+        ),
+        httpx.HTTPStatusError(
+            "RAW_PROVIDER_BODY SECRET_QUERY",
+            request=httpx.Request("POST", "https://ilink.example.invalid/send"),
+            response=httpx.Response(
+                429,
+                request=httpx.Request("POST", "https://ilink.example.invalid/send"),
+            ),
+        ),
+        httpx.HTTPStatusError(
+            "RAW_PROVIDER_BODY SECRET_QUERY",
+            request=httpx.Request("POST", "https://ilink.example.invalid/send"),
+            response=httpx.Response(
+                503,
+                request=httpx.Request("POST", "https://ilink.example.invalid/send"),
+            ),
+        ),
+    ],
+)
+def test_media_only_final_message_ambiguous_outcome_forbids_automatic_retry(
+    exc, tmp_path, monkeypatch,
+):
+    source = _source(tmp_path, "report.html")
+    manager = _manager(tmp_path)
+
+    def fake_run(coro, *, timeout=30, timeout_error=None):
+        name = coro.cr_code.co_name
+        coro.close()
+        if name == "upload_media":
+            return object()
+        if name == "send_message":
+            raise exc
+        raise AssertionError(name)
+
+    monkeypatch.setattr(manager, "_run_async", fake_run)
+    monkeypatch.setattr(media, "make_media_item", lambda info, path: object())
+
+    result = manager._handle_send({
+        "user_id": "SECRET_USER",
+        "media_path": str(source),
+    })
+
+    assert result["status"] == "failed"
+    assert result["media_status"] == "unknown"
+    assert result["failure"]["remote_acceptance"] == "unknown"
+    assert result["failure"]["retryable"] is False
+    assert result["automatic_retry_allowed"] is False
+    assert manager._load_sent_messages() == []
+    _assert_redacted(result, local_path=source)
+
+
+def _install_text_send_sequence(manager, monkeypatch, *, failure_call: int | None):
+    calls: list[str] = []
+
+    def fake_run(coro, *, timeout=30, timeout_error=None):
+        name = coro.cr_code.co_name
+        text = None
+        if name == "send_message":
+            msg = coro.cr_frame.f_locals["msg"]
+            text = msg.item_list[0].text_item.text
+        coro.close()
+        if name != "send_message":
+            raise AssertionError(name)
+        calls.append(text)
+        if failure_call is not None and len(calls) == failure_call:
+            raise RuntimeError("RAW_PROVIDER_BODY SECRET_QUERY unsent suffix")
+        return None
+
+    monkeypatch.setattr(manager, "_run_async", fake_run)
+    return calls
+
+
+def test_later_text_chunk_failure_persists_safe_delivered_prefix(
+    tmp_path, monkeypatch,
+):
+    manager = _manager(tmp_path)
+    text = "A" * manager_mod.TEXT_CHUNK_LIMIT + "SECRET_UNSENT_SUFFIX"
+    calls = _install_text_send_sequence(manager, monkeypatch, failure_call=2)
+
+    result = manager._handle_send({"user_id": "SECRET_USER", "text": text})
+
+    assert len(calls) == 2
+    assert calls[0] == "A" * manager_mod.TEXT_CHUNK_LIMIT
+    assert calls[1] == "SECRET_UNSENT_SUFFIX"
+    assert result["status"] == "partial"
+    assert result["partial_delivery"] is True
+    assert result["text_status"] == "partial"
+    assert result["delivered_text_chunks"] == 1
+    assert result["total_text_chunks"] == 2
+    assert result["failed_text_chunk"] == 2
+    assert result["automatic_retry_allowed"] is False
+    assert result["failure"] == {
+        "stage": "text_message_response",
+        "message": "WeChat iLink did not accept text chunk 2.",
+        "retryable": False,
+        "remote_acceptance": "rejected",
+        "failed_text_chunk": 2,
+        "total_text_chunks": 2,
+    }
+    assert result["sent"] == [f"text ({manager_mod.TEXT_CHUNK_LIMIT} chars)"]
+
+    persisted = manager._load_sent_messages()
+    assert len(persisted) == 1
+    assert persisted[0]["text"] == "A" * manager_mod.TEXT_CHUNK_LIMIT
+    assert persisted[0]["text_status"] == "partial"
+    assert persisted[0]["delivered_text_chunks"] == 1
+    assert persisted[0]["total_text_chunks"] == 2
+    assert persisted[0]["failed_text_chunk"] == 2
+    assert persisted[0]["automatic_retry_allowed"] is False
+    rendered = json.dumps({"result": result, "persisted": persisted})
+    assert "SECRET_UNSENT_SUFFIX" not in rendered
+    assert "RAW_PROVIDER_BODY" not in rendered
+    assert "SECRET_QUERY" not in rendered
+
+
+def test_first_text_chunk_known_rejection_has_no_partial_record(
+    tmp_path, monkeypatch,
+):
+    manager = _manager(tmp_path)
+    request = httpx.Request("POST", "https://ilink.example.invalid/send")
+    calls: list[str] = []
+
+    def fake_run(coro, *, timeout=30, timeout_error=None):
+        msg = coro.cr_frame.f_locals["msg"]
+        calls.append(msg.item_list[0].text_item.text)
+        coro.close()
+        raise httpx.HTTPStatusError(
+            "RAW_PROVIDER_BODY SECRET_QUERY",
+            request=request,
+            response=httpx.Response(400, request=request),
+        )
+
+    monkeypatch.setattr(manager, "_run_async", fake_run)
+    result = manager._handle_send({
+        "user_id": "SECRET_USER",
+        "text": "B" * (manager_mod.TEXT_CHUNK_LIMIT + 1),
+    })
+
+    assert len(calls) == 1
+    assert result == {
+        "status": "failed",
+        "error": "WeChat iLink rejected text chunk 1 (HTTP 400).",
+        "text_status": "failed",
+        "failure": {
+            "stage": "text_message_http",
+            "message": "WeChat iLink rejected text chunk 1 (HTTP 400).",
+            "retryable": False,
+            "remote_acceptance": "rejected",
+            "failed_text_chunk": 1,
+            "total_text_chunks": 2,
+        },
+        "automatic_retry_allowed": False,
+    }
+    assert manager._load_sent_messages() == []
+    _assert_redacted(result)
+
+
+def test_first_text_chunk_ambiguous_transport_forbids_automatic_retry(
+    tmp_path, monkeypatch,
+):
+    manager = _manager(tmp_path)
+    request = httpx.Request("POST", "https://ilink.example.invalid/send")
+
+    def fake_run(coro, *, timeout=30, timeout_error=None):
+        coro.close()
+        raise httpx.ConnectError(
+            "RAW_PROVIDER_BODY SECRET_QUERY", request=request,
+        )
+
+    monkeypatch.setattr(manager, "_run_async", fake_run)
+    result = manager._handle_send({
+        "user_id": "SECRET_USER",
+        "text": "one chunk",
+    })
+
+    assert result["status"] == "failed"
+    assert result["text_status"] == "failed"
+    assert result["automatic_retry_allowed"] is False
+    assert result["failure"] == {
+        "stage": "text_message_transport",
+        "message": "Could not reach WeChat iLink while sending text chunk 1.",
+        "retryable": False,
+        "remote_acceptance": "unknown",
+        "failed_text_chunk": 1,
+        "total_text_chunks": 1,
+    }
+    assert manager._load_sent_messages() == []
+    _assert_redacted(result)
+
+
+def test_successful_multi_chunk_text_persists_complete_delivery(
+    tmp_path, monkeypatch,
+):
+    manager = _manager(tmp_path)
+    text = "C" * manager_mod.TEXT_CHUNK_LIMIT + "tail"
+    calls = _install_text_send_sequence(manager, monkeypatch, failure_call=None)
+
+    result = manager._handle_send({"user_id": "SECRET_USER", "text": text})
+
+    assert result["status"] == "ok"
+    assert calls == ["C" * manager_mod.TEXT_CHUNK_LIMIT, "tail"]
+    assert result["sent"] == [
+        f"text ({manager_mod.TEXT_CHUNK_LIMIT} chars)",
+        "text (4 chars)",
+    ]
+    persisted = manager._load_sent_messages()
+    assert len(persisted) == 1
+    assert persisted[0]["status"] == "sent"
+    assert persisted[0]["text"] == text
+    assert persisted[0]["delivered_text_chunks"] == 2
+    assert persisted[0]["total_text_chunks"] == 2
+    assert "failure" not in persisted[0]
 
 
 @pytest.mark.parametrize(

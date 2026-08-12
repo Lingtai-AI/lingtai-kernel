@@ -60,6 +60,7 @@ class OutboundMediaError(Exception):
     message: str
     endpoint_host: str | None = None
     retryable: bool = False
+    remote_acceptance: str | None = None
 
     def __post_init__(self) -> None:
         Exception.__init__(self, self.message)
@@ -72,6 +73,8 @@ class OutboundMediaError(Exception):
         }
         if self.endpoint_host:
             result["endpoint_host"] = self.endpoint_host
+        if self.remote_acceptance:
+            result["remote_acceptance"] = self.remote_acceptance
         return result
 
 
@@ -150,24 +153,33 @@ def _cdn_transport_failure(exc: httpx.HTTPError, upload_url: str) -> OutboundMed
 
 
 def media_message_failure(exc: Exception) -> OutboundMediaError:
-    """Redact a failure while sending the final iLink media message."""
+    """Redact a failure while sending the final iLink media message.
+
+    Transport failures and retryable HTTP statuses do not prove non-delivery:
+    iLink may have accepted the message before the response was lost. Keep that
+    ambiguity explicit and never recommend an automatic whole-message retry.
+    """
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
+        ambiguous = status_code >= 500 or status_code == 429
         return OutboundMediaError(
             stage="media_message_http",
             message=f"WeChat iLink rejected the media message (HTTP {status_code}).",
-            retryable=status_code >= 500 or status_code == 429,
+            retryable=False,
+            remote_acceptance="unknown" if ambiguous else "rejected",
         )
     if isinstance(exc, (httpx.HTTPError, TimeoutError)):
         return OutboundMediaError(
             stage="media_message_transport",
             message="Could not reach WeChat iLink while sending the media message.",
-            retryable=True,
+            retryable=False,
+            remote_acceptance="unknown",
         )
     return OutboundMediaError(
         stage="media_message_response",
         message="WeChat iLink did not accept the media message.",
         retryable=False,
+        remote_acceptance="rejected",
     )
 
 
