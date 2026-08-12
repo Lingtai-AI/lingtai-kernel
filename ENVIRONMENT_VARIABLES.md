@@ -4,7 +4,7 @@ description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
 version: 1.0.0
-last_changed_at: "2026-08-10"
+last_changed_at: "2026-08-12"
 related_files:
 - ANATOMY.md
 - CONTRACT.md
@@ -22,6 +22,7 @@ related_files:
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/kernel/refresh_watcher/ANATOMY.md
 - src/lingtai/llm/openai/ANATOMY.md
+- src/lingtai/llm/anthropic/ANATOMY.md
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/local_commands/ANATOMY.md
 - src/lingtai/prompts/ANATOMY.md
@@ -92,6 +93,7 @@ reports, prompts, or this registry.
 | `LINGTAI_CODEX_WS_EPOCH_RESET_TURNS` | `0` | Non-negative integer | Codex diagnostic WebSocket epoch | Session construction; restart session | Invalid value falls back to the adapter default (`0`, turn-count reset disabled) | Codex adapter | Avoid values that cause unexpected session churn |
 | `LINGTAI_CODEX_RESPONSES_TRACE` | off | Adapter-recognized boolean | Bounded Codex Responses-wire diagnostics | Session construction; restart session | Invalid value is treated as off | Codex adapter | Traces remain local and redacted |
 | `LINGTAI_CODEX_RESPONSES_TRACE_PATH` | unset; adapter default | Local path | Codex Responses-wire diagnostics | Session construction; restart session | Unwritable or invalid path fails closed or disables tracing | Codex adapter | Trace files can contain sensitive prompts; restrict permissions |
+| `LINGTAI_LLM_READ_TIMEOUT` | `300` seconds | Positive finite numeric seconds | Per-phase HTTP read cap for OpenAI-compatible and Anthropic adapter SDK calls | Each `_build_http_timeout` call; no restart | Missing, blank, non-numeric, non-finite, zero, or negative values fall back to `300` | `src/lingtai/llm/openai/adapter.py`, `src/lingtai/llm/anthropic/adapter.py` | Tunes read tolerance only; the main-thread watchdog still bounds total request time and it grants no capability |
 | `LINGTAI_CLAUDE_MANAGED_ROOT` | Host-specific or unset | Local directory path | Claude launcher | Launch; relaunch after change | Invalid path fails closed | Claude adapter | Never widen the root from untrusted model text |
 | `LINGTAI_CLAUDE_INTERACTIVE_FIFO` | unset | Local FIFO or path | Claude interactive launch | Interactive launch; relaunch after change | Wrong type or permissions fail closed | Claude adapter | Protect the FIFO from other users and processes |
 | `LINGTAI_TASKCARD_POLL_INTERVAL` | `5.0` seconds | Positive numeric seconds (float) | Telegram automatic Task Card event-tail poll interval | Telegram manager load/start; restart after change | Non-numeric value fails manager load | `src/lingtai/mcp_servers/telegram/manager.py` | Display cadence only; no delivery or authorization effect |

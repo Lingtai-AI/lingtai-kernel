@@ -13,6 +13,8 @@ Key Anthropic API differences from OpenAI/Gemini:
 
 from __future__ import annotations
 
+import math
+import os
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -25,19 +27,42 @@ from lingtai.kernel.logging import get_logger
 logger = get_logger()
 
 
+_READ_TIMEOUT_ENV = "LINGTAI_LLM_READ_TIMEOUT"
+_READ_TIMEOUT_DEFAULT = 300.0
+
+
+def _read_timeout_cap() -> float:
+    """Resolve the per-phase HTTP read cap (seconds).
+
+    ``LINGTAI_LLM_READ_TIMEOUT`` overrides the default 300s cap so operators
+    can tune how long a thinking model may occupy a read phase before the
+    SDK gives up. Values must be positive and finite; anything else falls
+    back to the default.
+    """
+    raw = os.environ.get(_READ_TIMEOUT_ENV, "").strip()
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            return _READ_TIMEOUT_DEFAULT
+        if math.isfinite(value) and value > 0:
+            return value
+    return _READ_TIMEOUT_DEFAULT
+
+
 def _build_http_timeout(request_timeout: float | None):
     """Build explicit per-phase HTTP timeout for SDK calls.
 
-    The read cap stays at least as long as the watchdog's ``retry_timeout``
-    (default 300s, config.py) so modern thinking models (DeepSeek/GLM
-    extended thinking, 60-180s) are not killed mid-thought before the
-    watchdog can decide.
+    The read cap defaults to the watchdog's ``retry_timeout`` (300s, config.py)
+    so modern thinking models (DeepSeek/GLM extended thinking, 60-180s) are not
+    killed mid-thought before the watchdog can decide. Operators may tune the
+    read cap with ``LINGTAI_LLM_READ_TIMEOUT`` (seconds).
     """
     if request_timeout is None:
         return None
     return httpx.Timeout(
         connect=min(float(request_timeout), 30.0),
-        read=min(float(request_timeout), 300.0),
+        read=min(float(request_timeout), _read_timeout_cap()),
         write=min(float(request_timeout), 30.0),
         pool=10.0,
     )

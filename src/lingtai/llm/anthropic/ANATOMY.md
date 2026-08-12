@@ -1,5 +1,6 @@
 ---
 related_files:
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/llm/ANATOMY.md
   - src/lingtai/llm/anthropic/__init__.py
   - src/lingtai/llm/anthropic/adapter.py
