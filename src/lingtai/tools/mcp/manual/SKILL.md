@@ -146,6 +146,79 @@ Identity comes from the addon-written, non-secret document at `system/mcp_identi
 
 All registry mutations happen via `write` / `edit` / `bash`. The `mcp` capability never writes to the registry.
 
+## Runtime venv swap (latest-main owner rollout)
+
+When the runtime venv moves (e.g. a latest-main owner rollout), curated registry records that still carry the old interpreter's `command` must be reconciled **explicitly and manually** after the authorized venv swap. There is no kernel helper for this: `decompress_addons` is append-only/non-destructive to existing records, and the `mcp` capability never writes the registry. The rollout procedure performs the reconcile itself as a manual step using ordinary `write`/`edit`/`bash`, e.g. run this self-contained command with the **new** runtime interpreter:
+
+```bash
+NEW_PYTHON=/absolute/path/to/new/venv/bin/python
+AGENT_DIR=/absolute/path/to/agent/dir
+
+"$NEW_PYTHON" - "$AGENT_DIR" <<'PY'
+import json, os, sys, tempfile
+from pathlib import Path
+
+agent_dir = Path(sys.argv[1])
+if not agent_dir.is_absolute():
+    raise SystemExit("AGENT_DIR must be an absolute path")
+registry = agent_dir / "mcp_registry.jsonl"
+print(f"target registry: {registry}")
+print(f"interpreter: {sys.executable}")
+if not registry.is_file():
+    raise SystemExit(f"no registry at {registry}")  # fail loud, never "empty"
+
+# Fail-closed preflight: only rewrite a registry with zero problems.
+from lingtai.services.mcp_registry import read_registry
+_valid, problems = read_registry(agent_dir)
+if problems:
+    for p in problems:
+        print(f"problem line {p['line']}: {p['error']}")
+    raise SystemExit("registry has problems; aborting without writing")
+
+lines = registry.read_text(encoding="utf-8").splitlines(keepends=True)
+seen: set[str] = set()
+changed: list[str] = []
+for i, raw in enumerate(lines):
+    if not raw.strip():
+        continue
+    try:
+        rec = json.loads(raw)
+    except json.JSONDecodeError:
+        continue  # defensive; preflight already rejected invalid lines
+    name = rec.get("name")
+    if not name or name in seen:
+        continue  # only the canonical first-valid row per name is touched
+    seen.add(name)
+    if (
+        rec.get("source") == "lingtai-curated"
+        and rec.get("command") != sys.executable
+    ):
+        rec["command"] = sys.executable
+        ending = "\n" if raw.endswith("\n") else ""
+        lines[i] = json.dumps(rec, ensure_ascii=False) + ending
+        changed.append(name)
+if changed:
+    fd, tmp = tempfile.mkstemp(dir=str(registry.parent), prefix=".mcp_registry.jsonl.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:  # atomic replace
+            f.write("".join(lines)); f.flush(); os.fsync(f.fileno())
+        if registry.exists():
+            os.chmod(tmp, registry.stat().st_mode & 0o777)
+        os.replace(tmp, registry)
+    except BaseException:
+        try: os.unlink(tmp)
+        except OSError: pass
+        raise
+    print(f"reconciled {len(changed)} curated command(s): {', '.join(changed)} -> {sys.executable}")
+else:
+    print("no curated command needed reconciling")
+PY
+```
+
+**Contract (explicit manual step, not automatic):** after an **authorized** venv swap this command switches **every canonical curated record** to `NEW_PYTHON` (a `lingtai-curated` record whose `command` differs from the current interpreter gets its `command` rewritten **in place** — atomic, order-preserving, no duplicate record appended — so the canonical `read_registry()` surface (`mcp info`, `<registered_mcp>`, manual copies) observes the new command with `problems == []`). It does **not** preserve a command-only intentional override of a curated record: if you deliberately pointed a curated record at an independent interpreter, exclude that record or do not run this recipe. The command is fail-closed: if the registry has any invalid/duplicate/problem line, it aborts **before** writing and the file bytes are unchanged. This reconcile is **not** the MCP spawn source: live children spawn from `init.json`'s `mcp.<name>.command` (main agent) or the caller's `sys.executable` (daemon), never from the registry record, so a registry rewrite never auto-swaps a live child's runtime.
+
+`system(action="refresh")` only retries **failed** MCPs and does **not** restart healthy children — a live curated child only moves to the new venv on a **full agent relaunch**. After any venv swap, verify live children with a **fail-closed provenance gate**: one-shot probe with the child's activation command/env printing `sys.executable`, `lingtai.__file__`, and `lingtai.mcp_servers.<name>.__file__`. If they still resolve to the old venv, the gate FAILS and reports 'requires relaunch' — do not claim PASS.
+
 ## See also
 
 - **Canonical spec**: `lingtai-kernel-anatomy reference/mcp-protocol.md` — supported SDK range (`mcp>=2,<3`), protocol `2026-07-28` with legacy fallback, the split between what the official SDK owns and what LingTai owns, the tool-metadata sidecar, and the stdio env-injection/registry boundary. It routes onward for the details it does not own.
