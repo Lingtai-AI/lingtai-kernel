@@ -124,7 +124,7 @@ Configuration is per-agent `daemon/daemon.json` with environment overrides
 
 | Config key | Env var | Default | Meaning |
 |---|---|---|---|
-| `manager_pool_size` | `LINGTAI_DAEMON_MANAGER_POOL_SIZE` | `0` (disabled) | Max concurrent execution children under the manager. `0` disables the manager entirely; the classic per-run supervisor path is used. |
+| `manager_pool_size` | `LINGTAI_DAEMON_MANAGER_POOL_SIZE` | `100` | Max concurrent execution children under the manager (Jason 10202). `0` disables the manager entirely; the classic per-run supervisor path is used. |
 | `manager_threshold` | `LINGTAI_DAEMON_MANAGER_THRESHOLD` | `50` | A batch routes through the manager only when it contains more emanations than this threshold (and `manager_pool_size > 0`). Below it, the classic path runs unchanged. |
 
 Behavior notes:

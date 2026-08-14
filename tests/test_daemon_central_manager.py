@@ -460,7 +460,7 @@ def test_default_disabled_routing_uses_legacy_spawn_adapter(tmp_path, monkeypatc
     assert not (agent._working_dir / MANAGER_DIR / "queue").exists()
 
 
-def test_central_manager_is_disabled_by_default(tmp_path):
+def test_central_manager_defaults_pool_100_threshold_50(tmp_path):
     agent = SimpleNamespace(
         service=SimpleNamespace(model="mock"),
         _working_dir=tmp_path / "agent",
@@ -468,8 +468,11 @@ def test_central_manager_is_disabled_by_default(tmp_path):
     )
     manager = DaemonManager(agent)
 
-    assert manager._manager_pool_size == 0
-    assert manager._should_use_central_daemon_manager(10_000) is False
+    assert manager._manager_pool_size == 100
+    assert manager._manager_threshold == 50
+    # small batch stays on the classic path; high-concurrency batch routes through manager
+    assert manager._should_use_central_daemon_manager(50) is False
+    assert manager._should_use_central_daemon_manager(51) is True
 
 
 def test_central_manager_orders_queue_by_enqueued_at(tmp_path, monkeypatch):

@@ -9,7 +9,7 @@ system notification, so the parent can dispatch and go idle without polling.
 
 Usage:
     Agent(capabilities=["daemon"])
-    Agent(capabilities={"daemon": {"max_emanations": 100}})
+    Agent(capabilities={"daemon": {"max_emanations": 1000}})
 """
 from __future__ import annotations
 
@@ -155,7 +155,7 @@ class _Config(NamedTuple):
     manager_threshold: int
 
 
-_BUILTIN_CONFIG = _Config(DEFAULT_MAX_TURNS, 0, 50)
+_BUILTIN_CONFIG = _Config(DEFAULT_MAX_TURNS, 100, 50)
 
 
 def _config_max_turns(value: Any) -> int:
@@ -1329,7 +1329,7 @@ class _ToolCollector:
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows status; daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions.'
+    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows status; daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. High-concurrency batches route through the central daemon manager when configured: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children, `manager_threshold` (env LINGTAI_DAEMON_MANAGER_THRESHOLD, default 50) is the batch size that triggers the manager queue, and `max_emanations` (default 1000) caps concurrent emanations; below the threshold the classic per-run supervisor path runs unchanged. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -1463,10 +1463,10 @@ class DaemonManager:
     # callers/configs.
     _NOTIFY_MIN_LEN = 20
 
-    def __init__(self, agent: "Agent", max_emanations: int = 100,
+    def __init__(self, agent: "Agent", max_emanations: int = 1000,
                  max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
                  notify_threshold: int = 20,
-                 manager_pool_size: int = 0,
+                 manager_pool_size: int = 100,
                  manager_threshold: int = 50,
                  *, process_port: DaemonProcessPort | None = None,
                  interactive_terminal_port: InteractiveTerminalPort | None = None):
@@ -8885,7 +8885,7 @@ class DaemonManager:
 assert _FAMILY_CHECK_LAST_MAX == DaemonManager._CHECK_LAST_MAX
 
 
-def setup(agent: "Agent", max_emanations: int = 100,
+def setup(agent: "Agent", max_emanations: int = 1000,
           max_turns: int | None = None, timeout: float = 3600.0,
           notify_threshold: int = 20,
           process_port: DaemonProcessPort | None = None,
