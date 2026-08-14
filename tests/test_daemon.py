@@ -248,6 +248,30 @@ def test_daemon_load_config_coercion(tmp_path):
     assert daemon_tool._load_config(tmp_path).max_turns == 5000
 
 
+def test_daemon_load_config_partial_file_keeps_manager_defaults(tmp_path):
+    """A partial daemon.json (e.g. only max_turns) keeps the built-in manager
+    defaults instead of silently disabling the default-enabled manager."""
+    # No file at all -> built-in defaults (manager pool 100, threshold 50).
+    cfg = daemon_tool._load_config(tmp_path)
+    assert cfg.manager_pool_size == 100
+    assert cfg.manager_threshold == 50
+    # Existing file that only sets max_turns must NOT fall back to pool 0.
+    _write_daemon_config(tmp_path, {"max_turns": 42})
+    cfg = daemon_tool._load_config(tmp_path)
+    assert cfg.max_turns == 42
+    assert cfg.manager_pool_size == 100
+    assert cfg.manager_threshold == 50
+    # Explicit manager_pool_size: 0 still disables the manager on purpose.
+    _write_daemon_config(tmp_path, {"manager_pool_size": 0})
+    assert daemon_tool._load_config(tmp_path).manager_pool_size == 0
+    # Invalid values fall back to built-in defaults, not 0.
+    for bad in (-1, "x", 2.5, None):
+        _write_daemon_config(tmp_path, {"manager_pool_size": bad})
+        assert daemon_tool._load_config(tmp_path).manager_pool_size == 100, bad
+        _write_daemon_config(tmp_path, {"manager_threshold": bad})
+        assert daemon_tool._load_config(tmp_path).manager_threshold == 50, bad
+
+
 def test_daemon_setup_reaps_dead_parent_running_record(tmp_path, monkeypatch):
     """Startup marks stale running daemon.json records failed."""
     from lingtai.tools import daemon as daemon_mod

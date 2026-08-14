@@ -128,8 +128,10 @@ Configuration is per-agent `daemon/daemon.json` with environment overrides
 | `manager_threshold` | `LINGTAI_DAEMON_MANAGER_THRESHOLD` | `50` | A batch routes through the manager only when it contains more emanations than this threshold (and `manager_pool_size > 0`). Below it, the classic path runs unchanged. |
 
 Behavior notes:
-- The manager path is POSIX-only and default-disabled. Windows and default
-  configs keep today's byte-identical per-run supervisor behavior.
+- The manager path is POSIX-only and enabled by default (`manager_pool_size`
+  default `100`); Windows and an explicit `manager_pool_size: 0` keep the
+  classic per-run supervisor behavior. Below the threshold, default configs
+  still run byte-identical to the classic path.
 - When enabled, a batch of `n > manager_threshold` emanations runs at most
   `manager_pool_size` at a time; the rest queue and execute as workers free.
 - Queued runs keep only secret-free durable state under `<agent>/daemon/manager`.

@@ -185,8 +185,12 @@ def _load_config(agent_working_dir: str | os.PathLike[str]) -> _Config:
         return _BUILTIN_CONFIG
     return _Config(
         _config_max_turns(data.get("max_turns")),
-        _config_nonnegative_int(data.get("manager_pool_size"), 0),
-        _config_nonnegative_int(data.get("manager_threshold"), 50),
+        _config_nonnegative_int(
+            data.get("manager_pool_size"), _BUILTIN_CONFIG.manager_pool_size
+        ),
+        _config_nonnegative_int(
+            data.get("manager_threshold"), _BUILTIN_CONFIG.manager_threshold
+        ),
     )
 
 
