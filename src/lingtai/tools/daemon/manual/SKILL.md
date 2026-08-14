@@ -6,8 +6,8 @@ description: >
   hunch, understand `daemon(action="list", input={})`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.11.0
-last_changed_at: 2026-08-10T00:00:00Z
+version: 0.12.1
+last_changed_at: 2026-08-14T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
@@ -86,6 +86,71 @@ the call root — is refused before the daemon engine runs.
 
 `list`, `check`, and `manual` are read-only. `emanate`, `ask`, and `reclaim`
 are the three that change state.
+
+## Programmatic use / CLI
+
+Callers outside a live agent turn — a shell script, a Python subprocess, a CI
+job — should use the `lingtai-agent daemon` subcommand instead of scripting this
+tool. It runs the same engine (`DaemonManager`) through the same action
+envelope, so dispatch, run directories, presets, and result shapes are
+identical.
+
+```bash
+lingtai-agent daemon emanate --tasks batch.json --agent-dir ~/agents/foo [--backend lingtai] [--yes]
+lingtai-agent daemon list  [--status running] [--agent-dir ~/agents/foo]
+lingtai-agent daemon check em-1 [--agent-dir ~/agents/foo]
+```
+
+`--tasks` takes the tool's own `emanate` input object (`tasks`, and optionally
+`backend` / `max_turns` / `timeout`), or a bare array of task objects:
+
+```json
+{"tasks": [{"task": "Summarize docs/ into notes.md", "tools": ["file"]}]}
+```
+
+Behavior worth knowing before wiring it into a job:
+
+- **`emanate` previews by default.** Without `--yes` it prints the batch it
+  *would* dispatch (count, backend, presets, per-task tools) and exits 0
+  without spawning anything. With `--yes` it prints the tool's own emanate
+  result — `status`, `count`, `ids`, `group_id`, `handoff`.
+- **The preview is fully validated.** The tasks file is checked against this
+  tool's own `emanate` schema before `--yes` is even considered: backend enum,
+  field types, `max_turns` 1..5000, `timeout` ≥ 5, `context_token_limit` ≥ 1.
+  An invalid file exits non-zero with every violation listed, rather than
+  printing a preview that dispatch would reject.
+- **`--agent-dir` is required for `emanate`** and must contain `init.json`;
+  `list` / `check` default to the current directory.
+- **`emanate` reads the agent's *effective* configuration**, through the same
+  canonical reader boot uses: JSONC parsed, active preset materialized,
+  `provider: "inherit"` expanded, schema validated, and every relative path
+  (notably `env_file`) resolved against `--agent-dir` rather than the caller's
+  working directory. A daemon therefore launches on the preset's effective
+  provider/model, not the raw `manifest.llm` the preset replaces. An
+  unusable `init.json` refuses the batch.
+- **Capability policy is enforced.** A task may only request tools this agent
+  actually grants — `manifest.capabilities` overlaid on the core floor, minus
+  `manifest.disable` — and each is instantiated with the agent's authored
+  kwargs. Requesting a disabled tool refuses the *whole* batch. Tasks naming an
+  explicit `preset` are governed by that preset's own sandbox instead.
+- **Preset allowlist is fail-closed.** A task naming a preset outside
+  `manifest.preset.allowed` refuses the *whole* batch, at preview time as well
+  as at dispatch. An agent with no allowlist grants no preset.
+- **`list` and `check` are categorically read-only.** They perform none of the
+  startup reconciliation an agent boot does (no reaping stale records, no
+  replaying pending terminal notifications) *and* never lazily repair a
+  `daemon.json` that is missing, unreadable, or written by an older
+  `data_version`. Such runs are still listed — reconstructed in memory — with a
+  stderr note naming them; run `daemon(action="list")` as the owning agent to
+  actually repair them.
+- **Terminal notifications stay with the owning agent.** Runs dispatched from
+  the CLI are detached and still notify the agent that owns the working
+  directory; the CLI process itself publishes nothing.
+- **Secrets are redacted from CLI output** (`backend_options.env`, MCP
+  `env`/`headers`, credential-shaped keys), using the same policy as the
+  durable daemon manifest.
+- `ask` and `reclaim` are deliberately not exposed: this surface causes no side
+  effect beyond spawning daemons.
 
 ## Router table
 

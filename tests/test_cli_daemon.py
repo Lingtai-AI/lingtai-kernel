@@ -1,0 +1,1120 @@
+"""``lingtai-agent daemon`` CLI surface.
+
+The engine itself is covered by ``test_daemon*.py``; these tests pin the CLI's
+own guardrails — what it refuses, what it will not spawn, and what it must not
+write — plus the fact that a dispatch reaches the unmodified engine.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Fixtures / helpers
+# ---------------------------------------------------------------------------
+
+
+def _write_preset(tmp_path: Path, name: str, *, provider: str = "anthropic",
+                  model: str = "preset-model",
+                  capabilities: dict | None = None) -> str:
+    """Write a loadable preset file and return its path as a string."""
+    library = tmp_path / "presets"
+    library.mkdir(parents=True, exist_ok=True)
+    path = library / f"{name}.json"
+    path.write_text(json.dumps({
+        "name": name,
+        "description": {"summary": f"{name} preset"},
+        "manifest": {
+            "llm": {
+                "provider": provider,
+                "model": model,
+                "api_key": "preset-key",
+                "base_url": None,
+            },
+            "capabilities": {"file": {}} if capabilities is None else capabilities,
+        },
+    }), encoding="utf-8")
+    return str(path)
+
+
+def _write_agent_dir(tmp_path: Path, *, allowed: list[str] | None = None,
+                     preset_block: object | None = None,
+                     capabilities: dict | None = None,
+                     disable: list[str] | None = None,
+                     env_file: str | None = None,
+                     extra_manifest: dict | None = None) -> Path:
+    """Create an agent working directory with a schema-valid init.json.
+
+    Schema-valid matters now that the CLI reads init.json through the canonical
+    reader: `manifest.preset`, when present, must carry `active`/`default`/
+    non-empty `allowed`, and `active` must point at a loadable preset. Callers
+    that only want an allowlist get one built around a real preset file.
+    """
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    manifest: dict = {
+        "agent_name": "cli-daemon-agent",
+        "language": "en",
+        "llm": {
+            "provider": "anthropic",
+            "model": "test-model",
+            "api_key": "test-key",
+            "base_url": None,
+        },
+        "capabilities": {} if capabilities is None else capabilities,
+    }
+    if disable is not None:
+        manifest["disable"] = disable
+    if preset_block is not None:
+        manifest["preset"] = preset_block
+    elif allowed is not None:
+        home = _write_preset(tmp_path, "home")
+        manifest["preset"] = {
+            "active": home,
+            "default": home,
+            "allowed": [home, *allowed],
+        }
+    if extra_manifest:
+        manifest.update(extra_manifest)
+    data: dict = {"manifest": manifest, "covenant": "", "pad": "", "lingtai": ""}
+    if env_file is not None:
+        data["env_file"] = env_file
+    (agent_dir / "init.json").write_text(json.dumps(data), encoding="utf-8")
+    return agent_dir
+
+
+def _write_tasks(tmp_path: Path, payload: object, name: str = "tasks.json") -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _run_cli(monkeypatch, argv: list[str]) -> int:
+    """Invoke ``lingtai.cli.main`` and return the process exit code (0 = ok)."""
+    from lingtai.cli import main
+
+    monkeypatch.setattr(sys, "argv", ["lingtai-agent", *argv])
+    try:
+        main()
+    except SystemExit as exc:
+        return int(exc.code or 0)
+    return 0
+
+
+@pytest.fixture
+def no_spawn(monkeypatch):
+    """Record every detached spawn the engine attempts instead of performing it.
+
+    Patching at ``_spawn_detached_lingtai_run`` keeps the whole CLI → envelope
+    → ``_handle_emanate`` path (validation, preset gate, run-dir creation,
+    prompt build) live, and stops exactly at the process boundary.
+    """
+    from lingtai.tools.daemon import DaemonManager
+
+    spawns: list[dict] = []
+
+    def _record(self, run_dir, **kwargs):
+        spawns.append({"run_dir": run_dir, **kwargs})
+
+    monkeypatch.setattr(DaemonManager, "_spawn_detached_lingtai_run", _record)
+    return spawns
+
+
+# ---------------------------------------------------------------------------
+# Tasks-file validation
+# ---------------------------------------------------------------------------
+
+
+def test_emanate_refuses_missing_tasks_file(tmp_path, monkeypatch, capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path)
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate",
+        "--tasks", str(tmp_path / "absent.json"),
+        "--agent-dir", str(agent_dir), "--yes",
+    ])
+    assert code == 1
+    assert "does not exist" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+def test_emanate_refuses_empty_tasks_file(tmp_path, monkeypatch, capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path)
+    empty = tmp_path / "empty.json"
+    empty.write_text("", encoding="utf-8")
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(empty),
+        "--agent-dir", str(agent_dir), "--yes",
+    ])
+    assert code == 1
+    assert "is empty" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+def test_emanate_refuses_tasks_file_with_no_tasks(tmp_path, monkeypatch, capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, {"tasks": []})
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--yes",
+    ])
+    assert code == 1
+    assert "no tasks" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+@pytest.mark.parametrize("payload,fragment", [
+    ({"tasks": [{"task": "x", "tools": ["file"]}], "nope": 1}, "unsupported field"),
+    ({"tasks": [{"task": "x", "tools": ["file"], "bogus": 1}]}, "unsupported field"),
+    ({"tasks": [{"tools": ["file"]}]}, "tasks[0].task is required"),
+    ({"tasks": [{"task": "x"}]}, "tasks[0].tools is required"),
+    ({"tasks": ["not-an-object"]}, "tasks[0] must be object"),
+])
+def test_emanate_refuses_off_schema_payloads(tmp_path, monkeypatch, capsys, no_spawn,
+                                             payload, fragment):
+    """Structural checks read the daemon tool's own emanate schema."""
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, payload)
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--yes",
+    ])
+    assert code == 1
+    assert fragment in capsys.readouterr().err
+    assert no_spawn == []
+
+
+def test_emanate_accepts_bare_task_array(tmp_path, monkeypatch, capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, [{"task": "bare array form", "tools": ["file"]}])
+    assert _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks), "--agent-dir", str(agent_dir),
+    ]) == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["count"] == 1
+    assert no_spawn == []
+
+
+# ---------------------------------------------------------------------------
+# --agent-dir
+# ---------------------------------------------------------------------------
+
+
+def test_emanate_requires_agent_dir(tmp_path, monkeypatch, capsys, no_spawn):
+    tasks = _write_tasks(tmp_path, {"tasks": [{"task": "x", "tools": ["file"]}]})
+    code = _run_cli(monkeypatch, ["daemon", "emanate", "--tasks", str(tasks)])
+    assert code == 2  # argparse usage error
+    assert "--agent-dir" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+def test_emanate_refuses_agent_dir_without_init_json(tmp_path, monkeypatch, capsys, no_spawn):
+    bare = tmp_path / "not-an-agent"
+    bare.mkdir()
+    tasks = _write_tasks(tmp_path, {"tasks": [{"task": "x", "tools": ["file"]}]})
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(bare), "--yes",
+    ])
+    assert code == 1
+    assert "init.json" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+# ---------------------------------------------------------------------------
+# --yes gate
+# ---------------------------------------------------------------------------
+
+
+def test_emanate_without_yes_previews_and_spawns_nothing(tmp_path, monkeypatch,
+                                                        capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, {"tasks": [
+        {"task": "Summarize docs into notes.md", "tools": ["file"]},
+        {"task": "Second task", "tools": ["file", "shell"]},
+    ]})
+    assert _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks), "--agent-dir", str(agent_dir),
+    ]) == 0
+
+    captured = capsys.readouterr()
+    preview = json.loads(captured.out)
+    assert preview["status"] == "preview"
+    assert preview["dispatched"] is False
+    assert preview["count"] == 2
+    assert preview["backend"] == "lingtai"
+    assert [t["tools"] for t in preview["tasks"]] == [["file"], ["file", "shell"]]
+    assert "--yes" in captured.err
+
+    assert no_spawn == []
+    assert not (agent_dir / "daemons").exists()
+
+
+def test_emanate_with_yes_dispatches_through_the_engine(tmp_path, monkeypatch,
+                                                        capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, {"tasks": [
+        {"task": "Summarize docs into notes.md", "tools": ["file"]},
+    ]})
+    assert _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--yes",
+    ]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    # The daemon tool's own emanate result shape, verbatim.
+    assert result["status"] == "dispatched"
+    assert result["count"] == 1
+    assert len(result["ids"]) == 1
+    assert result["group_id"]
+    assert "handoff" in result
+
+    assert len(no_spawn) == 1
+    assert no_spawn[0]["task"] == "Summarize docs into notes.md"
+    assert (agent_dir / "daemons").is_dir()
+
+
+def test_emanate_backend_flag_overrides_the_file(tmp_path, monkeypatch, capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, {
+        "tasks": [{"task": "x", "tools": ["file"]}],
+        "backend": "lingtai",
+    })
+    assert _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--backend", "codex",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["backend"] == "codex"
+    assert no_spawn == []
+
+
+# ---------------------------------------------------------------------------
+# P1-3 regression: the preview validates against the canonical emanate schema
+#
+# These all used to print a clean preview and exit 0, because every bound below
+# lived in the family dispatcher, which only runs under --yes.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("payload,fragment", [
+    ({"tasks": [{"task": "x", "tools": ["file"]}], "backend": "not-a-backend"},
+     "is not one of"),
+    ({"tasks": [{"task": "x", "tools": ["file"]}], "max_turns": 0},
+     "max_turns must be >= 1"),
+    ({"tasks": [{"task": "x", "tools": ["file"]}], "max_turns": 999999},
+     "max_turns must be <= "),
+    ({"tasks": [{"task": "x", "tools": ["file"]}], "timeout": 1},
+     "timeout must be >= 5"),
+    ({"tasks": [{"task": "x", "tools": ["file"], "context_token_limit": 0}]},
+     "context_token_limit must be >= 1"),
+    ({"tasks": [{"task": "x", "tools": ["file"]}], "max_turns": "many"},
+     "max_turns must be integer or null"),
+    ({"tasks": [{"task": "x", "tools": [7]}]},
+     "tasks[0].tools[0] must be string"),
+    ({"tasks": [{"task": "x", "tools": ["file"], "preset": 7}]},
+     "tasks[0].preset must be string"),
+    ({"tasks": [{"task": "x", "tools": ["file"], "skills": "not-a-list"}]},
+     "tasks[0].skills must be array"),
+])
+def test_preview_refuses_schema_violations_without_yes(tmp_path, monkeypatch, capsys,
+                                                       no_spawn, payload, fragment):
+    """Every bound the tool enforces at dispatch is enforced at preview too."""
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, payload)
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks), "--agent-dir", str(agent_dir),
+    ])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "does not match the daemon emanate schema" in err
+    assert fragment in err
+    assert no_spawn == []
+    assert not (agent_dir / "daemons").exists()
+
+
+def test_preview_refuses_the_reviewers_exact_payload(tmp_path, monkeypatch, capsys, no_spawn):
+    """The reported reproducer: four violations at once, previously exit 0."""
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, {
+        "tasks": [{"task": "x", "tools": ["file"], "context_token_limit": 0}],
+        "backend": "not-a-backend",
+        "max_turns": 0,
+        "timeout": 1,
+    })
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks), "--agent-dir", str(agent_dir),
+    ])
+    assert code == 1
+    err = capsys.readouterr().err
+    # All four are reported together rather than one per run.
+    assert "is not one of" in err
+    assert "max_turns must be >= 1" in err
+    assert "timeout must be >= 5" in err
+    assert "context_token_limit must be >= 1" in err
+    assert no_spawn == []
+
+
+def test_backend_flag_is_held_to_the_same_enum(tmp_path, monkeypatch, capsys, no_spawn):
+    """--backend overrides the file, so it needs the same enum check."""
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, {"tasks": [{"task": "x", "tools": ["file"]}]})
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--backend", "not-a-backend",
+    ])
+    assert code == 1
+    assert "--backend 'not-a-backend' is not one of" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+def test_schema_bounds_are_read_from_the_tool_not_restated():
+    """The validator's numbers come from ``_tool_family``, so they cannot drift."""
+    from lingtai.tools.daemon import _BACKEND_SCHEMA_ENUM
+    from lingtai.tools.daemon._tool_family import _emanate_input_schema
+    from lingtai.cli_daemon import CliDaemonError, _validate_emanate_input
+
+    schema = _emanate_input_schema(list(_BACKEND_SCHEMA_ENUM))
+    ceiling = schema["properties"]["max_turns"]["maximum"]
+    floor = schema["properties"]["timeout"]["minimum"]
+
+    ok = {"tasks": [{"task": "x", "tools": []}], "max_turns": ceiling, "timeout": floor}
+    assert _validate_emanate_input(dict(ok))
+
+    with pytest.raises(CliDaemonError, match=f"must be <= {ceiling}"):
+        _validate_emanate_input({**ok, "max_turns": ceiling + 1})
+    with pytest.raises(CliDaemonError, match=f"must be >= {floor}"):
+        _validate_emanate_input({**ok, "timeout": floor - 1})
+
+
+def test_validator_fails_loudly_on_an_unknown_schema_keyword():
+    """A new schema keyword must break the interpreter, not be ignored."""
+    from lingtai.cli_daemon import CliDaemonError, _check_schema
+
+    with pytest.raises(CliDaemonError, match="unsupported keyword"):
+        _check_schema({}, {"type": "object", "dependentRequired": {}}, "", [])
+
+
+# ---------------------------------------------------------------------------
+# P1-1 regression: the tool surface respects effective capability policy
+# ---------------------------------------------------------------------------
+
+
+def test_disabled_tool_refuses_the_batch(tmp_path, monkeypatch, capsys, no_spawn):
+    """``manifest.disable`` is policy; a task cannot route around it."""
+    agent_dir = _write_agent_dir(tmp_path, disable=["shell"])
+    tasks = _write_tasks(tmp_path, {"tasks": [
+        {"task": "run something", "tools": ["shell"]},
+    ]})
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--yes",
+    ])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "this agent does not grant" in err
+    assert "whole batch is refused" in err
+    assert no_spawn == []
+    assert not (agent_dir / "daemons").exists()
+
+
+def test_disabled_tool_refuses_the_whole_batch_including_allowed_siblings(
+    tmp_path, monkeypatch, capsys, no_spawn,
+):
+    agent_dir = _write_agent_dir(tmp_path, disable=["shell"])
+    tasks = _write_tasks(tmp_path, {"tasks": [
+        {"task": "fine", "tools": ["file"]},
+        {"task": "not fine", "tools": ["shell"]},
+    ]})
+    assert _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--yes",
+    ]) == 1
+    assert "tasks[1] requests tool 'shell'" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+def test_disabled_tool_is_refused_before_yes(tmp_path, monkeypatch, capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path, disable=["shell"])
+    tasks = _write_tasks(tmp_path, {"tasks": [{"task": "x", "tools": ["shell"]}]})
+    assert _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks), "--agent-dir", str(agent_dir),
+    ]) == 1
+    assert "this agent does not grant" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+def test_engine_also_refuses_a_disabled_tool_when_the_cli_gate_is_bypassed(tmp_path):
+    """The CLI gate is defense in depth; the surface itself must fail closed.
+
+    Even calling the dispatcher directly — no CLI gate — a disabled tool is
+    never registered on the facade, so ``_build_tool_surface`` refuses.
+    """
+    from lingtai.cli_daemon import _CliDaemonAgent, _dispatch_through_tool_family
+
+    agent_dir = _write_agent_dir(tmp_path, disable=["shell"])
+    agent = _CliDaemonAgent.for_dispatch(agent_dir)
+    agent.install_tool_surface({"shell", "file"})
+
+    assert "shell" not in {s.name for s in agent._tool_schemas}
+    result = _dispatch_through_tool_family(agent, "emanate", {
+        "tasks": [{"task": "x", "tools": ["shell"]}],
+        "backend": "lingtai", "max_turns": None, "timeout": None,
+    })
+    assert result["status"] == "error"
+    assert "Unknown tools for emanation" in result["message"]
+
+
+def test_effective_capabilities_apply_core_defaults_and_disable(tmp_path):
+    """The effective set is ``apply_core_defaults``, not the raw manifest."""
+    from lingtai.cli_daemon import _CliDaemonAgent
+
+    agent_dir = _write_agent_dir(
+        tmp_path, capabilities={"shell": {"yolo": False}}, disable=["vision"],
+    )
+    granted = _CliDaemonAgent.for_dispatch(agent_dir).effective_capabilities()
+
+    assert "vision" not in granted           # dropped by manifest.disable
+    assert "file" in granted                 # core floor, never named in init
+    assert granted["shell"] == {"yolo": False}  # authored kwargs win over the floor
+
+
+def test_authored_capability_kwargs_reach_setup(tmp_path, monkeypatch):
+    """A capability is instantiated with the agent's configuration, not defaults."""
+    from lingtai.cli_daemon import _CliDaemonAgent
+    import lingtai.tools.registry as registry
+
+    agent_dir = _write_agent_dir(tmp_path, capabilities={"shell": {"yolo": False}})
+    seen: dict = {}
+    real = registry.setup_capability
+
+    def _spy(collector, name, **kwargs):
+        seen[name] = kwargs
+        return real(collector, name, **kwargs)
+
+    monkeypatch.setattr(registry, "setup_capability", _spy)
+    _CliDaemonAgent.for_dispatch(agent_dir).install_tool_surface({"shell"})
+
+    assert seen["shell"] == {"yolo": False}
+
+
+@pytest.mark.parametrize("tool", ["email", "compact"])
+def test_engine_provided_tools_are_not_refused_by_the_capability_gate(
+    tmp_path, monkeypatch, capsys, no_spawn, tool,
+):
+    """The gate must not over-refuse names the engine supplies itself.
+
+    ``email`` is auto-mounted as MCP and ``compact`` comes from the daemon
+    intrinsic surface; neither is a capability in ``BUILTIN_TOOLS``, so the
+    capability set is not their authority.
+    """
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, {"tasks": [{"task": "x", "tools": [tool]}]})
+    _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks), "--agent-dir", str(agent_dir),
+    ])
+    assert "this agent does not grant" not in capsys.readouterr().err
+
+
+def test_a_preset_task_is_not_gated_on_the_parent_capability_set(tmp_path, monkeypatch,
+                                                                 capsys, no_spawn):
+    """A preset brings its own sandbox, so the parent set is not its authority."""
+    preset = _write_preset(tmp_path, "cheap", capabilities={"file": {}})
+    agent_dir = _write_agent_dir(tmp_path, allowed=[preset], disable=["shell"])
+    tasks = _write_tasks(tmp_path, {"tasks": [
+        {"task": "x", "tools": ["shell"], "preset": preset},
+    ]})
+    # Reaches the engine (which owns preset-surface resolution) rather than
+    # being refused by the parent-capability gate.
+    _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks), "--agent-dir", str(agent_dir),
+    ])
+    assert "this agent does not grant" not in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Preset allowlist — fail closed
+# ---------------------------------------------------------------------------
+
+
+def test_disallowed_preset_refuses_the_whole_batch(tmp_path, monkeypatch, capsys, no_spawn):
+    """One unauthorized preset refuses every task in the file, not just its own."""
+    agent_dir = _write_agent_dir(tmp_path, allowed=[str(tmp_path / "ok.json")])
+    tasks = _write_tasks(tmp_path, {"tasks": [
+        {"task": "allowed sibling", "tools": ["file"]},
+        {"task": "unauthorized", "tools": ["file"], "preset": str(tmp_path / "evil.json")},
+    ]})
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--yes",
+    ])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "not in this agent's allowed list" in err
+    assert "whole batch is refused" in err
+    assert no_spawn == []
+    assert not (agent_dir / "daemons").exists()
+
+
+def test_absent_allowlist_fails_closed(tmp_path, monkeypatch, capsys, no_spawn):
+    """An agent with no preset block grants no preset."""
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, {"tasks": [
+        {"task": "x", "tools": ["file"], "preset": str(tmp_path / "any.json")},
+    ]})
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--yes",
+    ])
+    assert code == 1
+    assert "not in this agent's allowed list" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+@pytest.mark.parametrize("preset_block", [{}, {"allowed": []}, {"allowed": "oops"}])
+def test_malformed_preset_block_fails_closed(tmp_path, monkeypatch, capsys,
+                                             no_spawn, preset_block):
+    """A malformed preset block is refused by the canonical init reader.
+
+    This used to reach the CLI's own allowlist gate because init.json was read
+    with a bare ``json.loads``. Reading through ``read_init`` means the schema
+    rejects the block first — an earlier and stricter fail-closed point, but
+    still a refusal with no dispatch, which is what matters.
+    """
+    agent_dir = _write_agent_dir(tmp_path, preset_block=preset_block)
+    tasks = _write_tasks(tmp_path, {"tasks": [
+        {"task": "x", "tools": ["file"], "preset": str(tmp_path / "any.json")},
+    ]})
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--yes",
+    ])
+    assert code == 1
+    assert "is not usable" in capsys.readouterr().err
+    assert no_spawn == []
+    assert not (agent_dir / "daemons").exists()
+
+
+def test_disallowed_preset_is_refused_before_yes(tmp_path, monkeypatch, capsys, no_spawn):
+    """The gate runs at preview time too — a bad batch never looks dispatchable."""
+    agent_dir = _write_agent_dir(tmp_path, allowed=[str(tmp_path / "ok.json")])
+    tasks = _write_tasks(tmp_path, {"tasks": [
+        {"task": "x", "tools": ["file"], "preset": str(tmp_path / "evil.json")},
+    ]})
+    code = _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks), "--agent-dir", str(agent_dir),
+    ])
+    assert code == 1
+    assert "not in this agent's allowed list" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+def test_engine_preset_gate_still_runs_when_the_cli_gate_is_bypassed(tmp_path, monkeypatch):
+    """The CLI's own check is defense in depth, never the only gate."""
+    from lingtai.cli_daemon import _CliDaemonAgent, _dispatch_through_tool_family
+
+    agent_dir = _write_agent_dir(tmp_path, allowed=[str(tmp_path / "ok.json")])
+    agent = _CliDaemonAgent.for_dispatch(agent_dir)
+    agent.install_tool_surface({"file"})
+    result = _dispatch_through_tool_family(agent, "emanate", {
+        "tasks": [{"task": "x", "tools": ["file"], "preset": str(tmp_path / "evil.json")}],
+        "backend": "lingtai",
+        "max_turns": None,
+        "timeout": None,
+    })
+    assert result["status"] == "error"
+    assert "not in this agent's allowed list" in result["message"]
+    assert not (agent_dir / "daemons").exists()
+
+
+# ---------------------------------------------------------------------------
+# P1-2 regression: dispatch uses the agent's effective config, not raw JSON
+# ---------------------------------------------------------------------------
+
+
+def test_active_preset_model_is_used_not_the_raw_init_llm(tmp_path, monkeypatch,
+                                                          capsys, no_spawn):
+    """A materialized preset decides the daemon's provider/model.
+
+    Reading init.json with a bare ``json.loads`` skipped active-preset
+    materialization, so the daemon launched on the *stale raw* llm block that
+    the preset was supposed to replace.
+    """
+    from lingtai.cli_daemon import _CliDaemonAgent
+
+    active = _write_preset(
+        tmp_path, "minimax", provider="minimax", model="effective-model",
+    )
+    agent_dir = _write_agent_dir(tmp_path, preset_block={
+        "active": active, "default": active, "allowed": [active],
+    }, extra_manifest={
+        "llm": {
+            "provider": "anthropic",
+            "model": "stale-raw-model",
+            "api_key": "raw-key",
+            "base_url": None,
+        },
+    })
+
+    agent = _CliDaemonAgent.for_dispatch(agent_dir)
+    assert agent._init_data["manifest"]["llm"]["model"] == "effective-model"
+    assert agent._init_data["manifest"]["llm"]["provider"] == "minimax"
+    assert agent.service.model == "effective-model"
+    assert agent.service.provider == "minimax"
+
+    # And it is the effective model that reaches the run directory.
+    tasks = _write_tasks(tmp_path, {"tasks": [{"task": "x", "tools": ["file"]}]})
+    assert _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--yes",
+    ]) == 0
+    capsys.readouterr()
+    state = json.loads(
+        (no_spawn[0]["run_dir"].path / "daemon.json").read_text(encoding="utf-8")
+    )
+    assert state["model"] == "effective-model"
+
+
+def test_relative_env_file_resolves_under_agent_dir_not_cwd(tmp_path, monkeypatch):
+    """``--agent-dir`` is the base for every relative path in init.json.
+
+    ``resolve_paths`` is part of the canonical reader; skipping it meant a
+    relative ``env_file`` was loaded from wherever the CLI happened to be
+    invoked, so a daemon could boot with another directory's credentials — or
+    none at all.
+    """
+    from lingtai.cli_daemon import _CliDaemonAgent
+
+    agent_dir = _write_agent_dir(tmp_path, env_file="secrets.env", extra_manifest={
+        "llm": {
+            "provider": "anthropic",
+            "model": "m",
+            "api_key_env": "CLI_DAEMON_ENV_FILE_PROBE",
+            "base_url": None,
+        },
+    })
+    (agent_dir / "secrets.env").write_text(
+        "CLI_DAEMON_ENV_FILE_PROBE=from-agent-dir\n", encoding="utf-8",
+    )
+    # A decoy with the same relative name next to the caller's CWD.
+    cwd = tmp_path / "elsewhere"
+    cwd.mkdir()
+    (cwd / "secrets.env").write_text(
+        "CLI_DAEMON_ENV_FILE_PROBE=from-cwd\n", encoding="utf-8",
+    )
+    monkeypatch.chdir(cwd)
+    monkeypatch.delenv("CLI_DAEMON_ENV_FILE_PROBE", raising=False)
+
+    agent = _CliDaemonAgent.for_dispatch(agent_dir)
+    assert agent._init_data["env_file"] == str(agent_dir / "secrets.env")
+    assert agent.service.api_key == "from-agent-dir"
+
+
+def test_jsonc_init_is_parsed(tmp_path):
+    """The canonical reader accepts JSONC; ``json.loads`` did not."""
+    from lingtai.cli_daemon import _CliDaemonAgent
+
+    agent_dir = _write_agent_dir(tmp_path)
+    raw = (agent_dir / "init.json").read_text(encoding="utf-8")
+    (agent_dir / "init.json").write_text(
+        "// the canonical reader tolerates comments\n" + raw, encoding="utf-8",
+    )
+    assert _CliDaemonAgent.for_dispatch(agent_dir)._config.language == "en"
+
+
+def test_invalid_init_refuses_dispatch(tmp_path, monkeypatch, capsys, no_spawn):
+    """Schema validation now runs; an unusable init.json refuses the batch."""
+    agent_dir = _write_agent_dir(tmp_path)
+    (agent_dir / "init.json").write_text(
+        json.dumps({"manifest": {"agent_name": "x"}}), encoding="utf-8",
+    )
+    tasks = _write_tasks(tmp_path, {"tasks": [{"task": "x", "tools": ["file"]}]})
+    assert _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--yes",
+    ]) == 1
+    assert "is not usable" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+def test_reading_effective_config_writes_nothing(tmp_path):
+    """Unlike ``cli.load_init``, the CLI never publishes a resolved manifest."""
+    from lingtai.cli_daemon import _CliDaemonAgent
+
+    active = _write_preset(tmp_path, "p")
+    agent_dir = _write_agent_dir(tmp_path, preset_block={
+        "active": active, "default": active, "allowed": [active],
+    })
+    before = (agent_dir / "init.json").read_bytes()
+
+    _CliDaemonAgent.for_dispatch(agent_dir)
+
+    assert (agent_dir / "init.json").read_bytes() == before
+    assert not (agent_dir / "system" / "manifest.resolved.json").exists()
+
+
+def test_inspection_does_not_require_a_usable_init(tmp_path, monkeypatch, capsys):
+    """A broken agent must still be inspectable — refusing to list is backwards."""
+    agent_dir = _write_agent_dir(tmp_path)
+    _seed_run_dir(agent_dir)
+    (agent_dir / "init.json").write_text(
+        json.dumps({"manifest": {"agent_name": "broken"}}), encoding="utf-8",
+    )
+    assert _run_cli(monkeypatch, ["daemon", "list", "--agent-dir", str(agent_dir)]) == 0
+    assert "em-1" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Read-only list / check
+# ---------------------------------------------------------------------------
+
+
+#: A PID that is not this process and is overwhelmingly unlikely to be alive —
+#: what a run directory left behind by a since-exited agent looks like.
+_DEAD_PARENT_PID = 999_999
+
+
+def _seed_run_dir(agent_dir: Path, *, handle: str = "em-1",
+                  task: str = "seeded task", state: str = "done") -> Path:
+    """Create a well-formed daemon run directory through ``DaemonRunDir``.
+
+    Written by the real writer rather than by hand, so ``list``'s legitimate
+    lazy repair of malformed/legacy records never fires and a byte-comparison
+    can isolate the writes this CLI must not perform.  The record is left
+    owned by a dead parent PID with its terminal notification unpublished —
+    exactly the two things ``DaemonManager.__init__`` reconciles.
+    """
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
+
+    run_dir = DaemonRunDir(
+        parent_working_dir=agent_dir,
+        handle=handle,
+        run_id=f"{handle}-20260813-101010-abcdef",
+        task=task,
+        tools=["file"],
+        model="test-model",
+        max_turns=5,
+        timeout_s=60.0,
+        parent_addr=agent_dir.name,
+        parent_pid=_DEAD_PARENT_PID,
+        system_prompt="prompt",
+        backend="lingtai",
+    )
+    if state != "running":
+        run_dir.update_state(state=state, finished_at="2026-08-13T10:11:10Z")
+    return run_dir.path
+
+
+def test_list_prints_a_status_table(tmp_path, monkeypatch, capsys):
+    agent_dir = _write_agent_dir(tmp_path)
+    _seed_run_dir(agent_dir)
+    assert _run_cli(monkeypatch, ["daemon", "list", "--agent-dir", str(agent_dir)]) == 0
+    out = capsys.readouterr().out
+    assert "STATUS" in out and "TASK" in out
+    assert "em-1" in out
+    assert "seeded task" in out
+
+
+def test_list_status_filter(tmp_path, monkeypatch, capsys):
+    agent_dir = _write_agent_dir(tmp_path)
+    _seed_run_dir(agent_dir)
+    assert _run_cli(monkeypatch, [
+        "daemon", "list", "--status", "running", "--agent-dir", str(agent_dir),
+    ]) == 0
+    assert "no daemon runs" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("argv", [
+    ["daemon", "list"],
+    ["daemon", "check", "em-1"],
+])
+def test_list_and_check_write_nothing(tmp_path, monkeypatch, capsys, argv):
+    """A stale, unnotified record must survive inspection byte-for-byte."""
+    agent_dir = _write_agent_dir(tmp_path)
+    run_path = _seed_run_dir(agent_dir, state="running")
+    before = (run_path / "daemon.json").read_bytes()
+
+    assert _run_cli(monkeypatch, [*argv, "--agent-dir", str(agent_dir)]) == 0
+    capsys.readouterr()
+
+    assert (run_path / "daemon.json").read_bytes() == before
+    assert not (agent_dir / ".notification").exists()
+
+
+def test_a_full_manager_would_have_rewritten_that_record(tmp_path):
+    """Positive control: the reconciliation the read-only view skips is real.
+
+    Without this, ``test_list_and_check_write_nothing`` could pass simply
+    because nothing ever reconciles stale records.
+    """
+    from lingtai.tools.daemon import DaemonManager
+    from lingtai.cli_daemon import _CliDaemonAgent
+
+    agent_dir = _write_agent_dir(tmp_path)
+    run_path = _seed_run_dir(agent_dir, state="running")
+    before = (run_path / "daemon.json").read_bytes()
+
+    DaemonManager(_CliDaemonAgent.for_dispatch(agent_dir))
+
+    after = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
+    assert (run_path / "daemon.json").read_bytes() != before
+    assert after["state"] == "failed"
+
+
+def test_check_prints_a_snapshot(tmp_path, monkeypatch, capsys):
+    agent_dir = _write_agent_dir(tmp_path)
+    run_path = _seed_run_dir(agent_dir)
+    assert _run_cli(monkeypatch, [
+        "daemon", "check", "em-1", "--agent-dir", str(agent_dir),
+    ]) == 0
+    snapshot = json.loads(capsys.readouterr().out)
+    assert snapshot["id"] == "em-1"
+    assert snapshot["state"] == "done"
+    assert snapshot["path"] == str(run_path)
+
+
+def test_check_unknown_id_exits_nonzero(tmp_path, monkeypatch, capsys):
+    agent_dir = _write_agent_dir(tmp_path)
+    code = _run_cli(monkeypatch, [
+        "daemon", "check", "em-404", "--agent-dir", str(agent_dir),
+    ])
+    assert code == 1
+    assert json.loads(capsys.readouterr().out)["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# P1-4 regression: inspection never rewrites durable state, whatever its shape
+#
+# The engine's ``_load_or_rebuild_daemon_state`` self-heals a daemon.json that
+# is missing, unparseable, or stamped with an older data_version. That repair
+# belongs to the owning agent; a CLI must observe without mutating.
+# ---------------------------------------------------------------------------
+
+
+def _damage(run_path: Path, kind: str) -> None:
+    """Put a run directory into one of the three would-be-rebuild shapes."""
+    daemon_json = run_path / "daemon.json"
+    if kind == "missing":
+        daemon_json.unlink()
+    elif kind == "unparseable":
+        daemon_json.write_text("{not json", encoding="utf-8")
+    elif kind == "stale_version":
+        state = json.loads(daemon_json.read_text(encoding="utf-8"))
+        state["data_version"] = 0
+        daemon_json.write_text(json.dumps(state), encoding="utf-8")
+    else:  # pragma: no cover - guards the parametrization
+        raise AssertionError(kind)
+
+
+@pytest.mark.parametrize("kind", ["missing", "unparseable", "stale_version"])
+@pytest.mark.parametrize("argv", [["daemon", "list"], ["daemon", "check", "em-1"]])
+def test_inspection_never_repairs_damaged_durable_state(tmp_path, monkeypatch, capsys,
+                                                        kind, argv):
+    agent_dir = _write_agent_dir(tmp_path)
+    run_path = _seed_run_dir(agent_dir)
+    _damage(run_path, kind)
+    daemon_json = run_path / "daemon.json"
+    existed = daemon_json.exists()
+    before = daemon_json.read_bytes() if existed else None
+
+    _run_cli(monkeypatch, [*argv, "--agent-dir", str(agent_dir)])
+    capsys.readouterr()
+
+    assert daemon_json.exists() is existed, "inspection created daemon.json"
+    if existed:
+        assert daemon_json.read_bytes() == before, "inspection rewrote daemon.json"
+
+
+@pytest.mark.parametrize("kind", ["missing", "unparseable", "stale_version"])
+def test_list_still_shows_a_damaged_run_and_says_it_needs_rebuild(tmp_path, monkeypatch,
+                                                                  capsys, kind):
+    """Not repairing must not mean silently dropping the row, or lying about it."""
+    agent_dir = _write_agent_dir(tmp_path)
+    run_path = _seed_run_dir(agent_dir)
+    _damage(run_path, kind)
+
+    assert _run_cli(monkeypatch, ["daemon", "list", "--agent-dir", str(agent_dir)]) == 0
+    captured = capsys.readouterr()
+
+    assert run_path.name.split("-2026")[0] in captured.out  # the row is still listed
+    assert "NOT repaired on disk" in captured.err
+    assert "read-only" in captured.err
+
+
+@pytest.mark.parametrize("kind", ["missing", "unparseable", "stale_version"])
+def test_a_full_manager_would_have_repaired_the_damaged_record(tmp_path, kind):
+    """Positive control for the lazy-repair path the read-only view overrides."""
+    from lingtai.tools.daemon import DaemonManager
+    from lingtai.cli_daemon import _CliDaemonAgent
+
+    agent_dir = _write_agent_dir(tmp_path)
+    run_path = _seed_run_dir(agent_dir)
+    _damage(run_path, kind)
+
+    manager = DaemonManager(_CliDaemonAgent.for_dispatch(agent_dir))
+    manager._handle_list()
+
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
+
+    repaired = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
+    assert repaired["data_version"] == DaemonRunDir.DATA_VERSION
+    assert repaired["migration"]["source"] == "daemon_list_best_effort"
+
+
+def test_read_only_view_records_which_runs_need_rebuild(tmp_path):
+    """The needs-rebuild set is what the CLI reports instead of repairing."""
+    from lingtai.cli_daemon import _CliDaemonAgent, _ReadOnlyDaemonView
+
+    agent_dir = _write_agent_dir(tmp_path)
+    healthy = _seed_run_dir(agent_dir, handle="em-1")
+    damaged = _seed_run_dir(agent_dir, handle="em-2")
+    _damage(damaged, "stale_version")
+
+    view = _ReadOnlyDaemonView(_CliDaemonAgent.for_inspection(agent_dir))
+    result = view._handle_list()
+
+    assert view.needs_rebuild == [damaged.name]
+    assert healthy.name not in view.needs_rebuild
+    # Both runs are still reported, the damaged one from reconstruction.
+    assert {e["run_id"] for e in result["emanations"]} == {healthy.name, damaged.name}
+
+
+# ---------------------------------------------------------------------------
+# Secret hygiene
+# ---------------------------------------------------------------------------
+
+
+def test_backend_options_env_values_are_redacted_from_output(tmp_path, monkeypatch,
+                                                             capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path)
+    tasks = _write_tasks(tmp_path, {
+        "tasks": [{
+            "task": "x",
+            "tools": ["file"],
+            "backend_options": {"env": {"CLAUDE_CONFIG_DIR": "s3cr3t-value"}},
+        }],
+        "backend": "claude-p",
+    })
+    assert _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks), "--agent-dir", str(agent_dir),
+    ]) == 0
+    out = capsys.readouterr().out
+    assert "s3cr3t-value" not in out
+
+
+def test_redaction_keeps_explicit_nulls_in_the_printed_shape():
+    """A script reading `check` output must see null, not a missing key."""
+    from lingtai.cli_daemon import _redact_preserving_nulls
+
+    assert _redact_preserving_nulls({
+        "result_path": None,
+        "current_tool": None,
+        "state": "done",
+        "env": {"TOKEN": "s3cr3t"},
+        "events": [{"detail": None, "event": "daemon_done"}],
+    }) == {
+        "result_path": None,
+        "current_tool": None,
+        "state": "done",
+        "env": {"TOKEN": "<redacted>"},
+        "events": [{"detail": None, "event": "daemon_done"}],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Facade
+# ---------------------------------------------------------------------------
+
+
+def test_facade_takes_no_lease_and_writes_no_agent_identity(tmp_path):
+    """The facade must never look like a second agent in the working dir."""
+    from lingtai.cli_daemon import _CliDaemonAgent
+
+    agent_dir = _write_agent_dir(tmp_path)
+    agent = _CliDaemonAgent.for_dispatch(agent_dir)
+    agent.install_tool_surface({"file"})
+
+    assert {s.name for s in agent._tool_schemas} == {"file"}
+    assert agent._config.language == "en"
+    assert not (agent_dir / ".agent.heartbeat").exists()
+    assert not (agent_dir / ".agent.lock").exists()
+    assert not (agent_dir / ".agent.json").exists()
+
+
+def test_facade_reads_the_sanitized_preset_allowlist(tmp_path):
+    """``_read_preset_from_init`` is the live Agent's implementation, not a copy."""
+    from lingtai.agent import Agent
+    from lingtai.cli_daemon import _CliDaemonAgent
+
+    home = _write_preset(tmp_path, "home")
+    agent_dir = _write_agent_dir(tmp_path, preset_block={
+        "allowed": [home, 7],
+        "active": home,
+        "default": home,
+        "secret": "must-not-survive",
+    })
+    agent = _CliDaemonAgent.for_inspection(agent_dir)
+    assert _CliDaemonAgent._read_preset_from_init is Agent._read_preset_from_init
+    assert agent._read_preset_from_init() == {
+        "allowed": [home], "active": home, "default": home,
+    }
+
+
+def test_facade_refuses_to_publish_terminal_notifications(tmp_path):
+    """A CLI publish must fail so the pending receipt survives for the agent."""
+    from lingtai.cli_daemon import _CliDaemonAgent, _ReadOnlyDaemonView
+
+    agent_dir = _write_agent_dir(tmp_path)
+    run_path = _seed_run_dir(agent_dir)
+    agent = _CliDaemonAgent.for_dispatch(agent_dir)
+    view = _ReadOnlyDaemonView(agent)
+
+    published = view._publish_daemon_notification(
+        "em-1", status="done", text="body", run_path=run_path,
+        run_state=json.loads((run_path / "daemon.json").read_text(encoding="utf-8")),
+        idempotency_key="k",
+    )
+    assert published is False
+
+
+def test_facade_service_is_lazy(tmp_path):
+    """`list`/`check` must work with no resolvable credential."""
+    from lingtai.cli_daemon import _CliDaemonAgent
+
+    env_file = tmp_path / "agent.env"
+    env_file.write_text("OTHER=1\n", encoding="utf-8")
+    agent_dir = _write_agent_dir(tmp_path, env_file=str(env_file), extra_manifest={
+        "llm": {
+            "provider": "anthropic",
+            "model": "m",
+            "api_key_env": "NOPE_MISSING_CLI_DAEMON_KEY",
+            "base_url": None,
+        },
+    })
+
+    agent = _CliDaemonAgent.for_dispatch(agent_dir)
+    assert agent._working_dir == agent_dir  # construction touched no credential
+    with pytest.raises(ValueError):
+        _ = agent.service
+
+
+# ---------------------------------------------------------------------------
+# Docs / description hint
+# ---------------------------------------------------------------------------
+
+
+def test_daemon_tool_description_points_programmatic_callers_at_the_cli():
+    from lingtai.tools.daemon import get_description
+
+    assert "lingtai-agent daemon" in get_description()
+
+
+def test_daemon_manual_documents_the_cli():
+    manual = (
+        Path(__file__).resolve().parents[1]
+        / "src/lingtai/tools/daemon/manual/SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "## Programmatic use / CLI" in manual
+    assert "lingtai-agent daemon emanate" in manual

@@ -79,6 +79,7 @@ related_files:
   - tests/test_claude_live_effort.py
   - tests/test_claude_code_effort.py
   - tests/test_cli.py
+  - tests/test_cli_daemon.py
   - tests/test_cli_integration.py
   - tests/test_cli_runtime_env.py
   - tests/test_cli_worker_poison_recovery.py

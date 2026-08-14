@@ -16,6 +16,7 @@ related_files:
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/auth/ANATOMY.md
   - src/lingtai/cli.py
+  - src/lingtai/cli_daemon.py
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/registry.py
@@ -43,6 +44,7 @@ related_files:
   - tests/test_agent_preset_manifest.py
   - tests/test_agent_config_hydration.py
   - tests/test_cli.py
+  - tests/test_cli_daemon.py
   - tests/test_deep_refresh.py
   - tests/test_kernel_migrate.py
   - tests/test_init_schema.py
@@ -78,6 +80,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `adapters/browser_transport.py` | Production static HTTP(S) Adapter for the internal browse Core-owned `BrowserPort`; bounds DNS wait with one in-flight resolver job, pins vetted IPs, and preserves Host/SNI, selected lazily by unified web setup. |
 | `adapters/lifecycle_clock.py` | The one portable production `SystemLifecycleClockAdapter` for the Core-owned `LifecycleClockPort` — direct `wall_seconds()`→`time.time()` / `monotonic_seconds()`→`time.monotonic()`, no caching or policy. Not POSIX (no filesystem/`fcntl`/platform selection), so it sits at the top of `adapters/` rather than under `adapters/posix/`; its promise/navigation are owned by the kernel `lifecycle_clock/` governed pair (`src/lingtai/kernel/lifecycle_clock/CONTRACT.md` + `ANATOMY.md`). |
 | `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent check-caps` / `lingtai-agent log ...` / `lingtai-agent maintenance cleanup <target>` entry points; the `run` composition root performs a post-stop hard exit only when existing worker-poison state would otherwise keep the old process alive and block the refresh watcher |
+| `cli_daemon.py` | `lingtai-agent daemon emanate|list|check` — the programmatic (shell/Python/CI) skin over the daemon engine. `_CliDaemonAgent` is the minimal parent-agent facade `DaemonManager` reads (no lease, heartbeat, or agent identity), built from the agent's effective config through the canonical `init_reader.read_init`; `emanate` validates the tasks file against the tool's own emanate schema and enforces the preset allowlist and effective capability policy before previewing, then dispatches through the `DaemonFamilyDispatcher` envelope only under `--yes`; `_ReadOnlyDaemonView` binds the manager's unmodified `_handle_list`/`_handle_check` with both of its write paths (startup reconciliation, lazy daemon.json repair) removed |
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai.kernel.presets`) |
 | `init.jsonc` / `init_reader.py` / `init_schema.py` | Kernel canonical shape plus the one real parse → materialize → validate → resolve reader. `InitReadOutcome` reports fully-effective, ignored-field, or failed reads with typed PASS/NUDGE/BLOCKED/UNKNOWN shape evidence without rewriting user-owned init.json; `validate_init()` remains the schema validator. See `CONTRACT.md`. |
@@ -91,7 +94,9 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 *(Function-name anchors, not line numbers — line citations in this table drift with every edit; grep the name in `agent.py` for the current location.)*
 
-**`cli.py`**: `load_init` · `build_agent` · `run` · `_force_exit_if_worker_poisoned` · `_handle_log_command` · `_handle_maintenance_command` · `main`
+**`cli.py`**: `load_init` · `build_llm_service` (shared with `cli_daemon.py`) · `build_agent` · `run` · `_force_exit_if_worker_poisoned` · `_handle_log_command` · `_handle_maintenance_command` · `main`
+
+**`cli_daemon.py`**: `_CliDaemonAgent` (`for_dispatch` reads effective config via `init_reader.read_init`; `for_inspection` reads none) · `_CliDaemonAgent.effective_capabilities` / `install_tool_surface` (`registry.apply_core_defaults` — honors `manifest.disable` and authored kwargs) · `_ReadOnlyDaemonView` (overrides `_load_or_rebuild_daemon_state` so inspection reconstructs in memory instead of repairing on disk) · `_read_effective_init` · `_load_tasks_file` · `_check_schema` / `_validate_emanate_input` (interprets the tool's own `_emanate_input_schema` at preview time) · `_enforce_preset_allowlist` · `_enforce_capability_policy` · `_dispatch_through_tool_family` · `add_daemon_parser` · `handle_daemon_command`
 
 **`presets.py`**: compatibility re-export shim (`presets.py:1-21`); implementation lives in `lingtai.kernel.presets` (`discover_presets_in_dirs` :177 · `load_preset` :232 · `materialize_active_preset` :360 · `expand_inherit` :580).
 

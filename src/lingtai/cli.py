@@ -75,6 +75,53 @@ def _raise_env_miss(message: str, env_file: str | None) -> None:
     )
 
 
+def build_llm_service(data: dict, working_dir: Path) -> LLMService:
+    """Construct the manifest's ``LLMService`` — no Agent, lease, or heartbeat.
+
+    Split out of :func:`build_agent` so short-lived, non-booting entry points
+    (``lingtai-agent daemon``) resolve the very same provider/model/credential/
+    provider-defaults configuration the boot path resolves, instead of
+    re-deriving credentials themselves. Loading ``env_file`` stays with the
+    caller: boot has refresh-marker semantics that a one-shot CLI must not
+    inherit.
+    """
+    m = data["manifest"]
+    llm = m["llm"]
+    env_file = data.get("env_file")
+
+    api_key = resolve_env_checked(
+        llm.get("api_key"),
+        llm.get("api_key_env"),
+        context="manifest.llm.api_key_env",
+        warn=lambda msg: _raise_env_miss(msg, env_file),
+    )
+
+    # Default 60 matches AgentConfig.max_rpm — agents whose init.json
+    # predates this field cooperatively share the network-wide 60 RPM cap
+    # by default. Set to 0 in init.json to disable gating.
+    max_rpm = m.get("max_rpm", 60)
+    # Pass working_dir so Codex agents get their per-agent session/thread
+    # identity (agent path + last molt time) wired in by default.
+    provider_defaults = build_provider_defaults_from_manifest_llm(
+        llm, max_rpm=max_rpm, working_dir=working_dir
+    )
+    context_window = m.get("context_limit")
+    if (
+        not isinstance(context_window, int)
+        or isinstance(context_window, bool)
+        or context_window <= 0
+    ):
+        context_window = CONSERVATIVE_CONTEXT_WINDOW
+    return LLMService(
+        provider=llm["provider"],
+        model=llm["model"],
+        api_key=api_key,
+        base_url=llm.get("base_url"),
+        context_window=context_window,
+        provider_defaults=provider_defaults,
+    )
+
+
 def build_agent(data: dict, working_dir: Path) -> Agent:
     """Construct Agent from validated init data.
 
@@ -94,39 +141,7 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
         os.environ.pop("LINGTAI_REFRESH_ENV_OVERWRITE", None)
 
     m = data["manifest"]
-    llm = m["llm"]
-
-    api_key = resolve_env_checked(
-        llm.get("api_key"),
-        llm.get("api_key_env"),
-        context="manifest.llm.api_key_env",
-        warn=lambda m: _raise_env_miss(m, env_file),
-    )
-
-    # Default 60 matches AgentConfig.max_rpm — agents whose init.json
-    # predates this field cooperatively share the network-wide 60 RPM cap
-    # by default. Set to 0 in init.json to disable gating.
-    max_rpm = m.get("max_rpm", 60)
-    # Pass working_dir so Codex agents get their per-agent session/thread
-    # identity (agent path + last molt time) wired in by default.
-    provider_defaults = build_provider_defaults_from_manifest_llm(
-        llm, max_rpm=max_rpm, working_dir=working_dir
-    )
-    context_window = m.get("context_limit")
-    if (
-        not isinstance(context_window, int)
-        or isinstance(context_window, bool)
-        or context_window <= 0
-    ):
-        context_window = CONSERVATIVE_CONTEXT_WINDOW
-    service = LLMService(
-        provider=llm["provider"],
-        model=llm["model"],
-        api_key=api_key,
-        base_url=llm.get("base_url"),
-        context_window=context_window,
-        provider_defaults=provider_defaults,
-    )
+    service = build_llm_service(data, working_dir)
 
     mail_service = PosixFilesystemMailAdapter(
         working_dir=working_dir,
@@ -500,6 +515,9 @@ def main() -> None:
     log_query.add_argument("agent_dir", type=Path, help="Agent working directory")
     log_query.add_argument("sql", help="SQL query to execute")
 
+    from lingtai.cli_daemon import add_daemon_parser
+    add_daemon_parser(sub)
+
     maintenance_parser = sub.add_parser(
         "maintenance",
         help="Inspect kernel-owned maintenance surfaces",
@@ -549,6 +567,10 @@ def main() -> None:
         print(json.dumps(get_all_providers()))
     elif args.command == "log":
         _handle_log_command(args)
+    elif args.command == "daemon":
+        from lingtai.cli_daemon import handle_daemon_command
+
+        handle_daemon_command(args)
     elif args.command == "maintenance":
         _handle_maintenance_command(args)
     else:
