@@ -151,14 +151,21 @@ class _Config(NamedTuple):
     """Resolved agent-wide daemon defaults for new emanations."""
 
     max_turns: int
+    manager_pool_size: int
+    manager_threshold: int
 
 
-_BUILTIN_CONFIG = _Config(DEFAULT_MAX_TURNS)
+_BUILTIN_CONFIG = _Config(DEFAULT_MAX_TURNS, 0, 50)
 
 
 def _config_max_turns(value: Any) -> int:
     """Coerce a configured ``max_turns``; any non-positive-integer falls back."""
     return value if type(value) is int and value > 0 else DEFAULT_MAX_TURNS
+
+
+def _config_nonnegative_int(value: Any, default: int) -> int:
+    """Coerce a non-negative integer config field with a safe fallback."""
+    return value if type(value) is int and value >= 0 else default
 
 
 def _load_config(agent_working_dir: str | os.PathLike[str]) -> _Config:
@@ -176,7 +183,11 @@ def _load_config(agent_working_dir: str | os.PathLike[str]) -> _Config:
         data = read_json(config_path, expect=dict)
     except (OSError, ValueError, TypeError):
         return _BUILTIN_CONFIG
-    return _Config(_config_max_turns(data.get("max_turns")))
+    return _Config(
+        _config_max_turns(data.get("max_turns")),
+        _config_nonnegative_int(data.get("manager_pool_size"), 0),
+        _config_nonnegative_int(data.get("manager_threshold"), 50),
+    )
 
 
 DAEMON_CONTEXT_COUNTDOWN_ROUNDS = 9
@@ -1455,12 +1466,20 @@ class DaemonManager:
     def __init__(self, agent: "Agent", max_emanations: int = 100,
                  max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
                  notify_threshold: int = 20,
+                 manager_pool_size: int = 0,
+                 manager_threshold: int = 50,
                  *, process_port: DaemonProcessPort | None = None,
                  interactive_terminal_port: InteractiveTerminalPort | None = None):
         self._agent = agent
         self._max_emanations = max_emanations
         self._max_turns = max_turns
         self._timeout = timeout
+        self._manager_pool_size = self._env_nonnegative_int(
+            "LINGTAI_DAEMON_MANAGER_POOL_SIZE", manager_pool_size,
+        )
+        self._manager_threshold = self._env_nonnegative_int(
+            "LINGTAI_DAEMON_MANAGER_THRESHOLD", manager_threshold,
+        )
         self._default_model = agent.service.model
         self._notify_threshold = notify_threshold
         # Direct construction is a supported test/in-process composition path
@@ -1527,6 +1546,17 @@ class DaemonManager:
         )
         self._reap_dead_parent_daemon_records()
         self._reconcile_terminal_notifications()
+
+    @staticmethod
+    def _env_nonnegative_int(name: str, default: int) -> int:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return default
+        return value if value >= 0 else default
 
     def _reap_dead_parent_daemon_records(self) -> None:
         """Mark stale running daemon.json records failed after a restart.
@@ -2978,6 +3008,7 @@ class DaemonManager:
         preset_llm: dict | None = None,
         preset_capabilities: dict | None = None,
         secret_capsule: dict | None = None,
+        use_central_manager: bool = False,
     ) -> None:
         """Write the run manifest and spawn the detached supervisor for it.
 
@@ -3054,8 +3085,16 @@ class DaemonManager:
             runtime_llm["provider_defaults"] = normalized_defaults
         if runtime_llm:
             capsule.setdefault("llm", {}).update(runtime_llm)
-        select_daemon_supervisor_adapter().spawn_detached(request, capsule=capsule)
-        self._await_supervisor_startup(run_dir)
+        if use_central_manager:
+            self._enqueue_central_daemon_manager_run(
+                request,
+                capsule=capsule,
+                pool_size=self._manager_pool_size,
+                run_dir=run_dir,
+            )
+        else:
+            select_daemon_supervisor_adapter().spawn_detached(request, capsule=capsule)
+            self._await_supervisor_startup(run_dir)
 
     def _await_supervisor_startup(self, run_dir: DaemonRunDir) -> None:
         """Bounded poll for the supervisor to record its own PID.
@@ -3091,6 +3130,33 @@ class DaemonManager:
             f"detached daemon supervisor for run {run_dir.run_id!r} did not "
             f"start within {self._SUPERVISOR_STARTUP_TIMEOUT_S}s"
         )
+
+    def _should_use_central_daemon_manager(self, batch_count: int) -> bool:
+        """Return whether this batch should use the explicit Phase 1 manager."""
+        return (
+            os.name == "posix"
+            and self._manager_pool_size > 0
+            and batch_count > self._manager_threshold
+        )
+
+    def _enqueue_central_daemon_manager_run(
+        self,
+        request,
+        *,
+        capsule: dict,
+        pool_size: int,
+        run_dir: DaemonRunDir,
+    ) -> None:
+        """Submit one already-materialized run to the resident POSIX manager."""
+        from lingtai.adapters.posix.daemon_manager import enqueue_manager_run
+
+        enqueue_manager_run(
+            agent_working_dir=self._agent._working_dir,
+            request=request,
+            capsule=capsule,
+            pool_size=pool_size,
+        )
+        self._await_supervisor_startup(run_dir)
 
     def _run_emanation(self, em_id: str, run_dir, schemas, dispatch,
                        task: str,
@@ -4791,6 +4857,7 @@ class DaemonManager:
         group_id = DaemonRunDir.new_group_id()
         parent_addr = self._agent._working_dir.name
         parent_pid = os.getpid()
+        use_central_manager = self._should_use_central_daemon_manager(len(tasks))
 
         for i, spec in enumerate(tasks):
             em_id = self._new_emanation_id(reserved_ids=set(ids))
@@ -4922,6 +4989,7 @@ class DaemonManager:
                     preset_name=resolved["name"] if resolved else None,
                     preset_llm=resolved["llm"] if resolved else None,
                     preset_capabilities=resolved["capabilities"] if resolved else None,
+                    use_central_manager=use_central_manager,
                 )
             except Exception as e:
                 run_dir.mark_failed(e)
@@ -5058,6 +5126,7 @@ class DaemonManager:
         group_id = DaemonRunDir.new_group_id()
         parent_addr = self._agent._working_dir.name
         parent_pid = os.getpid()
+        use_central_manager = self._should_use_central_daemon_manager(len(tasks))
 
         for spec, context in zip(tasks, contexts):
             em_id = self._new_emanation_id(reserved_ids=set(ids))
@@ -5237,10 +5306,18 @@ class DaemonManager:
                 # container's values, so the manifest cannot carry it.
                 if context.backend_env:
                     capsule["backend_env"] = dict(context.backend_env)
-                select_daemon_supervisor_adapter().spawn_detached(
-                    request, capsule=capsule,
-                )
-                self._await_supervisor_startup(run_dir)
+                if use_central_manager:
+                    self._enqueue_central_daemon_manager_run(
+                        request,
+                        capsule=capsule,
+                        pool_size=self._manager_pool_size,
+                        run_dir=run_dir,
+                    )
+                else:
+                    select_daemon_supervisor_adapter().spawn_detached(
+                        request, capsule=capsule,
+                    )
+                    self._await_supervisor_startup(run_dir)
             except Exception as e:
                 run_dir.mark_failed(e)
                 return {"status": "error", "message": str(e)}
@@ -8766,8 +8843,9 @@ def setup(agent: "Agent", max_emanations: int = 100,
     ``DEFAULT_MAX_TURNS`` (5000) when the file is missing or the value is
     invalid. An explicit ``max_turns`` always wins over the config file.
     """
+    config = _load_config(agent._working_dir)
     if max_turns is None:
-        max_turns = _load_config(agent._working_dir).max_turns
+        max_turns = config.max_turns
     if process_port is None:
         if os.name == "posix":
             process_port = PosixDaemonProcessPort()
@@ -8789,6 +8867,8 @@ def setup(agent: "Agent", max_emanations: int = 100,
     mgr = DaemonManager(agent, max_emanations=max_emanations,
                         max_turns=max_turns, timeout=timeout,
                         notify_threshold=notify_threshold,
+                        manager_pool_size=config.manager_pool_size,
+                        manager_threshold=config.manager_threshold,
                         process_port=process_port,
                         interactive_terminal_port=interactive_terminal_port)
     schema = get_schema()
