@@ -229,6 +229,7 @@ class _DaemonManagerProcess:
         self.capsules: dict[str, dict] = {}
         self.lock = threading.Lock()
         self.last_activity = time.monotonic()
+        self.started_at = time.time()
         self._capsule_socket: socket.socket | None = None
         self._capsule_server_thread: threading.Thread | None = None
 
@@ -382,6 +383,8 @@ class _DaemonManagerProcess:
             with self.lock:
                 capsule = self.capsules.pop(request.run_id, None)
             if capsule is None:
+                if self._missing_capsule_is_terminal(job):
+                    self._fail_unavailable_capsule_job(job_path, request)
                 continue
             try:
                 job_path.unlink()
@@ -409,6 +412,61 @@ class _DaemonManagerProcess:
         if isinstance(enqueued_at, (int, float)) and not isinstance(enqueued_at, bool):
             return (float(enqueued_at), job_path.name)
         return (float("inf"), job_path.name)
+
+    def _missing_capsule_is_terminal(self, job: dict[str, Any]) -> bool:
+        enqueued_at = job.get("enqueued_at")
+        if isinstance(enqueued_at, bool) or not isinstance(enqueued_at, (int, float)):
+            return True
+        deadline = max(float(enqueued_at), self.started_at) + _CAPSULE_SEND_TIMEOUT_S
+        return time.time() >= deadline
+
+    def _fail_unavailable_capsule_job(
+        self,
+        job_path: Path,
+        request: DaemonSupervisorRequest,
+    ) -> None:
+        evidence_timestamp = time.time()
+        evidence = {
+            "reason": "manager_restart_capsule_unavailable",
+            "source": str(job_path),
+            "timestamp": evidence_timestamp,
+            "manager_pid": os.getpid(),
+        }
+        try:
+            manifest = _read_manifest_for_request(request)
+            run_dir = _attach_run_dir(manifest)
+            state = run_dir.read_state_from_disk(run_dir.path)
+            if state.get("state") not in {"done", "failed", "cancelled", "timeout"}:
+                run_dir.update_state(
+                    owner="manager",
+                    manager_recovered_by=os.getpid(),
+                )
+                run_dir.mark_failed(RuntimeError(
+                    "manager_restart_capsule_unavailable: central daemon manager "
+                    "found a queued job after restart but its in-memory runtime "
+                    f"capsule was unavailable; source={job_path}"
+                ))
+            _publish_terminal(run_dir, manifest)
+        except Exception as exc:
+            evidence["error"] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
+        self._journal_raw(request.run_id, {
+            "schema": "lingtai.daemon_manager_journal.v1",
+            "run_id": request.run_id,
+            "request": encode_request(request),
+            "state": "failed_missing_capsule",
+            "capsule_in_memory": False,
+            "capsule_scrubbed": True,
+            "evidence": evidence,
+            "manager_pid": os.getpid(),
+            "updated_at": evidence_timestamp,
+        })
+        try:
+            job_path.unlink()
+        except OSError:
+            pass
 
     def _quarantine_malformed_job(self, job_path: Path, exc: Exception) -> None:
         self._journal_raw(job_path.stem, {

@@ -243,6 +243,30 @@ def test_central_manager_recovery_marks_active_failed_without_duplicate_notify(t
     assert [ev["ref_id"] for ev in events].count("em-recover") == 1
 
 
+def test_central_manager_restart_fails_queued_job_without_capsule(tmp_path):
+    run_dir, request = _make_run(tmp_path, "em-missing-capsule")
+    queue_dir = tmp_path / "manager" / "queue"
+    journal_dir = tmp_path / "manager" / "journal"
+    _write_job(queue_dir, request, enqueued_at=0.0)
+
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager.run()
+
+    state = _wait_state(run_dir, "failed")
+    assert "manager_restart_capsule_unavailable" in state["error"]["message"]
+    assert state["terminal_notified"] is True
+    assert not (queue_dir / f"{request.run_id}.json").exists()
+    events = _notification_events(run_dir.path.parent.parent)
+    assert [ev["ref_id"] for ev in events].count("em-missing-capsule") == 1
+    record = json.loads((journal_dir / f"{request.run_id}.json").read_text(encoding="utf-8"))
+    assert record["state"] == "failed_missing_capsule"
+    assert record["capsule_in_memory"] is False
+    assert record["capsule_scrubbed"] is True
+    assert record["evidence"]["reason"] == "manager_restart_capsule_unavailable"
+    assert record["evidence"]["source"].endswith("em-missing-capsule.json")
+    assert "capsule" not in record
+
+
 def test_central_manager_timeout_run_notifies(tmp_path, monkeypatch):
     run_dir, request = _make_run(tmp_path, "em-timeout", timeout_s=5.0)
     queue_dir = tmp_path / "manager" / "queue"

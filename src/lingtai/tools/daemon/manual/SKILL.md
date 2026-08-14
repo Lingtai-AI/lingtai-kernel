@@ -132,8 +132,10 @@ Behavior notes:
   configs keep today's byte-identical per-run supervisor behavior.
 - When enabled, a batch of `n > manager_threshold` emanations runs at most
   `manager_pool_size` at a time; the rest queue and execute as workers free.
-- Queued runs are durable state under `<agent>/daemon/manager`; manager restart
-  marks interrupted active runs failed with evidence and replays queued runs.
+- Queued runs keep only secret-free durable state under `<agent>/daemon/manager`.
+  Their runtime capsules are memory-only. If the manager restarts before assigning
+  a queued run, that run is failed with `manager_restart_capsule_unavailable`
+  evidence and terminal notification instead of being replayed.
 - Phase 1 still spawns one execution child per active run (no reusable LLM
   worker yet); the reusable worker pool is a later phase.
 

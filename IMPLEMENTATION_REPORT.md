@@ -17,7 +17,7 @@
 - Low-concurrency behavior remains on the existing `select_daemon_supervisor_adapter().spawn_detached(...)` path. The manager path is selected only on POSIX when `manager_pool_size > 0` and `batch_count > manager_threshold`.
 - The resident manager is per agent working directory under `<agent>/daemon/manager`, with private `0700` directories and `0600` queue/journal JSON files.
 - The manager is intentionally thin: it handles intake, journal, assignment, process wait/deadline/control through existing supervisor helpers, exact termination on recovery, terminal truth, and notification. It does not import the daemon tool manager or LLM runtime at process startup.
-- Manager restart recovery marks previously active journal entries failed with explicit evidence and publishes the terminal notification through the existing idempotency gate. Queued jobs remain queued.
+- Manager restart recovery marks previously active journal entries failed with explicit evidence and publishes the terminal notification through the existing idempotency gate. Queued jobs whose memory-only capsules were lost are also failed with `manager_restart_capsule_unavailable` evidence, notified, and removed from the queue.
 
 ## Tests Run
 
@@ -89,14 +89,33 @@ Review-fix validation:
 - `.venv/bin/python -m pytest tests/test_daemon_central_manager.py tests/test_daemon_detached_supervisor.py tests/test_daemon.py -q`
   - Result: `189 passed in 67.06s (0:01:07)`
 
+Round-3 review fixes:
+
+- P1 queued restart capsule loss: queued manager jobs still do not persist runtime
+  capsules or secrets. If a restarted manager finds a queued job after the capsule
+  handoff grace period and no in-memory capsule is available, it marks the public
+  run failed with `manager_restart_capsule_unavailable`, publishes the existing
+  idempotent terminal notification, writes a secret-free `failed_missing_capsule`
+  journal record with source/timestamp evidence, and removes the queue file so the
+  manager cannot spin forever on unexecutable work.
+
+Round-3 validation:
+
+- `.venv/bin/python -m py_compile src/lingtai/adapters/posix/daemon_manager.py src/lingtai/adapters/posix/daemon_manager_entrypoint.py src/lingtai/tools/daemon/__init__.py tests/test_daemon_central_manager.py`
+  - Result: passed with no output
+- `.venv/bin/python -m pytest tests/test_daemon_central_manager.py -q`
+  - Result: `15 passed in 29.05s`
+- `.venv/bin/python -m pytest tests/test_daemon_central_manager.py tests/test_daemon_detached_supervisor.py tests/test_daemon.py -q`
+  - Result: `190 passed in 75.01s (0:01:15)`
+
 ## Deviations From Spec
 
 - Queued and active manager records do not persist the one-shot runtime capsule. The
   resident manager must be alive to receive the in-memory capsule during enqueue; if
-  it cannot, enqueue fails and removes the secret-free queue record. This preserves
-  the previous no-durable-secrets lifetime at the cost of not making pre-assignment
-  queued capsules restartable after a manager crash.
-- Phase 1 does not make queued state visible as a distinct public daemon status. Existing `daemon.json` remains `running` until the manager starts the execution child or reaches terminal recovery.
+  it cannot, enqueue fails and removes the secret-free queue record. If a manager
+  restart loses capsules for previously queued jobs, those runs fail closed with
+  evidence rather than replaying.
+- Phase 1 does not make queued state visible as a distinct public daemon status. Existing `daemon.json` remains `running` until the manager starts the execution child or reaches terminal recovery/fail-closed queued cleanup.
 
 ## Risks / Known Limitations
 
