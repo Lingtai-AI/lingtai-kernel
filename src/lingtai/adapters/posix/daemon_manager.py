@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -83,10 +84,17 @@ def _ensure_manager(agent_working_dir: Path, *, pool_size: int) -> None:
         info = {}
     pid = info.get("pid") if isinstance(info, dict) else None
     started_at = info.get("started_at") if isinstance(info, dict) else None
-    if isinstance(pid, int) and not isinstance(pid, bool) and _pid_alive(pid):
+    start_identity = info.get("manager_start_identity") if isinstance(info, dict) else None
+    if (
+        isinstance(pid, int)
+        and not isinstance(pid, bool)
+        and _pid_alive(pid)
+        and _process_identity_matches(pid, start_identity)
+    ):
         return
     if isinstance(started_at, (int, float)) and time.time() - started_at < _PID_STALE_AFTER_S:
         return
+    token = uuid.uuid4().hex
     _write_private_json(
         pid_path,
         {
@@ -94,14 +102,17 @@ def _ensure_manager(agent_working_dir: Path, *, pool_size: int) -> None:
             "started_at": time.time(),
             "pool_size": pool_size,
             "state": "starting",
+            "manager_token": token,
         },
     )
+    env = _manager_env()
+    env["LINGTAI_DAEMON_MANAGER_TOKEN"] = token
     subprocess.Popen(
         [sys.executable, "-m", ENTRYPOINT_MODULE, str(agent_working_dir), str(pool_size)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        env=_manager_env(),
+        env=env,
         cwd=str(agent_working_dir),
         start_new_session=True,
         close_fds=True,
@@ -151,6 +162,8 @@ def run_manager(agent_working_dir: Path, *, pool_size: int) -> None:
             "started_at": time.time(),
             "pool_size": pool_size,
             "state": "running",
+            "manager_start_identity": _process_identity(os.getpid()),
+            "manager_token": os.environ.get("LINGTAI_DAEMON_MANAGER_TOKEN"),
         },
     )
     manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=pool_size)
@@ -192,8 +205,17 @@ class _DaemonManagerProcess:
                     ))
                 _publish_terminal(run_dir, manifest)
                 self._journal(run_id, "failed_recovered", request, record.get("capsule") or {})
-            except Exception:
-                self._journal_raw(path.stem, {"state": "recovery_error", "run_id": run_id})
+            except Exception as exc:
+                self._journal_raw(path.stem, {
+                    "state": "recovery_error",
+                    "run_id": run_id,
+                    "source": str(path),
+                    "error": {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                    "updated_at": time.time(),
+                })
 
     def run(self, *, idle_exit_s: float | None = 2.0) -> None:
         idle_since: float | None = None
@@ -224,17 +246,24 @@ class _DaemonManagerProcess:
             capacity = self.pool_size - len(self.active)
         if capacity <= 0:
             return
-        for job_path in sorted(self.queue_dir.glob("*.json"))[:capacity]:
+        jobs = sorted(
+            self.queue_dir.glob("*.json"),
+            key=lambda path: (*self._queue_sort_key(path), path.name),
+        )
+        for job_path in jobs[:capacity]:
             job = read_json(job_path, default={}, expect=dict)
             if not isinstance(job, dict):
+                self._quarantine_malformed_job(
+                    job_path,
+                    ValueError("manager queue job JSON must be an object"),
+                )
                 continue
             try:
+                if "request" not in job:
+                    raise ValueError("manager queue job missing request")
                 request = decode_request(str(job["request"]))
-            except Exception:
-                try:
-                    job_path.unlink()
-                except OSError:
-                    pass
+            except Exception as exc:
+                self._quarantine_malformed_job(job_path, exc)
                 continue
             capsule = job.get("capsule") if isinstance(job.get("capsule"), dict) else {}
             try:
@@ -251,6 +280,34 @@ class _DaemonManagerProcess:
             with self.lock:
                 self.active[request.run_id] = thread
             thread.start()
+
+    def _queue_sort_key(self, job_path: Path) -> tuple[float, str]:
+        try:
+            job = read_json(job_path, default={}, expect=dict)
+        except Exception:
+            return (float("inf"), job_path.name)
+        enqueued_at = job.get("enqueued_at") if isinstance(job, dict) else None
+        if isinstance(enqueued_at, (int, float)) and not isinstance(enqueued_at, bool):
+            return (float(enqueued_at), job_path.name)
+        return (float("inf"), job_path.name)
+
+    def _quarantine_malformed_job(self, job_path: Path, exc: Exception) -> None:
+        self._journal_raw(job_path.stem, {
+            "schema": "lingtai.daemon_manager_journal.v1",
+            "run_id": job_path.stem,
+            "state": "failed_malformed_queue_job",
+            "source": str(job_path),
+            "error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            },
+            "manager_pid": os.getpid(),
+            "updated_at": time.time(),
+        })
+        try:
+            job_path.unlink()
+        except OSError:
+            pass
 
     def _run_job(self, request: DaemonSupervisorRequest, capsule: dict) -> None:
         try:
@@ -293,18 +350,19 @@ class _DaemonManagerProcess:
         request: DaemonSupervisorRequest,
         capsule: dict,
     ) -> None:
-        self._journal_raw(
-            run_id,
-            {
-                "schema": "lingtai.daemon_manager_journal.v1",
-                "run_id": run_id,
-                "request": encode_request(request),
-                "capsule": capsule,
-                "state": state,
-                "manager_pid": os.getpid(),
-                "updated_at": time.time(),
-            },
-        )
+        payload = {
+            "schema": "lingtai.daemon_manager_journal.v1",
+            "run_id": run_id,
+            "request": encode_request(request),
+            "state": state,
+            "manager_pid": os.getpid(),
+            "updated_at": time.time(),
+        }
+        if state == "active":
+            payload["capsule"] = capsule
+        else:
+            payload["capsule_scrubbed"] = True
+        self._journal_raw(run_id, payload)
 
     def _journal_raw(self, run_id: str, payload: dict[str, Any]) -> None:
         _write_private_json(self.journal_dir / f"{run_id}.json", payload)
@@ -326,6 +384,12 @@ def _process_identity(pid: int) -> str | None:
     from lingtai.adapters.posix.process_identity import process_identity
 
     return process_identity(pid)
+
+
+def _process_identity_matches(pid: int, saved_identity: object) -> bool:
+    from lingtai.adapters.posix.process_identity import process_identity_matches
+
+    return process_identity_matches(pid, saved_identity)
 
 
 def _run_one_emanation(run_dir, manifest: dict, capsule: dict) -> None:

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
+from lingtai.adapters.posix.daemon_manager import MANAGER_DIR
 from lingtai.adapters.posix.daemon_manager import _DaemonManagerProcess
 from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest, encode_request
 from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_path_for, write_manifest
+from lingtai.tools.daemon import DaemonManager
 from lingtai.tools.daemon.run_dir import DaemonRunDir
+from tests._daemon_helpers import install_fake_detached_owner, make_daemon_agent
 
 
 def _make_run(tmp_path: Path, run_id: str, *, timeout_s: float = 30.0) -> tuple[DaemonRunDir, DaemonSupervisorRequest]:
@@ -47,7 +52,13 @@ def _make_run(tmp_path: Path, run_id: str, *, timeout_s: float = 30.0) -> tuple[
     )
 
 
-def _write_job(queue_dir: Path, request: DaemonSupervisorRequest, capsule: dict | None = None) -> None:
+def _write_job(
+    queue_dir: Path,
+    request: DaemonSupervisorRequest,
+    capsule: dict | None = None,
+    *,
+    enqueued_at: float | None = None,
+) -> None:
     queue_dir.mkdir(parents=True, exist_ok=True)
     (queue_dir / f"{request.run_id}.json").write_text(
         json.dumps(
@@ -56,6 +67,7 @@ def _write_job(queue_dir: Path, request: DaemonSupervisorRequest, capsule: dict 
                 "run_id": request.run_id,
                 "request": encode_request(request),
                 "capsule": capsule or {},
+                "enqueued_at": enqueued_at if enqueued_at is not None else time.time(),
             }
         ),
         encoding="utf-8",
@@ -78,6 +90,51 @@ def _notification_events(parent: Path) -> list[dict]:
         return []
     payload = json.loads(path.read_text(encoding="utf-8"))
     return list(payload.get("data", {}).get("events", []))
+
+
+def _enable_detached_fake_llm(monkeypatch, agent, *, sleep_s: float = 0.0) -> None:
+    agent.service.provider = "lingtai-supervisor-test-fake"
+    agent.service.model = "fake-model"
+    agent.service.api_key = "detached-test-key"
+    agent.service._base_url = None
+    agent.service._provider_defaults = {}
+    monkeypatch.setenv("LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM", "1")
+    monkeypatch.setenv("LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_FINISH", "1")
+    if sleep_s:
+        monkeypatch.setenv("LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SLEEP", str(sleep_s))
+    tests_dir = str(Path(__file__).parent)
+    src_dir = str(Path(__file__).resolve().parents[1] / "src")
+    existing = os.environ.get("PYTHONPATH", "")
+    parts = [tests_dir, src_dir]
+    parts.extend(p for p in existing.split(os.pathsep) if p)
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(dict.fromkeys(parts)))
+
+
+def _wait_for(predicate, *, timeout: float = 5.0, message: str = "condition") -> object:
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        last = predicate()
+        if last:
+            return last
+        time.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {message}; last={last!r}")
+
+
+def _terminate_resident_manager(agent) -> None:
+    pid_path = agent._working_dir / MANAGER_DIR / "manager.pid"
+    if not pid_path.exists():
+        return
+    try:
+        info = json.loads(pid_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    pid = info.get("pid")
+    if isinstance(pid, int) and not isinstance(pid, bool):
+        try:
+            os.kill(pid, 15)
+        except OSError:
+            pass
 
 
 def test_central_manager_completes_run_and_notifies(tmp_path, monkeypatch):
@@ -172,11 +229,56 @@ def test_central_manager_queues_until_worker_frees(tmp_path, monkeypatch):
     assert _wait_state(second, "done")["state"] == "done"
 
 
+def test_central_manager_dispatches_high_concurrency_without_waiting_for_queued_pid(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path, ["file", "daemon"])
+    _enable_detached_fake_llm(monkeypatch, agent, sleep_s=1.0)
+    manager = DaemonManager(agent, manager_pool_size=1, manager_threshold=0)
+
+    try:
+        start = time.monotonic()
+        result = manager._handle_emanate([
+            {"task": "slow task A", "tools": ["file"]},
+            {"task": "slow task B", "tools": ["file"]},
+        ])
+        elapsed = time.monotonic() - start
+
+        assert result["status"] == "dispatched"
+        assert result["count"] == 2
+        assert elapsed < 0.75
+
+        run_dirs = [manager._emanations[run_id]["run_dir"] for run_id in result["ids"]]
+        queue_dir = agent._working_dir / MANAGER_DIR / "queue"
+
+        _wait_for(
+            lambda: DaemonRunDir.read_state_from_disk(run_dirs[0].path).get("supervisor_pid"),
+            timeout=5.0,
+            message="first managed run to start",
+        )
+        second_state = DaemonRunDir.read_state_from_disk(run_dirs[1].path)
+        assert not second_state.get("supervisor_pid")
+        assert (queue_dir / f"{result['ids'][1]}.json").exists()
+
+        for run_dir in run_dirs:
+            _wait_state(run_dir, "done", timeout=10.0)
+    finally:
+        _terminate_resident_manager(agent)
+
+
+def test_default_disabled_routing_uses_legacy_spawn_adapter(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path, ["file", "daemon"])
+    records = install_fake_detached_owner(monkeypatch)
+    manager = DaemonManager(agent, manager_pool_size=0, manager_threshold=0)
+
+    result = manager._handle_emanate([
+        {"task": "legacy detached", "tools": ["file"]},
+    ])
+
+    assert result["status"] == "dispatched"
+    assert len(records) == 1
+    assert not (agent._working_dir / MANAGER_DIR / "queue").exists()
+
+
 def test_central_manager_is_disabled_by_default(tmp_path):
-    from types import SimpleNamespace
-
-    from lingtai.tools.daemon import DaemonManager
-
     agent = SimpleNamespace(
         service=SimpleNamespace(model="mock"),
         _working_dir=tmp_path / "agent",
@@ -187,3 +289,83 @@ def test_central_manager_is_disabled_by_default(tmp_path):
     assert manager._manager_pool_size == 0
     assert manager._should_use_central_daemon_manager(10_000) is False
 
+
+def test_central_manager_orders_queue_by_enqueued_at(tmp_path, monkeypatch):
+    older, older_req = _make_run(tmp_path, "em-z-older")
+    newer, newer_req = _make_run(tmp_path, "em-a-newer")
+    queue_dir = tmp_path / "manager" / "queue"
+    journal_dir = tmp_path / "manager" / "journal"
+    _write_job(queue_dir, newer_req, enqueued_at=200.0)
+    _write_job(queue_dir, older_req, enqueued_at=100.0)
+    starts: list[str] = []
+
+    def fake_run(rd, manifest, capsule):
+        starts.append(rd.run_id)
+        rd.mark_done(rd.run_id)
+
+    monkeypatch.setattr("lingtai.adapters.posix.daemon_manager._run_one_emanation", fake_run)
+
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager.run()
+
+    assert starts == ["em-z-older", "em-a-newer"]
+    assert _wait_state(older, "done")["state"] == "done"
+    assert _wait_state(newer, "done")["state"] == "done"
+
+
+def test_central_manager_terminal_journal_scrubs_capsule(tmp_path, monkeypatch):
+    run_dir, request = _make_run(tmp_path, "em-scrub")
+    queue_dir = tmp_path / "manager" / "queue"
+    journal_dir = tmp_path / "manager" / "journal"
+    _write_job(queue_dir, request, capsule={"api_key": "secret", "backend_env": {"X": "Y"}})
+
+    def fake_run(rd, manifest, capsule):
+        assert capsule["api_key"] == "secret"
+        rd.mark_done("manager completed")
+
+    monkeypatch.setattr("lingtai.adapters.posix.daemon_manager._run_one_emanation", fake_run)
+
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager.run()
+
+    _wait_state(run_dir, "done")
+    record = json.loads((journal_dir / "em-scrub.json").read_text(encoding="utf-8"))
+    assert "capsule" not in record
+    assert record["capsule_scrubbed"] is True
+
+
+def test_central_manager_recovery_error_keeps_evidence(tmp_path):
+    journal_dir = tmp_path / "manager" / "journal"
+    journal_dir.mkdir(parents=True)
+    (journal_dir / "em-bad.json").write_text(
+        json.dumps({
+            "schema": "lingtai.daemon_manager_journal.v1",
+            "run_id": "em-bad",
+            "request": "not-a-valid-request",
+            "state": "active",
+        }),
+        encoding="utf-8",
+    )
+
+    manager = _DaemonManagerProcess(tmp_path / "manager" / "queue", journal_dir, pool_size=1)
+    manager.recover_interrupted_active_runs()
+
+    record = json.loads((journal_dir / "em-bad.json").read_text(encoding="utf-8"))
+    assert record["state"] == "recovery_error"
+    assert record["source"].endswith("em-bad.json")
+    assert record["error"]["type"]
+
+
+def test_central_manager_malformed_top_level_queue_job_is_terminal(tmp_path):
+    queue_dir = tmp_path / "manager" / "queue"
+    journal_dir = tmp_path / "manager" / "journal"
+    queue_dir.mkdir(parents=True)
+    (queue_dir / "em-bad.json").write_text("[1, 2, 3]", encoding="utf-8")
+
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager.run()
+
+    assert not (queue_dir / "em-bad.json").exists()
+    record = json.loads((journal_dir / "em-bad.json").read_text(encoding="utf-8"))
+    assert record["state"] == "failed_malformed_queue_job"
+    assert record["error"]["type"] == "ValueError"

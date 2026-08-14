@@ -3147,7 +3147,12 @@ class DaemonManager:
         pool_size: int,
         run_dir: DaemonRunDir,
     ) -> None:
-        """Submit one already-materialized run to the resident POSIX manager."""
+        """Submit one already-materialized run to the resident POSIX manager.
+
+        The manager path intentionally does not wait for ``supervisor_pid`` here:
+        queued runs have no manager assignment, and therefore no pid, until pool
+        capacity frees up.
+        """
         from lingtai.adapters.posix.daemon_manager import enqueue_manager_run
 
         enqueue_manager_run(
@@ -3156,7 +3161,6 @@ class DaemonManager:
             capsule=capsule,
             pool_size=pool_size,
         )
-        self._await_supervisor_startup(run_dir)
 
     def _run_emanation(self, em_id: str, run_dir, schemas, dispatch,
                        task: str,

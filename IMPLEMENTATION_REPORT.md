@@ -34,22 +34,58 @@ Using local worktree venv `.venv` created with `/opt/homebrew/bin/python3.11` be
 - `.venv/bin/python -m py_compile src/lingtai/adapters/posix/daemon_manager.py src/lingtai/adapters/posix/daemon_manager_entrypoint.py src/lingtai/tools/daemon/__init__.py tests/test_daemon_central_manager.py`
   - Result: passed with no output
 
+## Review-Fixes
+
+- P0 central-manager enqueue: removed the caller-side `_await_supervisor_startup(...)`
+  wait from the central-manager path. The LingTai and CLI backend routing sites both
+  flow through `_enqueue_central_daemon_manager_run(...)`, so queued jobs now return
+  to `emanate` after durable enqueue; the resident manager owns later assignment and
+  pid/state updates.
+- P1 credential/capsule durability: terminal manager journal records now scrub the
+  runtime capsule and retain only non-secret identity/status fields with
+  `capsule_scrubbed=true`. Active journal and queue entries still carry the capsule
+  while a job is restartable/queued; they remain private `0600` files. A follow-up
+  design decision is still needed for avoiding or encrypting queued restart capsules.
+- P1 manager pid identity: manager pidfile liveness now requires the saved
+  `manager_start_identity` to match the observed process identity, avoiding PID-only
+  false positives after PID reuse. Manager startup also carries a per-spawn token in
+  the private pidfile for traceability.
+- P1 queue ordering: queued jobs dispatch FIFO by `enqueued_at`, with filename as the
+  stable tie-breaker.
+- P1 tests: added production routing coverage for `manager_pool_size=1` and
+  `manager_threshold=0` with two slow jobs, asserting `emanate` returns dispatched ids
+  before the second job has a pid and while it remains queued. Added default-disabled
+  routing coverage proving the legacy spawn adapter is still used.
+- P2 recovery/queue evidence: recovery errors now include source path and exception
+  type/message. Malformed top-level queue JSON is converted into a terminal
+  `failed_malformed_queue_job` journal record and removed from the queue.
+
+Review-fix validation:
+
+- `.venv/bin/python -m pytest tests/test_daemon_central_manager.py -q`
+  - Result: `11 passed in 19.05s`
+- `.venv/bin/python -m pytest tests/test_daemon_central_manager.py tests/test_daemon.py -q`
+  - Result: `144 passed in 38.08s`
+- `.venv/bin/python -m pytest tests/test_daemon_detached_supervisor.py tests/test_daemon_central_manager.py -q`
+  - Result: `53 passed in 46.96s`
+- `.venv/bin/python -m py_compile src/lingtai/adapters/posix/daemon_manager.py src/lingtai/adapters/posix/daemon_manager_entrypoint.py src/lingtai/tools/daemon/__init__.py tests/test_daemon_central_manager.py`
+  - Result: passed with no output
+
 ## Deviations From Spec
 
-- The durable manager journal stores the same one-shot runtime capsule needed to execute queued jobs after a restart. Files are private (`0600`) and outside the public run-dir layout, but this is still more durable secret exposure than the previous pure pipe capsule path. A future hardening pass should replace this with encrypted local storage or a credential re-resolution protocol.
+- Queued and active manager records store the one-shot runtime capsule needed to execute queued jobs after a restart. Files are private (`0600`) and outside the public run-dir layout, and terminal journal records scrub the capsule after completion/recovery. This is still more durable secret exposure while jobs are queued/active than the previous pure pipe capsule path. A future hardening pass should replace this with encrypted local storage or a credential re-resolution protocol.
 - Phase 1 does not make queued state visible as a distinct public daemon status. Existing `daemon.json` remains `running` until the manager starts the execution child or reaches terminal recovery.
 
 ## Risks / Known Limitations
 
-- The manager pidfile currently uses PID liveness only, not a start-identity check. This is consistent with a minimal Phase 1 manager bootstrap but can be hardened to avoid rare PID reuse false positives.
+- The manager pidfile now records and verifies a process start identity before treating a live PID as the resident manager.
 - The manager is POSIX-only. Windows remains on the existing path.
 - This does not reduce memory for active execution children; it caps active concurrency only when explicitly enabled. True reusable worker-pool memory savings remain Phase 2.
-- Queue ordering is filesystem-name sorted by run id. This is stable and tested at small scale, but not a formal FIFO timestamp queue.
+- Queue ordering is FIFO by `enqueued_at`, with run-id filename as the stable tie-breaker.
 
 ## Deferred Items
 
 - Phase 2 reusable execution-worker pool with surface-keyed reuse/reset/scrub.
 - Memory benchmark at 10/100/500/1000 in-flight after Phase 2.
 - Queue-state visibility in `daemon(action="list")`.
-- Hardened manager pid identity and secure capsule persistence.
-
+- Secure queued/active capsule persistence.
