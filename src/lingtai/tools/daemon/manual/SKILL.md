@@ -109,6 +109,34 @@ are the three that change state.
 5. **Cleaning old folders?** Read `reference/cleanup/SKILL.md` and avoid deleting
    useful forensic evidence without a reason.
 
+## High-concurrency central manager (Phase 1)
+
+For high-concurrency daemon batches, the kernel can route work through a
+**central daemon manager** instead of spawning one detached supervisor per run.
+The manager is a single thin POSIX process per agent that owns queue intake,
+assignment, deadline/control, terminal truth, idempotent notification, and a
+durable journal with restart recovery. Its purpose is to cap RAM growth: at most
+`manager_pool_size` execution children run concurrently, and runs beyond that
+queue as pure state (≈0 MB RAM) until a worker frees.
+
+Configuration is per-agent `daemon/daemon.json` with environment overrides
+(env wins):
+
+| Config key | Env var | Default | Meaning |
+|---|---|---|---|
+| `manager_pool_size` | `LINGTAI_DAEMON_MANAGER_POOL_SIZE` | `0` (disabled) | Max concurrent execution children under the manager. `0` disables the manager entirely; the classic per-run supervisor path is used. |
+| `manager_threshold` | `LINGTAI_DAEMON_MANAGER_THRESHOLD` | `50` | A batch routes through the manager only when it contains more emanations than this threshold (and `manager_pool_size > 0`). Below it, the classic path runs unchanged. |
+
+Behavior notes:
+- The manager path is POSIX-only and default-disabled. Windows and default
+  configs keep today's byte-identical per-run supervisor behavior.
+- When enabled, a batch of `n > manager_threshold` emanations runs at most
+  `manager_pool_size` at a time; the rest queue and execute as workers free.
+- Queued runs are durable state under `<agent>/daemon/manager`; manager restart
+  marks interrupted active runs failed with evidence and replays queued runs.
+- Phase 1 still spawns one execution child per active run (no reusable LLM
+  worker yet); the reusable worker pool is a later phase.
+
 ## Core rules to keep resident
 
 - Keep daemon lightweight. If the task needs long-lived persona, molt/pad,
