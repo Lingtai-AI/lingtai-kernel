@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -30,10 +33,22 @@ MANAGER_DIR = Path("daemon") / "manager"
 ENTRYPOINT_MODULE = "lingtai.adapters.posix.daemon_manager_entrypoint"
 _POLL_INTERVAL_S = 0.05
 _PID_STALE_AFTER_S = 2.0
+_CAPSULE_SOCKET_NAME = "capsule.sock"
+_CAPSULE_SEND_TIMEOUT_S = 5.0
+_MAX_CAPSULE_BYTES = 4 * 1024 * 1024
+_UNIX_SOCKET_PATH_LIMIT = 100
 
 
 def _manager_dir(agent_working_dir: Path) -> Path:
     return Path(agent_working_dir) / MANAGER_DIR
+
+
+def _capsule_socket_path(root: Path) -> Path:
+    direct = root / _CAPSULE_SOCKET_NAME
+    if len(str(direct)) < _UNIX_SOCKET_PATH_LIMIT:
+        return direct
+    digest = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:24]
+    return Path(tempfile.gettempdir()) / f"lingtai-dm-{digest}.sock"
 
 
 def _private_dir(path: Path) -> None:
@@ -50,6 +65,28 @@ def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
         path.chmod(0o600)
     except OSError:
         pass
+
+
+def _read_manager_pid_info(root: Path) -> dict[str, Any]:
+    try:
+        info = read_json(root / "manager.pid", default={}, expect=dict)
+    except TypeError:
+        return {}
+    return info if isinstance(info, dict) else {}
+
+
+def _live_manager_info(root: Path) -> dict[str, Any]:
+    info = _read_manager_pid_info(root)
+    pid = info.get("pid")
+    identity = info.get("manager_start_identity")
+    if (
+        isinstance(pid, int)
+        and not isinstance(pid, bool)
+        and _pid_alive(pid)
+        and _process_identity_matches(pid, identity)
+    ):
+        return info
+    return {}
 
 
 def _pid_alive(pid: int) -> bool:
@@ -135,15 +172,26 @@ def enqueue_manager_run(
     queue_dir = root / "queue"
     _private_dir(queue_dir)
     _private_dir(root / "journal")
+    _mark_run_manager_owned(request, root)
     payload = {
         "schema": "lingtai.daemon_manager_job.v1",
         "run_id": request.run_id,
         "request": encode_request(request),
-        "capsule": capsule or {},
+        "capsule_in_memory": True,
         "enqueued_at": time.time(),
     }
-    _write_private_json(queue_dir / f"{request.run_id}.json", payload)
+    job_path = queue_dir / f"{request.run_id}.json"
+    _write_private_json(job_path, payload)
     _ensure_manager(Path(agent_working_dir), pool_size=pool_size)
+    try:
+        _send_capsule(root, request.run_id, capsule or {})
+    except Exception:
+        try:
+            job_path.unlink()
+        except OSError:
+            pass
+        raise
+    _mark_run_manager_owned(request, root)
 
 
 def run_manager(agent_working_dir: Path, *, pool_size: int) -> None:
@@ -167,6 +215,7 @@ def run_manager(agent_working_dir: Path, *, pool_size: int) -> None:
         },
     )
     manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=pool_size)
+    manager.start_capsule_server(_capsule_socket_path(root))
     manager.recover_interrupted_active_runs()
     manager.run(idle_exit_s=None)
 
@@ -177,8 +226,73 @@ class _DaemonManagerProcess:
         self.journal_dir = journal_dir
         self.pool_size = pool_size
         self.active: dict[str, threading.Thread] = {}
+        self.capsules: dict[str, dict] = {}
         self.lock = threading.Lock()
         self.last_activity = time.monotonic()
+        self._capsule_socket: socket.socket | None = None
+        self._capsule_server_thread: threading.Thread | None = None
+
+    def start_capsule_server(self, socket_path: Path) -> None:
+        """Accept one-shot runtime capsules over a private local socket."""
+        try:
+            socket_path.unlink()
+        except FileNotFoundError:
+            pass
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.bind(str(socket_path))
+        try:
+            socket_path.chmod(0o600)
+        except OSError:
+            pass
+        sock.listen()
+        self._capsule_socket = sock
+        thread = threading.Thread(
+            target=self._serve_capsules,
+            name="daemon-manager-capsules",
+            daemon=True,
+        )
+        self._capsule_server_thread = thread
+        thread.start()
+
+    def _serve_capsules(self) -> None:
+        sock = self._capsule_socket
+        if sock is None:
+            return
+        while True:
+            try:
+                conn, _ = sock.accept()
+            except OSError:
+                return
+            with conn:
+                try:
+                    data = self._read_capsule_message(conn)
+                    run_id = data.get("run_id")
+                    capsule = data.get("capsule")
+                    if isinstance(run_id, str) and isinstance(capsule, dict):
+                        with self.lock:
+                            self.capsules[run_id] = capsule
+                        conn.sendall(b"OK")
+                    else:
+                        conn.sendall(b"ERR")
+                except Exception:
+                    try:
+                        conn.sendall(b"ERR")
+                    except OSError:
+                        pass
+
+    def _read_capsule_message(self, conn: socket.socket) -> dict[str, Any]:
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _MAX_CAPSULE_BYTES:
+                raise ValueError("daemon manager capsule exceeds size limit")
+            chunks.append(chunk)
+        value = json.loads(b"".join(chunks).decode("utf-8"))
+        return value if isinstance(value, dict) else {}
 
     def recover_interrupted_active_runs(self) -> None:
         """Mark manager-owned active runs from a prior crash failed."""
@@ -204,7 +318,7 @@ class _DaemonManagerProcess:
                         "committing terminal truth"
                     ))
                 _publish_terminal(run_dir, manifest)
-                self._journal(run_id, "failed_recovered", request, record.get("capsule") or {})
+                self._journal(run_id, "failed_recovered", request, {})
             except Exception as exc:
                 self._journal_raw(path.stem, {
                     "state": "recovery_error",
@@ -265,10 +379,15 @@ class _DaemonManagerProcess:
             except Exception as exc:
                 self._quarantine_malformed_job(job_path, exc)
                 continue
-            capsule = job.get("capsule") if isinstance(job.get("capsule"), dict) else {}
+            with self.lock:
+                capsule = self.capsules.pop(request.run_id, None)
+            if capsule is None:
+                continue
             try:
                 job_path.unlink()
             except OSError:
+                with self.lock:
+                    self.capsules[request.run_id] = capsule
                 continue
             self._journal(request.run_id, "active", request, capsule)
             thread = threading.Thread(
@@ -358,10 +477,8 @@ class _DaemonManagerProcess:
             "manager_pid": os.getpid(),
             "updated_at": time.time(),
         }
-        if state == "active":
-            payload["capsule"] = capsule
-        else:
-            payload["capsule_scrubbed"] = True
+        payload["capsule_in_memory"] = state == "active"
+        payload["capsule_scrubbed"] = True
         self._journal_raw(run_id, payload)
 
     def _journal_raw(self, run_id: str, payload: dict[str, Any]) -> None:
@@ -378,6 +495,51 @@ def _attach_run_dir(manifest: dict):
     from lingtai.tools.daemon.run_dir import DaemonRunDir
 
     return DaemonRunDir.attach(Path(manifest["run_dir"]))
+
+
+def _mark_run_manager_owned(request: DaemonSupervisorRequest, root: Path) -> None:
+    try:
+        manifest = _read_manifest_for_request(request)
+        run_dir = _attach_run_dir(manifest)
+    except Exception:
+        return
+    updates: dict[str, Any] = {"owner": "manager"}
+    info = _live_manager_info(root)
+    pid = info.get("pid")
+    identity = info.get("manager_start_identity")
+    if isinstance(pid, int) and not isinstance(pid, bool):
+        updates["manager_pid"] = pid
+        updates["manager_start_identity"] = identity
+    run_dir.update_state(**updates)
+
+
+def _send_capsule(root: Path, run_id: str, capsule: dict) -> None:
+    socket_path = _capsule_socket_path(root)
+    payload = json.dumps(
+        {"run_id": run_id, "capsule": capsule},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(payload) > _MAX_CAPSULE_BYTES:
+        raise ValueError("daemon manager capsule exceeds size limit")
+    deadline = time.monotonic() + _CAPSULE_SEND_TIMEOUT_S
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.5)
+                sock.connect(str(socket_path))
+                sock.sendall(payload)
+                sock.shutdown(socket.SHUT_WR)
+                if sock.recv(2) == b"OK":
+                    return
+                raise RuntimeError("daemon manager rejected runtime capsule")
+        except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError) as exc:
+            last_error = exc
+            time.sleep(_POLL_INTERVAL_S)
+    raise RuntimeError(
+        f"central daemon manager did not accept runtime capsule for {run_id!r}"
+    ) from last_error
 
 
 def _process_identity(pid: int) -> str | None:

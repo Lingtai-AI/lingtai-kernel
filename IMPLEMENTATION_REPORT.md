@@ -60,20 +60,42 @@ Using local worktree venv `.venv` created with `/opt/homebrew/bin/python3.11` be
   type/message. Malformed top-level queue JSON is converted into a terminal
   `failed_malformed_queue_job` journal record and removed from the queue.
 
+Round-2 review fixes:
+
+- P0 manager-owned restart reaping: central-manager enqueue now re-owns the public
+  run record as `owner="manager"` before the durable queue job is visible. The parent
+  restart reaper treats manager-owned runs as detached manager work and checks either
+  the per-run `manager_pid`/`manager_start_identity` or the resident manager pidfile
+  before failing a running record. The pidfile `starting` window is also treated as
+  live for the bounded startup interval.
+- P1 credential/capsule durability: durable queue jobs and active/terminal journal
+  records no longer store the one-shot capsule. Queue records keep only
+  `capsule_in_memory=true`; the parent sends the capsule to the resident manager
+  over a private Unix-domain socket, and the manager keeps it in process memory until
+  assignment. If the manager cannot accept the capsule, enqueue removes the queue job
+  and the caller marks the run failed instead of leaving secrets or an unexecutable
+  job on disk.
+- P1 CLI production routing coverage: added a real external-backend route test using
+  a fake `opencode` executable. With `manager_pool_size=1` and `manager_threshold=0`,
+  two slow CLI jobs return dispatched ids immediately, the second job remains queued
+  with no supervisor pid, and both eventually execute through the central manager.
+
 Review-fix validation:
 
-- `.venv/bin/python -m pytest tests/test_daemon_central_manager.py -q`
-  - Result: `11 passed in 19.05s`
-- `.venv/bin/python -m pytest tests/test_daemon_central_manager.py tests/test_daemon.py -q`
-  - Result: `144 passed in 38.08s`
-- `.venv/bin/python -m pytest tests/test_daemon_detached_supervisor.py tests/test_daemon_central_manager.py -q`
-  - Result: `53 passed in 46.96s`
 - `.venv/bin/python -m py_compile src/lingtai/adapters/posix/daemon_manager.py src/lingtai/adapters/posix/daemon_manager_entrypoint.py src/lingtai/tools/daemon/__init__.py tests/test_daemon_central_manager.py`
   - Result: passed with no output
+- `.venv/bin/python -m pytest tests/test_daemon_central_manager.py -q`
+  - Result: `14 passed in 23.92s`
+- `.venv/bin/python -m pytest tests/test_daemon_central_manager.py tests/test_daemon_detached_supervisor.py tests/test_daemon.py -q`
+  - Result: `189 passed in 67.06s (0:01:07)`
 
 ## Deviations From Spec
 
-- Queued and active manager records store the one-shot runtime capsule needed to execute queued jobs after a restart. Files are private (`0600`) and outside the public run-dir layout, and terminal journal records scrub the capsule after completion/recovery. This is still more durable secret exposure while jobs are queued/active than the previous pure pipe capsule path. A future hardening pass should replace this with encrypted local storage or a credential re-resolution protocol.
+- Queued and active manager records do not persist the one-shot runtime capsule. The
+  resident manager must be alive to receive the in-memory capsule during enqueue; if
+  it cannot, enqueue fails and removes the secret-free queue record. This preserves
+  the previous no-durable-secrets lifetime at the cost of not making pre-assignment
+  queued capsules restartable after a manager crash.
 - Phase 1 does not make queued state visible as a distinct public daemon status. Existing `daemon.json` remains `running` until the manager starts the execution child or reaches terminal recovery.
 
 ## Risks / Known Limitations
@@ -88,4 +110,3 @@ Review-fix validation:
 - Phase 2 reusable execution-worker pool with surface-keyed reuse/reset/scrub.
 - Memory benchmark at 10/100/500/1000 in-flight after Phase 2.
 - Queue-state visibility in `daemon(action="list")`.
-- Secure queued/active capsule persistence.

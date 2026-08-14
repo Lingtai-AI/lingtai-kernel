@@ -1576,6 +1576,10 @@ class DaemonManager:
           terminal state is a genuinely lost run (crashed without committing
           terminal truth — see the parent contract's "exact supervisor
           identity plus durable state" classification requirement).
+        - ``"manager"``: high-concurrency queued/active work is owned by the
+          resident central manager, not by the launching parent interpreter.
+          A refreshed parent must recognize a live manager pidfile or per-run
+          manager identity and leave the record alone.
         """
         daemons_dir = self._agent._working_dir / "daemons"
         if not daemons_dir.is_dir():
@@ -1614,6 +1618,19 @@ class DaemonManager:
                     "no terminal state committed (crashed without committing "
                     "terminal truth)."
                 )
+            elif owner == "manager":
+                if self._manager_owner_alive(state):
+                    continue
+                manager_pid = state.get("manager_pid")
+                if isinstance(manager_pid, int) and not isinstance(manager_pid, bool):
+                    subject = f"manager_pid {manager_pid}"
+                else:
+                    subject = "central daemon manager"
+                reap_reason = (
+                    "Reaped running daemon record because recorded "
+                    f"{subject} is no longer alive with no terminal state "
+                    "committed."
+                )
             else:
                 parent_pid = state.get("parent_pid")
                 if not isinstance(parent_pid, int) or isinstance(parent_pid, bool):
@@ -1650,6 +1667,41 @@ class DaemonManager:
         except (PermissionError, OSError):
             return True
         return True
+
+    def _manager_owner_alive(self, state: dict) -> bool:
+        manager_pid = state.get("manager_pid")
+        manager_identity = state.get("manager_start_identity")
+        if (
+            isinstance(manager_pid, int)
+            and not isinstance(manager_pid, bool)
+            and self._pid_identity_matches(manager_pid, manager_identity)
+        ):
+            return True
+        try:
+            from lingtai.adapters.posix.daemon_manager import MANAGER_DIR
+
+            pid_path = self._agent._working_dir / MANAGER_DIR / "manager.pid"
+            info = json.loads(pid_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not isinstance(info, dict):
+            return False
+        pid = info.get("pid")
+        identity = info.get("manager_start_identity")
+        started_at = info.get("started_at")
+        if (
+            pid is None
+            and info.get("state") == "starting"
+            and isinstance(started_at, (int, float))
+            and not isinstance(started_at, bool)
+            and time.time() - started_at < self._SUPERVISOR_STARTUP_TIMEOUT_S
+        ):
+            return True
+        return (
+            isinstance(pid, int)
+            and not isinstance(pid, bool)
+            and self._pid_identity_matches(pid, identity)
+        )
 
     @staticmethod
     def _pid_identity_matches(pid: int, expected: str | None) -> bool:

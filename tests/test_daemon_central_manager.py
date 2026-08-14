@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from lingtai.adapters.posix.daemon_manager import MANAGER_DIR
 from lingtai.adapters.posix.daemon_manager import _DaemonManagerProcess
+from lingtai.adapters.posix.process_identity import process_identity
 from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest, encode_request
 from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_path_for, write_manifest
 from lingtai.tools.daemon import DaemonManager
@@ -66,12 +67,24 @@ def _write_job(
                 "schema": "lingtai.daemon_manager_job.v1",
                 "run_id": request.run_id,
                 "request": encode_request(request),
-                "capsule": capsule or {},
+                "capsule_in_memory": True,
                 "enqueued_at": enqueued_at if enqueued_at is not None else time.time(),
             }
         ),
         encoding="utf-8",
     )
+
+
+def _manager_with_capsules(
+    queue_dir: Path,
+    journal_dir: Path,
+    *,
+    pool_size: int,
+    capsules: dict[str, dict] | None = None,
+) -> _DaemonManagerProcess:
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=pool_size)
+    manager.capsules.update(capsules or {})
+    return manager
 
 
 def _wait_state(run_dir: DaemonRunDir, state: str, *, timeout: float = 5.0) -> dict:
@@ -110,6 +123,33 @@ def _enable_detached_fake_llm(monkeypatch, agent, *, sleep_s: float = 0.0) -> No
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(dict.fromkeys(parts)))
 
 
+def _install_fake_opencode(tmp_path: Path, monkeypatch, *, sleep_s: float = 1.0) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "opencode"
+    script.write_text(
+        "\n".join([
+            "#!/usr/bin/env python3",
+            "import json, os, pathlib, time",
+            "cfg = json.loads(os.environ.get('OPENCODE_CONFIG_CONTENT') or '{}')",
+            "env = cfg.get('mcp', {}).get('daemon_common', {}).get('environment', {})",
+            "completion = env.get('LINGTAI_DAEMON_COMPLETION_FILE')",
+            "if completion:",
+            "    pathlib.Path(completion).write_text(json.dumps({",
+            "        'schema': 'lingtai.daemon_completion.v1',",
+            "        'status': 'done',",
+            "        'run_id': env.get('LINGTAI_DAEMON_RUN_ID'),",
+            "        'summary': 'fake opencode done',",
+            "    }), encoding='utf-8')",
+            f"time.sleep({sleep_s!r})",
+            "print(json.dumps({'type': 'result', 'session_id': 'fake-session', 'result': 'done'}), flush=True)",
+        ]),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+
+
 def _wait_for(predicate, *, timeout: float = 5.0, message: str = "condition") -> object:
     deadline = time.monotonic() + timeout
     last = None
@@ -137,6 +177,21 @@ def _terminate_resident_manager(agent) -> None:
             pass
 
 
+def _write_live_manager_pid(agent, *, pid: int | None = None) -> None:
+    pid = os.getpid() if pid is None else pid
+    root = agent._working_dir / MANAGER_DIR
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "manager.pid").write_text(
+        json.dumps({
+            "pid": pid,
+            "state": "running",
+            "started_at": time.time(),
+            "manager_start_identity": process_identity(pid),
+        }),
+        encoding="utf-8",
+    )
+
+
 def test_central_manager_completes_run_and_notifies(tmp_path, monkeypatch):
     run_dir, request = _make_run(tmp_path, "em-manager")
     queue_dir = tmp_path / "manager" / "queue"
@@ -148,7 +203,9 @@ def test_central_manager_completes_run_and_notifies(tmp_path, monkeypatch):
 
     monkeypatch.setattr("lingtai.adapters.posix.daemon_manager._run_one_emanation", fake_run)
 
-    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager = _manager_with_capsules(
+        queue_dir, journal_dir, pool_size=1, capsules={request.run_id: {}},
+    )
     manager.run()
 
     state = _wait_state(run_dir, "done")
@@ -168,7 +225,8 @@ def test_central_manager_recovery_marks_active_failed_without_duplicate_notify(t
                 "schema": "lingtai.daemon_manager_journal.v1",
                 "run_id": "em-recover",
                 "request": encode_request(request),
-                "capsule": {},
+                "capsule_in_memory": True,
+                "capsule_scrubbed": True,
                 "state": "active",
             }
         ),
@@ -196,7 +254,9 @@ def test_central_manager_timeout_run_notifies(tmp_path, monkeypatch):
 
     monkeypatch.setattr("lingtai.adapters.posix.daemon_manager._run_one_emanation", fake_timeout)
 
-    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager = _manager_with_capsules(
+        queue_dir, journal_dir, pool_size=1, capsules={request.run_id: {}},
+    )
     manager.run()
 
     state = _wait_state(run_dir, "timeout")
@@ -221,7 +281,12 @@ def test_central_manager_queues_until_worker_frees(tmp_path, monkeypatch):
 
     monkeypatch.setattr("lingtai.adapters.posix.daemon_manager._run_one_emanation", fake_slow)
 
-    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager = _manager_with_capsules(
+        queue_dir,
+        journal_dir,
+        pool_size=1,
+        capsules={req1.run_id: {}, req2.run_id: {}},
+    )
     manager.run()
 
     assert starts == ["em-first", "em-second"]
@@ -242,7 +307,7 @@ def test_central_manager_dispatches_high_concurrency_without_waiting_for_queued_
         ])
         elapsed = time.monotonic() - start
 
-        assert result["status"] == "dispatched"
+        assert result["status"] == "dispatched", result
         assert result["count"] == 2
         assert elapsed < 0.75
 
@@ -253,6 +318,99 @@ def test_central_manager_dispatches_high_concurrency_without_waiting_for_queued_
             lambda: DaemonRunDir.read_state_from_disk(run_dirs[0].path).get("supervisor_pid"),
             timeout=5.0,
             message="first managed run to start",
+        )
+        second_state = DaemonRunDir.read_state_from_disk(run_dirs[1].path)
+        assert not second_state.get("supervisor_pid")
+        queued_job = queue_dir / f"{result['ids'][1]}.json"
+        assert queued_job.exists()
+        assert "detached-test-key" not in queued_job.read_text(encoding="utf-8")
+        active_journal = agent._working_dir / MANAGER_DIR / "journal" / f"{result['ids'][0]}.json"
+        assert "detached-test-key" not in active_journal.read_text(encoding="utf-8")
+
+        for run_dir in run_dirs:
+            _wait_state(run_dir, "done", timeout=10.0)
+    finally:
+        _terminate_resident_manager(agent)
+
+
+def test_parent_restart_does_not_reap_queued_manager_owned_run(tmp_path):
+    agent = make_daemon_agent(tmp_path, ["file", "daemon"], working_dir_name="agent")
+    run_dir, request = _make_run(tmp_path, "em-queued")
+    run_dir.update_state(owner="manager")
+    _write_live_manager_pid(agent)
+    queue_dir = agent._working_dir / MANAGER_DIR / "queue"
+    _write_job(queue_dir, request)
+
+    DaemonManager(agent)
+
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    assert state["state"] == "running"
+    assert state["owner"] == "manager"
+    assert state.get("finished_at") is None
+
+
+def test_parent_restart_does_not_reap_active_manager_owned_run(tmp_path):
+    agent = make_daemon_agent(tmp_path, ["file", "daemon"], working_dir_name="agent")
+    run_dir, request = _make_run(tmp_path, "em-active")
+    manager_pid = os.getpid()
+    run_dir.update_state(
+        owner="manager",
+        manager_pid=manager_pid,
+        manager_start_identity=process_identity(manager_pid),
+    )
+    _write_live_manager_pid(agent, pid=manager_pid)
+    journal_dir = agent._working_dir / MANAGER_DIR / "journal"
+    journal_dir.mkdir(parents=True, exist_ok=True)
+    (journal_dir / f"{request.run_id}.json").write_text(
+        json.dumps({
+            "schema": "lingtai.daemon_manager_journal.v1",
+            "run_id": request.run_id,
+            "request": encode_request(request),
+            "state": "active",
+            "manager_pid": manager_pid,
+            "capsule_in_memory": True,
+            "capsule_scrubbed": True,
+        }),
+        encoding="utf-8",
+    )
+
+    DaemonManager(agent)
+
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    assert state["state"] == "running"
+    assert state["owner"] == "manager"
+    assert state.get("finished_at") is None
+
+
+def test_central_manager_cli_route_dispatches_without_waiting_for_queued_pid(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path, ["file", "daemon"])
+    _install_fake_opencode(tmp_path, monkeypatch, sleep_s=1.0)
+    manager = DaemonManager(agent, manager_pool_size=1, manager_threshold=0)
+
+    try:
+        start = time.monotonic()
+        result = manager._handle_emanate_cli(
+            [
+                {"task": "slow cli task A", "tools": ["file"]},
+                {"task": "slow cli task B", "tools": ["file"]},
+            ],
+            backend="opencode",
+            effective_max_turns=1,
+            effective_timeout=10.0,
+        )
+        elapsed = time.monotonic() - start
+
+        assert result["status"] == "dispatched", result
+        assert result["count"] == 2
+        assert elapsed < 0.75
+
+        run_dirs = [manager._emanations[run_id]["run_dir"] for run_id in result["ids"]]
+        queue_dir = agent._working_dir / MANAGER_DIR / "queue"
+
+        _wait_for(
+            lambda: DaemonRunDir.read_state_from_disk(run_dirs[0].path).get("supervisor_pid"),
+            timeout=5.0,
+            message="first managed CLI run to start",
         )
         second_state = DaemonRunDir.read_state_from_disk(run_dirs[1].path)
         assert not second_state.get("supervisor_pid")
@@ -305,7 +463,12 @@ def test_central_manager_orders_queue_by_enqueued_at(tmp_path, monkeypatch):
 
     monkeypatch.setattr("lingtai.adapters.posix.daemon_manager._run_one_emanation", fake_run)
 
-    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager = _manager_with_capsules(
+        queue_dir,
+        journal_dir,
+        pool_size=1,
+        capsules={older_req.run_id: {}, newer_req.run_id: {}},
+    )
     manager.run()
 
     assert starts == ["em-z-older", "em-a-newer"]
@@ -325,7 +488,12 @@ def test_central_manager_terminal_journal_scrubs_capsule(tmp_path, monkeypatch):
 
     monkeypatch.setattr("lingtai.adapters.posix.daemon_manager._run_one_emanation", fake_run)
 
-    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1)
+    manager = _manager_with_capsules(
+        queue_dir,
+        journal_dir,
+        pool_size=1,
+        capsules={request.run_id: {"api_key": "secret", "backend_env": {"X": "Y"}}},
+    )
     manager.run()
 
     _wait_state(run_dir, "done")
