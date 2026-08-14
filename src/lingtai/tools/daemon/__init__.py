@@ -9,7 +9,7 @@ system notification, so the parent can dispatch and go idle without polling.
 
 Usage:
     Agent(capabilities=["daemon"])
-    Agent(capabilities={"daemon": {"max_emanations": 100}})
+    Agent(capabilities={"daemon": {"max_emanations": 1000}})
 """
 from __future__ import annotations
 
@@ -151,14 +151,21 @@ class _Config(NamedTuple):
     """Resolved agent-wide daemon defaults for new emanations."""
 
     max_turns: int
+    manager_pool_size: int
+    manager_threshold: int
 
 
-_BUILTIN_CONFIG = _Config(DEFAULT_MAX_TURNS)
+_BUILTIN_CONFIG = _Config(DEFAULT_MAX_TURNS, 100, 50)
 
 
 def _config_max_turns(value: Any) -> int:
     """Coerce a configured ``max_turns``; any non-positive-integer falls back."""
     return value if type(value) is int and value > 0 else DEFAULT_MAX_TURNS
+
+
+def _config_nonnegative_int(value: Any, default: int) -> int:
+    """Coerce a non-negative integer config field with a safe fallback."""
+    return value if type(value) is int and value >= 0 else default
 
 
 def _load_config(agent_working_dir: str | os.PathLike[str]) -> _Config:
@@ -176,7 +183,15 @@ def _load_config(agent_working_dir: str | os.PathLike[str]) -> _Config:
         data = read_json(config_path, expect=dict)
     except (OSError, ValueError, TypeError):
         return _BUILTIN_CONFIG
-    return _Config(_config_max_turns(data.get("max_turns")))
+    return _Config(
+        _config_max_turns(data.get("max_turns")),
+        _config_nonnegative_int(
+            data.get("manager_pool_size"), _BUILTIN_CONFIG.manager_pool_size
+        ),
+        _config_nonnegative_int(
+            data.get("manager_threshold"), _BUILTIN_CONFIG.manager_threshold
+        ),
+    )
 
 
 DAEMON_CONTEXT_COUNTDOWN_ROUNDS = 9
@@ -1318,7 +1333,7 @@ class _ToolCollector:
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows status; daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
+    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows status; daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. High-concurrency batches route through the central daemon manager when configured: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children, `manager_threshold` (env LINGTAI_DAEMON_MANAGER_THRESHOLD, default 50) is the batch size that triggers the manager queue, and `max_emanations` (default 1000) caps concurrent emanations; below the threshold the classic per-run supervisor path runs unchanged. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -1452,15 +1467,23 @@ class DaemonManager:
     # callers/configs.
     _NOTIFY_MIN_LEN = 20
 
-    def __init__(self, agent: "Agent", max_emanations: int = 100,
+    def __init__(self, agent: "Agent", max_emanations: int = 1000,
                  max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
                  notify_threshold: int = 20,
+                 manager_pool_size: int = 100,
+                 manager_threshold: int = 50,
                  *, process_port: DaemonProcessPort | None = None,
                  interactive_terminal_port: InteractiveTerminalPort | None = None):
         self._agent = agent
         self._max_emanations = max_emanations
         self._max_turns = max_turns
         self._timeout = timeout
+        self._manager_pool_size = self._env_nonnegative_int(
+            "LINGTAI_DAEMON_MANAGER_POOL_SIZE", manager_pool_size,
+        )
+        self._manager_threshold = self._env_nonnegative_int(
+            "LINGTAI_DAEMON_MANAGER_THRESHOLD", manager_threshold,
+        )
         self._default_model = agent.service.model
         self._notify_threshold = notify_threshold
         # Direct construction is a supported test/in-process composition path
@@ -1528,6 +1551,17 @@ class DaemonManager:
         self._reap_dead_parent_daemon_records()
         self._reconcile_terminal_notifications()
 
+    @staticmethod
+    def _env_nonnegative_int(name: str, default: int) -> int:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return default
+        return value if value >= 0 else default
+
     def _reap_dead_parent_daemon_records(self) -> None:
         """Mark stale running daemon.json records failed after a restart.
 
@@ -1546,6 +1580,10 @@ class DaemonManager:
           terminal state is a genuinely lost run (crashed without committing
           terminal truth — see the parent contract's "exact supervisor
           identity plus durable state" classification requirement).
+        - ``"manager"``: high-concurrency queued/active work is owned by the
+          resident central manager, not by the launching parent interpreter.
+          A refreshed parent must recognize a live manager pidfile or per-run
+          manager identity and leave the record alone.
         """
         daemons_dir = self._agent._working_dir / "daemons"
         if not daemons_dir.is_dir():
@@ -1584,6 +1622,19 @@ class DaemonManager:
                     "no terminal state committed (crashed without committing "
                     "terminal truth)."
                 )
+            elif owner == "manager":
+                if self._manager_owner_alive(state):
+                    continue
+                manager_pid = state.get("manager_pid")
+                if isinstance(manager_pid, int) and not isinstance(manager_pid, bool):
+                    subject = f"manager_pid {manager_pid}"
+                else:
+                    subject = "central daemon manager"
+                reap_reason = (
+                    "Reaped running daemon record because recorded "
+                    f"{subject} is no longer alive with no terminal state "
+                    "committed."
+                )
             else:
                 parent_pid = state.get("parent_pid")
                 if not isinstance(parent_pid, int) or isinstance(parent_pid, bool):
@@ -1620,6 +1671,41 @@ class DaemonManager:
         except (PermissionError, OSError):
             return True
         return True
+
+    def _manager_owner_alive(self, state: dict) -> bool:
+        manager_pid = state.get("manager_pid")
+        manager_identity = state.get("manager_start_identity")
+        if (
+            isinstance(manager_pid, int)
+            and not isinstance(manager_pid, bool)
+            and self._pid_identity_matches(manager_pid, manager_identity)
+        ):
+            return True
+        try:
+            from lingtai.adapters.posix.daemon_manager import MANAGER_DIR
+
+            pid_path = self._agent._working_dir / MANAGER_DIR / "manager.pid"
+            info = json.loads(pid_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not isinstance(info, dict):
+            return False
+        pid = info.get("pid")
+        identity = info.get("manager_start_identity")
+        started_at = info.get("started_at")
+        if (
+            pid is None
+            and info.get("state") == "starting"
+            and isinstance(started_at, (int, float))
+            and not isinstance(started_at, bool)
+            and time.time() - started_at < self._SUPERVISOR_STARTUP_TIMEOUT_S
+        ):
+            return True
+        return (
+            isinstance(pid, int)
+            and not isinstance(pid, bool)
+            and self._pid_identity_matches(pid, identity)
+        )
 
     @staticmethod
     def _pid_identity_matches(pid: int, expected: str | None) -> bool:
@@ -2978,6 +3064,7 @@ class DaemonManager:
         preset_llm: dict | None = None,
         preset_capabilities: dict | None = None,
         secret_capsule: dict | None = None,
+        use_central_manager: bool = False,
     ) -> None:
         """Write the run manifest and spawn the detached supervisor for it.
 
@@ -3054,8 +3141,16 @@ class DaemonManager:
             runtime_llm["provider_defaults"] = normalized_defaults
         if runtime_llm:
             capsule.setdefault("llm", {}).update(runtime_llm)
-        select_daemon_supervisor_adapter().spawn_detached(request, capsule=capsule)
-        self._await_supervisor_startup(run_dir)
+        if use_central_manager:
+            self._enqueue_central_daemon_manager_run(
+                request,
+                capsule=capsule,
+                pool_size=self._manager_pool_size,
+                run_dir=run_dir,
+            )
+        else:
+            select_daemon_supervisor_adapter().spawn_detached(request, capsule=capsule)
+            self._await_supervisor_startup(run_dir)
 
     def _await_supervisor_startup(self, run_dir: DaemonRunDir) -> None:
         """Bounded poll for the supervisor to record its own PID.
@@ -3090,6 +3185,37 @@ class DaemonManager:
         raise RuntimeError(
             f"detached daemon supervisor for run {run_dir.run_id!r} did not "
             f"start within {self._SUPERVISOR_STARTUP_TIMEOUT_S}s"
+        )
+
+    def _should_use_central_daemon_manager(self, batch_count: int) -> bool:
+        """Return whether this batch should use the explicit Phase 1 manager."""
+        return (
+            os.name == "posix"
+            and self._manager_pool_size > 0
+            and batch_count > self._manager_threshold
+        )
+
+    def _enqueue_central_daemon_manager_run(
+        self,
+        request,
+        *,
+        capsule: dict,
+        pool_size: int,
+        run_dir: DaemonRunDir,
+    ) -> None:
+        """Submit one already-materialized run to the resident POSIX manager.
+
+        The manager path intentionally does not wait for ``supervisor_pid`` here:
+        queued runs have no manager assignment, and therefore no pid, until pool
+        capacity frees up.
+        """
+        from lingtai.adapters.posix.daemon_manager import enqueue_manager_run
+
+        enqueue_manager_run(
+            agent_working_dir=self._agent._working_dir,
+            request=request,
+            capsule=capsule,
+            pool_size=pool_size,
         )
 
     def _run_emanation(self, em_id: str, run_dir, schemas, dispatch,
@@ -4791,6 +4917,7 @@ class DaemonManager:
         group_id = DaemonRunDir.new_group_id()
         parent_addr = self._agent._working_dir.name
         parent_pid = os.getpid()
+        use_central_manager = self._should_use_central_daemon_manager(len(tasks))
 
         for i, spec in enumerate(tasks):
             em_id = self._new_emanation_id(reserved_ids=set(ids))
@@ -4922,6 +5049,7 @@ class DaemonManager:
                     preset_name=resolved["name"] if resolved else None,
                     preset_llm=resolved["llm"] if resolved else None,
                     preset_capabilities=resolved["capabilities"] if resolved else None,
+                    use_central_manager=use_central_manager,
                 )
             except Exception as e:
                 run_dir.mark_failed(e)
@@ -5058,6 +5186,7 @@ class DaemonManager:
         group_id = DaemonRunDir.new_group_id()
         parent_addr = self._agent._working_dir.name
         parent_pid = os.getpid()
+        use_central_manager = self._should_use_central_daemon_manager(len(tasks))
 
         for spec, context in zip(tasks, contexts):
             em_id = self._new_emanation_id(reserved_ids=set(ids))
@@ -5237,10 +5366,18 @@ class DaemonManager:
                 # container's values, so the manifest cannot carry it.
                 if context.backend_env:
                     capsule["backend_env"] = dict(context.backend_env)
-                select_daemon_supervisor_adapter().spawn_detached(
-                    request, capsule=capsule,
-                )
-                self._await_supervisor_startup(run_dir)
+                if use_central_manager:
+                    self._enqueue_central_daemon_manager_run(
+                        request,
+                        capsule=capsule,
+                        pool_size=self._manager_pool_size,
+                        run_dir=run_dir,
+                    )
+                else:
+                    select_daemon_supervisor_adapter().spawn_detached(
+                        request, capsule=capsule,
+                    )
+                    self._await_supervisor_startup(run_dir)
             except Exception as e:
                 run_dir.mark_failed(e)
                 return {"status": "error", "message": str(e)}
@@ -8752,7 +8889,7 @@ class DaemonManager:
 assert _FAMILY_CHECK_LAST_MAX == DaemonManager._CHECK_LAST_MAX
 
 
-def setup(agent: "Agent", max_emanations: int = 100,
+def setup(agent: "Agent", max_emanations: int = 1000,
           max_turns: int | None = None, timeout: float = 3600.0,
           notify_threshold: int = 20,
           process_port: DaemonProcessPort | None = None,
@@ -8766,8 +8903,9 @@ def setup(agent: "Agent", max_emanations: int = 100,
     ``DEFAULT_MAX_TURNS`` (5000) when the file is missing or the value is
     invalid. An explicit ``max_turns`` always wins over the config file.
     """
+    config = _load_config(agent._working_dir)
     if max_turns is None:
-        max_turns = _load_config(agent._working_dir).max_turns
+        max_turns = config.max_turns
     if process_port is None:
         if os.name == "posix":
             process_port = PosixDaemonProcessPort()
@@ -8789,6 +8927,8 @@ def setup(agent: "Agent", max_emanations: int = 100,
     mgr = DaemonManager(agent, max_emanations=max_emanations,
                         max_turns=max_turns, timeout=timeout,
                         notify_threshold=notify_threshold,
+                        manager_pool_size=config.manager_pool_size,
+                        manager_threshold=config.manager_threshold,
                         process_port=process_port,
                         interactive_terminal_port=interactive_terminal_port)
     schema = get_schema()
