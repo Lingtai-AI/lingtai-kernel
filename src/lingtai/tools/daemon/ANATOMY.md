@@ -50,6 +50,8 @@ related_files:
   - src/lingtai/adapters/posix/process_identity.py
   - src/lingtai/adapters/windows/daemon_supervisor.py
   - src/lingtai/tools/daemon/runtime.py
+  - src/lingtai/tools/daemon/return_observer_hook.py
+  - src/lingtai/tools/daemon/return_observer_helper.py
   - src/lingtai/tools/daemon/glossary-en.md
   - src/lingtai/tools/daemon/glossary-zh.md
   - src/lingtai/tools/daemon/glossary-wen.md
@@ -154,6 +156,7 @@ remains deferred until ConPTY has its own accepted adapter. `ClaudeInteractiveBr
 - `adapters/posix/daemon_execution_child_entrypoint.py` — fresh-interpreter execution boundary launched by the supervisor before its watcher. It registers exact execution PID/PGID/start identity and composes the existing production host; it does not duplicate backend parsers. `daemon_resume_owner_entrypoint.py` provides the bounded detached owner for one terminal supported-CLI resume generation. Durable `resume-claims/` records enforce one writer, and `followups/` plus `daemon.json` expose follow-up truth to `daemon(check)`.
 - `adapters/posix/process_identity.py` — shared POSIX process-incarnation helper. Linux identities combine boot ID and `/proc/<pid>/stat` start ticks; Darwin/BSD identities use bounded `ps` start time plus PPID. It returns `None` when observation is unavailable, and all ownership-sensitive signal paths refuse unknown or mismatched identities.
 - `daemon/runtime.py` — stateless daemon backend runtime primitives shared by the LingTai in-process loop and transitional CLI runners. Port-owned Codex, Cursor, OpenCode-family, Qwen, and Kimi runners use the daemon-local process Port for stderr draining and stdout iteration; only ask workers use a local deadline, while initial streams remain watchdog-owned. The historical private names remain for unmigrated paths and compatibility tests.
+- `daemon/return_observer_hook.py` and `daemon/return_observer_helper.py` — default-off supervisor return observation. The hook is a fail-open wrapper called from `supervisor_runtime.py` after terminal notification claim and before publication; the helper is a separate stdlib-only process that reads bounded files beneath the run directory and writes only `.supervisor/return-observation/g*.{host,portable,status}.json`.
 - `daemon/CONTRACT.md` — maintained daemon contract for the public tool surface, selected skills catalog/path semantics, MCP registration redaction/native mounting, `daemon_common` completion enforcement, backend implementation status, run artifacts, review triggers, and the acceptance gate for new backend or contract-impacting changes.
 
 - `daemon/interactive_terminal/` — capability-local immutable command/exit values and the

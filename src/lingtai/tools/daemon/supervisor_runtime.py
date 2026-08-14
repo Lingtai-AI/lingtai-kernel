@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -230,9 +231,13 @@ def run_resume_owner(manifest_path: str, run_id: str, generation: str,
         )
         try:
             state = run_dir.read_state_from_disk(run_dir.path)
+            observation = _return_observation_if_available(
+                run_dir, manifest, status=f"follow-up {status}", state=state,
+            )
             _publish_daemon_notification(
                 run_dir, manifest, status=f"follow-up {status}",
                 state=state, idempotency_key=f"daemon-followup:{run_id}:{generation}",
+                return_observation=observation,
             )
         except Exception:
             pass
@@ -480,7 +485,11 @@ def _publish_terminal_notification_if_needed(run_dir, manifest: dict) -> None:
     idempotency_key = run_dir.claim_terminal_notification(status)
     if idempotency_key is None:
         return  # already claimed/published by a concurrent path
-    published = _publish_daemon_notification(run_dir, manifest, status=status, state=state, idempotency_key=idempotency_key)
+    observation = _return_observation_if_available(run_dir, manifest, status=status, state=state)
+    published = _publish_daemon_notification(
+        run_dir, manifest, status=status, state=state, idempotency_key=idempotency_key,
+        return_observation=observation,
+    )
     if published:
         run_dir.mark_terminal_notification_published(idempotency_key)
     else:
@@ -490,7 +499,50 @@ def _publish_terminal_notification_if_needed(run_dir, manifest: dict) -> None:
 _NOTIFICATION_PREVIEW_MAX = 500
 
 
-def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state: dict, idempotency_key: str) -> bool:
+def _return_observation_if_available(run_dir, manifest: dict, *, status: str, state: dict) -> dict | None:
+    if manifest.get("return_observer_enabled") is not True:
+        return None
+    def _expected_generation() -> str:
+        if str(status).startswith("follow-up"):
+            value = state.get("followup_generation")
+            if isinstance(value, str) and re.fullmatch(r"(?:g0000|g[1-9][0-9]*-[0-9a-f]{16})", value):
+                return value
+            return ""
+        return "g0000"
+    try:
+        from lingtai.tools.daemon.return_observer_hook import observe_return_bounded
+        observation = observe_return_bounded(run_dir, manifest, status=status, state=state)
+        if not isinstance(observation, dict):
+            return None
+        if observation.get("schema_version") != "lingtai.return-observation-notice.v0":
+            return None
+        if observation.get("state") != "available":
+            return None
+        digest = observation.get("receipt_digest")
+        if not (isinstance(digest, str) and len(digest) == 71 and digest.startswith("sha256:")):
+            return None
+        if any(ch not in "0123456789abcdef" for ch in digest.removeprefix("sha256:")):
+            return None
+        generation = observation.get("generation")
+        if not isinstance(generation, str):
+            return None
+        if not (generation == "g0000" or re.fullmatch(r"g[1-9][0-9]*-[0-9a-f]{16}", generation)):
+            return None
+        if generation != _expected_generation():
+            return None
+        if observation.get("authority") != "advisory_only":
+            return None
+        if observation.get("raw_result_unchanged") is not True:
+            return None
+        return observation
+    except BaseException:
+        return None
+
+
+def _publish_daemon_notification(
+    run_dir, manifest: dict, *, status: str, state: dict, idempotency_key: str,
+    return_observation: dict | None = None,
+) -> bool:
     """Publish the terminal event directly via the notification store Port.
 
     Mirrors ``DaemonManager._publish_daemon_notification``'s body/text
@@ -572,6 +624,8 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
             "at": received_at,
             "idempotency_key": idempotency_key,
         }
+        if isinstance(return_observation, dict):
+            event["return_observation"] = return_observation
         events.append(event)
         events = events[-20:]
         envelope_priority = (

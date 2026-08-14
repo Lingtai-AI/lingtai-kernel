@@ -81,6 +81,12 @@ from .process_port import (
 from .posix_process import PosixDaemonProcessPort
 
 PROVIDERS = {"providers": [], "default": "builtin"}
+_RETURN_OBSERVER_ENV = "LINGTAI_DAEMON_RETURN_OBSERVER_ENABLED"
+
+
+def _return_observer_feature_enabled() -> bool:
+    value = os.environ.get(_RETURN_OBSERVER_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _kill_process_group(proc, *, term_timeout: float = 5.0, kill_timeout: float = 3.0) -> None:
@@ -3102,8 +3108,15 @@ class DaemonManager:
             preset_name=preset_name,
             preset_llm=preset_llm,
             preset_capabilities=preset_capabilities,
+            return_observer_enabled=_return_observer_feature_enabled(),
         )
         write_manifest(run_dir.path, manifest)
+        if manifest.get("return_observer_enabled") is True:
+            try:
+                from .return_observer_hook import write_dispatch_intent_receipt
+                write_dispatch_intent_receipt(run_dir, manifest)
+            except BaseException:
+                pass
 
         from lingtai.kernel.daemon_supervisor.manifest import manifest_path_for
         from .supervisor_runtime import select_daemon_supervisor_adapter
@@ -5066,9 +5079,20 @@ class DaemonManager:
         self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks),
                   tasks=[{"task": s["task"][:80], "tools": s["tools"]} for s in tasks])
 
-        return {"status": "dispatched", "count": len(tasks), "ids": ids,
-                "group_id": group_id,
-                "handoff": self._emanate_handoff(len(tasks), requested_timeout)}
+        result = {"status": "dispatched", "count": len(tasks), "ids": ids,
+                  "group_id": group_id,
+                  "handoff": self._emanate_handoff(len(tasks), requested_timeout)}
+        if _return_observer_feature_enabled():
+            try:
+                from .return_observer_hook import write_dispatch_result_receipt
+                for em_id in ids:
+                    entry = self._emanations.get(em_id)
+                    run_dir = entry.get("run_dir") if isinstance(entry, dict) else None
+                    if run_dir is not None:
+                        write_dispatch_result_receipt(run_dir, result)
+            except BaseException:
+                pass
+        return result
 
     def _emanate_handoff(self, count: int, requested_timeout_s: float | None) -> str:
         """Async handoff line, plus a Task Card nudge for fleet-scale dispatch.

@@ -265,9 +265,10 @@ def build_manifest(
     backend_argv: list[str] | None = None, language: str = "en",
     preset_name: str | None = None, preset_llm: dict | None = None,
     preset_capabilities: dict | None = None,
+    return_observer_enabled: bool = False,
 ) -> dict:
     """Build the supervisor input record without resolved credentials."""
-    return {
+    manifest = {
         "schema": MANIFEST_SCHEMA,
         "run_id": run_id,
         "backend": backend,
@@ -288,6 +289,9 @@ def build_manifest(
         "preset_llm": _safe_llm(preset_llm),
         "preset_capabilities": _safe_json(preset_capabilities) if isinstance(preset_capabilities, dict) else None,
     }
+    if return_observer_enabled:
+        manifest["return_observer_enabled"] = True
+    return manifest
 
 
 def write_manifest(run_dir: Path, manifest: dict) -> Path:
@@ -327,6 +331,8 @@ def read_manifest(path: Path) -> dict:
         raise ValueError("manifest max_turns must be a positive integer")
     if isinstance(data["timeout_s"], bool) or not isinstance(data["timeout_s"], (int, float)) or data["timeout_s"] <= 0:
         raise ValueError("manifest timeout_s must be positive")
+    if "return_observer_enabled" in data and not isinstance(data["return_observer_enabled"], bool):
+        raise ValueError("manifest return_observer_enabled must be a boolean")
     run_dir = Path(data["run_dir"]).resolve()
     if run_dir != path.parent or run_dir.name == "":
         raise ValueError("manifest run_dir does not match its canonical parent directory")
