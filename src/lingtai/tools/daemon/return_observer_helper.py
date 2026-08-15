@@ -150,6 +150,18 @@ def _read_file_beneath(root_fd: int, rel: str) -> tuple[bytes, os.stat_result]:
         os.close(fd)
 
 
+def _stat_regular_file_beneath(root_fd: int, rel: str) -> os.stat_result:
+    """Return no-follow metadata without reading file content."""
+    fd = _open_beneath(root_fd, rel)
+    try:
+        st = os.fstat(fd)
+        if not _is_regular(st.st_mode):
+            raise Unavailable("not_regular_file")
+        return st
+    finally:
+        os.close(fd)
+
+
 def _row_for_bytes(rel: str, data: bytes, st: os.stat_result) -> dict:
     return {
         "relative_ref": rel,
@@ -365,10 +377,42 @@ def _declared_artifact_rows(
         rel = _safe_rel(item["path"])
         if not _exists_beneath(root_fd, rel):
             raise Unavailable("artifact_missing")
+        metadata = _stat_regular_file_beneath(root_fd, rel)
+        manifest_size = item.get("size")
+        omission_reason = None
+        omission_cap = None
+        omission_remaining = None
+        if metadata.st_size > MAX_FILE_BYTES:
+            omission_reason = "per_file_cap"
+            omission_cap = MAX_FILE_BYTES
+        elif rel not in seen and total + int(metadata.st_size) > MAX_TOTAL_BYTES:
+            omission_reason = "total_byte_cap"
+            omission_cap = MAX_TOTAL_BYTES
+            omission_remaining = max(MAX_TOTAL_BYTES - total, 0)
+        if omission_reason is not None:
+            if isinstance(manifest_size, int) and manifest_size != metadata.st_size:
+                differences.append({
+                    "path": rel,
+                    "field": "size",
+                    "declared": manifest_size,
+                    "observed": metadata.st_size,
+                })
+            omission = {
+                "path": rel,
+                "field": "content_observation",
+                "declared": "present",
+                "observed": "omitted",
+                "reason_code": omission_reason,
+                "size_bytes": metadata.st_size,
+                "cap_bytes": omission_cap,
+            }
+            if omission_remaining is not None:
+                omission["remaining_bytes"] = omission_remaining
+            differences.append(omission)
+            continue
         row = _hash_file(root_fd, rel)
         row["role"] = item.get("role") if isinstance(item.get("role"), str) else "declared_artifact"
         row["declared_path"] = rel
-        manifest_size = item.get("size")
         if isinstance(manifest_size, int) and manifest_size != row["size"]:
             differences.append({
                 "path": rel,

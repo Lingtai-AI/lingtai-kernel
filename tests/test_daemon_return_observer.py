@@ -733,14 +733,63 @@ def test_atomic_json_zero_write_fails_certificate(tmp_path, monkeypatch, capsys)
     assert json.loads(capsys.readouterr().out) == {"reason_code": "short_write", "state": "unavailable"}
 
 
-def test_per_file_cap_breach_fails_certificate_only(tmp_path, capsys):
+@pytest.mark.parametrize("oversized_bytes", [530_042, 892_071])
+def test_oversized_declared_artifact_is_omitted_but_notice_remains_exactly_once(
+    tmp_path, oversized_bytes
+):
+    """Regression for the two real failed transcript sizes.
+
+    A declared artifact beyond the read cap is explicitly not content-observed;
+    it must not disable the bounded generation or the additive terminal notice.
+    """
+    run_dir = _make_run_dir(tmp_path)
+    manifest = _manifest(run_dir, enabled=True)
+    private_marker = b"PRIVATE-OVERSIZED-CONTENT-MUST-NOT-BE-READ"
+    too_large = run_dir.path / "too-large.bin"
+    too_large.write_bytes(private_marker + b"x" * (oversized_bytes - len(private_marker)))
+    run_dir.mark_done("raw survives")
+    run_dir.manifest_path.write_text(
+        json.dumps({"artifacts": [{"path": "too-large.bin", "size": oversized_bytes}], "truncated": False}),
+        encoding="utf-8",
+    )
+
+    _publish_terminal_notification_if_needed(run_dir, manifest)
+    _publish_terminal_notification_if_needed(run_dir, manifest)
+
+    events = _matching_events(run_dir)
+    assert len(events) == 1
+    assert events[0]["return_observation"]["generation"] == "g0000"
+    side = run_dir.path / ".supervisor" / "return-observation"
+    assert sorted(path.name for path in side.glob("g0000.*.json")) == [
+        "g0000.host.json",
+        "g0000.portable.json",
+        "g0000.status.json",
+    ]
+    portable = json.loads((side / "g0000.portable.json").read_text(encoding="utf-8"))
+    assert {
+        "path": "too-large.bin",
+        "field": "content_observation",
+        "declared": "present",
+        "observed": "omitted",
+        "reason_code": "per_file_cap",
+        "size_bytes": oversized_bytes,
+        "cap_bytes": 256 * 1024,
+    } in portable["declared_artifacts"]["differences"]
+    assert "too-large.bin" not in {row["relative_ref"] for row in portable["observed_files"]}
+    rendered_receipts = b"".join(path.read_bytes() for path in side.glob("g0000.*.json"))
+    assert private_marker not in rendered_receipts
+    assert run_dir.result_path.read_text(encoding="utf-8") == "raw survives"
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["state"] == "done"
+
+
+def test_oversized_declared_artifact_preserves_manifest_size_difference(tmp_path, capsys):
     run_dir = _make_run_dir(tmp_path)
     _manifest(run_dir, enabled=True)
-    run_dir.mark_done("raw")
     too_large = run_dir.path / "too-large.bin"
-    too_large.write_bytes(b"x" * (256 * 1024 + 1))
+    too_large.write_bytes(b"x" * 530_042)
+    run_dir.mark_done("raw")
     run_dir.manifest_path.write_text(
-        json.dumps({"artifacts": [{"path": "too-large.bin", "size": too_large.stat().st_size}], "truncated": False}),
+        json.dumps({"artifacts": [{"path": "too-large.bin", "size": 1}], "truncated": False}),
         encoding="utf-8",
     )
 
@@ -751,8 +800,108 @@ def test_per_file_cap_breach_fails_certificate_only(tmp_path, capsys):
         "--terminal-state", "done",
     ])
 
-    assert json.loads(capsys.readouterr().out) == {"reason_code": "per_file_cap", "state": "unavailable"}
-    assert run_dir.result_path.read_text(encoding="utf-8") == "raw"
+    assert json.loads(capsys.readouterr().out)["state"] == "available"
+    portable = json.loads(
+        (run_dir.path / ".supervisor" / "return-observation" / "g0000.portable.json").read_text(encoding="utf-8")
+    )
+    differences = portable["declared_artifacts"]["differences"]
+    assert {
+        "path": "too-large.bin",
+        "field": "size",
+        "declared": 1,
+        "observed": 530_042,
+    } in differences
+    assert any(
+        row.get("path") == "too-large.bin"
+        and row.get("field") == "content_observation"
+        and row.get("reason_code") == "per_file_cap"
+        and row.get("size_bytes") == 530_042
+        for row in differences
+    )
+
+
+def test_declared_artifact_total_budget_omits_content_without_disabling_generation(tmp_path, capsys):
+    run_dir = _make_run_dir(tmp_path)
+    _manifest(run_dir, enabled=True)
+    private_marker = b"PRIVATE-TOTAL-BUDGET-CONTENT-MUST-NOT-BE-READ"
+    declared = []
+    for index in range(5):
+        path = run_dir.path / f"budget-{index}.bin"
+        path.write_bytes(private_marker + b"x" * (250_000 - len(private_marker)))
+        declared.append({"path": path.name, "size": path.stat().st_size})
+    run_dir.mark_done("raw total survives")
+    run_dir.manifest_path.write_text(
+        json.dumps({"artifacts": declared, "truncated": False}),
+        encoding="utf-8",
+    )
+
+    helper_main([
+        "--run-dir", str(run_dir.path),
+        "--manifest-path", str(run_dir.path / "supervisor_manifest.json"),
+        "--generation", "g0000",
+        "--terminal-state", "done",
+    ])
+
+    assert json.loads(capsys.readouterr().out)["state"] == "available"
+    side = run_dir.path / ".supervisor" / "return-observation"
+    portable = json.loads((side / "g0000.portable.json").read_text(encoding="utf-8"))
+    omissions = [
+        row for row in portable["declared_artifacts"]["differences"]
+        if row.get("field") == "content_observation" and row.get("reason_code") == "total_byte_cap"
+    ]
+    assert omissions
+    observed = {row["relative_ref"] for row in portable["observed_files"]}
+    assert all(row["path"] not in observed for row in omissions)
+    assert all(row["size_bytes"] == 250_000 for row in omissions)
+    rendered_receipts = b"".join(path.read_bytes() for path in side.glob("g0000.*.json"))
+    assert private_marker not in rendered_receipts
+    assert run_dir.result_path.read_text(encoding="utf-8") == "raw total survives"
+
+
+def test_concurrent_bounded_invocations_share_one_oversized_generation(tmp_path):
+    import lingtai.tools.daemon.return_observer_hook as hook
+
+    run_dir = _make_run_dir(tmp_path)
+    manifest = _manifest(run_dir, enabled=True)
+    too_large = run_dir.path / "too-large.bin"
+    too_large.write_bytes(b"x" * 530_042)
+    run_dir.mark_done("raw concurrent")
+    run_dir.manifest_path.write_text(
+        json.dumps({"artifacts": [{"path": "too-large.bin", "size": too_large.stat().st_size}], "truncated": False}),
+        encoding="utf-8",
+    )
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    barrier = threading.Barrier(3)
+    blocks: list[dict | None] = []
+    errors: list[BaseException] = []
+
+    def invoke():
+        try:
+            barrier.wait(timeout=5)
+            blocks.append(hook.observe_return_bounded(run_dir, manifest, status="done", state=state))
+        except BaseException as exc:  # test thread must report, not disappear
+            errors.append(exc)
+
+    threads = [threading.Thread(target=invoke) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not errors
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(blocks) == 2
+    assert all(isinstance(block, dict) for block in blocks)
+    assert blocks[0] == blocks[1]
+    assert blocks[0]["generation"] == "g0000"
+    side = run_dir.path / ".supervisor" / "return-observation"
+    assert sorted(path.name for path in side.glob("g0000.*.json")) == [
+        "g0000.host.json",
+        "g0000.portable.json",
+        "g0000.status.json",
+    ]
+    assert run_dir.result_path.read_text(encoding="utf-8") == "raw concurrent"
 
 
 def test_dispatch_intent_manifest_mismatch_is_explicit_unavailable(tmp_path, capsys):
