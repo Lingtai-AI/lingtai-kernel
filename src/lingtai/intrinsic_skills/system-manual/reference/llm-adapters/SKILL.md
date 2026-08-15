@@ -98,6 +98,33 @@ Two behaviors worth holding here: they are read at session construction time
 accidentally-set variable never flips a Codex agent onto WebSocket unless the
 value is explicitly the opt-in value.
 
+### Runtime reasoning-effort control (live effort)
+
+Codex sessions (`CodexResponsesSession`) support **process-local live reasoning
+effort** — changing the effort used for subsequent dispatches at runtime,
+without reconfiguring or restarting the agent. This is the Codex side of the
+kernel's neutral reasoning-effort port (`llm/base.py` +
+`src/lingtai/kernel/llm/reasoning_effort.py`, shared with Claude Code's live
+effort).
+
+- **Supported values**: `low | medium | high | xhigh | max | ultra`. The exact
+  vocabulary is validated against the active route's descriptor
+  (`codex_effort.py`), so an unsupported value is rejected fail-closed.
+- **Runtime surface**: `SessionManager` exposes
+  `reasoning_effort_status()`, `set_reasoning_effort(value)`, and
+  `clear_reasoning_effort()` — query the current effort/route, override the
+  next unsnapshotted dispatch, or restore the construction baseline. These are
+  in-process, self-facing methods for agents that want to tune effort per task
+  (e.g. low effort for cheap work, xhigh for hard reasoning).
+- **Evidence**: each dispatch records the effort actually emitted on the wire
+  into `llm_response` event metadata under `codex_reasoning_effort*` keys
+  (`codex_reasoning_effort`, `codex_reasoning_effort_source`,
+  `codex_reasoning_effort_revision`), alongside the Claude Code
+  `claude_reasoning_effort*` keys.
+- **Default**: when no route is bound or the route does not support live
+  effort, the controller stays truthfully `unavailable` and the adapter keeps
+  its construction baseline — no behavior change for existing agents.
+
 ## OpenAI adapter
 
 The `openai` adapter (`OpenAIAdapter` in `src/lingtai/llm/openai/adapter.py`)
