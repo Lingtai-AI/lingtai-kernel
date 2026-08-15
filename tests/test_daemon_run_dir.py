@@ -943,6 +943,29 @@ def test_token_ledger_lines_parseable(tmp_path):
         assert json.loads(line)
 
 
+def test_checkpoint_inbox_backfills_pre_checkpoint_live_state(tmp_path):
+    """An already-running pre-upgrade run can queue and drain one correction."""
+    rd = _make_run_dir(tmp_path, backend="opencode")
+    for field in (
+        "checkpoint_sequence", "latest_checkpoint", "pending_checkpoint_messages"
+    ):
+        rd._state.pop(field)
+    rd._atomic_write_json(rd.daemon_json_path, rd._state)
+
+    message_id = rd.enqueue_checkpoint_message("continue with the bounded slice")
+    recorded = rd.record_checkpoint(
+        {"state": "implementing", "summary": "old live run upgraded in place"}
+    )
+
+    assert recorded["messages"] == [
+        {"id": message_id, "message": "continue with the bounded slice"}
+    ]
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["checkpoint_sequence"] == 1
+    assert state["latest_checkpoint"]["summary"] == "old live run upgraded in place"
+    assert state["pending_checkpoint_messages"] == []
+
+
 def test_mark_failed_handles_pathological_str_exc(tmp_path):
     """If exc.__str__ raises, mark_failed still records terminal state."""
     class BadStr(Exception):

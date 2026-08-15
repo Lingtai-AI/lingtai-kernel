@@ -259,9 +259,14 @@ Behavior notes:
     `mcp.json`. HTTP MCP registrations remain prompt catalog context for other
     CLI backends until a backend-specific HTTP MCP config path is implemented.
     LingTai automatically adds the built-in `daemon_common` MCP to MCP-capable
-    daemon backends. Its `finish(status, summary?, reason?, artifacts?)` tool is
-    the hard terminal-success contract: only `finish(status="done")` permits
-    `done`; `failed`/`incomplete`, missing finish, or invalid completion prevents
+    daemon backends. Its strict live-only
+    `checkpoint(state, summary, artifacts?, blocker?, request?)` tool records a
+    bounded nonterminal snapshot, wakes the parent, and returns any ID-bound
+    parent messages exactly once. Use it at useful boundaries, not as chat,
+    polling, stdin injection, or preemption. Its
+    `finish(status, summary?, reason?, artifacts?)` tool remains the hard
+    terminal-success contract: only `finish(status="done")` permits `done`;
+    `failed`/`incomplete`, missing finish, or invalid completion prevents
     silent success. A daemon that ends without calling `finish()` is reported
     as a missing-finish failure; that is not necessarily proof the underlying
     task failed — before treating the work as lost, inspect the run's trace/result
@@ -382,6 +387,18 @@ Behavior notes:
   notification arrives on the system channel carrying the daemon id, terminal
   status, task summary, and the result/error path. React to it with
   `daemon(action="check", input={"id": ...})` (and read `result.txt` for the full output).
+- **A cooperative checkpoint is a separate nonterminal wake.** On one, call
+  `daemon(action="check", input={"id": ...})` to inspect `latest_checkpoint`
+  and the `pending_checkpoint_messages` count. If a correction is needed, use
+  `daemon(action="ask", input={"id": ..., "message": ...})`. A
+  `{status: "queued", delivery: "checkpoint", message_id: ...}` receipt means
+  the message waits durably for the model's next checkpoint; it is not live
+  chat or immediate CLI input. This active-run route exists only for
+  `claude-p`/`claude-code`, Codex, OpenCode, Qwen, and Kimi because those exact
+  launch paths mount `daemon_common`; hidden interactive Claude, MiMo,
+  Oh-My-Pi, and Cursor remain `busy` while active. Qwen/Kimi still have no
+  terminal resume route. Do not poll waiting for checkpoints — the model chooses
+  useful boundaries, and terminal notification discipline remains unchanged.
 - **Use a Task Card for progress when one is available for this turn.**
   The dispatch success `handoff` is conditional: if Telegram is connected and a
   Task Card is available for the current turn, use it to report progress — call

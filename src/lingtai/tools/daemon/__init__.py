@@ -2236,6 +2236,7 @@ class DaemonManager:
                     DaemonManager._completion_file(run_dir)
                 ),
                 "LINGTAI_DAEMON_RUN_ID": run_dir.run_id,
+                "LINGTAI_DAEMON_RUN_DIR": str(run_dir.path),
                 "PYTHONPATH": _dev_pythonpath_with_source_root(),
             },
         }
@@ -2298,6 +2299,12 @@ class DaemonManager:
     @staticmethod
     def _daemon_common_context() -> str:
         return (
+            "LingTai daemon checkpoint contract: at useful nonterminal task "
+            "boundaries, call the reserved MCP tool `checkpoint` with a short "
+            "state and bounded progress summary. The call durably wakes the "
+            "parent and returns any queued parent messages exactly once; apply "
+            "those messages before continuing. A checkpoint is cooperative and "
+            "does not finish, pause, preempt, or turn the run into a chat. "
             "LingTai daemon completion contract: before ending this run, call "
             "the MCP tool `finish` exactly once with status `done`, `failed`, "
             "or `incomplete`. Use `done` only after the task is actually "
@@ -5973,10 +5980,41 @@ class DaemonManager:
             control.submit_request(run_dir.path, "ask", {"message": message})
             self._log("daemon_ask_detached", em_id=em_id, message_length=len(message))
             return {"status": "sent", "id": em_id}
-        if spec is None or spec.ask_handler_attr is None:
+        if spec is None:
             return {"status": "error", "id": em_id,
-                    "message": spec.ask_unsupported_msg if spec else f"unknown backend {backend!r}"}
-        if state.get("state") not in {"done", "failed", "cancelled", "timeout"}:
+                    "message": f"unknown backend {backend!r}"}
+        state_name = state.get("state")
+        if state_name in {"running", "active"}:
+            if _cli_backend_loads_common_mcp(backend):
+                try:
+                    message_id = run_dir.enqueue_checkpoint_message(message)
+                except (ValueError, RuntimeError) as exc:
+                    return {"status": "error", "id": em_id, "message": str(exc)}
+                if message_id:
+                    self._log(
+                        "daemon_ask_checkpoint_queued",
+                        em_id=em_id,
+                        message_id=message_id,
+                        message_length=len(message),
+                    )
+                    return {
+                        "status": "queued",
+                        "id": em_id,
+                        "delivery": "checkpoint",
+                        "message_id": message_id,
+                    }
+                state = self._read_run_dir_state_from_disk(run_dir)
+                state_name = state.get("state")
+            if state_name in {"running", "active"}:
+                if spec.ask_handler_attr is None:
+                    return {"status": "error", "id": em_id,
+                            "message": spec.ask_unsupported_msg}
+                return {"status": "busy", "id": em_id,
+                        "message": "primary detached CLI run is still active; retry ask after terminal state"}
+        if spec.ask_handler_attr is None:
+            return {"status": "error", "id": em_id,
+                    "message": spec.ask_unsupported_msg}
+        if state_name not in {"done", "failed", "cancelled", "timeout"}:
             return {"status": "busy", "id": em_id,
                     "message": "primary detached CLI run is still active; retry ask after terminal state"}
         session_key = {
@@ -8315,6 +8353,12 @@ class DaemonManager:
             "result_path": state.get("result_path"),
             "last_output": state.get("last_output"),
             "last_output_at": state.get("last_output_at"),
+            "latest_checkpoint": state.get("latest_checkpoint"),
+            "pending_checkpoint_messages": len(
+                state.get("pending_checkpoint_messages")
+                if isinstance(state.get("pending_checkpoint_messages"), list)
+                else []
+            ),
             "resume_generation": state.get("resume_generation"),
             "resume_state": state.get("resume_state"),
             "followup_status": state.get("followup_status"),

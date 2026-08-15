@@ -35,12 +35,19 @@ def _env(monkeypatch, tmp_path):
 async def test_lists_ltp_v2_envelope_schema():
     async with Client(build_server()) as client:
         result = await client.list_tools()
-        assert [t.name for t in result.tools] == ["finish"]
-        schema = result.tools[0].input_schema
-        assert schema["required"] == ["action", "input", "reasoning"]
-        assert schema["properties"]["action"]["enum"] == ["finish"]
-        assert schema["properties"]["input"]["required"] == ["status"]
-    assert FINISH_SCHEMA == schema
+        assert [t.name for t in result.tools] == ["checkpoint", "finish"]
+        by_name = {tool.name: tool.input_schema for tool in result.tools}
+        finish_schema = by_name["finish"]
+        checkpoint_schema = by_name["checkpoint"]
+        assert finish_schema["required"] == ["action", "input", "reasoning"]
+        assert finish_schema["properties"]["action"]["enum"] == ["finish"]
+        assert finish_schema["properties"]["input"]["required"] == ["status"]
+        assert checkpoint_schema["required"] == ["action", "input", "reasoning"]
+        assert checkpoint_schema["properties"]["action"]["enum"] == ["checkpoint"]
+        assert checkpoint_schema["properties"]["input"]["required"] == [
+            "state", "summary"
+        ]
+    assert FINISH_SCHEMA == finish_schema
     assert "finish(action='finish'" in DESCRIPTION
 
 

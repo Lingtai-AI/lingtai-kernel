@@ -182,10 +182,20 @@ class DetachedDaemonExecutionHost:
             pass
 
     def _completion_surface(self) -> tuple[dict[str, FunctionSchema], dict]:
-        from lingtai.mcp_servers.daemon_common.server import DESCRIPTION, FINISH_SCHEMA, _validate_finish
+        from lingtai.mcp_servers.daemon_common.server import (
+            CHECKPOINT_DESCRIPTION,
+            CHECKPOINT_SCHEMA,
+            DESCRIPTION,
+            FINISH_SCHEMA,
+            _record_checkpoint,
+            _validate_finish,
+        )
         from lingtai.kernel._fsutil import atomic_write_json
 
         path = self._run_dir.path / "daemon_completion.json"
+
+        def checkpoint(arguments: dict) -> dict:
+            return _record_checkpoint(self._run_dir, arguments or {})
 
         def finish(arguments: dict) -> dict:
             payload = _validate_finish(arguments or {})
@@ -198,11 +208,15 @@ class DetachedDaemonExecutionHost:
             return {"status": "ok", "completion_status": payload["status"]}
 
         return {
+            "checkpoint": FunctionSchema(
+                name="checkpoint", description=CHECKPOINT_DESCRIPTION,
+                parameters=CHECKPOINT_SCHEMA,
+            ),
             "finish": FunctionSchema(
                 name="finish", description=DESCRIPTION,
                 parameters=FINISH_SCHEMA,
-            )
-        }, {"finish": finish}
+            ),
+        }, {"checkpoint": checkpoint, "finish": finish}
 
     # Explicit forwarding keeps the production runner methods unmodified while
     # preventing this host from becoming a second backend implementation.

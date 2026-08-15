@@ -134,9 +134,13 @@ ownership -> §Process and Terminal Boundaries.
   `oh-my-pi`, `omp`, `kimicode`, `kimi`, `cursor`. Aliases collapse via
   `_normalize_backend`: `mimo→mimocode`, `qwen→qwen-code`, `omp→oh-my-pi`,
   `kimi→kimicode`; `claude-code` is a compatibility alias for `claude-p`.
-  `claude` / `claude-interactive` are hidden (not schema-advertised). Some CLI
-  backends do not support `ask` yet (e.g. qwen-code, kimicode) and return an
-  explicit unsupported message.
+  `claude` / `claude-interactive` are hidden (not schema-advertised). Active
+  external CLI runs whose launch path really mounts `daemon_common`
+  (`claude-p`/`claude-code`, Codex, OpenCode, Qwen, and Kimi) accept `ask` as a
+  queued next-checkpoint message. This does not add a terminal resume contract:
+  Qwen and Kimi still return explicit unsupported messages after terminal state,
+  while hidden interactive Claude and every backend without common MCP retain the
+  existing active `busy` behavior.
 - The architecture capability invariant applies to every daemon backend and
   backend family LingTai exposes. It is not primarily a per-task input contract:
   the durable requirement is that any daemon architecture preserves the same
@@ -270,8 +274,8 @@ continues on full history and never falls back to a different wire).
 |---|---|---|---|---|
 | `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `prompt` (LingTai only), `skills`/`mcp`/`preset`/`backend_options`/`context_token_limit`/`plugin` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — obsolete `system_prompt` migration, CLI `prompt`, bad limits, or tool-surface/preset failure |
 | `list` | — | `contains`, `status`, `include_done` (default true), `last` | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
-| `ask` | `id`, `message` | — | `{status: "sent", id, output}` (CLI ask returns immediately; `{status: "sent", id, async: true, ...}`) | `{status: "error", id, message}` — unknown/absent id, backend `ask` unsupported, or busy |
-| `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, events: [...]}` | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
+| `ask` | `id`, `message` | — | `{status: "sent", id, output}` (resume-capable CLI ask returns immediately as `{status: "sent", id, async: true, ...}`); an active common-MCP CLI returns `{status: "queued", id, delivery: "checkpoint", message_id}` | `{status: "error", id, message}` — unknown/absent id or terminal backend resume unsupported; an active backend without common MCP remains `{status: "busy", ...}` |
+| `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, latest_checkpoint, pending_checkpoint_messages, events: [...]}`; pending is a count, never message content | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
 | `reclaim` | — | — | `{status: "reclaimed", cancelled: <n>}` (or `{status: "shutdown", ...}` on lifecycle shutdown) | — |
 
 `emanate` returns immediately after dispatch; terminal state (`done` /
@@ -331,24 +335,44 @@ explicitly declared, and restores public `reasoning` for the exact strict
 LTP-v2 family schema. Other unknown business fields pass through so the server
 remains authoritative for closed-schema validation.
 
-### 3. daemon_common is the completion capability for MCP-capable backends
+### 3. daemon_common provides cooperative checkpoints and terminal completion
 
 MCP-capable daemon backends receive the built-in `daemon_common` MCP before any
-parent registrations. The oneshot context tells the model to call `finish`
-exactly once with `done`, `failed`, or `incomplete`. The MCP server writes
+parent registrations. Its strict LTP-v2 `checkpoint` tool accepts
+`action="checkpoint"`, an `input` object with required bounded `state` and
+`summary` plus optional bounded `artifacts`, `blocker`, and `request`, and the
+required `reasoning` field. The server attaches only to the exact run named by
+`LINGTAI_DAEMON_RUN_DIR` + `LINGTAI_DAEMON_RUN_ID` and rejects mismatches,
+invalid payloads, and terminal runs before mutation.
+
+A valid live checkpoint performs one RunDir state transaction: increment
+`checkpoint_sequence`, store `latest_checkpoint`, and drain bounded/redacted
+ID-bearing `pending_checkpoint_messages` exactly once in the durable state write;
+then append a `daemon_checkpoint` event and refresh heartbeat. It next publishes
+a stable-key `source="daemon"`, `kind="daemon_checkpoint"`, `terminal=false`
+system event so the parent wakes without consuming the exactly-once terminal
+notification. The tool response returns the drained IDs/messages. Once the
+durable state write succeeds, an event append, heartbeat touch, or notification
+publication failure is an honest error carrying `checkpoint_recorded=true`, the
+sequence, and those same drained messages; a retry cannot hide or redeliver them.
+Checkpoint is cooperative and nonterminal:
+it is not chat, stdin injection, preemption, cancellation, or a completion
+receipt.
+
+The oneshot context still tells the model to call `finish` exactly once with
+`done`, `failed`, or `incomplete`. That unchanged tool writes
 `daemon_completion.json` with `status`, optional `summary`, optional `reason`
 (required by validation when `status` is `failed` or `incomplete`), and optional
-`artifacts`.
-
-When `daemon_common` is loaded, a conversational final answer is not enough.
-Success requires a validated `finish(status="done")`; missing completion,
-invalid JSON, invalid status, run-id mismatch, `failed`, or `incomplete` must
-prevent terminal `done`. A missing-finish failure is a contract failure, not
-by itself proof the underlying task failed: the failure message tells the
-parent that before concluding it should inspect the run's trace and the full
-final text preserved in the run directory's physical `result.txt` (on this
-failure path `result_path` stays null; the physical file is the discoverable
-route), and the daemon context/manual carry the same guidance.
+`artifacts`. A checkpoint never satisfies this gate. When `daemon_common` is
+loaded, a conversational final answer is not enough. Success requires a
+validated `finish(status="done")`; missing completion, invalid JSON, invalid
+status, run-id mismatch, `failed`, or `incomplete` must prevent terminal `done`.
+A missing-finish failure is a contract failure, not by itself proof the
+underlying task failed: the failure message tells the parent that before
+concluding it should inspect the run's trace and the full final text preserved
+in the run directory's physical `result.txt` (on this failure path `result_path`
+stays null; the physical file is the discoverable route), and the daemon
+context/manual carry the same guidance.
 
 The LingTai loop shares only the pure `LLMResponse` all-empty predicate
 (`text`, `tool_calls`, and `thoughts` all empty) with the main agent. An all-empty
@@ -570,17 +594,17 @@ Guarded by: [D006](BEHAVIORS.md#behavior-d006), [D007](BEHAVIORS.md#behavior-d00
 
 Current source-backed status:
 
-| Backend / architecture | Selected skills catalog/path | Parent MCP native mounting | `daemon_common` native completion |
+| Backend / architecture | Selected skills catalog/path | Parent MCP native mounting | `daemon_common` native checkpoint + completion |
 |---|---|---|---|
-| `lingtai` | Yes, in the daemon prompt/context. | Yes, task-scoped stdio and HTTP MCP clients. | Yes, task-scoped MCP; `finish(done)` is enforced. |
-| `claude-p` / `claude-code` | Yes. | Yes for stdio via per-run `--mcp-config`; HTTP omitted. | Yes, same per-run config. |
-| `codex` | Yes. | Yes for stdio via `-c mcp_servers.*`; HTTP omitted. | Yes, same config override path. |
-| `opencode` | Yes. | Yes for stdio via `OPENCODE_CONFIG_CONTENT`; HTTP omitted. | Yes, same per-process config content. |
-| `qwen-code` / `qwen` | Yes. | Yes for stdio via per-run Qwen settings; HTTP omitted. | Yes, same settings file. |
-| `mimocode` / `mimo` | Yes. | Not wired in this slice; prompt catalog only. | Not wired; do not claim MCP-capable completion. |
-| `oh-my-pi` / `omp` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim MCP-capable completion. |
-| `kimicode` / `kimi` | Yes. | Yes for stdio and HTTP via run-private `$KIMI_CODE_HOME/mcp.json`. | Yes, same run-private config. |
-| `cursor` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim MCP-capable completion. |
+| `lingtai` | Yes, in the daemon prompt/context. | Yes, task-scoped stdio and HTTP MCP clients. | Yes; live checkpoint is available and `finish(done)` is enforced. |
+| `claude-p` / `claude-code` | Yes. | Yes for stdio via per-run `--mcp-config`; HTTP omitted. | Yes; live checkpoint and finish use the same per-run config. |
+| `codex` | Yes. | Yes for stdio via `-c mcp_servers.*`; HTTP omitted. | Yes; live checkpoint and finish use the same config override path. |
+| `opencode` | Yes. | Yes for stdio via `OPENCODE_CONFIG_CONTENT`; HTTP omitted. | Yes; live checkpoint and finish use the same per-process config content. |
+| `qwen-code` / `qwen` | Yes. | Yes for stdio via per-run Qwen settings; HTTP omitted. | Yes; live checkpoint and finish use the same settings file. |
+| `mimocode` / `mimo` | Yes. | Not wired in this slice; prompt catalog only. | Not wired; do not claim checkpoint or completion. |
+| `oh-my-pi` / `omp` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim checkpoint or completion. |
+| `kimicode` / `kimi` | Yes. | Yes for stdio and HTTP via run-private `$KIMI_CODE_HOME/mcp.json`. | Yes; live checkpoint and finish use the same run-private config. |
+| `cursor` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim checkpoint or completion. |
 
 The native stdio/helper set is source-owned by `_codex_mcp_argv`,
 `_opencode_mcp_env`, `_write_qwen_mcp_settings`, `_write_kimicode_mcp_config`,
@@ -594,12 +618,12 @@ All paths are relative to the parent agent working directory (`<parent>/`):
 
 ```text
 <parent>/daemons/<handle>-<YYYYMMDD-HHMMSS>-<hash6>/   # one dir per run (run_id)
-  daemon.json                  # identity card + live status (state, turn, tokens, ...)
+  daemon.json                  # identity/live status + checkpoint sequence/latest/pending count
   .prompt                      # system prompt verbatim
   .heartbeat                   # mtime-touched on activity
   history/chat_history.jsonl   # session transcript
   logs/token_ledger.jsonl      # per-call tokens, daemon-scoped (source="daemon")
-  logs/events.jsonl            # tool_call / tool_result / cli_output / cli_usage / daemon_*
+  logs/events.jsonl            # tool_call / tool_result / cli_output / cli_usage / daemon_checkpoint / daemon_*
   result.txt                   # full terminal result when available
 
 <parent>/logs/token_ledger.jsonl   # ALSO receives each daemon token row, tagged
@@ -619,8 +643,10 @@ reaped to `failed`.
 
 Codex, Cursor, the shared OpenCode/MiMo/Oh-My-Pi family, and the Qwen/Kimi raw
 one-shot initial `emanate` runners route through the daemon-local process Port.
-Qwen and Kimi remain Manager-owned text-capture backends and do not gain `ask`
-support from this boundary. `DaemonProcessCommand` is an immutable
+Qwen and Kimi remain Manager-owned text-capture backends and do not gain a
+terminal resume contract from this boundary. While their initial run is active,
+`ask` may queue one bounded message only because their launch paths independently
+mount `daemon_common`; delivery waits for the model's next checkpoint. `DaemonProcessCommand` is an immutable
 argv/cwd/environment value; policy receives only an opaque handle and a
 `DaemonProcessExit` containing the raw return code and optional local
 termination reason. `PosixDaemonProcessPort` owns POSIX session creation,
@@ -768,8 +794,12 @@ change must prove all applicable items:
    LingTai task-scoped calls additionally prove that undeclared host-private
    arguments do not cross the provider boundary, without filtering unknown
    business arguments or weakening strict LTP-v2 restoration.
-6. `daemon_common` is available for MCP-capable daemon backends, and terminal
-   success is gated by valid `finish(status="done")`.
+6. `daemon_common` is available only on source-proven loaders. Its live
+   checkpoint durably stores sequence/latest state and drains an ID-bound bounded
+   inbox exactly once before appending an event, refreshing heartbeat, and
+   publishing a unique nonterminal wake. Any failure after that durable write
+   returns `checkpoint_recorded=true` and the drained messages without redelivery.
+   Terminal success remains separately gated by valid `finish(status="done")`.
 7. Unsupported backends remain documented as prompt-catalog-only or fail
    explicitly; they must not imply tool availability from prompt text alone.
 8. `.prompt`, `daemon.json`, native config files/env/argv/settings,
@@ -789,12 +819,12 @@ Re-check this contract when touching:
   assembly, MCP registration handling, native config writers, compact handling,
   or completion enforcement.
 - `src/lingtai/tools/daemon/run_dir.py` artifact paths, `daemon.json`
-  `call_parameters`, redaction-sensitive fields, terminal markers,
-  terminal-notification receipt fields, or manifests.
+  `call_parameters`, checkpoint sequence/latest/inbox fields, redaction-sensitive
+  fields, terminal markers, terminal-notification receipt fields, or manifests.
 - `src/lingtai/tools/daemon/manual/` daemon argument semantics, backend status,
   MCP capability guidance, compact guidance, or completion guidance.
-- `src/lingtai/mcp_servers/daemon_common/` finish schema, payload file, or
-  server behavior.
+- `src/lingtai/mcp_servers/daemon_common/` checkpoint/finish schemas,
+  RunDir identity/wake behavior, payload file, or server behavior.
 - `tests/test_daemon*.py` coverage that proves backend options, CLI native MCP,
   daemon_common completion, OpenCode-family routing, Qwen settings, Claude print
   MCP config, run-dir artifacts, prompt redaction, selected-skill catalog
@@ -810,7 +840,8 @@ Re-check this contract when touching:
 | Default `max_emanations` is 100 and the override reaches the manager | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_daemon_default_max_emanations_is_100`, `::test_daemon_max_emanations_override_reaches_manager` |
 | Backend schema enum matches the ordered alias contract | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_backend_options.py::test_backend_schema_enum_matches_ordered_contract`, `::test_backend_metadata_consistency_keeps_hidden_legacy_claude` |
 | `check` returns state + events, honors `last`/`truncate`, validates inputs | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_check.py` |
-| CLI-backend `ask` returns immediately and enforces its own timeout | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs`, `::test_ask_codex_silent_subprocess_enforces_timeout` |
+| CLI-backend terminal `ask` returns immediately and enforces its own timeout | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs`, `::test_ask_codex_silent_subprocess_enforces_timeout` |
+| Active common-MCP CLI `ask` queues an ID-bound next-checkpoint message; checkpoint records/drains/wakes without terminal mutation and old live RunDirs backfill fields | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/run_dir.py`, `src/lingtai/mcp_servers/daemon_common/server.py` | `tests/test_daemon_checkpoint.py`, `tests/test_daemon_run_dir.py::test_checkpoint_inbox_backfills_pre_checkpoint_live_state` |
 | Token rows are written to both the daemon and parent ledgers, tagged | `src/lingtai/tools/daemon/run_dir.py` | `tests/test_daemon_run_dir.py::test_append_tokens_writes_daemon_ledger`, `::test_append_tokens_writes_parent_ledger_tagged` |
 | `context_token_limit` is validated, reaches Codex and native `mimo`, and is inert for every other provider and every external CLI backend | `src/lingtai/tools/daemon/__init__.py` | `tests/test_codex_standalone_compaction.py`, `tests/test_mimo_responses_compaction.py` |
 | `tasks[].plugin` renders the `## Parent-selected plugins` section into the durable `.prompt` the detached child reads; plugin skills and mcp.json servers are merged/mounted; missing plugin paths resolve to nothing; non-list fails preflight | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_task_plugin_context_renders_catalog_and_flattens_skills_mcp`, `::test_task_plugin_context_rejects_bad_plugin_path`, `::test_task_plugin_context_rejects_non_list`, `::test_handle_emanate_writes_plugin_section_to_prompt_before_detach` |

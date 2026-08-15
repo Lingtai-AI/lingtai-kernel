@@ -108,6 +108,7 @@ related_files:
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_check.py
   - tests/test_daemon_check_historical.py
+  - tests/test_daemon_checkpoint.py
   - tests/test_daemon_claude_interactive_backend.py
   - tests/test_daemon_claude_p_background_guard.py
   - tests/test_daemon_claude_p_submanual.py

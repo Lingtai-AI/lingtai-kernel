@@ -377,3 +377,37 @@ duplicate catalog entry, a missing routing-table row, wrong frontmatter, or a
 child grown past 90 lines — the submanual must route agents to the installed
 CLI's live help (`qwen --version`, `qwen --help`, no subcommand), never become
 a maintained flag catalog.
+
+<a id="behavior-d008"></a>
+## Behavior D008: Active common-MCP CLI checkpoint and parent correction
+
+**Given** a detached external CLI run is still live and its exact launch path
+mounts `daemon_common` (`claude-p`/`claude-code`, Codex, OpenCode, Qwen, or
+Kimi).
+
+**When** the parent calls `daemon.ask`, and the daemon later calls the strict
+`checkpoint` tool at a useful boundary.
+
+**Then** the parent call returns `status="queued"`, `delivery="checkpoint"`,
+and an opaque `message_id`; one RunDir transaction increments/stores the
+checkpoint, drains that ID-bearing correction once, appends an event, and
+touches heartbeat; the tool response returns the message; `daemon.check`
+projects the latest checkpoint plus only a pending count; a unique nonterminal
+system event wakes the parent; terminal state, result, receipt, and `finish`
+requirements remain unchanged. A backend without the common-MCP loader stays
+`busy` while active. A wake-publication failure reports that the checkpoint was
+recorded and still returns the drained message rather than hiding it.
+
+**Guarded by:**
+`CONTRACT.md#3-daemon_common-provides-cooperative-checkpoints-and-terminal-completion`
+
+**Verification:** `tests/test_daemon_checkpoint.py` and
+`tests/test_daemon_run_dir.py::test_checkpoint_inbox_backfills_pre_checkpoint_live_state`.
+
+### Pass / Fail
+Pass when the supported/unsupported matrix, drain-once acknowledgement,
+nonterminal wake, trust/bounds/live gates, old-state compatibility, local
+LingTai surface, and unchanged terminal fields all hold. Fail on chat-style or
+preemptive delivery, message redelivery/loss, a terminal checkpoint, a false
+backend capability claim, or any checkpoint that satisfies or mutates the
+terminal completion receipt.

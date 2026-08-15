@@ -28,6 +28,10 @@ from lingtai.kernel.token_ledger import (
 )
 
 
+_MAX_CHECKPOINT_MESSAGE_CHARS = 50_000
+_MAX_PENDING_CHECKPOINT_MESSAGES = 20
+
+
 @contextmanager
 def _exclusive_state_lock(lock_path: Path):
     """Hold the cross-process exclusive lock on one ``.daemon-state.lock`` file.
@@ -204,6 +208,9 @@ class DaemonRunDir:
             "terminal_notification_claim": None,
             "terminal_notification_receipt": None,
             "pending_followups": [],
+            "checkpoint_sequence": 0,
+            "latest_checkpoint": None,
+            "pending_checkpoint_messages": [],
             "child_pid": None,
             "child_pgid": None,
             "child_start_identity": None,
@@ -622,6 +629,94 @@ class DaemonRunDir:
             self._state["pending_followups"] = []
             self._atomic_write_json(self.daemon_json_path, self._state)
         return "\n\n".join(messages) or None
+
+    def enqueue_checkpoint_message(self, message: str) -> str | None:
+        """Queue one ID-bound parent message for the worker's next checkpoint."""
+        if not isinstance(message, str) or not message.strip():
+            return None
+        if len(message) > _MAX_CHECKPOINT_MESSAGE_CHARS:
+            raise ValueError(
+                f"checkpoint message exceeds {_MAX_CHECKPOINT_MESSAGE_CHARS} characters"
+            )
+        from lingtai.kernel.daemon_supervisor.manifest import redact_durable_value
+
+        safe_message = self._durable_value(
+            redact_durable_value(message, field="checkpoint_message")
+        )
+        with self._state_transaction():
+            if self._state.get("state") not in {"running", "active"}:
+                return None
+            queue = self._state.get("pending_checkpoint_messages")
+            if not isinstance(queue, list):
+                queue = []
+                self._state["pending_checkpoint_messages"] = queue
+            if len(queue) >= _MAX_PENDING_CHECKPOINT_MESSAGES:
+                raise RuntimeError("checkpoint message inbox is full")
+            message_id = f"msg-{secrets.token_hex(8)}"
+            queue.append({
+                "id": message_id,
+                "message": safe_message,
+                "queued_at": self._now_iso(),
+            })
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            return message_id
+
+    def record_checkpoint(self, payload: dict) -> dict:
+        """Persist one live checkpoint and atomically acknowledge its inbox."""
+        if not isinstance(payload, dict):
+            raise ValueError("checkpoint payload must be an object")
+        from lingtai.kernel.daemon_supervisor.manifest import redact_durable_event_fields
+
+        safe_payload = self._durable_value(redact_durable_event_fields(payload))
+        with self._state_transaction():
+            if self._state.get("state") not in {"running", "active"}:
+                raise RuntimeError(
+                    f"daemon checkpoint requires a live run (state={self._state.get('state')!r})"
+                )
+            raw_sequence = self._state.get("checkpoint_sequence", 0)
+            sequence = raw_sequence + 1 if isinstance(raw_sequence, int) else 1
+            queue = self._state.get("pending_checkpoint_messages")
+            valid_messages = [
+                {"id": item["id"], "message": item["message"]}
+                for item in (queue if isinstance(queue, list) else [])
+                if isinstance(item, dict)
+                and isinstance(item.get("id"), str)
+                and item.get("id")
+                and isinstance(item.get("message"), str)
+                and item.get("message")
+            ]
+            checkpoint = {
+                "sequence": sequence,
+                "at": self._now_iso(),
+                **safe_payload,
+                "delivered_message_ids": [item["id"] for item in valid_messages],
+            }
+            self._state["checkpoint_sequence"] = sequence
+            self._state["latest_checkpoint"] = checkpoint
+            self._state["pending_checkpoint_messages"] = []
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            recorded = {"checkpoint": checkpoint, "messages": valid_messages}
+            try:
+                self._append_jsonl(
+                    self.events_path,
+                    {"event": "daemon_checkpoint", "ts": checkpoint["at"], **checkpoint},
+                )
+            except Exception as exc:
+                recorded["post_record_failure"] = {
+                    "operation": "checkpoint event append",
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+                return recorded
+            try:
+                self.heartbeat_path.touch()
+            except Exception as exc:
+                recorded["post_record_failure"] = {
+                    "operation": "checkpoint heartbeat touch",
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            return recorded
 
     def set_session_id(self, key: str, value: str, *, overwrite: bool = True) -> bool:
         """Persist a backend resume id into daemon.json under *key*.
