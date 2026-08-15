@@ -789,7 +789,7 @@ def test_real_manager_handle_emanate_capsule_and_fresh_active_control(tmp_path, 
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
     run_dir = mgr._emanations[em_id]["run_dir"]
-    _poll_until(lambda: _disk_state(run_dir).get("owner") == "supervisor", timeout=10)
+    _poll_until(lambda: _disk_state(run_dir).get("supervisor_pid"), timeout=10)
 
     # A fresh manager resolves the exact run directory, checks supervisor
     # identity, and submits control without adopting the process.
@@ -948,7 +948,7 @@ def test_real_manager_parent_interpreter_exit_keeps_supervisor_owner(tmp_path, m
         if _disk_state(DaemonRunDir.attach(run_path)).get("state") == "done" else None,
         timeout=20,
     )
-    assert state["owner"] == "supervisor"
+    assert state["owner"] == "manager"
     assert (run_path / "result.txt").is_file()
     assert "PARENT_EXIT_INLINE_SENTINEL" not in (run_path / "supervisor_manifest.json").read_text()
 
@@ -1266,7 +1266,6 @@ def _run_legacy_direct_popen_cleanup_probe(cleanup: str) -> dict:
             "llm": {{"model": "fake-model"}},
         }}
         host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
-        host._max_emanations = 1
         host._ask_pool = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="legacy-popen-regression"
         )
@@ -1524,7 +1523,7 @@ def _wait_exact_process_gone(pid: int, identity: str | None):
 
 def _assert_detached_interactive_identity(state: dict) -> None:
     # Check the durable execution/child identity chain from outside the host.
-    assert state["owner"] == "supervisor"
+    assert state["owner"] == "manager"
     assert isinstance(state["supervisor_pid"], int)
     assert state["supervisor_start_identity"]
     assert state["execution_registration"] == "registered"

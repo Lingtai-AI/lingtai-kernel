@@ -435,7 +435,7 @@ def materialize_active_preset(
 
     - **Per-key override** (any capability the preset *also* enables):
       init.json's kwargs win key-by-key over the preset's — e.g. init.json's
-      ``daemon.max_emanations`` survives a preset that also enables daemon
+      ``daemon.manager_pool_size`` survives a preset that also enables daemon
       with a different ceiling.
     - **Core-default carry-forward** (capabilities the preset *omits*): for
       capability names in ``core_defaults`` — the always-on floor
@@ -443,7 +443,7 @@ def materialize_active_preset(
       ``read``/``write``/``edit``/``glob``/``grep``) — init.json's kwargs are
       carried into the materialized manifest even when the preset never
       mentions the capability. Without this, a preset that omits ``daemon``
-      drops init.json's ``daemon.max_emanations``, and ``apply_core_defaults``
+      drops init.json's ``daemon.manager_pool_size``, and ``apply_core_defaults``
       later re-adds ``daemon={}`` (losing the override). Non-core optional
       capabilities (``vision``/``web_search``/...) the preset omits are NOT
       carried — that omission is the swap.

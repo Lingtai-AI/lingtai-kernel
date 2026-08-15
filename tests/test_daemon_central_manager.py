@@ -321,7 +321,7 @@ def test_central_manager_queues_until_worker_frees(tmp_path, monkeypatch):
 def test_central_manager_dispatches_high_concurrency_without_waiting_for_queued_pid(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path, ["file", "daemon"])
     _enable_detached_fake_llm(monkeypatch, agent, sleep_s=1.0)
-    manager = DaemonManager(agent, manager_pool_size=1, manager_threshold=0)
+    manager = DaemonManager(agent, manager_pool_size=1)
 
     try:
         start = time.monotonic()
@@ -409,7 +409,7 @@ def test_parent_restart_does_not_reap_active_manager_owned_run(tmp_path):
 def test_central_manager_cli_route_dispatches_without_waiting_for_queued_pid(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path, ["file", "daemon"])
     _install_fake_opencode(tmp_path, monkeypatch, sleep_s=1.0)
-    manager = DaemonManager(agent, manager_pool_size=1, manager_threshold=0)
+    manager = DaemonManager(agent, manager_pool_size=1)
 
     try:
         start = time.monotonic()
@@ -449,7 +449,7 @@ def test_central_manager_cli_route_dispatches_without_waiting_for_queued_pid(tmp
 def test_default_disabled_routing_uses_legacy_spawn_adapter(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path, ["file", "daemon"])
     records = install_fake_detached_owner(monkeypatch)
-    manager = DaemonManager(agent, manager_pool_size=0, manager_threshold=0)
+    manager = DaemonManager(agent, manager_pool_size=0)
 
     result = manager._handle_emanate([
         {"task": "legacy detached", "tools": ["file"]},
@@ -460,7 +460,7 @@ def test_default_disabled_routing_uses_legacy_spawn_adapter(tmp_path, monkeypatc
     assert not (agent._working_dir / MANAGER_DIR / "queue").exists()
 
 
-def test_central_manager_defaults_pool_100_threshold_50(tmp_path):
+def test_central_manager_defaults_pool_100_all_batch_sizes(tmp_path):
     agent = SimpleNamespace(
         service=SimpleNamespace(model="mock"),
         _working_dir=tmp_path / "agent",
@@ -469,10 +469,9 @@ def test_central_manager_defaults_pool_100_threshold_50(tmp_path):
     manager = DaemonManager(agent)
 
     assert manager._manager_pool_size == 100
-    assert manager._manager_threshold == 50
-    # small batch stays on the classic path; high-concurrency batch routes through manager
-    assert manager._should_use_central_daemon_manager(50) is False
-    assert manager._should_use_central_daemon_manager(51) is True
+    assert manager._should_use_central_daemon_manager(1) is (os.name == "posix")
+    assert manager._should_use_central_daemon_manager(50) is (os.name == "posix")
+    assert manager._should_use_central_daemon_manager(51) is (os.name == "posix")
 
 
 def test_central_manager_orders_queue_by_enqueued_at(tmp_path, monkeypatch):

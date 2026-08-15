@@ -241,7 +241,7 @@ def test_env_rejects_non_string_value():
 def test_emanate_cli_rejects_bad_backend_options(tmp_path):
     """A single invalid backend_options spec refuses the whole batch
     with a tool-level error mentioning the offending index."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     result = mgr.handle({
         "action": "emanate",
@@ -259,7 +259,7 @@ def test_emanate_cli_rejects_bad_backend_options(tmp_path):
 
 def test_emanate_cli_persists_resolved_options(tmp_path, monkeypatch):
     """Detached manifest persists and hands resolved user/harness argv to its owner."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
@@ -296,7 +296,7 @@ def test_emanate_cli_persists_resolved_options(tmp_path, monkeypatch):
 
 def test_emanate_cli_no_options_omits_fields(tmp_path, monkeypatch):
     """No backend_options omits user fields in durable detached state."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
@@ -325,7 +325,7 @@ def test_emanate_cli_no_options_omits_fields(tmp_path, monkeypatch):
 def test_emanate_cli_persists_and_hands_off_env_overlay(tmp_path, monkeypatch):
     """The `env` overlay survives to durable state and reaches the detached
     owner through the one-shot capsule — never as an argv token."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
@@ -369,7 +369,7 @@ def test_emanate_cli_persists_and_hands_off_env_overlay(tmp_path, monkeypatch):
 
 def test_emanate_cli_rejects_bad_env_overlay(tmp_path):
     """A malformed `env` object refuses the whole batch before any spawn."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     result = mgr.handle({
         "action": "emanate",
@@ -389,7 +389,7 @@ def test_emanate_cli_rejects_bad_env_overlay(tmp_path):
 def test_lingtai_backend_ignores_env_overlay(tmp_path):
     """The lingtai backend spawns no CLI, so an `env` overlay is ignored
     rather than validated — matching today's backend_options behavior."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
 
     mock_session = MagicMock()
@@ -416,7 +416,7 @@ def test_lingtai_backend_ignores_env_overlay(tmp_path):
 def test_lingtai_backend_ignores_backend_options(tmp_path):
     """The lingtai backend has no CLI process — backend_options must be
     silently ignored, never raised against the schema."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
 
     # Force preset path off and mock create_session so the worker is a no-op.
@@ -445,7 +445,7 @@ def test_lingtai_backend_ignores_backend_options(tmp_path):
 
 def test_unknown_backend_falls_back_to_lingtai_path(tmp_path, monkeypatch):
     """Unknown backend is normalized to the detached LingTai execution path."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
@@ -468,7 +468,7 @@ def test_unknown_backend_falls_back_to_lingtai_path(tmp_path, monkeypatch):
 def test_claude_code_cmd_appends_backend_argv_before_task(tmp_path):
     """The Claude Code runner must put backend_argv after the required
     infrastructure flags and immediately before the task positional."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
 
     captured_cmd: list[list[str]] = []
@@ -524,7 +524,7 @@ def test_claude_code_cmd_appends_backend_argv_before_task(tmp_path):
 def test_claude_code_spawn_env_carries_backend_env_overlay(tmp_path):
     """`backend_options.env` reaches the spawned Claude subprocess as an
     environment variable, never as an argv token."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     port = _OneShotRecordingPort(lines=(
         '{"type":"system","subtype":"init","session_id":"sess-env"}\n',
@@ -556,7 +556,7 @@ def test_claude_code_spawn_env_carries_backend_env_overlay(tmp_path):
 
 def test_claude_code_spawn_env_unchanged_without_overlay(tmp_path):
     """No `env` overlay leaves the sanitized Claude spawn env untouched."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     port = _OneShotRecordingPort(lines=(
         '{"type":"result","subtype":"success","is_error":false,'
@@ -582,7 +582,7 @@ def test_claude_code_spawn_env_unchanged_without_overlay(tmp_path):
 
 
 def test_codex_cmd_appends_backend_argv_before_task(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
 
     captured_cmd: list[list[str]] = []
@@ -761,7 +761,7 @@ def test_normalize_backend_aliases_only_true_aliases():
 
 
 def test_mimocode_alias_dispatches_to_canonical_backend(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
@@ -777,7 +777,7 @@ def test_mimocode_alias_dispatches_to_canonical_backend(tmp_path, monkeypatch):
 
 
 def test_cli_contexts_keep_per_task_argv_and_passive_mcp(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     with patch.object(
@@ -829,7 +829,7 @@ def test_cli_contexts_keep_per_task_argv_and_passive_mcp(tmp_path, monkeypatch):
 
 
 def test_mimocode_cmd_appends_backend_argv_before_prompt(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     captured_cmd: list[list[str]] = []
 
@@ -870,7 +870,7 @@ def test_mimocode_cmd_appends_backend_argv_before_prompt(tmp_path):
 
 
 def test_qwen_code_cmd_appends_backend_argv_before_prompt(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     captured_cmd: list[list[str]] = []
 
@@ -908,7 +908,7 @@ def test_qwen_code_cmd_appends_backend_argv_before_prompt(tmp_path):
 
 
 def test_qwen_initial_run_uses_injected_port_without_local_deadline(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     port = _OneShotRecordingPort(lines=("qwen done\n", "\n"))
     mgr._process_port = port
@@ -935,7 +935,7 @@ def test_qwen_initial_run_uses_injected_port_without_local_deadline(tmp_path):
 
 
 def test_kimicode_initial_run_uses_injected_port_and_private_environment(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     port = _OneShotRecordingPort(lines=("kimi done\n",))
     mgr._process_port = port
@@ -973,7 +973,7 @@ def test_kimicode_initial_run_uses_injected_port_and_private_environment(tmp_pat
 def test_one_shot_cancellation_uses_port_termination_attribution(
     tmp_path, monkeypatch, runner, backend, label,
 ):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     cancel_event = threading.Event()
     timeout_event = threading.Event()
@@ -1005,7 +1005,7 @@ def test_one_shot_cancellation_uses_port_termination_attribution(
 
 
 def test_qwen_code_rejects_harness_owned_backend_options(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
 
     result = mgr.handle({
@@ -1021,7 +1021,7 @@ def test_qwen_code_rejects_harness_owned_backend_options(tmp_path):
 
 
 def test_qwen_code_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
@@ -1048,7 +1048,7 @@ def test_qwen_code_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("backend", ["kimi", "kimicode"])
 def test_kimicode_alias_and_canonical_dispatch_to_backend(tmp_path, monkeypatch, backend):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
@@ -1065,7 +1065,7 @@ def test_kimicode_alias_and_canonical_dispatch_to_backend(tmp_path, monkeypatch,
 
 
 def test_kimicode_cmd_appends_backend_argv_before_owned_flags(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     captured_cmd: list[list[str]] = []
     captured_env: list[dict] = []
@@ -1109,7 +1109,7 @@ def test_kimicode_cmd_appends_backend_argv_before_owned_flags(tmp_path):
 
 
 def test_kimicode_run_env_defaults_and_home(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     captured_env: list[dict] = []
 
@@ -1159,7 +1159,7 @@ def test_kimicode_run_env_defaults_and_home(tmp_path, monkeypatch):
 
 
 def test_kimicode_run_env_respects_existing_operator_values(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     captured_env: list[dict] = []
 
@@ -1210,7 +1210,7 @@ def test_kimicode_run_env_api_key_fallback_sources(
     """When ``KIMICODE_API_KEY`` is absent, the next source in the fallback
     order (``KIMI_API_KEY`` then ``MOONSHOT_API_KEY``) maps onto the canonical
     ``KIMI_MODEL_API_KEY``."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     captured_env: list[dict] = []
 
@@ -1253,7 +1253,7 @@ def test_kimicode_run_env_api_key_fallback_sources(
 def test_kimicode_run_env_api_key_fallback_precedence(tmp_path, monkeypatch):
     """When multiple source keys are present, the fallback order is honored:
     ``KIMICODE_API_KEY`` beats ``KIMI_API_KEY`` beats ``MOONSHOT_API_KEY``."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     captured_env: list[dict] = []
 
@@ -1297,7 +1297,7 @@ def test_kimicode_in_common_mcp_loading_set():
 
 
 def test_kimicode_writes_run_private_mcp_json_for_common_and_parent_mcp(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
@@ -1348,7 +1348,7 @@ def test_kimicode_writes_run_private_mcp_json_for_common_and_parent_mcp(tmp_path
 
 
 def test_kimicode_missing_completion_signal_prevents_done(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     run_dir = make_daemon_run_dir(
         agent,
@@ -1390,7 +1390,7 @@ def test_kimicode_missing_completion_signal_prevents_done(tmp_path):
 
 @pytest.mark.parametrize("bad_flag", ["prompt", "output-format", "yolo", "session", "continue"])
 def test_kimicode_rejects_harness_owned_backend_options(tmp_path, bad_flag):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
 
     result = mgr.handle({
@@ -1406,7 +1406,7 @@ def test_kimicode_rejects_harness_owned_backend_options(tmp_path, bad_flag):
 
 
 def test_kimicode_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
@@ -1433,7 +1433,7 @@ def test_kimicode_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("backend", ["omp", "oh-my-pi"])
 def test_oh_my_pi_alias_and_canonical_dispatch_to_backend(tmp_path, monkeypatch, backend):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
@@ -1449,7 +1449,7 @@ def test_oh_my_pi_alias_and_canonical_dispatch_to_backend(tmp_path, monkeypatch,
 
 
 def test_oh_my_pi_cmd_includes_mode_json_and_session_id_from_header(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     captured_cmd: list[list[str]] = []
 
@@ -1498,7 +1498,7 @@ def test_oh_my_pi_cmd_includes_mode_json_and_session_id_from_header(tmp_path):
 
 
 def test_oh_my_pi_ask_resume_uses_session_flag(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     captured_cmd: list[list[str]] = []
 
@@ -1551,7 +1551,7 @@ def test_oh_my_pi_ask_resume_uses_session_flag(tmp_path):
 
 
 def test_oh_my_pi_ask_before_session_id_returns_initializing_error(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
 
     run_dir = make_daemon_run_dir(
@@ -1586,7 +1586,7 @@ def test_oh_my_pi_ask_before_session_id_returns_initializing_error(tmp_path):
 
 
 def test_oh_my_pi_rejects_harness_owned_backend_options(tmp_path):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
 
     for flag, key, value in (

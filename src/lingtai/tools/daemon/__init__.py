@@ -9,7 +9,7 @@ system notification, so the parent can dispatch and go idle without polling.
 
 Usage:
     Agent(capabilities=["daemon"])
-    Agent(capabilities={"daemon": {"max_emanations": 1000}})
+    Agent(capabilities={"daemon": {"manager_pool_size": 100}})
 """
 from __future__ import annotations
 
@@ -138,11 +138,13 @@ DEFAULT_MAX_TURNS = 5000
 # Per-agent daemon capability config, mirroring the sibling task_card
 # capability's ``<workdir>/taskcard/taskcard.json`` pattern: this capability's
 # own config lives at ``<workdir>/daemon/daemon.json``. Today it supports a
-# single ``max_turns`` field: a configured positive integer becomes the parent
-# ceiling (and therefore the emanation default) when ``setup()`` is called
-# without an explicit ``max_turns``. A missing file, a malformed/undecodable
-# file, or an invalid field all fall back to ``DEFAULT_MAX_TURNS``, so agents
-# without a config file behave exactly as before.
+# ``max_turns`` and ``manager_pool_size`` fields. A configured positive
+# ``max_turns`` becomes the parent ceiling (and therefore the emanation default)
+# when ``setup()`` is called without an explicit ``max_turns``. The
+# ``manager_pool_size`` field caps concurrent central-manager execution
+# workers. A missing file, a malformed/undecodable file, or an invalid field
+# falls back independently, so agents without a config file behave exactly as
+# before.
 _DAEMON_CONFIG_DIR = "daemon"
 _CONFIG_FILENAME = "daemon.json"
 
@@ -152,10 +154,9 @@ class _Config(NamedTuple):
 
     max_turns: int
     manager_pool_size: int
-    manager_threshold: int
 
 
-_BUILTIN_CONFIG = _Config(DEFAULT_MAX_TURNS, 100, 50)
+_BUILTIN_CONFIG = _Config(DEFAULT_MAX_TURNS, 100)
 
 
 def _config_max_turns(value: Any) -> int:
@@ -187,9 +188,6 @@ def _load_config(agent_working_dir: str | os.PathLike[str]) -> _Config:
         _config_max_turns(data.get("max_turns")),
         _config_nonnegative_int(
             data.get("manager_pool_size"), _BUILTIN_CONFIG.manager_pool_size
-        ),
-        _config_nonnegative_int(
-            data.get("manager_threshold"), _BUILTIN_CONFIG.manager_threshold
         ),
     )
 
@@ -1333,7 +1331,7 @@ class _ToolCollector:
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows status; daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. High-concurrency batches route through the central daemon manager when configured: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children, `manager_threshold` (env LINGTAI_DAEMON_MANAGER_THRESHOLD, default 50) is the batch size that triggers the manager queue, and `max_emanations` (default 1000) caps concurrent emanations; below the threshold the classic per-run supervisor path runs unchanged. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
+    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows status; daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. POSIX daemon batches route through the central daemon manager by default: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children for every batch size. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -1467,22 +1465,17 @@ class DaemonManager:
     # callers/configs.
     _NOTIFY_MIN_LEN = 20
 
-    def __init__(self, agent: "Agent", max_emanations: int = 1000,
+    def __init__(self, agent: "Agent",
                  max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
                  notify_threshold: int = 20,
                  manager_pool_size: int = 100,
-                 manager_threshold: int = 50,
                  *, process_port: DaemonProcessPort | None = None,
                  interactive_terminal_port: InteractiveTerminalPort | None = None):
         self._agent = agent
-        self._max_emanations = max_emanations
         self._max_turns = max_turns
         self._timeout = timeout
         self._manager_pool_size = self._env_nonnegative_int(
             "LINGTAI_DAEMON_MANAGER_POOL_SIZE", manager_pool_size,
-        )
-        self._manager_threshold = self._env_nonnegative_int(
-            "LINGTAI_DAEMON_MANAGER_THRESHOLD", manager_threshold,
         )
         self._default_model = agent.service.model
         self._notify_threshold = notify_threshold
@@ -1545,7 +1538,7 @@ class DaemonManager:
         # (cli_output events, last_output, follow-up completion notification).
         # Workers are submitted lazily so the pool is only spun up on first use.
         self._ask_pool = ThreadPoolExecutor(
-            max_workers=max(1, max_emanations),
+            max_workers=max(1, self._manager_pool_size),
             thread_name_prefix="daemon-cli-ask",
         )
         self._reap_dead_parent_daemon_records()
@@ -3199,7 +3192,6 @@ class DaemonManager:
         return (
             os.name == "posix"
             and self._manager_pool_size > 0
-            and batch_count > self._manager_threshold
         )
 
     def _enqueue_central_daemon_manager_run(
@@ -5848,7 +5840,7 @@ class DaemonManager:
         return {
             "emanations": emanations,
             "running": running,
-            "max_emanations": self._max_emanations,
+            "manager_pool_size": self._manager_pool_size,
             "history_included": include_done,
             "index": "daemon_run_dirs",
             "total_before_filter": total_before_filter,
@@ -8551,7 +8543,7 @@ class DaemonManager:
         except Exception as e:  # pragma: no cover - defensive teardown
             errors.append(f"shutdown ask pool: {e}")
         self._ask_pool = ThreadPoolExecutor(
-            max_workers=max(1, self._max_emanations),
+            max_workers=max(1, self._manager_pool_size),
             thread_name_prefix="daemon-cli-ask",
         )
 
@@ -8933,9 +8925,10 @@ class DaemonManager:
 assert _FAMILY_CHECK_LAST_MAX == DaemonManager._CHECK_LAST_MAX
 
 
-def setup(agent: "Agent", max_emanations: int = 1000,
+def setup(agent: "Agent",
           max_turns: int | None = None, timeout: float = 3600.0,
           notify_threshold: int = 20,
+          manager_pool_size: int | None = None,
           process_port: DaemonProcessPort | None = None,
           interactive_terminal_port: InteractiveTerminalPort | None = None) -> DaemonManager:
     """Set up the daemon capability on an agent.
@@ -8945,11 +8938,15 @@ def setup(agent: "Agent", max_emanations: int = 1000,
     resolves from the agent's per-agent config file
     (``<workdir>/daemon/daemon.json``, ``max_turns`` field) and falls back to
     ``DEFAULT_MAX_TURNS`` (5000) when the file is missing or the value is
-    invalid. An explicit ``max_turns`` always wins over the config file.
+    invalid. ``manager_pool_size`` follows the same explicit-argument,
+    config-file, built-in fallback order. Explicit capability kwargs always
+    win over the config file.
     """
     config = _load_config(agent._working_dir)
     if max_turns is None:
         max_turns = config.max_turns
+    if manager_pool_size is None:
+        manager_pool_size = config.manager_pool_size
     if process_port is None:
         if os.name == "posix":
             process_port = PosixDaemonProcessPort()
@@ -8968,11 +8965,9 @@ def setup(agent: "Agent", max_emanations: int = 1000,
             PosixInteractiveTerminalAdapter,
         )
         interactive_terminal_port = PosixInteractiveTerminalAdapter()
-    mgr = DaemonManager(agent, max_emanations=max_emanations,
-                        max_turns=max_turns, timeout=timeout,
+    mgr = DaemonManager(agent, max_turns=max_turns, timeout=timeout,
                         notify_threshold=notify_threshold,
-                        manager_pool_size=config.manager_pool_size,
-                        manager_threshold=config.manager_threshold,
+                        manager_pool_size=manager_pool_size,
                         process_port=process_port,
                         interactive_terminal_port=interactive_terminal_port)
     schema = get_schema()

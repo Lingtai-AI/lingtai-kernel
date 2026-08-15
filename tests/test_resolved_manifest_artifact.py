@@ -96,7 +96,7 @@ def test_redact_secrets_drops_secret_keys_keeps_public():
             "feishu": {"appSecret": "app-secret", "app_id": "cli_x"},
             "imap": {"accounts": [{"host": "h", "password": "hunter2",
                                    "auth_token": "tok-abc"}]},
-            "daemon": {"max_emanations": 30, "max_tokens": 4096},
+            "daemon": {"manager_pool_size": 30, "max_tokens": 4096},
         },
         "secretary": {"enabled": True},
     }
@@ -116,7 +116,7 @@ def test_redact_secrets_drops_secret_keys_keeps_public():
     account = caps["imap"]["accounts"][0]
     assert account == {"host": "h"}  # password + auth_token dropped
     # token-LIKE keys go, but plural "tokens" (e.g. max_tokens) is not a secret
-    assert caps["daemon"] == {"max_emanations": 30, "max_tokens": 4096}
+    assert caps["daemon"] == {"manager_pool_size": 30, "max_tokens": 4096}
     # non-secret words that merely contain "secret" must survive
     assert out["secretary"] == {"enabled": True}
     # input untouched (pure function)
@@ -181,7 +181,7 @@ def test_artifact_merges_init_extras_per_materialize_semantics(tmp_path, monkeyp
                 "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
                         "api_key": None, "api_key_env": "GEMINI_API_KEY"},
                 "capabilities": {"skills": {"paths": ["~/skills/curated"]},
-                                 "daemon": {"max_emanations": 10}},
+                                 "daemon": {"manager_pool_size": 10}},
             },
         },
     })
@@ -190,7 +190,7 @@ def test_artifact_merges_init_extras_per_materialize_semantics(tmp_path, monkeyp
         tmp_path, active_preset=str(plib / "smart.json"),
         manifest_extra={"capabilities": {
             "skills": {"paths": ["~/skills/mine", "~/skills/curated"]},
-            "daemon": {"max_emanations": 30},
+            "daemon": {"manager_pool_size": 30},
         }},
     )
     a = _make_probe_agent(wd)
@@ -199,8 +199,8 @@ def test_artifact_merges_init_extras_per_materialize_semantics(tmp_path, monkeyp
     caps = _read_artifact(wd)["manifest"]["capabilities"]
     # preset paths first, init extras appended, duplicates dropped
     assert caps["skills"]["paths"] == ["~/skills/curated", "~/skills/mine"]
-    # per-key override: init.json wins for daemon.max_emanations
-    assert caps["daemon"]["max_emanations"] == 30
+    # per-key override: init.json wins for daemon.manager_pool_size
+    assert caps["daemon"]["manager_pool_size"] == 30
 
 
 def test_artifact_redacts_api_key_like_secrets(tmp_path, monkeypatch):

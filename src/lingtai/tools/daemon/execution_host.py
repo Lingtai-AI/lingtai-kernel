@@ -93,6 +93,9 @@ class DetachedDaemonExecutionHost:
         self._agent._mcp_tool_names = set()
         self._max_turns = int(manifest["max_turns"])
         self._timeout = float(manifest["timeout_s"])
+        self._manager_pool_size = DaemonManager._env_nonnegative_int(
+            "LINGTAI_DAEMON_MANAGER_POOL_SIZE", 100,
+        )
         self._default_model = self._agent.service.model
         self._notify_threshold = 20
         self._emanations = {}

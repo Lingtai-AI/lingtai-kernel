@@ -322,18 +322,11 @@ class _ReadOnlyDaemonView:
     """
 
     def __init__(self, agent: _CliDaemonAgent) -> None:
-        import inspect
-
         from lingtai.tools.daemon import DaemonManager
 
         self._agent = agent
         self._emanations: dict = {}
-        # ``_handle_list`` reports the concurrency ceiling as a display field.
-        # Taken from the constructor's own default rather than restated, so it
-        # cannot drift from what a live agent's manager would report.
-        self._max_emanations = (
-            inspect.signature(DaemonManager.__init__).parameters["max_emanations"].default
-        )
+        self._manager_pool_size = 100
         self._manager_type = DaemonManager
         #: Run directories whose ``daemon.json`` the engine would have rewritten
         #: (missing, unparseable, or written by an older ``data_version``).

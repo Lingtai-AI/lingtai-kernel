@@ -164,20 +164,21 @@ def test_daemon_registers_tool(tmp_path):
     assert "daemon" in tool_names
 
 
-def test_daemon_default_max_emanations_is_100(tmp_path):
-    """Default concurrency ceiling is 100 when init.json gives no override."""
+def test_daemon_default_manager_pool_size_is_100(tmp_path):
+    """Default worker concurrency ceiling is 100 when config gives no override."""
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
-    assert mgr._max_emanations == 100
-    assert mgr._handle_list()["max_emanations"] == 100
+    assert mgr._manager_pool_size == 100
+    assert mgr._handle_list()["manager_pool_size"] == 100
 
 
-def test_daemon_max_emanations_override_reaches_manager(tmp_path):
-    """A kwargs override on the daemon capability reaches DaemonManager."""
-    agent = _make_agent(tmp_path, {"daemon": {"max_emanations": 30}})
+def test_daemon_manager_pool_size_config_reaches_manager(tmp_path):
+    """The per-agent daemon config reaches DaemonManager."""
+    _write_daemon_config(tmp_path / "daemon-agent", {"manager_pool_size": 30})
+    agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
-    assert mgr._max_emanations == 30
-    assert mgr._handle_list()["max_emanations"] == 30
+    assert mgr._manager_pool_size == 30
+    assert mgr._handle_list()["manager_pool_size"] == 30
 
 
 # -- per-agent daemon config: <workdir>/daemon/daemon.json -----------------
@@ -251,16 +252,14 @@ def test_daemon_load_config_coercion(tmp_path):
 def test_daemon_load_config_partial_file_keeps_manager_defaults(tmp_path):
     """A partial daemon.json (e.g. only max_turns) keeps the built-in manager
     defaults instead of silently disabling the default-enabled manager."""
-    # No file at all -> built-in defaults (manager pool 100, threshold 50).
+    # No file at all -> built-in defaults (manager pool 100).
     cfg = daemon_tool._load_config(tmp_path)
     assert cfg.manager_pool_size == 100
-    assert cfg.manager_threshold == 50
     # Existing file that only sets max_turns must NOT fall back to pool 0.
     _write_daemon_config(tmp_path, {"max_turns": 42})
     cfg = daemon_tool._load_config(tmp_path)
     assert cfg.max_turns == 42
     assert cfg.manager_pool_size == 100
-    assert cfg.manager_threshold == 50
     # Explicit manager_pool_size: 0 still disables the manager on purpose.
     _write_daemon_config(tmp_path, {"manager_pool_size": 0})
     assert daemon_tool._load_config(tmp_path).manager_pool_size == 0
@@ -268,8 +267,6 @@ def test_daemon_load_config_partial_file_keeps_manager_defaults(tmp_path):
     for bad in (-1, "x", 2.5, None):
         _write_daemon_config(tmp_path, {"manager_pool_size": bad})
         assert daemon_tool._load_config(tmp_path).manager_pool_size == 100, bad
-        _write_daemon_config(tmp_path, {"manager_threshold": bad})
-        assert daemon_tool._load_config(tmp_path).manager_threshold == 50, bad
 
 
 def test_daemon_setup_reaps_dead_parent_running_record(tmp_path, monkeypatch):
@@ -2599,7 +2596,7 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
     _assert_compact_daemon_id(em_id)
     run_dir = mgr._emanations[em_id]["run_dir"]
     state = _poll_daemon_terminal(run_dir)
-    assert state["owner"] == "supervisor"
+    assert state["owner"] == "manager"
     assert "Task done" in run_dir.result_path.read_text(encoding="utf-8")
 
     list_result = mgr._handle_list()
@@ -2956,7 +2953,7 @@ def test_terminal_notification_not_blocked_by_prior_followup(tmp_path):
 
 def test_sequential_emanate_increments_ids(tmp_path):
     """Multiple emanate calls produce distinct compact IDs."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}, "file": {}})
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
