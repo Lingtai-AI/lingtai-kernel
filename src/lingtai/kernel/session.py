@@ -85,10 +85,16 @@ _SAFE_USAGE_EXTRA_EVENT_KEYS = {
     "codex_store",
     "codex_fallback_error_type",
     "codex_fallback_error_message",
+    # Runtime reasoning-effort evidence (issue #1197): the exact value the wire
+    # actually emitted, whether it came from the construction baseline or a
+    # process-local override, and the controller revision it was captured at.
     "claude_reasoning_effort",
     "claude_reasoning_effort_emitted",
     "claude_reasoning_effort_source",
     "claude_reasoning_effort_revision",
+    "codex_reasoning_effort",
+    "codex_reasoning_effort_source",
+    "codex_reasoning_effort_revision",
 }
 
 
@@ -237,6 +243,14 @@ class SessionManager:
         self._text_already_streamed = False
         self._intermediate_text_streamed = False
         self._message_seq = 0
+
+        # Process-local runtime reasoning-effort control (issue #1197 K1a).
+        # Owned HERE — not by a cached adapter, a module global, or the
+        # replaceable chat session — so it survives an in-process
+        # ``_rebuild_session()``. It deliberately does NOT survive a process
+        # refresh / restart / molt / suspend; durability is a separate concern.
+        # Providers with no such route leave it truthfully unavailable.
+        self._reasoning_effort = ReasoningEffortController()
 
         # Timeout pool for LLM calls
         self._timeout_pool = ThreadPoolExecutor(max_workers=1)
