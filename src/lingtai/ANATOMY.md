@@ -20,6 +20,10 @@ related_files:
   - src/lingtai/auth/ANATOMY.md
   - src/lingtai/cli.py
   - src/lingtai/cli_daemon.py
+  - src/lingtai/execution_policy/__init__.py
+  - src/lingtai/execution_policy/configured.py
+  - src/lingtai/execution_policy/registry.py
+  - src/lingtai/kernel/execution_policy/ANATOMY.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/bash/ANATOMY.md
@@ -100,6 +104,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `cli_daemon.py` | `lingtai-agent daemon emanate|list|check` — the programmatic (shell/Python/CI) skin over the daemon engine. `_CliDaemonAgent` is the minimal parent-agent facade `DaemonManager` reads (no lease, heartbeat, or agent identity), built from the agent's effective config through the canonical `init_reader.read_init`; `emanate` validates the tasks file against the tool's own emanate schema and enforces the preset allowlist and effective capability policy before previewing, then dispatches through the `DaemonFamilyDispatcher` envelope only under `--yes`; `_ReadOnlyDaemonView` binds the manager's unmodified `_handle_list`/`_handle_check` with both of its write paths (startup reconciliation, lazy daemon.json repair) removed |
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai.kernel.presets`) |
+| `execution_policy/` | Wrapper composition for versioned execution-policy adapters: explicit factory registry, first-party strict JSON configuration/health adapter, and pass-through default. The technology-neutral Port lives in `kernel/execution_policy/`. |
 | `init.jsonc` / `init_reader.py` / `init_schema.py` | Kernel canonical shape plus the one real parse → materialize → validate → resolve reader. `InitReadOutcome` reports fully-effective, ignored-field, or failed reads with typed PASS/NUDGE/BLOCKED/UNKNOWN shape evidence without rewriting user-owned init.json; `validate_init()` remains the schema validator. See `CONTRACT.md`. |
 | `venv_resolve.py` | Python venv resolution — explicit `init.json` venv → global runtime → auto-create with platform-aware interpreter selection, plus kernel-owned `.lingtai-env.json` marker check/stamp semantics for TUI and kernel callers |
 | `intrinsic_skills/` | Standalone skill bundles (manuals plus sidecar scripts/assets, e.g. the `lingtai-kernel-anatomy` checker and benchmark) copied verbatim into `.library/intrinsic/capabilities/`; see `intrinsic_skills/ANATOMY.md` for the full bundle inventory and the packaging rule its `reference/`/`assets/` levels depend on |

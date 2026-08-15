@@ -11,6 +11,7 @@ related_files:
   - src/lingtai/cli.py
   - src/lingtai/agent.py
   - src/lingtai/kernel/workdir.py
+  - src/lingtai/kernel/execution_policy/CONTRACT.md
   - src/lingtai/kernel/nudge/ANATOMY.md
   - src/lingtai/kernel/nudge/__init__.py
   - src/lingtai/kernel/nudge/init_config.py

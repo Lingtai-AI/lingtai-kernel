@@ -129,6 +129,9 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "timezone_awareness": bool,
     "pseudo_agent_subscriptions": list,
     "preset": dict,
+    # Versioned declaration for the execution-policy Port. Adapter-specific
+    # configuration is validated by the selected adapter at capability setup.
+    "execution_policy": dict,
     # Large-result hint threshold.  `current_tool_result_chars` always ranks
     # tool results over a fixed 1000-char floor into
     # `_meta.agent_meta.agent_state.current_tool_result_chars.top_results` as summarize
@@ -379,6 +382,28 @@ def validate_init(data: dict) -> list[str]:
         for key in preset:
             if key not in {"active", "default", "allowed"}:
                 warnings.append(f"unknown field in manifest.preset: {key}")
+
+    execution_policy = manifest.get("execution_policy")
+    if execution_policy:
+        api_version = execution_policy.get("api_version")
+        if isinstance(api_version, bool) or api_version != 1:
+            raise ValueError(
+                "manifest.execution_policy.api_version: expected exact integer 1"
+            )
+        adapter = execution_policy.get("adapter")
+        if adapter is not None and (
+            not isinstance(adapter, str) or not adapter
+        ):
+            raise ValueError(
+                "manifest.execution_policy.adapter: expected non-empty str"
+            )
+        if adapter == "configured":
+            for field in ("config", "health"):
+                value = execution_policy.get(field)
+                if not isinstance(value, str) or not value:
+                    raise ValueError(
+                        f"manifest.execution_policy.{field}: expected non-empty str"
+                    )
 
     for key in manifest:
         if key not in MANIFEST_KNOWN:

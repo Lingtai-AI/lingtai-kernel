@@ -438,6 +438,23 @@ def test_llm_thinking_valid_for_deepseek_responses(value):
     )
     validate_init(data)
 
+
+@pytest.mark.parametrize("provider", ["custom", "deepseek"])
+@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_llm_thinking_valid_for_seven_tier_chat_completions(provider, value):
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {
+            "provider": provider,
+            "api_compat": "openai",
+            "wire_api": "chat_completions",
+            "reasoning_effort_vocab": "seven_tier",
+            "thinking": value,
+        }
+    )
+
+    validate_init(data)
+
 @pytest.mark.parametrize("value", ["default", "ultra", 1, None])
 def test_llm_thinking_invalid_for_custom_openai_responses(value):
     data = _valid_init()
@@ -831,6 +848,41 @@ def test_preset_block_allowed_with_multiple_entries():
         "allowed": ["minimax", "zhipu", "deepseek"],
     }
     validate_init(data)  # should not raise
+
+
+def test_execution_policy_configured_declaration_is_valid():
+    data = _valid_init()
+    data["manifest"]["execution_policy"] = {
+        "api_version": 1,
+        "adapter": "configured",
+        "config": "system/execution-policy.json",
+        "health": "system/execution-policy-health.json",
+    }
+
+    validate_init(data)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        ({"api_version": 2}, "api_version"),
+        ({"api_version": 1, "adapter": ""}, "adapter"),
+        (
+            {
+                "api_version": 1,
+                "adapter": "configured",
+                "config": "system/execution-policy.json",
+            },
+            "health",
+        ),
+    ],
+)
+def test_execution_policy_invalid_declaration_fails_init(declaration, message):
+    data = _valid_init()
+    data["manifest"]["execution_policy"] = declaration
+
+    with pytest.raises(ValueError, match=message):
+        validate_init(data)
 
 
 def test_preset_block_missing_active_raises():

@@ -41,6 +41,8 @@ related_files:
   - tests/test_daemon_detached_supervisor.py
   - src/lingtai/kernel/daemon_supervisor/ANATOMY.md
   - src/lingtai/kernel/daemon_supervisor/CONTRACT.md
+  - src/lingtai/kernel/execution_policy/ANATOMY.md
+  - src/lingtai/kernel/execution_policy/CONTRACT.md
   - src/lingtai/kernel/daemon_supervisor/__init__.py
   - src/lingtai/kernel/daemon_supervisor/manifest.py
   - src/lingtai/kernel/daemon_supervisor/control.py

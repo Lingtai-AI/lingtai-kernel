@@ -1530,7 +1530,8 @@ class DaemonManager:
                  notify_threshold: int = 20,
                  manager_pool_size: int = 100,
                  *, process_port: DaemonProcessPort | None = None,
-                 interactive_terminal_port: InteractiveTerminalPort | None = None):
+                 interactive_terminal_port: InteractiveTerminalPort | None = None,
+                 execution_policy=None):
         self._agent = agent
         self._max_turns = max_turns
         self._timeout = timeout
@@ -1539,6 +1540,11 @@ class DaemonManager:
         )
         self._default_model = agent.service.model
         self._notify_threshold = notify_threshold
+        if execution_policy is None:
+            from lingtai.kernel.execution_policy import PassThroughExecutionPolicy
+
+            execution_policy = PassThroughExecutionPolicy()
+        self._execution_policy = execution_policy
         # Direct construction is a supported test/in-process composition path
         # as well as setup(). POSIX and Windows each have one production
         # process adapter; any other platform fails loudly.
@@ -4993,6 +4999,89 @@ class DaemonManager:
                     self._task_first_prompt(spec)
                 except ValueError as exc:
                     return {"status": "error", "message": f"tasks[{i}].prompt: {exc}"}
+            workload = spec.get("workload")
+            if workload is not None and (
+                not isinstance(workload, str)
+                or not workload
+                or workload != workload.strip()
+            ):
+                return {
+                    "status": "error",
+                    "message": f"tasks[{i}].workload must be a non-empty string",
+                }
+
+        # Resolve policy before backend/preset side effects. The policy sees
+        # the task responsibility, not the receiving Agent's identity. Its
+        # decision is materialized back into the existing backend/preset
+        # gates, so authorization, connectivity and capability checks remain
+        # the sole execution boundary.
+        from lingtai.kernel.execution_policy import (
+            ExecutionPolicyError,
+            ExecutionRequest,
+            PassThroughExecutionPolicy,
+        )
+
+        if not isinstance(self._execution_policy, PassThroughExecutionPolicy):
+            read_raw_preset = getattr(self._agent, "_read_preset_from_init", None)
+            try:
+                raw_preset_block = (
+                    read_raw_preset() if callable(read_raw_preset) else {}
+                )
+            except Exception:
+                raw_preset_block = {}
+            allowed_value = (
+                raw_preset_block.get("allowed")
+                if isinstance(raw_preset_block, dict) else None
+            )
+            allowed_refs = tuple(
+                item for item in (allowed_value or [])
+                if isinstance(item, str) and item
+            )
+            parent_address = str(
+                getattr(self._agent, "mail_address", None)
+                or getattr(self._agent, "_working_dir").name
+            )
+            parent_admin = getattr(self._agent, "_admin", {})
+            parent_is_admin = bool(
+                parent_admin.get("karma")
+                if isinstance(parent_admin, dict) else False
+            )
+            decided_tasks: list[dict] = []
+            decided_backends: set[str] = set()
+            for i, spec in enumerate(tasks):
+                try:
+                    decision = self._execution_policy.decide(
+                        ExecutionRequest(
+                            workload=spec.get("workload") or "worker",
+                            preset=spec.get("preset") or None,
+                            backend=backend,
+                            parent_address=parent_address,
+                            parent_is_admin=parent_is_admin,
+                            allowed_preset_refs=allowed_refs,
+                        )
+                    )
+                except ExecutionPolicyError as exc:
+                    return {
+                        "status": "error",
+                        "message": f"tasks[{i}] execution policy: {exc}",
+                    }
+                decided = dict(spec)
+                if decision.preset is None:
+                    decided.pop("preset", None)
+                else:
+                    decided["preset"] = decision.preset
+                decision_backend = _normalize_backend(decision.backend or backend)
+                decided_backends.add(decision_backend)
+                if decision.route_id is not None:
+                    decided["_execution_route_id"] = decision.route_id
+                decided_tasks.append(decided)
+            if len(decided_backends) != 1:
+                return {
+                    "status": "error",
+                    "message": "execution policy selected mixed backends for one batch",
+                }
+            tasks = decided_tasks
+            backend = decided_backends.pop()
 
         # Pre-flight: optional per-task input files. Resolve every path under
         # the parent working directory, validate UTF-8 text and the practical
@@ -5283,6 +5372,8 @@ class DaemonManager:
                             "manifest": task_files_manifest,
                             "files": task_files_rows[i],
                         },
+                        "workload": spec.get("workload") or "worker",
+                        "execution_route_id": spec.get("_execution_route_id"),
                     },
                     log_callback=self._log,
                     preset_name=resolved["name"] if resolved else None,
@@ -9453,7 +9544,8 @@ def setup(agent: "Agent",
           notify_threshold: int = 20,
           manager_pool_size: int | None = None,
           process_port: DaemonProcessPort | None = None,
-          interactive_terminal_port: InteractiveTerminalPort | None = None) -> DaemonManager:
+          interactive_terminal_port: InteractiveTerminalPort | None = None,
+          execution_policy=None) -> DaemonManager:
     """Set up the daemon capability on an agent.
 
     ``max_turns`` is the parent ceiling (and therefore the per-emanation
@@ -9488,11 +9580,33 @@ def setup(agent: "Agent",
             PosixInteractiveTerminalAdapter,
         )
         interactive_terminal_port = PosixInteractiveTerminalAdapter()
-    mgr = DaemonManager(agent, max_turns=max_turns, timeout=timeout,
+    if execution_policy is None:
+        from lingtai.execution_policy import load_execution_policy
+
+        declaration = None
+        init_path = agent._working_dir / "init.json"
+        if init_path.is_file():
+            read_init = getattr(agent, "_read_init", None)
+            if not callable(read_init):
+                raise ValueError(
+                    "daemon setup requires the canonical Agent init reader"
+                )
+            effective_init = read_init()
+            if effective_init is None:
+                raise ValueError(
+                    f"cannot load execution policy from invalid {init_path}"
+                )
+            manifest = effective_init.get("manifest")
+            if isinstance(manifest, dict):
+                declaration = manifest.get("execution_policy")
+        execution_policy = load_execution_policy(declaration, agent._working_dir)
+    mgr = DaemonManager(agent, max_emanations=max_emanations,
+                        max_turns=max_turns, timeout=timeout,
                         notify_threshold=notify_threshold,
                         manager_pool_size=manager_pool_size,
                         process_port=process_port,
-                        interactive_terminal_port=interactive_terminal_port)
+                        interactive_terminal_port=interactive_terminal_port,
+                        execution_policy=execution_policy)
     schema = get_schema()
     # The model-facing handler is the LTP v2 envelope dispatcher, not the
     # engine's legacy flat ``handle``. Still exactly one registered public

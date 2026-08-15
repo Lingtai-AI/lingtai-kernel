@@ -28,6 +28,12 @@ it does not document cross-process recovery/orphan-detection internals. For the
 broader runtime turn loop that daemon emanations mirror, use `lingtai-kernel-anatomy`
 and its runtime-loop reference.
 
+When `tasks[].workload` is available, describe the responsibility of that task,
+not the identity of the receiving Agent. Use the exact configured workload name;
+omission means `worker`. An explicit `tasks[].preset` remains an operator/model
+override and is never replaced by execution policy. Policy-selected presets still
+pass the Agent's ordinary allowlist, connectivity, and capability gates.
+
 Maintainer note: the unified daemon contract is
 `src/lingtai/tools/daemon/CONTRACT.md`. Update or explicitly re-check that
 contract when changing backend routing, selected `skills`, one-run `mcp`, native

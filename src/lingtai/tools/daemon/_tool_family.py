@@ -133,7 +133,7 @@ def _emanate_task_schema() -> dict[str, Any]:
     """One task object inside ``emanate``'s ``tasks`` array.
 
     Byte-for-byte the pre-migration nested task schema (``task``, ``tools``,
-    ``skills``, ``mcp``, ``preset``, ``backend_options``, ``prompt``,
+    ``skills``, ``mcp``, ``preset``, ``workload``, ``backend_options``, ``prompt``,
     ``context_token_limit``, ``required: ["task", "tools"]``). The nested
     object is deliberately NOT closed with ``additionalProperties: false``:
     the engine's own strict per-task validation in ``_handle_emanate`` owns
@@ -164,6 +164,10 @@ def _emanate_task_schema() -> dict[str, Any]:
             "preset": {
                 "type": "string",
                 "description": "Optional preset file path. Must be a .json/.jsonc path as returned by system(action='presets'). Do NOT use shorthand names — use the full 'name' field from the presets listing. Example: '~/.lingtai-tui/presets/saved/cheap.json'. Omit to inherit the parent's regular (non-MCP) tool surface; provide task MCP registrations separately with `mcp`.",
+            },
+            "workload": {
+                "type": "string",
+                "description": "Optional execution-policy workload class. Use the task's responsibility (for example orchestration, architecture, implementation, review, regression, worker, batch, or extraction), not the receiving Agent's identity. Omit for the backward-compatible worker class.",
             },
             "backend_options": {
                 "type": "object",
