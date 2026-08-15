@@ -154,7 +154,7 @@ def _emanate_task_schema() -> dict[str, Any]:
             "mcp": {
                 "type": "array",
                 "items": {"type": "object"},
-                "description": 'Optional one-run MCP registrations for this daemon task. Array of full MCP registration objects: {name, transport/type: stdio|http, command+args+env for stdio or url+headers for http}. The registrations are serialized into the daemon prompt as YAML; LingTai backend also starts them as task-scoped MCP clients and exposes their tools for this run. CLI backends receive the same serialized registrations as context and may load them if their runtime supports MCP. Secret env/header values are redacted in prompts.',
+                "description": 'Optional one-run MCP registrations for this daemon task. Array of full MCP registration objects: {name, transport/type: stdio|http, command+args+env for stdio or url+headers for http}. The registrations are serialized into the daemon prompt as YAML; LingTai backend also starts them as task-scoped MCP clients and exposes their tools for this run. CLI backends receive the same serialized registrations as context and may load them if their runtime supports MCP. Secret env/header values are redacted in prompts. Exposed tool names must be unique across this task: a plugin mcp.json server and a task-level `mcp` registration that expose the same tool name fail at dispatch with a duplicate-MCP-tool-name error (rename or dedupe one registration).',
             },
             "plugin": {
                 "type": "array",

@@ -232,6 +232,13 @@ surface, closing them when the run finishes. Secret `env`/`headers` values are
 redacted in prompts. Beyond the daemon-eligible, opt-in `email` intrinsic, other
 intrinsics remain unavailable to keep daemon lightweight and non-recursive.
 
+> **MCP tool-name uniqueness.** Tool names exposed by MCP registrations must be
+> unique within a run. If a plugin `mcp.json` server and a task-level `mcp`
+> registration (or two registrations of either kind) expose the same tool name,
+> dispatch fails immediately with `ValueError: duplicate MCP tool name` before any
+> work starts — rename or dedupe one of the registrations. This is by design: both
+> injection paths are live at the same time, so same-server duplicates collide.
+
 Where each backend receives its native `daemon_common` MCP config:
 
 | Backend | Injection path |

@@ -234,6 +234,12 @@ Three things to know when authoring one:
   addon-decompressed record already owns the name, the plugin's server is
   skipped and the existing record survives untouched. Same between two plugins:
   first declared wins.
+- **MCP tool names must stay unique within a daemon run.** A plugin's `mcp.json`
+  server is also injected into daemon tasks that select the plugin; if its
+  exposed tool name collides with a task-level `mcp` registration (or another
+  plugin/server), the daemon fails at dispatch with `duplicate MCP tool name` —
+  rename or dedupe one registration. This is expected: both injection paths are
+  live simultaneously.
 - **`${PLUGIN_ROOT}` and `./` paths are resolved to absolute** in the record. The
   record is a registration, not a launch spec: activating the server needs an
   `init.json` top-level `mcp` entry, and the kernel spawns from *that* entry's
