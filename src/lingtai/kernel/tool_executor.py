@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
+from . import malloc_relief
 from .llm.base import ToolCall
 from .loop_guard import LoopGuard
 from .meta_block import (
@@ -1022,6 +1023,11 @@ class ToolExecutor:
             )
         finally:
             self._current_api_call_id = previous_api_call_id
+            # A tool batch is this process's largest transient allocation, so
+            # it is the only point where returning empty heap regions could pay
+            # off. Off unless LINGTAI_DAEMON_MEMORY_RELIEF=1 — see the measured
+            # (negative) result in malloc_relief's docstring.
+            malloc_relief.relieve()
 
     def _execute_with_current_api_call_id(
         self,

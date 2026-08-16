@@ -10,22 +10,55 @@ from .logging import get_logger
 _tokenizer = None
 _backend: str = "none"
 
+
+def _find_spec_safe(name: str):
+    """``importlib.util.find_spec`` that never raises.
+
+    find_spec imports parent packages and propagates any error they raise, so
+    treat every failure as "not importable".
+    """
+    import importlib.util
+    try:
+        return importlib.util.find_spec(name)
+    except Exception:
+        return None
+
+
 def _init_tokenizer() -> None:
     global _tokenizer, _backend
     logger = get_logger()
 
-    # Try google-genai first
-    try:
-        from google.genai._common import ExperimentalWarning
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=ExperimentalWarning)
-            from google.genai.local_tokenizer import LocalTokenizer
-        _tokenizer = LocalTokenizer()
-        _backend = "gemini"
-        logger.debug("token_counter: using google-genai LocalTokenizer")
-        return
-    except (ImportError, Exception):
-        pass
+    # Try google-genai first.
+    #
+    # ``google.genai.local_tokenizer`` hard-imports ``sentencepiece`` at module
+    # scope, and sentencepiece is not a declared dependency — so on a stock
+    # install this branch always raises ModuleNotFoundError and we fall through.
+    # But by then the ``google.genai`` package import has already run, resident
+    # for the life of the process at a measured ~66MB RSS (it drags in
+    # pydantic_core, cryptography, websockets, brotli, charset_normalizer).
+    # Every process that counts a single token paid that — including daemon
+    # execution children running an entirely different provider.
+    #
+    # Probe for sentencepiece with find_spec (no import, no cost) first. When it
+    # is absent the google branch cannot succeed, so skipping it is exactly
+    # equivalent to running it, minus the memory.
+    if _find_spec_safe("sentencepiece") is None:
+        logger.debug(
+            "token_counter: sentencepiece absent, skipping google-genai "
+            "LocalTokenizer (its import cannot succeed)"
+        )
+    else:
+        try:
+            from google.genai._common import ExperimentalWarning
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=ExperimentalWarning)
+                from google.genai.local_tokenizer import LocalTokenizer
+            _tokenizer = LocalTokenizer()
+            _backend = "gemini"
+            logger.debug("token_counter: using google-genai LocalTokenizer")
+            return
+        except (ImportError, Exception):
+            pass
 
     # Try tiktoken
     try:
