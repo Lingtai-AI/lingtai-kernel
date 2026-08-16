@@ -772,6 +772,12 @@ class BaseAgent:
         now_wall = self._lifecycle_clock.wall_seconds()
         self._state_changed_at: float = now_wall
         self._last_progress_at: float = now_wall
+        #: Wall time of the most recent ``llm_call`` (API call start), used
+        #: to surface "how long has this agent been active since its last
+        #: API call" (Jason 2026-08-16). Seeded on state transitions like
+        #: ``_last_progress_at`` so a fresh ACTIVE turn starts at zero;
+        #: only ``llm_call`` bumps it afterwards.
+        self._last_api_call_at: float | None = now_wall
         self._active_turn_kind: str | None = None
         self._active_turn_started_at: float | None = None
         self._active_turn_id: str | None = None
@@ -993,6 +999,7 @@ class BaseAgent:
         now_wall = self._lifecycle_clock.wall_seconds()
         self._state_changed_at = now_wall
         self._last_progress_at = now_wall
+        self._last_api_call_at = now_wall
         if new_state == AgentState.ACTIVE:
             # The kernel doesn't know yet what kind of turn this will be —
             # the next progress event (``wake``, ``tc_wake_continue``,
@@ -1055,6 +1062,14 @@ class BaseAgent:
         # bookkeeping is in place even if the log service raises.
         if event_type in _PROGRESS_EVENTS:
             self._last_progress_at = self._lifecycle_clock.wall_seconds()
+            if event_type == "llm_call":
+                # "Active since last API call" — the wall time of the most
+                # recent LLM API call start, so external observers (taskcard
+                # footer, TUI Email To) can show how long the agent has been
+                # grinding since it last talked to the model (Jason
+                # 2026-08-16). Only ``llm_call`` bumps it, not responses,
+                # tools, or notifications.
+                self._last_api_call_at = self._lifecycle_clock.wall_seconds()
             kind = _PROGRESS_EVENTS[event_type]
             if kind is not None:
                 self._active_turn_kind = kind

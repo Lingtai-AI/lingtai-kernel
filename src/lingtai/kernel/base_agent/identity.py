@@ -232,6 +232,7 @@ def _status(agent) -> dict:
     # reports/dual-agent-stuck-forensics-2026-05-26.md.
     state_changed_at = getattr(agent, "_state_changed_at", None)
     last_progress_at = getattr(agent, "_last_progress_at", None)
+    last_api_call_at = getattr(agent, "_last_api_call_at", None)
     no_progress_seconds = None
     if last_progress_at is not None:
         no_progress_seconds = round(max(0.0, agent._lifecycle_clock.wall_seconds() - last_progress_at), 1)
@@ -280,11 +281,13 @@ def _status(agent) -> dict:
             "state": agent._state.value,
             "state_changed_at": state_changed_at,
             "last_progress_at": last_progress_at,
+            "last_api_call_at": last_api_call_at,
             "no_progress_seconds": no_progress_seconds,
         },
         keys=(
             "current_time", "started_at", "uptime_seconds",
-            "state_changed_at", "last_progress_at", "no_progress_seconds",
+            "state_changed_at", "last_progress_at", "last_api_call_at",
+            "no_progress_seconds",
         ),
     )
 

@@ -182,6 +182,45 @@ class TestStatusJsonExposesActiveTurn:
         assert isinstance(runtime["no_progress_seconds"], (int, float))
         assert runtime["no_progress_seconds"] >= 0
 
+    def test_status_exposes_last_api_call_at(self, tmp_path):
+        from lingtai.kernel import BaseAgent
+        agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        )
+        status = agent.status()
+        runtime = status["runtime"]
+        assert "last_api_call_at" in runtime
+        assert isinstance(runtime["last_api_call_at"], (int, float))
+
+    def test_llm_call_bumps_last_api_call_at_but_tool_call_does_not(self, tmp_path):
+        from lingtai.kernel import BaseAgent, AgentState
+        clock = make_test_lifecycle_clock()
+        agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test_agent",
+            workdir_lease=make_test_lease(),
+        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=clock, source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        )
+        agent._set_state(AgentState.ACTIVE, reason="test")
+        anchor = agent._last_api_call_at
+        clock.advance_wall(5.0)
+        # tool_call is progress but is NOT a new API call: anchor unchanged.
+        agent._log("tool_call", tool_call_id="t1")
+        assert agent._last_api_call_at == anchor
+        assert agent._last_progress_at > anchor
+        clock.advance_wall(5.0)
+        # llm_call is a new API call: anchor advances to now.
+        agent._log("llm_call", model="test", api_call_id="a1")
+        assert agent._last_api_call_at > anchor
+        assert agent._last_api_call_at == agent._last_progress_at
+
     def test_status_active_turn_block_present_only_in_active(self, tmp_path):
         from lingtai.kernel import BaseAgent, AgentState
         agent = BaseAgent(

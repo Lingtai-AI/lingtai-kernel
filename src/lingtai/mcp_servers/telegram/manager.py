@@ -2952,15 +2952,19 @@ class TelegramManager:
         return state if alive else "offline"
 
     def _task_card_active_seconds(self) -> float | None:
-        """Seconds since the agent's last progress while it is active.
+        """Seconds since the agent's last API call while it is active.
 
-        Reads ``.status.json``'s ``runtime.last_progress_at`` (the wall
-        timestamp ``BaseAgent._write_status_snapshot`` refreshes on every
-        turn) and returns its age only when the runtime reports ``active``.
-        This surfaces the live LLM/tool latency: while the model thinks or a
-        tool runs, ``last_progress_at`` stays put and the age grows; when
-        activity resumes it resets. Missing/malformed data, a non-active
-        state, or a future timestamp degrades to ``None``.
+        Reads ``.status.json``'s ``runtime.last_api_call_at`` (the wall
+        timestamp of the most recent ``llm_call`` event; ``BaseAgent``
+        refreshes it on every turn and every API call) and returns its age
+        only when the runtime reports ``active``. This is the "how long
+        has the agent been grinding since it last talked to the model"
+        signal Jason wants (2026-08-16): while the model thinks or a tool
+        runs, ``last_api_call_at`` stays put and the age grows; when a new
+        API call starts it resets. For older status files that predate the
+        field it falls back to ``runtime.last_progress_at``. Missing/
+        malformed data, a non-active state, or a future timestamp degrades
+        to ``None``.
         """
         try:
             raw = (self._working_dir / ".status.json").read_text(encoding="utf-8")
@@ -2977,12 +2981,14 @@ class TelegramManager:
             return None
         if runtime.get("state") != AgentState.ACTIVE.value:
             return None
-        last_progress = runtime.get("last_progress_at")
-        if not isinstance(last_progress, (int, float)) or isinstance(last_progress, bool):
+        anchor = runtime.get("last_api_call_at")
+        if not isinstance(anchor, (int, float)) or isinstance(anchor, bool):
+            anchor = runtime.get("last_progress_at")
+        if not isinstance(anchor, (int, float)) or isinstance(anchor, bool):
             return None
-        if not math.isfinite(last_progress):
+        if not math.isfinite(anchor):
             return None
-        age = time.time() - last_progress
+        age = time.time() - anchor
         return age if age >= 0 else None
 
     @staticmethod
