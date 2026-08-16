@@ -1140,6 +1140,7 @@ def test_dsh_run_generates_patch_uses_workspace_and_records_independent_acceptan
     patch_path = run_dir.path / "dsh.patch.yml"
     assert command.argv[3:5] == ("--patch", str(patch_path))
     patch_text = patch_path.read_text(encoding="utf-8")
+    assert '"mode": !!js process.env.DSH_PERMISSION_MODE ?? \'workspace-write\'' in patch_text
     assert "session-persistence-jsonl" in patch_text
     assert "dsh-skills" in patch_text
     assert "@deepseek-ai/dsh-mcp-client" in patch_text
