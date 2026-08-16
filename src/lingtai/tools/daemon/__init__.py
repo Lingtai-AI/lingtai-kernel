@@ -1154,6 +1154,16 @@ class _CliTaskContext:
     plugin_catalog: str | None = None
     # Reserved ``backend_options.env`` overlay for the spawned CLI subprocess.
     backend_env: dict[str, str] = field(default_factory=dict)
+    dsh_contract: "_DshExecutionContract | None" = None
+
+
+@dataclass(frozen=True)
+class _DshExecutionContract:
+    """Validated parent-owned execution and acceptance boundary for one DSH run."""
+
+    workspace: Path
+    allowed_paths: tuple[str, ...]
+    required_checks: tuple[tuple[str, ...], ...]
 
 
 @dataclass(frozen=True)
@@ -1268,7 +1278,7 @@ _BACKEND_SPECS: dict[str, _BackendSpec] = {
     "deepseek": _BackendSpec(
         id="deepseek",
         is_cli=True,
-        runner_attr="_run_deepseek_emanation",
+        runner_attr="_run_dsh_emanation",
         ask_handler_attr=None,
         ask_unsupported_msg=_DEEPSEEK_ASK_UNSUPPORTED_MESSAGE,
         reserved_flags=frozenset(_DEEPSEEK_RESERVED_BACKEND_FLAGS),
@@ -5497,6 +5507,87 @@ class DaemonManager:
         except Exception:
             return False
 
+    def _validate_dsh_execution_contract(
+        self, spec: dict
+    ) -> _DshExecutionContract:
+        """Validate the DSH workspace and verifier inputs at the public boundary."""
+
+        raw_workspace = spec.get("workspace")
+        if raw_workspace is None:
+            workspace = self._agent._working_dir.resolve()
+        else:
+            if (
+                not isinstance(raw_workspace, str)
+                or not raw_workspace
+                or raw_workspace != raw_workspace.strip()
+            ):
+                raise ValueError("workspace must be a non-empty path string")
+            workspace = Path(raw_workspace).expanduser()
+            if not workspace.is_absolute():
+                workspace = self._agent._working_dir / workspace
+            workspace = workspace.resolve()
+        if not workspace.is_dir():
+            raise ValueError(f"workspace must be an existing directory: {workspace}")
+
+        raw_allowed = spec.get("allowed_paths", [])
+        if not isinstance(raw_allowed, list):
+            raise ValueError("allowed_paths must be an array of relative paths")
+        allowed_paths: list[str] = []
+        for index, value in enumerate(raw_allowed):
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(
+                    f"allowed_paths[{index}] must be a non-empty relative path"
+                )
+            path = Path(value)
+            if path.is_absolute() or path.drive or ".." in path.parts:
+                raise ValueError(
+                    f"allowed_paths[{index}] must stay relative to workspace"
+                )
+            normalized = path.as_posix().rstrip("/") or "."
+            if normalized not in allowed_paths:
+                allowed_paths.append(normalized)
+
+        raw_checks = spec.get("required_checks", [])
+        if not isinstance(raw_checks, list):
+            raise ValueError("required_checks must be an array of argv arrays")
+        required_checks: list[tuple[str, ...]] = []
+        for index, value in enumerate(raw_checks):
+            if (
+                not isinstance(value, list)
+                or not value
+                or not all(isinstance(arg, str) for arg in value)
+                or not value[0]
+            ):
+                raise ValueError(
+                    f"required_checks[{index}] must be a non-empty argv array"
+                )
+            required_checks.append(tuple(value))
+
+        return _DshExecutionContract(
+            workspace=workspace,
+            allowed_paths=tuple(allowed_paths),
+            required_checks=tuple(required_checks),
+        )
+
+    @staticmethod
+    def _render_dsh_execution_context(contract: _DshExecutionContract) -> str:
+        allowed = ", ".join(contract.allowed_paths) or "not restricted"
+        checks = (
+            "\n".join(
+                f"- {json.dumps(list(argv), ensure_ascii=False)}"
+                for argv in contract.required_checks
+            )
+            or "- none supplied; LingTai will require human decision"
+        )
+        return (
+            "## LingTai execution contract\n"
+            f"Workspace: {contract.workspace}\n"
+            f"Allowed changed paths: {allowed}\n"
+            "LingTai, not this harness, runs these checks after you exit:\n"
+            f"{checks}\n"
+            "Do not claim acceptance; report the work and let LingTai verify it."
+        )
+
     def _handle_emanate_cli(
         self,
         tasks: list[dict],
@@ -5527,6 +5618,11 @@ class DaemonManager:
         contexts: list[_CliTaskContext] = []
         for i, spec in enumerate(tasks):
             try:
+                dsh_contract = (
+                    self._validate_dsh_execution_contract(spec)
+                    if backend == "deepseek"
+                    else None
+                )
                 task_skill_catalog = self._task_skill_catalog(spec)
                 task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
                 task_plugin_catalog, plugin_skill_rows, plugin_mcp_regs = self._task_plugin_context(spec)
@@ -5568,11 +5664,16 @@ class DaemonManager:
                             "message": f"tasks[{i}].backend_options: {e}"}
             contexts.append(_CliTaskContext(
                 backend_argv=backend_argv,
-                system_prompt=None,
+                system_prompt=(
+                    self._render_dsh_execution_context(dsh_contract)
+                    if dsh_contract is not None
+                    else None
+                ),
                 skill_catalog=task_skill_catalog,
                 mcp_catalog=task_mcp_catalog,
                 mcp_regs=task_mcp_regs,
                 backend_env=backend_env,
+                dsh_contract=dsh_contract,
             ))
 
         ids = []
@@ -5646,6 +5747,20 @@ class DaemonManager:
                             "manifest": task_files_manifest,
                             "files": task_files_rows[i],
                         },
+                        "workload": spec.get("workload") or "worker",
+                        "execution_route_id": spec.get("_execution_route_id"),
+                        **(
+                            {
+                                "workspace": str(context.dsh_contract.workspace),
+                                "allowed_paths": list(context.dsh_contract.allowed_paths),
+                                "required_checks": [
+                                    list(argv)
+                                    for argv in context.dsh_contract.required_checks
+                                ],
+                            }
+                            if context.dsh_contract is not None
+                            else {}
+                        ),
                     },
                     log_callback=self._log,
                     backend=backend,
@@ -5666,7 +5781,7 @@ class DaemonManager:
                     )
                 mcp_catalog = self._render_task_mcp_catalog(mcp_regs)
                 task_context = self._combine_oneshot_context(
-                    None, context.skill_catalog, mcp_catalog,
+                    context.system_prompt, context.skill_catalog, mcp_catalog,
                     task_files_catalog=task_files_catalog,
                 )
                 if _cli_backend_loads_common_mcp(backend):
@@ -7684,6 +7799,454 @@ class DaemonManager:
 
         text = output or (f"[no stdout; stderr tail follows]\n{stderr_tail[-500:]}" if stderr_tail else "[no output]")
         self._require_done_completion(run_dir, text)
+        run_dir.mark_done(text)
+        return text
+
+    @staticmethod
+    def _dsh_powershell_script(search_path: str | None) -> str | None:
+        """Locate npm's ``dsh.ps1`` shim without depending on ``PATHEXT``."""
+        for entry in (search_path or "").split(os.pathsep):
+            entry = entry.strip().strip('"')
+            if not entry:
+                continue
+            candidate = Path(entry) / "dsh.ps1"
+            if candidate.is_file():
+                return str(candidate)
+        return None
+
+    @staticmethod
+    def _dsh_node_entrypoint(dsh_script: str) -> str | None:
+        """Resolve the official npm package entrypoint beside a DSH shim."""
+        shim_dir = Path(dsh_script).parent
+        package_root = shim_dir.parent if shim_dir.name.lower() == ".bin" else (
+            shim_dir / "node_modules"
+        )
+        entrypoint = package_root / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
+        return str(entrypoint) if entrypoint.is_file() else None
+
+    @staticmethod
+    def _dsh_command_prefix(env: dict[str, str]) -> list[str]:
+        """Return the native Node launcher prefix for the installed DSH CLI.
+
+        npm exposes DSH as ``dsh`` on POSIX and ``dsh.ps1``/``dsh.cmd`` on
+        Windows. The Windows daemon discovers that PowerShell-visible shim,
+        then invokes its official Node entrypoint directly so UTF-8 output is
+        not transcoded by a nested shell. It never crosses into WSL or a POSIX
+        shell.
+        """
+        if os.name != "nt":
+            return ["dsh"]
+
+        search_path = env.get("PATH") or env.get("Path")
+        dsh_script = DaemonManager._dsh_powershell_script(search_path)
+        if not dsh_script:
+            raise FileNotFoundError("'dsh' CLI not found on PATH")
+        entrypoint = DaemonManager._dsh_node_entrypoint(dsh_script)
+        if not entrypoint:
+            raise FileNotFoundError("official @deepseek-ai/dsh entrypoint not found")
+        node = shutil.which("node", path=search_path)
+        if not node:
+            raise FileNotFoundError("Node.js executable not found on PATH")
+        return [node, entrypoint]
+
+    def _materialize_dsh_skills(
+        self, run_dir: DaemonRunDir, skill_paths: list[str]
+    ) -> Path | None:
+        """Copy only the parent-selected skill bundles into this DSH run."""
+
+        if not skill_paths:
+            return None
+        root = run_dir.path / "dsh-skills"
+        root.mkdir()
+        seen: set[Path] = set()
+        for index, raw_path in enumerate(skill_paths):
+            skill_file = self._resolve_task_skill_path(
+                raw_path, self._agent._working_dir
+            )
+            source = skill_file.parent
+            if source in seen:
+                continue
+            seen.add(source)
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", source.name).strip("-")
+            destination = root / f"{index:03d}-{safe_name or 'skill'}"
+            shutil.copytree(source, destination)
+        return root
+
+    @staticmethod
+    def _dsh_mcp_server_name(value: object, *, index: int) -> str:
+        name = re.sub(r"[^A-Za-z0-9_-]+", "-", str(value or "")).strip("-")
+        name = name[:32]
+        if not name:
+            raise ValueError(f"mcp[{index}].name cannot map to a DSH server name")
+        return name
+
+    def _write_dsh_patch(
+        self,
+        run_dir: DaemonRunDir,
+        workspace: Path,
+        skill_paths: list[str],
+        mcp_regs: list[dict],
+    ) -> tuple[Path, dict[str, str]]:
+        """Create the per-run Cordis patch without persisting MCP secret values."""
+
+        quote = lambda value: json.dumps(str(value), ensure_ascii=False)
+        session_root = run_dir.path / "dsh-sessions"
+        skill_root = self._materialize_dsh_skills(run_dir, skill_paths)
+        lines = [
+            "# Generated by LingTai for this DSH run.",
+            "- id: sandbox-policy",
+            "  config:",
+            '    "mode": "workspace-write"',
+            f'    "workspaceRoot": {quote(workspace)}',
+            "- id: session-persistence-jsonl",
+            "  config:",
+            f'    "root": {quote(session_root)}',
+            '    "compression": "none"',
+        ]
+        if skill_root is not None:
+            lines.extend(
+                [
+                    "- id: skill-filesystem",
+                    "  config:",
+                    '    "includeDefaultRoots": true',
+                    '    "customSkillDirs":',
+                    f"      - {quote(skill_root)}",
+                ]
+            )
+
+        secret_env: dict[str, str] = {}
+        seen_servers: set[str] = set()
+        if mcp_regs:
+            lines.append("- insert:")
+        for index, registration in enumerate(mcp_regs):
+            server_name = self._dsh_mcp_server_name(
+                registration.get("name"), index=index
+            )
+            if server_name in seen_servers:
+                raise ValueError(
+                    f"MCP names collide after DSH normalization: {server_name!r}"
+                )
+            seen_servers.add(server_name)
+            transport = registration.get("transport", "stdio")
+            dsh_transport = "streamable-http" if transport == "http" else transport
+            lines.extend(
+                [
+                    f"    - id: lingtai-mcp-{index}-{server_name}",
+                    "      name: '@deepseek-ai/dsh-mcp-client'",
+                    "      config:",
+                    f'        "serverName": {quote(server_name)}',
+                    f'        "transport": {quote(dsh_transport)}',
+                    '        "failOnStartupError": true',
+                ]
+            )
+            if transport == "stdio":
+                lines.append(f'        "command": {quote(registration["command"])}')
+                args = registration.get("args") or []
+                lines.append('        "args":')
+                if args:
+                    lines.extend(f"          - {quote(arg)}" for arg in args)
+                else:
+                    lines[-1] += " []"
+                if registration.get("cwd"):
+                    lines.append(f'        "cwd": {quote(registration["cwd"])}')
+                secret_field = "env"
+            else:
+                lines.append(f'        "url": {quote(registration["url"])}')
+                secret_field = "headers"
+            secret_values = registration.get(secret_field)
+            if isinstance(secret_values, dict) and secret_values:
+                lines.append(f'        "{secret_field}":')
+                for key, value in secret_values.items():
+                    safe_key = re.sub(r"[^A-Za-z0-9_]", "_", key).upper()
+                    env_name = f"LINGTAI_DSH_MCP_{index}_{safe_key}"
+                    secret_env[env_name] = value
+                    lines.append(
+                        f"          {key}: !!js process.env.{env_name}"
+                    )
+
+        patch_path = run_dir.path / "dsh.patch.yml"
+        patch_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        run_dir.update_state(
+            dsh_patch_path=str(patch_path),
+            dsh_session_root=str(session_root),
+        )
+        return patch_path, secret_env
+
+    @staticmethod
+    def _dsh_git_status_paths(workspace: Path) -> set[str] | None:
+        """Return Git-observed changed paths, or None outside a Git worktree."""
+
+        result = subprocess.run(
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode != 0:
+            return None
+        records = result.stdout.split("\0")
+        paths: set[str] = set()
+        index = 0
+        while index < len(records):
+            record = records[index]
+            index += 1
+            if not record:
+                continue
+            status = record[:2]
+            path = record[3:].replace("\\", "/")
+            if path:
+                paths.add(path)
+            if "R" in status or "C" in status:
+                if index < len(records) and records[index]:
+                    paths.add(records[index].replace("\\", "/"))
+                    index += 1
+        return paths
+
+    @staticmethod
+    def _dsh_path_is_allowed(path: str, allowed_paths: list[str]) -> bool:
+        normalized = path.replace("\\", "/").strip("/")
+        for allowed in allowed_paths:
+            root = allowed.replace("\\", "/").strip("/")
+            if root in ("", ".") or normalized == root or normalized.startswith(root + "/"):
+                return True
+        return False
+
+    def _verify_dsh_execution(
+        self,
+        run_dir: DaemonRunDir,
+        workspace: Path,
+        baseline_paths: set[str] | None,
+        allowed_paths: list[str],
+        required_checks: list[list[str]],
+    ) -> dict:
+        """Run LingTai-owned checks and record accepted/rejected/decision state."""
+
+        final_paths = self._dsh_git_status_paths(workspace)
+        new_paths = (
+            final_paths - baseline_paths
+            if final_paths is not None and baseline_paths is not None
+            else set()
+        )
+        outside_paths = sorted(
+            path
+            for path in new_paths
+            if allowed_paths and not self._dsh_path_is_allowed(path, allowed_paths)
+        )
+
+        check_receipts: list[dict] = []
+        for argv in required_checks:
+            try:
+                result = subprocess.run(
+                    argv,
+                    cwd=workspace,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=300,
+                )
+                check_receipts.append(
+                    {
+                        "argv": list(argv),
+                        "returncode": result.returncode,
+                        "stdout_tail": result.stdout[-1000:],
+                        "stderr_tail": result.stderr[-1000:],
+                    }
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                check_receipts.append(
+                    {
+                        "argv": list(argv),
+                        "returncode": None,
+                        "error": str(exc),
+                    }
+                )
+
+        reasons: list[str] = []
+        checks_failed = any(row.get("returncode") != 0 for row in check_receipts)
+        if outside_paths:
+            reasons.append("changes escaped allowed_paths")
+        if checks_failed:
+            reasons.append("one or more required_checks failed")
+        if outside_paths or checks_failed:
+            status = "rejected"
+        elif not required_checks:
+            status = "needs_decision"
+            reasons.append("no independent required_checks were supplied")
+        elif allowed_paths and baseline_paths is None:
+            status = "needs_decision"
+            reasons.append("workspace is not a Git worktree; changed paths are unknown")
+        elif allowed_paths and baseline_paths:
+            status = "needs_decision"
+            reasons.append("workspace was already dirty; full change attribution is ambiguous")
+        else:
+            status = "accepted"
+
+        receipt = {
+            "status": status,
+            "workspace": str(workspace),
+            "allowed_paths": list(allowed_paths),
+            "changed_paths": sorted(final_paths or []),
+            "new_changed_paths": sorted(new_paths),
+            "outside_paths": outside_paths,
+            "checks": check_receipts,
+            "reasons": reasons,
+        }
+        run_dir.update_state(execution_acceptance=receipt)
+        return receipt
+
+    def _run_dsh_emanation(
+        self,
+        em_id: str,
+        run_dir: DaemonRunDir,
+        task: str,
+        cancel_event: threading.Event,
+        timeout_event: threading.Event | None = None,
+        backend_argv: list[str] | None = None,
+        backend_env: dict[str, str] | None = None,
+    ) -> str:
+        """Run one DeepSeek Harness headless task and persist its final text.
+
+        DSH 0.1's headless profile prints one final assistant message and
+        exits, but exposes no stable session/resume or structured completion
+        contract. This backend therefore records stdout/stderr honestly as a
+        one-shot result and rejects ``daemon(action='ask')`` via metadata.
+        """
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+
+        env = os.environ.copy()
+        env.update(self._deepseek_run_env(run_dir))
+        if backend_env:
+            env.update(backend_env)
+        prompt = self._build_opencode_prompt(task)
+        call_parameters = run_dir.state_snapshot().get("call_parameters") or {}
+        workspace = Path(
+            call_parameters.get("workspace") or self._agent._working_dir
+        ).resolve()
+        allowed_paths = list(call_parameters.get("allowed_paths") or [])
+        required_checks = [
+            list(argv) for argv in (call_parameters.get("required_checks") or [])
+        ]
+        baseline_paths = self._dsh_git_status_paths(workspace)
+        manifest = getattr(self, "_manifest", {})
+        mcp_regs = (
+            list(manifest.get("mcp") or []) if isinstance(manifest, dict) else []
+        )
+
+        try:
+            patch_path, patch_env = self._write_dsh_patch(
+                run_dir,
+                workspace,
+                list(call_parameters.get("skills") or []),
+                mcp_regs,
+            )
+            env.update(patch_env)
+            prefix = self._dsh_command_prefix(env)
+            cmd = [*prefix, "--profile", "headless"]
+            if backend_argv:
+                cmd.extend(backend_argv)
+            cmd.extend(["--patch", str(patch_path)])
+            cmd.append(prompt)
+            self._log("daemon_dsh_start", em_id=em_id, cmd_head="dsh --profile headless")
+            handle = self._process_port.spawn(
+                DaemonProcessCommand(
+                    tuple(cmd), workspace, tuple(env.items()),
+                    encoding="utf-8",
+                ),
+                group_id=run_dir.group_id,
+            )
+        except FileNotFoundError as e:
+            exc = RuntimeError(str(e) or "'dsh' CLI not found on PATH")
+            run_dir.mark_failed(exc)
+            raise exc
+        except OSError as e:
+            exc = RuntimeError(f"Failed to start dsh CLI: {e}")
+            run_dir.mark_failed(exc)
+            raise exc
+
+        stdout_lines: list[str] = []
+        stderr_thread = self._process_port.drain_stderr(
+            handle,
+            on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
+            thread_name=f"daemon-dsh-stderr-{em_id}",
+        )
+        stderr_lines = stderr_thread.lines
+
+        try:
+            for raw_line in self._process_port.iter_stdout(handle):
+                if cancel_event.is_set():
+                    self._process_port.terminate(
+                        handle,
+                        reason=(
+                            "timeout"
+                            if timeout_event and timeout_event.is_set()
+                            else "reclaim"
+                        ),
+                    )
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                stdout_lines.append(line)
+                run_dir.record_cli_output(line, stream="stdout")
+            exit_receipt = self._process_port.wait(handle)
+        except Exception as e:
+            self._process_port.terminate(handle)
+            run_dir.mark_failed(e)
+            raise
+        finally:
+            stderr_thread.join(timeout=2.0)
+            self._process_port.release(handle)
+
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+        output = "\n".join(stdout_lines).strip()
+        detail = stderr_tail or output
+        if cancel_event.is_set():
+            attributed = self._attributed_process_exit(
+                exit_receipt, "deepseek", detail[-500:], run_dir,
+            )
+            if (
+                attributed is None
+                and exit_receipt.reason is not None
+                and exit_receipt.returncode == 0
+            ):
+                try:
+                    run_dir.record_cli_termination(
+                        reason=exit_receipt.reason,
+                        signal_name="SIGTERM",
+                        returncode=exit_receipt.returncode,
+                    )
+                except Exception:
+                    pass
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+        if exit_receipt.returncode != 0:
+            attributed = self._attributed_process_exit(
+                exit_receipt, "deepseek", detail[-500:], run_dir,
+            )
+            exc = RuntimeError(
+                attributed
+                or f"dsh CLI exited with code {exit_receipt.returncode}: "
+                f"{detail[-500:]}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
+
+        text = output or (
+            f"[no stdout; stderr tail follows]\n{stderr_tail[-500:]}"
+            if stderr_tail
+            else "[no output]"
+        )
+        self._require_done_completion(run_dir, text)
+        self._verify_dsh_execution(
+            run_dir,
+            workspace,
+            baseline_paths,
+            allowed_paths,
+            required_checks,
+        )
         run_dir.mark_done(text)
         return text
 

@@ -25,6 +25,21 @@ class _SelectingPolicy:
         )
 
 
+class _BackendSelectingPolicy:
+    api_version = 1
+
+    def __init__(self) -> None:
+        self.requests = []
+
+    def decide(self, request):
+        self.requests.append(request)
+        return ExecutionDecision(
+            preset=None,
+            backend="deepseek",
+            route_id="dsh-fast",
+        )
+
+
 def _agent(tmp_path, allowed: list[str]):
     return SimpleNamespace(
         service=SimpleNamespace(model="mock-model"),
@@ -124,6 +139,24 @@ def test_policy_defaults_omitted_workload_to_worker_and_reaches_preset_loader(
     assert result["status"] == "error"
     assert "sentinel allowed.json" in result["message"]
     assert policy.requests[0].workload == "worker"
+
+
+def test_policy_selected_dsh_backend_reaches_existing_cli_dispatch(tmp_path):
+    policy = _BackendSelectingPolicy()
+    manager = DaemonManager(_agent(tmp_path, []), execution_policy=policy)
+    manager._handle_emanate_cli = MagicMock(
+        return_value={"status": "dispatched", "backend": "deepseek"}
+    )
+
+    result = manager._handle_emanate(
+        [{"task": "implement", "tools": [], "workload": "implementation"}]
+    )
+
+    assert result == {"status": "dispatched", "backend": "deepseek"}
+    manager._handle_emanate_cli.assert_called_once()
+    assert manager._handle_emanate_cli.call_args.kwargs["backend"] == "deepseek"
+    routed_task = manager._handle_emanate_cli.call_args.args[0][0]
+    assert routed_task["_execution_route_id"] == "dsh-fast"
 
 
 def test_workload_rejects_whitespace_normalization(tmp_path):

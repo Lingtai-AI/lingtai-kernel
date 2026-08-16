@@ -133,8 +133,9 @@ def _emanate_task_schema() -> dict[str, Any]:
     """One task object inside ``emanate``'s ``tasks`` array.
 
     Byte-for-byte the pre-migration nested task schema (``task``, ``tools``,
-    ``skills``, ``mcp``, ``preset``, ``workload``, ``backend_options``, ``prompt``,
-    ``context_token_limit``, ``required: ["task", "tools"]``). The nested
+    ``skills``, ``mcp``, ``preset``, ``workload``, DSH execution-contract fields,
+    ``backend_options``, ``prompt``, ``context_token_limit``,
+    ``required: ["task", "tools"]``). The nested
     object is deliberately NOT closed with ``additionalProperties: false``:
     the engine's own strict per-task validation in ``_handle_emanate`` owns
     that boundary and returns domain-specific errors (e.g. the ``system_prompt``
@@ -168,6 +169,24 @@ def _emanate_task_schema() -> dict[str, Any]:
             "workload": {
                 "type": "string",
                 "description": "Optional execution-policy workload class. Use the task's responsibility (for example orchestration, architecture, implementation, review, regression, worker, batch, or extraction), not the receiving Agent's identity. Omit for the backward-compatible worker class.",
+            },
+            "workspace": {
+                "type": "string",
+                "description": "Optional execution working directory for the DSH backend. Absolute paths are accepted; relative paths resolve against the parent agent working directory. The directory must already exist.",
+            },
+            "allowed_paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional DSH change boundary. Each entry is a safe path relative to workspace; LingTai independently checks Git-observed changed paths after the run.",
+            },
+            "required_checks": {
+                "type": "array",
+                "items": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                },
+                "description": "Optional independent post-run checks for DSH. Each check is an argv array, never a shell command string, for example [\"python\", \"-m\", \"pytest\", \"-q\"].",
             },
             "backend_options": {
                 "type": "object",

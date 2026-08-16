@@ -28,7 +28,8 @@ class ExecutionPolicyConfigurationError(ExecutionPolicyError):
 @dataclass(frozen=True, slots=True)
 class RouteCandidate:
     route_id: str
-    preset: str
+    preset: str | None
+    backend: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,14 +62,15 @@ class ConfiguredExecutionPolicy:
 
         health = load_health_snapshot(self.health_path)
         for candidate in route.candidates:
-            if _preset_ref_in(
+            preset_allowed = candidate.preset is None or _preset_ref_in(
                 candidate.preset,
                 list(request.allowed_preset_refs),
                 working_dir=self.working_dir,
-            ) and health.is_available(candidate.route_id):
+            )
+            if preset_allowed and health.is_available(candidate.route_id):
                 return ExecutionDecision(
                     preset=candidate.preset,
-                    backend=request.backend,
+                    backend=candidate.backend or request.backend,
                     route_id=candidate.route_id,
                 )
 
@@ -139,19 +141,39 @@ def load_policy_config(path: Path) -> tuple[WorkloadRoute, ...]:
             label = f"execution-policy workload {workload!r} candidate {index}"
             if not isinstance(raw_candidate, dict):
                 raise ExecutionPolicyConfigurationError(f"{label} must be an object")
-            _require_exact_keys(
-                raw_candidate,
-                expected={"route_id", "preset"},
-                label=label,
+            actual_keys = set(raw_candidate)
+            required_keys = {"route_id", "preset"}
+            allowed_keys = required_keys | {"backend"}
+            if not required_keys.issubset(actual_keys) or not actual_keys.issubset(
+                allowed_keys
+            ):
+                raise ExecutionPolicyConfigurationError(
+                    f"{label} must contain route_id and preset, with optional "
+                    f"backend; got {sorted(actual_keys)!r}"
+                )
+            raw_preset = raw_candidate["preset"]
+            preset = (
+                None
+                if raw_preset is None
+                else _require_non_empty_string(raw_preset, label=f"{label} preset")
             )
+            raw_backend = raw_candidate.get("backend")
+            backend = (
+                None
+                if raw_backend is None
+                else _require_non_empty_string(raw_backend, label=f"{label} backend")
+            )
+            if preset is None and backend is None:
+                raise ExecutionPolicyConfigurationError(
+                    f"{label} must select a preset or backend"
+                )
             candidates.append(
                 RouteCandidate(
                     route_id=_require_non_empty_string(
                         raw_candidate["route_id"], label=f"{label} route_id"
                     ),
-                    preset=_require_non_empty_string(
-                        raw_candidate["preset"], label=f"{label} preset"
-                    ),
+                    preset=preset,
+                    backend=backend,
                 )
             )
         routes.append(WorkloadRoute(workload=workload, candidates=tuple(candidates)))

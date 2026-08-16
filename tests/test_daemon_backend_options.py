@@ -1045,6 +1045,239 @@ def test_qwen_code_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# DeepSeek Harness backend
+# ---------------------------------------------------------------------------
+
+
+def test_dsh_initial_run_uses_native_headless_profile_and_env_overlay(
+    tmp_path, monkeypatch,
+):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    port = _OneShotRecordingPort(lines=("dsh done\n", "\n"))
+    mgr._process_port = port
+    monkeypatch.setattr(mgr, "_dsh_command_prefix", lambda env: ["dsh"])
+    run_dir = make_daemon_run_dir(agent, backend="deepseek")
+
+    result = mgr._run_dsh_emanation(
+        "em-dsh", run_dir, "Refactor with DSH.",
+        threading.Event(), threading.Event(),
+        backend_argv=["--patch", "D:/rawle/dsh-extra.yml"],
+        backend_env={"DSH_TEST_VALUE": "native-powershell"},
+    )
+
+    command, group_id = port.commands[0]
+    assert command.argv[:5] == (
+        "dsh", "--profile", "headless", "--patch",
+        "D:/rawle/dsh-extra.yml",
+    )
+    assert command.argv[5:7] == ("--patch", str(run_dir.path / "dsh.patch.yml"))
+    assert "Refactor with DSH." in command.argv[-1]
+    assert command.cwd == agent._working_dir
+    assert command.encoding == "utf-8"
+    assert dict(command.environment)["DSH_TEST_VALUE"] == "native-powershell"
+    assert port.deadlines == [None]
+    assert port.waited == [port.handle]
+    assert port.released == [port.handle]
+    assert run_dir._state["state"] == "done"
+    assert run_dir._state["last_output"] == "dsh done"
+    assert result == "dsh done"
+
+
+def test_dsh_run_generates_patch_uses_workspace_and_records_independent_acceptance(
+    tmp_path, monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet"], cwd=workspace, check=True,
+        capture_output=True, text=True,
+    )
+    skill_dir = tmp_path / "selected-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: selected-skill\ndescription: selected\n---\nUse it.\n",
+        encoding="utf-8",
+    )
+
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    mgr._manifest = {
+        "mcp": [
+            {
+                "name": "docs",
+                "transport": "stdio",
+                "command": "docs-mcp",
+                "args": ["--stdio"],
+                "env": {"DOC_TOKEN": "secret"},
+            }
+        ]
+    }
+    port = _OneShotRecordingPort(lines=("verified\n",))
+    mgr._process_port = port
+    monkeypatch.setattr(mgr, "_dsh_command_prefix", lambda env: ["dsh"])
+    run_dir = make_daemon_run_dir(agent, backend="deepseek")
+    call_parameters = dict(run_dir._state["call_parameters"])
+    call_parameters.update(
+        {
+            "workspace": str(workspace),
+            "allowed_paths": ["src"],
+            "required_checks": [
+                [sys.executable, "-c", "raise SystemExit(0)"]
+            ],
+            "skills": [str(skill_dir)],
+        }
+    )
+    run_dir.update_state(call_parameters=call_parameters)
+
+    result = mgr._run_dsh_emanation(
+        "em-dsh-contract", run_dir, "Implement the scoped change.",
+        threading.Event(), threading.Event(),
+    )
+
+    command, _ = port.commands[0]
+    assert command.cwd == workspace
+    patch_path = run_dir.path / "dsh.patch.yml"
+    assert command.argv[3:5] == ("--patch", str(patch_path))
+    patch_text = patch_path.read_text(encoding="utf-8")
+    assert "session-persistence-jsonl" in patch_text
+    assert "dsh-skills" in patch_text
+    assert "@deepseek-ai/dsh-mcp-client" in patch_text
+    assert '"serverName": "docs"' in patch_text
+    assert '"failOnStartupError": true' in patch_text
+    assert 'DOC_TOKEN: !!js process.env.LINGTAI_DSH_MCP_0_DOC_TOKEN' in patch_text
+    assert "secret" not in patch_text
+    assert dict(command.environment)["LINGTAI_DSH_MCP_0_DOC_TOKEN"] == "secret"
+    assert run_dir._state["execution_acceptance"]["status"] == "accepted"
+    assert run_dir._state["execution_acceptance"]["checks"][0]["returncode"] == 0
+    assert result == "verified"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("allowed_paths", ["../outside"], "allowed_paths[0]"),
+        ("required_checks", ["python -m pytest"], "required_checks[0]"),
+    ],
+)
+def test_dsh_execution_contract_rejects_unsafe_or_shell_shaped_input_before_dispatch(
+    tmp_path, field, value, message,
+):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle(
+        {
+            "action": "emanate",
+            "backend": "deepseek",
+            "tasks": [
+                {
+                    "task": "scoped",
+                    "tools": [],
+                    "workspace": str(tmp_path),
+                    field: value,
+                }
+            ],
+        }
+    )
+
+    assert result["status"] == "error"
+    assert message in result["message"]
+    assert mgr._emanations == {}
+
+
+def test_dsh_failed_required_check_records_rejected_acceptance(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    port = _OneShotRecordingPort(lines=("looks done\n",))
+    mgr._process_port = port
+    monkeypatch.setattr(mgr, "_dsh_command_prefix", lambda env: ["dsh"])
+    run_dir = make_daemon_run_dir(agent, backend="deepseek")
+    call_parameters = dict(run_dir._state["call_parameters"])
+    call_parameters.update(
+        {
+            "workspace": str(workspace),
+            "allowed_paths": [],
+            "required_checks": [
+                [sys.executable, "-c", "raise SystemExit(3)"]
+            ],
+        }
+    )
+    run_dir.update_state(call_parameters=call_parameters)
+
+    mgr._run_dsh_emanation(
+        "em-dsh-rejected", run_dir, "Do it.",
+        threading.Event(), threading.Event(),
+    )
+
+    acceptance = run_dir._state["execution_acceptance"]
+    assert acceptance["status"] == "rejected"
+    assert acceptance["checks"][0]["returncode"] == 3
+
+
+def test_dsh_rejects_owned_profile_option_before_dispatch(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "deepseek",
+        "tasks": [{
+            "task": "bad",
+            "tools": [],
+            "backend_options": {"profile": "tui"},
+        }],
+    })
+
+    assert result["status"] == "error"
+    assert "--profile is reserved by the deepseek daemon backend" in result["message"]
+    assert mgr._emanations == {}
+
+
+def test_dsh_does_not_claim_native_common_mcp_loading():
+    assert _source_cli_backend_loads_common_mcp("deepseek") is False
+
+
+def test_dsh_finds_powershell_shim_without_relying_on_pathext(tmp_path):
+    shim_dir = tmp_path / "node_modules" / ".bin"
+    shim_dir.mkdir(parents=True)
+    shim = shim_dir / "dsh.ps1"
+    shim.write_text("# npm PowerShell shim\n", encoding="utf-8")
+    entrypoint = tmp_path / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("// dsh entrypoint\n", encoding="utf-8")
+
+    found = _BACKEND_SPECS["deepseek"]
+    assert found.id == "deepseek"
+    from lingtai.tools.daemon import DaemonManager
+    assert DaemonManager._dsh_powershell_script(str(shim_dir)) == str(shim)
+    assert DaemonManager._dsh_node_entrypoint(str(shim)) == str(entrypoint)
+
+
+def test_dsh_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": "deepseek",
+        "tasks": [{"task": "DSH once.", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    em_id = result["ids"][0]
+    wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
+
+    ask = mgr.handle({"action": "ask", "id": em_id, "message": "follow up"})
+
+    assert ask["status"] == "error"
+    assert ask["message"] == (
+        "deepseek daemon backend does not support daemon(action='ask') yet; "
+        "start a new deepseek emanation instead."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Kimi Code backend
 # ---------------------------------------------------------------------------
 

@@ -1,6 +1,6 @@
 ---
 name: execution-policy
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/CONTRACT.md
@@ -40,17 +40,22 @@ The built-in declaration is:
 ```
 
 Both paths are relative to the Agent working directory and may not escape it.
-The policy file contains exact workload keys and ordered `{route_id,preset}`
-candidates. The health file contains exact route IDs with boolean availability.
+The policy file contains exact workload keys and ordered candidates. A legacy
+candidate is `{route_id,preset}`. A backend route adds `backend`; external CLI
+routes use an explicit null preset, for example
+`{route_id:"dsh-fast",backend:"deepseek",preset:null}`. The health file contains
+exact route IDs with boolean availability.
 Unknown/missing fields, malformed JSON, unavailable routes, and unsupported API
 versions fail loudly.
 
 ## Selection promise
 
-An explicit task preset wins unchanged. Otherwise, the first candidate whose
-preset is in the parent allowlist and whose route is available wins. A workload
-without configuration and a configured workload with no eligible healthy
-candidate both fail instead of guessing or silently changing responsibility.
+An explicit task preset wins unchanged. Otherwise, the first available candidate
+wins when its optional preset is in the parent allowlist. A candidate-selected
+backend is returned with that preset; omitting backend preserves the requested
+backend. A workload without configuration and a configured workload with no
+eligible healthy candidate both fail instead of guessing or silently changing
+responsibility.
 
 ## Daemon boundary
 

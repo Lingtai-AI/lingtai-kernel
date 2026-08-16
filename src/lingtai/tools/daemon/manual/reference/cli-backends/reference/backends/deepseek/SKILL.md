@@ -1,117 +1,92 @@
 ---
 name: daemon-backend-deepseek
 description: >
-  Nested daemon-cli-backends reference for the DeepSeek Harness daemon
-  backend's flag surface. Read this only when a daemon task needs
-  DeepSeek-specific launcher flags (`--patch` overlays): it routes you to the
-  installed CLI's live help via shell and shows how to translate that help into
-  the generic `backend_options` mechanism. It is not a flag catalog.
-version: 0.1.0
-last_changed_at: 2026-08-16T00:00:00Z
+  Nested daemon-cli-backends reference for the official DeepSeek Harness
+  execution backend. Read this for native Windows launch behavior, DSH patches,
+  selected skills and MCP, workspace acceptance, and one-shot limitations.
+version: 0.2.0
+last_changed_at: 2026-08-18T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
+- src/lingtai/tools/daemon/ANATOMY.md
+- src/lingtai/tools/daemon/CONTRACT.md
 maintenance: |
-  Tracks the DeepSeek Harness daemon backend flag-discovery topic it documents; update when that integration changes.
+  Tracks the DeepSeek Harness daemon backend; update when headless execution,
+  session/resume, Cordis patching, MCP, or acceptance behavior changes.
 ---
 
-# DeepSeek Harness Daemon Backend — Flag Discovery Entrypoint
+# DeepSeek Harness execution backend
 
-The installed CLI's own help is the authority for DeepSeek Harness flags; this
-page is only the entrypoint. Conversion rules, key safety, and persistence live
-in the parent [`reference/cli-backends/SKILL.md`](../../../SKILL.md). `deepseek`
-is the canonical backend name (no alias is registered); persisted daemon
-entries use it verbatim.
+`deepseek` is LingTai's canonical backend id for DeepSeek AI's official `dsh`
+harness. DSH is a developer preview and may make compatibility-breaking changes.
+LingTai uses it as a bounded execution layer: one headless task, a per-run Cordis
+patch, selected skills and MCP, durable JSONL artifacts, and parent-owned
+acceptance. Planning, high-risk judgment, and final acceptance remain outside
+the harness.
 
-## Discover flags from the installed CLI
+## Native Windows command
 
-1. Run, in bash: `dsh --help` (launcher help) and, once the headless profile
-   has booted at least once, `dsh --profile headless --help` (the headless
-   app's own help). The daemon backend wraps the one-shot headless profile
-   (`dsh --profile headless <prompt>`), which takes only the task text as its
-   positional argument — there is no `exec`-style wrapper subcommand. These are
-   local read-only commands; no session is started. The docs authority is the
-   official CLI reference: https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md
-2. Translate what you found into `backend_options` with the parent's generic
-   conversion rules. Nothing DeepSeek-specific is added to that contract here.
+On Windows, stay in PowerShell. LingTai finds npm's PowerShell-visible `dsh.ps1`
+shim, resolves the adjacent official `@deepseek-ai/dsh/lib/bin.js`, and starts
+that file with native Node.js. No WSL, Bash, or `cmd.exe` path is involved.
 
-## Example: launcher-level `--patch` overlay
+```text
+node <official-dsh-bin.js> --profile headless <backend_argv...> --patch <run-patch> <prompt>
+```
 
-The launcher parses its own flags first; the first unrecognized token starts
-`--profile headless`'s app arguments. Only launcher-level flags are therefore
-meaningful in `backend_options` for this backend — the highest-value one is
-`--patch <path>`, the official way to overlay a config tree (provider/model
-selection) on a one-shot run. Through `backend_options`, a string value becomes
-`--flag <value>`:
+Use `dsh --help` and `dsh --profile headless --help` from PowerShell to inspect
+the installed version. LingTai owns `--profile headless`; `--profile`, `--help`,
+`--version`, `--dump-config`, and `--dump-default-config` are reserved.
+Repeatable user `--patch` overlays remain available through
+`backend_options.patch`, and LingTai appends its policy patch last.
+
+## Task shape
 
 ```jsonc
 {
-  "backend": "deepseek",   // no alias; canonical name only
+  "backend": "deepseek",
   "tasks": [{
-    "task": "Implement and validate the change.",
+    "task": "Implement the scoped change and report the result.",
     "tools": [],
-    "backend_options": {
-      "patch": "./dsh-model.yml",   // launcher flag + value
-      "env": {
-        "DEEPSEEK_API_KEY": "sk-..."  // only if the operator's env lacks it
-      }
-    }
+    "workspace": "D:/rawle/Coding/project",
+    "allowed_paths": ["src", "tests"],
+    "required_checks": [
+      ["python", "-m", "pytest", "-q", "tests/test_feature.py"],
+      ["git", "diff", "--check"]
+    ]
   }]
 }
-// argv: dsh --patch ./dsh-model.yml --profile headless <prompt>
 ```
 
-The model/provider vocabulary belongs to the installed CLI and its patch/settings
-configuration — LingTai does not validate, enumerate, or simulate model names.
-Non-launcher flags (e.g. `--model ...`) are NOT valid here: they end up as app
-arguments after the launcher boundary and the headless app rejects them as a
-usage error (exit 1 → the run fails with the CLI's stderr).
+`workspace` defaults to the parent Agent directory. Use a clean worktree when
+you need fully attributable path acceptance. A pre-dirty worktree is allowed,
+but a scoped run reports `needs_decision` because edits to already-dirty files
+cannot be attributed reliably.
 
-## Subscription & auth
+LingTai copies only explicitly selected skill bundles into the run directory and
+mounts them through DSH's filesystem-skill provider. Selected MCP registrations
+use DSH's native MCP client. Secret env/header values stay in process environment
+variables and are never written into `dsh.patch.yml`. Session persistence is
+redirected to readable per-run JSONL. No custom DSH plugin is required.
 
-The DeepSeek Harness base bundle mounts the native DeepSeek adapter
-(`deepseek-official` route; default models deepseek-v4-flash / deepseek-v4-pro).
-Credentials resolve from the inherited environment first (`DEEPSEEK_API_KEY` is
-the adapter's default `apiKeyEnv`; `$DEEPSEEK_BASE_URL` overrides the public
-API), then `$DSH_HOME/.credentials.yaml`, the invoking project's `.env`, then
-`$DSH_HOME/.env`. LingTai pins `$DSH_HOME` to the run-private `<run>/dsh-home`
-so the headless profile's first-use auto-initialization and per-profile settings
-never touch the operator's real home — the machine-local `cordis.patch.yml` /
-`.credentials.yaml` layers are therefore deliberately NOT honored; use env vars
-or the project's `.env`. Never print key values.
+## Quality gate
 
-Official docs: https://github.com/deepseek-ai/deepseek-harness (developer
-preview — upstream may break compatibility between releases).
+Treat DSH as a worker, not its own verifier. After a zero exit, LingTai checks
+newly Git-observed paths against `allowed_paths` and executes every
+`required_checks` entry directly as argv, never through a shell. Durable
+`execution_acceptance.status` is `accepted`, `rejected`, or `needs_decision`.
+Escaped paths or failed checks reject; missing checks, non-Git attribution, or a
+pre-dirty scoped worktree require a decision.
 
-## Harness boundary
+The headless profile does not expose a verified stable session-id/resume
+contract. `daemon(action="ask", ...)` therefore returns an explicit unsupported
+error; start a new emanation for follow-up work.
 
-DeepSeek Harness declares a reserved-flag list at the validation layer; passing
-any of these in `backend_options` refuses the whole batch before spawn:
-`--profile`, `--dump-default-config`, `--dump-config`, `--version`, `--help`.
-LingTai owns `--profile headless` (the one-shot harness's profile lock) and the
-inspection-only exits are reserved because they would finish without doing the
-task. `--patch` is intentionally NOT reserved (documented user knob, same trust
-level as `backend_options.env`). No stable machine-readable session-id / resume
-contract was verified for the shipped headless profile, so
-`daemon(action="ask", input={"id": ..., "message": ...})` returns an explicit unsupported-backend error — start
-a new deepseek emanation instead.
+## Authentication
 
-Free-form options are inserted between `dsh` and the owned `--profile headless`
-flags; the prompt is the headless app's trailing positional argument. Output is
-plain text, not a JSON event stream: stdout is recorded verbatim, line by line,
-as `cli_output` events, no session id is captured, and the joined stdout becomes
-the result (exit 0 = completed; any nonzero exit — usage error, boot/config
-failure, or non-completed session — fails the run with the recorded text kept
-in the run dir for inspection). The run-private env (`DSH_HOME`, and
-`DSH_TELEMETRY_DISABLED=1` — the official hard opt-out) plus the operator's
-`$DSH_HOME` caveat are described in the parent table; `daemon_common` MCP
-injection is not wired yet for this backend.
+DSH owns its DeepSeek account/API configuration. LingTai neither copies nor
+prints credentials. `backend_options.env` may pass an already-authorized,
+task-scoped environment to the subprocess; values stay redacted from durable
+daemon metadata.
 
-## DeepSeek-specific validation steps
-
-In the Generic validation checklist (see
-`reference/cli-backends/SKILL.md`), additionally confirm from installed help
-that the launcher's app-argument boundary behaves as documented (`dsh --profile
-headless "task"` prints the final answer and exits 0/1, and non-launcher flags
-after the boundary are rejected by the headless app). Before enabling `ask` for
-this backend, source-cite a stable machine-readable session-id output plus a
-tested resume command from local help/code — do not guess.
+Official source: https://github.com/deepseek-ai/deepseek-harness
