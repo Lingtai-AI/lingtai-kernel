@@ -5867,11 +5867,11 @@ class DaemonManager:
             return None
         if state.get("run_id") != run_path.name:
             return None
-        if state.get("owner") != "supervisor":
-            return None
         pid = state.get("supervisor_pid")
         terminal = state.get("state") in {"done", "failed", "cancelled", "timeout"}
         if not terminal:
+            if state.get("owner") not in {"supervisor", "manager"}:
+                return None
             if not isinstance(pid, int) or isinstance(pid, bool):
                 return None
             if not self._pid_identity_matches(pid, state.get("supervisor_start_identity")):
@@ -5962,8 +5962,8 @@ class DaemonManager:
         if backend == "lingtai":
             if state.get("state") not in ("running", "active"):
                 return {"status": "error", "message": f"not running (state={state.get('state')!r})"}
-            if state.get("owner") != "supervisor":
-                return {"status": "error", "message": "detached supervisor owner is not confirmed"}
+            if state.get("owner") not in {"supervisor", "manager"}:
+                return {"status": "error", "message": "detached run owner is not confirmed"}
             pid = state.get("supervisor_pid")
             if not isinstance(pid, int) or not self._pid_identity_matches(
                 pid, state.get("supervisor_start_identity")
