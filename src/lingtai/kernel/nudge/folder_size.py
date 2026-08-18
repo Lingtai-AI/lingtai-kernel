@@ -61,7 +61,6 @@ def check(agent) -> None:
 
     if folder_state.get("last_check_date") != today:
         _start_probe(Path(agent._working_dir), today)
-        return
 
     if "size_bytes" not in folder_state:
         return
