@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1074,7 +1076,6 @@ def test_dsh_initial_run_uses_native_headless_profile_and_env_overlay(
     assert command.argv[5:7] == ("--patch", str(run_dir.path / "dsh.patch.yml"))
     assert "Refactor with DSH." in command.argv[-1]
     assert command.cwd == agent._working_dir
-    assert command.encoding == "utf-8"
     assert dict(command.environment)["DSH_TEST_VALUE"] == "native-powershell"
     assert port.deadlines == [None]
     assert port.waited == [port.handle]

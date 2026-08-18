@@ -18,6 +18,7 @@ import json
 import os
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -8154,7 +8155,6 @@ class DaemonManager:
             handle = self._process_port.spawn(
                 DaemonProcessCommand(
                     tuple(cmd), workspace, tuple(env.items()),
-                    encoding="utf-8",
                 ),
                 group_id=run_dir.group_id,
             )
@@ -10163,8 +10163,7 @@ def setup(agent: "Agent",
             if isinstance(manifest, dict):
                 declaration = manifest.get("execution_policy")
         execution_policy = load_execution_policy(declaration, agent._working_dir)
-    mgr = DaemonManager(agent, max_emanations=max_emanations,
-                        max_turns=max_turns, timeout=timeout,
+    mgr = DaemonManager(agent, max_turns=max_turns, timeout=timeout,
                         notify_threshold=notify_threshold,
                         manager_pool_size=manager_pool_size,
                         process_port=process_port,
