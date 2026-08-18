@@ -13,6 +13,7 @@ import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock, Thread
 from typing import Any, Mapping
 
 _KIND = "folder_size"
@@ -20,10 +21,23 @@ _STATE_FILE = Path(".notification") / ".nudge_state.json"
 DEFAULT_LIMIT_GB = 5.0
 LIMIT_ENV = "LINGTAI_NUDGE_FOLDER_SIZE_GB"
 _BYTES_PER_GB = 1_000_000_000
+_PROBE_LOCK = Lock()
+_PROBES_BY_WORKDIR: dict[str, "_Probe"] = {}
+
+
+class _Probe:
+    """One in-process directory measurement owned by a heartbeat workdir."""
+
+    def __init__(self, path: Path, start_date: str) -> None:
+        self.path = path
+        self.start_date = start_date
+        self.total_bytes: int | None = None
+        self.error: str | None = None
+        self.done = False
 
 
 def check(agent) -> None:
-    """Evaluate the folder-size nudge on every heartbeat (walk max once/day)."""
+    """Evaluate the nudge without performing a recursive walk on heartbeat."""
     persistent = _load_persistent_state(agent)
     folder_state = persistent.setdefault(_KIND, {})
 
@@ -31,14 +45,23 @@ def check(agent) -> None:
     if invalid:
         _safe_log(agent, "folder_size_limit_invalid", value=invalid)
 
-    if folder_state.get("last_check_date") != _today_utc():
-        try:
-            total_bytes = _dir_size(Path(agent._working_dir))
-        except Exception as e:  # pragma: no cover - defensive
-            _safe_log(agent, "folder_size_probe_error", error=str(e)[:200])
+    today = _today_utc()
+    completed = _take_completed_probe(Path(agent._working_dir))
+    if completed is not None:
+        if completed.start_date != today:
+            pass
+        elif completed.error is not None:
+            _safe_log(agent, "folder_size_probe_error", error=completed.error[:200])
             return
-        folder_state.update({"last_check_date": _today_utc(), "size_bytes": total_bytes, "limit_gb": limit_gb})
-        _save_persistent_state(agent, persistent)
+        else:
+            folder_state.update(
+                {"last_check_date": completed.start_date, "size_bytes": completed.total_bytes, "limit_gb": limit_gb}
+            )
+            _save_persistent_state(agent, persistent)
+
+    if folder_state.get("last_check_date") != today:
+        _start_probe(Path(agent._working_dir), today)
+        return
 
     if "size_bytes" not in folder_state:
         return
@@ -72,6 +95,40 @@ def check(agent) -> None:
             "checked_at_date": folder_state.get("last_check_date"),
         },
     )
+
+
+def _start_probe(workdir: Path, start_date: str) -> None:
+    path = workdir.resolve()
+    key = str(path)
+    with _PROBE_LOCK:
+        if key in _PROBES_BY_WORKDIR:
+            return
+        probe = _Probe(path, start_date)
+        _PROBES_BY_WORKDIR[key] = probe
+    Thread(target=_measure_probe, args=(probe,), daemon=True).start()
+
+
+def _measure_probe(probe: _Probe) -> None:
+    try:
+        total_bytes = _dir_size(probe.path)
+    except Exception as e:
+        with _PROBE_LOCK:
+            probe.error = str(e)[:200]
+            probe.done = True
+        return
+    with _PROBE_LOCK:
+        probe.total_bytes = total_bytes
+        probe.done = True
+
+
+def _take_completed_probe(workdir: Path) -> _Probe | None:
+    key = str(workdir.resolve())
+    with _PROBE_LOCK:
+        probe = _PROBES_BY_WORKDIR.get(key)
+        if probe is None or not probe.done:
+            return None
+        del _PROBES_BY_WORKDIR[key]
+        return probe
 
 
 def _read_limit_gb(environ: Mapping[str, str] | None = None) -> tuple[float, str | None]:
