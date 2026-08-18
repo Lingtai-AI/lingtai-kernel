@@ -281,6 +281,41 @@ def test_blocking_probe_returns_and_is_single_flight_until_a_heartbeat_consumes_
         release.set()
 
 
+def test_prior_observation_remains_effective_while_new_day_probe_is_pending(monkeypatch, tmp_path):
+    agent = _Agent(tmp_path)
+    monkeypatch.setenv(LIMIT_ENV, TINY_LIMIT)
+    _state_file(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    _state_file(tmp_path).write_text(
+        json.dumps(
+            {
+                "folder_size": {
+                    "last_check_date": "2026-08-17",
+                    "size_bytes": CHUNK,
+                    "limit_gb": 5,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(folder_size, "_today_utc", lambda: "2026-08-18")
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked_probe(path):
+        started.set()
+        assert release.wait(3.0)
+        return CHUNK
+
+    monkeypatch.setattr(folder_size, "_dir_size", blocked_probe)
+    try:
+        _assert_fast_check(agent)
+        assert started.wait(1.0)
+        assert bool(_entries(tmp_path))
+        assert _state(tmp_path)["folder_size"]["last_check_date"] == "2026-08-17"
+    finally:
+        release.set()
+
+
 def test_blocked_workdir_probe_does_not_delay_another_workdir(monkeypatch, tmp_path):
     first_path = tmp_path / "first"
     second_path = tmp_path / "second"
