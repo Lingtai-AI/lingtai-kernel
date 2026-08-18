@@ -18,6 +18,7 @@ related_files:
   - src/lingtai/CONTRACT.md
   - tests/test_nudge_prompts.py
   - tests/test_kernel_version_nudge.py
+  - tests/test_folder_size_nudge.py
   - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -65,8 +66,11 @@ the ordinary Notification Store channel; it does not create a second transport.
   `init.json` independently (`src/lingtai/kernel/nudge/init_config.py:1-74`).
 - `folder_size.py` — read-only recursive size walk of the agent working
   directory, throttled to one walk per UTC day via a per-kind persistent date
-  gate; every heartbeat re-evaluates the persisted observation through the
-  shared `upsert`/`remove` so global repeat/enable/retry semantics stay live.
+  gate. The walk runs in a daemon worker with one in-process flight per
+  canonical working directory; a later heartbeat alone consumes and persists
+  the result, so the heartbeat never waits for a large filesystem traversal.
+  Every heartbeat re-evaluates the persisted observation through the shared
+  `upsert`/`remove` so global repeat/enable/retry semantics stay live.
   Emits/clears a `storage_size` finding when the directory crosses
   `LINGTAI_NUDGE_FOLDER_SIZE_GB` (default `5` decimal GB) (`src/lingtai/kernel/nudge/folder_size.py:1-182`).
   `event_journal_count.py` has no user setting: its once-per-UTC-day direct
@@ -97,8 +101,8 @@ the ordinary Notification Store channel; it does not create a second transport.
 ## Connections
 
 `../base_agent/lifecycle.py` calls `run_checks` once per heartbeat
-(checks must never block on the network — long work goes to a background
-thread, see `kernel_version.py`);
+(checks must never block on network or recursive filesystem probes — long work
+goes to a background thread, see `kernel_version.py` and `folder_size.py`);
 protected goal reminders are dispatched separately by
 `run_system_notifications`. Producer checks call `upsert`/`remove`; the shared
 `NotificationStorePort` persists `nudge.json`. `notification(action="dismiss_channel", input={"channel": "nudge", ...},
@@ -126,6 +130,12 @@ cost), never the upsert/remove decision, which is re-evaluated on every
 heartbeat so shared global enabled/repeat values stay product semantics. Goal
 source state remains protected `.notification/goal.json` and its reminder
 remains in `system.json`.
+
+While a folder-size walk is running, process-local ephemeral state holds one
+pending probe per canonical working directory. The worker publishes only an
+in-memory result or bounded error; the heartbeat thread owns all persistent
+state and Notification Store mutations. A result that finishes after its UTC
+start date is discarded and measured again for the current day.
 
 Findings that exceed `INLINE_MAX_CHARS` also persist their complete original
 body to `<working_dir>/tmp/nudge-findings/<kind>-<sha256>.json`
