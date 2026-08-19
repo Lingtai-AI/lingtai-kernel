@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from lingtai.agent import Agent
+from lingtai.kernel.config import TOOL_PROSE_SECTION_ENABLED_ENV
 from lingtai.tools.browser.core import BrowserEngine
 from lingtai.tools.browser.port import ResolvedTarget, TransportResponse
 from lingtai.tools.web_search import get_schema
@@ -219,10 +220,10 @@ def test_web_action_input_search_to_link_ref_browse(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_web_real_agent_startup_and_complete_prompt_build(tmp_path):
-    agent = Agent(
+def _web_startup_agent(tmp_path, name):
+    return Agent(
         service=make_gemini_mock_service(),
-        agent_name="web-startup-gate",
+        agent_name=name,
         working_dir=tmp_path,
         capabilities={"web": {}},
         disable=[
@@ -230,6 +231,19 @@ def test_web_real_agent_startup_and_complete_prompt_build(tmp_path):
             "read", "write", "edit", "glob", "grep", "vision",
         ],
     )
+
+
+def test_web_real_agent_startup_and_complete_prompt_build(tmp_path, monkeypatch):
+    """The resident ``## tools`` walkthrough is opt-in, so assert it opted in.
+
+    The gate (``LINGTAI_TOOL_PROSE_SECTION_ENABLED``) decides whether the
+    section exists at all; this test is about ``web`` reaching a *complete*
+    prompt build, so it turns the section on. The default state — where ``web``
+    reaches the model through its tool schema instead — is covered by
+    ``test_web_real_agent_startup_reaches_schemas_without_prose_section``.
+    """
+    monkeypatch.setenv(TOOL_PROSE_SECTION_ENABLED_ENV, "1")
+    agent = _web_startup_agent(tmp_path, "web-startup-gate")
     try:
         agent.start()
         prompt = agent._build_system_prompt()
@@ -238,6 +252,26 @@ def test_web_real_agent_startup_and_complete_prompt_build(tmp_path):
         assert "### web" in prompt
         assert "web" in {schema.name for schema in schemas}
         assert "web" in "\n\n".join(batches)
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_web_real_agent_startup_reaches_schemas_without_prose_section(
+    tmp_path, monkeypatch
+):
+    """Default gate state: no ``## tools`` section, but ``web`` is still callable."""
+    monkeypatch.delenv(TOOL_PROSE_SECTION_ENABLED_ENV, raising=False)
+    agent = _web_startup_agent(tmp_path, "web-startup-gate-off")
+    try:
+        agent.start()
+        prompt = agent._build_system_prompt()
+        schemas = {schema.name: schema for schema in agent._build_tool_schemas()}
+        assert "### web" not in prompt
+        assert "## tools" not in prompt
+        # The capability is not lost — its full prose rides on the schema the
+        # provider payload is built from.
+        assert "web" in schemas
+        assert schemas["web"].description
     finally:
         agent.stop(timeout=1.0)
 
