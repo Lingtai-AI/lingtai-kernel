@@ -16,12 +16,12 @@ from google.genai import errors as genai_errors, types
 from lingtai.kernel.logging import get_logger
 
 from lingtai.kernel.llm.base import (
-    WIRE_TOOL_DESCRIPTION,
     ChatSession,
     FunctionSchema,
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    wire_tool_description,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
@@ -42,15 +42,18 @@ def _build_function_declarations(
 ) -> list[types.FunctionDeclaration] | None:
     """Convert our FunctionSchema list to Gemini FunctionDeclaration list.
 
-    The wire description is the constant ``WIRE_TOOL_DESCRIPTION``; the full
-    prose stays in the system prompt's ``## tools`` section.
+    The wire description comes from ``wire_tool_description``: the constant
+    ``WIRE_TOOL_DESCRIPTION`` pointer while the resident ``## tools`` section is
+    opted in via ``LINGTAI_TOOL_PROSE_SECTION_ENABLED``, otherwise the full
+    ``FunctionSchema.description`` prose (that section is not rendered by
+    default, so the wire is where the prose lives).
     """
     if not tools:
         return None
     return [
         types.FunctionDeclaration(
             name=t.name,
-            description=WIRE_TOOL_DESCRIPTION,
+            description=wire_tool_description(t.description),
             parameters=t.parameters,
         )
         for t in tools
@@ -212,8 +215,11 @@ def _build_interactions_tools(
 ) -> list[dict] | None:
     """Convert FunctionSchema list to Interactions API tool dicts.
 
-    The wire description is the constant ``WIRE_TOOL_DESCRIPTION``; the full
-    prose stays in the system prompt's ``## tools`` section.
+    The wire description comes from ``wire_tool_description``: the constant
+    ``WIRE_TOOL_DESCRIPTION`` pointer while the resident ``## tools`` section is
+    opted in via ``LINGTAI_TOOL_PROSE_SECTION_ENABLED``, otherwise the full
+    ``FunctionSchema.description`` prose (that section is not rendered by
+    default, so the wire is where the prose lives).
     """
     if not tools:
         return None
@@ -221,7 +227,7 @@ def _build_interactions_tools(
         {
             "type": "function",
             "name": t.name,
-            "description": WIRE_TOOL_DESCRIPTION,
+            "description": wire_tool_description(t.description),
             "parameters": _sanitize_parameters_for_interactions(t.parameters),
         }
         for t in tools

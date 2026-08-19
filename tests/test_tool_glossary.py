@@ -22,6 +22,7 @@ import pytest
 
 import lingtai.kernel.tool_glossary as tool_glossary
 from lingtai.kernel.base_agent.tools import _refresh_tool_inventory_section
+from lingtai.kernel.config import TOOL_PROSE_SECTION_ENABLED_ENV
 from lingtai.kernel.llm.base import WIRE_TOOL_DESCRIPTION
 from lingtai.kernel.tool_glossary import (
     GlossaryValidationError,
@@ -517,7 +518,10 @@ class TestSchemaInvariance:
         assert "offset" in read_props
         assert "limit" in read_props
 
-    def test_normal_and_daemon_resident_tools_render_selected_glossary(self):
+    def test_normal_and_daemon_resident_tools_render_selected_glossary(self, monkeypatch):
+        # The resident section is opt-in (default off), so this rendering
+        # contract is asserted in the state that produces it.
+        monkeypatch.setenv(TOOL_PROSE_SECTION_ENABLED_ENV, "1")
         zh_body = load_tool_glossary("lingtai.tools.file", "zh")
         schema = FunctionSchema(
             name="read",
@@ -581,7 +585,21 @@ class TestSchemaInvariance:
         assert set(schemas) == {"compact"}
         assert set(handlers) == set()
 
-    def test_glossary_metadata_and_body_never_reach_provider_wire(self):
+    @pytest.mark.parametrize("prose_section", ["on", "off"])
+    def test_glossary_metadata_and_body_never_reach_provider_wire(
+        self, monkeypatch, prose_section
+    ):
+        """The glossary body never reaches a wire in either gate state.
+
+        Which top-level description the wire carries *does* depend on the gate
+        (pointer when the resident section is opted in, full prose otherwise),
+        but the package glossary body is section-only text in both.
+        """
+        if prose_section == "on":
+            monkeypatch.setenv(TOOL_PROSE_SECTION_ENABLED_ENV, "1")
+        else:
+            monkeypatch.delenv(TOOL_PROSE_SECTION_ENABLED_ENV, raising=False)
+
         from lingtai.llm.anthropic.adapter import _build_tools as build_anthropic_tools
         from lingtai.llm.openai.adapter import (
             _build_responses_tools,
@@ -609,8 +627,11 @@ class TestSchemaInvariance:
         openai_chat = build_openai_tools([schema])[0]["function"]
         openai_responses = _build_responses_tools([schema])[0]
         anthropic = build_anthropic_tools([schema], cache_tools=False)[0]
+        expected = (
+            WIRE_TOOL_DESCRIPTION if prose_section == "on" else "Read text files."
+        )
         for payload in (openai_chat, openai_responses, anthropic):
-            assert payload["description"] == WIRE_TOOL_DESCRIPTION
+            assert payload["description"] == expected
             assert body not in repr(payload)
             assert "glossary_package" not in payload
         assert openai_chat["parameters"] == parameters

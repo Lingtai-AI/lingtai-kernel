@@ -4,6 +4,7 @@ The 2-layer tool dispatch: intrinsics (built-in) + capabilities/MCP.
 """
 from __future__ import annotations
 
+from ..config import tool_prose_section_enabled
 from ..llm import FunctionSchema
 from ..tool_glossary import append_tool_glossary
 from ..types import UnknownToolError
@@ -46,13 +47,32 @@ def _dispatch_tool(agent, tc) -> dict:
 def _refresh_tool_inventory_section(agent) -> None:
     """Rebuild the 'tools' section from current intrinsic + schema descriptions.
 
-    Each tool's full canonical English description (``get_description()`` for
-    intrinsics, ``FunctionSchema.description`` for dynamic/MCP tools) is
-    appended with the selected-language glossary body from its owning package.
-    Provider wire descriptions/schemas are a separate surface
-    (``_build_tool_schemas`` + ``WIRE_TOOL_DESCRIPTION``); this section never
-    affects them.
+    OPT-IN, DEFAULT OFF. The prose this section renders is the same text the
+    tool-calling schema already carries as its top-level ``description``, so
+    rendering both puts two copies of every tool's prose into one turn's
+    context — byte-identical duplication on the CLI-backed adapters
+    (``claude_code``/``kimi_code``), which serialise the full schema
+    description into their ``# AVAILABLE TOOLS`` block right next to this
+    section. Unless ``LINGTAI_TOOL_PROSE_SECTION_ENABLED`` is truthy
+    (:func:`lingtai.kernel.config.tool_prose_section_enabled`) the section is
+    left unwritten — and any previously written copy is deleted, so flipping
+    the switch off and rebuilding actually drops it — while
+    :func:`lingtai.kernel.llm.base.wire_tool_description` puts the full prose
+    on the provider wire instead of the ``WIRE_TOOL_DESCRIPTION`` pointer.
+    Exactly one copy either way; no tool ever loses its guidance.
+
+    When opted in, the old behavior is restored unchanged: each tool's full
+    canonical English description (``get_description()`` for intrinsics,
+    ``FunctionSchema.description`` for dynamic/MCP tools) is appended with the
+    selected-language glossary body from its owning package, and provider wire
+    descriptions revert to the ``WIRE_TOOL_DESCRIPTION`` pointer.
+
+    Nested parameter/property descriptions inside ``parameters`` are untouched
+    in both states.
     """
+    if not tool_prose_section_enabled():
+        agent._prompt_manager.delete_section("tools")
+        return
     lang = agent._config.language
     lines = []
     for name in agent._intrinsics:

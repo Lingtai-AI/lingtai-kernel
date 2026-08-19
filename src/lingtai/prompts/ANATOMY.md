@@ -92,7 +92,7 @@ sources, catalog INDEX ↔ catalog sections).
 | `<section>/<section>.yaml` | `prompt-section-definition` YAML: `name_definition`, `purpose`, `scope`, `injection_contract`, `related_files`, `maintenance`. Present for every section. |
 | `principle/principle.md`, `substrate/substrate.md`, `procedures/procedures.md` | The three kernel-owned, packaged section bodies (skill-style frontmatter + Markdown body; frontmatter stripped on render). |
 | `meta_guidance/catalog/` | Runtime-guidance Markdown catalog: `INDEX.md` (manifest frontmatter) + one `<id>.md` per section, nested under the `meta_guidance` section it generates. Assembled into the `meta_guidance` body; order is code-owned in `GUIDANCE_SECTION_ORDER`. |
-| `tools/tools.yaml` | Semantic contract for the generated `tools` section. Resident tool inventory renders each canonical-English description/schema plus the selected package-owned glossary body; provider tool definitions remain the fixed generic wire description with unchanged nested parameters. |
+| `tools/tools.yaml` | Semantic contract for the generated `tools` section. The section is opt-in and default off (`LINGTAI_TOOL_PROSE_SECTION_ENABLED`): when opted in the resident tool inventory renders each canonical-English description/schema plus the selected package-owned glossary body and provider tool definitions carry the fixed generic wire pointer; by default the section is omitted and that prose rides on the provider tool definition instead. Nested parameters are unchanged either way. |
 
 ## Render ownership and definition vs injection
 
@@ -118,7 +118,12 @@ For the generated `tools` section, `src/lingtai/kernel/base_agent/tools.py`
 collects canonical-English descriptions and parameter schemas, then appends the
 selected `glossary-{en,zh,wen}.md` body through
 `src/lingtai/kernel/tool_glossary.py`; English glossary bodies are deliberately
-empty. The daemon is a sibling system-prompt variant, mapped through
+empty. That whole section is opt-in and default off behind
+`LINGTAI_TOOL_PROSE_SECTION_ENABLED` (`src/lingtai/kernel/config.py`) because its
+prose duplicates the tool-calling schema description the provider payload already
+carries; with it off, `wire_tool_description`
+(`src/lingtai/kernel/llm/base.py`) puts that prose on the wire instead, so no
+tool loses guidance and no schema changes. The daemon is a sibling system-prompt variant, mapped through
 `src/lingtai/tools/daemon/ANATOMY.md` and implemented by
 `src/lingtai/tools/daemon/system_prompt.py`: it does not render this resident
 section stack or duplicate full tool descriptions. Instead it provides a short

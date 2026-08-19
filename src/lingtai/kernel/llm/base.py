@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from lingtai.kernel.config import tool_prose_section_enabled
 from lingtai.kernel.logging import get_logger
 
 from .interface import ChatInterface
@@ -180,13 +181,34 @@ def is_all_empty_response(response: LLMResponse) -> bool:
     return not response.text and not response.tool_calls and not response.thoughts
 
 
-# The single wire-facing description for registered ``FunctionSchema`` tools.
-# Provider payload builders send this constant as those tools' top-level
-# description; the full ``FunctionSchema.description`` prose renders only into
-# the system prompt's
-# ``## tools`` section (base_agent/tools.py:_refresh_tool_inventory_section).
-# Parameter/property descriptions inside ``parameters`` are never touched.
+# The pointer description for registered ``FunctionSchema`` tools, used ONLY
+# while the resident ``## tools`` prose section is opted in — it is the pointer
+# that section is the target of. Parameter/property descriptions inside
+# ``parameters`` are never touched.
 WIRE_TOOL_DESCRIPTION = "See the system prompt for tool usage guidance."
+
+
+def wire_tool_description(description: str | None) -> str:
+    """Return the top-level wire description a provider payload should carry.
+
+    Exactly one copy of a tool's prose reaches the model per turn:
+
+    * ``LINGTAI_TOOL_PROSE_SECTION_ENABLED`` truthy — the resident ``## tools``
+      section carries the prose, so the wire carries the
+      :data:`WIRE_TOOL_DESCRIPTION` pointer at it. This is the historical
+      behavior, restored byte-for-byte.
+    * default (unset/falsey) — the ``## tools`` section is not rendered at all
+      (``base_agent/tools.py:_refresh_tool_inventory_section``), so the pointer
+      would dangle; the wire carries the full ``FunctionSchema.description``
+      instead. Nothing is shortened or dropped — the prose simply moves to the
+      one surface that survives.
+
+    ``description`` falls back to the pointer when empty so a schema registered
+    without prose still gets a non-empty wire description, exactly as before.
+    """
+    if tool_prose_section_enabled():
+        return WIRE_TOOL_DESCRIPTION
+    return description or WIRE_TOOL_DESCRIPTION
 
 
 @dataclass

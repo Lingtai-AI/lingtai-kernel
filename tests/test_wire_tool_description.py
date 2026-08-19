@@ -1,10 +1,20 @@
 """Wire tool-description single-source contract.
 
-FunctionSchema.description keeps the full tool prose — the system prompt's
-``## tools`` section and canonical ChatInterface tool snapshots render it —
-while every provider payload built from registered schemas carries the constant
-``WIRE_TOOL_DESCRIPTION`` as the function-level description. Parameter and
-property descriptions inside ``parameters`` are never touched.
+FunctionSchema.description keeps the full tool prose and canonical
+ChatInterface tool snapshots render it. Which surface the *model* sees it on
+depends on ``LINGTAI_TOOL_PROSE_SECTION_ENABLED``:
+
+* opted in — the system prompt's ``## tools`` section carries the prose and
+  every provider payload carries the constant ``WIRE_TOOL_DESCRIPTION`` pointer
+  at it. That is the historical behavior this module pins, so the fixture below
+  turns the switch on for the whole file.
+* default (off) — the ``## tools`` section is not rendered and the provider
+  payload carries the full prose instead. Pinned by
+  ``tests/test_tool_prose_section_gate.py`` and by the default-state tests at
+  the bottom of this module.
+
+Either way the prose reaches the model exactly once, and parameter/property
+descriptions inside ``parameters`` are never touched.
 """
 from __future__ import annotations
 
@@ -14,8 +24,20 @@ from types import SimpleNamespace
 
 import pytest
 
+from lingtai.kernel.config import TOOL_PROSE_SECTION_ENABLED_ENV
 from lingtai.kernel.llm.base import WIRE_TOOL_DESCRIPTION, FunctionSchema
 from lingtai.kernel.base_agent.tools import _refresh_tool_inventory_section
+
+
+@pytest.fixture(autouse=True)
+def _prose_section_opted_in(monkeypatch):
+    """Pin this module to the opt-in state the pointer contract belongs to.
+
+    The gate is read from ``os.environ`` at every render, so without this an
+    ambient operator value (or the default-off state) would silently flip which
+    surface carries the prose.
+    """
+    monkeypatch.setenv(TOOL_PROSE_SECTION_ENABLED_ENV, "1")
 
 FULL_DESCRIPTION = (
     "Send an email. Full multi-paragraph usage guidance lives here and must "
@@ -461,3 +483,64 @@ def test_gemini_wire_descriptions():
         PARAMETERS, sort_keys=True
     )
     assert schemas[0].description == FULL_DESCRIPTION
+
+
+# ---------------------------------------------------------------------------
+# Default state — the switch is OFF unless explicitly opted in
+# ---------------------------------------------------------------------------
+
+
+def _default_off(monkeypatch):
+    monkeypatch.delenv(TOOL_PROSE_SECTION_ENABLED_ENV, raising=False)
+
+
+def test_default_off_moves_prose_from_section_to_every_wire(monkeypatch):
+    """With the section off, the prose lives on the wire instead — never both."""
+    _default_off(monkeypatch)
+
+    from lingtai.llm.anthropic.adapter import _build_tools as anthropic_tools
+    from lingtai.llm.gemini.adapter import _build_function_declarations
+    from lingtai.llm.openai.adapter import _build_responses_tools
+    from lingtai.llm.openai.adapter import _build_tools as openai_tools
+
+    sections: dict[str, str] = {}
+    deleted: list[str] = []
+    agent = SimpleNamespace(
+        _config=SimpleNamespace(language="en"),
+        _intrinsics={},
+        _intrinsic_modules={},
+        _tool_schemas=_schemas(),
+        _prompt_manager=SimpleNamespace(
+            write_section=lambda name, text, protected=False: sections.__setitem__(name, text),
+            delete_section=lambda name: deleted.append(name),
+        ),
+    )
+    _refresh_tool_inventory_section(agent)
+    assert sections == {}, "the prose section must not be written by default"
+    assert deleted == ["tools"], "a previously written section must be dropped"
+
+    schemas = _schemas()
+    wires = [
+        openai_tools(schemas)[0]["function"]["description"],
+        _build_responses_tools(schemas)[0]["description"],
+        anthropic_tools(schemas, cache_tools=False)[0]["description"],
+        _build_function_declarations(schemas)[0].description,
+    ]
+    for description in wires:
+        assert description == FULL_DESCRIPTION
+        assert description != WIRE_TOOL_DESCRIPTION
+
+    # Nested parameter descriptions stay byte-for-byte identical in both states.
+    assert json.dumps(
+        openai_tools(schemas)[0]["function"]["parameters"], sort_keys=True
+    ) == json.dumps(PARAMETERS, sort_keys=True)
+
+
+def test_default_off_keeps_pointer_for_a_schema_with_no_prose(monkeypatch):
+    """An empty description still yields a non-empty wire description."""
+    _default_off(monkeypatch)
+
+    from lingtai.llm.openai.adapter import _build_tools as openai_tools
+
+    schema = FunctionSchema(name="silent", description="", parameters={"type": "object"})
+    assert openai_tools([schema])[0]["function"]["description"] == WIRE_TOOL_DESCRIPTION

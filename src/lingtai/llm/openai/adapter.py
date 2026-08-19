@@ -35,7 +35,6 @@ from lingtai.kernel.config import (
 )
 
 from lingtai.kernel.llm.base import (
-    WIRE_TOOL_DESCRIPTION,
     ChatSession,
     FunctionSchema,
     LLMReplayTerminalError,
@@ -44,6 +43,7 @@ from lingtai.kernel.llm.base import (
     UsageMetadata,
     mark_llm_replay_terminal,
     safe_exception_description,
+    wire_tool_description,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.kernel.llm.reasoning_effort import (
@@ -1160,8 +1160,11 @@ def _build_http_timeout(request_timeout: float | None):
 def _build_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
     """Convert FunctionSchema list to OpenAI tool format.
 
-    The wire description is the constant ``WIRE_TOOL_DESCRIPTION``; the full
-    prose stays in the system prompt's ``## tools`` section.
+    The wire description comes from ``wire_tool_description``: the constant
+    ``WIRE_TOOL_DESCRIPTION`` pointer while the resident ``## tools`` section is
+    opted in via ``LINGTAI_TOOL_PROSE_SECTION_ENABLED``, otherwise the full
+    ``FunctionSchema.description`` prose (that section is not rendered by
+    default, so the wire is where the prose lives).
     """
     if not schemas:
         return None
@@ -1170,7 +1173,7 @@ def _build_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
             "type": "function",
             "function": {
                 "name": s.name,
-                "description": WIRE_TOOL_DESCRIPTION,
+                "description": wire_tool_description(s.description),
                 "parameters": s.parameters,
             },
         }
@@ -1294,7 +1297,7 @@ def _build_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] |
             {
                 "type": "function",
                 "name": s.name,
-                "description": WIRE_TOOL_DESCRIPTION,
+                "description": wire_tool_description(s.description),
                 "parameters": params,
             }
         )

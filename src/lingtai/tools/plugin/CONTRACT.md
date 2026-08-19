@@ -328,9 +328,13 @@ python -m pytest tests/test_plugin_tool.py tests/test_signpost_tool_descriptions
   language-independent; the optional `lang` argument is accepted for source
   compatibility but ignored. Agent Plugins filenames (`plugin.json`, `mcp.json`,
   `skills/`, `SKILL.md`) are standard literals and are never localized.
-- **Provider wire:** provider adapters send the global `WIRE_TOOL_DESCRIPTION`
-  constant as the top-level tool description; `FunctionSchema.description`
-  holds the full canonical prose rendered into `## tools`.
+- **Provider wire:** provider adapters resolve the top-level tool description
+  through `wire_tool_description`: the global `WIRE_TOOL_DESCRIPTION` pointer
+  while the resident `## tools` section is opted in via
+  `LINGTAI_TOOL_PROSE_SECTION_ENABLED`, otherwise the full
+  `FunctionSchema.description` prose (that section is off by default, so the
+  wire is where the canonical prose lands). Nested parameter descriptions are
+  unchanged either way.
 - **Glossary resources:** this package owns `glossary-en.md`, `glossary-zh.md`,
   and `glossary-wen.md`. Each has strict YAML frontmatter
   (`kind: tool-glossary`, `schema_version: 1`, `tool_package: tools.<pkg>`,

@@ -69,12 +69,12 @@ def _build_http_timeout(request_timeout: float | None):
 
 
 from lingtai.kernel.llm.base import (
-    WIRE_TOOL_DESCRIPTION,
     ChatSession,
     FunctionSchema,
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    wire_tool_description,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
@@ -94,15 +94,18 @@ def _build_tools(
 ) -> list[dict] | None:
     """Convert FunctionSchema list to Anthropic tool format.
 
-    The wire description is the constant ``WIRE_TOOL_DESCRIPTION``; the full
-    prose stays in the system prompt's ``## tools`` section.
+    The wire description comes from ``wire_tool_description``: the constant
+    ``WIRE_TOOL_DESCRIPTION`` pointer while the resident ``## tools`` section is
+    opted in via ``LINGTAI_TOOL_PROSE_SECTION_ENABLED``, otherwise the full
+    ``FunctionSchema.description`` prose (that section is not rendered by
+    default, so the wire is where the prose lives).
     """
     if not schemas:
         return None
     tools = [
         {
             "name": s.name,
-            "description": WIRE_TOOL_DESCRIPTION,
+            "description": wire_tool_description(s.description),
             "input_schema": s.parameters,
         }
         for s in schemas

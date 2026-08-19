@@ -135,6 +135,49 @@ def system_prompt_pressure_ratio() -> float:
         return DEFAULT_SYSTEM_PROMPT_PRESSURE_RATIO
     return value
 
+
+# ---------------------------------------------------------------------------
+# Resident ``## tools`` prose walkthrough — opt-in, DEFAULT OFF
+# ---------------------------------------------------------------------------
+#
+# Every tool's full canonical-English prose used to be rendered TWICE into the
+# model-facing context of one turn: once as the resident ``## tools`` section of
+# the composed system prompt (``base_agent/tools.py``
+# ``_refresh_tool_inventory_section``) and once as the tool-calling schema's
+# top-level ``description``. For API providers the wire copy is the generic
+# ``WIRE_TOOL_DESCRIPTION`` pointer, so only the section carried the prose; for
+# the CLI-backed adapters (``claude_code``, ``kimi_code``) the full prose is
+# serialised verbatim into the ``# AVAILABLE TOOLS`` block *next to* the very
+# same text inside ``# AGENT SYSTEM INSTRUCTIONS`` — literal byte-identical
+# duplication of ~1.1 KB per registered tool, every turn.
+#
+# The section is now OPT-IN and DEFAULT OFF. With it off, each tool's prose
+# lives in exactly one place — the tool-calling schema description, which every
+# adapter already sends (``wire_tool_description`` returns the full prose
+# instead of the pointer sentence, so no provider loses guidance). Set
+# ``LINGTAI_TOOL_PROSE_SECTION_ENABLED`` to a truthy value to restore the old
+# two-copy behavior byte-for-byte, including the ``WIRE_TOOL_DESCRIPTION``
+# pointer on API wires.
+#
+# Nested parameter/property descriptions are never affected either way.
+TOOL_PROSE_SECTION_ENABLED_ENV = "LINGTAI_TOOL_PROSE_SECTION_ENABLED"
+# Case-insensitive truthy set, matching the other kernel opt-in gates
+# (``LINGTAI_RISKY_ACTION_GATE``, ``LINGTAI_SOUL_FLOW_ENABLED``). Anything else
+# — including unset and "" — is off.
+_TOOL_PROSE_SECTION_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def tool_prose_section_enabled() -> bool:
+    """Return whether the resident ``## tools`` prose section is opted in.
+
+    Read fresh from ``os.environ`` at every prompt rebuild and every provider
+    payload build so a value flipped in an agent's ``env_file`` applies at the
+    next refresh without a restart.
+    """
+    raw = os.environ.get(TOOL_PROSE_SECTION_ENABLED_ENV, "")
+    return raw.strip().lower() in _TOOL_PROSE_SECTION_TRUTHY
+
+
 # Hidden runtime housekeeping: an agent that remains IDLE for this long is moved
 # to ASLEEP. This is deliberately kernel-fixed and not surfaced in init.json,
 # prompts, status, or tool metadata.
