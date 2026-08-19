@@ -61,7 +61,12 @@ from ._snapshots import SNAPSHOT_SCHEMA_VERSION, _write_molt_snapshot, _write_mo
 # Molt (the public surface)
 from ._molt import _context_molt, context_forget  # noqa: F401
 from .._manual import load_installed_manual  # noqa: F401
-from ..tool_family import ChildTool, ToolFamily
+from ..tool_family import (
+    TRIGGER_UNSUPPORTED_INPUT_FIELD,
+    ChildTool,
+    DiagnosticDescriptor,
+    ToolFamily,
+)
 from ..tool_family.manual import build_manual_child
 
 # The summarize/rebuild engine. It stays in ``system/summarize.py`` — moving
@@ -104,6 +109,32 @@ _MOLT_INPUT_SCHEMA: dict[str, Any] = {
     },
     "required": ["summary", "session_journal_path", "keep_tool_calls", "keep_last"],
     "additionalProperties": False,
+}
+
+# ``molt``'s own static, mechanical diagnostic for a foreign ``input`` field
+# (cross-action, e.g. a ``summarize``/``rebuild`` key, or wholly unknown, e.g.
+# a smuggled ``files``): declared once, adjacent to ``_MOLT_INPUT_SCHEMA``,
+# per ``tool_family/CONTRACT.md`` "Diagnostics sidecar". The generic
+# dispatcher only ever supplies the structural ``location`` around this
+# verbatim text — it does not (and must not) claim `session_journal_path`
+# has to be relative; the existing in-workdir-absolute-normalizes-to-relative
+# policy is unchanged and unrelated to this diagnostic.
+_MOLT_UNSUPPORTED_INPUT_DIAGNOSTIC = DiagnosticDescriptor(
+    code="CTX_MOLT_UNSUPPORTED_INPUT_FIELD",
+    expected_form=(
+        "an input object containing only summary, session_journal_path, "
+        "keep_tool_calls, and keep_last"
+    ),
+    reason="molt rejects foreign action input before it can shed context",
+    fix="remove the foreign field or choose the action that owns it",
+)
+
+#: Per-child diagnostic sidecars, keyed by child name then structural
+#: trigger. Only ``molt`` opts in today; a child absent here (``summarize``,
+#: ``rebuild``, ``manual``) gets exactly the generic dispatcher's legacy
+#: three-key failure for a foreign ``input`` field, unchanged.
+_CHILD_DIAGNOSTICS: dict[str, Mapping[str, DiagnosticDescriptor]] = {
+    "molt": {TRIGGER_UNSUPPORTED_INPUT_FIELD: _MOLT_UNSUPPORTED_INPUT_DIAGNOSTIC},
 }
 
 #: One item of the summarize/rebuild ``items`` array. Declared once and reused
@@ -318,7 +349,13 @@ def _build_children(agent, envelope: Mapping[str, Any] | None = None) -> list[Ch
         return _dispatch
 
     return [
-        ChildTool(name, schema, _bind(handler, name), title=f"{name} input")
+        ChildTool(
+            name,
+            schema,
+            _bind(handler, name),
+            title=f"{name} input",
+            diagnostics=_CHILD_DIAGNOSTICS.get(name),
+        )
         for name, schema, handler in _CHILD_SPECS
     ] + [build_manual_child(agent, _MANUAL_SKILL_NAME)]
 

@@ -558,3 +558,62 @@ Pass when every evidence item holds. Fail if an abs send omits
 `_return_route`, a reply self-delivers to the responder's own inbox, or the
 ambiguity guard silently sends instead of refusing. Forbidden side effect: an
 ambiguous reply must create no sent record and dispatch no mail.
+
+## Behavior T010 — molt's unsupported-input-field diagnostic is additive and local
+
+- **id**: T010
+- **title**: `context.molt`'s own declared diagnostic sidecar names the
+  foreign `input` field and location on a failed molt call, the legacy
+  three-key failure is unchanged underneath it, a sibling action with no
+  sidecar still gets the plain legacy failure, and the diagnostic never
+  claims `session_journal_path` must be relative
+- **guards**: `tool-family` § Diagnostics sidecar
+  ([CONTRACT.md](CONTRACT.md#diagnostics-sidecar))
+- **runner**: any LingTai agent with the `context` tool
+- **prerequisites**: a working dir (`<wd>`) with a valid session-journal entry
+  path available for `session_journal_path` (see `../context/CONTRACT.md`);
+  no other setup
+- **estimate**: 1 min
+
+### Steps
+1. Call `context(action="molt", input={"summary": "s", "session_journal_path":
+   "<valid path>", "keep_tool_calls": null, "keep_last": null, "files":
+   ["a.txt"]}, reasoning="...")` — `files` is a wholly foreign key smuggled
+   into `molt`'s own `input`.
+2. Call `context(action="summarize", input={"items": [], "session_journal_path":
+   "<valid path>"}, reasoning="...")` — `session_journal_path` here is a
+   cross-action key that belongs to `molt`, not `summarize`.
+3. Call `context(action="molt", input={"summary": "s", "session_journal_path":
+   "<valid path>", "keep_tool_calls": null, "keep_last": null}, reasoning="...")`
+   with every field correctly nested — a normal, well-formed call — to confirm
+   the diagnostic path is not taken when nothing is foreign.
+
+### Expected evidence
+- [ ] Step 1 returns `{"status": "failed", "error_code": "INVALID_ARGUMENT",
+      "message": "unsupported context input field", "diagnostics":
+      [{"location": "context/molt/input.files", "code":
+      "CTX_MOLT_UNSUPPORTED_INPUT_FIELD", "expected_form": "an input object
+      containing only summary, session_journal_path, keep_tool_calls, and
+      keep_last", "reason": "molt rejects foreign action input before it can
+      shed context", "fix": "remove the foreign field or choose the action
+      that owns it"}]}` and molt performed no shed/no I/O (no new
+      `system/summaries/` file, no session state change).
+- [ ] Step 2 returns the plain legacy `{"status": "failed", "error_code":
+      "INVALID_ARGUMENT", "message": "unsupported context input field"}` with
+      **no** `diagnostics` key — `summarize` declares no sidecar entry, so the
+      cross-action key gets exactly the pre-existing failure shape.
+- [ ] Neither step's message or diagnostic claims or implies that
+      `session_journal_path` must be relative — an in-workdir absolute
+      journal path remains a separate, valid, unrelated policy untouched by
+      this feature.
+- [ ] Step 3 succeeds (or fails only for reasons unrelated to field shape,
+      e.g. an invalid journal) with no `diagnostics` key present — the
+      sidecar never fires when `input` matches the declared schema.
+
+### Pass / Fail
+Pass when every evidence item holds. Fail if the `diagnostics` array is
+missing, wraps a second envelope, appears for an opted-out action, contains a
+raw value/path/exception string, or if any wording implies
+`session_journal_path` must be relative. Forbidden side effect: any rejected
+molt call (with or without a diagnostic) must shed no context and write no
+new snapshot/summary/session state.

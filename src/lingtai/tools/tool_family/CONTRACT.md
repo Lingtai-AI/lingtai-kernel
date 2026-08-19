@@ -156,6 +156,67 @@ method is a required interface a family must implement against — a
 conforming family may satisfy the same wire shape without ever importing this
 package, per `../CONTRACT.md` "Implementation independence".
 
+`ChildTool.diagnostics` is a third, optional Port surface: a passive,
+non-wire sidecar mapping a structural trigger name to the static
+`DiagnosticDescriptor` (`code`, `expected_form`, `reason`, `fix`) that action
+owns for it. It never participates in `build_schema()` and is read only by
+`handle()`.
+
+## Diagnostics sidecar
+
+Guarded by: [T010](BEHAVIORS.md#behavior-t010).
+
+Compiler-style, agent-visible hints for a failed tool call are declared
+**adjacent to the relevant action's own definition**, not centralized in this
+generic package, and rendered generically. Today's one structural trigger is
+`TRIGGER_UNSUPPORTED_INPUT_FIELD`: a selected action's own `input` carrying a
+key outside its declared schema `properties` (cross-action or wholly
+foreign) — the case `handle()` was already rejecting fail-closed as
+`INVALID_ARGUMENT: unsupported <family> input field` before any handler I/O,
+per "Contract rules" below.
+
+- A `ChildTool` opts in by declaring `diagnostics={TRIGGER_UNSUPPORTED_INPUT_FIELD:
+  <DiagnosticDescriptor>}`. Declining (the default, `diagnostics=None` or no
+  entry for a trigger) yields the exact pre-existing legacy `status`/
+  `error_code`/`message` failure result for that trigger — unchanged,
+  byte-for-byte.
+- `DiagnosticDescriptor` is a frozen, fully static value: `code`,
+  `expected_form`, `reason`, and `fix` are fixed strings the owning action's
+  author writes once, next to that action's own `input_schema`. This package
+  never inspects/parses prose, never guesses a tool-specific reason, and
+  keeps no central tool-name/message table mapping actions to text — the
+  owning action supplies the text; the generic dispatcher supplies only
+  structure.
+- On a recognized trigger for an opted-in child, `handle()` computes a
+  **structural fact and location only** — `<family>/<child>/input.<field>` —
+  and pairs it with the child's own descriptor text verbatim, added as an
+  **additive** `diagnostics: [...]` array alongside the unchanged legacy
+  three-key failure result. One entry is emitted per foreign field.
+- A field *label* is only ever surfaced when it is conventional-identifier-
+  shaped and carries no secret-shaped substring (`_is_safe_field_label`); an
+  unsafe-shaped or non-identifier label is silently dropped from the
+  `diagnostics` array rather than surfaced, and if every candidate field is
+  dropped this way, no `diagnostics` key is added at all — the legacy result
+  is untouched. This package never emits a raw rejected value, a raw path, an
+  argument, an exception string, or a JSON blob in a diagnostic; only the
+  vetted field label, structural location, and the descriptor's own static
+  text.
+- The sidecar is passive and non-wire by construction: `diagnostics` is never
+  read by `build_schema()`, so it can never reach a provider's Chat
+  Completions or Responses tool schema. It performs no I/O and changes no
+  control flow — the fail-closed rejection order, the "no handler I/O for a
+  cross-action/unknown `input` key" guarantee, and every other envelope rule
+  below are unaffected; this is presentation enrichment of an
+  already-computed rejection, not a new enforcement path.
+- `context.molt` (`../context/CONTRACT.md`) is the first concrete
+  declaration: it owns a `DiagnosticDescriptor` for
+  `TRIGGER_UNSUPPORTED_INPUT_FIELD` stating the allowed `input` field set
+  (`summary`, `session_journal_path`, `keep_tool_calls`, `keep_last`) and
+  that molt rejects foreign action input before it can shed context. It does
+  not, and must not, claim `session_journal_path` must be relative — the
+  existing in-workdir-absolute-normalizes-to-relative policy for that field
+  is unrelated and unchanged by this sidecar.
+
 ## Adapters
 
 `web_search/__init__.py` is the first production Adapter/consumer:
@@ -331,7 +392,13 @@ deliberately collapses.
 module-level composition shape: a schema-only `ToolFamily` at import time
 (which is also the registry collision check) and an agent-bound one per
 `handle(agent, args)` call, both from one `_CHILD_SPECS` source. It registers
-`build_manual_child(agent, "context-manual")` directly and unwrapped.
+`build_manual_child(agent, "context-manual")` directly and unwrapped. It is
+also the first concrete declaration of the "Diagnostics sidecar" above:
+`molt`'s `ChildTool` carries a `diagnostics={TRIGGER_UNSUPPORTED_INPUT_FIELD:
+...}` entry stating molt's own allowed `input` field set and refusal reason,
+declared adjacent to `_MOLT_INPUT_SCHEMA` in `context/__init__.py`; the
+sibling `summarize`, `rebuild`, and `manual` children declare none, so a
+foreign `input` key on those still renders the exact legacy failure.
 
 It also exercises a boundary the earlier intrinsics could only half-prove.
 `soul`, `notification`, `system`, and `email` merely *drop* the kernel-injected
@@ -441,6 +508,16 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006)
   family's own Host/presentation layer, per the no-double-wrap rule above.
 - This package owns no external MCP mounting, registry, adapter, schema, or
   test; it MUST NOT be extended to add one.
+- `handle()`'s foreign-`input`-field rejection MAY be additively enriched
+  with a `diagnostics` array, per "Diagnostics sidecar" above, but the
+  legacy `status`/`error_code`/`message` failure result MUST remain
+  byte-for-byte unchanged for a child that declares no descriptor for the
+  trigger. `ChildTool.diagnostics` MUST NOT be read by `build_schema()` or
+  reach any provider-facing schema; this package MUST NOT keep a central
+  tool-name/message table or infer descriptor text — only the owning
+  `ChildTool` supplies it. A diagnostic field label MUST pass the generic
+  safety check before being surfaced; a rejected value, path, argument,
+  exception string, or JSON blob MUST NEVER appear in a diagnostic.
 
 ## Contract tests
 
@@ -460,11 +537,20 @@ dependency added) shows the schema itself rejects a mismatched
 `action`/`input` pairing, `handle()` remains authoritative and fail-closed
 regardless, and both the `allOf` conditions and the `oneOf` branches are
 mutation-isolated from each other and from a child's own canonical schema.
+It also proves the "Diagnostics sidecar" contract using an opted-in fake
+`widget` child: the exact owner-declared `DiagnosticDescriptor` and
+mechanically derived `<family>/<action>/input.<field>` location are returned
+for a recognized foreign-`input`-field trigger; an opted-out child yields the
+byte-for-byte legacy three-key failure with no `diagnostics` key; an
+unknown/cross-action key is still rejected before any handler I/O regardless
+of opt-in; and an unsafe- or non-identifier-shaped field label (and any raw
+rejected value) never appears in a `diagnostics` entry.
 `tests/test_tool_family_wire_parity.py`
 proves the composed schema (including required `reasoning`) survives both
 Chat Completions and Responses wires (including a real Agent
 startup for `web`) at the existing OpenAI adapter seam with zero adapter code
-changes. `tests/test_tool_family_manual_contract.py` invokes the actual
+changes, and that `ChildTool.diagnostics` text never appears anywhere in
+either wire's tool schema. `tests/test_tool_family_manual_contract.py` invokes the actual
 generic manual child handler (not an unused presentational helper) and
 proves the ManualTool reserved name, strict empty input, the canonical
 `content[0].text`/`structuredContent.manual_path` return shape,
@@ -504,8 +590,14 @@ schema (including the nested task object) surviving both wires.
 `tests/test_context_ownership_redesign.py` are the family-specific evidence for
 `context` (`../context/CONTRACT.md`): the final action inventory, strict branch
 isolation, `_tc_id` isolation on the consume-rather-than-drop molt path,
-refusal-before-shed journal gates, the manual child, and full reconstruction
-ordering. `tests/test_pad_lingtai_split.py` independently pins the two sibling
+refusal-before-shed journal gates, the manual child, full reconstruction
+ordering, and `molt`'s own `TRIGGER_UNSUPPORTED_INPUT_FIELD` declaration —
+proving a foreign `input` field on `molt` (e.g. `files`) yields the
+`CTX_MOLT_UNSUPPORTED_INPUT_FIELD` diagnostic at `context/molt/input.files`
+with molt's own allowed-field-set text, while the sibling `summarize` action
+still gets the plain legacy failure for a cross-action `session_journal_path`
+key, and no diagnostic ever claims `session_journal_path` must be relative.
+`tests/test_pad_lingtai_split.py` independently pins the two sibling
 families' narrower public inventories.
 
 `tests/test_tool_family_soul_migration.py` is the equivalent family-specific

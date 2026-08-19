@@ -6,11 +6,15 @@ boilerplate in ``lingtai.tools.tool_family`` is generic, not Web-specific.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from lingtai.tools.tool_family import (
     RESERVED_MANUAL_NAME,
+    TRIGGER_UNSUPPORTED_INPUT_FIELD,
     ChildTool,
+    DiagnosticDescriptor,
     ToolFamily,
     ToolFamilyError,
 )
@@ -442,3 +446,258 @@ def test_build_schema_all_of_conditions_are_mutation_isolated():
     # allOf.then.input and the oneOf branch do not share a container either.
     first_spin_branch = next(b for b in first["properties"]["input"]["oneOf"] if b["title"] == "spin input")
     assert first_spin_branch["properties"]["speed"]["type"] == "integer"
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic sidecar — compiler-style hints for a recognized structural
+# failure (``tool_family/CONTRACT.md`` "Diagnostics sidecar").
+#
+# ``ChildTool.diagnostics: Mapping[str, DiagnosticDescriptor] | None`` is
+# keyed by *structural trigger* (today only ``TRIGGER_UNSUPPORTED_INPUT_FIELD``),
+# not by field name — an opted-in child owns exactly one static
+# ``DiagnosticDescriptor`` (``code``/``expected_form``/``reason``/``fix``) per
+# trigger and that same text is reused for EVERY safe foreign field name
+# ``handle()`` encounters for that trigger; there is no per-field
+# registration. This is a passive sidecar declared adjacent to a child's
+# existing name/input_schema/handler — never part of ``input_schema`` itself,
+# so it can never reach ``build_schema()``'s wire output (see
+# ``test_tool_family_wire_parity.py``). For the *selected* action's own
+# ``set(action_input) - allowed`` rejection (the "unsupported <family> input
+# field" structural failure), ``ToolFamily.handle()`` emits one additive
+# ``diagnostics`` list entry per offending field whose *label* passes the
+# generic safety check (conventional-identifier-shaped, no secret-shaped
+# substring) — never guessing, never parsing prose, never consulting a
+# central tool-name table. Each entry is
+# ``{"location": "<family>/<action>/input.<field>", **descriptor-fields}``,
+# where ``location`` is the only value ``ToolFamily`` computes itself. Legacy
+# ``status``/``error_code``/``message`` are unchanged either way. No
+# ``diagnostics`` key is added at all when the child never opted in for the
+# trigger, or when every offending field's label fails the safety check.
+# ---------------------------------------------------------------------------
+
+_SPIN_DIAGNOSTIC = DiagnosticDescriptor(
+    code="WIDGET_SPIN_UNSUPPORTED_INPUT_FIELD",
+    expected_form="an input object containing only speed",
+    reason="spin rejects foreign action input before it can spin",
+    fix="remove the foreign field or choose the action that owns it",
+)
+
+
+def _spin_child_with_diagnostics(
+    calls: list[dict], descriptor: DiagnosticDescriptor = _SPIN_DIAGNOSTIC
+) -> ChildTool:
+    def handler(input_):
+        calls.append(dict(input_))
+        return {"status": "ok", "action": "spin", "speed": input_.get("speed")}
+
+    return ChildTool(
+        name="spin",
+        input_schema={
+            "type": "object",
+            "properties": {"speed": {"type": "integer"}},
+            "required": ["speed"],
+            "additionalProperties": False,
+        },
+        handler=handler,
+        title="spin input",
+        diagnostics={TRIGGER_UNSUPPORTED_INPUT_FIELD: descriptor},
+    )
+
+
+def _expected_entry(family: str, action: str, field: str, descriptor: DiagnosticDescriptor) -> dict:
+    return {
+        "location": f"{family}/{action}/input.{field}",
+        "code": descriptor.code,
+        "expected_form": descriptor.expected_form,
+        "reason": descriptor.reason,
+        "fix": descriptor.fix,
+    }
+
+
+def test_opted_in_child_yields_owner_defined_descriptor_and_mechanical_location():
+    """An opted-in child's own static descriptor is emitted verbatim,
+    additive to the exact legacy failure, at a mechanically derived
+    ``family/action/input.field`` location."""
+    calls: list[dict] = []
+    child = _spin_child_with_diagnostics(calls)
+    fam = ToolFamily("widget", [child, _manual_child()])
+
+    result = fam.handle({"action": "spin", "input": {"speed": 1, "turbo": True}, "reasoning": "r"})
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == "INVALID_ARGUMENT"
+    assert result["message"] == "unsupported widget input field"
+    assert result["diagnostics"] == [_expected_entry("widget", "spin", "turbo", _SPIN_DIAGNOSTIC)]
+    assert calls == []  # no handler I/O on a rejected call
+
+
+def test_opted_in_child_emits_its_descriptor_for_every_safe_foreign_field_sorted():
+    """There is no per-field registration: an opted-in child's ONE static
+    descriptor is reused for every safe foreign field name present, one
+    diagnostics entry per field, in sorted field-name order (matching
+    ``handle()``'s own ``sorted(fields)`` iteration)."""
+    calls: list[dict] = []
+    child = _spin_child_with_diagnostics(calls)
+    fam = ToolFamily("widget", [child, _manual_child()])
+
+    result = fam.handle({"action": "spin", "input": {"speed": 1, "zeta": True, "alpha": True}})
+
+    assert result["diagnostics"] == [
+        _expected_entry("widget", "spin", "alpha", _SPIN_DIAGNOSTIC),
+        _expected_entry("widget", "spin", "zeta", _SPIN_DIAGNOSTIC),
+    ]
+    assert calls == []
+
+
+def test_opted_out_child_yields_exact_legacy_three_key_failure():
+    """A child that never opts in (default ``diagnostics=None``) renders the
+    exact pre-existing three-key failure — no additive key, no behavior
+    change from before this feature existed."""
+    calls: list[dict] = []
+    fam = _widget_family(calls)  # plain ``_spin_child`` — no diagnostics sidecar
+
+    result = fam.handle({"action": "spin", "input": {"speed": 1, "turbo": True}})
+
+    assert result == {
+        "status": "failed",
+        "error_code": "INVALID_ARGUMENT",
+        "message": "unsupported widget input field",
+    }
+    assert "diagnostics" not in result
+    assert calls == []
+
+
+def test_secret_shaped_field_label_is_dropped_from_diagnostics_and_never_leaked():
+    """A foreign field whose *label itself* looks secret-shaped (contains an
+    unsafe substring like ``token``) must never be surfaced in a diagnostic,
+    even on an opted-in child — the generic safety check, not molt-specific
+    logic. Legacy failure stays exact, no ``diagnostics`` key, and neither
+    the label nor its raw value ever leaks into the serialized result."""
+    calls: list[dict] = []
+    child = _spin_child_with_diagnostics(calls)
+    fam = ToolFamily("widget", [child, _manual_child()])
+
+    result = fam.handle({"action": "spin", "input": {"speed": 1, "api_token": "sk-should-never-leak"}})
+
+    assert result == {
+        "status": "failed",
+        "error_code": "INVALID_ARGUMENT",
+        "message": "unsupported widget input field",
+    }
+    assert "diagnostics" not in result
+    dumped = json.dumps(result)
+    assert "api_token" not in dumped
+    assert "sk-should-never-leak" not in dumped
+    assert calls == []
+
+
+def test_non_identifier_shaped_field_label_is_dropped_from_diagnostics():
+    """A foreign field whose label is not conventional-identifier-shaped
+    (punctuation/whitespace) is dropped the same way as an unsafe one — the
+    exact legacy failure, no ``diagnostics`` key, no leak."""
+    calls: list[dict] = []
+    child = _spin_child_with_diagnostics(calls)
+    fam = ToolFamily("widget", [child, _manual_child()])
+
+    result = fam.handle({"action": "spin", "input": {"speed": 1, "not an identifier!": "x"}})
+
+    assert result == {
+        "status": "failed",
+        "error_code": "INVALID_ARGUMENT",
+        "message": "unsupported widget input field",
+    }
+    assert "diagnostics" not in result
+    assert "not an identifier!" not in json.dumps(result)
+    assert calls == []
+
+
+def test_mixed_offending_fields_only_the_safe_identifier_label_is_surfaced():
+    """A safe identifier-shaped field, a secret-shaped-label field, and a
+    non-identifier-shaped field arrive together: only the safe one gets a
+    diagnostics entry, and the other two never appear anywhere — not their
+    label, not any value — in the serialized result. Proves the drop is
+    per-field, not all-or-nothing."""
+    calls: list[dict] = []
+    child = _spin_child_with_diagnostics(calls)
+    fam = ToolFamily("widget", [child, _manual_child()])
+
+    result = fam.handle({
+        "action": "spin",
+        "input": {
+            "speed": 1,
+            "turbo": True,              # safe, identifier-shaped
+            "api_token": "sk-secret",   # unsafe: secret-shaped label
+            "not valid!": "x",          # unsafe: non-identifier-shaped
+        },
+    })
+
+    assert result["diagnostics"] == [_expected_entry("widget", "spin", "turbo", _SPIN_DIAGNOSTIC)]
+    dumped = json.dumps(result)
+    assert "api_token" not in dumped
+    assert "sk-secret" not in dumped
+    assert "not valid!" not in dumped
+    assert calls == []
+
+
+def test_diagnostics_never_echoes_a_raw_rejected_value():
+    """A secret-shaped raw value submitted for a safe-labeled field must
+    never appear anywhere in the diagnostic payload — only the static
+    descriptor text and the mechanically computed location are ever
+    emitted."""
+    calls: list[dict] = []
+    child = _spin_child_with_diagnostics(calls)
+    fam = ToolFamily("widget", [child, _manual_child()])
+    secret = "sk-super-secret-token-should-never-leak"
+
+    result = fam.handle({"action": "spin", "input": {"speed": 1, "turbo": secret}})
+
+    assert secret not in json.dumps(result)
+
+
+def test_diagnostics_sidecar_is_owner_defined_not_a_generic_central_table():
+    """Two unrelated families, each opting in their OWN distinct descriptor
+    text for the same-named offending field, each get back their own text
+    verbatim — proving ``ToolFamily`` holds no central tool-name/message
+    table and does not guess a tool-specific reason itself."""
+    calls_a: list[dict] = []
+    calls_b: list[dict] = []
+    descriptor_a = DiagnosticDescriptor(
+        code="WIDGET_A_UNSUPPORTED_INPUT_FIELD",
+        expected_form="an input object containing only speed",
+        reason="family A's own reason",
+        fix="family A's own fix",
+    )
+    descriptor_b = DiagnosticDescriptor(
+        code="WIDGET_B_UNSUPPORTED_INPUT_FIELD",
+        expected_form="an input object containing only speed",
+        reason="family B's own reason",
+        fix="family B's own fix",
+    )
+    fam_a = ToolFamily(
+        "widget_a",
+        [_spin_child_with_diagnostics(calls_a, descriptor_a), _manual_child()],
+    )
+    fam_b = ToolFamily(
+        "widget_b",
+        [_spin_child_with_diagnostics(calls_b, descriptor_b), _manual_child()],
+    )
+
+    result_a = fam_a.handle({"action": "spin", "input": {"speed": 1, "turbo": True}})
+    result_b = fam_b.handle({"action": "spin", "input": {"speed": 1, "turbo": True}})
+
+    assert result_a["diagnostics"] == [_expected_entry("widget_a", "spin", "turbo", descriptor_a)]
+    assert result_b["diagnostics"] == [_expected_entry("widget_b", "spin", "turbo", descriptor_b)]
+
+
+def test_diagnostics_do_not_relocate_extra_fields_or_weaken_the_allowed_set():
+    """The sidecar only adds explanatory payload to an existing rejection —
+    it must never coerce/relocate the offending field into the handler's
+    input, and must never widen what the handler ends up receiving."""
+    calls: list[dict] = []
+    child = _spin_child_with_diagnostics(calls)
+    fam = ToolFamily("widget", [child, _manual_child()])
+
+    result = fam.handle({"action": "spin", "input": {"speed": 1, "turbo": True}})
+
+    assert result["status"] == "failed"
+    assert calls == []  # the handler never ran — no relocation, no I/O

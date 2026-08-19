@@ -53,8 +53,14 @@ this package too — using it is optional, not mandatory).
 ## Components
 
 - `ChildTool` — a frozen descriptor pairing one child's canonical name,
-  `input_schema`, and `handler`; name doubles as the model `action` constant
-  and dispatch key (`__init__.py:76-95`).
+  `input_schema`, `handler`, and an optional `diagnostics` sidecar; name
+  doubles as the model `action` constant and dispatch key
+  (`__init__.py:138-166`, preceded by the `DiagnosticDescriptor` dataclass at
+  `__init__.py:120-135`). `diagnostics` maps a structural trigger name
+  (today: only
+  `TRIGGER_UNSUPPORTED_INPUT_FIELD`) to the static `DiagnosticDescriptor`
+  (`code`/`expected_form`/`reason`/`fix`) that action owns for it — see
+  "Diagnostics sidecar" below.
 - `ToolFamily` — validates a fixed child registry (duplicate names and a
   `manual` reserved-name collision fail loudly at construction), composes a
   model-facing schema from each child's own `input_schema` plus a REQUIRED
@@ -64,7 +70,7 @@ this package too — using it is optional, not mandatory).
   and strips root `summarize`, rejects unknown root fields, and rejects
   `input` keys outside the selected child's own declared schema properties
   before calling that child's handler with only its `input`
-  (`__init__.py:98-281`). Two enforcement layers correlate `action` with
+  (`__init__.py:169-438`). Two enforcement layers correlate `action` with
   `input`, generated purely from the child registry with no name/schema
   mapping table: (1) schema-level — a root `allOf` with one `if`/`then`
   condition per child, each `if` testing `action` via `const` against that
@@ -76,6 +82,24 @@ this package too — using it is optional, not mandatory).
   correlation was adopted after a live non-strict Codex Responses probe on
   2026-07-27 accepted a raw root `allOf`/`if`/`then` schema without error on
   the current route (see `CONTRACT.md` "Contract rules").
+
+### Diagnostics sidecar
+
+`DiagnosticDescriptor` (`__init__.py`, next to `ChildTool`) is a frozen,
+fully static value an action author writes once, adjacent to that action's
+own `input_schema` — never computed, parsed, or guessed. When `handle()`
+rejects a selected action's `input` for a key outside its declared
+properties, `_build_diagnostics` checks whether that child declared a
+`TRIGGER_UNSUPPORTED_INPUT_FIELD` entry; if so, it additively attaches a
+`diagnostics` array to the otherwise-unchanged legacy failure result, one
+entry per foreign field, each pairing a mechanically computed
+`<family>/<action>/input.<field>` location with the descriptor's own text
+verbatim. A field label that is not conventional-identifier-shaped, or
+contains a secret-shaped substring, is dropped by the generic
+`_is_safe_field_label` check rather than surfaced. This sidecar is read only
+by `handle()` — `build_schema()` never touches it, so it cannot reach any
+provider wire. See `CONTRACT.md` "Diagnostics sidecar" for the full rules and
+`../context/ANATOMY.md`/below for `molt`'s concrete declaration.
 - `manual.py` — owns `MANUAL_INPUT_SCHEMA`, the single strict-empty `manual`
   input schema every family reuses, and `build_manual_child()`, which wraps
   `../_manual.py`'s
@@ -238,7 +262,12 @@ root and threads it to that child out-of-band, via the same Host-owned seam
 `avatar` uses for its spawn mission brief. The generic package is not widened:
 `_ROOT_FIELDS` is unchanged and no envelope field reaches any child. The sibling
 `pad` and `lingtai` families are independent consumers with their own final
-action inventories.
+action inventories. `context` is also the first concrete "Diagnostics
+sidecar" declaration: a `_CHILD_DIAGNOSTICS` mapping next to `_MOLT_INPUT_SCHEMA`
+gives `molt`'s `ChildTool` a `TRIGGER_UNSUPPORTED_INPUT_FIELD`
+`DiagnosticDescriptor` stating its own allowed-field set and refusal reason;
+the sibling `summarize`/`rebuild`/`manual` children declare none, so a
+foreign `input` key on those still renders the plain legacy failure.
 
 ## Composition
 

@@ -963,6 +963,155 @@ def test_pending_summaries_survive_to_a_later_bare_rebuild(tmp_path):
     assert iface._entries[1].content[0].content["status"] == SUMMARY_STATUS_DONE
 
 
+# ---------------------------------------------------------------------------
+# Diagnostic sidecar — the first concrete local declaration
+# (SONNET_DIAGNOSTIC_CONTRACT.md "Required design" #6): ``context.molt``
+# opts a static descriptor in for its own foreign-input-field structural
+# failure (example field ``files``, already exercised without the
+# diagnostic in ``test_wrong_branch_input_is_rejected_before_any_handler_io``
+# above). These tests pin the additive ``diagnostics`` payload verbatim
+# against the shared contract's own candidate shape, that molt state is
+# untouched (no I/O), and that an action which does NOT opt in (summarize,
+# receiving molt's own ``session_journal_path``) keeps the exact
+# pre-existing legacy failure with no additive key at all.
+# ---------------------------------------------------------------------------
+
+
+def test_molt_foreign_files_field_yields_the_documented_local_diagnostic(tmp_path):
+    """A foreign ``files`` field on molt's own input must produce the
+    documented additive ``diagnostics`` entry, on top of the exact legacy
+    three-key failure, while never touching molt state (no snapshot/archive/
+    shed) — the sidecar only adds explanation, never relaxes fail-closed I/O
+    ordering. It must also never echo the raw rejected value anywhere."""
+    agent = _agent(tmp_path)
+    try:
+        before_count = agent._molt_count
+        result = _call(agent, {
+            "action": "molt",
+            "input": _molt_input(_JOURNAL_REL, files=["x.txt"]),
+        })
+
+        # Exact legacy compatibility: status/error_code/message unchanged.
+        assert result["status"] == "failed"
+        assert result["error_code"] == "INVALID_ARGUMENT"
+        assert "unsupported context input field" in result["message"]
+
+        # The documented additive diagnostic, verbatim per the shared
+        # contract's candidate shape — molt safely states its own allowed
+        # input field set and explains itself, without claiming anything
+        # about `session_journal_path` needing to be relative/absolute.
+        assert result["diagnostics"] == [{
+            "location": "context/molt/input.files",
+            "code": "CTX_MOLT_UNSUPPORTED_INPUT_FIELD",
+            "expected_form": (
+                "an input object containing only summary, "
+                "session_journal_path, keep_tool_calls, and keep_last"
+            ),
+            "reason": "molt rejects foreign action input before it can shed context",
+            "fix": "remove the foreign field or choose the action that owns it",
+        }]
+
+        # No molt state changed — this is explanation, not relaxed I/O.
+        assert agent._molt_count == before_count
+        assert not (agent._working_dir / "history" / "snapshots").exists()
+        assert not (agent._working_dir / "history" / "chat_history_archive.jsonl").exists()
+
+        # No raw rejected value, path, or exception string leaked anywhere.
+        dumped = json.dumps(result)
+        assert "x.txt" not in dumped
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_cross_action_session_journal_path_on_summarize_keeps_the_undiagnosed_legacy_failure(tmp_path):
+    """A foreign field cross-smuggled onto a DIFFERENT action than the one
+    that owns a descriptor gets that selected action's own behavior. Only
+    ``context.molt`` opts into a local descriptor this slice ("Required
+    design" #1: "A selected action must own static safe descriptor(s) for
+    the structural trigger it opts into"), so ``context.summarize``
+    receiving molt's own ``session_journal_path`` field stays the exact
+    pre-existing legacy three-key failure, with no additive ``diagnostics``
+    key at all."""
+    agent = _agent(tmp_path)
+    try:
+        result = _call(agent, {
+            "action": "summarize",
+            "input": {"items": [], "session_journal_path": _JOURNAL_REL},
+        })
+        assert result == {
+            "status": "failed",
+            "error_code": "INVALID_ARGUMENT",
+            "message": "unsupported context input field",
+        }
+        assert "diagnostics" not in result
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_molt_secret_shaped_unsafe_field_label_is_dropped_from_diagnostics(tmp_path):
+    """``molt`` is opted in for ``TRIGGER_UNSUPPORTED_INPUT_FIELD``, but a
+    foreign field whose *label itself* looks secret-shaped (contains an
+    unsafe substring like ``token``) must never be surfaced in a diagnostic
+    — the generic ``tool_family`` safety check, not molt-specific logic.
+    Legacy failure stays exact, no ``diagnostics`` key at all, the label and
+    its raw value never leak into the serialized result, and molt state is
+    untouched (fail-closed, no I/O)."""
+    agent = _agent(tmp_path)
+    try:
+        before_count = agent._molt_count
+        result = _call(agent, {
+            "action": "molt",
+            "input": _molt_input(_JOURNAL_REL, api_token="sk-should-never-leak"),
+        })
+
+        assert result == {
+            "status": "failed",
+            "error_code": "INVALID_ARGUMENT",
+            "message": "unsupported context input field",
+        }
+        assert "diagnostics" not in result
+        dumped = json.dumps(result)
+        assert "api_token" not in dumped
+        assert "sk-should-never-leak" not in dumped
+
+        assert agent._molt_count == before_count
+        assert not (agent._working_dir / "history" / "snapshots").exists()
+        assert not (agent._working_dir / "history" / "chat_history_archive.jsonl").exists()
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_molt_non_identifier_shaped_field_label_is_dropped_from_diagnostics(tmp_path):
+    """A foreign field whose label is not conventional-identifier-shaped
+    (contains punctuation/whitespace) is dropped the same way as an unsafe
+    one — the exact legacy failure, no ``diagnostics`` key, no leak of
+    either the label or its raw value, and molt state untouched
+    (fail-closed, no I/O)."""
+    agent = _agent(tmp_path)
+    try:
+        before_count = agent._molt_count
+        sentinel_value = "molt-non-identifier-label-sentinel-2c9f7e1b"
+        payload = _molt_input(_JOURNAL_REL)
+        payload["not an identifier!"] = sentinel_value
+        result = _call(agent, {"action": "molt", "input": payload})
+
+        assert result == {
+            "status": "failed",
+            "error_code": "INVALID_ARGUMENT",
+            "message": "unsupported context input field",
+        }
+        assert "diagnostics" not in result
+        dumped = json.dumps(result)
+        assert "not an identifier!" not in dumped
+        assert sentinel_value not in dumped
+
+        assert agent._molt_count == before_count
+        assert not (agent._working_dir / "history" / "snapshots").exists()
+        assert not (agent._working_dir / "history" / "chat_history_archive.jsonl").exists()
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_root_summarize_bool_is_never_domain_input_of_the_summarize_action(tmp_path):
     """The ACTION named ``summarize`` and the ROOT bool named ``summarize``.
 

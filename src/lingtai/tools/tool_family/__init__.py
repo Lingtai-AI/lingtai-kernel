@@ -32,17 +32,29 @@ optional helper, not a mandatory base class: a family may use
 :class:`ToolFamily` directly, or hand-write an equivalent ``handle()`` the way
 ``web`` did before adopting it. Two children in a family are not required to
 share anything beyond their registration in one :class:`ToolFamily`.
+
+A ``ChildTool`` may also declare a passive, non-wire ``diagnostics`` sidecar —
+static, mechanical :class:`DiagnosticDescriptor` text the *action* owns for a
+structural dispatch-time trigger it opts into (today: a foreign key in its
+own ``input``). ``handle()`` additively enriches its already fail-closed
+rejection with this text plus a generically computed ``location``; it never
+inspects/parses prose, guesses a reason, or keeps a central tool-name/message
+table, and the sidecar never reaches ``build_schema()`` or any provider wire.
+See ``CONTRACT.md`` "Diagnostics sidecar" for the full contract.
 """
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
 __all__ = [
     "ChildTool",
+    "DiagnosticDescriptor",
     "ToolFamily",
     "ToolFamilyError",
+    "TRIGGER_UNSUPPORTED_INPUT_FIELD",
 ]
 
 # The one reserved child name every family may offer at most once. Colliding
@@ -53,6 +65,38 @@ RESERVED_MANUAL_NAME = "manual"
 
 # Envelope root fields admitted alongside ``action``/``input``.
 _ROOT_FIELDS = {"action", "input", "reasoning", "_reasoning", "summarize"}
+
+# The one structural trigger a ChildTool may currently declare a diagnostic
+# descriptor for: the selected action's own ``input`` carrying a key outside
+# its declared schema properties (cross-action or wholly foreign). Additional
+# triggers would be added here, never invented ad hoc by a consumer.
+TRIGGER_UNSUPPORTED_INPUT_FIELD = "unsupported_input_field"
+
+# A diagnostic field *label* (never the rejected value) is only ever surfaced
+# when it looks like a conventional identifier and carries no secret-shaped
+# substring — this is a generic safety boundary, not a tool-specific
+# allow/deny table, so it applies uniformly to every opted-in child.
+_SAFE_FIELD_LABEL_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_UNSAFE_FIELD_LABEL_SUBSTRINGS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "credential",
+    "apikey",
+    "api_key",
+    "private",
+    "auth",
+    "access_key",
+    "session_key",
+)
+
+
+def _is_safe_field_label(label: str) -> bool:
+    if not isinstance(label, str) or not _SAFE_FIELD_LABEL_PATTERN.match(label):
+        return False
+    lowered = label.lower()
+    return not any(bad in lowered for bad in _UNSAFE_FIELD_LABEL_SUBSTRINGS)
 
 # Same canonical English reasoning-property description the kernel injects
 # for every tool (``kernel/base_agent/tools.py:_REASONING_DESCRIPTION``).
@@ -74,6 +118,24 @@ class ToolFamilyError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class DiagnosticDescriptor:
+    """One action-owned, static, mechanical diagnostic for a structural trigger.
+
+    Declared adjacent to the action it describes — see
+    :attr:`ChildTool.diagnostics` — never computed or guessed by the generic
+    dispatcher. ``code``, ``expected_form``, ``reason``, and ``fix`` are all
+    fixed strings the owning action's author writes once; :class:`ToolFamily`
+    only ever supplies the structural ``location`` (family/action/input.field)
+    around this verbatim text, and never inspects/parses it.
+    """
+
+    code: str
+    expected_form: str
+    reason: str
+    fix: str
+
+
+@dataclass(frozen=True, slots=True)
 class ChildTool:
     """One family-owned child: canonical name, schema, and handler.
 
@@ -84,12 +146,21 @@ class ChildTool:
     is the child's own responsibility). ``handler`` receives only the
     validated ``input`` mapping (never ``action``, ``reasoning``, or
     ``summarize``) and returns the child's own raw, canonical result dict.
+
+    ``diagnostics`` is an optional, passive, non-wire sidecar: a mapping from
+    structural trigger name (e.g. :data:`TRIGGER_UNSUPPORTED_INPUT_FIELD`) to
+    the static :class:`DiagnosticDescriptor` this action owns for that
+    trigger. It never reaches ``build_schema()`` or any provider wire — only
+    ``handle()`` reads it, to enrich its own already-fail-closed rejection
+    with additive, mechanical hint text. A child that declares no entry for a
+    trigger gets exactly the legacy failure result for it, unchanged.
     """
 
     name: str
     input_schema: Mapping[str, Any]
     handler: Callable[[Mapping[str, Any]], dict[str, Any]]
     title: str | None = None
+    diagnostics: Mapping[str, DiagnosticDescriptor] | None = None
 
     def branch_title(self) -> str:
         return self.title or f"{self.name} input"
@@ -251,7 +322,11 @@ class ToolFamily:
         alone is not the dispatch-time authorization boundary: ``input`` keys
         are validated against the selected child's own declared
         ``input_schema`` properties, rejecting any key belonging to another
-        action's branch, before the child handler ever runs.
+        action's branch, before the child handler ever runs. That specific
+        rejection is additively enriched via ``_build_diagnostics`` when the
+        selected child opted in for :data:`TRIGGER_UNSUPPORTED_INPUT_FIELD`
+        (see ``ChildTool.diagnostics``); an opted-out child gets the exact
+        legacy three-key failure, unchanged.
 
         Invalid JSON can make ``action`` an unhashable value (e.g. ``[]`` or
         ``{}``) — the issue #513 blocker class. Such an ``action`` simply
@@ -312,11 +387,52 @@ class ToolFamily:
         action_input = raw.get("input")
         if not isinstance(action_input, Mapping):
             return self._envelope_error("INVALID_ARGUMENT", "input must be an object")
-        if set(action_input) - allowed:
+        foreign_input_fields = set(action_input) - allowed
+        if foreign_input_fields:
             return self._envelope_error(
-                "INVALID_ARGUMENT", f"unsupported {self.name} input field"
+                "INVALID_ARGUMENT",
+                f"unsupported {self.name} input field",
+                self._build_diagnostics(
+                    child, TRIGGER_UNSUPPORTED_INPUT_FIELD, foreign_input_fields
+                ),
             )
         return child.handler(action_input)
 
-    def _envelope_error(self, code: str, message: str) -> dict[str, Any]:
-        return {"status": "failed", "error_code": code, "message": message}
+    def _build_diagnostics(
+        self, child: ChildTool, trigger: str, fields: set[str]
+    ) -> list[dict[str, str]] | None:
+        """Render an additive diagnostic entry per safe field label, if opted in.
+
+        Purely structural: this method computes only the ``location``
+        (family/action/input.field) and reads the child's own static
+        :class:`DiagnosticDescriptor` for ``trigger`` verbatim — it never
+        inspects/parses prose, guesses a reason, or consults a central
+        tool-name/message table. A field whose label fails the generic safety
+        check (:func:`_is_safe_field_label`) is silently dropped rather than
+        surfaced; if every candidate field is dropped, or the child declared
+        no descriptor for this trigger, this returns ``None`` and the caller's
+        legacy three-key failure result is unaffected.
+        """
+        descriptor = (child.diagnostics or {}).get(trigger)
+        if descriptor is None:
+            return None
+        entries = [
+            {
+                "location": f"{self.name}/{child.name}/input.{field}",
+                "code": descriptor.code,
+                "expected_form": descriptor.expected_form,
+                "reason": descriptor.reason,
+                "fix": descriptor.fix,
+            }
+            for field in sorted(fields)
+            if _is_safe_field_label(field)
+        ]
+        return entries or None
+
+    def _envelope_error(
+        self, code: str, message: str, diagnostics: list[dict[str, str]] | None = None
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {"status": "failed", "error_code": code, "message": message}
+        if diagnostics:
+            result["diagnostics"] = diagnostics
+        return result
