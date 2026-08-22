@@ -45,7 +45,7 @@ from typing import Any
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from .plugin import SYSTEM_DECLARED_ACTIONS
 
-# Canonical compatibility order for the eleven operational actions plus
+# Canonical compatibility order for the twelve operational actions plus
 # ``manual``. The ToolPlugin declaration owns operational child registration;
 # ToolFamily's reserved settings-provider opt-in mechanically inserts
 # ``settings`` immediately before ``manual`` in the final model-facing family.
@@ -59,7 +59,7 @@ _REASON_DESCRIPTION = (
 )
 
 _ADDRESS_DESCRIPTION = (
-    "Target agent's address (working directory path). Required for interrupt, "
+    "Target agent's address (working directory path). Required for target_refresh, interrupt, "
     "lull, suspend, cpr, clear, nirvana."
 )
 
@@ -88,7 +88,7 @@ _FORCE_DESCRIPTION = (
 )
 
 def _address_input_schema() -> dict[str, Any]:
-    """Build the shared input shape for the six address-taking verbs.
+    """Build the shared input shape for the address-taking verbs.
 
     ``lull``/``interrupt``/``suspend``/``cpr``/``clear``/``nirvana`` take
     exactly the same two fields, so they are generated rather than restated
@@ -190,6 +190,7 @@ _NAME_NICKNAME_INPUT_SCHEMA: dict[str, Any] = {
 
 INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "refresh": _REFRESH_INPUT_SCHEMA,
+    "target_refresh": _address_input_schema(),
     "sleep": _SLEEP_INPUT_SCHEMA,
     "lull": _address_input_schema(),
     "interrupt": _address_input_schema(),
@@ -247,13 +248,13 @@ def get_description(lang: str = "en") -> str:
         "inter-agent management.\n\n"
         "Self-actions (no permissions needed): sleep, refresh, presets, "
         "name_set, name_nickname, settings, manual.\n"
-        "Karma actions (require admin.karma=True): lull, interrupt, suspend, "
+        "Karma actions (require admin.karma=True): target_refresh, lull, interrupt, suspend, "
         "cpr, clear.\n"
         "Nirvana (require admin.karma=True AND admin.nirvana=True): nirvana — "
         "this permanently destroys an agent and is irreversible.\n\n"
         "Every call takes action + input + reasoning; input is the strict "
         "argument object for the selected action. The karma verbs take "
-        "input={'address': '<agent working dir>', 'reason': ...}; refresh "
+        "input={'address': '<agent working dir>', 'reason': ...}; target_refresh writes the target's .refresh signal and does not change preset/config; refresh "
         "takes input={'reason': ..., 'preset': ..., 'revert_preset': ...}; "
         "the two name actions take input={'content': ...}; presets, settings, "
         "and manual take input={}.\n\n"

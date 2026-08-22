@@ -17,7 +17,7 @@ from lingtai.kernel.handshake import resolve_address
 # Karma / Nirvana gate mapping
 # ---------------------------------------------------------------------------
 
-_KARMA_ACTIONS = {"interrupt", "lull", "suspend", "cpr", "clear"}
+_KARMA_ACTIONS = {"interrupt", "lull", "suspend", "cpr", "clear", "target_refresh"}
 _NIRVANA_ACTIONS = {"nirvana"}
 
 
@@ -307,6 +307,19 @@ def _interrupt(agent, args: dict) -> dict:
     (resolved / ".interrupt").write_text("", encoding="utf-8")
     agent._log("karma_interrupt", target=address)
     return {"status": "interrupted", "address": address}
+
+
+def _target_refresh(agent, args: dict) -> dict:
+    err = _check_karma_gate(agent, "target_refresh", args)
+    if err:
+        return err
+    address = args["address"]
+    resolved = args["_resolved_address"]
+    if not _is_alive(resolved):
+        return {"error": True, "message": f"Agent at {address} is not running"}
+    (resolved / ".refresh").write_text("", encoding="utf-8")
+    agent._log("karma_target_refresh", target=address)
+    return {"status": "refresh_requested", "address": address}
 
 
 def _clear(agent, args: dict) -> dict:

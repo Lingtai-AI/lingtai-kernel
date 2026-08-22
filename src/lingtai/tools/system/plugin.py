@@ -8,6 +8,7 @@ from __future__ import annotations
 
 SYSTEM_DECLARED_ACTIONS: tuple[str, ...] = (
     "refresh",
+    "target_refresh",
     "sleep",
     "lull",
     "interrupt",
