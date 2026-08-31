@@ -10,6 +10,8 @@ related_files:
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/agent.py
   - src/lingtai/tools/system/karma.py
+  - src/lingtai/kernel/agent_guardian/ANATOMY.md
+  - src/lingtai/adapters/agent_guardian.py
   - src/lingtai/tools/system/preset.py
   - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/summarize.py
@@ -36,6 +38,7 @@ related_files:
   - tests/test_init_reader.py
   - tests/test_system_sleep_alarm.py
   - tests/test_system_declared_plugin.py
+  - tests/test_karma.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -47,7 +50,7 @@ maintenance: |
 ---
 # intrinsics/system
 
-System intrinsic — runtime, lifecycle, identity, and the read-only kernel-level settings catch-all. Provides the agent with refresh (hot-reload config/presets), karma-gated lifecycle actions on other agents (sleep, lull, suspend, cpr, interrupt, clear, nirvana), preset listing, and the agent's true name/nickname. It is an **LTP v2 family** (`src/lingtai/tools/CONTRACT.md`): one model-facing root `system` with eleven fixed operational children followed by the generic reserved `settings` and `manual` children, each owning its own strict `input` object. Every retained operational action value, its semantics, receipts, privilege gates, and errors are unchanged, and the children consume no additional model tool slots.
+System intrinsic — runtime, lifecycle, identity, and the read-only kernel-level settings catch-all. Provides the agent with refresh (hot-reload config/presets), karma-gated lifecycle actions on other agents (sleep, lull, suspend, cpr, interrupt, clear, nirvana), preset listing, and the agent's true name/nickname. It is an **LTP v2 family** (`src/lingtai/tools/CONTRACT.md`): one model-facing root `system` with eleven fixed operational children followed by the generic reserved `settings` and `manual` children, each owning its own strict `input` object. Every retained operational action value, ordinary semantics, receipts, and privilege gates are unchanged. Suspend and CPR additionally fail closed with stable structured errors when durable guardian-intent storage cannot be recorded or cleared before lifecycle effects; the children consume no additional model tool slots.
 
 **System is an official declared host plugin.** `plugin.py` owns the static
 operational action tuple. `__init__.py::DECLARATION` is constructed before any
@@ -119,8 +122,14 @@ of declaration, mount, identity, mounted runtime sleep, and packaged manual.
   `_system_sleep_port` or wrapping a direct Agent-like subject in
   `_DirectSleepPort`.
   - `_lull()` (`karma.py:250-261`) — put another agent to sleep.
-  - `_suspend()` (`karma.py:264-275`) — suspend another agent.
-  - `_cpr()` (`karma.py:278-296`) — resuscitate a suspended agent.
+  - `_suspend()` (`src/lingtai/tools/system/karma.py:264`) — durably
+    records/coalesces explicit suspend intent before writing the legacy
+    `.suspend` marker; typed ledger failure refuses
+    ([B009](BEHAVIORS.md#behavior-b009)).
+  - `_cpr()` (`src/lingtai/tools/system/karma.py:295`) — delegates CPR;
+    `Agent._cpr_agent()` (`src/lingtai/agent.py:1386`) records a matching durable
+    clear before legacy marker cleanup or detached launch and fails closed
+    ([B009](BEHAVIORS.md#behavior-b009)).
   - `_interrupt()` (`karma.py:299-309`) — interrupt a running agent's current turn.
   - `_clear()` (`karma.py:312-331`) — force a full molt on another agent.
   - `_nirvana()` (`karma.py:334-358`) — permanently destroy an agent's working directory.

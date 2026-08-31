@@ -20,6 +20,8 @@ related_files:
   - src/lingtai/kernel/agent_presence/CONTRACT.md
   - src/lingtai/kernel/lifecycle_clock/ANATOMY.md
   - src/lingtai/kernel/lifecycle_clock/CONTRACT.md
+  - src/lingtai/kernel/agent_guardian/ANATOMY.md
+  - src/lingtai/kernel/agent_guardian/CONTRACT.md
   - src/lingtai/kernel/session_stats/ANATOMY.md
   - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
@@ -147,6 +149,14 @@ The kernel root holds the coordinator (`base_agent/`) plus a flat collection of 
 - `notification_store/` — required Core-owned `NotificationStorePort`; exactly eight families end with the hook-registry family: read-only `load_hook_manifests`, atomic `update_hook_manifests`, and read-only `stat_hook_registry() -> tuple[int, int] | None` (the cheap `(st_mtime_ns, st_size)` staleness fingerprint used for out-of-band re-seed; the family mirrors the ack-refs families 6/7) (`src/lingtai/kernel/notification_store/__init__.py:115-254`). Its production POSIX adapter is composed outside Core (`src/lingtai/adapters/posix/notification_store.py:69-314`); daemon append routing stays inside the existing typed `compare_update_channel` family and projects `.notification/daemon/<daemon-id>.json` mini-files into one aggregate; the sibling `.notification/daemon.json` is only a derived run/state report. See the paired child Anatomy and Contract.
 - `agent_presence/` — required Core-owned `AgentPresenceStorePort` (construction-bound to one working dir; exactly four operations `observe_manifest`/`observe_heartbeat`/`publish_heartbeat`/`withdraw_heartbeat`) plus the typed `ManifestObservation`/`HeartbeatObservation` evidence and pure `is_agent`/`is_human`/`is_alive` liveness policy (`src/lingtai/kernel/agent_presence/__init__.py`). `BaseAgent` receives it as a **required** `agent_presence` dependency and the heartbeat loop publishes / teardown withdraws through it; foreign-address observers build a target-bound adapter per resolved address. Its production POSIX `.agent.json`/`.agent.heartbeat` adapter is composed outside Core (`src/lingtai/adapters/posix/agent_presence.py`); `handshake` keeps only `resolve_address`. The wall value it publishes is now read from the injected lifecycle clock (below). See the paired child Anatomy and Contract.
 - `lifecycle_clock/` — required Core-owned `LifecycleClockPort` with exactly two zero-argument readings (`wall_seconds` for persisted/cross-process timestamps and ages, `monotonic_seconds` for process-local elapsed intervals) and no wait/sleep/scheduler operation (`src/lingtai/kernel/lifecycle_clock/__init__.py`). `BaseAgent` receives it as a **required** `lifecycle_clock` dependency bound before its first time sample; state/progress/deferred/event timestamps, the heartbeat value, and status ages read wall while uptime/idle-timeout/AED/snapshot/GC read monotonic. The one portable production adapter `SystemLifecycleClockAdapter` (direct `time.time()`/`time.monotonic()`) lives outside Core at `src/lingtai/adapters/lifecycle_clock.py`, mapped by `src/lingtai/ANATOMY.md` (not POSIX, not a registry). The heartbeat `Event.wait(HEARTBEAT_TICK_SECONDS)` cadence, notification/event IDs, Agent CPR clocks, and the refresh-watcher subprocess clocks are excluded. See the paired child Anatomy and Contract.
+- `agent_guardian/` — Core-owned versioned lifecycle-intent event vocabulary,
+  evidence values, read/write and observer Ports, and pure four-way presence /
+  five-way shadow-plan policy
+  (`src/lingtai/kernel/agent_guardian/__init__.py:432`,
+  `src/lingtai/kernel/agent_guardian/__init__.py:655`). Filesystem, OS
+  observation, locks, clocks, sleep, and CLI composition live in the wrapper
+  package; no action Port exists. See `agent_guardian/ANATOMY.md` and
+  `agent_guardian/CONTRACT.md`.
 - `daemon_dispatch.py` — append-only daemon acceptance membership/order,
   checked tail/full diagnostics, and marker-only recovery primitives. It never
   owns daemon status or performs a legacy backfill/repair.
@@ -363,6 +373,9 @@ This file is the top of the kernel anatomy tree. Each subfolder below has its ow
 - [`workdir_lease/`](workdir_lease/ANATOMY.md) — Core-owned `acquire`/`release` exclusive working-directory lease Port; the production POSIX `flock` adapter and platform selector live outside the kernel.
 - [`refresh_watcher/`](refresh_watcher/ANATOMY.md) — Core-owned `spawn_detached(request: RefreshWatcherRequest)` detached refresh-watcher process hand-off Port, plus the Core-owned `watcher_program.render_watcher_script` program-text renderer; the production POSIX `subprocess.Popen`/`start_new_session`/`os.environ` adapter lives outside the kernel.
 - [`lifecycle_clock/`](lifecycle_clock/ANATOMY.md) — Core-owned two-reading `wall_seconds`/`monotonic_seconds` lifecycle-time Port; the one portable `SystemLifecycleClockAdapter` (`time.time()`/`time.monotonic()`) lives outside Core at `src/lingtai/adapters/lifecycle_clock.py`.
+- [`agent_guardian/`](agent_guardian/ANATOMY.md) — durable lifecycle-intent
+  Port/schema and pure external presence/shadow-plan decision; adapters and CLI
+  composition live outside Core.
 - [`services/`](services/ANATOMY.md) — kernel-side service implementations: filesystem mailbox (`mail.py`), JSONL event/token-ledger sources plus additive SQLite query index (`logging.py`).
 - [`maintenance/`](maintenance/ANATOMY.md) — operator-run maintenance reporters; currently dry-run retention reporting only.
 - [`migrate/`](migrate/ANATOMY.md) — versioned, append-only migration Core plus the Core-owned seven-family `MigrationWorkspacePort`. Preset-domain migrations are `m<NNN>_<name>.py`; agent-workdir/init migrations are `agent_m<NNN>_<name>.py`. Transforms consume adapter-provided text and write through the Port; the production `PosixMigrationWorkspaceAdapter` and the composition roots that construct it live outside Core. See `migrate/ANATOMY.md` and `migrate/CONTRACT.md`.
@@ -395,6 +408,10 @@ The kernel only writes inside the agent's working directory (`<workdir>/`). Per-
 - `system/` — kernel-managed durable state (pad, soul records, summaries, rules).
 - `system/manifest.resolved.json` — derived runtime artifact: the fully-resolved (preset-materialized, validated, path-resolved, secret-redacted) manifest, regenerated by `workdir.py:write_resolved_manifest` on every boot/refresh/molt-reload. Safe to delete; consumers (TUI/portal) read it instead of re-resolving raw init.json (issue #259).
 - `logs/events.jsonl` — authoritative structured event journal written by the injected POSIX adapter through the Core Port. Agent-originated rows include `kernel_version`, `kernel_runtime_stamp`, and compact `kernel_runtime` identity fields so a latest-event tail reveals which kernel/runtime produced it.
+- `logs/agent_lifecycle.jsonl` — locked, fsync append-only explicit lifecycle
+  intent and shadow-verdict ledger owned through `agent_guardian/`
+  (`src/lingtai/adapters/agent_guardian.py:49`,
+  `src/lingtai/adapters/agent_guardian.py:117`).
 - `logs/token_ledger.jsonl` — authoritative per-call token usage; standard appends also mirror into rebuildable `logs/log.sqlite.token_entries`.
 - `mailbox/{inbox,outbox,sent}/` — filesystem mailbox.
 - `tmp/tool-results/<timestamp>-<tool>-<id>-<uuid>.{json,txt}` — sidecar artifacts for oversized tool results. Main producers (`tool_result_artifacts.py:spill_oversized_result`): the preventive 200K cap in `ToolExecutor._build_result_message` (issue #144) writes a sidecar on every fresh result over `PREVENTIVE_MAX_CHARS=200_000`; the retroactive 5K cap in `base_agent/turn.py:_compact_history_before_retry` (issue #144) rewrites already-committed history before AED retry over `RETROACTIVE_MAX_CHARS=5_000`; and pending-call recovery (`tool_result_recovery.py:40-137`) replays durable `logs/events.jsonl` results through the same cap before they are appended by `ChatInterface.close_pending_tool_calls()`. In all cases the wire keeps only a compact manifest stamped with the namespaced marker `artifact="lingtai_tool_result_spill"` (plus `status="spilled"`, `spill_path`, `spill_path_abs`, `source` such as `preventive`, `retroactive`, or `recovered_from_events`, `cap_chars`, `original_char_count`, `preview`, …); the artifact holds the full original. `is_spill_manifest` requires the marker (or the legacy structural quadruple for forward-compat with manifests produced before the marker existed). Files are local to one agent run and may accumulate — not auto-cleaned today.

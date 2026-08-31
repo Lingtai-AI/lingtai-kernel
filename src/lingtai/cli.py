@@ -229,15 +229,33 @@ def build_agent(
     return agent
 
 
-def _clean_signal_files(working_dir: Path) -> None:
-    """Remove stale .suspend / .sleep files left over from a previous run."""
-    for name in (".suspend", ".sleep", ".refresh"):
+def _clean_signal_files(
+    working_dir: Path,
+    *,
+    preserve_suspend: bool = False,
+) -> None:
+    """Remove stale boot files, optionally preserving explicit suspend intent."""
+    names = (".sleep", ".refresh") if preserve_suspend else (
+        ".suspend",
+        ".sleep",
+        ".refresh",
+    )
+    for name in names:
         f = working_dir / name
         if f.is_file():
             try:
                 f.unlink()
             except OSError:
                 pass
+
+
+def _register_agent_boot(agent: Agent, working_dir: Path, *, ledger=None) -> dict:
+    """Durably register this exact runtime after Agent acquired its lease."""
+    if ledger is None:
+        from lingtai.adapters.agent_guardian import FilesystemLifecycleLedgerAdapter
+
+        ledger = FilesystemLifecycleLedgerAdapter(working_dir)
+    return ledger.register_boot(agent_address=working_dir.name, working_dir=str(working_dir))
 
 
 def _stop_signal_numbers() -> list[int]:
@@ -324,7 +342,21 @@ def _check_duplicate_process(working_dir: Path) -> None:
 def run(working_dir: Path) -> None:
     """Boot agent into ASLEEP — wakes on external messages (mail/imap/telegram)."""
     _check_duplicate_process(working_dir)
-    _clean_signal_files(working_dir)
+    from lingtai.adapters.agent_guardian import FilesystemLifecycleLedgerAdapter
+    from lingtai.kernel.agent_guardian import LifecycleLedgerError
+
+    # Refuse either the legacy marker or durable ledger intent before
+    # constructing providers, MCP clients, or ToolPlugins. register_boot repeats
+    # the ledger check under its lock after construction; the marker is also
+    # rechecked immediately before that append and is never silently cleaned.
+    suspend_marker = working_dir / ".suspend"
+    ledger = FilesystemLifecycleLedgerAdapter(working_dir)
+    if (
+        suspend_marker.is_file()
+        or ledger.read_snapshot().active_intent_id is not None
+    ):
+        raise LifecycleLedgerError("explicit_suspend_active")
+
     # Durable file logging for daemonized agents: stderr alone is DEVNULL for
     # avatars and truncated per-spawn in logs/spawn.stderr, so logger warnings
     # (mail claim failures, adapter retries, restore diagnostics) would
@@ -351,6 +383,22 @@ def run(working_dir: Path) -> None:
     data["venv_path"] = str(venv_dir)
 
     agent = build_agent(data, working_dir)
+    try:
+        # Preserve legacy suspend while cleaning unrelated stale boot files.
+        # Recheck the marker after Agent construction so a legacy suspend that
+        # arrived during construction also prevents registration and start.
+        _clean_signal_files(working_dir, preserve_suspend=True)
+        if suspend_marker.is_file():
+            raise LifecycleLedgerError("explicit_suspend_active")
+        # Agent construction owns the workdir lease; start() has not yet
+        # published a heartbeat or Agent Record. The locked ledger append repeats
+        # the durable-intent check and prevents an unregistered runtime start.
+        _register_agent_boot(agent, working_dir, ledger=ledger)
+    except BaseException:
+        try:
+            agent.stop(timeout=10.0)
+        finally:
+            raise
     agent._venv_path = str(venv_dir)
     _install_signal_handlers(working_dir, agent)
 
@@ -581,6 +629,8 @@ def main() -> None:
     add_puffo_v0_parser(sub)
     from lingtai.cli_project import add_project_parser
     add_project_parser(sub)
+    from lingtai.cli_guardian import add_guardian_parser
+    add_guardian_parser(sub)
 
     maintenance_parser = sub.add_parser(
         "maintenance",
@@ -625,7 +675,20 @@ def main() -> None:
             sys.exit(1)
         if getattr(args, "verbose", False):
             os.environ["LINGTAI_VERBOSE"] = "1"
-        run(working_dir)
+        from lingtai.kernel.agent_guardian import LifecycleLedgerError
+
+        try:
+            run(working_dir)
+        except LifecycleLedgerError as exc:
+            print(
+                json.dumps(
+                    {"error": {"code": exc.code}},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from None
     elif args.command == "check-caps":
         from lingtai.tools.registry import get_all_providers
         print(json.dumps(get_all_providers()))
@@ -660,6 +723,10 @@ def main() -> None:
         from lingtai.cli_project import handle_project_command
 
         handle_project_command(args)
+    elif args.command == "guardian":
+        from lingtai.cli_guardian import handle_guardian_command
+
+        handle_guardian_command(args)
     elif args.command == "maintenance":
         _handle_maintenance_command(args)
     else:

@@ -3,7 +3,8 @@
 Internal to ``lingtai.adapters.windows``: capability adapters (workdir lease,
 refresh watcher, daemon, avatar) each keep their own capability-local Ports and
 policy; this module only prevents divergent copies of the same raw ctypes
-plumbing. It deliberately exposes a small primitive surface — liveness,
+plumbing. It deliberately exposes a small primitive surface — boolean and
+tri-state liveness,
 creation-time identity, exact-PID termination, the taskkill tree-kill
 fallback, and the detached-spawn creation flags — and no process enumeration
 or policy surface, so it cannot grow into a generic process supervisor.
@@ -45,6 +46,7 @@ _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _PROCESS_TERMINATE = 0x0001
 _STILL_ACTIVE = 259
 _ERROR_ACCESS_DENIED = 5
+_ERROR_INVALID_PARAMETER = 87
 
 
 @functools.lru_cache(maxsize=1)
@@ -100,6 +102,43 @@ def process_alive(pid: int) -> bool:
         if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
             return False
         return code.value == _STILL_ACTIVE
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def process_liveness(pid: int) -> str:
+    """Return ``alive``, ``absent``, or ``unknown`` from narrow Win32 proof.
+
+    This stricter observation is for safety evidence. ``ERROR_INVALID_PARAMETER``
+    or an acquired handle with a non-``STILL_ACTIVE`` exit code proves absence;
+    access denial, other open failures, and query failures remain unknown.
+    ``process_alive`` retains its established boolean behavior for existing
+    callers.
+    """
+    if os.name != "nt":
+        raise OSError("Win32 process surface requires Windows")
+    if pid <= 0:
+        return "absent"
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = _kernel32()
+    handle = kernel.OpenProcess(
+        _PROCESS_QUERY_LIMITED_INFORMATION,
+        False,
+        wintypes.DWORD(pid),
+    )
+    if not handle:
+        return (
+            "absent"
+            if ctypes.get_last_error() == _ERROR_INVALID_PARAMETER
+            else "unknown"
+        )
+    try:
+        code = wintypes.DWORD()
+        if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return "unknown"
+        return "alive" if code.value == _STILL_ACTIVE else "absent"
     finally:
         kernel.CloseHandle(handle)
 
@@ -221,6 +260,7 @@ __all__ = [
     "CREATE_NO_WINDOW",
     "DETACHED_CREATIONFLAGS",
     "process_alive",
+    "process_liveness",
     "process_creation_identity",
     "taskkill_tree",
     "terminate_pid",

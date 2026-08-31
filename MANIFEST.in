@@ -29,6 +29,7 @@ include src/lingtai/init.jsonc
 # The governed ACP adapter manual/twins are runtime package data. Mirror the
 # package-data entry so source distributions carry the same four documents.
 recursive-include src/lingtai/adapters/acp *.md
+recursive-include src/lingtai/kernel/agent_guardian *.md
 
 # Standalone intrinsic skill bundles are runtime package data (including nested
 # system-manual scripts/references); source releases must carry the same tree.

@@ -270,6 +270,23 @@ def _suspend(agent, args: dict) -> dict:
     resolved = args["_resolved_address"]
     if not _is_alive(resolved):
         return {"error": True, "message": f"Agent at {address} is not running — already suspended?"}
+    from lingtai.adapters.agent_guardian import FilesystemLifecycleLedgerAdapter
+    from lingtai.kernel.agent_guardian import LifecycleLedgerError
+
+    actor = getattr(agent, "agent_name", None) or getattr(agent, "_working_dir", resolved).name or "unknown"
+    try:
+        FilesystemLifecycleLedgerAdapter(resolved).request_suspend(
+            agent_address=resolved.name,
+            actor_id=str(actor),
+            reason="explicit_suspend",
+        )
+    except LifecycleLedgerError as exc:
+        agent._log("karma_suspend_ledger_failed", target=address, code=exc.code)
+        return {
+            "error": True,
+            "message": "Suspend refused because durable intent could not be recorded",
+            "code": exc.code,
+        }
     (resolved / ".suspend").write_text("", encoding="utf-8")
     agent._log("karma_suspend", target=address)
     return {"status": "suspended", "address": address}

@@ -1444,6 +1444,27 @@ class Agent(BaseAgent):
             self._log("cpr_no_init", path=str(target))
             return None
 
+        # An explicit CPR clears only the currently active suspend intent, and
+        # does so durably before signal cleanup or detached launch. Corrupt or
+        # unwritable history fails closed and leaves the target untouched.
+        from lingtai.adapters.agent_guardian import FilesystemLifecycleLedgerAdapter
+        from lingtai.kernel.agent_guardian import LifecycleLedgerError
+
+        actor = self.agent_name or self._working_dir.name or "unknown"
+        try:
+            FilesystemLifecycleLedgerAdapter(target).request_cpr(
+                agent_address=target.name,
+                actor_id=str(actor),
+                reason="explicit_cpr",
+            )
+        except LifecycleLedgerError as exc:
+            self._log("cpr_ledger_failed", target=str(target), code=exc.code)
+            return {
+                "error": True,
+                "message": "CPR refused because durable intent could not be updated",
+                "code": exc.code,
+            }
+
         # Clean stale signal files so a CPR'd agent boots cleanly.
         for sig in (".suspend", ".sleep", ".interrupt"):
             sig_file = target / sig

@@ -39,7 +39,11 @@ def test_run_exports_live_runtime_python_env(monkeypatch, tmp_path):
     agent = _FakeAgent()
 
     monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
-    monkeypatch.setattr(cli, "_clean_signal_files", lambda working_dir: None)
+    monkeypatch.setattr(
+        cli,
+        "_clean_signal_files",
+        lambda working_dir, **kwargs: None,
+    )
     monkeypatch.setattr(cli, "_install_signal_handlers", lambda working_dir, agent: None)
     monkeypatch.setattr(cli, "load_init", lambda working_dir: {})
     monkeypatch.setattr(cli, "build_agent", lambda data, working_dir: agent)

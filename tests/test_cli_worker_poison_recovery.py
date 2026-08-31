@@ -74,7 +74,7 @@ class _FakeAgent:
 
 def _patch_run_dependencies(monkeypatch, tmp_path: Path, agent: _FakeAgent):
     monkeypatch.setattr(cli, "_check_duplicate_process", lambda wd: None)
-    monkeypatch.setattr(cli, "_clean_signal_files", lambda wd: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda wd, **kwargs: None)
     monkeypatch.setattr(cli, "load_init", lambda wd: {"venv_path": "/fake/venv"})
     monkeypatch.setattr(
         "lingtai.venv_resolve.resolve_venv", lambda data: Path("/fake/venv")

@@ -16,6 +16,7 @@ related_files:
   - src/lingtai/adapters/refresh_watcher.py
   - src/lingtai/adapters/process_scan.py
   - src/lingtai/adapters/lifecycle_clock.py
+  - src/lingtai/adapters/agent_guardian.py
   - src/lingtai/adapters/project_workspace.py
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/adapters/avatar_launcher.py
@@ -26,6 +27,7 @@ related_files:
   - src/lingtai/cli_acp.py
   - src/lingtai/cli_puffo_v0.py
   - src/lingtai/cli_daemon.py
+  - src/lingtai/cli_guardian.py
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/bash/ANATOMY.md
@@ -71,6 +73,8 @@ related_files:
   - src/lingtai/kernel/workdir.py
   - src/lingtai/kernel/session_stats/ANATOMY.md
   - src/lingtai/kernel/session_stats/CONTRACT.md
+  - src/lingtai/kernel/agent_guardian/ANATOMY.md
+  - src/lingtai/kernel/agent_guardian/CONTRACT.md
   - tests/test_agent_preset_manifest.py
   - tests/test_agent_config_hydration.py
   - tests/test_cli.py
@@ -110,8 +114,9 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `adapters/workdir_lease.py` | Outer platform selector for the `WorkdirLeasePort` adapter: composition-root wiring that reads the running platform, selects the concrete adapter, and constructs it. Deliberately the only place that branches on the OS for leasing — Core never imports it; `lingtai.agent` and `lingtai.cli` call `select_workdir_lease` and inject the returned Port into `BaseAgent` and the SQLite rebuild. An unsupported platform fails loudly rather than silently degrading. |
 | `adapters/browser_transport.py` | Production static HTTP(S) Adapter for the internal browse Core-owned `BrowserPort`; bounds DNS wait with one in-flight resolver job, pins vetted IPs, and preserves Host/SNI, selected lazily by unified web setup. |
 | `adapters/lifecycle_clock.py` | The one portable production `SystemLifecycleClockAdapter` for the Core-owned `LifecycleClockPort` — direct `wall_seconds()`→`time.time()` / `monotonic_seconds()`→`time.monotonic()`, no caching or policy. Not POSIX (no filesystem/`fcntl`/platform selection), so it sits at the top of `adapters/` rather than under `adapters/posix/`; its promise/navigation are owned by the kernel `lifecycle_clock/` governed pair (`src/lingtai/kernel/lifecycle_clock/CONTRACT.md` + `ANATOMY.md`). |
+| `adapters/agent_guardian.py` | Bounded guardian `.agent.json` observation, durable per-agent lifecycle ledger, read-only local process/lease/Agent-Record observation, and separate guardian lease for the Core `agent_guardian` Ports (`src/lingtai/adapters/agent_guardian.py:51`, `src/lingtai/adapters/agent_guardian.py:79`, `src/lingtai/adapters/agent_guardian.py:508`). Its shared PID-existence helper is defined at `src/lingtai/adapters/agent_guardian.py:587`, calls only literal signal zero at `src/lingtai/adapters/agent_guardian.py:590`, and is used by the macOS libproc-miss branch at `src/lingtai/adapters/agent_guardian.py:690` (no delivered signal); it has no process-action, launch, CPR, Agent, provider, MCP, or service API. |
 | `adapters/project_workspace.py` | Filesystem implementation of the Project Core Port: exclusively creates one fresh `.lingtai` tree, writes its seed, and applies an injected init-reader validation. |
-| `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent acp --agent-dir <dir>` / `lingtai-agent acp --profile puffo-v0 --runtime-id <id>` / `lingtai-agent puffo-v0 provision\|revoke` / `lingtai-agent project create ...` / `lingtai-agent check-caps` / `lingtai-agent log ...` / `lingtai-agent maintenance cleanup <target>` entry points; the `run` composition root performs a post-stop hard exit only when existing worker-poison state would otherwise keep the old process alive and block the refresh watcher |
+| `cli.py` / `cli_guardian.py` | Existing `lingtai-agent` entry points plus `guardian --agent-dir <path> [--once]`; ordinary `run()` refuses legacy `.suspend` or durable intent before construction, preserves/rechecks `.suspend` while cleaning only stale sleep/refresh markers (`src/lingtai/cli.py:352`, `src/lingtai/cli.py:390`), and performs the decisive locked durable-intent boot append before `start` (`src/lingtai/cli.py:396`), while guardian is foreground/shadow-only JSON observation with no actuator or installer (`src/lingtai/cli_guardian.py:111`). |
 | `cli_project.py` | Inbound composition for one fresh `project create` seed: caller inputs, wrapper preset loading, current-reader validation, Project adapter, and output; it does not start an Agent. |
 | `cli_acp.py` / `adapters/acp/puffo_v0.py` / `cli_puffo_v0.py` | ACP outer composition and Puffo full-tool profile: generic ACP accepts a local existing agent directory; `puffo-v0` resolves only an operator-provisioned opaque runtime id to canonical identity/workspace, forces no session MCP, admits only authenticated ACP-origin provider turns, and provides local provision/revoke control. It is a controlled-entrypoint gate, not same-OS host isolation or runtime containment. |
 | `cli_daemon.py` | `lingtai-agent daemon emanate|list|check` — the programmatic (shell/Python/CI) skin over the daemon engine. `_CliDaemonAgent` is the minimal parent-agent facade `DaemonManager` reads (no lease, heartbeat, or agent identity), built from the agent's effective config through the canonical `init_reader.read_init`; `emanate` validates the tasks file against the tool's own emanate schema and enforces the preset allowlist and effective capability policy before previewing, then dispatches through the `DaemonFamilyDispatcher` envelope only under `--yes`; `_ReadOnlyDaemonView` binds the manager's unmodified `_handle_list`/`_handle_check` with both of its write paths (startup reconciliation, lazy daemon.json repair) removed |

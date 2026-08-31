@@ -2,6 +2,8 @@
 from __future__ import annotations
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
+import os
+import json
 import threading
 import time
 from pathlib import Path
@@ -26,6 +28,47 @@ def _make_agent(tmp_path, **kwargs):
     kwargs.setdefault("working_dir", str(tmp_path / "test000000ab"))
     agent = BaseAgent(svc, intrinsics=_TEST_INTRINSICS, **kwargs, workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(kwargs["working_dir"]))
     return agent
+
+
+def _write_adversarial_ledger(target: Path, kind: str) -> Path:
+    path = target / "logs" / "agent_lifecycle.jsonl"
+    path.parent.mkdir(exist_ok=True)
+    row = {
+        "schema": "lingtai.agent_lifecycle_event/v1",
+        "schema_version": 1,
+        "event_id": "00000000-0000-0000-0000-000000000001",
+        "event": "boot_registered",
+        "recorded_at": "2026-08-29T00:00:00.000Z",
+        "agent_address": target.name,
+        "actor": {"kind": "runtime", "id": target.name},
+        "reason": "test",
+        "payload": {
+            "runtime_id": "00000000-0000-0000-0000-000000000002",
+            "pid": 1234,
+            "start_identity": "test:start",
+            "working_dir": str(target.resolve()),
+            "executable": str((target / "python").resolve()),
+            "command": {
+                "program": "python",
+                "subcommand": "run",
+                "agent_dir": str(target.resolve()),
+            },
+        },
+    }
+    if kind == "array_event":
+        row["event"] = []
+        text = json.dumps(row, separators=(",", ":"))
+    elif kind == "huge_integer":
+        text = json.dumps(row, separators=(",", ":")).replace(
+            '"pid":1234',
+            '"pid":' + ("9" * 5000),
+        )
+    elif kind == "deep_json":
+        text = "[" * 2000 + "0" + "]" * 2000
+    else:
+        raise AssertionError(kind)
+    path.write_text(text + "\n", encoding="utf-8")
+    return path
 
 
 class TestSignalFiles:
@@ -194,6 +237,128 @@ class TestSystemIntrinsicKarma:
         result = handle(agent, {"action": "cpr", "input": {"address": str(target_dir)}})
         assert "error" in result
         assert "not supported" in result["message"].lower()
+
+    def test_suspend_records_intent_before_signal_and_fails_closed(self, tmp_path, monkeypatch):
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        (target_dir / ".agent.json").write_text('{"agent_id": "t1"}')
+        (target_dir / ".agent.heartbeat").write_text(str(time.time()))
+        sender_base = tmp_path / "sender"
+        sender_base.mkdir()
+        agent = _make_agent(sender_base, admin={"karma": True})
+
+        import lingtai.adapters.agent_guardian as adapter_module
+        from lingtai.kernel.agent_guardian import LifecycleLedgerError
+        from lingtai.tools.system import handle
+
+        class RecordingLedger:
+            def __init__(self, target):
+                assert Path(target) == target_dir
+
+            def request_suspend(self, **kwargs):
+                assert not (target_dir / ".suspend").exists()
+                return "intent"
+
+        monkeypatch.setattr(adapter_module, "FilesystemLifecycleLedgerAdapter", RecordingLedger)
+        result = handle(agent, {"action": "suspend", "input": {"address": str(target_dir), "reason": "maintenance"}})
+        assert result["status"] == "suspended"
+        assert (target_dir / ".suspend").is_file()
+
+        (target_dir / ".suspend").unlink()
+
+        class FailingLedger(RecordingLedger):
+            def request_suspend(self, **kwargs):
+                raise LifecycleLedgerError("ledger_write_failed")
+
+        monkeypatch.setattr(adapter_module, "FilesystemLifecycleLedgerAdapter", FailingLedger)
+        result = handle(agent, {"action": "suspend", "input": {"address": str(target_dir), "reason": "maintenance"}})
+        assert result["error"] is True and result["code"] == "ledger_write_failed"
+        assert not (target_dir / ".suspend").exists()
+
+    def test_suspend_ledger_not_a_directory_error_is_structured(self, tmp_path):
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        (target_dir / ".agent.json").write_text('{"agent_id": "t1"}')
+        (target_dir / ".agent.heartbeat").write_text(str(time.time()))
+        (target_dir / "logs").write_text("not a directory", encoding="utf-8")
+        sender_base = tmp_path / "sender"
+        sender_base.mkdir()
+        agent = _make_agent(sender_base, admin={"karma": True})
+        from lingtai.tools.system import handle
+
+        result = handle(
+            agent,
+            {
+                "action": "suspend",
+                "input": {"address": str(target_dir), "reason": "maintenance"},
+            },
+        )
+
+        assert result["error"] is True
+        assert result["code"] == "ledger_io_error"
+        assert not (target_dir / ".suspend").exists()
+
+    @pytest.mark.parametrize(
+        ("corruption_kind", "expected_code"),
+        [
+            ("array_event", "event_unsupported"),
+            ("huge_integer", "malformed_record"),
+            ("deep_json", "malformed_record"),
+        ],
+    )
+    def test_suspend_adversarial_json_is_structured(
+        self, tmp_path, corruption_kind, expected_code,
+    ):
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        (target_dir / ".agent.json").write_text('{"agent_id":"t1"}')
+        (target_dir / ".agent.heartbeat").write_text(str(time.time()))
+        _write_adversarial_ledger(target_dir, corruption_kind)
+        sender_base = tmp_path / "sender"
+        sender_base.mkdir()
+        agent = _make_agent(sender_base, admin={"karma": True})
+        from lingtai.tools.system import handle
+
+        result = handle(
+            agent,
+            {
+                "action": "suspend",
+                "input": {"address": str(target_dir), "reason": "maintenance"},
+            },
+        )
+
+        assert result["error"] is True
+        assert result["code"] == expected_code
+        assert not (target_dir / ".suspend").exists()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics")
+    def test_suspend_ledger_permission_error_is_structured(self, tmp_path):
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        (target_dir / ".agent.json").write_text('{"agent_id": "t1"}')
+        (target_dir / ".agent.heartbeat").write_text(str(time.time()))
+        logs = target_dir / "logs"
+        logs.mkdir()
+        logs.chmod(0)
+        sender_base = tmp_path / "sender"
+        sender_base.mkdir()
+        agent = _make_agent(sender_base, admin={"karma": True})
+        from lingtai.tools.system import handle
+
+        try:
+            result = handle(
+                agent,
+                {
+                    "action": "suspend",
+                    "input": {"address": str(target_dir), "reason": "maintenance"},
+                },
+            )
+        finally:
+            logs.chmod(0o700)
+
+        assert result["error"] is True
+        assert result["code"] == "ledger_io_error"
+        assert not (target_dir / ".suspend").exists()
 
 
 class TestCPRLingtai:
@@ -386,6 +551,65 @@ class TestCPRLingtai:
             log=str(log_path),
         )
         assert all(call.args[0] != "cpr_launch_unconfirmed" for call in log.call_args_list)
+
+    def test_cpr_ledger_failure_precedes_signal_cleanup_and_launch(self, tmp_path):
+        target = tmp_path / "agents" / "blocked000001"
+        self._stage_cpr_target(target)
+        suspend = target / ".suspend"
+        suspend.write_text("", encoding="utf-8")
+        reviver = self._cpr_reviver(tmp_path, self._cpr_service())
+        from lingtai.kernel.agent_guardian import LifecycleLedgerError
+
+        with (
+            patch(
+                "lingtai.adapters.agent_guardian.FilesystemLifecycleLedgerAdapter.request_cpr",
+                side_effect=LifecycleLedgerError("malformed_record"),
+            ),
+            patch("subprocess.Popen", side_effect=AssertionError("CPR launched")),
+        ):
+            result = reviver._cpr_agent(str(target))
+
+        assert result["error"] is True and result["code"] == "malformed_record"
+        assert suspend.is_file()
+
+    def test_cpr_ledger_not_a_directory_error_precedes_cleanup_and_launch(self, tmp_path):
+        target = tmp_path / "agents" / "blocked000002"
+        self._stage_cpr_target(target)
+        suspend = target / ".suspend"
+        suspend.write_text("", encoding="utf-8")
+        (target / "logs").write_text("not a directory", encoding="utf-8")
+        reviver = self._cpr_reviver(tmp_path, self._cpr_service())
+
+        with patch("subprocess.Popen", side_effect=AssertionError("CPR launched")):
+            result = reviver._cpr_agent(str(target))
+
+        assert result["error"] is True and result["code"] == "ledger_io_error"
+        assert suspend.is_file()
+
+    @pytest.mark.parametrize(
+        ("corruption_kind", "expected_code"),
+        [
+            ("array_event", "event_unsupported"),
+            ("huge_integer", "malformed_record"),
+            ("deep_json", "malformed_record"),
+        ],
+    )
+    def test_cpr_adversarial_json_precedes_cleanup_and_launch(
+        self, tmp_path, corruption_kind, expected_code,
+    ):
+        target = tmp_path / "agents" / "blocked000003"
+        self._stage_cpr_target(target)
+        suspend = target / ".suspend"
+        suspend.write_text("", encoding="utf-8")
+        _write_adversarial_ledger(target, corruption_kind)
+        reviver = self._cpr_reviver(tmp_path, self._cpr_service())
+
+        with patch("subprocess.Popen", side_effect=AssertionError("CPR launched")):
+            result = reviver._cpr_agent(str(target))
+
+        assert result["error"] is True
+        assert result["code"] == expected_code
+        assert suspend.is_file()
 
 
 class TestSelfSleepPendingNotificationsGuard:

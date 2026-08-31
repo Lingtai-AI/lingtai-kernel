@@ -5,6 +5,9 @@ labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - src/lingtai/adapters/agent_guardian.py
+  - src/lingtai/agent.py
+  - src/lingtai/kernel/agent_guardian/CONTRACT.md
   - src/lingtai/tools/system/karma.py
   - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/settings.py
@@ -288,3 +291,57 @@ Pass only when mounted and direct routes agree on refusal, force escape, receipt
 ### Pass / Fail
 Pass only when all evidence holds. Fail on an omitted/duplicate row, partial
 inventory, secret disclosure, mutation, or an unresolved manual pointer.
+
+## Behavior B010 — durable suspend and CPR refuse before contradictory action
+
+- **id**: B010
+- **title**: durable suspend and CPR evidence precedes marker mutation or launch
+- **guards**: `system-contract` § [State & storage](CONTRACT.md#state--storage)
+- **supersedes**: `tests/test_karma.py::TestSystemIntrinsicKarma::test_suspend_records_intent_before_signal_and_fails_closed`, `tests/test_karma.py::TestSystemIntrinsicKarma::test_suspend_ledger_not_a_directory_error_is_structured`, `tests/test_karma.py::TestSystemIntrinsicKarma::test_suspend_ledger_permission_error_is_structured`, `tests/test_karma.py::TestSystemIntrinsicKarma::test_suspend_adversarial_json_is_structured`, `tests/test_karma.py::TestCPRLingtai::test_cpr_ledger_failure_precedes_signal_cleanup_and_launch`, `tests/test_karma.py::TestCPRLingtai::test_cpr_ledger_not_a_directory_error_precedes_cleanup_and_launch`, `tests/test_karma.py::TestCPRLingtai::test_cpr_adversarial_json_precedes_cleanup_and_launch`
+- **runner**: a coding agent with a POSIX shell and Git in a `lingtai-kernel` worktree
+- **prerequisites**: the repository virtualenv exists at
+  `<common-repository-root>/.venv`; pytest owns every target directory; no live
+  agent or runtime directory is used
+- **estimate**: 1 minute
+
+### Steps
+1. From any repository worktree, resolve the candidate root and repository
+   virtualenv, then execute the exact System integration cases:
+   ```bash
+   REPO_ROOT="$(git rev-parse --show-toplevel)"
+   REPO_BASE="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+   if test -x "$REPO_BASE/.venv/bin/python"; then
+     VENV_PYTHON="$REPO_BASE/.venv/bin/python"
+   else
+     VENV_PYTHON="$REPO_BASE/.venv/Scripts/python.exe"
+   fi
+   test -x "$VENV_PYTHON"
+   cd "$REPO_ROOT"
+   PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 "$VENV_PYTHON" -m pytest -p no:cacheprovider -q \
+     tests/test_karma.py::TestSystemIntrinsicKarma::test_suspend_records_intent_before_signal_and_fails_closed \
+     tests/test_karma.py::TestSystemIntrinsicKarma::test_suspend_ledger_not_a_directory_error_is_structured \
+     tests/test_karma.py::TestSystemIntrinsicKarma::test_suspend_ledger_permission_error_is_structured \
+     tests/test_karma.py::TestSystemIntrinsicKarma::test_suspend_adversarial_json_is_structured \
+     tests/test_karma.py::TestCPRLingtai::test_cpr_ledger_failure_precedes_signal_cleanup_and_launch \
+     tests/test_karma.py::TestCPRLingtai::test_cpr_ledger_not_a_directory_error_precedes_cleanup_and_launch \
+     tests/test_karma.py::TestCPRLingtai::test_cpr_adversarial_json_precedes_cleanup_and_launch
+   ```
+2. Read the pytest result; do not create or inspect any agent directory outside
+   pytest's temporary root.
+
+### Expected evidence
+- [ ] Pytest exits 0 and every selected case passes; only the POSIX permission
+  case may be skipped on Native Windows.
+- [ ] Successful suspend records intent before `.suspend`; injected and real
+  not-a-directory/permission failures return `{error: true, code: ...}` without
+  creating `.suspend`.
+- [ ] Array-valued event fields, 5000-digit JSON integers, and sub-64-KiB deep
+  JSON return stable ledger codes on both suspend and CPR without raw exceptions.
+- [ ] CPR ledger failures retain the existing `.suspend` marker and the patched
+  subprocess launch fails the test if reached.
+- [ ] No real signal, launch, runtime, configuration, or agent path is touched.
+
+### Pass / Fail
+Pass only when pytest exits 0 and all platform-applicable evidence holds. Fail
+if a raw filesystem traceback escapes, a marker changes after ledger refusal,
+or any CPR launch is attempted after durable clear failure.

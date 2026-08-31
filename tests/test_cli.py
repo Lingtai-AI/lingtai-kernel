@@ -877,7 +877,11 @@ def test_run_wires_file_logging(monkeypatch, tmp_path):
             self.stopped = True
 
     monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
-    monkeypatch.setattr(cli, "_clean_signal_files", lambda working_dir: None)
+    monkeypatch.setattr(
+        cli,
+        "_clean_signal_files",
+        lambda working_dir, **kwargs: None,
+    )
     monkeypatch.setattr(cli, "_install_signal_handlers", lambda working_dir, agent: None)
     monkeypatch.setattr(cli, "load_init", lambda working_dir: {})
     monkeypatch.setattr(cli, "build_agent", lambda data, working_dir: _FakeAgent())

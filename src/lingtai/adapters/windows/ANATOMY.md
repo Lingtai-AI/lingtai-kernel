@@ -65,8 +65,9 @@ only method execution requires Windows.
 
 ## Components
 
-- `_win32` — shared low-level ctypes surface: `process_alive`
-  (OpenProcess/GetExitCodeProcess — never `os.kill`, which terminates on
+- `_win32` — shared low-level ctypes surface: established boolean
+  `process_alive` plus strict `process_liveness` (`alive`/`absent`/`unknown`;
+  OpenProcess/GetExitCodeProcess — never `os.kill`, which terminates on
   Windows), `process_creation_identity` (`windows:<creation_filetime>`),
   `terminate_pid` (exact-PID `TerminateProcess`), `taskkill_tree`
   (identity-gated `taskkill /PID <pid> /T /F` tree-kill fallback), and the

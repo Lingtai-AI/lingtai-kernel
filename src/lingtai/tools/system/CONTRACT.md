@@ -1,7 +1,7 @@
 ---
 name: system-contract
 tool: system
-contract_version: 5
+contract_version: 6
 related_files:
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/plugin.py
@@ -15,6 +15,9 @@ related_files:
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/system/BEHAVIORS.md
+  - src/lingtai/kernel/agent_guardian/CONTRACT.md
+  - src/lingtai/kernel/agent_guardian/BEHAVIORS.md
+  - src/lingtai/adapters/agent_guardian.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
@@ -26,6 +29,7 @@ related_files:
   - tests/test_tool_family_system_migration.py
   - tests/test_system_sleep_alarm.py
   - tests/test_system_declared_plugin.py
+  - tests/test_karma.py
 maintenance: |
   Keep related_files as repo-relative paths to real files, including the
   paired ANATOMY.md, the LTP/ToolFamily contracts this family is governed by,
@@ -33,11 +37,13 @@ maintenance: |
   suite. If behavior and this contract disagree, the code is the source of
   truth — fix the contract in the same change and bump contract_version on
   breaking contract edits.
-  contract_version 5 applies the System kernel-level catch-all rule to every
-  effective setting without another concrete ToolPlugin owner while retaining
-  a SHOW-only five-field surface. contract_version 4 added read-only discovery
-  for the family-owned cache-miss budget and retired its legacy init source.
-  contract_version 3 is the
+  contract_version 6 adds breaking durable suspend/CPR refusal and stable
+  error-code semantics: guardian ledger updates must succeed before marker
+  mutation, signal cleanup, or launch. contract_version 5 applies the System
+  kernel-level settings catch-all to every effective setting without another
+  concrete ToolPlugin owner while retaining a SHOW-only five-field surface.
+  contract_version 4 added read-only discovery for the family-owned cache-miss
+  budget and retired its legacy init source. contract_version 3 is the
   breaking public-ownership
   change: the public
   summarize action left for context (which split it into record-only summarize and full reconstruction rebuild)
@@ -73,9 +79,11 @@ address verbs, `preset`/`revert_preset` only to `refresh`, and `content` only
 to the two name actions. It is the third migrated *intrinsic* (after `soul` and
 `notification`) and therefore composes its dispatching family per call rather
 than owning a per-Agent manager, and drops the kernel-injected `_tc_id` at its
-own Host boundary. The migration changed the argument shape only: the public
-tool name, every retained action value, every privilege gate, receipt, and error
-are unchanged, and the children consume no additional model tool slots.
+own Host boundary. The LTP migration changed the argument shape while
+preserving the public tool name, retained action values, ordinary receipts, and
+privilege gates. The later durable-intent integration deliberately adds
+structured suspend/CPR refusal codes when lifecycle evidence cannot be written;
+the children consume no additional model tool slots.
 `system` is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist
 (`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean
 it advertises is actually honored.
@@ -289,8 +297,8 @@ siblings.
 | `refresh` | — | `reason`, `preset`, `revert_preset` | `{status: "ok", message}` | `{status: "error", message}` on preset/revert conflict, unauthorized preset, oversize context, or activation failure |
 | `sleep` | — | `reason`, `force`, `delay` | `{status: "ok", message}` (self-sleep; refuses with an ok+message when notifications pending and not `force`; a finite positive `delay` arms the last-resort alarm) | `{status: "error", message}` for a non-number, bool, non-finite, zero, or negative `delay` |
 | `lull` | `address` | `reason` | `{status: "asleep", address}` | `{error: True, message}` (no karma, no/invalid address, self-target, target not running) |
-| `suspend` | `address` | `reason` | `{status: "suspended", address}` | `{error: True, message}` (as above) |
-| `cpr` | `address` | `reason` | `{status: "resuscitated", address}` | `{error: True, message}` (target already running, CPR unsupported, or observed child exit before a fresh heartbeat) |
+| `suspend` | `address` | `reason` | `{status: "suspended", address}` | `{error: True, message}` (as above, including durable intent failure before `.suspend`) |
+| `cpr` | `address` | `reason` | `{status: "resuscitated", address}` | `{error: True, message}` (target already running, durable intent-clear failure before action, CPR unsupported, or observed child exit before a fresh heartbeat) |
 | `interrupt` | `address` | `reason` | `{status: "interrupted", address}` | `{error: True, message}` (as above) |
 | `clear` | `address` | `reason` | `{status: "cleared", address, source}` | `{error: True, message}` (as above) |
 | `nirvana` | `address` | `reason` | `{status: "nirvana", address}` | `{error: True, message}` (requires karma AND nirvana; shutdown-timeout error) |
@@ -354,9 +362,10 @@ by [`BEHAVIORS.md`](BEHAVIORS.md) — authorization gate
 ([B002](BEHAVIORS.md#behavior-b002), [B003](BEHAVIORS.md#behavior-b003)),
 refusal paths ([B004](BEHAVIORS.md#behavior-b004),
 [B005](BEHAVIORS.md#behavior-b005)), nirvana privilege
-([B006](BEHAVIORS.md#behavior-b006)), and CPR launch confirmation
-([B007](BEHAVIORS.md#behavior-b007)). Change any of these behaviors, update the
-matching behavior entry and this clause together.
+([B006](BEHAVIORS.md#behavior-b006)), CPR launch confirmation
+([B007](BEHAVIORS.md#behavior-b007)), and durable suspend/CPR ordering and
+filesystem refusal ([B009](BEHAVIORS.md#behavior-b009)). Change any of these
+behaviors, update the matching behavior entry and this clause together.
 
 ### CPR launch confirmation
 
@@ -372,6 +381,17 @@ latter records absence of confirmation evidence, not an ongoing-health guarantee
 This observable distinction is guarded by [B007](BEHAVIORS.md#behavior-b007).
 
 ## State & storage
+
+Explicit `suspend` first fsync-appends/coalesces `suspend_requested` in
+`<target>/logs/agent_lifecycle.jsonl`, then preserves the legacy signal below.
+CPR first fsync-appends a matching `cpr_requested` clear when an intent is
+active, before deleting `.suspend` or launching. Either ledger failure refuses
+before the contradictory action. Boot/crash/time/marker deletion do not clear
+intent; ordinary boot refuses while it remains active, and matching CPR clears
+it before the later boot can register. The complete invariant is owned by the
+[guardian Contract](../../kernel/agent_guardian/CONTRACT.md) and guarded by
+[B009](BEHAVIORS.md#behavior-b009) plus the guardian's full
+[G001](../../kernel/agent_guardian/BEHAVIORS.md#behavior-g001) matrix.
 
 Karma verbs write **signal files** into the *target* agent's working directory;
 the target's heartbeat loop picks them up. Paths are relative to the resolved
@@ -431,6 +451,7 @@ drive it are `context`'s.
 | `refresh` cannot combine `preset` and `revert_preset` | `src/lingtai/tools/system/preset.py:_refresh` | `tests/test_system.py::test_refresh_revert_preset_with_preset_arg_errors` |
 | `presets` lists the allowed library and strips credentials | `src/lingtai/tools/system/preset.py:_presets` | `tests/test_system.py::test_presets_action_lists_full_library`, `tests/test_system.py::test_presets_action_strips_credentials` |
 | `cpr` reports an observed launch exit as failure, but retains its established receipt for a child still running after bounded heartbeat confirmation | `src/lingtai/tools/system/karma.py:_cpr` | `tests/test_system.py::test_cpr_propagates_launch_failure_instead_of_resuscitated`, `tests/test_karma.py::TestCPRLingtai` |
+| `suspend` and CPR refuse with a stable code when durable intent storage is corrupt/unparseable or unavailable, before marker mutation or launch | `src/lingtai/tools/system/karma.py:_suspend`, `src/lingtai/agent.py:_cpr_agent` | `tests/test_karma.py::TestSystemIntrinsicKarma::test_suspend_records_intent_before_signal_and_fails_closed`, `tests/test_karma.py::TestSystemIntrinsicKarma::test_suspend_adversarial_json_is_structured`, `tests/test_karma.py::TestCPRLingtai::test_cpr_ledger_not_a_directory_error_precedes_cleanup_and_launch`, `tests/test_karma.py::TestCPRLingtai::test_cpr_adversarial_json_precedes_cleanup_and_launch` |
 | The two name actions preserve live identity, `.agent.json`, and the protected prompt `identity` section, and mutate neither address nor workdir | `src/lingtai/tools/system/name.py` | `tests/test_tool_family_system_migration.py::test_name_actions_preserve_identity_semantics` |
 | The public `summarize` action is gone from `system` with no alias | `src/lingtai/tools/system/schema.py:ACTION_ORDER` | `tests/test_tool_family_system_migration.py::test_public_summarize_action_is_gone_and_fails_loudly`, `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss` |
 | `items`/`rebuild` belong to no `system` action | `src/lingtai/tools/system/schema.py:INPUT_SCHEMAS` | `tests/test_tool_family_system_migration.py::test_departed_summarize_fields_are_rejected_on_every_action` |

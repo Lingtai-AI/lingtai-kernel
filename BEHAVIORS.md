@@ -8,6 +8,7 @@ related_files:
   - dev-guide-skill/SKILL.md
   - tests/CONTRACT.md
   - src/lingtai/kernel/BEHAVIORS.md
+  - src/lingtai/kernel/agent_guardian/BEHAVIORS.md
   - src/lingtai/kernel/tool_plugin/BEHAVIORS.md
   - src/lingtai/adapters/acp/BEHAVIORS.md
   - src/lingtai/tools/BEHAVIORS.md
