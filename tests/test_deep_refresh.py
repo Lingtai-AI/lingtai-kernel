@@ -88,8 +88,17 @@ def _make_agent(
     from lingtai.agent import Agent
     from lingtai.kernel.config import AgentConfig
 
-    init = init_data or _make_init()
+    init = dict(init_data or _make_init())
+    owner = {"schema_version": 1}
+    for key in (
+        "base_prompt", "base_prompt_file", "covenant", "covenant_file",
+        "comment", "comment_file",
+    ):
+        if key in init:
+            owner[key] = init.pop(key)
     (tmp_path / "init.json").write_text(json.dumps(init))
+    (tmp_path / "settings").mkdir(exist_ok=True)
+    (tmp_path / "settings" / "psyche.json").write_text(json.dumps(owner))
 
     service = MagicMock()
     service.provider = "openai"
@@ -215,25 +224,32 @@ def test_deep_refresh_at_boot_no_history(tmp_path):
 
 
 def test_cli_build_agent_uses_refresh(tmp_path):
-    """cli.build_agent() constructs agent via _setup_from_init from init.json."""
+    """CLI boot reads capabilities from init and covenant from Psyche."""
     from lingtai.cli import load_init, build_agent
 
-    init = _make_init(capabilities={"file": {}}, covenant="Be helpful.")
+    init = _make_init(
+        capabilities={"file": {}},
+        covenant="LEGACY INIT COVENANT MUST STAY INERT",
+    )
     (tmp_path / "init.json").write_text(json.dumps(init))
+    (tmp_path / "settings").mkdir()
+    (tmp_path / "settings" / "psyche.json").write_text(
+        json.dumps({"schema_version": 1, "covenant": "Be helpful."})
+    )
 
     data = load_init(tmp_path)
     agent = build_agent(data, tmp_path)
 
-    # Capabilities loaded from init.json via _setup_from_init
+    # Capabilities remain init-owned.
     cap_names = [name for name, _ in agent._capabilities]
     assert "file" in cap_names
 
-    # Covenant loaded
+    # Covenant is Psyche-owned and the legacy init value is inert.
     covenant_content = agent._prompt_manager.read_section("covenant")
     assert covenant_content is not None
     assert "Be helpful" in covenant_content
+    assert "LEGACY INIT COVENANT" not in covenant_content
 
-    # Cleanup
     agent._workdir_lease.release()
 
 
@@ -545,7 +561,7 @@ def test_live_refresh_rebuilds_service_from_system_context_window(tmp_path, monk
     assert agent.service._context_window == CONSERVATIVE_CONTEXT_WINDOW
     assert agent._session._llm_service is agent.service
 
-    (tmp_path / "settings").mkdir()
+    (tmp_path / "settings").mkdir(exist_ok=True)
     (tmp_path / "settings" / "system.json").write_text(
         json.dumps({"schema_version": 2, "context_limit": 234_567})
     )
@@ -658,18 +674,22 @@ def _packaged_substrate() -> str:
     return strip_frontmatter(_packaged_substrate_file())
 
 
-def test_init_base_prompt_reaches_rendered_prompt_via_boot(tmp_path):
-    """Boot via build_agent: init.json base_prompt is the third-party injection
-    point and lands in the rendered system prompt after principle, before
-    covenant."""
+def test_psyche_base_prompt_reaches_rendered_prompt_via_boot(tmp_path):
+    """Psyche base prompt renders after principle and before covenant."""
     from lingtai.cli import load_init, build_agent
 
     init = _make_init(
         capabilities={"file": {}},
-        covenant="Be helpful.",
-        base_prompt="Recipe-injected base prompt.",
+        covenant="LEGACY INIT COVENANT",
+        base_prompt="LEGACY INIT BASE",
     )
     (tmp_path / "init.json").write_text(json.dumps(init))
+    (tmp_path / "settings").mkdir()
+    (tmp_path / "settings" / "psyche.json").write_text(json.dumps({
+        "schema_version": 1,
+        "base_prompt": "Recipe-injected base prompt.",
+        "covenant": "Be helpful.",
+    }))
 
     data = load_init(tmp_path)
     agent = build_agent(data, tmp_path)
@@ -677,21 +697,32 @@ def test_init_base_prompt_reaches_rendered_prompt_via_boot(tmp_path):
         assert agent._base_prompt == "Recipe-injected base prompt."
         prompt = agent._build_system_prompt()
         assert "Recipe-injected base prompt." in prompt
+        assert "LEGACY INIT BASE" not in prompt
+        assert "LEGACY INIT COVENANT" not in prompt
         assert prompt.index("Recipe-injected base prompt.") < prompt.index("Be helpful.")
     finally:
         agent._workdir_lease.release()
 
 
-def test_init_base_prompt_file_reaches_rendered_prompt_via_boot(tmp_path):
-    """base_prompt_file is the file form of the third-party injection point."""
+def test_psyche_base_prompt_file_reaches_rendered_prompt_via_boot(tmp_path):
+    """Psyche base_prompt_file preserves the third-party file injection point."""
     from lingtai.cli import load_init, build_agent
 
     (tmp_path / "recipe-base-prompt.md").write_text(
         "Recipe base prompt from file.", encoding="utf-8"
     )
-    init = _make_init(capabilities={"file": {}}, covenant="Be helpful.")
-    init["base_prompt_file"] = "recipe-base-prompt.md"
+    (tmp_path / "ignored-base-prompt.md").write_text(
+        "LEGACY INIT BASE FILE", encoding="utf-8"
+    )
+    init = _make_init(capabilities={"file": {}}, covenant="LEGACY INIT COVENANT")
+    init["base_prompt_file"] = "ignored-base-prompt.md"
     (tmp_path / "init.json").write_text(json.dumps(init))
+    (tmp_path / "settings").mkdir()
+    (tmp_path / "settings" / "psyche.json").write_text(json.dumps({
+        "schema_version": 1,
+        "base_prompt_file": "recipe-base-prompt.md",
+        "covenant": "Be helpful.",
+    }))
 
     data = load_init(tmp_path)
     agent = build_agent(data, tmp_path)
@@ -699,15 +730,20 @@ def test_init_base_prompt_file_reaches_rendered_prompt_via_boot(tmp_path):
         assert agent._base_prompt == "Recipe base prompt from file."
         prompt = agent._build_system_prompt()
         assert "Recipe base prompt from file." in prompt
+        assert "LEGACY INIT BASE FILE" not in prompt
+        assert "LEGACY INIT COVENANT" not in prompt
         assert prompt.index("Recipe base prompt from file.") < prompt.index("Be helpful.")
     finally:
         agent._workdir_lease.release()
 
 
-def test_init_base_prompt_post_molt_reload_keeps_injection(tmp_path):
-    """Firing post-molt hooks re-reads init.json from scratch; base_prompt must
-    survive (init.json still carries it, plus the on-disk mirror)."""
-    agent = _make_agent(tmp_path, _make_init(base_prompt="Recipe base prompt."))
+def test_psyche_base_prompt_post_molt_reload_keeps_injection(tmp_path):
+    """Post-molt reconstruction re-reads Psyche's prompt owner."""
+    agent = _make_agent(tmp_path, _make_init())
+    (tmp_path / "settings" / "psyche.json").write_text(json.dumps({
+        "schema_version": 1,
+        "base_prompt": "Recipe base prompt.",
+    }))
     agent._setup_from_init()
 
     for cb in getattr(agent, "_post_molt_hooks", []):

@@ -161,8 +161,10 @@ Shell, Daemon, Notification, Email, File, Vision, Web, Task Card,
 Plugin/Psyche, MCP, and curated-addon ToolPlugins. In particular,
 `manifest.pseudo_agent_subscriptions` is Email-owned and is projected only by
 Email's owner-local row, which fully redacts both path lists; System does not
-project it. Psyche owns the live root `pad` / `pad_file` prompt inputs, so they
-are concrete-owner exclusions rather than inert compatibility fields. Daemon's
+project it. Psyche owns the live Pad inputs and the six configurable prompt
+inputs in `settings/psyche.json`, so System excludes the Pad pair as
+concrete-owner rows and the legacy init prompt spellings as inert compatibility
+fields. Daemon's
 manager-pool variable is a registered concrete-owner setting; its manager token
 and run directory are registered injected/handoff values. The historically
 named `LINGTAI_DAEMON_MEMORY_RELIEF` instead controls the global `ToolExecutor`

@@ -518,6 +518,12 @@ class AvatarManager:
             parent_init = json.loads(parent_init_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as e:
             return {"error": f"failed to read parent init.json: {e}"}
+        try:
+            from lingtai.tools.psyche.settings import read_prompt_owner_values
+
+            parent_psyche = read_prompt_owner_values(parent_working_dir)
+        except Exception:
+            return {"error": "failed to read parent Psyche settings"}
 
         # Dry-run short-circuit. Returns a preview of what would be created,
         # but performs NO filesystem mutation and NO process launch. We've
@@ -576,13 +582,10 @@ class AvatarManager:
             else:
                 avatar_working_dir.mkdir(parents=True, exist_ok=True)
 
-        # Resolve relative file paths to absolute so avatar can find them.
-        # Only active prompt-contract file fields are re-rooted: env_file plus
-        # the externally changeable prompt surfaces (covenant / base_prompt /
-        # comment). Retired override file fields (principle_file / substrate_file
-        # / brief_file / procedures_file) are not inherited as live paths.
-            for key in ("env_file", "covenant_file",
-                        "base_prompt_file", "comment_file"):
+        # Keep the one remaining active init path meaningful from the child.
+        # Psyche owner pointers are resolved by its reader against the parent
+        # workdir before the narrow child document is produced below.
+            for key in ("env_file",):
                 val = parent_init.get(key)
                 if val and not os.path.isabs(val):
                     resolved = parent_working_dir / val
@@ -624,6 +627,15 @@ class AvatarManager:
             (avatar_working_dir / "init.json").write_text(
                 json.dumps(avatar_init, indent=2, ensure_ascii=False),
                 encoding="utf-8"
+            )
+            avatar_psyche = self._make_avatar_psyche_settings(
+                parent_psyche,
+                comment=avatar_comment,
+            )
+            (avatar_working_dir / "settings").mkdir(exist_ok=True)
+            (avatar_working_dir / "settings" / "psyche.json").write_text(
+                json.dumps(avatar_psyche, indent=2, ensure_ascii=False),
+                encoding="utf-8",
             )
 
             # Only a Driver-granted child endpoint makes this avatar derived.
@@ -789,14 +801,13 @@ class AvatarManager:
         init.pop("lingtai_file", None)
         # Avatar has no admin privileges
         init["manifest"]["admin"] = {}
-        # Comment is not inherited — parent can set one explicitly for the avatar
-        init["comment"] = comment
-        init.pop("comment_file", None)
-        # Kernel-owned / secretary-owned prompt layers are not inherited as
-        # init.json overrides.  Under the init-prompt contract the only external
-        # prompt surfaces are base_prompt, covenant, and comment; comment is
-        # reset above, while base_prompt and covenant remain inherited.
+        # Psyche owns all configurable prompt pairs. Their old init spellings
+        # are deliberately removed rather than copied as inert compatibility
+        # data; the spawn-specific owner document is built separately below.
         for key in (
+            "base_prompt", "base_prompt_file",
+            "covenant", "covenant_file",
+            "comment", "comment_file",
             "principle", "principle_file",
             "procedures", "procedures_file",
             "substrate", "substrate_file",
@@ -844,6 +855,28 @@ class AvatarManager:
             init["manifest"].pop("capabilities", None)
 
         return init
+
+    @staticmethod
+    def _make_avatar_psyche_settings(
+        parent_values: Mapping[str, str], *, comment: str,
+    ) -> dict[str, object]:
+        """Build the narrow child prompt-owner document.
+
+        Only Psyche's base-prompt and covenant pairs carry forward. A parent
+        relative pointer has already been anchored by the owner reader, so this
+        preserves its source meaning without copying any System runtime policy
+        or another owner's settings document. The child always gets its spawn
+        comment and never inherits a parent comment pointer.
+        """
+        child: dict[str, object] = {"schema_version": 1}
+        for key in (
+            "base_prompt", "base_prompt_file",
+            "covenant", "covenant_file",
+        ):
+            if key in parent_values:
+                child[key] = parent_values[key]
+        child["comment"] = comment
+        return child
 
     # ------------------------------------------------------------------
     # Deep copy — 二重身

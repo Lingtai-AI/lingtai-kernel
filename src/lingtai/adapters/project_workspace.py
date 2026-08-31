@@ -44,6 +44,8 @@ class FilesystemProjectWorkspaceAdapter(ProjectWorkspacePort):
         self._write(human / ".agent.json", seed.human_manifest_json)
         self._write(agent / ".agent.json", seed.agent_manifest_json)
         self._write(agent / "init.json", seed.init_json)
+        (agent / "settings").mkdir()
+        self._write(agent / "settings" / "psyche.json", seed.psyche_settings_json)
         return agent
 
     def create(self, seed: ProjectSeed) -> None:

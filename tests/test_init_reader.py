@@ -9,7 +9,6 @@ from lingtai.kernel.config_resolve import load_jsonc
 
 _REQUIRED = {
     "manifest": {"llm": {"provider": "openai", "model": "gpt-4o"}},
-    "covenant": "operator contract",
     "pad": "durable state",
 }
 
@@ -23,19 +22,33 @@ def test_kernel_canonical_init_jsonc_is_parseable_and_has_current_shape():
     data = load_jsonc(root / "src/lingtai/init.jsonc")
     assert data["manifest"]["llm"]["provider"] == "minimax"
     assert data["manifest"]["capabilities"]["shell"]["policy_file"] == "bash_policy.json"
-    assert data["covenant"]
+    assert "covenant" not in data
     assert data["pad"] == ""
 
 
 def test_real_reader_reports_ignored_legacy_paths_without_mutating_input(tmp_path):
-    raw = json.dumps({**_REQUIRED, "substrate": "old resident text", "manifest": {
-        **_REQUIRED["manifest"], "stamina": 1, "cache_miss_budget": 123,
-    }}, indent=2)
+    legacy_prompt_inputs = {
+        "base_prompt": {"legacy": "inert"},
+        "base_prompt_file": 1,
+        "covenant": ["legacy", "inert"],
+        "covenant_file": False,
+        "comment": {"legacy": "inert"},
+        "comment_file": None,
+    }
+    raw = json.dumps({
+        **_REQUIRED,
+        **legacy_prompt_inputs,
+        "substrate": "old resident text",
+        "manifest": {
+            **_REQUIRED["manifest"], "stamina": 1, "cache_miss_budget": 123,
+        },
+    }, indent=2)
     _write_init(tmp_path, raw)
 
     outcome = read_init(tmp_path)
 
     assert outcome.status is InitReadStatus.READ_OK_WITH_IGNORED_FIELDS
+    assert set(legacy_prompt_inputs) <= set(outcome.ignored_paths)
     assert "substrate" in outcome.ignored_paths
     assert "manifest.stamina" in outcome.ignored_paths
     assert "manifest.cache_miss_budget" in outcome.ignored_paths
@@ -73,14 +86,14 @@ def test_real_reader_uses_in_memory_materialization_and_prepare_callbacks(tmp_pa
 
     def prepare(data: dict) -> None:
         calls.append("prepare")
-        data["comment"] = "prepared"
+        data["lingtai"] = "prepared"
 
     outcome = read_init(tmp_path, materialize=materialize, prepare=prepare)
 
     assert outcome.status is InitReadStatus.FULLY_EFFECTIVE
     assert calls == ["materialize", "prepare"]
     assert outcome.data["manifest"]["llm"]["model"] == "materialized"
-    assert outcome.data["comment"] == "prepared"
+    assert outcome.data["lingtai"] == "prepared"
 
 
 def _capability_init(capabilities: dict) -> str:

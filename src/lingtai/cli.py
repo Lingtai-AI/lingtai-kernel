@@ -213,7 +213,8 @@ def build_agent(
     # normally, and an early return cannot leave suppression armed.
     agent._from_init_boot = False
 
-    # Full setup from init.json (capabilities, addons, config, covenant, etc.)
+    # Full setup from init plus Psyche prompt-owner settings (capabilities,
+    # addons, config, covenant, etc.)
     agent._setup_from_init()
     outcome = getattr(agent, "_last_init_read_outcome", None)
     if outcome is not None and outcome.status is InitReadStatus.READ_FAILED:

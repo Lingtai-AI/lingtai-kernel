@@ -86,12 +86,6 @@ def _init(
 SYSTEM_INIT_SETTING_SPECS: tuple[_InitSettingSpec, ...] = (
     _init("env_file", "/env_file", None, sensitive=True),
     _init("venv_path", "/venv_path", None, sensitive=True),
-    _init("base_prompt", "/base_prompt", "", sensitive=True),
-    _init("base_prompt_file", "/base_prompt_file", None, sensitive=True),
-    _init("covenant", "/covenant", None, sensitive=True),
-    _init("covenant_file", "/covenant_file", None, sensitive=True),
-    _init("comment", "/comment", "", sensitive=True),
-    _init("comment_file", "/comment_file", None, sensitive=True),
     _init("agent_name", "/manifest/agent_name", None, configurable=False),
     _init("language", "/manifest/language", "en"),
     _init("disable", "/manifest/disable", []),
@@ -223,6 +217,15 @@ SYSTEM_INIT_CONCRETE_TOOL_EXCLUSIONS = frozenset(
 )
 SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
     {
+        # Psyche owns the active prompt document. Their old init fields remain
+        # recognized solely as untyped compatibility input and never become
+        # System rows or active readers.
+        "/base_prompt",
+        "/base_prompt_file",
+        "/covenant",
+        "/covenant_file",
+        "/comment",
+        "/comment_file",
         "/soul",
         "/soul_file",
         "/principle",
@@ -860,13 +863,6 @@ def _effective_init(root: Path) -> dict[str, Any]:
     return outcome.data
 
 
-def _resolved_prompt_value(data: Mapping[str, Any], key: str) -> Any:
-    """Resolve the canonical file-over-inline precedence without exposing text."""
-    from lingtai.kernel.config_resolve import resolve_file
-
-    return resolve_file(data.get(key), data.get(f"{key}_file"))
-
-
 def _openai_adapter_default(parameter: str) -> Any:
     """Read an effective constructor default from the canonical adapter."""
     from inspect import Parameter, signature
@@ -1104,10 +1100,6 @@ def _effective_service_tier_values(
 def _init_current(spec: _InitSettingSpec, data: dict[str, Any], root: Path) -> Any:
     manifest = data["manifest"]
     llm = manifest["llm"]
-
-    if spec.key in {"base_prompt", "covenant", "comment"}:
-        value = _resolved_prompt_value(data, spec.key)
-        return spec.default if value is None else value
 
     if spec.key in {
         "language",

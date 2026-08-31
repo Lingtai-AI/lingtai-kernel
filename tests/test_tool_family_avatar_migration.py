@@ -362,6 +362,56 @@ def test_avatar_spawn_preserves_workdir_identity_venv_and_rules_control(tmp_path
     assert (child_dir / ".rules").read_text(encoding="utf-8") == "Be concise."
 
 
+@pytest.mark.parametrize("avatar_type", ["shallow", "deep"])
+def test_avatar_spawn_carries_only_psyche_prompt_owner_for_both_modes(
+    tmp_path, monkeypatch, avatar_type,
+):
+    parent_dir = _parent_dir(tmp_path)
+    base_source = parent_dir / "relative-base.md"
+    base_source.write_text("PARENT BASE", encoding="utf-8")
+    psyche = parent_dir / "settings" / "psyche.json"
+    psyche.parent.mkdir()
+    psyche.write_text(json.dumps({
+        "schema_version": 1,
+        "base_prompt": "base fallback",
+        "base_prompt_file": base_source.name,
+        "covenant": "PARENT COVENANT",
+        "comment": "PARENT COMMENT",
+        "comment_file": "parent-comment.md",
+    }), encoding="utf-8")
+    system_policy = parent_dir / "settings" / "system.json"
+    system_policy.write_text(json.dumps({"schema_version": 2, "max_rpm": 3}), encoding="utf-8")
+
+    manager = AvatarManager(_host(parent_dir), launcher=_Launcher())
+    receipt = AvatarLaunchReceipt(pid=4242, handle=object())
+    monkeypatch.setattr(
+        manager,
+        "_launch",
+        lambda working_dir, **_kwargs: (receipt, working_dir / "stderr"),
+    )
+    monkeypatch.setattr(manager, "_wait_for_boot", lambda *_args: ("ok", None))
+    result = manager({
+        "action": "spawn",
+        "input": {
+            "name": f"{avatar_type}-child",
+            "type": avatar_type,
+            "comment": "CHILD COMMENT",
+            "confirm": True,
+        },
+        "_reasoning": "Inspect the owner-document inheritance behavior carefully.",
+    })
+    assert result["status"] == "ok"
+    child = parent_dir.parent / f"{avatar_type}-child"
+    assert json.loads((child / "settings" / "psyche.json").read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "base_prompt": "base fallback",
+        "base_prompt_file": str(base_source),
+        "covenant": "PARENT COVENANT",
+        "comment": "CHILD COMMENT",
+    }
+    assert not (child / "settings" / "system.json").exists()
+
+
 def test_agent_mounts_avatar_only_through_the_official_registrar(tmp_path):
     from lingtai.agent import Agent
     from tests._service_helpers import make_gemini_mock_service

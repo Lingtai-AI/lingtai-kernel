@@ -57,17 +57,14 @@ No environment peers are invented for these fields. An active preset replaces
 the authored `manifest.llm` block, but its `llm.context_limit` remains
 preset-local for fit/authorization checks and is removed before effective init
 materialization; the System runtime-policy row reports the separate
-environment/v2/default result. For prompt
-pairs, an existing `*_file` body wins the inline value, while a missing file
-falls back to inline. Derived `system/manifest.resolved.json` is never authority.
+environment/v2/default result. Psyche owns configurable prompt pairs through
+its separate closed owner document; System neither resolves nor projects them.
+Derived `system/manifest.resolved.json` is never authority.
 
 | Key | Default and accepted value | Invalid behavior | Redaction | Application timing |
 |---|---|---|---|---|
 | `env_file` | absent; UTF-8 dotenv path | Missing file loads nothing; an invalid `init.json` path value fails the canonical read | full | Boot or System refresh; editing the dotenv needs refresh |
 | `venv_path` | absent, so launcher-managed resolution applies; venv-root path | An unusable configured root fails launcher validation | full | Full relaunch only |
-| `base_prompt` / `base_prompt_file` | empty inline / absent path; strings | Wrong types fail init validation; unreadable present source makes SHOW unavailable | full prompt and path | Prompt reconstruction on refresh |
-| `covenant` / `covenant_file` | no default; one string source is required | Missing pair or wrong type fails init validation; unreadable present source makes SHOW unavailable | full prompt and path | Prompt reconstruction on refresh |
-| `comment` / `comment_file` | empty inline / absent path; strings | Wrong types fail init validation; unreadable present source makes SHOW unavailable | full prompt and path | Prompt reconstruction on refresh |
 | `agent_name` | `null`; string or null boot seed | Wrong type fails init validation | none | Creation/full relaunch only; immutable for an existing identity, so `configurable` is false |
 | `language` | `en`; string | Wrong type fails init validation | none | System refresh |
 | `disable` | `[]`; `list[str]` | A non-list or any non-string entry fails init validation; entries are interpreted by capability composition without coercion or dropping | none | Capability rebuild during System refresh |
@@ -209,7 +206,8 @@ future fields cannot vanish silently:
 - Concrete ToolPlugin owners stay out of System: Soul; Shell; Daemon;
   Notification; File/search sidecars; Vision; Web; Task Card; Plugin/Psyche;
   Skills; LingTai character; MCP, curated addons, and their config/session
-  paths. Psyche owns the live Pad prompt inputs at root `pad`/`pad_file`.
+  paths. Psyche owns the live Pad prompt inputs at root `pad`/`pad_file` and
+  the six configurable system-prompt inputs in `settings/psyche.json`.
   `manifest.capabilities`, `manifest.plugins`, root `addons`/`mcp`, and root
   `lingtai`/`lingtai_file` therefore are not System rows.
 - Inert/compatibility **init inputs** are not settings sources:

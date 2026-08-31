@@ -4,7 +4,7 @@ last_changed_at: 2026-08-29T00:00:00Z
 description: >
   Routing table for the `psyche` tool — the one public root for your four
   durable domains: pad + lingtai + knowledge + skills = psyche. Read this to
-  learn which action loads which manual, inspect Psyche-owned Pad settings, and
+  learn which action loads which manual, inspect Psyche-owned prompt settings, and
   follow the one mutation/rebuild model all four domains share.
 related_files:
 - src/lingtai/tools/psyche/CONTRACT.md
@@ -48,7 +48,7 @@ name belongs to `system`.
 | `psyche(action="lingtai", input={}, reasoning="load identity guidance")` | `lingtai-manual` | `system/lingtai.md` (your 灵台 / character) |
 | `psyche(action="knowledge", input={}, reasoning="load knowledge guidance")` | the knowledge manual | `knowledge/<name>/KNOWLEDGE.md` entries |
 | `psyche(action="skills", input={}, reasoning="load skills guidance")` | the skills manual | `.library/{intrinsic,custom}/` plus configured skills paths |
-| `psyche(action="settings", input={}, reasoning="inspect Pad configuration")` | two fully redacted five-field rows | root `pad` and `pad_file` inputs |
+| `psyche(action="settings", input={}, reasoning="inspect Psyche prompt configuration")` | eight fully redacted five-field rows | Pad seed plus Psyche's prompt-owner document |
 | `psyche(action="manual", input={}, reasoning="load the routing table")` | this routing table | — |
 
 Every action takes a strict empty `input`; any key is rejected before its
@@ -91,25 +91,38 @@ depth.
 ## `summarize`
 
 **Short-result.** Manual actions return one manual body, and `settings` returns
-two compact rows. Leave root `summarize` `false`; summarizing either result loses
+eight compact rows. Leave root `summarize` `false`; summarizing either result loses
 the exact procedure or inventory you called it for.
 
 ## Settings
 
-`psyche(action="settings", input={}, reasoning="inspect Pad configuration")` is
-SHOW only. It returns exactly `pad`, then `pad_file`; every row has exactly
-`key`, `current`, `default`, `configurable`, and `comment` in that order. Both
-`current` and `default` are always `<redacted>` for both rows, including when a
-value is empty or absent. The action reports the `pad` / `pad_file` snapshot
-consumed by the last successful full reconstruction. Editing `init.json` or the
-file it references does not change SHOW until rebuild, refresh, or molt applies
-that edit; an unreadable or malformed pending source leaves the last applied
-SHOW available. A provider/snapshot failure still produces one fixed bounded
-failure without content, paths, or parser details, never partial rows.
+`psyche(action="settings", input={}, reasoning="inspect Psyche prompt configuration")`
+is SHOW only. It returns exactly `pad`, `pad_file`, `base_prompt`,
+`base_prompt_file`, `covenant`, `covenant_file`, `comment`, then `comment_file`.
+Every row has exactly `key`, `current`, `default`, `configurable`, and `comment`
+in that order. Both `current` and `default` are always `<redacted>` for every
+row, including empty or absent values. The action reports the applied snapshot
+from the last successful full reconstruction. Ambient source edits do not change
+SHOW until rebuild, refresh, or molt applies them; a failed reconstruction keeps
+the last successful snapshot. A provider/snapshot failure returns only the fixed
+bounded `SETTINGS_UNAVAILABLE` failure, never partial rows or parser details.
 
-There is no `settings/psyche.json`, no per-action settings file, no Psyche
-environment variable, and no `set` or `reset` operation. File presence never
-opts a family into SHOW, and SHOW never changes configuration or prompt state.
+`settings/psyche.json` is Psyche's deliberately small owner document. It is
+optional: a missing file means schema v1 with all six owner values absent. When
+present it must be UTF-8 JSON object `{"schema_version": 1, ...}` with no keys
+other than `base_prompt`, `base_prompt_file`, `covenant`, `covenant_file`,
+`comment`, and `comment_file`; each present value is a string (including `""`).
+Duplicate/unknown keys, Boolean/non-1 versions, non-regular or symlink files,
+files over 64 KiB, unstable reads, invalid UTF-8/JSON, and read failures reject
+the complete reconstruction before prompt publication. There is no environment
+layer, `set`, `reset`, patch action, migration, or writeback.
+
+The legacy top-level init spellings for these six fields are compatibility-known
+but inert. They neither configure the prompt nor populate SHOW. For each owner
+pair, a readable `*_file` wins; a missing file falls back to inline. `~` expands
+and relative pointers resolve against the agent workdir. Edit the owner document
+with `file.write`/`file.edit`, then use `context.rebuild` (or refresh/molt) to
+apply it atomically.
 
 ### Setting pad
 
@@ -146,3 +159,38 @@ A second SHOW before reconstruction deliberately reports the same applied
 snapshot. After an authorized rebuild/refresh/molt succeeds, another SHOW can
 verify that discovery remains available, but because both values are always
 redacted it cannot reveal or compare the underlying content.
+
+### Setting base prompt
+
+The optional third-party/application prompt body; default `""`, configurable
+`true`. Psyche resolves it once per reconstruction, writes nonempty content to
+`system/base_prompt.md`, and otherwise falls back to that mirror. The kernel
+renders it after raw `principle` and before the remaining Batch 1 sections.
+
+### Setting base prompt file
+
+Optional pointer; default `null`, configurable `true`. A readable file wins
+over `base_prompt`; its path is fully redacted and follows the owner-document
+relative/`~` rules above.
+
+### Setting covenant
+
+Optional protected operator-contract body; default `""`, configurable `true`.
+Nonempty resolved content mirrors to `system/covenant.md` and uses the existing
+protected covenant section; absent owner content falls back to that mirror.
+
+### Setting covenant file
+
+Optional pointer; default `null`, configurable `true`. A readable file wins
+over `covenant`; the pointer and resolved body remain fully redacted.
+
+### Setting comment
+
+Optional unprotected comment-section body; default `""`, configurable `true`.
+Unlike base prompt and covenant, comment has no `system/*.md` mirror: an absent
+owner value removes the section on the applied reconstruction.
+
+### Setting comment file
+
+Optional pointer; default `null`, configurable `true`. A readable file wins
+over `comment`; it is fully redacted and has no mirror behavior.

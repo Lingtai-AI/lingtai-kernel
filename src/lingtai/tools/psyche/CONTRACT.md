@@ -1,6 +1,6 @@
 ---
 name: psyche-tool-contract
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/psyche/ANATOMY.md
@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/psyche/__init__.py
   - src/lingtai/tools/psyche/settings.py
   - src/lingtai/agent.py
+  - src/lingtai/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
@@ -44,8 +45,9 @@ contract exactly:
 
 It is a read-only manual router plus owner settings SHOW. Its five manual
 actions teach the durable domains and routing model; its reserved `settings`
-action exposes exactly the two Psyche-owned root Pad inputs, fully redacted. It
-owns no settings document or domain state of its own.
+action exposes exactly eight fully redacted Psyche-owned inputs: the existing
+Pad pair plus the three configurable system-prompt pairs. Psyche owns the
+small closed `settings/psyche.json` v1 document for those latter six fields.
 
 It replaces four former public roots (`pad`, `lingtai`, `knowledge`, `skills`) as
 a clean break. Those roots, the `pad.append` action, and the `skills.info` /
@@ -95,14 +97,16 @@ Agents MUST treat every `psyche` action as read-only. No action authors,
 edits, pins, installs, migrates, rescans a catalog, writes a prompt or source
 file, or reloads prompt state.
 
-`settings` MUST report the narrow `pad` / `pad_file` snapshot consumed by the
-last successful canonical reconstruction and return exactly `pad`, then
-`pad_file`. Ambient edits to `init.json` or its referenced Pad file MUST NOT
-change SHOW until active or passive reconstruction successfully consumes them;
-an unreadable or malformed new source MUST leave the prior SHOW available.
+`settings` MUST report the applied snapshot consumed by the last successful
+canonical reconstruction and return exactly `pad`, `pad_file`, `base_prompt`,
+`base_prompt_file`, `covenant`, `covenant_file`, `comment`, then `comment_file`.
+Ambient edits to init, Pad, or the owner document MUST NOT change SHOW until
+active or passive reconstruction successfully consumes them; a malformed owner
+document or a failed reconstruction MUST leave the prior SHOW available.
 Each row MUST project exactly `key`, `current`, `default`, `configurable`, and
-`comment` in that order. Both values of both rows MUST be fully redacted,
-including empty and null defaults. A provider/snapshot/row failure MUST return
+`comment` in that order. The current and default values of all eight rows MUST
+be fully redacted, including empty and null defaults. A provider/snapshot/row
+failure MUST return
 the generic fixed `SETTINGS_UNAVAILABLE` result with no partial inventory or
 exception text. The complete response MUST remain subject to the generic
 incremental 65,536-byte UTF-8 bound.
@@ -134,7 +138,7 @@ and `reasoning` are required. The public action inventory is exactly:
 | `lingtai` | strict empty `{}` | same shape — `lingtai-manual` |
 | `knowledge` | strict empty `{}` | same shape — the installed knowledge manual |
 | `skills` | strict empty `{}` | same shape — the installed skills manual |
-| `settings` | strict empty `{}` | exact `{settings: [...]}` inventory with two fully redacted five-field rows |
+| `settings` | strict empty `{}` | exact `{settings: [...]}` inventory with eight fully redacted five-field rows |
 | `manual` | strict empty `{}` | same shape — `psyche-manual`, the routing table |
 
 Every call carries required root `action`, `input`, and `reasoning`; a public
@@ -157,9 +161,10 @@ dispatch in this package's own Host layer, per the no-double-wrap rule.
 Schema composition opts in with an inert callable so the reserved `settings`
 child is injected immediately before `manual`. The static `DECLARATION` binds
 only `workdir` and `PsycheSettingsPort`; the provider reads the Agent-owned
-`(pad, pad_file)` snapshot through that one read-only operation and performs no
-file I/O. Agent reconstruction alone uses the canonical reader and resolver,
-then replaces the snapshot only after the complete prompt-section pass succeeds.
+applied eight-value snapshot through that one read-only operation and performs
+no file I/O or Agent access. Agent reconstruction reads Psyche's strict owner
+document exactly once, uses the existing prompt file-over-inline helper, then
+replaces the snapshot only after the complete prompt-section pass succeeds.
 
 `psyche` remains mandatory in `INTRINSICS`, marked `official_plugin=True`: the
 intrinsic entry is only the kernel hook/dispatch shim. `boot` runs the private
@@ -191,15 +196,25 @@ Neither the binder nor settings provider receives an Agent.
   reconstruction attempts preserve the prior rows until a later successful
   reconstruction replaces them.
 - `psyche` is in `_LTP_V2_MIGRATED_FAMILIES` and `EMANATION_BLACKLIST`.
-- Psyche owns only these settings rows:
+- Psyche owns exactly these settings rows:
   - `pad`: default `""`, configurable `true`, fully redacted, comment
     `psyche-manual#setting-pad`.
   - `pad_file`: default `null`, configurable `true`, fully redacted, comment
     `psyche-manual#setting-pad-file`.
+  - `base_prompt` / `base_prompt_file`: defaults `""` / `null`, fully
+    redacted, anchors `#setting-base-prompt` / `#setting-base-prompt-file`.
+  - `covenant` / `covenant_file`: defaults `""` / `null`, fully redacted,
+    anchors `#setting-covenant` / `#setting-covenant-file`.
+  - `comment` / `comment_file`: defaults `""` / `null`, fully redacted,
+    anchors `#setting-comment` / `#setting-comment-file`.
+- `settings/psyche.json` is optional; when present it is a bounded (64 KiB),
+  stable-read UTF-8 JSON object with exact integer `schema_version: 1`, no
+  duplicate/unknown keys, and optional string-only six fields. A non-regular or
+  symlink document, invalid bytes/JSON/schema, read race, or I/O failure raises
+  one typed Psyche settings error before prompt publication. It has no
+  environment layer, mutation action, migration, or writeback.
 - Psyche MUST NOT expose LingTai inputs, Skills paths, content, paths, auth, or
-  any other row. System MUST NOT duplicate the two owned Pad rows.
-- No `psyche` settings file or environment layer exists, and no generic
-  set/reset/control-plane writer is authorized.
+  any other row. System MUST NOT duplicate the six Psyche prompt rows.
 - `summarize` profile: **short-result** for every action.
 
 ## Contract tests
@@ -209,9 +224,10 @@ python -m pytest -q tests/test_psyche_family.py
 ```
 
 These pin the exact six-action inventory and order; strict-empty input on every
-child; applied-snapshot file-over-inline resolution; ambient-edit isolation;
-last-good preservation after a malformed init; exact five-field row order,
-defaults, configurability, anchors, and full redaction; whole-inventory failure;
+child; strict bounded owner parsing and file-over-inline resolution; ambient
+edit isolation; last-good preservation after failed reconstruction; exact
+five-field projection, eight-row order, defaults, anchors, and full redaction;
+whole-inventory failure;
 missing/empty-only Pad seeding; unchanged manual routing; no action mutation;
 the absence of old roots/actions; and both provider wire shapes. The shared
 settings suite additionally pins the 65,536-byte whole-response bound and the

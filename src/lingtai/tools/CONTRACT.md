@@ -951,8 +951,8 @@ read-only root, `psyche` (`pad | lingtai | knowledge | skills | settings |
 manual`,
 `src/lingtai/tools/psyche/CONTRACT.md`, the equation
 `pad + lingtai + knowledge + skills = psyche`): five actions return the domain
-or routing manual; `settings` returns the two fully redacted Psyche-owned Pad
-rows. Every action mutates nothing. Those four packages remain as private lifecycle
+or routing manual; `settings` returns the eight fully redacted Psyche-owned Pad
+and configurable-prompt rows. Every action mutates nothing. Those four packages remain as private lifecycle
 owners — Pad/LingTai composers and the Skills/Knowledge catalogs plus the
 Knowledge legacy migration — and register no tool. Generic durable mutation
 belongs to `file.write`/`file.edit`, which never hot-load prompt state; the

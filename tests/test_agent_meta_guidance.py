@@ -52,6 +52,14 @@ def _agent_with_static_comment(tmp_path):
     return agent
 
 
+def _write_psyche(agent, **values):
+    import json
+
+    path = agent._working_dir / "settings" / "psyche.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps({"schema_version": 1, **values}), encoding="utf-8")
+
+
 def test_agent_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
     agent = _agent_with_static_comment(tmp_path)
 
@@ -121,16 +129,18 @@ def test_agent_loads_kernel_owned_principle_prompt(tmp_path):
     assert prompt.index("Progressive disclosure principle: each resident prompt layer") < prompt.index("## meta_guidance")
 
 
-def test_init_base_prompt_renders_after_principle_before_covenant(tmp_path):
-    """The init-prompt contract's `base_prompt` is the third-party injection
+def test_psyche_base_prompt_renders_after_principle_before_covenant(tmp_path):
+    """Psyche's `base_prompt` is the third-party injection
     point. After _reload_prompt_sections threads it into self._base_prompt, the
     builder renders it right after the raw kernel-owned `principle` section and
     before the rest of Batch 1 (here, `covenant`)."""
     agent = _agent_with_static_comment(tmp_path)
-    agent._reload_prompt_sections({
-        "base_prompt": "Recipe-injected base prompt.",
-        "covenant": "The operator contract.",
-    })
+    _write_psyche(
+        agent,
+        base_prompt="Recipe-injected base prompt.",
+        covenant="The operator contract.",
+    )
+    agent._reload_prompt_sections({})
 
     prompt = agent._build_system_prompt()
     batched = "\n".join(agent._build_system_prompt_batches())
@@ -148,15 +158,17 @@ def test_init_base_prompt_renders_after_principle_before_covenant(tmp_path):
     assert mirror.read_text(encoding="utf-8") == "Recipe-injected base prompt."
 
 
-def test_init_base_prompt_survives_from_scratch_reload(tmp_path):
+def test_psyche_base_prompt_survives_from_scratch_reload(tmp_path):
     """A no-arg reload (post-molt hook re-reads init.json from scratch) keeps the
     base_prompt via the system/base_prompt.md mirror even if the new read has no
     inline value."""
     agent = _agent_with_static_comment(tmp_path)
-    agent._reload_prompt_sections({"base_prompt": "Recipe-injected base prompt."})
+    _write_psyche(agent, base_prompt="Recipe-injected base prompt.")
+    agent._reload_prompt_sections({})
     assert agent._base_prompt == "Recipe-injected base prompt."
 
-    # Reload with empty data — disk mirror is the fallback.
+    # Clear the owner value — disk mirror is the fallback.
+    _write_psyche(agent)
     agent._reload_prompt_sections({})
     assert agent._base_prompt == "Recipe-injected base prompt."
     assert "Recipe-injected base prompt." in agent._build_system_prompt()

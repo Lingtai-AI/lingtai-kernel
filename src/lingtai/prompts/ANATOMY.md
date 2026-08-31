@@ -110,9 +110,11 @@ Each section has a `<section>/<section>.yaml` definition. Bodies split three way
 - **Generated sections** — `meta_guidance` (from `meta_guidance/catalog/`), `tools`
   (tool registry), `mcp` (MCP state), `skills`/`knowledge` (registries), `identity`
   (runtime facts). No packaged body; content is built each turn.
-- **Injected sections** — `covenant`, `comment`, `rules`, `brief`, `character`,
-  `pad`. No packaged body; content supplied by init/recipe/operator or the
-  persistent agent store and mirrored to `system/<section>.md`.
+- **Injected sections** — `covenant` and `comment` are supplied by Psyche's
+  closed `settings/psyche.json` owner document. Covenant keeps
+  `system/covenant.md` as a durable mirror/fallback; comment has no mirror or
+  fallback. `rules`, `brief`, `character`, and `pad` come from their existing
+  persistent/configured sources. None has a packaged prompt body.
 
 For the generated `tools` section, `src/lingtai/kernel/base_agent/tools.py`
 collects canonical-English descriptions and parameter schemas, then appends the
@@ -159,8 +161,9 @@ section is: `defined_by`, `injected_by`, `content_source`, optional
 ## Notes
 
 - `covenant` and `meta_guidance` are section definitions with no one-to-one body
-  file: covenant's content is external (operator/recipe/init), meta_guidance's body
-  is generated from `meta_guidance/catalog/`. This is intentional; do not add
+  file: covenant's content comes from Psyche's owner document plus its durable
+  `system/covenant.md` mirror fallback, while meta_guidance's body is generated
+  from `meta_guidance/catalog/`. This is intentional; do not add
   `covenant/covenant.md` or `meta_guidance/meta_guidance.md`.
 - YAML-only sections (`comment`, `tools`, `rules`, `brief`, `mcp`, `skills`,
   `knowledge`, `identity`, `character`, `pad`) exist so coding agents have a

@@ -107,7 +107,8 @@ and launcher review, the focused tests, and relaunch as described above.
 
 An avatar (他我) is a **fully independent agent process** spawned from you. It:
 
-- Inherits your `init.json` (model config, capabilities, covenant, language)
+- Inherits your `init.json` model config/capabilities/language and a narrow
+  Psyche document carrying only base-prompt/covenant inputs
 - Boots on your **default** preset (not your active preset — this keeps the avatar's "home" stable in the network)
 - Is recorded in `delegates/ledger.jsonl`
 - Communicates with you via `mail` or `email`
@@ -126,7 +127,7 @@ and `bash` for one-off commands. The full body-selection model lives in
 
 | Type | What it gets | When to use |
 |------|-------------|-------------|
-| `shallow` (default, 初生) | `init.json` only — blank slate | Most tasks. The avatar starts clean and learns what it needs. |
+| `shallow` (default, 初生) | `init.json` plus narrow Psyche base/covenant owner inputs — blank slate | Most tasks. The avatar starts clean and learns what it needs. |
 | `deep` (二重身) | Full copy of your lingtai (character), pad, and knowledge | When the avatar needs to hit the ground running with your accumulated knowledge. |
 
 ## 3. Naming Rules

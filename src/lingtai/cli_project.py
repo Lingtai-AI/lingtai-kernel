@@ -75,6 +75,15 @@ def _validate_agent(agent_dir: Path) -> None:
     outcome = read_init(agent_dir, materialize=materialize, prepare=prepare, failure_behavior="STOP")
     if outcome.status is InitReadStatus.READ_FAILED:
         raise _error("init_preflight_failed", "generated init could not be read")
+    try:
+        from lingtai.tools.psyche.settings import read_resolved_prompt_inputs
+
+        read_resolved_prompt_inputs(agent_dir)
+    except Exception as exc:
+        raise _error(
+            "psyche_preflight_failed",
+            "generated Psyche settings could not be read",
+        ) from exc
 
 
 def _emit_error(error: ProjectError, *, as_json: bool) -> None:

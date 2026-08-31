@@ -34,6 +34,7 @@ class ProjectSeed:
     human_manifest_json: str
     agent_manifest_json: str
     init_json: str
+    psyche_settings_json: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +101,11 @@ def _seed(request: ProjectCreateRequest) -> ProjectSeed:
             "address": request.agent_name,
             "admin": {},
         }),
-        init_json=_json({"manifest": manifest, "covenant": request.covenant, "pad": ""}),
+        init_json=_json({"manifest": manifest, "pad": ""}),
+        psyche_settings_json=_json({
+            "schema_version": 1,
+            "covenant": request.covenant,
+        }),
     )
 
 

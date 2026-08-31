@@ -232,18 +232,11 @@
   // =============================================================
   // Agent personality & initial state
   // =============================================================
-  // Each field accepts inline text OR a file path via the _file variant.
-  // Examples:
-  //   "covenant": "You are a helpful assistant."     ← inline
-  //   "covenant_file": "covenant.md"                 ← reads from file
-  // If both are present, the file takes precedence.
-
+  // Configurable prompt inputs are Psyche-owned in settings/psyche.json:
+  // base_prompt/base_prompt_file, covenant/covenant_file, and
+  // comment/comment_file. That closed v1 document is optional; a missing file
+  // leaves all six values absent. It is deliberately not an init.json layer.
   // Principle is kernel-owned prompt content and is not configured here.
-
-  // Covenant — protected prompt section the agent cannot modify.
-  // Core behavioral rules that persist across molts.
-  "covenant": "You are a helpful assistant.",
-  // Or use a file: "covenant_file": "covenant.md"
 
   // Procedures prompt content is managed by the TUI as system/procedures.md;
   // init.json procedures/procedures_file overrides are no longer honored by the kernel.

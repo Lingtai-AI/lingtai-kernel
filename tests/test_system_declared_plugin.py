@@ -24,12 +24,6 @@ _EXPECTED_SYSTEM_SETTING_KEYS = (
     "cache_miss_budget",
     "env_file",
     "venv_path",
-    "base_prompt",
-    "base_prompt_file",
-    "covenant",
-    "covenant_file",
-    "comment",
-    "comment_file",
     "agent_name",
     "language",
     "disable",
@@ -89,12 +83,6 @@ _EXPECTED_GEMINI_DEFAULTS = {
     "cache_miss_budget": 2_000_000,
     "env_file": "<redacted>",
     "venv_path": "<redacted>",
-    "base_prompt": "<redacted>",
-    "base_prompt_file": "<redacted>",
-    "covenant": "<redacted>",
-    "covenant_file": "<redacted>",
-    "comment": "<redacted>",
-    "comment_file": "<redacted>",
     "agent_name": None,
     "language": "en",
     "disable": [],
@@ -376,7 +364,7 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
     rows = result["settings"]
     assert system_settings.SYSTEM_SETTING_KEYS == _EXPECTED_SYSTEM_SETTING_KEYS
     assert tuple(row["key"] for row in rows) == _EXPECTED_SYSTEM_SETTING_KEYS
-    assert len(rows) == len({row["key"] for row in rows}) == 62
+    assert len(rows) == len({row["key"] for row in rows}) == 56
     for row in rows:
         assert tuple(row) == (
             "key", "current", "default", "configurable", "comment",
@@ -1536,9 +1524,6 @@ def test_system_settings_redacts_sensitive_effective_values(monkeypatch, tmp_pat
     for key in (
         "env_file",
         "venv_path",
-        "base_prompt",
-        "base_prompt_file",
-        "comment",
         "admin",
         "llm.api_key",
         "llm.base_url",

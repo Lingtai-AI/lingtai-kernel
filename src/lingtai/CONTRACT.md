@@ -16,6 +16,9 @@ related_files:
   - src/lingtai/kernel/nudge/init_config.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/tools/system/settings.py
+  - src/lingtai/tools/psyche/settings.py
+  - src/lingtai/tools/psyche/CONTRACT.md
+  - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
   - ENVIRONMENT_VARIABLES.md
   - tests/test_init_reader.py
@@ -24,6 +27,7 @@ related_files:
   - tests/test_nudge_inline_cap.py
   - tests/test_agent_config_hydration.py
   - tests/test_init_schema.py
+  - tests/test_psyche_prompt_settings.py
   - tests/test_preset_materialization.py
   - tests/test_presets.py
 maintenance: |
@@ -70,8 +74,13 @@ v2 System settings, or fixed defaults.
 
 Compatibility exists to keep older local files readable while agents/humans
 repair them. Retired prompt fields and ignored runtime knobs are never new-write
-shapes. If active validation encounters a conflict or unsupported value it fails
-closed; the reader does not guess an effective value or silently claim success.
+shapes. The six former init prompt fields (`base_prompt`, `base_prompt_file`,
+`covenant`, `covenant_file`, `comment`, `comment_file`) are compatibility-known
+but inert: this reader does not type-check, path-resolve, or consume them.
+Psyche owns the active six-field surface through its independent strict
+`settings/psyche.json` v1 reader at Agent reconstruction. If active validation
+encounters a conflict or unsupported value it fails closed; the reader does not
+guess an effective value or silently claim success.
 There is no automatic rewrite, strip-and-write-back, migration registry, version
 chain, stored progress, or remote runtime dependency in this read path. Explicit
 agent/human actions such as an intentional preset activation remain separate

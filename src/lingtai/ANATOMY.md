@@ -42,6 +42,8 @@ related_files:
   - src/lingtai/tools/registry.py
   - src/lingtai/CONTRACT.md
   - src/lingtai/init.jsonc
+  - src/lingtai/tools/psyche/ANATOMY.md
+  - src/lingtai/tools/psyche/settings.py
   - src/lingtai/init_reader.py
   - src/lingtai/init_schema.py
   - src/lingtai/intrinsic_skills/ANATOMY.md
@@ -129,6 +131,15 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 *(Function-name anchors, not line numbers — line citations in this table drift with every edit; grep the name in `agent.py` for the current location.)*
 
+**Current Psyche prompt ownership:** Agent reconstruction reads the independent
+`<workdir>/settings/psyche.json` v1 document exactly once, resolves only its
+`base_prompt`, `covenant`, and `comment` pairs into local composition input, and
+commits Pad plus all six owner values/pointers to the applied Psyche SHOW
+snapshot only after the full reconstruction succeeds. The six former init keys
+are compatibility-known but inert; they are neither path-resolved nor rendered.
+The existing base/covenant mirrors, comment non-mirroring, and builder order are
+unchanged. See `tools/psyche/{ANATOMY,CONTRACT}.md` for the closed reader.
+
 **`cli.py`**: `load_init` · `build_llm_service` (shared with `cli_daemon.py`) · `build_agent` · `run` · `_force_exit_if_worker_poisoned` · `_handle_log_command` · `_handle_maintenance_command` · `main`
 
 **`cli_acp.py`**: `add_acp_parser` · `run_acp` · `handle_acp_command`
@@ -179,6 +190,7 @@ Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai/kernel/` (
 | Path | When | What |
 |---|---|---|
 | `<workdir>/init.json` | `_activate_preset` :1254 (explicit preset action only), `init_reader.py` read path | User-owned input. Boot/refresh parse, materialize, validate, and resolve in memory; the reader never strips, canonicalizes, persists venv paths, or otherwise rewrites this file. |
+| `<workdir>/settings/psyche.json` | `tools/psyche/settings.py` via `Agent._reload_prompt_sections` | Optional strict Psyche-owned v1 prompt document. Missing defaults all six owner values; any present invalid/non-regular/raced document aborts full reconstruction before publication. It is never written or migrated by Agent. |
 | `<workdir>/logs/{events.jsonl,log.sqlite}` | `Agent.__init__` :115-154 and `cli.build_agent` :125-141 | Authoritative structured event JSONL plus derived SQLite query sidecar, owned by the injected POSIX adapter. |
 | `<workdir>/system/llm.json` | `_persist_llm_config` :136 | LLM provider/model/base_url for revive |
 | `<workdir>/system/manifest.resolved.json` | `_read_init` :1169 via `lingtai.kernel.workdir.write_resolved_manifest` | Derived runtime artifact (issue #259): fully-resolved manifest (preset materialized, validated, paths resolved) with secret-bearing keys removed, plus `schema`/`generated_at`/`source`/`preset` metadata. Atomic write, regenerated on every boot/refresh/molt-reload; init.json is never written back. |

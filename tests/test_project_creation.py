@@ -41,7 +41,9 @@ def test_core_builds_one_seed_through_its_port() -> None:
 
     assert workspace.seed is not None
     init = json.loads(workspace.seed.init_json)
-    assert init["covenant"] == "caller covenant"
+    psyche = json.loads(workspace.seed.psyche_settings_json)
+    assert "covenant" not in init
+    assert psyche == {"covenant": "caller covenant", "schema_version": 1}
     assert init["manifest"]["preset"]["allowed"] == ["/presets/local.json"]
     assert "context_limit" not in init["manifest"]
     assert result.to_payload()["status"] == "created"
@@ -62,6 +64,9 @@ def test_adapter_creates_complete_seed_and_refuses_existing_project(tmp_path: Pa
     assert [path.name for path in checked] == ["alpha"]
     assert (tmp_path / ".lingtai" / "human" / "mailbox" / "inbox").is_dir()
     assert (tmp_path / ".lingtai" / "alpha" / "init.json").is_file()
+    assert json.loads((tmp_path / ".lingtai" / "alpha" / "settings" / "psyche.json").read_text(encoding="utf-8")) == {
+        "covenant": "caller covenant", "schema_version": 1,
+    }
     with pytest.raises(ProjectCreationError) as exc:
         ProjectCreationUseCase(workspace).create(_request())
     assert exc.value.error.code == "already_initialized"
@@ -95,6 +100,8 @@ def test_root_cli_creates_reader_accepted_data_without_starting_agent(
 
     assert json.loads(capsys.readouterr().out)["agent_name"] == "alpha"
     init = json.loads((tmp_path / ".lingtai" / "alpha" / "init.json").read_text(encoding="utf-8"))
+    psyche = json.loads((tmp_path / ".lingtai" / "alpha" / "settings" / "psyche.json").read_text(encoding="utf-8"))
     assert "context_limit" not in init["manifest"]
     assert "context_limit" not in init["manifest"]["llm"]
+    assert psyche == {"covenant": "caller covenant", "schema_version": 1}
     assert json.loads(preset.read_text(encoding="utf-8"))["manifest"]["llm"]["context_limit"] == 8192

@@ -56,7 +56,8 @@ No OLD
 root named `psyche` does exist again — it is the read-only family for the four
 durable domains (`pad + lingtai + knowledge + skills = psyche`,
 `src/lingtai/tools/psyche/CONTRACT.md`) — it carries five strict-empty manual
-loaders plus redacted settings SHOW for its two Pad inputs.
+loaders plus redacted settings SHOW for its Pad inputs and Psyche-owned
+configurable prompt pairs.
 `psyche.context_molt`, `psyche.pad_edit`, `psyche.lingtai_update`,
 `psyche.name_set`, and every other old spelling fail as unknown actions: root
 reuse is not action compatibility. The lifecycle actions live here; name changes
