@@ -164,7 +164,8 @@ only `workdir` and `PsycheSettingsPort`; the provider reads the Agent-owned
 applied eight-value snapshot through that one read-only operation and performs
 no file I/O or Agent access. Agent reconstruction reads Psyche's strict owner
 document exactly once, uses the existing prompt file-over-inline helper, then
-replaces the snapshot only after the complete prompt-section pass succeeds.
+publishes the replacement snapshot only after the successful final prompt
+flush.
 
 `psyche` remains mandatory in `INTRINSICS`, marked `official_plugin=True`: the
 intrinsic entry is only the kernel hook/dispatch shim. `boot` runs the private

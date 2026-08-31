@@ -91,15 +91,17 @@ registrar.
   `intrinsic_skills/psyche-manual/`.
 - `boot` imports `pad._pad_load` and `lingtai._lingtai_load` and calls them once
   at construction; those are the domains' own composers, the same ones
-  `Agent._reload_prompt_sections` reuses. No edge runs the other way: nothing in
-  this package is imported by the domain packages, by
-  `Agent._reload_prompt_sections`, or by the catalog composers.
+  `Agent._reload_prompt_sections` reuses. The Pad/LingTai domain packages and
+  catalog composers do not import Psyche. The sole reverse composition edge is
+  `Agent._reload_prompt_sections` importing this package's closed settings
+  reader; no Psyche public action reaches that edge.
 - `Agent._reload_prompt_sections` consumes Pad plus one resolved Psyche owner
   read, overlays only the six prompt values into its local composition input,
   preserves the existing base/covenant mirrors and comment non-mirroring, and
-  commits the applied eight-value snapshot only after the complete section pass
-  succeeds. `PsycheSettingsPort` exposes only that immutable snapshot to SHOW;
-  no Psyche public action reaches the reconstruction edge or rereads a source.
+  commits the applied eight-value snapshot only after the successful final
+  prompt flush. `PsycheSettingsPort` exposes only that immutable snapshot to
+  SHOW; no Psyche public action reaches the reconstruction edge or rereads a
+  source.
 
 ## Composition
 
