@@ -36,7 +36,7 @@ re-read and recomposed into every fresh system prompt.
 
 `psyche` is the one public root that teaches them. Its five domain/routing
 actions return manuals; `settings` shows a bounded, fully redacted inventory of
-the Pad configuration Psyche owns. Every public action is read-only. It owns no
+Psyche's Pad configuration plus its six configurable prompt-owner inputs. Every public action is read-only. It owns no
 lifecycle action: molt, summarize, and rebuild belong to `context`, and your
 name belongs to `system`.
 

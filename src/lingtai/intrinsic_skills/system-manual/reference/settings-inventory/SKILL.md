@@ -44,8 +44,8 @@ sets, resets, writes, refreshes, or mutates process environment. A row with
 exists. It does not authorize the caller to perform that procedure.
 
 SHOW resolves one complete fresh snapshot. A malformed/unreadable `init.json`,
-active preset, prompt source file, System owner document, or risky-action gate
-document makes the whole inventory unavailable—there are no partial rows and
+active preset, System owner document, or risky-action gate document makes the
+whole inventory unavailable—there are no partial rows and
 no exception details. Sensitive rows replace both `current` and `default` with
 `<redacted>` before JSON serialization.
 
@@ -111,8 +111,9 @@ preset-owned LLM/context value, edit the authorized preset outside SHOW or use
 the existing `system(action="refresh", input={"preset": ...})` workflow; never
 edit the derived resolved manifest or widen `preset.allowed` as a shortcut.
 Run the refresh precheck, refresh/relaunch at the timing above, then call SHOW
-again. For prompt/file pairs, changing or removing the pointer never changes
-or deletes the referenced file. Existing identity changes use
+again. Psyche-owned prompt/file pairs are changed only through the procedure in
+`psyche-manual`; changing or removing a pointer never changes or deletes the
+referenced file. Existing identity changes use
 `system(action="name_set"|"name_nickname")`; editing `manifest.agent_name` is
 not a supported rename procedure.
 

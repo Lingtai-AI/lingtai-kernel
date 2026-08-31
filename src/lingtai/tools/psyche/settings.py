@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,10 +28,10 @@ PSYCHE_SETTINGS_RELATIVE_PATH = Path("settings") / "psyche.json"
 _SCHEMA_VERSION = 1
 _MAX_SETTINGS_BYTES = 64 * 1024
 _PROMPT_FIELDS = ("base_prompt", "covenant", "comment")
-_OWNER_KEYS = frozenset({
-    "schema_version",
-    *(field for name in _PROMPT_FIELDS for field in (name, f"{name}_file")),
-})
+_OWNER_VALUE_KEYS = tuple(
+    field for name in _PROMPT_FIELDS for field in (name, f"{name}_file")
+)
+_OWNER_KEYS = frozenset(("schema_version", *_OWNER_VALUE_KEYS))
 
 
 class PsycheSettingsError(RuntimeError):
@@ -72,51 +73,75 @@ def _closed_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _document_identity(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
 def _stable_document_bytes(path: Path) -> bytes | None:
-    """Read one bounded regular owner file without accepting raced content."""
+    """Read one bounded regular owner file through an identity-bound descriptor."""
     try:
-        before = path.lstat()
+        path_before = path.lstat()
     except FileNotFoundError:
         return None
     except OSError as exc:
         raise PsycheSettingsError("Psyche settings could not be inspected") from exc
 
-    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+    if stat.S_ISLNK(path_before.st_mode) or not stat.S_ISREG(path_before.st_mode):
         raise PsycheSettingsError("Psyche settings must be a regular non-symlink file")
-    if before.st_size > _MAX_SETTINGS_BYTES:
+    if path_before.st_size > _MAX_SETTINGS_BYTES:
         raise PsycheSettingsError("Psyche settings exceeds the 64 KiB limit")
 
+    flags = os.O_RDONLY
+    for flag_name in ("O_BINARY", "O_CLOEXEC", "O_NOFOLLOW", "O_NONBLOCK"):
+        flags |= getattr(os, flag_name, 0)
+
+    descriptor: int | None = None
     try:
-        with path.open("rb") as stream:
-            raw = stream.read(_MAX_SETTINGS_BYTES + 1)
-        if len(raw) > _MAX_SETTINGS_BYTES:
-            raise PsycheSettingsError("Psyche settings exceeds the 64 KiB limit")
-        after = path.lstat()
+        descriptor = os.open(path, flags)
+        opened_before = os.fstat(descriptor)
+        if not stat.S_ISREG(opened_before.st_mode):
+            raise PsycheSettingsError("Psyche settings must be a regular non-symlink file")
+        if (
+            opened_before.st_size > _MAX_SETTINGS_BYTES
+            or _document_identity(opened_before) != _document_identity(path_before)
+        ):
+            raise PsycheSettingsError("Psyche settings changed while being read")
+
+        chunks: list[bytes] = []
+        remaining = _MAX_SETTINGS_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        opened_after = os.fstat(descriptor)
+        path_after = path.lstat()
+    except PsycheSettingsError:
+        raise
     except OSError as exc:
         raise PsycheSettingsError("Psyche settings could not be read") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
-    before_identity = (
-        before.st_dev,
-        before.st_ino,
-        before.st_mode,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
-    )
-    after_identity = (
-        after.st_dev,
-        after.st_ino,
-        after.st_mode,
-        after.st_size,
-        after.st_mtime_ns,
-        after.st_ctime_ns,
-    )
+    if len(raw) > _MAX_SETTINGS_BYTES:
+        raise PsycheSettingsError("Psyche settings exceeds the 64 KiB limit")
     if (
-        stat.S_ISLNK(after.st_mode)
-        or not stat.S_ISREG(after.st_mode)
-        or after.st_size > _MAX_SETTINGS_BYTES
-        or len(raw) != before.st_size
-        or before_identity != after_identity
+        not stat.S_ISREG(opened_after.st_mode)
+        or stat.S_ISLNK(path_after.st_mode)
+        or not stat.S_ISREG(path_after.st_mode)
+        or len(raw) != opened_before.st_size
+        or _document_identity(opened_before) != _document_identity(opened_after)
+        or _document_identity(path_before) != _document_identity(path_after)
     ):
         raise PsycheSettingsError("Psyche settings changed while being read")
     return raw
@@ -144,7 +169,7 @@ def _read_owner_values(working_dir: str | Path) -> dict[str, str]:
         raise PsycheSettingsError("Psyche settings schema_version must be integer 1")
 
     values: dict[str, str] = {}
-    for key in _OWNER_KEYS - {"schema_version"}:
+    for key in _OWNER_VALUE_KEYS:
         if key not in data:
             continue
         value = data[key]

@@ -3,6 +3,7 @@ related_files:
   - src/lingtai/tools/psyche/BEHAVIORS.md
   - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/ANATOMY.md
   - src/lingtai/tools/skills/ANATOMY.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from lingtai.agent import Agent
+from lingtai.tools.psyche import settings as psyche_settings
 from lingtai.tools.psyche.settings import (
     PsycheSettingsError,
     build_settings_provider,
@@ -77,6 +79,13 @@ def test_owner_document_is_closed_strict_v1(tmp_path: Path, raw: str) -> None:
         read_resolved_prompt_inputs(tmp_path)
 
 
+def test_owner_validation_uses_fixed_field_order(tmp_path: Path) -> None:
+    _write_owner(tmp_path, comment=False, covenant=[], base_prompt=3)
+
+    with pytest.raises(PsycheSettingsError, match="base_prompt must be a string"):
+        read_resolved_prompt_inputs(tmp_path)
+
+
 def test_owner_document_rejects_utf8_size_symlink_race_and_read_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
@@ -127,7 +136,28 @@ def test_owner_document_rejects_utf8_size_symlink_race_and_read_failures(
         read_resolved_prompt_inputs(tmp_path)
     monkeypatch.undo()
 
-    monkeypatch.setattr(Path, "open", lambda _path, *_args, **_kwargs: (_ for _ in ()).throw(OSError("nope")))
+    forged = tmp_path / "forged.json"
+    forged.write_text('{"schema_version": 2}', encoding="utf-8")
+    assert forged.stat().st_size == path.stat().st_size
+    real_open = os.open
+
+    def open_forged(candidate, flags, *args, **kwargs):
+        if Path(candidate) == path:
+            return real_open(forged, flags, *args, **kwargs)
+        return real_open(candidate, flags, *args, **kwargs)
+
+    monkeypatch.setattr(psyche_settings.os, "open", open_forged)
+    with pytest.raises(PsycheSettingsError, match="changed while being read"):
+        read_resolved_prompt_inputs(tmp_path)
+    monkeypatch.undo()
+
+    monkeypatch.setattr(
+        psyche_settings.os,
+        "open",
+        lambda _path, _flags, *_args, **_kwargs: (
+            _ for _ in ()
+        ).throw(OSError("nope")),
+    )
     with pytest.raises(PsycheSettingsError):
         read_resolved_prompt_inputs(tmp_path)
 
@@ -261,6 +291,38 @@ def test_show_snapshot_commits_only_after_final_prompt_flush(
         assert applied == [
             "", None, "APPLIED BASE", None, "APPLIED COVENANT", None,
             "", None,
+        ]
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_each_successful_reconstruction_reads_once_and_advances_show(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _write_init(tmp_path)
+    _write_owner(tmp_path, base_prompt="BASE A", comment="COMMENT A")
+    agent = _agent(tmp_path)
+    provider = build_settings_provider(agent)
+    real_read = psyche_settings.read_resolved_prompt_inputs
+    reads: list[Path] = []
+
+    def counted_read(root):
+        reads.append(Path(root))
+        return real_read(root)
+
+    monkeypatch.setattr(psyche_settings, "read_resolved_prompt_inputs", counted_read)
+    try:
+        agent._reconstruct_context()
+        assert reads == [tmp_path]
+        assert [row.current for row in provider()] == [
+            "", None, "BASE A", None, "", None, "COMMENT A", None,
+        ]
+
+        _write_owner(tmp_path, base_prompt="BASE B", covenant="COVENANT B")
+        agent._reconstruct_context()
+        assert reads == [tmp_path, tmp_path]
+        assert [row.current for row in provider()] == [
+            "", None, "BASE B", None, "COVENANT B", None, "", None,
         ]
     finally:
         agent.stop(timeout=1.0)
