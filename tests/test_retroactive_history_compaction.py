@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -580,9 +581,8 @@ def test_aed_transient_retry_compacts_history_before_backoff(tmp_path, monkeypat
     agent, iface = _make_run_loop_agent_with_oversized_history(tmp_path, big)
 
     state_at_sleep = {}
-    real_sleep = turn.time.sleep
 
-    def watched_sleep(seconds):
+    def watched_sleep(_seconds):
         # When the first sleep fires for transient backoff, compaction must
         # have already run.
         block = iface._entries[1].content[0]
@@ -599,7 +599,7 @@ def test_aed_transient_retry_compacts_history_before_backoff(tmp_path, monkeypat
         _agent._shutdown.set()
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    monkeypatch.setattr(turn.time, "sleep", watched_sleep)
+    monkeypatch.setattr(turn, "time", SimpleNamespace(sleep=watched_sleep))
     import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 

@@ -1376,6 +1376,13 @@ def _run_loop_body(agent) -> None:
                             attempts=rate_limit_attempts,
                             error=err_desc[:300],
                         )
+                        _report_api_error_to_task_card(
+                            agent,
+                            e,
+                            attempt=rate_limit_attempts,
+                            max_attempts=_RATE_LIMIT_RETRY_LIMIT,
+                            terminal=True,
+                        )
                         # lingtai#672: like the generic AED exhausted exit, send
                         # ONE sanitized, user-visible failure notice to the
                         # originating conversation through the existing telegram

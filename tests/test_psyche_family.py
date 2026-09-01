@@ -438,7 +438,7 @@ REQUIRED_BODY_ROUTES = {
 def _file_required_fields():
     from lingtai.tools.file import get_schema
 
-    branches = get_schema()["properties"]["input"]["oneOf"]
+    branches = get_schema()["properties"]["input"]["anyOf"]
     return {b["title"].split()[0]: list(b.get("required", [])) for b in branches}
 
 

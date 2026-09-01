@@ -702,7 +702,7 @@ class AgentDaemonRuntimeAdapter:
         read_preset: Callable[[], Mapping[str, Any]],
         load_preset: Callable[[str], dict],
         enqueue_notification: Callable[..., None],
-        read_task_card_watch: Callable[[], bool],
+        read_task_card_watch: Callable[[], bool | None],
         now_iso: Callable[[], str],
         log: Callable[..., None],
     ) -> None:
@@ -796,7 +796,7 @@ class AgentDaemonRuntimeAdapter:
             channel=channel,
         )
 
-    def has_active_task_card_watch(self) -> bool:
+    def has_active_task_card_watch(self) -> bool | None:
         return self._read_task_card_watch()
 
     def attach_daemon_manager(self, manager: Any) -> None:
@@ -845,14 +845,15 @@ def daemon_runtime_for_agent(
             return {}
         return value if isinstance(value, Mapping) else {}
 
-    def _read_task_card_watch() -> bool:
+    def _read_task_card_watch() -> bool | None:
         check = getattr(getattr(agent, "_task_card_manager", None), "has_active_watch", None)
         if not callable(check):
-            return False
+            return None
         try:
-            return bool(check())
+            active = check()
         except Exception:
-            return False
+            return None
+        return active if isinstance(active, bool) else None
 
     def _authorize_derived_launch(capability: Any) -> Any:
         from lingtai.kernel.provider_admission import require_derived_launch_admission

@@ -45,6 +45,7 @@ import argparse
 import contextlib
 import json
 import ntpath
+import os
 import posixpath
 import shutil
 import subprocess
@@ -246,11 +247,17 @@ def verify_wheel_install_and_run(wheel: Path) -> None:
         venv.EnvBuilder(with_pip=True).create(env_dir)
         bindir = "Scripts" if sys.platform == "win32" else "bin"
         py = env_dir / bindir / ("python.exe" if sys.platform == "win32" else "python")
+        isolated_env = dict(os.environ)
+        isolated_env.pop("PYTHONPATH", None)
 
         install = subprocess.run(
-            [str(py), "-m", "pip", "install", "--no-deps", "--quiet", str(wheel)],
+            [
+                str(py), "-m", "pip", "install", "--no-deps", "--force-reinstall",
+                "--quiet", str(wheel),
+            ],
             capture_output=True,
             text=True,
+            env=isolated_env,
         )
         assert install.returncode == 0, (
             f"--no-deps install failed:\n{install.stdout}\n{install.stderr}"
@@ -258,11 +265,11 @@ def verify_wheel_install_and_run(wheel: Path) -> None:
 
         purelib = subprocess.run(
             [str(py), "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=isolated_env,
         ).stdout.strip()
         platlib = subprocess.run(
             [str(py), "-c", "import sysconfig; print(sysconfig.get_paths()['platlib'])"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=isolated_env,
         ).stdout.strip()
 
         binary = _sidecar_in_prefix(purelib, platlib)

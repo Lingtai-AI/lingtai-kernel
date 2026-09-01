@@ -389,32 +389,43 @@ child grown past 90 lines — the submanual must route agents to the installed
 CLI's live help (`qwen --version`, `qwen --help`, no subcommand), never become
 a maintained flag catalog.
 
-<a id="behavior-d008"></a>
-## Behavior D008: Active common-MCP CLI checkpoint and parent correction
+## Behavior D008 — active common-MCP CLI checkpoint and parent correction
 
-**Given** a detached external CLI run is still live and its exact launch path
-mounts `daemon_common` (`claude-p`/`claude-code`, Codex, OpenCode, Qwen, or
-Kimi).
+- **id**: D008
+- **title**: a live common-MCP CLI run records a cooperative checkpoint and
+  drains one parent correction without changing terminal truth
+- **guards**: `daemon-contract` § daemon_common provides cooperative
+  checkpoints and terminal completion
+  ([CONTRACT.md](CONTRACT.md#3-daemon_common-provides-cooperative-checkpoints-and-terminal-completion))
+- **supersedes**: `tests/test_daemon_checkpoint.py` and
+  `tests/test_daemon_run_dir.py::test_checkpoint_inbox_backfills_pre_checkpoint_live_state`
+- **runner**: any LingTai agent with the `daemon` tool and a common-MCP CLI backend
+- **prerequisites**: a live detached CLI run whose launch path mounts
+  `daemon_common` (`claude-p`/`claude-code`, Codex, OpenCode, Qwen, or Kimi)
+- **estimate**: 5 min
 
-**When** the parent calls `daemon.ask`, and the daemon later calls the strict
-`checkpoint` tool at a useful boundary.
+### Steps
+1. Emanate a long-running task on a backend that mounts `daemon_common` and
+   record its daemon id.
+2. While it is live, call `daemon.ask` with one correction and retain the
+   returned delivery fields.
+3. Have the daemon call the strict `checkpoint` tool at a useful boundary.
+4. Inspect the checkpoint response, `daemon.check`, the daemon notification
+   mini-channel, and the run's terminal fields.
 
-**Then** the parent call returns `status="queued"`, `delivery="checkpoint"`,
-and an opaque `message_id`; one RunDir transaction increments/stores the
-checkpoint, drains that ID-bearing correction once, appends an event, and
-touches heartbeat; the tool response returns the message; `daemon.check`
-projects the latest checkpoint plus only a pending count; a unique nonterminal
-event on the singular built-in `daemon` channel wakes the parent and advances
-its durable batch state; terminal state, result, receipt, and `finish`
-requirements remain unchanged. A backend without the common-MCP loader stays
-`busy` while active. A wake-publication failure reports that the checkpoint was
-recorded and still returns the drained message rather than hiding it.
-
-**Guarded by:**
-`CONTRACT.md#3-daemon_common-provides-cooperative-checkpoints-and-terminal-completion`
-
-**Verification:** `tests/test_daemon_checkpoint.py` and
-`tests/test_daemon_run_dir.py::test_checkpoint_inbox_backfills_pre_checkpoint_live_state`.
+### Expected evidence
+- [ ] The parent call returns `status="queued"`, `delivery="checkpoint"`, and
+      an opaque `message_id`.
+- [ ] One RunDir transaction increments and stores the checkpoint, drains that
+      ID-bearing correction once, appends an event, and touches heartbeat.
+- [ ] The checkpoint response returns the message, while `daemon.check`
+      projects the latest checkpoint plus only a pending count.
+- [ ] One unique nonterminal event on the built-in `daemon` channel wakes the
+      parent and advances durable batch state.
+- [ ] Terminal state, result, receipt, and `finish` requirements are unchanged;
+      unsupported backends remain `busy` while active.
+- [ ] A wake-publication failure reports that the checkpoint was recorded and
+      still returns the drained message.
 
 ### Pass / Fail
 Pass when the supported/unsupported matrix, drain-once acknowledgement,

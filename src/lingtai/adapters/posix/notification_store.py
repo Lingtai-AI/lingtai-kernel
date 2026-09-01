@@ -15,10 +15,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from lingtai.adapters.notification_store_lock import (
-    exclusive_notification_mutation,
-    select_notification_store_lock,
-)
+from lingtai.adapters.notification_store_lock import select_notification_store_lock
 from lingtai.kernel._fsutil import atomic_write_json, atomic_write_text
 from lingtai.kernel.notification_store import (
     AllowPredicate,
@@ -38,6 +35,7 @@ from lingtai.kernel.notification_store._mutation_lock import (
     NotificationMutationLockPort,
     channel_mutation_scope,
     daemon_run_mutation_scope,
+    exclusive_notification_mutation,
     resource_mutation_scope,
 )
 
@@ -419,6 +417,11 @@ class PosixNotificationStoreAdapter(NotificationStorePort):
     def __init__(self, workdir: Path, mutation_lock: NotificationMutationLockPort | None = None):
         self._workdir = Path(workdir)
         self._mutation_lock = mutation_lock or select_notification_store_lock()
+
+    @property
+    def mutation_lock(self) -> NotificationMutationLockPort:
+        """Return the lock Port composed with this Store instance."""
+        return self._mutation_lock
 
     @contextlib.contextmanager
     def _exclusive_mutation(self, scopes: str | list[str]):

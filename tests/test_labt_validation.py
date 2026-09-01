@@ -11,8 +11,8 @@ ROOT_BEHAVIORS = ROOT / "BEHAVIORS.md"
 
 
 # A LABT id is either the default B### scheme or a per-family prefix followed
-# by three digits (e.g. D003, L005, T009, C001, K004, S002, W001, F001, FE001).
-LABT_ID_RE = re.compile(r"^[A-Z]{1,2}\d{3}$")
+# by three digits (e.g. D003, FE001, ACP001).
+LABT_ID_RE = re.compile(r"^[A-Z]{1,3}\d{3}$")
 
 REQUIRED_FRONTMATTER_KEYS = {
     "name",
@@ -361,7 +361,7 @@ def test_contract_clauses_link_guarding_labts() -> None:
     tracked = {line for line in proc.stdout.splitlines() if line}
 
     link_re = re.compile(
-        r"\[([A-Z]{1,2}\d{3})\]\(([^)]*BEHAVIORS\.md#behavior-([a-z0-9]{1,2}\d{3}))\)"
+        r"\[([A-Z]{1,3}\d{3})\]\(([^)]*BEHAVIORS\.md#behavior-([a-z0-9]{1,3}\d{3}))\)"
     )
     failures: list[str] = []
     for path in tracked:

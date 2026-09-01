@@ -129,7 +129,9 @@ def test_codex_terminal_usage_never_mutates_either_token_ledger(tmp_path):
     )
 
     state = json.loads(run_dir.daemon_json_path.read_text())
-    assert state["tokens"] == {"input": 0, "output": 0, "thinking": 0, "cached": 0}
+    assert state["tokens"] == {
+        "input": 0, "output": 0, "thinking": 0, "cached": 0, "calls": 0,
+    }
     assert not run_dir.token_ledger_path.exists()
     assert not run_dir._parent_token_ledger.exists()
 

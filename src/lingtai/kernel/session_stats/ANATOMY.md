@@ -1,5 +1,6 @@
 ---
 related_files:
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/kernel/session_stats/__init__.py

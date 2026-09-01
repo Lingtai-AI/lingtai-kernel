@@ -485,7 +485,9 @@ def test_cursor_initial_wait_signal_cannot_persist_usage_candidate(tmp_path):
 
 
 def test_emanate_cursor_routes_to_cli_handler(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(
+        tmp_path, capabilities={"daemon": {"manager_pool_size": 0}}
+    )
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
 

@@ -16,6 +16,7 @@ related_files:
   - src/lingtai/tools/daemon/_tool_family.py
   - src/lingtai/tools/daemon/settings.py
   - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/adapters/posix/daemon_manager.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/tools/daemon/system_prompt.py
@@ -57,6 +58,7 @@ related_files:
   - tests/test_tool_family_daemon_migration.py
   - tests/test_daemon_settings.py
   - tests/test_daemon.py
+  - tests/test_daemon_central_manager.py
   - tests/test_daemon_empty_parity.py
   - tests/test_daemon_missing_finish_guidance.py
   - tests/test_apriori_summary_executor.py
@@ -77,6 +79,7 @@ review_triggers:
   - src/lingtai/tools/daemon/_tool_family.py
   - src/lingtai/tools/daemon/settings.py
   - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/adapters/posix/daemon_manager.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/tools/daemon/system_prompt.py
@@ -88,6 +91,7 @@ review_triggers:
   - src/lingtai/tools/daemon/manual/
   - src/lingtai/mcp_servers/daemon_common/
   - tests/test_daemon.py
+  - tests/test_daemon_central_manager.py
   - tests/test_daemon_settings.py
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_claude_p_background_guard.py
@@ -651,6 +655,13 @@ identity **and** its persisted loaded-code head, source root, and per-run daemon
 notification-protocol identity match. A missing, malformed, or mismatched stamp
 refuses the new submission before it is queue-owned or receives a capsule; it
 does not terminate or take over the old manager's active/capsule-backed runs.
+When the manager's direct Unix-socket path is too long, its capsule transport
+uses `/tmp/lingtai-dm-<uid>-<digest>/capsule.sock`, independent of ambient temp
+variables. Before stale-socket unlink or bind, the fallback parent MUST be a
+real owner-owned mode-0700 directory. An existing entry is reusable only when
+it is an owner-owned socket with no group/other permission bits; symlink, type,
+owner, or mode mismatches fail closed without unlinking the entry. A normally
+created private stale socket remains reusable.
 If task or selected skill/MCP context would exceed the resolved budget, prompt
 construction fails before the LLM is scheduled and MUST NOT silently truncate
 any parent constraint.

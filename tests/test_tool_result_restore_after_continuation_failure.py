@@ -678,7 +678,7 @@ def test_codex_responses_wire_pairs_earlier_orphan_with_synthetic_output():
     )
 
 
-def test_tc_wake_legacy_path_restores_real_item_result_when_send_fails():
+def test_tc_wake_legacy_path_restores_real_item_result_when_send_fails(tmp_path: Path):
     """Issue #170: when the legacy tc_inbox splice path's ``send([item.result])``
     fails and the adapter rolled the user entry back, the kernel must
     restore the real item.result before the catch-all heal calls
@@ -732,7 +732,7 @@ def test_tc_wake_legacy_path_restores_real_item_result_when_send_fails():
         _intrinsics: dict = field(default_factory=dict)
         _tool_handlers: dict = field(default_factory=dict)
         _PARALLEL_SAFE_TOOLS: set = field(default_factory=set)
-        _working_dir = None
+        _working_dir: Path = tmp_path
         _logs: list = field(default_factory=list)
         saves: int = 0
 

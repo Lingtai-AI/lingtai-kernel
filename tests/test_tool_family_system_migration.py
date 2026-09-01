@@ -27,6 +27,7 @@ from typing import Any
 
 import pytest
 
+from lingtai.kernel.presets import home_shortened
 from lingtai.tools import system as system_tool
 from lingtai.tools.system.schema import ACTION_ORDER, INPUT_SCHEMAS
 from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
@@ -700,7 +701,7 @@ def test_presets_lists_the_allowed_library(tmp_path: Path) -> None:
     result = system_tool.handle(_Agent(tmp_path), {"action": "presets", "input": {}})
     assert result["status"] == "ok"
     assert result["active"] == "cheap"
-    assert [entry["name"] for entry in result["available"]] == [str(preset_path)]
+    assert [entry["name"] for entry in result["available"]] == [home_shortened(preset_path)]
     # Credentials are never echoed.
     assert "api_key" not in json.dumps(result)
 

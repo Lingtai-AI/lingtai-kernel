@@ -589,29 +589,11 @@ def _parent_host_tool_floor() -> frozenset[str]:
     tools (e.g. ``vision``, ``web_search``) must NOT silently fall back to the
     parent when a preset omits or fails them.
 
-    Derived from ``CORE_DEFAULTS`` so it stays in sync with the floor, minus
-    the entries that are not borrowable host *tools*:
-      * ``EMANATION_BLACKLIST`` (knowledge / skills / avatar / daemon …) — these
-        register no emanation-usable tool surface;
-      * ``mcp`` — the MCP host registers no regular tool of its own; parent MCP
-        tools are inherited only via task ``mcp`` registrations, never the floor.
-      * ``plugin`` — mcp's flagpost twin. It does register a regular tool, but
-        that tool only renders the *parent's* Agent Plugins catalog, which is
-        not a host primitive and means nothing inside an emanation. Excluded for
-        the same reason optional parent tools are: the floor is host primitives
-        only, and a capability joining ``CORE_DEFAULTS`` must not silently widen
-        it.
-      * ``vision`` — always registered since it joined ``CORE_DEFAULTS``, but
-        its route is provider-bound (the default inherits the active LLM's
-        Responses API; the ``preset`` analyze option borrows another allowed
-        preset's identity). A preset emanation has no independent vision
-        service of its own, so vision must NOT silently fall back to the
-        parent host floor either; it is available only when the preset's own
-        sandbox provides it.
+    This is an explicit contract allowlist. Growing ``CORE_DEFAULTS`` must not
+    silently widen what a preset child may borrow from its parent.
     The result is exactly {shell, file}.
     """
-    from lingtai.tools.registry import CORE_DEFAULTS  # noqa: PLC0415
-    return frozenset(set(CORE_DEFAULTS) - EMANATION_BLACKLIST - {"mcp", "plugin", "vision"})
+    return frozenset({"shell", "file"})
 
 
 # Env vars that override Claude Code's normal first-party OAuth credentials.
@@ -5632,7 +5614,8 @@ class DaemonManager:
             or requested_timeout_s < DAEMON_CARD_NUDGE_MIN_TIMEOUT_S
         ):
             return False
-        return not self._runtime.has_active_task_card_watch()
+        watch_active = self._runtime.has_active_task_card_watch()
+        return watch_active is False
 
     def _handle_emanate_cli(
         self,

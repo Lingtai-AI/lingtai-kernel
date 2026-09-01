@@ -1197,6 +1197,8 @@ class TaskCardEventProjection:
             + sum(len(line) + 1 for line in metadata_lines)
             + len(time_line)
             + 1
+            + len(ask_agent_line)
+            + 1
             + api_scaffold
             + text_scaffold
             + tool_scaffold

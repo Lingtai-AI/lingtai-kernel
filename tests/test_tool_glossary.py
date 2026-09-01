@@ -557,7 +557,9 @@ class TestSchemaInvariance:
         from lingtai.tools.daemon import DaemonManager
 
         daemon_prompt = DaemonManager._build_emanation_prompt(
-            SimpleNamespace(_agent=agent), "Inspect one file", [schema]
+            SimpleNamespace(_runtime=SimpleNamespace(language="zh")),
+            "Inspect one file",
+            [schema],
         )
         assert f"`{schema.name}`" in daemon_prompt
         assert "Read text files." not in daemon_prompt

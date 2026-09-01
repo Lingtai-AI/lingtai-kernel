@@ -1,5 +1,6 @@
 ---
 related_files:
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/ANATOMY.md
   - src/lingtai/adapters/acp/CONTRACT.md
   - src/lingtai/adapters/acp/BEHAVIORS.md

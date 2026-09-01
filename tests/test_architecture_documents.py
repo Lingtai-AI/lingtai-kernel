@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -97,6 +98,31 @@ def _sample(paths: list[str], limit: int = 20) -> str:
     if len(paths) > limit:
         shown += f"\n  ... and {len(paths) - limit} more"
     return shown
+
+
+def test_lingtai_anatomy_find_python_citations_match_the_definition() -> None:
+    """Every exact ``_find_python`` citation must track the same source line."""
+    _, anatomy = _read_document(ROOT / "src/lingtai/ANATOMY.md")
+    source = (ROOT / "src/lingtai/venv_resolve.py").read_text(
+        encoding="utf-8"
+    )
+    definition_line = next(
+        line_number
+        for line_number, line in enumerate(source.splitlines(), start=1)
+        if line.startswith("def _find_python(")
+    )
+    cited_lines = [
+        int(value)
+        for value in re.findall(
+            r"`(?:venv_resolve\.py:)?_find_python`\s*:(\d+)", anatomy
+        )
+    ]
+
+    assert len(cited_lines) >= 2, cited_lines
+    assert set(cited_lines) == {definition_line}, (
+        definition_line,
+        cited_lines,
+    )
 
 
 def test_every_tracked_file_climbs_the_anatomy_graph() -> None:

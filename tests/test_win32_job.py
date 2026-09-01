@@ -479,10 +479,13 @@ class _StdinProcess:
 
 
 def _invocation_with_stdin_script(script: str, stdin_script: str) -> ShellInvocation:
-    """ShellInvocation plus the #1191 ``stdin_script`` field (frozen dataclass)."""
-    invocation = ShellInvocation(script=script)
-    object.__setattr__(invocation, "stdin_script", stdin_script)
-    return invocation
+    """Valid argv-form invocation carrying the #1191 stdin bootstrap."""
+    return ShellInvocation(
+        script=script,
+        executable="pwsh",
+        argv=("-NoProfile", "-Command", "bootstrap"),
+        stdin_script=stdin_script,
+    )
 
 
 def test_sync_contained_delivers_stdin_bootstrap_script(monkeypatch, tmp_path):

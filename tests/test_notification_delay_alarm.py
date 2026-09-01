@@ -16,6 +16,7 @@ from lingtai.kernel.notifications import (
     notification_delay_max_seconds,
     reconcile_notification_delay,
 )
+from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
 from lingtai.kernel.meta_block import _collect_active_notifications
 from lingtai.tools.notification import get_schema
 from tests._tool_plugin_helpers import dispatch_declared_tool
@@ -133,7 +134,7 @@ def test_no_state_and_future_delay_heartbeat_take_zero_native_locks(tmp_path: Pa
     agent = _DelayAgent(tmp_path)
     calls = []
 
-    def no_native_lock(_workdir):
+    def no_native_lock(_workdir, _store):
         calls.append(_workdir)
         raise AssertionError("heartbeat should not acquire native delay locks")
 
@@ -146,6 +147,24 @@ def test_no_state_and_future_delay_heartbeat_take_zero_native_locks(tmp_path: Pa
     monkeypatch.setattr(notifications, "_delay_transaction", no_native_lock)
     assert reconcile_notification_delay(tmp_path, agent._notification_store) is False
     assert calls == []
+
+
+def test_delay_uses_the_lock_port_composed_with_the_store(tmp_path: Path) -> None:
+    acquired: list[str] = []
+
+    class RecordingMutationLock:
+        @contextmanager
+        def exclusive(self, _notification_dir: Path, scope: str):
+            acquired.append(scope)
+            yield
+
+    agent = _DelayAgent(tmp_path)
+    agent._notification_store = PosixNotificationStoreAdapter(
+        tmp_path, mutation_lock=RecordingMutationLock()
+    )
+
+    assert _call(agent, "email", 30)["status"] == "ok"
+    assert acquired == ["channel:delay-alarm", "resource:delay-state"]
 
 
 def test_delay_hides_only_target_from_coherent_and_voluntary_check_reads(tmp_path: Path) -> None:
@@ -233,7 +252,7 @@ def test_expiry_does_not_reuse_prelock_stats_after_delay_identity_replacement(tm
     agent = _expired_delay(tmp_path, payload={"data": {"count": 7}})
 
     @contextmanager
-    def replace_delay_identity(workdir):
+    def replace_delay_identity(workdir, _store):
         state_path = Path(workdir) / ".notification" / ".delay_state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state["target"] = "soul"

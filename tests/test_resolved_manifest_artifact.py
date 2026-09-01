@@ -213,14 +213,14 @@ def test_artifact_redacts_api_key_like_secrets(tmp_path, monkeypatch):
              "api_key": secret},
         manifest_extra={"capabilities": {
             "file": {},
-            "web_search": {"provider": "inherit"},
+            "web": {"provider": "inherit"},
         }},
     )
     a = _make_probe_agent(wd)
     data = a._read_init()
     assert data is not None
     # inherit expansion really copied the secret into capability kwargs
-    assert data["manifest"]["capabilities"]["web_search"]["api_key"] == secret
+    assert data["manifest"]["capabilities"]["web"]["api_key"] == secret
 
     artifact_text = (wd / "system" / "manifest.resolved.json").read_text()
     assert secret not in artifact_text
@@ -229,7 +229,7 @@ def test_artifact_redacts_api_key_like_secrets(tmp_path, monkeypatch):
     assert "api_key" not in llm
     assert llm["provider"] == "deepseek"
     assert llm["model"] == "deepseek-v4-flash"
-    assert "api_key" not in artifact["manifest"]["capabilities"]["web_search"]
+    assert "api_key" not in artifact["manifest"]["capabilities"]["web"]
     # no half-written temp file left behind by the atomic write
     assert not (wd / "system" / "manifest.resolved.json.tmp").exists()
 

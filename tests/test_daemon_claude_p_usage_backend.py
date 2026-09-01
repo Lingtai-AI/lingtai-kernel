@@ -508,7 +508,7 @@ def _port_handle(mgr, proc):
     with patch("lingtai.tools.daemon.posix_process.subprocess.Popen",
                return_value=proc):
         return mgr._process_port.spawn(
-            DaemonProcessCommand(("claude",), mgr._agent._working_dir),
+            DaemonProcessCommand(("claude",), mgr._workdir.path),
             group_id=None,
         )
 

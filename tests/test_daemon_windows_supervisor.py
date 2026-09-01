@@ -352,6 +352,8 @@ def test_supervisor_adapter_selector_is_platform_exact(monkeypatch):
 def test_manager_composition_gate_opens_for_windows(tmp_path, monkeypatch):
     """On nt the manager gets the Windows process port and NO terminal port."""
     from types import SimpleNamespace
+    import lingtai.tools.daemon as daemon_module
+    import lingtai.tools.daemon.windows_process as windows_process_module
     from lingtai.tools.daemon import DaemonManager
     from lingtai.tools.daemon.windows_process import WindowsDaemonProcessPort
     from lingtai.tools.daemon.process_port import DaemonProcessTerminationScope
@@ -359,7 +361,15 @@ def test_manager_composition_gate_opens_for_windows(tmp_path, monkeypatch):
     agent = SimpleNamespace(
         service=SimpleNamespace(model="m"), _working_dir=tmp_path / "agent",
     )
-    monkeypatch.setattr(os, "name", "nt")
+    class _OSProxy:
+        name = "nt"
+
+        def __getattr__(self, name):
+            return getattr(os, name)
+
+    platform_os = _OSProxy()
+    monkeypatch.setattr(daemon_module, "os", platform_os)
+    monkeypatch.setattr(windows_process_module, "os", platform_os)
     manager = DaemonManager(agent)
     assert isinstance(manager._process_port, WindowsDaemonProcessPort)
     assert (
@@ -367,7 +377,7 @@ def test_manager_composition_gate_opens_for_windows(tmp_path, monkeypatch):
         is DaemonProcessTerminationScope.PRIVATE_PROCESS_GROUP
     )
     assert manager._interactive_terminal_port is None
-    monkeypatch.setattr(os, "name", "java")
+    platform_os.name = "java"
     with pytest.raises(NotImplementedError, match="unsupported"):
         DaemonManager(agent)
 

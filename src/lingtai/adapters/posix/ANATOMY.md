@@ -140,6 +140,14 @@ co-located owning ANATOMY.md files.
   (`src/lingtai/adapters/posix/bash_process.py:111-185`).
 - `PosixBashStateLockAdapter` implements the Bash-local state-lock Port with an
   exclusive per-job lock file (`src/lingtai/adapters/posix/bash_state_lock.py:9-18`).
+- `daemon_manager.py` owns the resident central manager's queue and one-shot
+  Unix capsule socket. When an agent path exceeds the Unix socket-path limit,
+  `_capsule_socket_path` selects the fixed
+  `/tmp/lingtai-dm-<uid>-<digest>/capsule.sock` fallback, while
+  `_prepare_capsule_socket_path` permits bind/stale-socket reuse only inside a
+  real owner-owned mode-0700 directory and refuses symlink, ownership, type, or
+  private-mode mismatches before unlink or bind
+  (`src/lingtai/adapters/posix/daemon_manager.py:42-116`).
 - `refresh_watcher_entrypoint.main(argv)` is the owned ordinary
   importable/executable module the launched process runs
   (`src/lingtai/adapters/posix/refresh_watcher_entrypoint.py`). It decodes the
@@ -154,11 +162,13 @@ co-located owning ANATOMY.md files.
   through fixed Git command families. Separate composed instances target the
   agent workdir and running source; no arbitrary argv/process/result object is
   exposed.
-- `PosixNotificationStoreAdapter` implements all seven `NotificationStorePort`
-  families on `.notification/<channel>.json`, including typed compare-update and
-  atomic acknowledgement-set mutation
-  (`src/lingtai/adapters/posix/notification_store.py:69-314`). Its internal lock
-  spans each complete mutation; atomic writes use the shared `_fsutil` primitive.
+- `PosixNotificationStoreAdapter` implements all eight `NotificationStorePort`
+  persistence families on `.notification/<channel>.json`, including typed
+  compare-update and atomic acknowledgement/hook-manifest mutation. It also
+  exposes its composed `NotificationMutationLockPort` for Core's private delay
+  transaction (`src/lingtai/adapters/posix/notification_store.py`). Its internal
+  lock spans each complete mutation; atomic writes use the shared `_fsutil`
+  primitive.
 - `PosixAgentPresenceStoreAdapter` implements all four `AgentPresenceStorePort`
   operations on one working directory's `.agent.json` / `.agent.heartbeat`
   (`src/lingtai/adapters/posix/agent_presence.py`): tri-state manifest/heartbeat

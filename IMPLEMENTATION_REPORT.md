@@ -1,3 +1,12 @@
+---
+related_files:
+  - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/adapters/posix/daemon_manager.py
+  - tests/test_daemon_central_manager.py
+maintenance: |
+  Historical implementation report. Keep governed frontmatter valid if the
+  document is moved or its cited implementation paths change.
+---
 # Phase 1 Daemon RAM Capping Implementation Report
 
 ## Files Changed

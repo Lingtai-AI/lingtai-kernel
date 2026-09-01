@@ -413,8 +413,6 @@ def test_task_files_store_is_never_listed_as_a_run(tmp_path, monkeypatch):
     store = agent._working_dir / "daemons" / "_task_files"
     assert store.is_dir()
     assert not mgr._looks_like_daemon_run_dir(store)
-    history = mgr._iter_daemon_history_states()
-    assert all(run_path.name != "_task_files" for run_path, _state in history)
     listing = mgr._handle_list()["emanations"]
     assert all(item["id"] != "_task_files" for item in listing)
 

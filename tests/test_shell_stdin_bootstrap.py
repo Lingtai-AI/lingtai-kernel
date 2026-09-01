@@ -161,7 +161,11 @@ def test_stdin_script_serializes_as_optional_sixth_key():
     assert ShellInvocation.from_dict(data) == invocation
 
     # Pre-B1 five-key records remain readable: stdin_script defaults to None.
-    legacy = {key: value for key, value in data.items() if key != "stdin_script"}
+    legacy = {
+        key: value
+        for key, value in data.items()
+        if key not in {"stdin_script", "command_line"}
+    }
     assert set(legacy) == {"script", "executable", "argv", "encoding", "errors"}
     assert ShellInvocation.from_dict(legacy).stdin_script is None
 

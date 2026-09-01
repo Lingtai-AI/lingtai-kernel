@@ -6,6 +6,13 @@ import pytest
 
 from lingtai.mcp_servers.wechat import login
 
+pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
 
 @pytest.fixture
 def no_sleep(monkeypatch):
@@ -21,7 +28,6 @@ def _status_error(status_code: int) -> httpx.HTTPStatusError:
     return httpx.HTTPStatusError("QR fetch failed", request=request, response=response)
 
 
-@pytest.mark.asyncio
 async def test_qr_fetch_retries_transient_error_then_succeeds(monkeypatch, no_sleep):
     responses = [httpx.ConnectError("temporary connection failure"), {"qrcode": "qr"}]
     calls = 0
@@ -40,7 +46,6 @@ async def test_qr_fetch_retries_transient_error_then_succeeds(monkeypatch, no_sl
     assert calls == 2
 
 
-@pytest.mark.asyncio
 async def test_login_initial_fetch_retries_transient_error(monkeypatch, no_sleep):
     responses = [httpx.ConnectError("temporary connection failure"), {"qrcode": "qr"}]
     statuses = iter([{"status": "confirmed", "bot_token": "token"}])
@@ -66,7 +71,6 @@ async def test_login_initial_fetch_retries_transient_error(monkeypatch, no_sleep
     }
 
 
-@pytest.mark.asyncio
 async def test_login_refresh_retries_transient_qr_fetch(monkeypatch, no_sleep):
     responses = [
         {"qrcode": "first-qr"},
@@ -101,7 +105,6 @@ async def test_login_refresh_retries_transient_qr_fetch(monkeypatch, no_sleep):
     assert fetched == ["first-qr", "replacement-qr"]
 
 
-@pytest.mark.asyncio
 async def test_qr_fetch_exhaustion_is_bounded(monkeypatch, no_sleep):
     calls = 0
 
@@ -118,7 +121,6 @@ async def test_qr_fetch_exhaustion_is_bounded(monkeypatch, no_sleep):
     assert calls == login.QR_FETCH_MAX_ATTEMPTS
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", [408, 429, 503])
 async def test_qr_fetch_retries_selected_http_statuses(
     monkeypatch, no_sleep, status_code: int,
@@ -140,7 +142,6 @@ async def test_qr_fetch_retries_selected_http_statuses(
     assert calls == 2
 
 
-@pytest.mark.asyncio
 async def test_qr_fetch_does_not_retry_non_retryable_http_status(monkeypatch, no_sleep):
     calls = 0
     error = _status_error(401)

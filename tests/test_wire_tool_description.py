@@ -114,7 +114,9 @@ def test_main_and_daemon_tools_sections_render_full_prose():
     from lingtai.tools.daemon import DaemonManager
 
     daemon_prompt = DaemonManager._build_emanation_prompt(
-        SimpleNamespace(_agent=agent), "Inspect the repository", _schemas()
+        SimpleNamespace(_runtime=SimpleNamespace(language="en")),
+        "Inspect the repository",
+        _schemas(),
     )
     assert "`email`" in daemon_prompt and "`bash`" in daemon_prompt
     assert FULL_DESCRIPTION not in daemon_prompt
@@ -289,7 +291,7 @@ def test_openai_responses_preserves_daemon_backend_options_passthrough_schema():
     ]["backend_options"]
 
     assert "additionalProperties" in backend_options
-    assert set(backend_options["properties"]) == {"config"}
+    assert set(backend_options["properties"]) == {"config", "env"}
     config = backend_options["properties"]["config"]
     assert config["anyOf"] == backend_options["additionalProperties"]["anyOf"]
     assert any(

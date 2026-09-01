@@ -428,8 +428,8 @@ class DaemonRuntimePort(Protocol):
     ) -> None:
         """Publish one parent-facing Daemon notification through the host."""
 
-    def has_active_task_card_watch(self) -> bool:
-        """Whether the host has a live Task Card watch for Daemon presentation."""
+    def has_active_task_card_watch(self) -> bool | None:
+        """Whether a present Task Card host has a live watch, else ``None``."""
 
     def attach_daemon_manager(self, manager: Any) -> None:
         """Retain this binding's manager for the capability setup return value."""

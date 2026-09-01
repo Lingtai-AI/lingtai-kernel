@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lingtai.tools.daemon import (
+    DAEMON_ASYNC_HANDOFF,
     _BACKEND_ALIASES,
     _backend_options_to_argv,
     _backend_options_to_argv_and_env,
@@ -304,14 +305,7 @@ def test_emanate_cli_no_options_omits_fields(tmp_path, monkeypatch):
         "tasks": [{"task": "no options", "tools": []}],
     })
     assert result["status"] == "dispatched"
-    assert result["handoff"] == (
-        "While waiting, go idle or call system(action='sleep'); the terminal result "
-        "will arrive and wake you as a notification; read daemon-manual and "
-        "notification-manual for details. If Telegram is connected and a Task Card "
-        "is available for the current turn, use it to report progress; call "
-        "`telegram(action='manual')` and follow its `Programmable Task Card` "
-        "section for details."
-    )
+    assert result["handoff"] == DAEMON_ASYNC_HANDOFF
     state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
 
     assert "--mcp-config" in records[0]["manifest"]["backend_argv"]

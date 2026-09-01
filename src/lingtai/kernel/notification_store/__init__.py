@@ -9,6 +9,8 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Callable, Final, NamedTuple
 
+from ._mutation_lock import NotificationMutationLockPort
+
 # A predicate a caller provides to limit snapshot / fingerprint to only
 # accepted channel names.  The store enumerates directory entries and
 # calls the predicate with each channel (stem) name; Core supplies the
@@ -136,6 +138,17 @@ def _conflict_result(
 
 class NotificationStorePort(ABC):
     """Eight-family persistence boundary owned by notification Core."""
+
+    @property
+    @abstractmethod
+    def mutation_lock(self) -> NotificationMutationLockPort:
+        """Return the composed lock Port for Core-owned private state.
+
+        Notification delay uses this seam for its state/alarm transaction so
+        it shares Store resource scopes without importing or selecting an
+        outer adapter. Callers never wrap Store operations with this lock.
+        """
+        ...
 
     @abstractmethod
     def snapshot(self, allow_channel: AllowPredicate) -> dict[str, object]:

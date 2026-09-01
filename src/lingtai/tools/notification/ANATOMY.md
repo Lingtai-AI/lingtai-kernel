@@ -14,6 +14,7 @@ related_files:
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/notifications.py
+  - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - src/lingtai/tools/registry.py
   - src/lingtai/agent.py
   - ENVIRONMENT_VARIABLES.md

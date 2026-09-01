@@ -1,6 +1,6 @@
 ---
 name: notification-store
-contract_version: 4
+contract_version: 5
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/notification_store/ANATOMY.md
@@ -21,6 +21,7 @@ related_files:
   - src/lingtai/tools/daemon/supervisor_runtime.py
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
   - tests/_notification_store_helpers.py
+  - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
 maintenance: |
   <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
@@ -92,6 +93,14 @@ caller-held transaction lock.
    `update_hook_manifests(pure_core_manifest_mutator) -> UpdateHookManifestsResult`,
    and read-only `stat_hook_registry() -> tuple[int, int] | None`.
 
+The Port also exposes the read-only `mutation_lock` Port composed with that
+Store. This is not a ninth persistence family: notification Core uses it only
+for the private delay-state + delay-alarm transaction that sits beside Store
+state, and MUST NOT wrap any of the eight Store families in a caller-held lock.
+The Core-owned coordinator acquires deterministic resource scopes plus the
+process-wide canonical-path guard; native lock selection remains in the outer
+adapter.
+
 `UNCONDITIONAL` is distinct from `None`: `None` means expected absence. A
 fingerprint tuple means the exact delivered version. Channel mutators return
 `(payload_or_none, changed, value)`; acknowledgement mutators return
@@ -105,9 +114,10 @@ fingerprint tuple means the exact delivered version. Channel mutators return
 `PosixNotificationStoreAdapter` is the production filesystem adapter. The
 Store-private lock vocabulary maps canonical channel, acknowledgement, hook,
 delay, daemon-run, and daemon-control resources to bounded sanitized-plus-hash
-filenames under `.notification/.locks/`. A process-wide RLock keyed by that
-canonical path closes `flock`'s same-process/open-description gap; native locks
-then serialize only that resource across independently composed processes.
+filenames under `.notification/.locks/`. The Core-owned lock coordinator's
+process-wide RLock keyed by that canonical path closes `flock`'s
+same-process/open-description gap; native locks then serialize only that
+resource across independently composed processes.
 The POSIX selector takes an exclusive scoped `flock` plus a **shared** legacy
 `.store.lock` bridge for one compatibility release. Windows uses scoped
 byte-range locks but cannot express that shared bridge: old global writers and
@@ -209,8 +219,9 @@ excluded from snapshot, fingerprint, dismissal, and the heartbeat hot path.
 
 ## Contract tests
 
-Shared conformance covers the eight-family surface, expected absence versus
-unconditional updates, malformed/unreadable/error behavior, typed policy values,
+Shared conformance covers the eight-family surface and composed mutation-lock
+Port, expected absence versus unconditional updates,
+malformed/unreadable/error behavior, typed policy values,
 atomic same-process and spawned-process channel updates, atomic acknowledgement
 union/purge, atomic hook-manifest append/clear, required injection, outer
 composition, stale dismiss refusal, unrelated-event survival, daemon mini-channel

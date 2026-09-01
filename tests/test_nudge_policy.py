@@ -269,6 +269,8 @@ def test_run_checks_dev_kernel_version_silent_but_source_and_config_persist(monk
 def test_dismissal_mutes_unresolved_finding_then_global_interval_allows_repeat(monkeypatch, tmp_path):
     agent = _Agent(tmp_path)
     monkeypatch.setenv("LINGTAI_NUDGE_REPEAT_INTERVAL", "0.001s")
+    clock = [1_000.0]
+    monkeypatch.setattr("lingtai.kernel.nudge.time.time", lambda: clock[0])
     body = {"title": "Needs attention", "detail": "same unresolved finding"}
     upsert(agent, "example", body)
     assert len(_entries(tmp_path)) == 1
@@ -280,7 +282,7 @@ def test_dismissal_mutes_unresolved_finding_then_global_interval_allows_repeat(m
     # Dismissal is mute, so the producer cannot immediately recreate it.
     upsert(agent, "example", body)
     assert _entries(tmp_path) == []
-    time.sleep(0.01)
+    clock[0] += 0.01
     upsert(agent, "example", body)
     assert len(_entries(tmp_path)) == 1
 

@@ -1,8 +1,9 @@
 """Notification Store test doubles and explicit test composition helpers.
 
-The fake implements the final eight-family Port exactly.  POSIX helpers are
-intentionally test-only: they keep old filesystem-oriented assertions useful
-without restoring removed Path-based production APIs.
+The fake implements the final eight-family Port plus its composed mutation-lock
+seam exactly. POSIX helpers are intentionally test-only: they keep old
+filesystem-oriented assertions useful without restoring removed Path-based
+production APIs.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import copy
 import hashlib
 import json
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,6 +54,16 @@ class FakeNotificationStore(NotificationStorePort):
         self.channel_mutations: list[str] = []
         self.ack_mutations = 0
         self.hook_mutations = 0
+
+    @property
+    def mutation_lock(self):
+        return self
+
+    @contextmanager
+    def exclusive(self, _notification_dir: Path, _scope: str):
+        """Real in-process exclusion for the fake Store's composed lock Port."""
+        with self._lock:
+            yield
 
     def snapshot(self, allow_channel: AllowPredicate) -> dict[str, object]:
         with self._lock:

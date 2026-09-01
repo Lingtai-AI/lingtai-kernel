@@ -41,9 +41,15 @@ class _RaisingCard:
         raise RuntimeError("probe exploded")
 
 
+class _UnknownCard:
+    def has_active_watch(self) -> None:
+        return None
+
+
 @pytest.fixture
 def daemon(tmp_path):
-    return make_daemon_agent(tmp_path).get_capability("daemon")
+    agent = make_daemon_agent(tmp_path)
+    return agent, agent.get_capability("daemon")
 
 
 def _start_watch(manager: TaskCardManager, workdir: Path, *, max_refreshes: int) -> dict:
@@ -71,7 +77,8 @@ def test_async_handoff_recommends_daemon_delay_for_large_concurrency():
 
 
 def test_fleet_dispatch_without_a_watch_is_nudged(daemon):
-    daemon._agent._task_card_manager = _StubCard(False)
+    agent, daemon = daemon
+    agent._task_card_manager = _StubCard(False)
     handoff = daemon._emanate_handoff(4, None)
     assert handoff.startswith(DAEMON_ASYNC_HANDOFF)
     assert "You dispatched 4 daemon(s) with no active task_card watch" in handoff
@@ -79,25 +86,29 @@ def test_fleet_dispatch_without_a_watch_is_nudged(daemon):
 
 
 def test_single_quick_dispatch_is_not_nudged(daemon):
-    daemon._agent._task_card_manager = _StubCard(False)
+    agent, daemon = daemon
+    agent._task_card_manager = _StubCard(False)
     assert daemon._emanate_handoff(1, 300.0) == DAEMON_ASYNC_HANDOFF
 
 
 def test_single_dispatch_on_the_default_ceiling_is_not_nudged(daemon):
     """An omitted timeout must not qualify: the default ceiling is 3600s, so
     keying on it would nudge on every single quick daemon."""
-    daemon._agent._task_card_manager = _StubCard(False)
+    agent, daemon = daemon
+    agent._task_card_manager = _StubCard(False)
     assert daemon._emanate_handoff(1, None) == DAEMON_ASYNC_HANDOFF
 
 
 def test_single_explicitly_long_dispatch_is_nudged(daemon):
-    daemon._agent._task_card_manager = _StubCard(False)
+    agent, daemon = daemon
+    agent._task_card_manager = _StubCard(False)
     handoff = daemon._emanate_handoff(1, DAEMON_CARD_NUDGE_MIN_TIMEOUT_S)
     assert "You dispatched 1 daemon(s) with no active task_card watch" in handoff
 
 
 def test_active_watch_suppresses_the_nudge(daemon):
-    daemon._agent._task_card_manager = _StubCard(True)
+    agent, daemon = daemon
+    agent._task_card_manager = _StubCard(True)
     assert daemon._emanate_handoff(4, 3600.0) == DAEMON_ASYNC_HANDOFF
 
 
@@ -110,7 +121,14 @@ def test_agent_without_the_task_card_capability_is_never_nudged(tmp_path):
 
 
 def test_probe_failure_falls_back_to_the_plain_handoff(daemon):
-    daemon._agent._task_card_manager = _RaisingCard()
+    agent, daemon = daemon
+    agent._task_card_manager = _RaisingCard()
+    assert daemon._emanate_handoff(4, 3600.0) == DAEMON_ASYNC_HANDOFF
+
+
+def test_unknown_probe_state_falls_back_to_the_plain_handoff(daemon):
+    agent, daemon = daemon
+    agent._task_card_manager = _UnknownCard()
     assert daemon._emanate_handoff(4, 3600.0) == DAEMON_ASYNC_HANDOFF
 
 

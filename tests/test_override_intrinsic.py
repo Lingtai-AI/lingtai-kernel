@@ -48,11 +48,11 @@ def test_override_intrinsic_raises_unknown(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_override_intrinsic_tool_no_longer_visible(tmp_path):
-    """After override, the intrinsic should not appear in tool schemas."""
+def test_override_intrinsic_keeps_official_context_tool_visible(tmp_path):
+    """Official Context registration remains after its intrinsic hook is removed."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.override_intrinsic("context")
     schemas = agent._build_tool_schemas()
     schema_names = [s.name for s in schemas]
-    assert "context" not in schema_names
+    assert "context" in schema_names
     agent.stop(timeout=1.0)

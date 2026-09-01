@@ -251,7 +251,7 @@ def test_base_agent_kernel_only(tmp_path):
     from lingtai.kernel.base_agent import BaseAgent
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     assert set(agent._intrinsics.keys()) == {
-        "email", "system", "context", "psyche", "soul", "notification",
+        "email", "system", "context", "psyche", "soul",
     }
     agent.stop(timeout=1.0)
 

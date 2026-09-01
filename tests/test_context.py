@@ -64,13 +64,12 @@ def test_context_is_intrinsic(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_legacy_psyche_capability_is_tolerated_and_filtered(tmp_path):
-    """A stale init.json carrying capabilities=['psyche'] must not break boot.
+def test_psyche_capability_input_is_tolerated_because_psyche_is_intrinsic(tmp_path):
+    """A redundant capabilities=['psyche'] entry must not break boot.
 
-    This is **config tolerance, not a public alias**: an old on-disk manifest
-    naming the dissolved family is ignored the same way any unknown capability
-    is (logged, not raised), and it grants no tool. The real `context` tool
-    still arrives — as an intrinsic, which no capability list controls.
+    The capability entry is filtered because the durable Psyche family is
+    already intrinsic. Both Psyche and Context therefore remain visible
+    independently of the capability list.
     """
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
@@ -79,10 +78,9 @@ def test_legacy_psyche_capability_is_tolerated_and_filtered(tmp_path):
     try:
         # The stale name is filtered out of the resolved capability set...
         assert "psyche" not in [name for name, _ in agent._capabilities]
-        # ...and does not sneak in as an intrinsic either.
-        assert "psyche" not in agent._intrinsics
-        # It grants no tool: no public `psyche` root reaches the model.
-        assert "psyche" not in [s.name for s in agent._build_tool_schemas()]
+        # ...while the canonical intrinsic remains present and public.
+        assert "psyche" in agent._intrinsics
+        assert "psyche" in [s.name for s in agent._build_tool_schemas()]
         # Context is unaffected — it is intrinsic, not capability-gated.
         assert "context" in agent._intrinsics
         assert "context" in [s.name for s in agent._build_tool_schemas()]

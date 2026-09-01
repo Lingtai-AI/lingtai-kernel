@@ -60,7 +60,7 @@ def anyio_backend():
 # ---------------------------------------------------------------------------
 
 TOOL_ONLY_SERVERS = [
-    pytest.param(build_daemon_common, "finish", id="daemon-common"),
+    pytest.param(build_daemon_common, ("checkpoint", "finish"), id="daemon-common"),
     pytest.param(lambda: build_cloud_mail(None), "cloud_mail", id="cloud-mail"),
 ]
 
@@ -94,7 +94,7 @@ async def test_server_negotiates_2026_protocol_and_lists_its_tool(build, tool_na
         # able to terminate on this listing. Telegram now advertises only its
         # own public family; the public Task Card root is intrinsic.
         assert result.next_cursor is None
-        expected_names = [tool_name]
+        expected_names = [tool_name] if isinstance(tool_name, str) else list(tool_name)
         assert [tool.name for tool in result.tools] == expected_names
         assert isinstance(result.tools[0].input_schema, dict)
 
@@ -114,7 +114,7 @@ async def test_server_still_serves_a_legacy_handshake_client(build, tool_name):
 
         tools = (await client.list_tools()).tools
 
-        expected_names = [tool_name]
+        expected_names = [tool_name] if isinstance(tool_name, str) else list(tool_name)
         assert [tool.name for tool in tools] == expected_names
 
 

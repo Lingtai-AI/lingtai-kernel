@@ -135,9 +135,10 @@ def conforming_store(request, tmp_path) -> NotificationStorePort:
     return _posix_store(tmp_path / "posix-conformance")
 
 
-class TestSevenFamilyConformance:
-    def test_exact_eight_operation_families(self):
+class TestEightFamilyConformance:
+    def test_exact_eight_operation_families_plus_composed_lock_port(self):
         assert NotificationStorePort.__abstractmethods__ == {
+            "mutation_lock",
             "snapshot",
             "fingerprint",
             "publish",
@@ -1061,24 +1062,23 @@ class TestCompositionAndProvenance:
             repo / "src/lingtai/kernel/notification_store/__init__.py"
         )
 
-    def test_soul_inquiry_calls_strict_submit_with_agent(self):
-        import ast
-        import lingtai.tools.soul.inquiry as inquiry
+    def test_soul_inquiry_uses_runtime_publication_port(self):
+        from lingtai.tools.soul.inquiry import _publish_human_inquiry_notification
 
-        source = Path(inquiry.__file__).read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        calls = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "submit"
-        ]
-        assert calls
-        assert all(
-            isinstance(call.args[0], ast.Name) and call.args[0].id == "agent"
-            for call in calls
+        calls = []
+        runtime = SimpleNamespace(
+            publish_notification=lambda channel, **kwargs: calls.append(
+                (channel, kwargs)
+            ),
+            log=lambda *_args, **_kwargs: None,
+            wake_nap=lambda _reason: None,
         )
+        _publish_human_inquiry_notification(
+            runtime,
+            {"voice": "answer", "thinking": []},
+            "question",
+        )
+        assert calls and calls[0][0] == "btw"
 
     def test_telegram_server_composes_one_store_and_injects_same_instance(
         self, tmp_path, monkeypatch
@@ -1096,7 +1096,11 @@ class TestCompositionAndProvenance:
             def __init__(self, **kwargs):
                 captured["manager_kwargs"] = kwargs
 
-        monkeypatch.setattr(server, "load_config", lambda: {"accounts": [{"alias": "main"}]})
+        monkeypatch.setattr(
+            server,
+            "_load_config_with_source",
+            lambda: ({"accounts": [{"alias": "main"}]}, tmp_path / "telegram.json"),
+        )
         monkeypatch.setattr(server, "TelegramService", Service)
         monkeypatch.setattr(server, "TelegramManager", Manager)
         monkeypatch.setattr(

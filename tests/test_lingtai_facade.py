@@ -84,6 +84,24 @@ def test_bare_import_lingtai_is_lightweight():
     )
 
 
+def test_source_only_import_uses_unknown_version_sentinel():
+    """Missing distribution metadata must not prevent importing the source tree."""
+    code = """
+import importlib.metadata as metadata
+
+def missing_distribution(name):
+    raise metadata.PackageNotFoundError(name)
+
+metadata.version = missing_distribution
+import lingtai
+assert lingtai.__version__ == "0+unknown", lingtai.__version__
+"""
+    result = _run_in_subprocess(code)
+    assert result.returncode == 0, (
+        f"Subprocess failed.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
 def test_facade_names_match_canonical_objects():
     """Every lazy facade name is identical to the object in its canonical module."""
     import lingtai

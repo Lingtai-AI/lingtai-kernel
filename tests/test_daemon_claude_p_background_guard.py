@@ -73,7 +73,9 @@ def _drive_print_runner(mgr, run_dir, final_text, monkeypatch):
 
 
 def test_claude_command_includes_per_run_mcp_config(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(
+        tmp_path, capabilities={"daemon": {"manager_pool_size": 0}}
+    )
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
 
@@ -166,7 +168,9 @@ def test_invalid_sentinel_prevents_done(tmp_path, monkeypatch):
 
 
 def test_lingtai_backend_gets_default_common_mcp_registration(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(
+        tmp_path, capabilities={"daemon": {"manager_pool_size": 0}}
+    )
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
 
@@ -195,7 +199,9 @@ def test_lingtai_backend_gets_default_common_mcp_registration(tmp_path, monkeypa
 
 @pytest.mark.parametrize("backend", ["codex", "opencode", "qwen-code"])
 def test_cli_backend_receives_common_mcp_configuration(tmp_path, monkeypatch, backend):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(
+        tmp_path, capabilities={"daemon": {"manager_pool_size": 0}}
+    )
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
 

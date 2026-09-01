@@ -16,6 +16,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/server.py
   - src/lingtai/tools/daemon/supervisor_runtime.py
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
+  - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
@@ -35,14 +36,16 @@ The Notification Store is the Core-owned persistence boundary for current
 
 ## Components
 
-- `NotificationStorePort` defines exactly eight persistence families, with
+- `NotificationStorePort` defines exactly eight persistence families plus the
+  read-only composed `mutation_lock` Port used only by Core's private delay
+  state/alarm transaction, with
   specialized pure channel, acknowledgement, and hook-manifest mutators
-  (`src/lingtai/kernel/notification_store/__init__.py:115-254`). Family 8 (the
+  (`src/lingtai/kernel/notification_store/__init__.py:139-274`). Family 8 (the
   hook registry) pairs read-only `load_hook_manifests` with atomic
   `update_hook_manifests` and adds read-only `stat_hook_registry() ->
   tuple[int, int] | None` — the cheap `(st_mtime_ns, st_size)` staleness
   fingerprint Core uses for out-of-band re-seed
-  (`src/lingtai/kernel/notification_store/__init__.py:221-254`).
+  (`src/lingtai/kernel/notification_store/__init__.py:238-274`).
 - `STORE_RESERVED_NON_CHANNEL_STEMS` is the Store-owned frozenset
   `{"hooks", "large_result_acks"}` naming registry / acknowledgement filenames
   that are never channels; Core validation rejects them as hook channels
@@ -51,12 +54,13 @@ The Notification Store is the Core-owned persistence boundary for current
   carry typed operational and policy evidence
   (`src/lingtai/kernel/notification_store/__init__.py:66-90`).
 - `NotificationMutationLockPort` is the Store-private resource transaction
-  seam (`src/lingtai/kernel/notification_store/_mutation_lock.py`). Its scope
-  helpers map channel, daemon-run, daemon-control, ack, hook, and delay
-  resources to bounded sanitized-plus-SHA-256 filenames under `.locks/`.
-  `exclusive_notification_mutation` adds a process-wide RLock by canonical path
-  before the selected native lock, closing `flock`'s same-process/open-file
-  gap (`src/lingtai/adapters/notification_store_lock.py`).
+  seam (`src/lingtai/kernel/notification_store/_mutation_lock.py:54-59`). Its
+  scope helpers map channel, daemon-run, daemon-control, ack, hook, and delay
+  resources to bounded sanitized-plus-SHA-256 filenames under `.locks/`, while
+  the Core-owned `exclusive_notification_mutation` coordinator adds a
+  process-wide RLock by canonical path before the injected native lock, closing
+  `flock`'s same-process/open-file gap
+  (`src/lingtai/kernel/notification_store/_mutation_lock.py:62-93`).
 - `PosixNotificationStoreAdapter` maps the Port onto the established
   `.notification/` layout and owns resource-scoped serialization
   (`src/lingtai/adapters/posix/notification_store.py`). Non-daemon channels
@@ -88,8 +92,8 @@ processes share the native mutation lock for each complete transaction.
 The parent map is `src/lingtai/kernel/ANATOMY.md`; the paired normative interface
 is `src/lingtai/kernel/notification_store/CONTRACT.md`. The Store and
 mutation-lock Port definitions are Core-owned. The filesystem Store adapter
-depends inward on both, composes the platform-selected POSIX or Windows lock,
-and outer roots inject the Store Port.
+depends inward on both, composes and exposes the platform-selected POSIX or
+Windows lock through the Store Port, and outer roots inject the Store.
 
 ## State
 

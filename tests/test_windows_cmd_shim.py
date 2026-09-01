@@ -142,9 +142,10 @@ def test_resolve_npm_argv(npm_prefix):
     assert resolve_npm_argv(["npm.cmd", "run", "build"], path=path) == [
         node, cli, "run", "build",
     ]
-    assert resolve_npm_argv(["NPM.CMD", "run", "build"], path=path) == [
-        node, cli, "run", "build",
-    ]
+    upper = resolve_npm_argv(["NPM.CMD", "run", "build"], path=path)
+    assert upper is not None
+    assert upper[0] == node and upper[2:] == ["run", "build"]
+    assert os.path.samefile(upper[1], cli)
     assert resolve_npm_argv(["npx", "tsc"], path=path) == [node, npx_cli, "tsc"]
     assert resolve_npm_argv(["npx.cmd", "tsc"], path=path) == [node, npx_cli, "tsc"]
     assert resolve_npm_argv(["yarn", "build"], path=path) is None

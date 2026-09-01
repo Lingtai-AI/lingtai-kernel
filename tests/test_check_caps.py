@@ -13,6 +13,7 @@ def test_get_all_providers_returns_all_capabilities():
     expected = {
         "file", "shell", "web", "knowledge",
         "skills", "vision", "avatar", "daemon",
+        "task_card",
     }
     assert expected == set(result.keys())
 

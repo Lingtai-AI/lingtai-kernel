@@ -104,7 +104,7 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         # The generated watcher merges .notification/system.json from a separate
         # process. The in-agent Notification Store serializes every channel
         # mutation with an advisory flock on the same sidecar (see
-        # src/lingtai/adapters/posix/notification_store_lock.py), and the
+        # src/lingtai/kernel/notification_store/_mutation_lock.py), and the
         # watcher must participate in that lock or its terminal alert can be
         # silently lost against a concurrent agent merge (issue #742).
         "_NOTIFICATION_LOCK_TIMEOUT = 5.0\n"

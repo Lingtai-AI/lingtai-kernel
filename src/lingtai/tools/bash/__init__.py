@@ -951,11 +951,9 @@ class ShellManager:
             return {"status": "error", "message": f"Command failed: {e}"}
 
     def _sync_result_from(self, stdout: str, stderr: str, returncode: int, command: str | None = None) -> dict:
-        """Cap captured output and apply the shared pass/fail fidelity fields."""
-        if len(stdout) > self._max_output:
-            stdout = stdout[: self._max_output] + f"\n... (truncated, {len(stdout)} chars total)"
-        if len(stderr) > self._max_output:
-            stderr = stderr[: self._max_output] + f"\n... (truncated, {len(stderr)} chars total)"
+        """Sanitize captured output once and apply shared fidelity fields."""
+        stdout = sanitize_output(stdout, self._max_output)
+        stderr = sanitize_output(stderr, self._max_output)
         return _augment_command_result({
             "status": "ok", "exit_code": returncode,
             "stdout": stdout, "stderr": stderr,
@@ -1135,8 +1133,6 @@ class ShellManager:
                 process.stdout.close()
             if process.stderr is not None:
                 process.stderr.close()
-        stdout = sanitize_output(stdout, self._max_output)
-        stderr = sanitize_output(stderr, self._max_output)
         return self._sync_result_from(stdout, stderr, process.returncode, command)
 
     @staticmethod

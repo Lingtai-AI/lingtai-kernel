@@ -383,7 +383,7 @@ def test_real_stdio_start_lists_tools_over_a_live_subprocess(real_stdio_client):
     real_stdio_client.start()
 
     assert real_stdio_client.is_connected()
-    assert [t["name"] for t in real_stdio_client.list_tools()] == ["finish"]
+    assert [t["name"] for t in real_stdio_client.list_tools()] == ["checkpoint", "finish"]
     assert real_stdio_client.protocol_version == "2026-07-28"
 
 
@@ -455,7 +455,7 @@ def test_real_stdio_restart_reconnects_a_closed_client(real_stdio_client):
     real_stdio_client.restart()
 
     assert real_stdio_client.is_connected()
-    assert [t["name"] for t in real_stdio_client.list_tools()] == ["finish"]
+    assert [t["name"] for t in real_stdio_client.list_tools()] == ["checkpoint", "finish"]
 
 
 def test_real_stdio_failed_connect_reports_the_failure(tmp_path):

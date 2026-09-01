@@ -42,6 +42,14 @@ class _AvatarParent:
     def has_rule_privilege(self) -> bool:
         return self._rules
 
+    def authorize_derived_launch(self, _capability):
+        from lingtai.kernel.provider_admission import (
+            DerivedLaunchDecision,
+            ProviderAdmissionState,
+        )
+
+        return DerivedLaunchDecision(ProviderAdmissionState.GRANTED, "test_grant")
+
 
 class _Launcher:
     def release(self, _handle) -> None:
@@ -323,7 +331,7 @@ def test_avatar_spawn_preserves_workdir_identity_venv_and_rules_control(tmp_path
     host = _host(parent_dir, rules=True, venv_path="/parent/runtime")
     manager = AvatarManager(host, launcher=_Launcher())
     receipt = AvatarLaunchReceipt(pid=4242, handle=object())
-    monkeypatch.setattr(manager, "_launch", lambda working_dir: (receipt, working_dir / "stderr"))
+    monkeypatch.setattr(manager, "_launch", lambda working_dir, **_kwargs: (receipt, working_dir / "stderr"))
     monkeypatch.setattr(manager, "_wait_for_boot", lambda *_args: ("ok", None))
 
     dry_run = manager(

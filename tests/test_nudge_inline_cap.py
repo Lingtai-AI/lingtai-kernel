@@ -301,6 +301,8 @@ def test_ordinary_small_nudge_behavior_is_unchanged(tmp_path):
 def test_dismissal_round_trip_for_capped_finding(tmp_path, monkeypatch):
     agent = _Agent(tmp_path)
     monkeypatch.setenv("LINGTAI_NUDGE_REPEAT_INTERVAL", "0.001s")
+    clock = [1_000.0]
+    monkeypatch.setattr("lingtai.kernel.nudge.time.time", lambda: clock[0])
     body = {"title": "Capped finding", "detail": "r" * 30_000, "source": "s"}
 
     upsert(agent, "capped-dismiss", dict(body))
@@ -319,7 +321,7 @@ def test_dismissal_round_trip_for_capped_finding(tmp_path, monkeypatch):
     entries = snapshot_notifications(tmp_path).get("nudge", {}).get("data", {}).get("nudges", [])
     assert entries == []
 
-    time.sleep(0.01)
+    clock[0] += 0.01
     upsert(agent, "capped-dismiss", dict(body))
     entries = snapshot_notifications(tmp_path).get("nudge", {}).get("data", {}).get("nudges", [])
     assert len(entries) == 1

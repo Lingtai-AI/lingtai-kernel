@@ -29,7 +29,8 @@ def test_default_locale_is_english():
         {"tool": "bash", "tool_action": "run", "reasoning": "build",
          "elapsed_s": 3, "done": False},
     ])
-    assert text.startswith("\U0001f4cb ACTIVITIES\n")
+    assert text.startswith("Don't reply to this Task Card")
+    assert "\U0001f4cb ACTIVITIES\n" in text
     assert "Last Updated: " in text
     assert "Don't reply to this Task Card" in text
 
@@ -66,7 +67,8 @@ def test_zh_rows_render_localized_surface():
         {"tool": "bash", "tool_action": "run", "reasoning": "build",
          "elapsed_s": 3, "done": False},
     ], locale="zh")
-    assert text.startswith("\U0001f4cb \u6d3b\u52a8\n")
+    assert text.startswith("\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247")
+    assert "\U0001f4cb \u6d3b\u52a8\n" in text
     assert "\u6700\u540e\u66f4\u65b0: " in text
     assert "\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247" in text
     assert "ACTIVITIES" not in text
@@ -92,11 +94,11 @@ def test_zh_metadata_stuck_hint():
     lines = TaskCardEventProjection.format_metadata(
         {"agent_lifecycle": "stuck"}, locale="zh"
     )
-    assert lines == ["agent \u00b7 stuck \u00b7 \u5c1d\u8bd5 /refresh"]
+    assert lines == ["\u4f1a\u8bdd \u00b7 agent \u00b7 stuck \u00b7 \u5c1d\u8bd5 /refresh"]
     lines_en = TaskCardEventProjection.format_metadata(
         {"agent_lifecycle": "stuck"}, locale="en"
     )
-    assert lines_en == ["agent \u00b7 stuck \u00b7 try /refresh"]
+    assert lines_en == ["Session \u00b7 agent \u00b7 stuck \u00b7 try /refresh"]
 
 
 def test_render_event_groups_locale():
@@ -112,7 +114,8 @@ def test_render_event_groups_locale():
     text = TaskCardEventProjection.render_event_groups(
         groups, normal_rows=1, locale="zh"
     )
-    assert text.startswith("\U0001f4cb \u6d3b\u52a8\n")
+    assert text.startswith("\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247")
+    assert "\U0001f4cb \u6d3b\u52a8\n" in text
 
 
 # ---------------------------------------------------------------------------

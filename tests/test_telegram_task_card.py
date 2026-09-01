@@ -701,6 +701,8 @@ def test_connect_mcp_http_maps_client_by_tool_name():
 
     agent = Agent.__new__(Agent)
     agent._mcp_clients = []
+    agent._tool_handlers = {}
+    agent._tool_schemas = []
     agent.add_tool = MagicMock()  # prevent side effects
 
     mock_client = MagicMock(spec=HTTPMCPClient)
@@ -741,6 +743,8 @@ def test_connect_mcp_stdio_maps_client_by_tool_name():
 
     agent = Agent.__new__(Agent)
     agent._mcp_clients = []
+    agent._tool_handlers = {}
+    agent._tool_schemas = []
     agent._expand_agent_placeholders = lambda x: x
     agent.add_tool = MagicMock()
 

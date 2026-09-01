@@ -33,16 +33,26 @@ class _FakeAccount:
 
 
 class _FakeService:
-    def __init__(self):
+    def __init__(self, working_dir):
+        self._working_dir = Path(working_dir)
         self.default_account = _FakeAccount()
 
     def get_account(self, alias):
         assert alias == "mybot"
         return self.default_account
 
+    def list_accounts(self):
+        return [self.default_account.alias]
+
+    def account_details(self):
+        return [{"alias": self.default_account.alias}]
+
+    def identity_path(self):
+        return self._working_dir / "system" / "mcp_identities" / "telegram.json"
+
 
 def _make_manager(tmp_path):
-    service = _FakeService()
+    service = _FakeService(tmp_path)
     manager = TelegramManager(
         service,
         working_dir=Path(tmp_path),
@@ -157,7 +167,10 @@ def test_public_family_has_a_strict_root_and_action_owned_branches(tmp_path):
     assert schema["additionalProperties"] is False
     assert len(schema["allOf"]) == len(actions) == len(branches)
     for action, branch, condition in zip(actions, branches, schema["allOf"]):
-        assert branch["title"] == f"{action} input"
+        expected_title = (
+            "settings inventory input" if action == "settings" else f"{action} input"
+        )
+        assert branch["title"] == expected_title
         assert branch["additionalProperties"] is False
         assert condition["if"]["properties"]["action"]["const"] == action
         expected = dict(branch)

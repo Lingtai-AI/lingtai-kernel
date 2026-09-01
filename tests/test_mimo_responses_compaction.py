@@ -716,8 +716,12 @@ def _context_token_limit_paragraph(text: str) -> str:
     in the document (e.g. the backend alias table) can't produce a false
     negative/positive for these assertions.
     """
-    idx = text.index("context_token_limit")
-    # Grab a generous window around the first mention — enough to span the
+    anchors = (
+        "- `context_token_limit`:",
+        "Per-task `context_token_limit`",
+    )
+    idx = next(text.index(anchor) for anchor in anchors if anchor in text)
+    # Grab a generous window from the normative description — enough to span the
     # whole descriptive paragraph in both docs without over-fitting to one
     # doc's exact paragraph length.
     return text[idx: idx + 2500]

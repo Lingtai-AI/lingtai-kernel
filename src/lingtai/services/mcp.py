@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -284,13 +285,19 @@ async def _list_all_tools(client: Any) -> list[dict[str, Any]]:
 _STALE_RETRY_POLICIES = frozenset({"never", "safe"})
 
 
-def _snapshot_process_table() -> list[dict]:
+def _snapshot_process_table(
+    timeout: float = 20.0,
+    *,
+    strict: bool = False,
+) -> list[dict]:
     """Return [{pid, ppid, cmdline}] for every visible process.
 
     stdlib-only, cross-platform. The MCP server may be a wrapper that spawns
     a real interpreter child (Windows venv shim -> base python), so callers
     that need to kill a server must walk the whole descendant tree, not just
-    direct children.
+    direct children. ``strict`` propagates collection failures when a caller
+    needs process absence to be positive evidence rather than a best-effort
+    empty result.
     """
     rows: list[dict] = []
     try:
@@ -306,7 +313,7 @@ def _snapshot_process_table() -> list[dict]:
             out = subprocess.check_output(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                 text=True,
-                timeout=20,
+                timeout=max(0.0, timeout),
                 errors="replace",
             ).strip()
             if not out:
@@ -328,7 +335,7 @@ def _snapshot_process_table() -> list[dict]:
             out = subprocess.check_output(
                 ["ps", "-axo", "pid=,ppid=,command="],
                 text=True,
-                timeout=20,
+                timeout=max(0.0, timeout),
                 errors="replace",
             )
             for line in out.splitlines():
@@ -346,6 +353,8 @@ def _snapshot_process_table() -> list[dict]:
                 cmdline = (parts[2] if len(parts) > 2 else "").lower()
                 rows.append({"pid": pid, "ppid": ppid, "cmdline": cmdline})
     except Exception:
+        if strict:
+            raise
         # Best effort: if the snapshot fails we simply cannot clean up by pid.
         return rows
     return rows
@@ -365,21 +374,113 @@ def _descendant_pids(root_pid: int, table: list[dict]) -> list[int]:
     return found
 
 
+def _pid_exited(pid: int) -> bool:
+    """Reap an owned POSIX child when possible, then verify PID absence."""
+    try:
+        waited_pid, _ = os.waitpid(pid, os.WNOHANG)
+        if waited_pid == pid:
+            return True
+    except ChildProcessError:
+        pass  # A captured descendant need not be our direct child.
+    except ProcessLookupError:
+        return True
+    except OSError:
+        pass
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except (PermissionError, OSError):
+        return False
+    return False
+
+
+def _wait_for_processes_exit(
+    pids: list[int],
+    timeout: float,
+    *,
+    deadline: float | None = None,
+) -> bool:
+    """Boundedly reap/verify every captured PID."""
+    remaining = {candidate for candidate in pids if candidate > 0}
+    if deadline is None:
+        deadline = time.monotonic() + max(0.0, timeout)
+    while remaining:
+        if os.name == "nt":
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                return False
+            try:
+                table = _snapshot_process_table(
+                    timeout=remaining_time,
+                    strict=True,
+                )
+            except Exception:
+                # Snapshot failure is not evidence that a captured PID exited.
+                return False
+            present = {row.get("pid") for row in table}
+            remaining.intersection_update(present)
+        else:
+            remaining = {
+                candidate for candidate in remaining if not _pid_exited(candidate)
+            }
+        if not remaining:
+            return True
+        remaining_time = deadline - time.monotonic()
+        if remaining_time <= 0:
+            return False
+        time.sleep(min(0.05, remaining_time))
+    return True
+
+
 def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
     """Terminate a process and all its descendants; return True if gone."""
+    if pid <= 0:
+        return False
     try:
         if os.name == "nt":
             import subprocess
 
+            deadline = time.monotonic() + max(0.0, timeout)
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                return False
+            captured_tree_is_known = True
+            try:
+                table = _snapshot_process_table(
+                    timeout=remaining_time,
+                    strict=True,
+                )
+            except Exception:
+                table = []
+                captured_tree_is_known = False
+            captured_pids = list(
+                dict.fromkeys([pid, *_descendant_pids(pid, table)])
+            )
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                return False
             subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
                 capture_output=True,
                 text=True,
-                timeout=timeout + 2,
+                timeout=remaining_time,
+            )
+            if not captured_tree_is_known:
+                return False
+            return _wait_for_processes_exit(
+                captured_pids,
+                timeout,
+                deadline=deadline,
             )
         else:
             import signal
 
+            captured_pids = list(
+                dict.fromkeys(
+                    [pid, *_descendant_pids(pid, _snapshot_process_table())]
+                )
+            )
             try:
                 os.killpg(pid, signal.SIGTERM)
             except (ProcessLookupError, PermissionError, OSError):
@@ -387,17 +488,8 @@ def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
                     os.kill(pid, signal.SIGTERM)
                 except (ProcessLookupError, PermissionError, OSError):
                     pass
-            import time
-
-            deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    return True
-                except PermissionError:
-                    return False
-                time.sleep(0.05)
+            if _wait_for_processes_exit(captured_pids, timeout):
+                return True
             try:
                 os.killpg(pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError, OSError):
@@ -405,9 +497,9 @@ def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
                     os.kill(pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError, OSError):
                     pass
+            return _wait_for_processes_exit(captured_pids, timeout)
     except Exception:
         return False
-    return True
 
 
 class MCPClient:

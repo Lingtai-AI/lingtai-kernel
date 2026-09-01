@@ -281,9 +281,9 @@ def test_email_mcp_mounted_only_when_requested(tmp_path, monkeypatch):
     })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
-    run_dir_path = agent._working_dir / "daemons"
-    run_dirs = list(run_dir_path.iterdir())
-    state = json.loads((run_dirs[0] / "daemon.json").read_text())
+    state = json.loads(
+        (agent._working_dir / "daemons" / em_id / "daemon.json").read_text()
+    )
     mcp_names = {r.get("name") for r in state["call_parameters"].get("mcp", [])}
     assert "email" not in mcp_names
     assert "daemon_common" in mcp_names
@@ -301,7 +301,9 @@ def test_email_mcp_mounted_when_tools_requests_it(tmp_path, monkeypatch):
         "tasks": [{"task": "email-capable task", "tools": ["email"]}],
     })
     assert result["status"] == "dispatched"
-    run_dirs = list((agent._working_dir / "daemons").iterdir())
-    state = json.loads((run_dirs[0] / "daemon.json").read_text())
+    em_id = result["ids"][0]
+    state = json.loads(
+        (agent._working_dir / "daemons" / em_id / "daemon.json").read_text()
+    )
     mcp_names = {r.get("name") for r in state["call_parameters"].get("mcp", [])}
     assert "email" in mcp_names

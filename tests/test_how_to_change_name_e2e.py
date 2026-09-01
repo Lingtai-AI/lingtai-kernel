@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import sysconfig
 import time
 from pathlib import Path
 
@@ -58,7 +59,14 @@ def test_real_agent_suspend_rename_rebase_and_resume(tmp_path: Path):
     helper.write_bytes(SCRIPT.read_bytes())
     helper.chmod(0o755)
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT / "src"), env.get("PYTHONPATH", "")]))
+    invoking_site_packages = [
+        path
+        for key in ("purelib", "platlib")
+        if (path := sysconfig.get_paths().get(key))
+    ]
+    python_path = [str(ROOT / "src"), *invoking_site_packages]
+    python_path.extend(path for path in env.get("PYTHONPATH", "").split(os.pathsep) if path)
+    env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(python_path))
     boot_log = tmp_path / "boot.log"
     stream = boot_log.open("w", encoding="utf-8")
     process = subprocess.Popen(

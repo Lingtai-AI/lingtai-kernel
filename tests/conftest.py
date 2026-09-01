@@ -19,6 +19,29 @@ def make_agent_dir():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_llm_adapter_registry():
+    """Keep provider registration mutations local to each test."""
+
+    from lingtai.llm.service import LLMService
+
+    snapshot = dict(LLMService._adapter_registry)
+    yield
+    LLMService._adapter_registry.clear()
+    LLMService._adapter_registry.update(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_identity_cache():
+    """Keep process-cached runtime identity local to each test."""
+
+    from lingtai.kernel.runtime_identity import runtime_identity
+
+    runtime_identity.cache_clear()
+    yield
+    runtime_identity.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_cache_miss_budget_env(monkeypatch):
     """Keep the suite hermetic w.r.t. the live cache-miss budget env override.
 

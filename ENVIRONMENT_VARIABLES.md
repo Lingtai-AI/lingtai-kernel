@@ -3,8 +3,8 @@ name: environment-variable-registry
 description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
-version: 1.8.0
-last_changed_at: "2026-08-29"
+version: 1.8.1
+last_changed_at: "2026-09-01"
 related_files:
 - ANATOMY.md
 - CONTRACT.md
@@ -12,6 +12,7 @@ related_files:
 - src/lingtai/ANATOMY.md
 - src/lingtai/CONTRACT.md
 - src/lingtai/adapters/posix/ANATOMY.md
+- src/lingtai/adapters/acp/ANATOMY.md
 - src/lingtai/adapters/windows/ANATOMY.md
 - src/lingtai/auth/ANATOMY.md
 - src/lingtai/intrinsic_skills/ANATOMY.md
@@ -19,18 +20,21 @@ related_files:
 - src/lingtai/kernel/base_agent/ANATOMY.md
 - src/lingtai/kernel/base_agent/CONTRACT.md
 - src/lingtai/kernel/daemon_supervisor/ANATOMY.md
+- src/lingtai/kernel/llm/ANATOMY.md
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/kernel/refresh_watcher/ANATOMY.md
 - src/lingtai/kernel/session_stats/ANATOMY.md
 - src/lingtai/kernel/session_stats/CONTRACT.md
 - src/lingtai/llm/openai/ANATOMY.md
 - src/lingtai/llm/anthropic/ANATOMY.md
+- src/lingtai/llm/gemini/ANATOMY.md
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/SKILL.md
 - src/lingtai/mcp_servers/local_commands/ANATOMY.md
 - src/lingtai/prompts/ANATOMY.md
 - src/lingtai/services/ANATOMY.md
 - src/lingtai/tools/ANATOMY.md
+- src/lingtai/tools/avatar/ANATOMY.md
 - src/lingtai/tools/bash/ANATOMY.md
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/tools/daemon/CONTRACT.md
@@ -140,6 +144,7 @@ surface is explicit; do not set test hooks in a production agent environment.
 |---|---|---|---|---|---|---|---|
 | `LINGTAI_DAEMON_CAPSULE_FD` | unset | Supervisor-provided integer file descriptor | POSIX supervised daemon | Once at daemon start; restart daemon | Missing or invalid value fails the supervised path | `src/lingtai/kernel/daemon_supervisor` | Accept only a supervisor-validated inherited descriptor |
 | `LINGTAI_DAEMON_CAPSULE_HANDLE` | unset | Integer OS handle in the spawn `handle_list` | Windows supervised daemon | Once at Windows entrypoint; restart daemon | Missing or invalid value fails the supervised path | `src/lingtai/adapters/windows/daemon_supervisor.py` | Convert only a validated inherited handle; it carries no capsule data |
+| `LINGTAI_DRIVER_AUTHORITY_FD` | unset | Puffo Driver-injected integer file descriptor | One ACP child process's local provider-admission authority endpoint | ACP child startup; a new process is required to change it | Missing, malformed, stale, or role-mismatched endpoints fail the guarded admission path closed | `src/lingtai/adapters/acp/driver_authority.py` | One-use local handoff descriptor; never log it or treat its numeric value as an authority grant by itself |
 | `LINGTAI_DAEMON_COMPLETION_FILE` | unset | Supervisor-owned local path | Daemon completion reporting | Daemon start; restart daemon | Invalid path fails completion reporting | Daemon completion MCP and runner | Keep the path inside the assigned run directory |
 | `LINGTAI_DAEMON_MANAGER_TOKEN` | unset; central-manager launcher injects a fresh opaque token | Launcher-generated opaque string | One central daemon-manager process handoff and its private manager record | Injected when the manager child starts; restart/recreate the manager to change it | The production launcher always supplies it; a manually started manager records a missing value as null rather than inventing one | POSIX Daemon manager adapter — `src/lingtai/adapters/posix/daemon_manager.py` | Handoff identity, not an operator setting; keep it out of logs and model-visible output |
 | `LINGTAI_DAEMON_RUN_ID` | unset | Opaque run identifier | One daemon run and its event/token writes | Daemon startup and each relevant write; restart to change | Missing or invalid value is a run-integrity error where required | Daemon run directory | Do not use as a secret or expose unrelated run IDs |
@@ -148,6 +153,7 @@ surface is explicit; do not set test hooks in a production agent environment.
 | `LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_FINISH` | unset | Registered test scenario string | Fake-LLM finish mode | Child construction; restart child | Invalid scenario fails the test | Test and supervisor code | No production effect |
 | `LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SCENARIO` | unset | Registered test scenario | Fake-LLM scenario selection | Child construction; restart child | Unknown scenario fails closed | Test and supervisor code | Never use to bypass provider checks |
 | `LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SLEEP` | zero or unset | Non-negative numeric seconds | Fake-LLM test delay | Fake backend construction; restart child | Falls back to zero or fails the test | Test and supervisor code | Not a production timeout control |
+| `LINGTAI_AVATAR_BOOT_WAIT_SECONDS` | unset | Test-only arbitrary text | Regression probe proving Avatar settings have no environment-variable peer | Focused test setup only | Production ignores it | `tests/test_tool_family_avatar_migration.py` | No production effect; never use it as an operator setting |
 | `LINGTAI_FAKE_APP_SERVER_MODE` | unset; normal quota | Test scenario `exhausted` | Fake Codex app-server quota | Fake-server invocation; rerun test after change | Unrecognized value falls back to normal quota | `tests/_fake_codex_app_server.py` | Test-only; never set in production |
 | `LINGTAI_FAKE_CLI_REPORT` | unset | Test-only path or selector | Fake CLI report | Fake CLI invocation; rerun test after change | Invalid value fails the test | `tests/_fake_*` | Keep artifacts in a test temporary directory |
 | `LINGTAI_TEST_CONFIG` | unset | Test-only string or path | Test fixture setup | Fixture construction; rerun test after change | Invalid value fails fixture setup | `tests/` | No production behavior |

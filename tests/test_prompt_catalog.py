@@ -75,6 +75,11 @@ def _mentioned_file_paths(body: str) -> list[str]:
             continue
         if value.startswith(("~/", "~", "/", "http://", "https://")):
             continue
+        # Bare runtime basenames and generated-name templates are artifacts,
+        # not repository citations. Placeholder segments inside a real
+        # repo-relative path remain enforceable (see the focused test below).
+        if "/" not in value and (value == "README.md" or "<" in value):
+            continue
         if "/" in value or any(
             suffix in value
             for suffix in (".md", ".json", ".jsonl", ".py", ".go", ".toml", ".txt")

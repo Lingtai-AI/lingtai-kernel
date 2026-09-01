@@ -124,13 +124,13 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
 
     assert shared == telegram
     assert shared == (
+        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+        "/taskcard N sets normal rows (1-10, current: 1).\n"
         "📋 ACTIVITIES\n"
         f"{TaskCardEventProjection.API_CALL_DIVIDER}\n"
         "• public response\n"
         "• bash.run: build (0ms, running)\n"
         "\n"
-        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
-        "/taskcard N sets normal rows (1-10, current: 1).\n"
         "────────\n"
         "Session · active · calls 2\n"
         "Last Updated: 02:30:00 U+8\n"

@@ -263,26 +263,23 @@ def _delay_thread_lock(workdir: str) -> threading.RLock:
 
 
 @contextmanager
-def _delay_transaction(workdir: str):
+def _delay_transaction(workdir: str, store: NotificationStorePort):
     """Serialize only delay state and its alarm mirror, never all notifications.
 
     This deliberately performs the tiny delay/alarm transaction directly rather
     than adding a ninth Store Port family.  Callers must capture Store read facts
     before entering: no snapshot/fingerprint may run under these native scopes.
     """
-    from lingtai.adapters.notification_store_lock import (
-        exclusive_notification_mutation,
-        select_notification_store_lock,
-    )
-    from lingtai.kernel.notification_store._mutation_lock import (
+    from .notification_store._mutation_lock import (
         channel_mutation_scope,
+        exclusive_notification_mutation,
         resource_mutation_scope,
     )
 
     notification_dir, _, _ = _delay_paths(workdir)
     with _delay_thread_lock(workdir):
         with exclusive_notification_mutation(
-            select_notification_store_lock(),
+            store.mutation_lock,
             notification_dir,
             [resource_mutation_scope("delay-state"), channel_mutation_scope(DELAY_ALARM_CHANNEL)],
         ):
@@ -478,7 +475,7 @@ def reconcile_notification_delay(
     elif observed_status != "expiring":
         return False
     try:
-        with _delay_transaction(key):
+        with _delay_transaction(key, store):
             _, state_path, alarm_path = _delay_paths(key)
             state = _read_delay_state_locked(state_path)
             if not isinstance(state, dict):
@@ -684,7 +681,7 @@ def delay_notification_channel(agent, channel: str, seconds: int) -> dict[str, A
     for _ in range(2):
         overdue_request_id = None
         try:
-            with _delay_transaction(workdir):
+            with _delay_transaction(workdir, store):
                 _, state_path, _ = _delay_paths(workdir)
                 current = _read_delay_state_locked(state_path)
                 now = time.time()

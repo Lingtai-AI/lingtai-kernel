@@ -394,9 +394,8 @@ def test_emanate_with_preset_instantiates_caps_for_emanation(tmp_path,
 
     assert result["status"] == "dispatched", result.get("message")
     # Folder was created — preset surface was satisfied
-    daemons_dir = agent._working_dir / "daemons"
-    assert daemons_dir.is_dir()
-    assert len(list(daemons_dir.iterdir())) == 1
+    em_id = result["ids"][0]
+    assert (agent._working_dir / "daemons" / em_id / "daemon.json").is_file()
 
 
 def test_emanate_preset_with_intrinsics_dispatches(tmp_path, monkeypatch):

@@ -11,9 +11,9 @@ from __future__ import annotations
 import json
 import os
 import socket
+import stat
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -50,7 +50,66 @@ def _capsule_socket_path(root: Path) -> Path:
     if len(str(direct)) < _UNIX_SOCKET_PATH_LIMIT:
         return direct
     digest = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:24]
-    return Path(tempfile.gettempdir()) / f"lingtai-dm-{digest}.sock"
+    fallback = Path("/tmp") / f"lingtai-dm-{os.getuid()}-{digest}" / _CAPSULE_SOCKET_NAME
+    if len(str(fallback)) >= _UNIX_SOCKET_PATH_LIMIT:
+        raise RuntimeError("daemon manager capsule socket path exceeds the POSIX limit")
+    return fallback
+
+
+def _is_capsule_socket_fallback(path: Path) -> bool:
+    prefix = f"lingtai-dm-{os.getuid()}-"
+    directory = path.parent.name
+    digest = directory[len(prefix):] if directory.startswith(prefix) else ""
+    return (
+        path.name == _CAPSULE_SOCKET_NAME
+        and path.parent.parent == Path("/tmp")
+        and len(digest) == 24
+        and all(char in "0123456789abcdef" for char in digest)
+    )
+
+
+def _prepare_capsule_socket_path(socket_path: Path) -> None:
+    """Prepare a direct socket path or validate the private ``/tmp`` fallback."""
+    if not _is_capsule_socket_fallback(socket_path):
+        _private_dir(socket_path.parent)
+        try:
+            socket_path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+
+    directory = socket_path.parent
+    try:
+        directory.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    directory_stat = directory.lstat()
+    if (
+        not stat.S_ISDIR(directory_stat.st_mode)
+        or directory_stat.st_uid != os.getuid()
+        or stat.S_IMODE(directory_stat.st_mode) != 0o700
+    ):
+        raise RuntimeError(
+            "daemon manager capsule fallback directory must be a real, "
+            "owner-owned mode-0700 directory"
+        )
+
+    try:
+        socket_stat = socket_path.lstat()
+    except FileNotFoundError:
+        return
+    if (
+        not stat.S_ISSOCK(socket_stat.st_mode)
+        or socket_stat.st_uid != os.getuid()
+        or stat.S_IMODE(socket_stat.st_mode) & 0o077
+    ):
+        raise RuntimeError(
+            "refusing to replace an unsafe daemon manager capsule fallback socket"
+        )
+    try:
+        socket_path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _private_dir(path: Path) -> None:
@@ -270,10 +329,7 @@ class _DaemonManagerProcess:
 
     def start_capsule_server(self, socket_path: Path) -> None:
         """Accept one-shot runtime capsules over a private local socket."""
-        try:
-            socket_path.unlink()
-        except FileNotFoundError:
-            pass
+        _prepare_capsule_socket_path(socket_path)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.bind(str(socket_path))
         try:

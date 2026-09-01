@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,123 @@ from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_p
 from lingtai.tools.daemon import DaemonManager
 from lingtai.tools.daemon.run_dir import DaemonRunDir
 from tests._daemon_helpers import install_fake_detached_owner, make_daemon_agent
+
+
+def test_capsule_socket_fallback_ignores_overlong_ambient_temp_roots() -> None:
+    root = Path("/private/tmp") / ("deep-agent-root-" * 12)
+
+    socket_path = daemon_manager._capsule_socket_path(root)
+
+    assert socket_path.parent.parent == Path("/tmp")
+    assert socket_path.parent.name.startswith(f"lingtai-dm-{os.getuid()}-")
+    assert socket_path.name == "capsule.sock"
+    assert len(str(socket_path)) < daemon_manager._UNIX_SOCKET_PATH_LIMIT
+
+
+def test_capsule_socket_fallback_reuses_only_a_safe_stale_socket(monkeypatch) -> None:
+    socket_path = (
+        Path("/tmp")
+        / f"lingtai-dm-{os.getuid()}-{'a' * 24}"
+        / "capsule.sock"
+    )
+    unlinked: list[Path] = []
+
+    def fake_mkdir(path: Path, **_kwargs) -> None:
+        assert path == socket_path.parent
+        raise FileExistsError
+
+    def fake_lstat(path: Path):
+        if path == socket_path.parent:
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=os.getuid())
+        assert path == socket_path
+        return SimpleNamespace(st_mode=stat.S_IFSOCK | 0o600, st_uid=os.getuid())
+
+    monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    monkeypatch.setattr(Path, "unlink", lambda path: unlinked.append(path))
+
+    daemon_manager._prepare_capsule_socket_path(socket_path)
+
+    assert unlinked == [socket_path]
+
+
+@pytest.mark.parametrize(
+    ("mode", "uid"),
+    [
+        (stat.S_IFLNK | 0o700, os.getuid()),
+        (stat.S_IFDIR | 0o755, os.getuid()),
+        (stat.S_IFDIR | 0o700, os.getuid() + 1),
+    ],
+)
+def test_capsule_socket_fallback_refuses_unsafe_directory_before_unlink(
+    monkeypatch, mode: int, uid: int
+) -> None:
+    socket_path = (
+        Path("/tmp")
+        / f"lingtai-dm-{os.getuid()}-{'b' * 24}"
+        / "capsule.sock"
+    )
+    monkeypatch.setattr(
+        Path,
+        "mkdir",
+        lambda _path, **_kwargs: (_ for _ in ()).throw(FileExistsError()),
+    )
+    monkeypatch.setattr(
+        Path,
+        "lstat",
+        lambda path: SimpleNamespace(st_mode=mode, st_uid=uid)
+        if path == socket_path.parent
+        else pytest.fail("unsafe directory must fail before inspecting the socket"),
+    )
+    monkeypatch.setattr(
+        Path,
+        "unlink",
+        lambda _path: pytest.fail("unsafe fallback must not unlink any path"),
+    )
+
+    with pytest.raises(RuntimeError, match="owner-owned mode-0700"):
+        daemon_manager._prepare_capsule_socket_path(socket_path)
+
+
+@pytest.mark.parametrize(
+    ("mode", "uid"),
+    [
+        (stat.S_IFLNK | 0o600, os.getuid()),
+        (stat.S_IFREG | 0o600, os.getuid()),
+        (stat.S_IFSOCK | 0o660, os.getuid()),
+        (stat.S_IFSOCK | 0o600, os.getuid() + 1),
+    ],
+)
+def test_capsule_socket_fallback_refuses_unsafe_stale_entry(
+    monkeypatch, mode: int, uid: int
+) -> None:
+    socket_path = (
+        Path("/tmp")
+        / f"lingtai-dm-{os.getuid()}-{'c' * 24}"
+        / "capsule.sock"
+    )
+    monkeypatch.setattr(
+        Path,
+        "mkdir",
+        lambda _path, **_kwargs: (_ for _ in ()).throw(FileExistsError()),
+    )
+    monkeypatch.setattr(
+        Path,
+        "lstat",
+        lambda path: SimpleNamespace(
+            st_mode=stat.S_IFDIR | 0o700, st_uid=os.getuid()
+        )
+        if path == socket_path.parent
+        else SimpleNamespace(st_mode=mode, st_uid=uid),
+    )
+    monkeypatch.setattr(
+        Path,
+        "unlink",
+        lambda _path: pytest.fail("unsafe fallback must not unlink any path"),
+    )
+
+    with pytest.raises(RuntimeError, match="unsafe.*fallback socket"):
+        daemon_manager._prepare_capsule_socket_path(socket_path)
 
 
 def _make_run(tmp_path: Path, run_id: str, *, timeout_s: float = 30.0) -> tuple[DaemonRunDir, DaemonSupervisorRequest]:
@@ -101,11 +219,11 @@ def _wait_state(run_dir: DaemonRunDir, state: str, *, timeout: float = 5.0) -> d
 
 
 def _notification_events(parent: Path) -> list[dict]:
-    path = parent / ".notification" / "system.json"
-    if not path.exists():
-        return []
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return list(payload.get("data", {}).get("events", []))
+    events: list[dict] = []
+    for path in sorted((parent / ".notification" / "daemon").glob("*.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        events.extend(payload.get("data", {}).get("events", []))
+    return events
 
 
 def _enable_detached_fake_llm(monkeypatch, agent, *, sleep_s: float = 0.0) -> None:

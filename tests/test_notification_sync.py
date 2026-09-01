@@ -443,8 +443,10 @@ def test_human_soul_inquiry_publishes_btw_notification(tmp_path: Path) -> None:
     )
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
+    from lingtai.adapters.tool_plugin_host import agent_soul_runtime
+
     _publish_human_inquiry_notification(
-        agent,
+        agent_soul_runtime(agent),
         {
             "prompt": "What should I know?",
             "voice": "You asked a side question.",
@@ -477,6 +479,8 @@ def test_non_human_soul_inquiry_does_not_publish_btw_notification(
     from lingtai.tools.soul import inquiry
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
+    from lingtai.adapters.tool_plugin_host import agent_soul_runtime
+
     monkeypatch.setattr(
         inquiry,
         "soul_inquiry",
@@ -487,7 +491,7 @@ def test_non_human_soul_inquiry_does_not_publish_btw_notification(
         },
     )
 
-    inquiry._run_inquiry(agent, "auto?", source="insight")
+    inquiry._run_inquiry(agent_soul_runtime(agent), "auto?", source="insight")
 
     out = snapshot_notifications(tmp_path)
     assert "btw" not in out

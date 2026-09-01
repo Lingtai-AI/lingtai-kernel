@@ -184,7 +184,9 @@ def _write_fake_claude(bin_dir: Path, transcript_text: str = "fake interactive a
 
 
 def test_emanate_claude_dispatches_interactive_runner(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(
+        tmp_path, capabilities={"daemon": {"manager_pool_size": 0}}
+    )
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
 
@@ -222,7 +224,9 @@ def test_emanate_claude_dispatches_interactive_runner(tmp_path, monkeypatch):
 def test_claude_backend_ids_are_preserved_while_sharing_runners(
     tmp_path, monkeypatch, backend, expected_runner,
 ):
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(
+        tmp_path, capabilities={"daemon": {"manager_pool_size": 0}}
+    )
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
 

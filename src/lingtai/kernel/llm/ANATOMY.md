@@ -1,5 +1,6 @@
 ---
 related_files:
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/llm/ANATOMY.md
   - src/lingtai/llm/service.py
   - src/lingtai/kernel/ANATOMY.md

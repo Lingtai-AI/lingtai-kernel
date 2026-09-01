@@ -51,8 +51,11 @@ def test_manager_renders_current_time_line_from_render_instant_not_row_start():
          "elapsed_s": 3, "done": False, "started_at": "04:08:08 UTC-07"},
     ], now=_NOW)
     lines = text.splitlines()
-    # The bottom line is the labelled render-time stamp, not the row's own start.
-    assert lines[-1] == "Last Updated: 17:18:36 U-7"
+    # The render-time stamp precedes the approved ask-agent final line.
+    assert lines[-2:] == [
+        "Last Updated: 17:18:36 U-7",
+        'Ask agent for "Task Card"',
+    ]
 
 
 def test_current_time_line_follows_the_footer():
@@ -93,7 +96,10 @@ def test_current_time_line_present_even_when_no_row_has_a_stamp():
     assert "bash.run" in text
     # Last Updated never depends on any row carrying a stamp — it always
     # reflects the render instant.
-    assert text.splitlines()[-1] == "Last Updated: 17:18:36 U-7"
+    assert text.splitlines()[-2:] == [
+        "Last Updated: 17:18:36 U-7",
+        'Ask agent for "Task Card"',
+    ]
     # Tool rows never render an inline stamp even when one is supplied.
     for ln in text.splitlines():
         if ln.startswith(("•", "✓")):
@@ -113,4 +119,7 @@ def test_api_error_row_never_carries_a_stamp_alongside_a_tool_row():
     assert "UTC" not in bash_line
     api_line = next(ln for ln in text.splitlines() if "API error" in ln)
     assert "UTC" not in api_line
-    assert text.splitlines()[-1] == "Last Updated: 17:18:36 U-7"
+    assert text.splitlines()[-2:] == [
+        "Last Updated: 17:18:36 U-7",
+        'Ask agent for "Task Card"',
+    ]

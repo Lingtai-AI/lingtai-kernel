@@ -2002,8 +2002,9 @@ class TestWorkdirAwareHookPredicates:
             karma_sleep(agent, {"reason": "test"})
         elif site_name == "soul_flow":
             from lingtai.tools.soul.flow import _soul_whisper
+            from lingtai.adapters.tool_plugin_host import agent_soul_runtime
 
-            _soul_whisper(agent)
+            _soul_whisper(agent_soul_runtime(agent))
         elif site_name == "nudge_current_entries":
             from lingtai.kernel.nudge import _current_entries
 

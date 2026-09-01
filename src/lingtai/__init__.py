@@ -8,10 +8,13 @@ heavy provider SDKs, MCP servers, or the kernel until they are actually used.
 """
 from __future__ import annotations
 
-from importlib.metadata import version as _pkg_version
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from typing import TYPE_CHECKING
 
-__version__ = _pkg_version("lingtai")
+try:
+    __version__ = _pkg_version("lingtai")
+except PackageNotFoundError:  # source checkout without distribution metadata
+    __version__ = "0+unknown"
 
 # PEP 562 lazy facade mapping: public name -> (canonical module, attribute).
 # A None attribute means the public name is used as the attribute name.

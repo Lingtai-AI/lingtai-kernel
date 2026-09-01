@@ -483,7 +483,9 @@ def test_opencode_emanate_missing_cli_raises_runtime_error(tmp_path):
 
 def test_emanate_opencode_routes_to_cli_handler(tmp_path, monkeypatch):
     """OpenCode dispatch persists the exact detached CLI execution contract."""
-    agent = make_daemon_agent(tmp_path)
+    agent = make_daemon_agent(
+        tmp_path, capabilities={"daemon": {"manager_pool_size": 0}}
+    )
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
 

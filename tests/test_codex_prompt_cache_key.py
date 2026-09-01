@@ -1342,6 +1342,7 @@ def test_token_ledger_entry_merges_usage_extra(tmp_path):
         get_chat_state=lambda: {"messages": []},
         _build_manifest=lambda: {},
         _write_status_snapshot=lambda: None,
+        _write_session_stats_record=lambda: None,
         _last_usage=UsageMetadata(
             input_tokens=10,
             output_tokens=2,
