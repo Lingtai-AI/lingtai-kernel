@@ -5,6 +5,7 @@ related_files:
   - src/lingtai/adapters/acp/BEHAVIORS.md
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/__init__.py
+  - src/lingtai/adapters/acp/driver_authority.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
