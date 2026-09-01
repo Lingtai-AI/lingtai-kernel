@@ -19,6 +19,7 @@ related_files:
   - src/lingtai/adapters/posix/bash.py
   - src/lingtai/adapters/posix/bash_process.py
   - src/lingtai/adapters/posix/bash_state_lock.py
+  - src/lingtai/adapters/posix/channel_reply_state_lock.py
   - src/lingtai/adapters/posix/interactive_terminal.py
   - src/lingtai/tools/daemon/interactive_terminal/CONTRACT.md
   - src/lingtai/tools/daemon/interactive_terminal/ANATOMY.md
@@ -30,6 +31,7 @@ related_files:
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/adapters/posix/notification_store.py
   - src/lingtai/adapters/posix/agent_presence.py
+  - src/lingtai/kernel/channel_reply/_mutation_lock.py
   - src/lingtai/adapters/posix/migration_workspace.py
   - src/lingtai/kernel/agent_presence/ANATOMY.md
   - src/lingtai/kernel/workdir_lease/ANATOMY.md
@@ -140,6 +142,36 @@ co-located owning ANATOMY.md files.
   (`src/lingtai/adapters/posix/bash_process.py:111-185`).
 - `PosixBashStateLockAdapter` implements the Bash-local state-lock Port with an
   exclusive per-job lock file (`src/lingtai/adapters/posix/bash_state_lock.py:9-18`).
+- `PosixChannelReplyStateLockAdapter` implements the Phase A channel_reply
+  mutation-session Port automatically selected only for the exact Darwin/macOS runtime (the Linux primitive remains a dormant explicit adapter/test seam, not a support claim)
+  identities. It uses `fcntl.flock` on `.channel-reply.lock` only after
+  no-follow validation of an existing private root, descriptor-relative private
+  lock-leaf open/create, stable root/leaf identity checks, and no root/leaf
+  repair. Acquisition fails closed unless descriptor scans work on a proven
+  directory FD and libc/kernel expose descriptor-relative native no-replace
+  rename (`renameatx_np(RENAME_EXCL)` on Darwin or
+  `renameat2(RENAME_NOREPLACE)` on Linux). While held it yields a POSIX FD-backed
+  v1 session whose root and child directory tokens own no-follow metadata
+  inspection and bounded resumable descriptor scans. On Darwin, native
+  `getdirentries` cookies plus an at-most-32-name pending tail paginate a duplicate
+  of the already-verified directory FD; every charged entry is no-follow stated,
+  the cursor is bound to volume/object identity, and root/lock/session identities
+  remain pinned across pages. There is no path fallback and no fixed 512-entry
+  ceiling; stale directory cursors fail closed so proof-free maintenance can reset
+  only that surface. The same session provides strict private regular reads that loop
+  to the prevalidated size and reject EOF/growth, atomic replace/no-replace
+  hard-link publication with hidden-temp cleanup and parent durability after
+  handled failures, durable private directory creation, and identity-bound
+  regular-file moves whose source-bound hidden backup survives final destination
+  verification. Expected exact-name removal uses reversible quarantine;
+  every hidden-to-canonical recovery is native no-replace, so canonical collision
+  preserves both names and raises. Exact-name bounded post-order removal and
+  directory fsync use already-open FDs. Descriptor-scan duplicates are explicitly
+  closed after iterator close, and normal move/remove returns require proven
+  rollback, cleanup, restore, and parent fsync durability. Tokens are session-bound and
+  reject stale renamed/replaced child names. All three production Core transactions
+  consume these yielded capabilities; every transactional read, scan, create,
+  write, move, removal, and fsync is root-relative and has no mutable-path fallback.
 - `refresh_watcher_entrypoint.main(argv)` is the owned ordinary
   importable/executable module the launched process runs
   (`src/lingtai/adapters/posix/refresh_watcher_entrypoint.py`). It decodes the

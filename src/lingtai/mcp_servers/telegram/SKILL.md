@@ -378,6 +378,153 @@ slash-command editor for this field. Use an authorized File/Shell procedure to
 atomically replace the JSON while preserving `taskcard`, `normal_rows`,
 `max_refreshes`, and `locale`. It applies on the next projection; verify the
 effective list with SHOW.
+## AGENT SWITCHING: default-off target-only routing
+
+Agent switching is a per-account, default-off transport feature.
+
+**Platform warning:** V1 automatic state-lock selection is enabled only when the
+runtime identity is exactly `os.name == "posix"` and `sys.platform == "darwin"`
+(macOS). Linux, Windows, FreeBSD, and every other host are unsupported. On an
+unsupported host, leaving the feature disabled preserves normal Telegram startup;
+explicitly enabling it makes eager manager construction fail closed before any
+poller starts, and the MCP remains error-only until the setting is disabled or the
+Bot is moved to a supported macOS host. Do not use the example below on an
+unsupported host.
+
+Enable it only with an explicit account setting:
+
+```json
+{
+  "accounts": [
+    {
+      "alias": "main",
+      "bot_token": "<secret>",
+      "allowed_users": [12345678],
+      "agent_switching": {"enabled": true}
+    }
+  ]
+}
+```
+
+When enabled, admitted humans in a private chat can use these local controls:
+
+- `@agent-name` persistently selects one eligible target for later ordinary
+  text messages from the same account + chat + human.
+- `@agent-name <text>` routes one non-empty plain-text message without changing
+  the saved selection.
+- Exactly `@` or `/agent` lists eligible targets; `/agent status` shows the
+  current target and `/agent reset` returns later messages to the owner Agent.
+- `/agent@BotUsername ...` is accepted only for this Bot. Command and selector
+  tokens are delimited by Telegram/Python whitespace (spaces, tabs, or newlines);
+  malformed `/agent...` prefixes fail locally, while ordinary selected-message
+  bodies retain their exact text. Names use exact LingTai Agent names (ASCII
+  letters, digits, `_`, `-`); there is no fuzzy or display-name matching.
+- `/start`, `/start <args>`, and forms addressed to this Bot remain the normal
+  owner/admin setup path even after callback or persistent target selection. The
+  switching router does not answer, mutate selection, mint authority, or wake a
+  target; the account's existing local setup handler supplies the normal response.
+- If saved selection state is corrupt, unsafe, unavailable, or unreadable, ordinary
+  messages fail locally with no owner/admin or target provider projection. `/agent
+  status` reports the unavailable state. `/agent reset` clears it, and a valid bare
+  selector such as `@agent-name` atomically replaces it; neither path revokes
+  authority already delivered to a target.
+
+The `/agent` BotCommand entry is composed only for enabled accounts. If
+`commands` is omitted, the normal defaults plus `/agent` are registered. A
+custom non-empty list gains `/agent` unless it already contains that command;
+a configured description is preserved. Explicit `commands: []` remains an
+explicit empty Telegram menu even though typed controls are still handled.
+
+Routing is deliberately narrower than the public Telegram MCP:
+
+- Only verified live direct or nested avatar descendants advertising
+  `channel_reply/v1` are eligible. Discovery rejects duplicate/ineligible chains
+  before resolution, so lookup exposes one generic local ineligibility result
+  rather than an unreachable special ambiguity message. Stale, replaced, dead,
+  old-protocol, or otherwise ineligible targets fail the same way; there is no
+  owner-Agent fallback.
+- The owner keeps the lossless raw Telegram transport record, then stops before
+  conversation preview, Task Card, LICC notification, or owner provider history.
+  Exactly one target-local at-most-once LICC task is published for a successful
+  route. The target receives a short-lived `channel_reply` capsule and never the
+  Telegram Bot token, poller, public Telegram MCP, or owner ChatSession.
+- Every owner-derived reply grant and target capsule expires exactly two hours
+  after the route's creation time. Grant `created_at` is immutable owner/router
+  issuance time and anchors that lifetime. For each concrete `channel_reply`
+  submit, the target generates request `created_at` as the current UTC submission
+  time; it is not exact owner authority and stale/future request checks still
+  apply. `/agent reset` or reselection controls only future message routing: it
+  does not retroactively revoke or erase a grant already delivered to a target,
+  which may still submit its one reply until consumed, revoked by terminal
+  failure, or expired.
+- A target reply can use the capsule once. Immediately before the persisted
+  sending barrier and again before the Telegram call, the owner revalidates the
+  exact target identity, ledger chain, manifest, protocol, and live presence.
+  Stale queued replies fail terminally without a Telegram call, and stale cached
+  adapters are retired. The owner derives the account, chat, and original
+  message anchor; deleted or unreplyable anchors fail terminally rather than
+  sending an unanchored fallback.
+- V1 accepts only ordinary non-empty text in admitted private human chats.
+  Groups, channels, topics, media/captions, current or legacy forwarded messages,
+  service events, and rich/media replies are not routed. When a saved target or
+  one-shot directive applies, unsupported content receives a local error and
+  wakes neither target nor owner. With neither selection nor switching directive,
+  ordinary admin behavior remains unchanged.
+- V1 never routes an edited message. After the lossless raw edit is durable, an
+  admitted private-human edit is switching-owned when its text is selector- or
+  `/agent`-directive-like under the existing parser/username rules, a saved
+  selection is valid, selection state is unavailable, or `original-ownership`
+  proves that exact original account/chat/user/message identity was routed within
+  the seven-day horizon. It receives one generic local unsupported-content error
+  anchored to the edited Telegram message and stops before owner preview, Task
+  Card, notification, LICC, history, provider state, or any target publication.
+  A strict body-free `edit-rejections/<digest>.json` decision makes replay of the
+  same Telegram update local-reply idempotent across restart; unavailable decision
+  state remains handled and may stay silent rather than risk a duplicate error.
+  Reset or reselection changes only future new-message routing: it cannot
+  declassify or reassign a marked original. With no selection, directive-like
+  text, unavailable state, or live prior marker, ordinary admin edit behavior
+  remains unchanged.
+- Definite pre-publication failures get a generic local error. After a publication
+  boundary, delivery may be indeterminate; V1 never retries or remints and may stay
+  silent rather than claim success or failure that it cannot prove. Repeating the
+  same Telegram update does not republish the target task.
+- Before creating any target-visible capsule, router decision, or inbox event for
+  a newly routed original, the owner commits a strict versioned private atomic and
+  fsynced `state/original-ownership/<digest>.json` marker. Its filename/key is an
+  opaque digest of the exact account/chat/user/message identity; the record stores
+  only that digest plus creation/expiry times, never a routed/edited body, Telegram
+  username, selector, or other human content. Missing markers are created once,
+  exact duplicates reuse the same truth, and malformed, unreadable, conflicting,
+  or inaccessible occupants fail closed before any target task.
+- A dedicated worker runs retention immediately after startup and then every five
+  minutes using a monotonic cadence. Each cycle inspects at most 128 total picker,
+  raw-quarantine, original-ownership, and edit-rejection items and at most 128 currently registered
+  target reply roots; one surface failure is isolated from all others and from
+  poll/reply drains. Expired picker records are removed, raw quarantine and valid
+  original-ownership markers and edit-rejection decisions are retained seven days,
+  and Core grant/request/target reply state uses its seven-day retention rules.
+  Menu/dead/original-ownership/edit-rejection discovery and target rotation are
+  truly paginated with durable native cursors, not whole-directory scans.
+  All four owner classes rotate fairly across restart.
+  Unsafe or malformed ownership evidence is preserved rather than deleted into an
+  apparent admin absence. Core separately persists fair cleanup class and scan
+  progress, so sustained claims and process restart cannot starve receipts,
+  consumed/dead state, capsules, or temp reconciliation. Tiny
+  selection-unavailable tombstones remain until reset/reselection. Proof-free
+  owner Core no-remint decisions and Telegram target router decisions are retained
+  permanently, including terminal/ambiguous truth; cleanup never authorizes a
+  remint, republish, or ambiguous-delivery retry.
+
+The paired packaged state/writer details are in
+`reference/agent-switching/CONTRACT.md` and
+`reference/agent-switching/ANATOMY.md`.
+
+This is a cooperative same-UID boundary, not hostile process isolation: sibling
+Agents sharing the same OS account can ultimately read one another's files.
+Strict owner/target state, single-use grants, no-symlink checks, and target-only
+projection prevent accidental authority sharing and cross-Agent conversation
+leaks within that deployment model.
 
 ## AUTOMATIC TASK CARD: `events.jsonl` → resident broadcast
 

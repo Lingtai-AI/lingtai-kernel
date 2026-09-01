@@ -41,6 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 _BUILTIN_TOOLS = [
     "avatar",
     "bash",
+    "channel_reply",
     "context",
     "daemon",
     "email",
@@ -232,7 +233,7 @@ def test_wheel_ships_complete_web_search_manual_bundle(wheel_entries: set[str]):
 
 
 def test_wheel_ships_exact_expected_tool_contracts(wheel_entries: set[str]):
-    # Keep the manifest closed: the shared tools contract, twenty-one top-level
+    # Keep the manifest closed: the shared tools contract, twenty-two top-level
     # built-in tool contracts, and one intentional daemon component contract.
     # No other nested/manual contract may sneak in through an over-broad glob.
     expected = {

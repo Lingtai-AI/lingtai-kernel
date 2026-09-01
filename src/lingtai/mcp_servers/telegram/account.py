@@ -25,6 +25,7 @@ from lingtai.mcp_servers.local_commands import (
 
 from . import _runtime as tg_runtime
 from . import updates as tg_updates
+from .security import safe_telegram_error
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,15 @@ httpx: Any = None
 
 _API_BASE = "https://api.telegram.org/bot{token}/{method}"
 _FILE_BASE = "https://api.telegram.org/file/bot{token}/{file_path}"
+
+
+class TelegramAccountStopError(RuntimeError):
+    """Polling/client cleanup could not be proven complete."""
+
+    def __init__(self, failures: list[tuple[str, BaseException]]) -> None:
+        self.failures = tuple(failures)
+        summary = ", ".join(f"{name}:{type(exc).__name__}" for name, exc in failures)
+        super().__init__(f"Telegram account cleanup incomplete ({summary})")
 
 
 class TelegramRateLimitError(RuntimeError):
@@ -200,6 +210,9 @@ class TelegramAccount:
 
         self._poll_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        # Serializes lifecycle ownership. A retained thread/client means shutdown
+        # was not proven and start must fail rather than overlap another poller.
+        self._lifecycle_lock = threading.RLock()
         self._last_update_id: int = 0
         self._bot_info: dict | None = None
         self._last_verified_at: str | None = None
@@ -273,22 +286,28 @@ class TelegramAccount:
     # -- Lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
-        """Call getMe, register slash commands, start polling thread."""
-        if self._poll_thread is not None:
-            return
-        self._ensure_client()
-        self._bot_info = self._request("getMe")
-        self._last_verified_at = datetime.now(timezone.utc).isoformat()
-        self._save_state()
-        self._register_commands()
-        self._stop_event.clear()
-        self._poll_thread = threading.Thread(
-            target=self._poll_loop, daemon=True,
-            name=f"telegram-poll-{self.alias}",
-        )
-        self._poll_thread.start()
-        logger.info("Telegram account '%s' started (@%s)",
-                     self.alias, self._bot_info.get("username", "?"))
+        """Call getMe, register slash commands, and start exactly one poller."""
+        with self._lifecycle_lock:
+            if self._poll_thread is not None:
+                raise RuntimeError("Telegram polling lifecycle already retained")
+            if self._client is not None and self._stop_event.is_set():
+                raise RuntimeError("Telegram client cleanup is still uncertain")
+            self._ensure_client()
+            self._bot_info = self._request("getMe")
+            self._last_verified_at = datetime.now(timezone.utc).isoformat()
+            self._save_state()
+            self._register_commands()
+            self._stop_event.clear()
+            thread = threading.Thread(
+                target=self._poll_loop, daemon=True,
+                name=f"telegram-poll-{self.alias}",
+            )
+            # Retain ownership before start(): a start failure leaves an assigned,
+            # unstarted object that stop() can deterministically discard.
+            self._poll_thread = thread
+            thread.start()
+            logger.info("Telegram account '%s' started (@%s)",
+                        self.alias, self._bot_info.get("username", "?"))
 
     def _register_commands(self) -> None:
         """Register slash commands with @BotFather via setMyCommands.
@@ -308,18 +327,55 @@ class TelegramAccount:
         except Exception as e:
             logger.warning(
                 "Telegram account '%s' setMyCommands failed (continuing): %s",
-                self.alias, e,
+                self.alias,
+                safe_telegram_error(e),
             )
 
     def stop(self) -> None:
-        """Signal polling thread to stop and join it."""
-        self._stop_event.set()
-        if self._poll_thread is not None:
-            self._poll_thread.join(timeout=5.0)
-            self._poll_thread = None
-        if self._client is not None:
-            self._client.close()
-            self._client = None
+        """Interrupt and join the poller, retaining every uncertain owner."""
+        with self._lifecycle_lock:
+            self._stop_event.set()
+            thread = self._poll_thread
+            client = self._client
+            failures: list[tuple[str, BaseException]] = []
+            client_closed = client is None
+
+            # Closing the account-owned client interrupts getUpdates instead of
+            # waiting for its 30-second server timeout. Keep the reference until
+            # the worker is also proven stopped; no replacement may overlap it.
+            if client is not None:
+                try:
+                    client.close()
+                    client_closed = True
+                except BaseException as exc:
+                    failures.append(("client_close", exc))
+
+            thread_stopped = thread is None
+            if thread is not None:
+                if thread.ident is None:
+                    # Assigned but never started: it owns no execution context.
+                    self._poll_thread = None
+                    thread_stopped = True
+                else:
+                    try:
+                        thread.join(timeout=5.0)
+                    except BaseException as exc:
+                        # A join exception is uncertainty even if a test double's
+                        # is_alive() happens to report false. Retain for retry.
+                        failures.append(("poll_join", exc))
+                    else:
+                        if thread.is_alive():
+                            failures.append(
+                                ("poll_live", RuntimeError("polling worker did not stop"))
+                            )
+                        else:
+                            self._poll_thread = None
+                            thread_stopped = True
+
+            if client_closed and thread_stopped:
+                self._client = None
+            if failures:
+                raise TelegramAccountStopError(failures) from failures[0][1]
 
     # -- Polling -------------------------------------------------------------
 
@@ -345,10 +401,21 @@ class TelegramAccount:
                         "allowed_updates": list(tg_updates.KNOWN_UPDATE_BRANCHES),
                     },
                 )
+                # A long poll can return successfully after stop() signalled it.
+                # Never dispatch that late batch, and recheck between updates so a
+                # concurrent stop cannot leak additional post-stop callbacks.
+                if self._stop_event.is_set():
+                    return
                 for update in updates:
+                    if self._stop_event.is_set():
+                        return
                     self._process_update(update)
             except Exception as e:
-                logger.warning("Telegram poll error (%s): %s", self.alias, e)
+                logger.warning(
+                    "Telegram poll error (%s): %s",
+                    self.alias,
+                    safe_telegram_error(e),
+                )
                 # Backoff before retry
                 if self._stop_event.wait(timeout=5.0):
                     return
@@ -1279,7 +1346,10 @@ class TelegramAccount:
             self._last_verified_at = data.get("last_verified_at")
             self._task_cards = self._normalize_task_cards(data.get("task_cards"))
         except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Failed to load Telegram state: %s", e)
+            logger.warning(
+                "Failed to load Telegram state: %s",
+                safe_telegram_error(e),
+            )
 
     @staticmethod
     def _normalize_task_cards(raw: object) -> dict[str, str]:

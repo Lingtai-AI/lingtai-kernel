@@ -278,12 +278,17 @@ class Agent(BaseAgent):
         # Inject the built-in intrinsic tool registry. The kernel owns the tool
         # machinery, not the concrete tools: it accepts intrinsics as injection
         # and a bare BaseAgent has none. lingtai.Agent is the composing layer, so
-        # it supplies the five mandatory intrinsics here. Notification is an
+        # it supplies the six mandatory intrinsics here. Notification is an
         # always-on declared official family and mounts through the official
         # plugin registrar. ``setdefault`` lets a host override (e.g. a test
         # injecting a subset).
         from lingtai.tools.registry import INTRINSICS
         kwargs.setdefault("intrinsics", INTRINSICS)
+        final_intrinsics = kwargs.get("intrinsics") or {}
+        compose_channel_reply_submitter = (
+            "channel_reply" in final_intrinsics
+            and "channel_reply_submit_port" not in kwargs
+        )
 
         # The outer wrapper is a composition root for direct ``lingtai.Agent``
         # callers.  Explicit ``event_journal=None`` remains an honest opt-out.
@@ -301,6 +306,7 @@ class Agent(BaseAgent):
             )
             kwargs["event_journal"] = owned_event_journal
 
+        base_agent_initialized = False
         try:
             # BaseAgent requires an explicit workdir lease. As the composition
             # root for direct ``lingtai.Agent`` callers, select and construct the
@@ -368,6 +374,28 @@ class Agent(BaseAgent):
             # Store combo name before super().__init__ (not forwarded to BaseAgent)
             self._combo_name = combo_name
             super().__init__(*args, **kwargs)
+            base_agent_initialized = True
+            if compose_channel_reply_submitter:
+                from lingtai.adapters.channel_reply_state_lock import (
+                    UnsupportedChannelReplyPlatform,
+                    select_channel_reply_state_lock,
+                )
+                from lingtai.kernel.channel_reply import (
+                    ChannelReplyTargetFileSubmitPort,
+                    ClosedChannelReplySubmitPort,
+                )
+
+                try:
+                    mutation_lock = select_channel_reply_state_lock()
+                except UnsupportedChannelReplyPlatform as exc:
+                    self._channel_reply_submit_port = ClosedChannelReplySubmitPort(
+                        message=str(exc)
+                    )
+                else:
+                    self._channel_reply_submit_port = ChannelReplyTargetFileSubmitPort(
+                        self._working_dir,
+                        mutation_lock=mutation_lock,
+                    )
             # One canonical full-context reconstruction hook serves both passive
             # molt and the public active context.rebuild operation. Intrinsic
             # Pad/LingTai boots do initial composition only; they never register
@@ -377,7 +405,107 @@ class Agent(BaseAgent):
             # presets through the wrapper implementation instead of importing
             # Core load_preset or constructing a migration workspace adapter.
             self._preset_loader = load_preset
+            # Persist LLM config for revive (self-sufficient agents contract)
+            self._persist_llm_config()
+
+            # Auto-create FileIOService if not provided by host. Uses the
+            # ``default_file_io_service`` factory so the Rust sidecar gets
+            # picked up automatically when a wheel-bundled or env-provided
+            # binary is available, with transparent pure-Python fallback.
+            # See LINGTAI_FILE_IO_BACKEND in services/file_io_sidecar.py.
+            if self._file_io is None:
+                from .services.file_io_sidecar import default_file_io_service
+                self._file_io = default_file_io_service(root=self._working_dir)
+
+            # Normalize to dict
+            if isinstance(capabilities, list):
+                from lingtai.tools.registry import normalize_capabilities
+                capabilities = normalize_capabilities({name: {} for name in capabilities})
+            elif isinstance(capabilities, dict):
+                from lingtai.tools.registry import normalize_capabilities
+                expanded_dict: dict[str, dict] = {}
+                for name, cap_kwargs in capabilities.items():
+                    if cap_kwargs is None:
+                        expanded_dict[name] = None  # propagate disable-sentinel
+                    else:
+                        expanded_dict[name] = cap_kwargs
+                capabilities = normalize_capabilities(
+                    {n: (v if v is not None else {}) for n, v in expanded_dict.items()}
+                )
+                # Preserve null sentinels for apply_core_defaults to interpret as opt-out.
+                for n, v in expanded_dict.items():
+                    if v is None:
+                        capabilities[n] = None  # type: ignore[assignment]
+
+            # Apply core defaults — the always-on tool floor boots on every agent
+            # unless explicitly disabled via `disable=[...]` or `"name": null` in
+            # the capabilities dict. init.json kwargs override default kwargs.
+            from lingtai.tools.registry import apply_core_defaults
+            capabilities = apply_core_defaults(capabilities, disable=disable)
+
+            # Track for avatar replay
+            self._capabilities: list[tuple[str, dict]] = []
+            self._capability_managers: dict[str, Any] = {}
+            # Names registered by parent MCP clients. Daemon uses this only to avoid
+            # leaking parent MCP tools through tasks[].tools; task MCP access must
+            # come from complete per-task registrations.
+            self._mcp_tool_names: set[str] = set()
+
+            # Decompress addons BEFORE capability setup so the `mcp` capability
+            # sees the populated registry on its first reconcile.
+            if addons:
+                try:
+                    from .services.mcp_registry import decompress_addons
+                    report = decompress_addons(self._working_dir, addons)
+                    self._log("mcp_decompress", **report)
+                except Exception as e:
+                    self._log("mcp_decompress_failed", reason=str(e))
+
+            # Register declared Agent Plugins at the same point and for the same
+            # reason: `skills` must see each plugin's skill directories and `mcp`
+            # must see its plugin-sourced registry records on their first reconcile.
+            # It runs after addon decompression so a plugin server cannot silently
+            # take a name a curated addon owns.
+            #
+            # Skipped only for the minimal-construction path (neither `capabilities`
+            # nor `plugins` given), where `_setup_from_init` does the real
+            # registration moments later. Running here too would prune every
+            # plugin-owned record and re-append it on every single boot, making the
+            # idempotence this module promises untrue of the shipped boot flow.
+            self._plugin_skill_paths: list[str] = []
+            self._plugin_registration: dict = {}
+            if _plugin_decision_made:
+                self._register_declared_plugins(plugins, capabilities)
+
+            # Register capabilities — provider kwarg flows through to setup() naturally
+            if capabilities:
+                for name, cap_kwargs in capabilities.items():
+                    try:
+                        self._setup_capability(name, **cap_kwargs)
+                    except (ValueError, ImportError, TypeError) as e:
+                        self._log("capability_skipped", capability=name, reason=str(e))
+
+            # Install intrinsic manuals (wipe-and-rewrite .library/intrinsic/)
+            # from the bundles shipped with each enabled capability.
+            self._install_intrinsic_manuals()
+
+            # Auto-load MCP servers from working directory.
+            # Runs AFTER addon decompression so init.json mcp entries can reference
+            # newly-decompressed registry records.
+            self._load_mcp_from_workdir()
+
+            # Re-write manifest after final intrinsic and submit-Port composition.
+            # The route marker must never describe the earlier BaseAgent-only state.
+            self._workdir.write_manifest(self._build_manifest())
         except Exception:
+            # Once BaseAgent returned it owns live process identity, heartbeat,
+            # session/runtime resources, the journal, and the exclusive workdir
+            # lease. Any later capability-composition failure must run the same
+            # complete teardown as normal shutdown before the original exception
+            # escapes; closing only the journal wedges immediate reconstruction.
+            if base_agent_initialized:
+                with contextlib.suppress(Exception):
+                    self.stop()
             if owned_event_journal is not None:
                 with contextlib.suppress(Exception):
                     owned_event_journal.close()
@@ -835,6 +963,19 @@ class Agent(BaseAgent):
         carries anything outside ``_LLM_PUBLIC_KEYS``.
         """
         data = super()._build_manifest()
+        submitter = getattr(self, "_channel_reply_submit_port", None)
+        from lingtai.kernel.channel_reply import ClosedChannelReplySubmitPort
+
+        if (
+            "channel_reply" in getattr(self, "_intrinsics", {})
+            and callable(getattr(submitter, "submit_channel_reply", None))
+            and not isinstance(submitter, ClosedChannelReplySubmitPort)
+        ):
+            from lingtai.kernel.channel_reply import channel_reply_capability_marker
+
+            data.setdefault("route_capabilities", {})["channel_reply"] = (
+                channel_reply_capability_marker()
+            )
         caps = getattr(self, "_capabilities", None)
         if caps:
             # Re-apply the recursive redaction at the serialization boundary.

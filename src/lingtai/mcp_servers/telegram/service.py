@@ -36,6 +36,15 @@ _TASKCARD_DEFAULT_LOCALE = "en"
 _TASKCARD_SUPPORTED_LOCALES = frozenset({"en", "zh"})
 
 
+class TelegramServiceStopError(RuntimeError):
+    """Aggregate every account stop failure after all accounts were attempted."""
+
+    def __init__(self, failures: list[tuple[str, Exception]]) -> None:
+        self.failures = tuple(failures)
+        summary = ", ".join(f"{alias}:{type(exc).__name__}" for alias, exc in failures)
+        super().__init__(f"Telegram account cleanup incomplete ({summary})")
+
+
 class TelegramService:
     """Multi-account Telegram bot service."""
 
@@ -448,6 +457,12 @@ class TelegramService:
             )
 
     def stop(self) -> None:
-        """Stop all accounts."""
-        for acct in self._accounts.values():
-            acct.stop()
+        """Attempt every account stop, then report all uncertain cleanup."""
+        failures: list[tuple[str, Exception]] = []
+        for alias in self._account_order:
+            try:
+                self._accounts[alias].stop()
+            except Exception as exc:
+                failures.append((alias, exc))
+        if failures:
+            raise TelegramServiceStopError(failures) from failures[0][1]

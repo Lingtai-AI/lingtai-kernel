@@ -46,9 +46,11 @@ from . import _family
 from . import updates as tg_updates
 from .plugin import TELEGRAM_PLUGIN
 from .account import TelegramRateLimitError
+from .security import safe_telegram_error
 
 if TYPE_CHECKING:
     from lingtai.kernel.notification_store import NotificationStorePort
+    from .agent_switching import TelegramAgentSwitchingRouter
     from .service import TelegramService
 
 log = logging.getLogger(__name__)
@@ -352,6 +354,15 @@ REACTION_REPLIED = [{"type": "emoji", "emoji": "✍️"}]   # Reply sent
 REACTION_DONE = REACTION_REPLIED  # deprecated alias
 
 
+class TelegramManagerStopError(RuntimeError):
+    """Aggregate every lifecycle stop failure after all components were tried."""
+
+    def __init__(self, failures: list[tuple[str, Exception]]) -> None:
+        self.failures = tuple(failures)
+        summary = ", ".join(f"{name}:{type(exc).__name__}" for name, exc in failures)
+        super().__init__(f"Telegram manager cleanup incomplete ({summary})")
+
+
 class TypingIndicatorManager:
     """Manages automatic typing indicators for Telegram chats.
 
@@ -558,8 +569,9 @@ def _transcribe_voice(audio_path: str, model_name: str = "base") -> dict:
             "segments": transcript_segments,
         }
     except Exception as e:
-        log.warning("Voice transcription failed: %s", e)
-        return {"error": str(e)}
+        safe_error = safe_telegram_error(e)
+        log.warning("Voice transcription failed: %s", safe_error)
+        return {"error": safe_error}
 
 SUPPORTED_SEND_MEDIA_TYPES = ("photo", "document")
 
@@ -751,11 +763,13 @@ class TelegramManager:
         working_dir: Path,
         notification_store: "NotificationStorePort",
         on_inbound: "Callable[[dict], None]",
+        agent_switching_router: "TelegramAgentSwitchingRouter | None" = None,
     ) -> None:
         self._service = service
         self._working_dir = Path(working_dir)
         self._notification_store = notification_store
         self._on_inbound = on_inbound
+        self._agent_switching_router = agent_switching_router
         # Duplicate send protection: (account, chat_id, text) → count
         self._last_sent: dict[tuple[str, int, str], int] = {}
         self._dup_free_passes = 2
@@ -858,6 +872,9 @@ class TelegramManager:
         self._task_card_tail_stop = threading.Event()
         self._programmable_task_card_thread: threading.Thread | None = None
         self._programmable_task_card_stop = threading.Event()
+        # Worker references clear only after shutdown is proven. The lock prevents
+        # concurrent start/stop from manufacturing overlapping generations.
+        self._task_card_worker_lifecycle_lock = threading.RLock()
 
     @property
     def _task_card_channels(self) -> dict[str, dict[str, str]]:
@@ -961,21 +978,35 @@ class TelegramManager:
 
     def start(self) -> None:
         self._service.start()
+        if self._agent_switching_router is not None:
+            self._agent_switching_router.start()
         self._start_pending_task_card_edit_worker()
         self._start_task_card_tail()
         self._start_programmable_task_card_poller()
 
     def stop(self) -> None:
-        self._stop_programmable_task_card_poller()
-        self._stop_task_card_tail()
-        self._stop_pending_task_card_edit_worker()
-        # lingtai#672: quiesce the producers FIRST (service.stop() signals and
-        # joins every account poll thread, so no in-flight callback can start
-        # a new typing lease), then stop_all() signals and boundedly joins
-        # every typing worker. Order matters: stopping typing before the
-        # producers lets a late callback re-enter after the clear.
-        self._service.stop()
-        _typing_manager.stop_all()
+        # Quiesce every producer before stopping typing. Each component is tried
+        # even when an earlier stop fails; failures retain their owned references
+        # and are reported in deterministic lifecycle order.
+        failures: list[tuple[str, Exception]] = []
+        components: list[tuple[str, Callable[[], None]]] = [
+            ("programmable_task_card_poller", self._stop_programmable_task_card_poller),
+            ("task_card_tail", self._stop_task_card_tail),
+            ("pending_task_card_edit_worker", self._stop_pending_task_card_edit_worker),
+        ]
+        if self._agent_switching_router is not None:
+            components.append(("agent_switching_router", self._agent_switching_router.stop))
+        components.extend([
+            ("telegram_service", self._service.stop),
+            ("typing_manager", _typing_manager.stop_all),
+        ])
+        for name, stop in components:
+            try:
+                stop()
+            except Exception as exc:
+                failures.append((name, exc))
+        if failures:
+            raise TelegramManagerStopError(failures) from failures[0][1]
 
     # ------------------------------------------------------------------
     # Action dispatch
@@ -1057,7 +1088,7 @@ class TelegramManager:
         except TelegramRateLimitError as exc:
             result: dict[str, Any] = {
                 "status": "error",
-                "error": str(exc),
+                "error": safe_telegram_error(exc),
                 "error_code": exc.error_code,
                 "auto_retry": False,
                 "guidance": (
@@ -1074,7 +1105,7 @@ class TelegramManager:
                 )
             return result
         except Exception as e:
-            return {"error": str(e)}
+            return {"error": safe_telegram_error(e)}
 
     # ------------------------------------------------------------------
     # Incoming messages — called by TelegramService via on_message
@@ -1376,6 +1407,31 @@ class TelegramManager:
         (persist_dir / "message.json").write_text(
             json.dumps(payload, indent=2, default=str), encoding="utf-8",
         )
+
+        # Agent switching owns the target-only branch immediately after the
+        # lossless transport record is durable. A handled update must never
+        # enter admin preview, Task Card, notification, LICC, or provider state.
+        # Unexpected router failures fail closed for enabled accounts.
+        handled_by_agent_switching = False
+        if self._agent_switching_router is not None:
+            try:
+                handled_by_agent_switching = self._agent_switching_router.handle(
+                    account_alias, update, branch,
+                )
+            except Exception:
+                log.exception(
+                    "telegram agent switching failed closed account=%s branch=%s",
+                    account_alias,
+                    branch,
+                )
+                handled_by_agent_switching = True
+        if handled_by_agent_switching:
+            if account and isinstance(chat_id, int) and not isinstance(chat_id, bool):
+                try:
+                    _typing_manager.stop_typing(account, chat_id)
+                except Exception as exc:
+                    log.debug("Failed to stop routed typing indicator: %s", exc)
+            return
 
         # Forward to host via LICC. Body is a conversation preview showing the
         # last 20 messages. The agent uses telegram(action="check"|"read") to
@@ -2544,62 +2600,69 @@ class TelegramManager:
 
     def _start_pending_task_card_edit_worker(self) -> None:
         """Start the one manager-owned pending-latest retry worker."""
-        thread = self._task_card_pending_edit_thread
-        if thread is not None and thread.is_alive():
-            return
-        self._task_card_pending_edit_stop.clear()
+        with self._task_card_worker_lifecycle_lock:
+            if self._task_card_pending_edit_thread is not None:
+                thread = self._task_card_pending_edit_thread
+                if (
+                    thread.ident is not None
+                    and thread.is_alive()
+                    and not self._task_card_pending_edit_stop.is_set()
+                ):
+                    return
+                raise RuntimeError("pending task card edit lifecycle already retained")
+            self._task_card_pending_edit_stop.clear()
 
-        def _loop() -> None:
-            while not self._task_card_pending_edit_stop.is_set():
-                if not self._resident.enabled():
-                    # Keep accepted intent while hidden; re-enable notifies the
-                    # condition and reprojects the current logical composition.
-                    with self._task_card_edit_gate_condition:
-                        self._task_card_edit_gate_condition.wait(timeout=1.0)
-                    continue
-                key: tuple[str, int] | None = None
-                with self._task_card_edit_gate_condition:
-                    if self._task_card_pending_edit_stop.is_set():
-                        return
-                    now = self._task_card_edit_clock()
-                    wait_for: float | None = None
-                    for candidate in self._task_card_pending_edits:
-                        last_edit_at = self._task_card_last_edit_at.get(candidate)
-                        due_at = (
-                            now
-                            if last_edit_at is None
-                            else last_edit_at + self._TASK_CARD_EVENT_POLL_INTERVAL
-                        )
-                        retry_at = self._task_card_pending_retry_at.get(candidate)
-                        if retry_at is not None:
-                            due_at = max(due_at, retry_at)
-                        remaining = due_at - now
-                        if remaining <= 0:
-                            key = candidate
-                            break
-                        if wait_for is None or remaining < wait_for:
-                            wait_for = remaining
-                    if key is None:
-                        self._task_card_edit_gate_condition.wait(timeout=wait_for)
+            def _loop() -> None:
+                while not self._task_card_pending_edit_stop.is_set():
+                    if not self._resident.enabled():
+                        with self._task_card_edit_gate_condition:
+                            self._task_card_edit_gate_condition.wait(timeout=1.0)
                         continue
-                self._flush_pending_task_card_edit(key)
+                    key: tuple[str, int] | None = None
+                    with self._task_card_edit_gate_condition:
+                        if self._task_card_pending_edit_stop.is_set():
+                            return
+                        now = self._task_card_edit_clock()
+                        wait_for: float | None = None
+                        for candidate in self._task_card_pending_edits:
+                            last_edit_at = self._task_card_last_edit_at.get(candidate)
+                            due_at = (
+                                now
+                                if last_edit_at is None
+                                else last_edit_at + self._TASK_CARD_EVENT_POLL_INTERVAL
+                            )
+                            retry_at = self._task_card_pending_retry_at.get(candidate)
+                            if retry_at is not None:
+                                due_at = max(due_at, retry_at)
+                            remaining = due_at - now
+                            if remaining <= 0:
+                                key = candidate
+                                break
+                            if wait_for is None or remaining < wait_for:
+                                wait_for = remaining
+                        if key is None:
+                            self._task_card_edit_gate_condition.wait(timeout=wait_for)
+                            continue
+                    self._flush_pending_task_card_edit(key)
 
-        thread = threading.Thread(
-            target=_loop,
-            name="telegram-task-card-pending-edit",
-            daemon=True,
-        )
-        self._task_card_pending_edit_thread = thread
-        thread.start()
+            thread = threading.Thread(
+                target=_loop,
+                name="telegram-task-card-pending-edit",
+                daemon=True,
+            )
+            self._task_card_pending_edit_thread = thread
+            thread.start()
 
     def _stop_pending_task_card_edit_worker(self) -> None:
         self._task_card_pending_edit_stop.set()
         with self._task_card_edit_gate_condition:
             self._task_card_edit_gate_condition.notify_all()
-        thread = self._task_card_pending_edit_thread
-        if thread is not None:
-            thread.join()
-        self._task_card_pending_edit_thread = None
+        self._stop_task_card_worker(
+            thread_attr="_task_card_pending_edit_thread",
+            stop_event=self._task_card_pending_edit_stop,
+            timeout=5.0,
+            label="pending task card edit worker",
+        )
 
     @classmethod
     def _format_programmable_card_text(
@@ -3602,78 +3665,109 @@ class TelegramManager:
                     )
 
     def _start_task_card_tail(self) -> None:
-        """Start the one manager-owned tail worker, idempotently.
-
-        Joined with the Telegram MCP manager lifecycle: ``start()``/``stop()``
-        are the only callers, so exactly one worker runs per manager instance
-        regardless of how many times ``start()`` is called.
-        """
-        if self._task_card_tail_thread is not None and self._task_card_tail_thread.is_alive():
-            return
-        self._init_event_tail()
-        self._task_card_tail_stop.clear()
-
-        def _loop() -> None:
-            while not self._task_card_tail_stop.is_set():
-                try:
-                    self._poll_event_tail()
-                except Exception as e:
-                    log.debug("Automatic task card event tail poll failed: %s", e)
-                # Blanket rebuild: every tick re-renders the current window.
-                # Fingerprints reject time-only/unchanged renders; the resident
-                # transport gate enforces the hard per-target edit interval when
-                # this follows a changed-tail broadcast in the same tick.
-                try:
-                    self._broadcast_task_card_event_window()
-                except Exception as e:
-                    log.debug("Automatic task card blanket broadcast failed: %s", e)
-                if self._task_card_tail_stop.wait(self._TASK_CARD_EVENT_POLL_INTERVAL):
+        """Start the one manager-owned tail worker, idempotently."""
+        with self._task_card_worker_lifecycle_lock:
+            if self._task_card_tail_thread is not None:
+                thread = self._task_card_tail_thread
+                if (
+                    thread.ident is not None
+                    and thread.is_alive()
+                    and not self._task_card_tail_stop.is_set()
+                ):
                     return
+                raise RuntimeError("task card tail lifecycle already retained")
+            self._init_event_tail()
+            self._task_card_tail_stop.clear()
 
-        thread = threading.Thread(
-            target=_loop, name="telegram-task-card-event-tail", daemon=True,
-        )
-        self._task_card_tail_thread = thread
-        thread.start()
+            def _loop() -> None:
+                while not self._task_card_tail_stop.is_set():
+                    try:
+                        self._poll_event_tail()
+                    except Exception as e:
+                        log.debug("Automatic task card event tail poll failed: %s", e)
+                    try:
+                        self._broadcast_task_card_event_window()
+                    except Exception as e:
+                        log.debug("Automatic task card blanket broadcast failed: %s", e)
+                    if self._task_card_tail_stop.wait(self._TASK_CARD_EVENT_POLL_INTERVAL):
+                        return
+
+            thread = threading.Thread(
+                target=_loop, name="telegram-task-card-event-tail", daemon=True,
+            )
+            self._task_card_tail_thread = thread
+            thread.start()
 
     def _stop_task_card_tail(self) -> None:
-        self._task_card_tail_stop.set()
-        thread = self._task_card_tail_thread
-        if thread is not None:
-            thread.join(timeout=5.0)
-        self._task_card_tail_thread = None
+        self._stop_task_card_worker(
+            thread_attr="_task_card_tail_thread",
+            stop_event=self._task_card_tail_stop,
+            timeout=5.0,
+            label="task card tail",
+        )
 
     def _start_programmable_task_card_poller(self) -> None:
-        if (
-            self._programmable_task_card_thread is not None
-            and self._programmable_task_card_thread.is_alive()
-        ):
-            return
-        self._programmable_task_card_stop.clear()
-
-        def _loop() -> None:
-            while not self._programmable_task_card_stop.is_set():
-                try:
-                    self._broadcast_programmable_task_card_file()
-                except Exception as e:
-                    log.debug("Programmable task card poll failed: %s", e)
-                if self._programmable_task_card_stop.wait(self._TASK_CARD_EVENT_POLL_INTERVAL):
+        with self._task_card_worker_lifecycle_lock:
+            if self._programmable_task_card_thread is not None:
+                thread = self._programmable_task_card_thread
+                if (
+                    thread.ident is not None
+                    and thread.is_alive()
+                    and not self._programmable_task_card_stop.is_set()
+                ):
                     return
+                raise RuntimeError("programmable task card lifecycle already retained")
+            self._programmable_task_card_stop.clear()
 
-        thread = threading.Thread(
-            target=_loop,
-            name="telegram-task-card-programmable-poller",
-            daemon=True,
-        )
-        self._programmable_task_card_thread = thread
-        thread.start()
+            def _loop() -> None:
+                while not self._programmable_task_card_stop.is_set():
+                    try:
+                        self._broadcast_programmable_task_card_file()
+                    except Exception as e:
+                        log.debug("Programmable task card poll failed: %s", e)
+                    if self._programmable_task_card_stop.wait(self._TASK_CARD_EVENT_POLL_INTERVAL):
+                        return
+
+            thread = threading.Thread(
+                target=_loop,
+                name="telegram-task-card-programmable-poller",
+                daemon=True,
+            )
+            self._programmable_task_card_thread = thread
+            thread.start()
 
     def _stop_programmable_task_card_poller(self) -> None:
-        self._programmable_task_card_stop.set()
-        thread = self._programmable_task_card_thread
-        if thread is not None:
-            thread.join(timeout=2.0)
-        self._programmable_task_card_thread = None
+        self._stop_task_card_worker(
+            thread_attr="_programmable_task_card_thread",
+            stop_event=self._programmable_task_card_stop,
+            timeout=2.0,
+            label="programmable task card poller",
+        )
+
+    def _stop_task_card_worker(
+        self,
+        *,
+        thread_attr: str,
+        stop_event: threading.Event,
+        timeout: float,
+        label: str,
+    ) -> None:
+        """Convergently stop one manager worker without losing uncertainty."""
+        with self._task_card_worker_lifecycle_lock:
+            stop_event.set()
+            thread = getattr(self, thread_attr)
+            if thread is None:
+                return
+            if thread.ident is None:
+                setattr(self, thread_attr, None)
+                return
+            try:
+                thread.join(timeout=timeout)
+            except Exception as exc:
+                raise RuntimeError(f"{label} join failed") from exc
+            if thread.is_alive():
+                raise RuntimeError(f"{label} did not stop")
+            setattr(self, thread_attr, None)
 
     def _handle_task_card_update(self, args: dict) -> dict:
         """Private internal action — internally-driven Task Card projection
@@ -3711,8 +3805,9 @@ class TelegramManager:
             else:
                 return {"status": "error", "error": f"Unknown sub_action: {sub_action}"}
         except Exception as e:
-            log.debug("Task card update failed: %s", e)
-            return {"status": "error", "error": str(e)}
+            safe_error = safe_telegram_error(e)
+            log.debug("Task card update failed: %s", safe_error)
+            return {"status": "error", "error": safe_error}
 
     def _ensure_task_card_resident(self, account: str, chat_id: int) -> dict:
         """Ensure the resident target for an established inbound chat.
@@ -4348,10 +4443,46 @@ class TelegramManager:
         except ValueError as exc:
             return None, None, str(exc)
 
+    def _admin_labeled_text_args(
+        self,
+        args: dict,
+        text: str,
+    ) -> tuple[dict, str]:
+        """Label direct owner text replies while Agent switching is active."""
+        if (
+            self._agent_switching_router is None
+            or not text
+            or text == "[admin]"
+            or text.startswith("[admin] ")
+        ):
+            return args, text
+
+        prefix = "[admin] "
+        effective_args = dict(args)
+        # Telegram entity offsets are UTF-16 code-unit offsets.  The injected
+        # prefix is ASCII, so its Python length is also its UTF-16 width.
+        for field in ("entities", "caption_entities"):
+            entities = args.get(field)
+            if not isinstance(entities, list):
+                continue
+            shifted: list[Any] = []
+            for entity in entities:
+                if not isinstance(entity, dict):
+                    shifted.append(entity)
+                    continue
+                copied = dict(entity)
+                offset = copied.get("offset")
+                if isinstance(offset, int) and not isinstance(offset, bool):
+                    copied["offset"] = offset + len(prefix)
+                shifted.append(copied)
+            effective_args[field] = shifted
+        return effective_args, prefix + text
+
     def _send(self, args: dict) -> dict:
         account = self._resolve_account(args)
         chat_id = args.get("chat_id")
         text = args.get("text", "")
+        args, text = self._admin_labeled_text_args(args, text)
         media = args.get("media")
         # Some tool-call frontends serialize optional object fields as an empty
         # attachment object for text-only sends, e.g.

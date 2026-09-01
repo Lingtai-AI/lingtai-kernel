@@ -19,7 +19,8 @@ Config schema (plaintext, no env-indirection):
           "commands": [                      // optional menu entries for setMyCommands
             {"command": "status", "description": "Show agent status"},
             {"command": "tokenstats", "description": "Show recent token usage stats"}
-          ]
+          ],
+          "agent_switching": {"enabled": true} // optional; default false
         }
       ]
     }
@@ -48,12 +49,22 @@ from .._results import unknown_resource_error as _unknown_resource
 from .._results import unknown_tool_error as _unknown_tool
 
 from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
+from lingtai.mcp_servers.local_commands import DEFAULT_COMMANDS
 
 from .. import _config
+from .agent_switching import (
+    build_agent_switching_router,
+    prepare_account_configs,
+)
 from .licc import push_inbox_event
 from .manager import TelegramManager, SCHEMA, DESCRIPTION
 from ._family import handle_telegram
 from .plugin import TELEGRAM_ACTIONS, TELEGRAM_PLUGIN
+from .security import (
+    install_telegram_logging_safety,
+    restore_telegram_logging_safety,
+    safe_telegram_error,
+)
 from .service import TelegramService
 
 log = logging.getLogger("lingtai.mcp_servers.telegram")
@@ -638,7 +649,10 @@ def _accounts_from_config(cfg: dict) -> list[dict]:
 def build_manager() -> tuple[TelegramManager, Path]:
     """Construct manager + service from env + config. Returns (manager, working_dir)."""
     cfg, config_path = _load_config_with_source()
-    accounts = _accounts_from_config(cfg)
+    accounts = prepare_account_configs(
+        _accounts_from_config(cfg),
+        default_commands=DEFAULT_COMMANDS,
+    )
 
     agent_dir_raw = os.environ.get("LINGTAI_AGENT_DIR")
     working_dir = Path(agent_dir_raw) if agent_dir_raw else Path.cwd()
@@ -665,11 +679,17 @@ def build_manager() -> tuple[TelegramManager, Path]:
     )
 
     notification_store = PosixNotificationStoreAdapter(working_dir)
+    agent_switching_router = build_agent_switching_router(
+        owner_workdir=working_dir,
+        service=svc,
+        accounts_config=accounts,
+    )
     mgr = TelegramManager(
         service=svc,
         working_dir=working_dir,
         notification_store=notification_store,
         on_inbound=_on_inbound,
+        agent_switching_router=agent_switching_router,
     )
     mgr_ref[0] = mgr
     return mgr, working_dir
@@ -765,7 +785,7 @@ def build_server(manager: TelegramManager | None) -> Server:
             # tool result; only lookup misses above are protocol errors.
             result = {
                 "status": "error",
-                "error": str(e),
+                "error": safe_telegram_error(e),
                 "error_type": type(e).__name__,
             }
         return _tool_result(result)
@@ -788,23 +808,45 @@ def build_server(manager: TelegramManager | None) -> Server:
 async def serve() -> None:
     """Run the MCP server over stdio. Eagerly starts the polling listeners
     so inbound messages flow before the host expects them."""
+    # The shared curated-MCP entrypoint configures root INFO logging before
+    # entering here. Protect those handlers before build/start can issue the
+    # first credential-bearing Bot API request.
+    install_telegram_logging_safety()
     manager: TelegramManager | None = None
+    cleanup_manager: TelegramManager | None = None
     service_started = False
     try:
-        manager, _wd = build_manager()
-        # Starts the per-account poll threads and the automatic Task Card
-        # event-tail worker together as one lifecycle.
-        manager.start()
-        service_started = True
-        log.info("Telegram listener running")
-    except Exception as e:
-        log.error(
-            "eager start failed; tool calls will return errors until fixed: %s", e,
-        )
-        manager = None
+        try:
+            manager, _wd = build_manager()
+            cleanup_manager = manager
+            # Starts the per-account poll threads and the automatic Task Card
+            # event-tail worker together as one lifecycle. A start failure can
+            # occur after one listener is already live, so roll back before the
+            # process-wide redaction boundary is ever restored. If rollback is
+            # uncertain, retain the manager for a final lifecycle retry.
+            try:
+                manager.start()
+            except Exception:
+                try:
+                    manager.stop()
+                    cleanup_manager = None
+                except Exception as cleanup_exc:
+                    log.error(
+                        "partial eager-start cleanup incomplete; retained for final retry: %s",
+                        safe_telegram_error(cleanup_exc),
+                    )
+                raise
+            service_started = True
+            cleanup_manager = None
+            log.info("Telegram listener running")
+        except Exception as e:
+            log.error(
+                "eager start failed; tool calls will return errors until fixed: %s",
+                safe_telegram_error(e),
+            )
+            manager = None
 
-    server = build_server(manager)
-    try:
+        server = build_server(manager)
         async with stdio_server() as (read_stream, write_stream):
             await server.run(
                 read_stream,
@@ -812,8 +854,27 @@ async def serve() -> None:
                 server.create_initialization_options(),
             )
     finally:
+        cleanup_proven = True
         if manager is not None and service_started:
             try:
                 manager.stop()
-            except Exception:
-                pass
+            except Exception as cleanup_exc:
+                cleanup_proven = False
+                log.error(
+                    "Telegram lifecycle cleanup incomplete: %s",
+                    safe_telegram_error(cleanup_exc),
+                )
+        if cleanup_manager is not None:
+            try:
+                cleanup_manager.stop()
+            except Exception as cleanup_exc:
+                cleanup_proven = False
+                log.error(
+                    "partial eager-start final cleanup retry incomplete: %s",
+                    safe_telegram_error(cleanup_exc),
+                )
+        # A retained worker may continue logging after serve() unwinds. Never
+        # expose it to unsanitized process handlers; exact restoration is safe only
+        # when every component's cleanup returned successfully.
+        if cleanup_proven:
+            restore_telegram_logging_safety()

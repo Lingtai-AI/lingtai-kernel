@@ -80,6 +80,7 @@ related_files:
   - tests/test_browser_transport.py
   - tests/test_catalog_helpers.py
   - tests/test_chat_interface_invariant.py
+  - tests/test_channel_reply.py
   - tests/test_chat_interface_remove_pair_by_notif_id.py
   - tests/test_check_caps.py
   - tests/test_claude_code_adapter.py

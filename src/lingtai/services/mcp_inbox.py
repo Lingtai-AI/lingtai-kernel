@@ -33,9 +33,12 @@ any MCP that wants to use LICC just needs to read them and write files.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import shutil
+import stat
 import threading
 import time
 from datetime import datetime, timezone
@@ -453,6 +456,164 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_AT_MOST_ONCE_DIRNAME = ".at-most-once"
+_AT_MOST_ONCE_VERSION = 1
+_AT_MOST_ONCE_MAX_CLAIM_BYTES = 4096
+
+
+def _read_at_most_once_claim(path: Path) -> dict:
+    """Read one existing claim without following or accepting shared backing."""
+    fd: int | None = None
+    try:
+        before = path.lstat()
+        if stat.S_ISLNK(before.st_mode):
+            raise ValueError("unsafe_at_most_once_claim")
+        fd = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0),
+        )
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_size <= 0
+            or opened.st_size > _AT_MOST_ONCE_MAX_CLAIM_BYTES
+            or opened.st_dev != before.st_dev
+            or opened.st_ino != before.st_ino
+            or (os.name == "posix" and opened.st_mode & 0o077)
+            or (hasattr(os, "getuid") and opened.st_uid != os.getuid())
+        ):
+            raise ValueError("unsafe_at_most_once_claim")
+        data = bytearray()
+        while len(data) < opened.st_size:
+            chunk = os.read(fd, opened.st_size - len(data))
+            if not chunk:
+                raise ValueError("unsafe_at_most_once_claim")
+            data.extend(chunk)
+        after = os.fstat(fd)
+        canonical = path.lstat()
+        if (
+            after.st_dev != opened.st_dev
+            or after.st_ino != opened.st_ino
+            or after.st_size != opened.st_size
+            or canonical.st_dev != opened.st_dev
+            or canonical.st_ino != opened.st_ino
+            or canonical.st_nlink != 1
+            or not stat.S_ISREG(canonical.st_mode)
+        ):
+            raise ValueError("unsafe_at_most_once_claim")
+        try:
+            decoded = bytes(data).decode("utf-8")
+            value = json.loads(decoded)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("at_most_once_claim_conflict") from exc
+        return value
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError("unsafe_at_most_once_claim") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _fsync_directory(path: Path) -> None:
+    fd = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _claim_at_most_once_event(entry: Path, mcp_dir: Path, event: dict) -> str:
+    """Return ordinary, claimed, or duplicate for opt-in at-most-once events.
+
+    The durable claim is intentionally installed before agent-side dispatch.
+    A crash can therefore lose one opted-in event, but it cannot produce a
+    duplicate target task. Ordinary LICC events retain their existing behavior.
+    """
+    metadata = event.get("metadata")
+    if not isinstance(metadata, dict) or metadata.get("delivery_semantics") != "at-most-once/v1":
+        return "ordinary"
+    delivery_id = metadata.get("delivery_id")
+    if (
+        not isinstance(delivery_id, str)
+        or not delivery_id
+        or len(delivery_id) > 128
+        or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in delivery_id)
+        or entry.name != f"as-{delivery_id}.json"
+    ):
+        raise ValueError("invalid_at_most_once_identity")
+    entry_st = entry.lstat()
+    if stat.S_ISLNK(entry_st.st_mode) or not stat.S_ISREG(entry_st.st_mode) or entry_st.st_nlink != 1:
+        raise ValueError("unsafe_at_most_once_event")
+    digest = hashlib.sha256(
+        json.dumps(
+            event,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    claim_dir = mcp_dir / _AT_MOST_ONCE_DIRNAME
+    claim_dir.mkdir(mode=0o700, exist_ok=True)
+    claim_st = claim_dir.lstat()
+    if stat.S_ISLNK(claim_st.st_mode) or not stat.S_ISDIR(claim_st.st_mode):
+        raise ValueError("unsafe_at_most_once_claim_directory")
+    os.chmod(claim_dir, 0o700)
+    claim_path = claim_dir / f"{delivery_id}.json"
+    claim = {
+        "version": _AT_MOST_ONCE_VERSION,
+        "delivery_id": delivery_id,
+        "event_digest": digest,
+        "claimed_at": _now_iso(),
+    }
+    data = json.dumps(claim, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    fd: int | None = None
+    try:
+        try:
+            fd = os.open(
+                claim_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+        except FileExistsError:
+            existing = _read_at_most_once_claim(claim_path)
+            if (
+                not isinstance(existing, dict)
+                or set(existing) != {"version", "delivery_id", "event_digest", "claimed_at"}
+                or existing.get("version") != _AT_MOST_ONCE_VERSION
+                or existing.get("delivery_id") != delivery_id
+                or existing.get("event_digest") != digest
+                or _parse_received_at_ts(existing.get("claimed_at")) is None
+            ):
+                raise ValueError("at_most_once_claim_conflict")
+            return "duplicate"
+        offset = 0
+        while offset < len(data):
+            written = os.write(fd, data[offset:])
+            if written <= 0:
+                raise OSError("short_at_most_once_claim_write")
+            offset += written
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        _fsync_directory(claim_dir)
+        return "claimed"
+    except Exception:
+        if fd is not None:
+            os.close(fd)
+            try:
+                claim_path.unlink()
+                _fsync_directory(claim_dir)
+            except OSError:
+                pass
+        raise
+
+
 def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
     """One sweep through .mcp_inbox/<mcp_name>/*.json. Returns count dispatched.
 
@@ -511,6 +672,22 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
             ok, err = validate_event(event)
             if not ok:
                 _dead_letter(entry, f"validation failed: {err}")
+                continue
+
+            try:
+                claim_state = _claim_at_most_once_event(entry, mcp_dir, event)
+            except Exception as e:
+                _dead_letter(entry, f"at-most-once claim failed: {e}")
+                continue
+            if claim_state == "duplicate":
+                try:
+                    entry.unlink()
+                except OSError as e:
+                    log.warning(
+                        "mcp_inbox: duplicate at-most-once event retained %s: %s",
+                        entry,
+                        e,
+                    )
                 continue
 
             # Consume (log per-event + collect wake intent + preview) and delete on success.

@@ -63,6 +63,7 @@ def test_intrinsics_enabled_by_default(tmp_path):
     assert "context" in agent._intrinsics
     # Notification is an always-on official host plugin, not a direct intrinsic.
     assert "notification" not in agent._intrinsics
+    assert "channel_reply" in agent._intrinsics
     # File I/O is now a capability, not intrinsic
     assert "read" not in agent._intrinsics
     assert "write" not in agent._intrinsics
@@ -72,7 +73,7 @@ def test_intrinsics_enabled_by_default(tmp_path):
     assert "psyche" in agent._intrinsics
     assert "pad" not in agent._intrinsics
     assert "lingtai" not in agent._intrinsics
-    assert len(agent._intrinsics) == 5  # email, system, context, psyche, soul
+    assert len(agent._intrinsics) == 6  # email, system, context, psyche, soul, channel_reply
 
 
 # ---------------------------------------------------------------------------
@@ -846,3 +847,120 @@ def test_base_agent_has_no_non_kernel_imports():
                         assert not _matches_non_kernel(node.module, nk), (
                             f"{source_path.name} imports from non-kernel: {node.module}"
                         )
+
+
+def _real_lease_agent_kwargs(workdir, name):
+    from lingtai.adapters.workdir_lease import select_workdir_lease
+
+    return {
+        "service": make_mock_service(),
+        "agent_name": name,
+        "working_dir": workdir,
+        "workdir_lease": select_workdir_lease(workdir),
+        "agent_presence": make_test_presence_store(),
+        "snapshot_port": make_test_snapshot_port(),
+        "lifecycle_clock": make_test_lifecycle_clock(),
+        "source_revision_port": make_test_source_revision_port(),
+        "notification_store": notification_store_for(workdir),
+    }
+
+
+@pytest.mark.parametrize("failure_site", ["selector", "port", "manifest"])
+def test_agent_channel_reply_post_baseagent_failure_releases_real_workdir_lease(
+    tmp_path, monkeypatch, failure_site
+):
+    """Every post-Core failure preserves its error and permits immediate reacquisition."""
+    import lingtai.adapters.channel_reply_state_lock as lock_module
+    import lingtai.kernel.channel_reply as channel_reply_module
+
+    workdir = tmp_path / f"rollback-{failure_site}"
+    manifest_build_stages: list[str] = []
+    if failure_site == "selector":
+        expected = "selector exploded"
+
+        def fail_selector():
+            raise RuntimeError(expected)
+
+        monkeypatch.setattr(lock_module, "select_channel_reply_state_lock", fail_selector)
+    elif failure_site == "port":
+        expected = "target port exploded"
+        monkeypatch.setattr(
+            lock_module,
+            "select_channel_reply_state_lock",
+            lambda: object(),
+        )
+
+        class FailingTargetPort:
+            def __init__(self, *args, **kwargs):
+                raise RuntimeError(expected)
+
+        monkeypatch.setattr(
+            channel_reply_module,
+            "ChannelReplyTargetFileSubmitPort",
+            FailingTargetPort,
+        )
+    else:
+        expected = "final manifest exploded"
+        original_build_manifest = Agent._build_manifest
+
+        def fail_final_manifest(self):
+            stage = "final" if hasattr(self, "_preset_loader") else "base"
+            manifest_build_stages.append(stage)
+            if stage == "final":
+                raise RuntimeError(expected)
+            return original_build_manifest(self)
+
+        monkeypatch.setattr(Agent, "_build_manifest", fail_final_manifest)
+
+    with pytest.raises(RuntimeError, match=expected):
+        Agent(**_real_lease_agent_kwargs(workdir, "first"))
+
+    if failure_site == "manifest":
+        # BaseAgent writes its manifest through its non-virtual helper. Every
+        # virtual call observed here is therefore the final post-super write
+        # (plus a possible best-effort stop write), never the earlier Core write.
+        assert manifest_build_stages
+        assert set(manifest_build_stages) == {"final"}
+
+    monkeypatch.undo()
+    from lingtai.kernel.channel_reply import ClosedChannelReplySubmitPort
+
+    second = Agent(
+        **_real_lease_agent_kwargs(workdir, "second"),
+        channel_reply_submit_port=ClosedChannelReplySubmitPort(message="test closed"),
+    )
+    second.stop()
+
+
+def test_agent_channel_reply_unsupported_platform_is_closed_and_side_effect_free(
+    tmp_path, monkeypatch
+):
+    from lingtai.adapters.channel_reply_state_lock import UnsupportedChannelReplyPlatform
+    import lingtai.adapters.channel_reply_state_lock as lock_module
+    import lingtai.kernel.channel_reply as channel_reply_module
+    from lingtai.kernel.channel_reply import ClosedChannelReplySubmitPort
+
+    target_port_calls: list[tuple[tuple, dict]] = []
+
+    def unsupported_selector():
+        raise UnsupportedChannelReplyPlatform("synthetic unsupported platform")
+
+    def unexpected_target_port(*args, **kwargs):
+        target_port_calls.append((args, kwargs))
+        raise AssertionError("unsupported platform attempted target-port construction")
+
+    monkeypatch.setattr(lock_module, "select_channel_reply_state_lock", unsupported_selector)
+    monkeypatch.setattr(
+        channel_reply_module,
+        "ChannelReplyTargetFileSubmitPort",
+        unexpected_target_port,
+    )
+
+    workdir = tmp_path / "unsupported-channel-reply"
+    agent = Agent(**_real_lease_agent_kwargs(workdir, "unsupported"))
+    try:
+        assert isinstance(agent._channel_reply_submit_port, ClosedChannelReplySubmitPort)
+        assert agent._channel_reply_submit_port._message == "synthetic unsupported platform"
+        assert target_port_calls == []
+    finally:
+        agent.stop()

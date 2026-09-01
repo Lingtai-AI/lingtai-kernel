@@ -45,17 +45,22 @@ recursive-include src/lingtai/prompts *.yaml
 # glob so source releases carry the same localized strings.
 recursive-include src/lingtai/kernel/i18n *.json
 
+# Curated Telegram operator/reference documentation is runtime package data and
+# must also remain present in source distributions.
+include src/lingtai/mcp_servers/telegram/SKILL.md
+recursive-include src/lingtai/mcp_servers/telegram/reference *
+
 # Consolidated tool packages ship data assets (i18n catalogs, per-tool JSON
 # policy/data files, and manual trees). pyproject.toml owns the wheel
 # package-data globs; mirror them here so source releases carry the same tool
-# assets for 19 glossary packages. ``graft`` pulls the manual trees (arbitrary file types) wholesale.
+# assets for 22 glossary packages. ``graft`` pulls the manual trees (arbitrary file types) wholesale.
 recursive-include src/lingtai/tools *.json
 # Per-tool contracts (src/lingtai/tools/<tool>/CONTRACT.md) — mirror the
 # package-data glob in pyproject.toml so source releases carry the same tool
 # contracts.
 recursive-include src/lingtai/tools CONTRACT.md
 # Per-tool glossary resources — mirror the package-data globs in
-# pyproject.toml so source releases carry the 57 files (exact filenames,
+# pyproject.toml so source releases carry the 66 files (exact filenames,
 # not a wildcard, to prevent accidental inclusion of extra files).
 recursive-include src/lingtai/tools glossary-en.md
 recursive-include src/lingtai/tools glossary-zh.md
@@ -67,6 +72,7 @@ graft src/lingtai/tools/system/manual
 graft src/lingtai/tools/psyche/manual
 graft src/lingtai/tools/soul/manual
 graft src/lingtai/tools/notification/manual
+graft src/lingtai/tools/channel_reply/manual
 graft src/lingtai/tools/knowledge/manual
 graft src/lingtai/tools/skills/manual
 graft src/lingtai/tools/bash/manual

@@ -15,6 +15,8 @@ related_files:
   - src/lingtai/kernel/refresh_watcher/ANATOMY.md
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
   - src/lingtai/kernel/base_agent/__init__.py
+  - src/lingtai/tools/channel_reply/ANATOMY.md
+  - src/lingtai/tools/channel_reply/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
   - src/lingtai/kernel/base_agent/identity.py
   - src/lingtai/kernel/base_agent/lifecycle.py
@@ -67,7 +69,7 @@ maintenance: |
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.
 
-Generic agent kernel. Single class `BaseAgent` with methods distributed across 6 helper modules. `__init__.py` retains the constructor, properties, state machine, and subclass-overridable hooks.
+Generic agent kernel. Single class `BaseAgent` with methods distributed across 6 helper modules. `__init__.py` retains the constructor, properties, state machine, and subclass-overridable hooks. `channel_reply_submit_port` is a separate optional capability Port stored as `_channel_reply_submit_port`; absent on a raw `BaseAgent` means the static intrinsic is closed. The outer `lingtai.Agent` composes the inert target-file implementation only when its final intrinsic set contains `channel_reply` and the exact runtime is Darwin/macOS; unsupported platforms receive a reason-bearing closed Port and no route marker, while injected functional Ports retain advertisement (see `src/lingtai/tools/channel_reply/CONTRACT.md`). `BaseAgent` stores only those capabilities and performs no concrete adapter construction (`src/lingtai/kernel/base_agent/__init__.py:379-462`).
 
 > **History note:** there used to be a 7th module, `soul_flow.py`. It was deleted in `1acd183` — soul-domain logic moved to `intrinsics/soul/flow.py`, and the wire-splice logic that lived in it became `tc_inbox.TCInbox.drain_into()`. Mention preserved here only because old patches/discussions reference it.
 

@@ -13,7 +13,9 @@ path so we don't depend on timing.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,6 +24,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
+from lingtai.services import mcp_inbox as inbox_mod
 from lingtai.services.mcp_inbox import (
     DEAD_DIRNAME,
     INBOX_DIRNAME,
@@ -595,3 +598,182 @@ def test_poller_stop_idempotent(tmp_path):
     poller.start()
     poller.stop()
     poller.stop()  # second stop must not raise
+
+
+# ---------------------------------------------------------------------------
+# Opt-in target-routing at-most-once delivery
+# ---------------------------------------------------------------------------
+
+
+def _at_most_once_event(delivery_id: str, body: str = "hello") -> dict:
+    return {
+        "licc_version": 1,
+        "from": "telegram/main",
+        "subject": "routed",
+        "body": body,
+        "metadata": {
+            "delivery_semantics": "at-most-once/v1",
+            "delivery_id": delivery_id,
+        },
+        "wake": True,
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _patch_scan_dispatch(monkeypatch):
+    consumed: list[dict] = []
+
+    def consume(_agent, _mcp_name, event, **_kwargs):
+        consumed.append(event)
+        return True, {"from": event["from"], "subject": event["subject"], "preview": event["body"]}
+
+    monkeypatch.setattr(inbox_mod, "_consume_event", consume)
+    monkeypatch.setattr(inbox_mod, "_dispatch_summary", lambda *_args, **_kwargs: None)
+    return consumed
+
+
+def test_at_most_once_claim_precedes_consume_and_unlink_failure_never_redelivers(tmp_path, monkeypatch):
+    agent, workdir = _mk_agent(tmp_path)
+    delivery_id = "route-1"
+    entry = _write_event(
+        workdir,
+        "telegram-agent-switching",
+        "as-" + delivery_id,
+        _at_most_once_event(delivery_id),
+    )
+    consumed = _patch_scan_dispatch(monkeypatch)
+    real_unlink = Path.unlink
+    failed_once = {"value": False}
+
+    def fail_event_unlink_once(path: Path, *args, **kwargs):
+        if path == entry and not failed_once["value"]:
+            failed_once["value"] = True
+            raise OSError("simulated unlink failure")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_event_unlink_once)
+    inbox_root = workdir / INBOX_DIRNAME
+    assert _scan_once(agent, inbox_root) == 1
+    assert entry.is_file()
+    assert len(consumed) == 1
+    claim = entry.parent / ".at-most-once" / f"{delivery_id}.json"
+    assert claim.is_file()
+
+    assert _scan_once(agent, inbox_root) == 0
+    assert not entry.exists()
+    assert len(consumed) == 1
+
+
+def test_ordinary_event_behavior_is_unchanged_and_can_reconsume_after_unlink_failure(tmp_path, monkeypatch):
+    agent, workdir = _mk_agent(tmp_path)
+    entry = _write_event(
+        workdir,
+        "ordinary",
+        "event-1",
+        {"from": "alice", "subject": "ordinary", "body": "body"},
+    )
+    consumed = _patch_scan_dispatch(monkeypatch)
+    real_unlink = Path.unlink
+    failed_once = {"value": False}
+
+    def fail_event_unlink_once(path: Path, *args, **kwargs):
+        if path == entry and not failed_once["value"]:
+            failed_once["value"] = True
+            raise OSError("simulated unlink failure")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_event_unlink_once)
+    inbox_root = workdir / INBOX_DIRNAME
+    assert _scan_once(agent, inbox_root) == 1
+    assert _scan_once(agent, inbox_root) == 1
+    assert len(consumed) == 2
+
+
+def test_at_most_once_conflicting_claim_dead_letters_without_consume(tmp_path, monkeypatch):
+    agent, workdir = _mk_agent(tmp_path)
+    delivery_id = "route-conflict"
+    entry = _write_event(
+        workdir,
+        "telegram-agent-switching",
+        "as-" + delivery_id,
+        _at_most_once_event(delivery_id),
+    )
+    claim_dir = entry.parent / ".at-most-once"
+    claim_dir.mkdir()
+    claim_path = claim_dir / f"{delivery_id}.json"
+    claim_path.write_text(
+        json.dumps({
+            "version": 1,
+            "delivery_id": delivery_id,
+            "event_digest": "0" * 64,
+            "claimed_at": datetime.now(timezone.utc).isoformat(),
+        }),
+        encoding="utf-8",
+    )
+    claim_path.chmod(0o600)
+    consumed = _patch_scan_dispatch(monkeypatch)
+
+    assert _scan_once(agent, workdir / INBOX_DIRNAME) == 0
+    assert consumed == []
+    dead = entry.parent / DEAD_DIRNAME
+    assert (dead / entry.name).is_file()
+    error = json.loads((dead / f"{entry.stem}.error.json").read_text())
+    assert "at_most_once_claim_conflict" in error["error"]
+
+
+@pytest.mark.parametrize("shape", ["symlink", "hardlink"])
+def test_at_most_once_existing_claim_rejects_unsafe_backing_without_following_it(tmp_path, monkeypatch, shape):
+    agent, workdir = _mk_agent(tmp_path)
+    delivery_id = f"route-{shape}"
+    event = _at_most_once_event(delivery_id)
+    entry = _write_event(
+        workdir,
+        "telegram-agent-switching",
+        "as-" + delivery_id,
+        event,
+    )
+    digest = hashlib.sha256(
+        json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    claim = {
+        "version": 1,
+        "delivery_id": delivery_id,
+        "event_digest": digest,
+        "claimed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    outside = tmp_path / f"outside-{shape}.json"
+    outside_bytes = json.dumps(claim).encode("utf-8")
+    outside.write_bytes(outside_bytes)
+    claim_dir = entry.parent / ".at-most-once"
+    claim_dir.mkdir()
+    claim_path = claim_dir / f"{delivery_id}.json"
+    if shape == "symlink":
+        claim_path.symlink_to(outside)
+    else:
+        os.link(outside, claim_path)
+    consumed = _patch_scan_dispatch(monkeypatch)
+
+    assert _scan_once(agent, workdir / INBOX_DIRNAME) == 0
+    assert consumed == []
+    assert outside.read_bytes() == outside_bytes
+    dead = entry.parent / DEAD_DIRNAME
+    assert (dead / entry.name).is_file()
+    error = json.loads((dead / f"{entry.stem}.error.json").read_text())
+    assert "unsafe_at_most_once_claim" in error["error"]
+
+
+def test_at_most_once_invalid_filename_identity_is_dead_lettered(tmp_path, monkeypatch):
+    agent, workdir = _mk_agent(tmp_path)
+    entry = _write_event(
+        workdir,
+        "telegram-agent-switching",
+        "wrong-name",
+        _at_most_once_event("route-name"),
+    )
+    consumed = _patch_scan_dispatch(monkeypatch)
+    assert _scan_once(agent, workdir / INBOX_DIRNAME) == 0
+    assert consumed == []
+    error = json.loads(
+        (entry.parent / DEAD_DIRNAME / f"{entry.stem}.error.json").read_text()
+    )
+    assert "invalid_at_most_once_identity" in error["error"]

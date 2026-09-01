@@ -15,7 +15,7 @@ Import discipline: capability modules are resolved with ``importlib`` *inside*
 :func:`setup_capability` / :func:`get_all_providers`, never at module top, so
 ``import lingtai.tools.registry`` does not eagerly import every tool (and, for the two
 capability tools that lazily import ``lingtai`` services, does not pull
-``lingtai``). The six intrinsic modules ARE imported statically below because
+``lingtai``). The intrinsic modules ARE imported statically below because
 they are mandatory and cheap; they live under ``lingtai.tools`` and import only
 ``lingtai.kernel``.
 """
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 # ``handle(agent, args)``, and optionally ``boot(agent)``. ``BaseAgent`` iterates
 # this mapping in ``_wire_intrinsics``; membership here is the mandatory-include
 # mechanism (there is no manifest gate for intrinsics).
-from . import email, system, context, soul  # noqa: E402  (lingtai.tools.<pkg>)
+from . import channel_reply, email, system, context, soul  # noqa: E402  (lingtai.tools.<pkg>)
 # ``psyche`` is the single model-visible root for the four durable domains:
 # ``pad + lingtai + knowledge + skills = psyche``. It replaced the four former
 # public roots as a clean break: those tool names are unknown and fail loudly,
@@ -72,6 +72,7 @@ from . import email, system, context, soul  # noqa: E402  (lingtai.tools.<pkg>)
 from . import psyche  # noqa: E402  (lingtai.tools.psyche)
 
 INTRINSICS: dict[str, dict[str, Any]] = {
+    "channel_reply": {"module": channel_reply},
     "email": {"module": email, "official_plugin": True},
     "system": {"module": system, "official_plugin": True},
     "context": {"module": context, "official_plugin": True},
