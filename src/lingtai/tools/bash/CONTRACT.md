@@ -2,6 +2,7 @@
 name: bash-contract
 tool: shell
 contract_version: 7
+root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/bash/__init__.py
   - src/lingtai/kernel/execution_workspace.py

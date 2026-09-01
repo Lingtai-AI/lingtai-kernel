@@ -14,6 +14,7 @@ related_files:
   - src/lingtai/kernel/lifecycle_clock/CONTRACT.md
   - src/lingtai/kernel/project/CONTRACT.md
   - src/lingtai/kernel/refresh_watcher/CONTRACT.md
+  - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md

@@ -5,6 +5,7 @@ root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/BEHAVIORS.md
   - src/lingtai/tools/registry.py
   - src/lingtai/kernel/base_agent/tools.py
