@@ -51,7 +51,9 @@ class TestBashAsync:
             lambda state: state.pop("invocation"),
             lambda state: state.update({"invocation": {"script": 42}}),
             lambda state: state.update({
-                "invocation": {**state["invocation"], "argv": ["-Command"]},
+                "invocation": {
+                    **state["invocation"], "executable": None, "argv": ["-Command"],
+                },
             }),
             lambda state: state.update({
                 "invocation": {**state["invocation"], "unknown": True},
