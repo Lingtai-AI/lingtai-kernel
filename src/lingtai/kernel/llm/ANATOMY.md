@@ -7,7 +7,6 @@ related_files:
   - src/lingtai/kernel/llm/base.py
   - src/lingtai/kernel/llm/reasoning_effort.py
   - src/lingtai/kernel/llm/interface.py
-  - src/lingtai/kernel/llm/reasoning_effort.py
   - src/lingtai/kernel/llm/service.py
   - src/lingtai/kernel/llm/streaming.py
   - tests/test_llm_service.py
