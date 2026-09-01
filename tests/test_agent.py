@@ -61,7 +61,8 @@ def test_intrinsics_enabled_by_default(tmp_path):
     assert "email" in agent._intrinsics
     assert "system" in agent._intrinsics
     assert "context" in agent._intrinsics
-    assert "notification" in agent._intrinsics
+    # Notification is an always-on official host plugin, not a direct intrinsic.
+    assert "notification" not in agent._intrinsics
     # File I/O is now a capability, not intrinsic
     assert "read" not in agent._intrinsics
     assert "write" not in agent._intrinsics
@@ -71,7 +72,7 @@ def test_intrinsics_enabled_by_default(tmp_path):
     assert "psyche" in agent._intrinsics
     assert "pad" not in agent._intrinsics
     assert "lingtai" not in agent._intrinsics
-    assert len(agent._intrinsics) == 6  # email, system, context, psyche, soul, notification
+    assert len(agent._intrinsics) == 5  # email, system, context, psyche, soul
 
 
 # ---------------------------------------------------------------------------
