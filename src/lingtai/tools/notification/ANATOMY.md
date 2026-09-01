@@ -22,6 +22,9 @@ related_files:
   - tests/test_notification_tool.py
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_sync.py
+  - src/lingtai/tools/notification/glossary-en.md
+  - src/lingtai/tools/notification/glossary-wen.md
+  - src/lingtai/tools/notification/glossary-zh.md
 maintenance: |
   Notification is an official declared host-plugin slice. Keep this Anatomy
   reciprocal with CONTRACT.md and BEHAVIORS.md and update the kernel Port,

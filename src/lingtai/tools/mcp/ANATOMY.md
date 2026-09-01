@@ -34,6 +34,10 @@ related_files:
   - src/lingtai/tools/mcp/skills/mcp-manual/scripts/find_readme.py
   - src/lingtai/tools/mcp/manual/scripts/find_readme.py
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/mcp/manual/reference/curated-addons.md
+  - src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md
+  - src/lingtai/tools/mcp/manual/reference/troubleshooting.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

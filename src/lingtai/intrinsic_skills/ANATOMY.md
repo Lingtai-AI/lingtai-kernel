@@ -37,6 +37,8 @@ related_files:
   - tests/test_intrinsic_manual_actions.py
   - tests/test_lingtai_doctor.py
   - tests/test_override_intrinsic.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/scripts/external_attach_diagnostic.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   This package is a bundle of shipped documentation, not a code layer, so it

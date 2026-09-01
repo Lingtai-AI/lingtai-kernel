@@ -466,6 +466,15 @@ related_files:
   - tests/unit/__init__.py
   - tests/unit/auth/__init__.py
   - tests/unit/auth/test_codex_auth.py
+  - tests/_tool_plugin_helpers.py
+  - tests/test_cli_liveness.py
+  - tests/test_daemon_notification_channel.py
+  - tests/test_daemon_task_files.py
+  - tests/test_driver_authority_adapter.py
+  - tests/test_external_attach_diagnostic.py
+  - tests/test_feishu_settings.py
+  - tests/test_platform_workflow_release_gating.py
+  - tests/test_system_runtime_policy.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   This is a navigation-only inventory anatomy: tests/ is a validation surface,

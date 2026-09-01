@@ -148,6 +148,10 @@ related_files:
   - src/lingtai/mcp_servers/whatsapp/redaction.py
   - src/lingtai/mcp_servers/whatsapp/resources.py
   - src/lingtai/mcp_servers/whatsapp/server.py
+  - src/lingtai/mcp_servers/cloud_mail/plugin.py
+  - src/lingtai/mcp_servers/feishu/settings.py
+  - src/lingtai/mcp_servers/wechat/settings.py
+  - src/lingtai/mcp_servers/whatsapp/settings.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
