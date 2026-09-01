@@ -1,16 +1,20 @@
 ---
 name: context-manual
 description: |
-  Router and operational guide for the context tool: molt, summarize/rebuild, session journaling, and post-wipe recovery. Read it when molting, compacting or rebuilding provider context, tending the four durable stores, or waking from a system-performed wipe. Routes consequential handoffs to assets/molt-template.md and the summarize/rebuild procedure to reference/summarize-manual.
-version: 2.1.1
-last_changed_at: "2026-08-29T00:00:00Z"
+description: |
+  Router and operational guide for the context tool: molt, summarize/rebuild, settings inventory, session journaling, and post-wipe recovery. Read it when molting, compacting or rebuilding provider context, inspecting context policy, tending the four durable stores, or waking from a system-performed wipe. Routes consequential handoffs to assets/molt-template.md and the summarize/rebuild procedure to reference/summarize-manual.
+version: 2.2.0
+last_changed_at: "2026-08-30"
 related_files:
 - src/lingtai/tools/context/__init__.py
 - src/lingtai/tools/context/_molt.py
 - src/lingtai/tools/context/_session_journal.py
+- src/lingtai/tools/context/settings.py
 - src/lingtai/tools/system/summarize.py
 - src/lingtai/agent.py
 - src/lingtai/tools/psyche/CONTRACT.md
+- ENVIRONMENT_VARIABLES.md
+- tests/test_context_settings.py
 maintenance: |
   This package is the canonical Context manual source and runtime-installed owner.
   Update it when the tool/capability behavior changes.
@@ -18,7 +22,10 @@ maintenance: |
 
 # Context Manual
 
-This manual is the router for `context` operations — `molt`, `summarize`, and `rebuild`. Keep routine guidance here; load the supporting asset or reference only when you need the full scaffold or the detailed summarize/rebuild procedure.
+This manual is the router for `context` operations — `molt`, `summarize`,
+`rebuild`, and settings inventory. Keep routine guidance here; load the
+supporting asset or reference only when you need the full scaffold or the
+detailed summarize/rebuild procedure.
 
 ## Reference catalog
 
@@ -31,6 +38,120 @@ This manual is the router for `context` operations — `molt`, `summarize`, and 
 `context(action="rebuild", ...)` is the **one active full reconstruction operation**: recompose every canonical prompt source → apply pending summaries → provider replay. The tool description and the `rebuild` schema carry the exact contract, including that bare `{}` is valid.
 
 The fact that is only here: **generic durable mutations do not hot-load.** Write with `file.write`/`file.edit`, then rebuild when the change must apply now — that is the only mutation path for all four durable stores (no per-store append, info, or reload action). Passive refresh and molt invoke the same internal reconstruction contract with their own lifecycle effects. Do not loop rebuild.
+
+## Settings inventory
+
+Call `context(action="settings", input={}, reasoning="inspect Context policy")`
+to perform the read-only SHOW. Its input is exactly `{}` and each success row is
+exactly `key`, `current`, `default`, `configurable`, and `comment`. There is no
+set/reset/mutation form. `configurable: true` means an authorized procedure
+below exists outside this action; use a second SHOW to verify its effect. A
+failed or malformed current-value read fails the complete action instead of
+returning partial or unavailable rows.
+
+These seven scalars are not sensitive, so their values are not redacted.
+Session-journal paths, summaries, histories, prompt text, provider identity,
+credentials, accepted values, source, precedence, and procedures are never
+projected. The sections named by `comment` own those details.
+
+## Context limit
+
+- **Meaning and accepted values:** the effective main-session context-token
+  ceiling. `manifest.context_limit` accepts a positive integer; null or omission
+  selects the active provider/model window. The projected meaningful fallback
+  default is `272000`.
+- **Source and precedence:** a non-null effective `AgentConfig.context_limit`
+  wins; otherwise SHOW reads the live chat/provider context window.
+- **Canonical key and timing:** live-agent `init.json` uses
+  `manifest.context_limit`; a preset source uses
+  `manifest.llm.context_limit` and materializes it for activation. A change
+  applies on System refresh (or normal relaunch), not inside SHOW.
+- **Authorization and procedure:** this is a public scalar but configuration
+  editing is operator/owner work. Use the existing File or Shell procedure to
+  edit the authorized `init.json` or preset, validate the document, then call
+  `system(action="refresh", input={"reason": "apply context limit", "preset":
+  null, "revert_preset": null}, reasoning="apply the authorized change")`.
+  Re-run SHOW and confirm `current`.
+
+## Summarize notification threshold
+
+- **Meaning and accepted values:** character threshold for the large-result
+  summarize hint. It accepts a non-negative integer; `0` disables the hint.
+  The default is `3000`.
+- **Source and precedence:** the effective authored manifest value wins;
+  missing or invalid resolved input uses `3000`.
+- **Canonical key and timing:** `manifest.summarize_notification_threshold` in
+  the live `init.json` (or the corresponding manifest in an authorized preset),
+  applied by System refresh or relaunch.
+- **Authorization and procedure:** this public scalar is owner-configurable.
+  Edit the authorized manifest with the existing File or Shell procedure,
+  validate it, perform the same System refresh call shown under
+  [Context limit](#context-limit), then verify `current` with a second SHOW.
+
+## System prompt pressure ratio
+
+- **Meaning and accepted values:** advisory ratio at which rendered system
+  prompt size is reported as pressure. It accepts a finite float strictly
+  greater than `0` and less than `1`; the default is `0.4`.
+- **Source and precedence:** a valid live process value wins; missing, blank,
+  non-numeric, non-finite, non-positive, or `>=1` values fall back to `0.4`.
+- **Canonical key and timing:** environment variable
+  `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO`, read for every main-agent and daemon
+  metadata snapshot. SHOW never writes `os.environ`.
+- **Authorization and procedure:** this public scalar is launcher/operator
+  configurable. Set it in the authorized launcher environment, or edit the
+  workdir environment file selected by `manifest.env_file` and run the System
+  refresh procedure so that file is reloaded. A direct launcher change requires
+  relaunch. Verify the effective `current` with a second SHOW.
+
+## Pressure high ratio
+
+- **Meaning and accepted values:** inclusive sustained-high context-pressure
+  boundary. Its only accepted runtime value and default are the kernel constant
+  `0.85`.
+- **Source, key, and timing:** kernel source is authoritative; there is no
+  environment or config key. A different code release would load on full
+  relaunch.
+- **Authorization and procedure:** the scalar is public but
+  `configurable: false`; there is no owner setting procedure. Changing kernel
+  source/release policy is product development, not a SHOW mutation path.
+
+## Forced rebuild ratio
+
+- **Meaning and accepted values:** inclusive hard boundary for one forced
+  provider-context rebuild per continuous overflow episode. Its only accepted
+  runtime value and default are the kernel constant `1.0`.
+- **Source, key, and timing:** kernel source is authoritative; there is no
+  environment or config key. A different code release would load on full
+  relaunch.
+- **Authorization and procedure:** the scalar is public but
+  `configurable: false`; no owner setting procedure exists.
+
+## Pressure warn after rounds
+
+- **Meaning and accepted values:** consecutive fresh high-context rounds before
+  the sustained molt reminder appears. Its only accepted runtime value and
+  default are the kernel integer constant `3`.
+- **Source, key, and timing:** kernel source is authoritative; there is no
+  environment or config key. A different code release would load on full
+  relaunch.
+- **Authorization and procedure:** the scalar is public but
+  `configurable: false`; no owner setting procedure exists.
+
+## Recovery target ratio
+
+- **Meaning and accepted values:** target below which summarize/rebuild counts
+  as recovery from context pressure. Its only accepted runtime value and default
+  are the kernel constant `0.75`.
+- **Source, key, and timing:** kernel source is authoritative; there is no
+  environment or config key. A different code release would load on full
+  relaunch.
+- **Authorization and procedure:** the scalar is public but
+  `configurable: false`; no owner setting procedure exists.
+
+Legacy `manifest.molt_notice`, `molt_pressure`, `molt_urgency`, and
+`molt_prompt` remain recognized-and-ignored compatibility input. They are not
+settings aliases or hidden ways to change these policies.
 
 ## Asset catalog
 
@@ -128,8 +249,8 @@ context(
 ```
 
 Every `context` call uses this one envelope: a single `action`, that action's
-own strict `input` object, and a root `reasoning`. The four actions are `molt`,
-`summarize`, `rebuild`, and `manual`. Leave the root `summarize` **boolean**
+own strict `input` object, and a root `reasoning`. The five actions are `molt`,
+`summarize`, `rebuild`, `settings`, and `manual`. Leave the root `summarize` **boolean**
 false: `context` results are small (short-result profile), and summarizing a
 `manual` call would drop the exact procedure you called it for.
 

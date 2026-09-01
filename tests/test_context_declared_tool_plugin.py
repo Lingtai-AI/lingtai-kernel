@@ -56,7 +56,10 @@ def test_unallowlisted_same_name_manual_collision_fails_loudly(tmp_path, monkeyp
 def test_context_declaration_is_static_and_derives_its_public_surface():
     assert DECLARATION.name == "context"
     assert DECLARATION.actions == ("molt", "summarize", "rebuild")
-    assert DECLARATION.public_actions == ("molt", "summarize", "rebuild", "manual")
+    assert DECLARATION.public_actions == (
+        "molt", "summarize", "rebuild", "settings", "manual",
+    )
+    assert DECLARATION.settings is True
     assert DECLARATION.requires == ("workdir", "context_runtime")
     assert get_schema()["properties"]["action"]["enum"] == list(DECLARATION.public_actions)
 

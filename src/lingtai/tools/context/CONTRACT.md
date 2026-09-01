@@ -1,12 +1,14 @@
 ---
 name: context-contract
 tool: context
-contract_version: 6
+contract_version: 7
 related_files:
   - src/lingtai/tools/context/BEHAVIORS.md
   - src/lingtai/tools/context/__init__.py
   - src/lingtai/tools/context/_molt.py
   - src/lingtai/tools/context/_session_journal.py
+  - src/lingtai/tools/context/settings.py
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/context/ANATOMY.md
   - src/lingtai/agent.py
   - src/lingtai/kernel/base_agent/prompt.py
@@ -24,12 +26,14 @@ related_files:
   - tests/test_tool_family_context_migration.py
   - tests/test_deep_refresh.py
   - tests/test_context_declared_tool_plugin.py
+  - tests/test_context_settings.py
 maintenance: |
   Keep related paths real and the paired Anatomy reciprocal. Update schemas,
   model prose, manuals, results, lifecycle wiring, private summary engine, and
-  focused evidence together. Version 6 packages the established context-manual with its owner and recuts the
-  unchanged public surface through the declared host-plugin contract;
-  `context_runtime` is the only new host port and delegates existing engines.
+  focused evidence together. Version 7 opts Context into the bounded settings
+  action without changing its lifecycle engines or persistence; version 6
+  packaged the established context-manual with its owner and recut the public
+  surface through the declared host-plugin contract.
 ---
 
 # Context capability contract
@@ -43,12 +47,16 @@ Guarded by: [K003](../../kernel/BEHAVIORS.md#behavior-k003)
 - `molt` — shed conversation history while preserving durable stores;
 - `summarize` — record compact replacements in local runtime history only;
 - `rebuild` — the **one active full context reconstruction operation**;
+- `settings` — show effective Context policy through the read-only five-field
+  projection;
 - `manual` — return `context-manual` without a lifecycle operation.
 
 The implementation is an official declared host plugin: its static
-`DECLARATION` owns the identity, actions, schemas, and `context-manual`; its
-binder receives only `workdir` and `context_runtime`, whose three narrow
-operations delegate the existing live molt/summarize/rebuild engines. The package
+`DECLARATION` owns the identity, actions, settings opt-in, schemas, and
+`context-manual`; its
+binder receives only `workdir` and `context_runtime`; its three narrow lifecycle
+operations delegate the existing live molt/summarize/rebuild engines, and its
+owner adapter supplies the read-only settings provider. The package
 manual under `tools/context/manual/` is the sole canonical source and is installed
 at the longstanding `context-manual` path. Any same-name collision fails loudly.
 No OLD
@@ -76,11 +84,39 @@ Schema and dispatch derive from one child registry.
 | `molt` | required `summary`, `session_journal_path`, nullable `keep_tool_calls`, `keep_last` | preserved molt receipt/errors and refusal-before-shed gates |
 | `summarize` | required nonempty `items` | record-only marker/result; no prompt composition or provider rebuild |
 | `rebuild` | optional nullable `items`; bare `{}` is valid | summary-engine rebuild result plus `prompt_reconstructed: true`; LTP-shaped reconstruction/no-session errors |
+| `settings` | strict `{}` | seven ordered rows containing exactly `key`, `current`, `default`, `configurable`, `comment`; one fixed bounded whole-action failure on unavailable/malformed/unserializable provider output |
 | `manual` | strict `{}` | flat manual result |
 
-Unknown actions and branch/root shape errors fail before handler I/O. `_tc_id` is
+`settings` is inserted immediately before `manual` only through the declaration's
+generic opt-in seam. Unknown actions and branch/root shape errors fail before handler I/O. `_tc_id` is
 stripped from the closed root and reaches `molt` only. No retired Pad/LingTai or
 system-summarize spelling is accepted.
+
+## Settings inventory and authority
+
+Guarded by: [T011](../tool_family/BEHAVIORS.md#behavior-t011)
+
+The provider returns exactly these ordered key/comment pairs:
+
+| Key | Exact manual pointer |
+|---|---|
+| `context_limit` | `context-manual#context-limit` |
+| `summarize_notification_threshold` | `context-manual#summarize-notification-threshold` |
+| `system_prompt_pressure_ratio` | `context-manual#system-prompt-pressure-ratio` |
+| `pressure_high_ratio` | `context-manual#pressure-high-ratio` |
+| `forced_rebuild_ratio` | `context-manual#forced-rebuild-ratio` |
+| `pressure_warn_after_rounds` | `context-manual#pressure-warn-after-rounds` |
+| `recovery_target_ratio` | `context-manual#recovery-target-ratio` |
+
+The first three rows are configurable only through the authorized procedures at
+those exact manual targets; the four kernel constants are not configurable. The
+SHOW action itself never writes config, process environment, or runtime state.
+All seven are non-sensitive public scalars; session paths, history, prompt text,
+provider identity, and credentials are absent. A provider raises when either
+live runtime value is unavailable, so no partial or placeholder row is returned.
+The generic action owns the fixed failure and 65,536-byte complete-response
+bound. Accepted values, precedence, canonical keys, apply timing, authorization,
+and change/verification procedures live only in `context-manual`.
 
 ## Full reconstruction ordering
 
@@ -149,10 +185,15 @@ Focused verification:
 ```bash
 python -m pytest -q tests/test_context_ownership_redesign.py \
   tests/test_tool_family_context_migration.py tests/test_deep_refresh.py \
-  tests/test_pad_lingtai_split.py tests/test_context_declared_tool_plugin.py
+  tests/test_pad_lingtai_split.py tests/test_context_declared_tool_plugin.py \
+  tests/test_context_settings.py
 ```
 
 Evidence pins public action sets and strict retirement; file and append no-hot-
 load; bare zero-pending reconstruction; compose-before-summary-before-provider
 ordering (including provider replay observing the new prompt); all canonical
 durable sources; one shared refresh/molt hook; manual strictness; provider-wire parity; and existing molt refusal/lifecycle semantics.
+The settings evidence additionally pins exact five-field rows and manual targets,
+live current/default/configurable values, strict empty input, whole-action
+unavailable-current failure, absence of sensitive material, and ordinary rebuild
+non-regression.

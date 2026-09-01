@@ -226,6 +226,7 @@ def test_context_schema_exposes_the_exact_action_surface():
     assert SCHEMA["properties"]["action"]["enum"] == [
         "molt",
         "summarize", "rebuild",
+        "settings",
         "manual",
     ]
 

@@ -37,7 +37,9 @@ def test_public_action_sets_are_the_locked_inventories():
     assert psyche_tool.ACTION_ORDER == (
         "pad", "lingtai", "knowledge", "skills", "settings", "manual",
     )
-    assert _actions(context_tool) == ["molt", "summarize", "rebuild", "manual"]
+    assert _actions(context_tool) == [
+        "molt", "summarize", "rebuild", "settings", "manual",
+    ]
 
 
 def test_retired_actions_are_rejected_without_aliases(tmp_path):

@@ -17,9 +17,12 @@ related_files:
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/context/__init__.py
   - tests/test_context_declared_tool_plugin.py
+  - tests/test_context_settings.py
   - src/lingtai/tools/context/_molt.py
   - src/lingtai/tools/context/_session_journal.py
   - src/lingtai/tools/context/_snapshots.py
+  - src/lingtai/tools/context/settings.py
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/agent.py
   - src/lingtai/kernel/base_agent/prompt.py
   - src/lingtai/tools/context/glossary-en.md
@@ -35,7 +38,7 @@ maintenance: |
 # tools/context
 
 Context lifecycle family with exact public actions
-`molt | summarize | rebuild | manual`. `rebuild` is the sole active full
+`molt | summarize | rebuild | settings | manual`. `rebuild` is the sole active full
 reconstruction operation; refresh and molt invoke the same internal contract as
 passive lifecycle scenarios.
 
@@ -43,7 +46,8 @@ passive lifecycle scenarios.
 
 - `__init__.py`
   - module-level `DECLARATION` owns Context identity, ordered operational
-    actions, strict schemas, and the packaged `context-manual`;
+    actions, the settings opt-in, strict schemas, and the packaged
+    `context-manual`;
   - `_bind(host)` composes the public family from only `host.workdir` and
     `host.context_runtime`; `setup`/`boot` supply the registrar wiring while
     `handle` is direct-caller compatibility only;
@@ -54,7 +58,8 @@ passive lifecycle scenarios.
     private summary engine, handles reconstruction failures as result dicts, and
     marks successful engine results `prompt_reconstructed: true`;
   - `_CHILD_SPECS`, `_build_children`, `_FAMILY`, `get_schema`, `handle` provide
-    single-registry schema/dispatch and isolate `_tc_id` to molt;
+    single-registry schema/dispatch, inject the provider-backed `settings`
+    child, and isolate `_tc_id` to molt;
   - manual adaptation resolves `context-manual` once after dispatch.
 - `../system/summarize.py` — private history-summary engine. It records pending
   marker replacements, marks the applied set done, persists history, and only
@@ -66,6 +71,10 @@ passive lifecycle scenarios.
   post-molt notification publishing.
 - `_session_journal.py` — fail-closed journal-path/frontmatter gate.
 - `_snapshots.py` — atomic pre-molt snapshots and retrospective persistence.
+- `settings.py` — builds the seven-row `SettingsProvider` from two live Context
+  readers, the canonical prompt-pressure resolver, and four kernel constants;
+  its narrow runtime-adapter extension carries that read-only provider beside
+  the three existing lifecycle callbacks (`settings.py:1-131`).
 - `agent.py`
   - `_reload_prompt_sections` is the authoritative all-source composer and
     reuses private `_lingtai_load`/`_pad_load`;
@@ -111,3 +120,12 @@ and current tool/meta sections.
 `summarize` never reconstructs. `rebuild` always composes before history
 mutation and provider request. `molt` retains refusal-before-shed and its distinct
 archive/count/replay effects. No retired root or action is an alias.
+
+Settings inventory is read-only. `manifest.context_limit` and
+`manifest.summarize_notification_threshold` remain authored composition applied
+by refresh; `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` remains a live process input;
+the pressure ladder remains kernel-fixed. The provider owns no persistence or
+process-environment mutation and projects no session-journal/history/prompt
+content.
+Legacy `manifest.molt_notice`, `molt_pressure`, `molt_urgency`, and `molt_prompt`
+remain recognized-and-ignored compatibility input, not adjustable settings.

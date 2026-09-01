@@ -3,8 +3,8 @@ name: environment-variable-registry
 description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
-version: 1.8.0
-last_changed_at: "2026-08-29"
+version: 1.9.0
+last_changed_at: "2026-08-30"
 related_files:
 - ANATOMY.md
 - CONTRACT.md
@@ -31,6 +31,8 @@ related_files:
 - src/lingtai/prompts/ANATOMY.md
 - src/lingtai/services/ANATOMY.md
 - src/lingtai/tools/ANATOMY.md
+- src/lingtai/tools/context/ANATOMY.md
+- src/lingtai/tools/context/CONTRACT.md
 - src/lingtai/tools/bash/ANATOMY.md
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/tools/daemon/CONTRACT.md
@@ -71,7 +73,7 @@ reports, prompts, or this registry.
 | `LINGTAI_ACTIVE_STUCK_THRESHOLD_S` | `600` seconds | Finite numeric seconds; values below `30` clamp to `30` | ACTIVE no-progress watchdog | When the watchdog evaluates a turn | Missing, non-numeric, or non-finite values fall back to `600` | `src/lingtai/kernel/base_agent/lifecycle.py` | Watchdog tuning can affect availability; it grants no capability |
 | `LINGTAI_AGENT_ALIVE_THRESHOLD_SEC` | `10` seconds | Positive finite numeric seconds; shared TUI/Portal/kernel process environment | Heartbeat freshness for non-human agent presence, session status, and peer liveness; it does **not** control the separate ACTIVE-no-progress watchdog | Kernel resolves it when `lingtai.kernel.config` loads (restart/reload the participating process after a change); TUI and Portal resolve it on each liveness check | Missing, blank, non-numeric, non-finite, zero, or negative values fall back to `10` | `src/lingtai/kernel/config.py`, `src/lingtai/kernel/agent_presence/__init__.py` | Availability/liveness tuning only; it grants no authority and does not alter lifecycle state or ACTIVE-stuck semantics |
 | `LINGTAI_TOOL_PROSE_SECTION_ENABLED` | unset and off | `1`/`true`/`yes`/`on` (case-insensitive, surrounding whitespace ignored); anything else, including unset and empty, is off | The resident `## tools` prose walkthrough in every composed system prompt, and the top-level tool description on every provider wire | Every prompt rebuild and every provider payload build; no restart, so an `env_file` flip applies at the next refresh | Unrecognized values are treated as off | `src/lingtai/kernel/config.py`, `src/lingtai/kernel/base_agent/tools.py`, `src/lingtai/kernel/llm/base.py` | Context-size control only; it grants no capability and removes no tool. Off (default): the `## tools` section is not rendered and each tool's full prose rides on its tool-calling schema description. On: the historical two-surface behavior is restored — the section carries the prose and wires carry the `WIRE_TOOL_DESCRIPTION` pointer at it. Nested parameter/property descriptions are never affected in either state |
-| `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` | `0.4` | Finite float strictly greater than `0` and less than `1` | Main-agent and daemon metadata snapshots | Every metadata snapshot through the shared renderer | Missing, blank, non-numeric, non-finite, zero, negative, or `>=1` values fall back to `0.4` | `src/lingtai/kernel/config.py`, `src/lingtai/kernel/meta_block.py` | Advisory metadata only; never authorizes access or exposes prompt text |
+| `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` | `0.4` | Finite float strictly greater than `0` and less than `1` | Main-agent and daemon metadata snapshots | Every metadata snapshot through the shared renderer | Missing, blank, non-numeric, non-finite, zero, negative, or `>=1` values fall back to `0.4` | Runtime parser/consumers: `src/lingtai/kernel/config.py`, `src/lingtai/kernel/meta_block.py`; Context settings provider/manual: `src/lingtai/tools/context/settings.py`, `context-manual#system-prompt-pressure-ratio` | Read-only advisory metadata: Context settings never mutates process environment; the value never authorizes access or exposes prompt text |
 | `LINGTAI_SESSION_STATS_REFRESH_SECONDS` | `5` seconds | Finite positive number of seconds; one process | Agent Record (`system/agent_record.json`) refresh throttle | Each of the three existing `.status.json` write hooks (`_save_chat_history`, the ACTIVE no-progress watchdog, the heartbeat tick); no restart | Missing, blank, non-numeric, non-finite, zero, or negative values fall back to `5` | `src/lingtai/kernel/session_stats/__init__.py` | Refresh-cadence tuning only; never authorizes access or changes what fields are published |
 | `LINGTAI_SESSION_STATS_DAEMON_LIMIT` | `1000` | Positive integer; one Agent Record's daemon aggregation | Bound on how many newest-mtime `<run_dir>/session_stats.json` daemon self-records `kernel.session_stats.aggregate_daemon_records` reads into one Agent Record | Every Agent Record refresh | Missing, blank, non-integer, zero, or negative values fall back to `1000` | `src/lingtai/kernel/session_stats/__init__.py` | Aggregation-scope control only; a daemon whose self-record falls outside the bound is simply excluded from the aggregate, never faked as zero |
 | `LINGTAI_RISKY_ACTION_GATE` | unset and off unless `<workdir>/.security/gate_config.json` exists | `1`/`true`/`yes`/`on` enables the fail-closed gate without an owner document; a present owner document enables it independently | Risky file-write and shell-command authorization gate | Each gate-config load; no restart for direct process-environment changes | Unrecognized environment values are off; a present malformed owner document fails the guarded operation closed | `system` catch-all — `src/lingtai/kernel/risky_action_gate.py` | Authorization boundary; SHOW exposes only the effective enabled boolean and never the allowlists, roots, hosts, scripts, or pending path |

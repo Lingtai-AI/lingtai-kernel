@@ -1,12 +1,13 @@
 """Context intrinsic — the department that owns the agent's context.
 
 An LTP v2 family (``../CONTRACT.md``): one model-facing root ``context`` with
-four fixed canonical action children, each owning its own strict ``input``
+five fixed canonical action children, each owning its own strict ``input``
 object::
 
     molt      -> shed the conversation, keep the durable stores
     summarize -> record compact replacements in runtime history (record-only)
     rebuild   -> recompose the full prompt, apply summaries, replay provider context
+    settings  -> show Context policy through the read-only five-field projection
     manual    -> return the installed context-manual skill
 
 This package replaces the former ``psyche`` family, which mixed two unrelated
@@ -74,6 +75,10 @@ from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 # The summarize/rebuild engine remains private implementation. The official
 # plugin binds only the narrow context-runtime port that invokes it.
 from ..system.summarize import _summarize as _summarize_engine
+from .settings import (
+    ContextRuntimeSettingsAdapter,
+    build_context_settings_provider,
+)
 
 # ---------------------------------------------------------------------------
 # Canonical child input schemas — one strict, closed object per action.
@@ -290,8 +295,8 @@ def _build_family(
 
     ``None`` builds only the import-time schema family. A real host contributes
     two earned capabilities: a read-only workdir for the installed manual and a
-    ContextRuntimePort with exactly ``molt``, ``summarize``, and ``rebuild``.
-    No child closes over, receives, or reaches for the Agent.
+    ContextRuntimePort with ``molt``, ``summarize``, ``rebuild``, and the
+    owner-bound read-only settings provider. No child receives the Agent.
     """
     if host is None:
         def _unused(_input: Mapping[str, Any]) -> dict:
@@ -308,7 +313,7 @@ def _build_family(
             for name, schema, _handler in _CHILD_SPECS
         ]
         children.append(ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"))
-        return ToolFamily(DECLARATION.name, children)
+        return ToolFamily(DECLARATION.name, children, settings_provider=tuple)
 
     runtime = host.context_runtime
     extra = dict(envelope or {})
@@ -339,7 +344,11 @@ def _build_family(
     # The manual reads the installed copy from the workdir port. Its destination
     # is declaration-owned, so package/manual/ and runtime mount cannot drift.
     children.append(build_manual_child(host.workdir, DECLARATION.manual))
-    return ToolFamily(DECLARATION.name, children)
+    return ToolFamily(
+        DECLARATION.name,
+        children,
+        settings_provider=runtime.settings,
+    )
 
 # ---------------------------------------------------------------------------
 # Schema / description
@@ -361,6 +370,8 @@ _ACTION_ENUM_DESCRIPTION = (
     'pending/new summaries, then replay provider context with the new prompt and '
     'history. Bare input is valid even with zero pending summaries. Prefer one '
     'tactical rebuild; do not loop rebuild.\n'
+    'settings: show effective Context limits and pressure policy through the '
+    'read-only five-field projection; procedures live at each comment target.\n'
     'manual: return the installed context-manual skill without performing any '
     'context operation.\n'
     'Your name is not here: use system(action=\'name_set\'|\'name_nickname\').'
@@ -368,7 +379,7 @@ _ACTION_ENUM_DESCRIPTION = (
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Your context: shed it, compact it, rebuild it. One tool, four actions, each with its own strict input object: context(action=..., input={...}, reasoning=\'why\'). molt: 凝蜕 — shed the conversation, keep the durable stores; requires a written session journal. summarize: record compact replacements for bulky prior tool results (records only, does NOT rebuild). rebuild: re-read and recompose every canonical prompt source, then apply pending/new summaries, then replay provider context with the new prompt/history; bare input is valid even with zero pending summaries. manual: return the installed context-manual skill. Your name lives on system(action=\'name_set\'|\'name_nickname\'); your 灵台 and pad are lingtai(...) and pad(...). Note the two levels: the ACTION named summarize is this domain operation, while the optional ROOT summarize boolean is the unrelated result-presentation control — leave it false here (results are small), and call manual with summarize=false so the exact molt procedure is not summarized away.'
+    return 'Your context: shed it, compact it, rebuild it. One tool, five actions, each with its own strict input object: context(action=..., input={...}, reasoning=\'why\'). molt: 凝蜕 — shed the conversation, keep the durable stores; requires a written session journal. summarize: record compact replacements for bulky prior tool results (records only, does NOT rebuild). rebuild: re-read and recompose every canonical prompt source, then apply pending/new summaries, then replay provider context with the new prompt/history; bare input is valid even with zero pending summaries. settings: show effective Context limits and pressure policies through a read-only five-field projection whose comment targets teach real change procedures. manual: return the installed context-manual skill. Your name lives on system(action=\'name_set\'|\'name_nickname\'); your 灵台 and pad are lingtai(...) and pad(...). Note the two levels: the ACTION named summarize is this domain operation, while the optional ROOT summarize boolean is the unrelated result-presentation control — leave it false here (results are small), and call manual with summarize=false so the exact molt procedure is not summarized away.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -451,6 +462,7 @@ DECLARATION = ToolPluginDeclaration(
     binder=_bind,
     requires=("workdir", "context_runtime"),
     glossary_package=__package__,
+    settings=True,
 )
 
 #: Import-time schema-only composition catches a bad child registry before any
@@ -458,7 +470,7 @@ DECLARATION = ToolPluginDeclaration(
 #: every official bind.
 _FAMILY = _build_family(None)
 
-#: Public order comes only from the declaration (operational actions + manual).
+#: Public order comes only from the declaration (operations + settings + manual).
 ACTION_ORDER: tuple[str, ...] = DECLARATION.public_actions
 _MANUAL_SKILL_NAME = DECLARATION.manual
 
@@ -467,11 +479,9 @@ def _runtime_port(agent):
     """Compose the production ContextRuntimePort from narrow bound callbacks.
 
     This is composition wiring, not a plugin API: each callback preserves the
-    existing live-Agent engine intact while the bound family receives only the
-    adapter's three operation methods.
+    existing live-Agent engine intact while the bound family receives the
+    adapter's three operation methods and its read-only settings provider.
     """
-    from lingtai.adapters.tool_plugin_host import AgentContextRuntimeAdapter
-
     def invoke(action: str, args: dict) -> dict:
         # Look up at call time: Context's narrow focused tests can replace one
         # implementation operation without bypassing the declared host route.
@@ -480,19 +490,37 @@ def _runtime_port(agent):
                 return operation(agent, args)
         raise AssertionError(f"unknown Context runtime action: {action}")
 
-    return AgentContextRuntimeAdapter(
+    def read_context_limit() -> object:
+        configured = getattr(agent._config, "context_limit", None)
+        if configured is not None:
+            return configured
+        chat = getattr(agent, "_chat", None)
+        live = chat.context_window() if chat is not None else None
+        if type(live) is int and live > 0:
+            return live
+        return getattr(agent.service, "_context_window", None)
+
+    def read_summarize_notification_threshold() -> object:
+        return agent._summarize_notification_threshold
+
+    settings_provider = build_context_settings_provider(
+        read_context_limit,
+        read_summarize_notification_threshold,
+    )
+
+    return ContextRuntimeSettingsAdapter(
         molt=lambda args: invoke("molt", args),
         summarize=lambda args: invoke("summarize", args),
         rebuild=lambda args: invoke("rebuild", args),
+        settings=settings_provider,
     )
 
 
 def _build_children(agent, envelope: Mapping[str, Any] | None = None) -> list[ChildTool]:
-    """Compatibility child-list view for direct in-process family tests.
+    """Child-list view of the bound declaration for focused in-process tests.
 
     Normal Agent dispatch never uses this view; it is the declared family bound
-    to the same production adapters, returned as children for legacy callers
-    that construct their own ``ToolFamily`` around Context.
+    to the same production adapters, including its injected settings child.
     """
     from lingtai.adapters.tool_plugin_host import AgentWorkdirAdapter
 

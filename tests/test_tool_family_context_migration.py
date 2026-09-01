@@ -83,7 +83,7 @@ def _molt_input(journal_path, summary="briefing", **over):
 
 
 def test_one_public_context_root_with_the_exact_action_inventory():
-    """The four actions, in the exact public order, and nothing else.
+    """The five actions, in the exact public order, and nothing else.
 
     `molt` is the lifecycle operation carried over from `psyche.context_molt`;
     `summarize`/`rebuild` are the explicit pair that replaced the former
@@ -94,9 +94,10 @@ def test_one_public_context_root_with_the_exact_action_inventory():
         "molt",                    # shed the conversation
         "summarize",               # record only
         "rebuild",                 # apply pending summaries
+        "settings",                # read-only Context policy inventory
         "manual",                  # root manual (family-owned)
     ]
-    assert len(ACTION_ORDER) == 4
+    assert len(ACTION_ORDER) == 5
 
 
 def test_context_is_registered_exactly_once_as_an_intrinsic():
@@ -160,13 +161,19 @@ def test_schema_and_dispatch_come_from_one_registry():
     """A child cannot be schema-advertised but dispatch-rejected."""
     schema = get_schema("en")
     advertised = list(schema["properties"]["action"]["enum"])
-    branch_titles = [b["title"] for b in schema["properties"]["input"]["oneOf"]]
+    branch_titles = [b["title"] for b in schema["properties"]["input"]["anyOf"]]
     correlated = [
         c["if"]["properties"]["action"]["const"] for c in schema["allOf"]
     ]
     assert advertised == list(ACTION_ORDER)
     assert correlated == advertised
-    assert branch_titles == [f"{name} input" for name in advertised]
+    assert branch_titles == [
+        "molt input",
+        "summarize input",
+        "rebuild input",
+        "settings inventory input",
+        "manual input",
+    ]
 
 
 def test_each_action_advertises_only_its_own_input():
@@ -188,6 +195,7 @@ def test_each_action_advertises_only_its_own_input():
     }
     assert props["summarize"] == {"items"}
     assert props["rebuild"] == {"items"}
+    assert props["settings"] == set()
     assert props["manual"] == set()
     # Naming left for ``system``; no context action advertises ``content``.
     assert not any("content" in fields for fields in props.values())
@@ -640,14 +648,15 @@ def test_kernel_detects_the_migrated_molt_call_shape():
 
 
 def test_manual_child_returns_the_canonical_result_unwrapped(tmp_path):
-    """`ToolFamily.handle()` returns the reserved child's result verbatim."""
+    """The reserved manual child still owns its canonical unwrapped result."""
     from lingtai.tools.context import _build_children
-    from lingtai.tools.tool_family import ToolFamily
 
     agent = _agent(tmp_path)
     try:
-        family = ToolFamily("psyche", _build_children(agent))
-        raw = family.handle({"action": "manual", "input": {}})
+        manual = next(
+            child for child in _build_children(agent) if child.name == "manual"
+        )
+        raw = manual.handler({})
         # Canonical ManualTool shape — full body + host-local path, no flatten.
         assert raw["content"][0]["text"]
         assert raw["structuredContent"]["manual_path"]
@@ -729,7 +738,7 @@ def test_one_context_root_survives_both_wires_with_action_input_correlation(tmp_
 
         chat = _build_tools(context_schemas)[0]["function"]["parameters"]
         responses = _build_responses_tools(context_schemas)[0]["parameters"]
-        for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+        for wire, combinator in ((chat, "anyOf"), (responses, "anyOf")):
             assert set(wire["properties"]) == {
                 "action", "input", "reasoning", "summarize",
             }
@@ -740,7 +749,11 @@ def test_one_context_root_survives_both_wires_with_action_input_correlation(tmp_
             assert wire["properties"]["action"]["enum"] == list(ACTION_ORDER)
             branches = wire["properties"]["input"][combinator]
             assert [b["title"] for b in branches] == [
-                f"{a} input" for a in ACTION_ORDER
+                "molt input",
+                "summarize input",
+                "rebuild input",
+                "settings inventory input",
+                "manual input",
             ]
             assert len(wire["allOf"]) == len(ACTION_ORDER)
             molt = next(
@@ -839,7 +852,7 @@ def test_rebuild_items_stays_optional_on_both_provider_wires(tmp_path):
         schemas = [s for s in _build_tool_schemas(live) if s.name == "context"]
         chat = _build_tools(schemas)[0]["function"]["parameters"]
         responses = _build_responses_tools(schemas)[0]["parameters"]
-        for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+        for wire, combinator in ((chat, "anyOf"), (responses, "anyOf")):
             branches = {
                 b["title"]: b for b in wire["properties"]["input"][combinator]
             }

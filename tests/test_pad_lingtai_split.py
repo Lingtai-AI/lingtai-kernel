@@ -43,7 +43,9 @@ def test_neither_package_registers_a_public_root():
 
 
 def test_context_inventory_still_carries_no_pad_or_lingtai_aliases():
-    assert context_tool.ACTION_ORDER == ("molt", "summarize", "rebuild", "manual")
+    assert context_tool.ACTION_ORDER == (
+        "molt", "summarize", "rebuild", "settings", "manual",
+    )
     actions = context_tool.get_schema()["properties"]["action"]["enum"]
     for retired in (
         "pad_edit", "pad_load", "pad_append", "lingtai_update", "lingtai_load",
