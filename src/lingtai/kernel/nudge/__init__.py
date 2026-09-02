@@ -72,6 +72,11 @@ _ENTRY_CHANNEL_BY_KIND = {
 # replaced on the wire by a compact summary (see `_cap_inline_payload`).
 INLINE_MAX_CHARS = 10_000
 
+# Serialize same-process sidecar claims. The content-addressed filename and
+# O_EXCL temp file remain the cross-process safety boundary; this lock keeps
+# same-process heartbeat threads from contending on one PID-derived temp name.
+_SIDECAR_WRITE_LOCK = threading.Lock()
+
 # Bounded shape a `kind` must satisfy before it can participate in
 # externalization filename construction. Current built-in kinds
 # ("kernel_version", "source_drift", "init_config_shape", …) are short
@@ -496,23 +501,35 @@ def _write_sidecar_atomic(target: Path, text: str) -> None:
     opened — via ``os.open`` with an explicit ``mode``, not ``open()`` at the
     process umask followed by a later ``chmod`` — so the oversized finding
     body is never briefly readable at a broader mode. Content is written as
-    exact UTF-8 bytes and flushed/fsynced before the atomic ``os.replace``,
-    so a crash between write and replace cannot leave a target that looks
-    complete but is actually truncated.
+    exact UTF-8 bytes and flushed/fsynced before an atomic no-overwrite
+    ``os.link`` claim. A concurrent process that prepared the same digest gets
+    ``FileExistsError`` instead of replacing a complete target; the caller can
+    then reuse that target and suppress a duplicate event.
 
-    On any failure the caller is responsible for translating the raised
-    ``OSError`` into a bounded ``NudgeExternalizationError``; this helper
-    itself never logs or otherwise persists ``text``. No temp-file cleanup is
-    performed here — a failed write's partial temp file, already owner-only,
-    is left on disk as forensic evidence rather than being deleted.
+    The private temp link is unlinked on every return path, including a losing
+    concurrent claim, so ordinary failures do not leave plaintext temp files.
+    The caller translates raised ``OSError`` into a bounded
+    ``NudgeExternalizationError``; this helper itself never logs or otherwise
+    persists ``text`` beyond the content-addressed target.
     """
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(str(tmp), str(target))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        # Hard-linking is an atomic no-overwrite claim: unlike os.replace,
+        # competing processes cannot overwrite the winner's complete target.
+        os.link(str(tmp), str(target))
+    finally:
+        # A losing process (FileExistsError) and every ordinary failure must
+        # not strand a plaintext temp artifact. The target hard link, if any,
+        # retains the inode after this private name is removed.
+        try:
+            os.unlink(str(tmp))
+        except FileNotFoundError:
+            pass
 
 
 def _cap_inline_payload(agent, kind: str, entry: dict, *, fingerprint: str) -> dict:
@@ -568,20 +585,44 @@ def _cap_inline_payload(agent, kind: str, entry: dict, *, fingerprint: str) -> d
         )
 
     target = findings_dir / f"{kind}-{digest}.json"
-    if not target.is_file():
-        try:
-            findings_dir.mkdir(parents=True, exist_ok=True)
-            # Always enforce owner-only, even when the directory pre-existed
-            # with looser permissions (e.g. created before this cap existed,
-            # or by an external process) — a sidecar containing the full
-            # oversized finding must never be group/world-readable.
-            os.chmod(findings_dir, 0o700)
-            _write_sidecar_atomic(target, text)
-        except OSError as exc:
-            raise NudgeExternalizationError(
-                f"failed to durably write nudge finding sidecar file: "
-                f"{type(exc).__name__}"
-            ) from exc
+    with _SIDECAR_WRITE_LOCK:
+        if not target.is_file():
+            wrote_sidecar = False
+            try:
+                findings_dir.mkdir(parents=True, exist_ok=True)
+                # Always enforce owner-only, even when the directory pre-existed
+                # with looser permissions (e.g. created before this cap existed,
+                # or by an external process) — a sidecar containing the full
+                # oversized finding must never be group/world-readable.
+                os.chmod(findings_dir, 0o700)
+                _write_sidecar_atomic(target, text)
+                wrote_sidecar = True
+            except FileExistsError:
+                # Another concurrent process won the content-addressed O_EXCL
+                # create. Its complete, fsynced bytes are the same digest; reuse
+                # them without treating the benign race as a write failure or
+                # duplicating the journal event.
+                if not target.is_file():
+                    raise NudgeExternalizationError(
+                        "nudge finding sidecar creation raced without a durable target"
+                    )
+            except OSError as exc:
+                raise NudgeExternalizationError(
+                    f"failed to durably write nudge finding sidecar file: "
+                    f"{type(exc).__name__}"
+                ) from exc
+            # Content-addressing makes this the one durable transition for a
+            # digest. Keep the journal event coupled to that transition so a
+            # persisting finding is not logged once per heartbeat.
+            if wrote_sidecar:
+                _safe_log(
+                    agent,
+                    "nudge_finding_externalized",
+                    kind=kind,
+                    original_char_count=char_count,
+                    cap_chars=INLINE_MAX_CHARS,
+                    sha256=digest,
+                )
 
     # Bound every field sourced from producer-controlled text (title, source)
     # so a pathological producer value cannot itself blow the compact entry
@@ -635,15 +676,6 @@ def _cap_inline_payload(agent, kind: str, entry: dict, *, fingerprint: str) -> d
             compact["title"] = compact["title"][:50] + "…"
         else:
             break
-
-    _safe_log(
-        agent,
-        "nudge_finding_externalized",
-        kind=kind,
-        original_char_count=char_count,
-        cap_chars=INLINE_MAX_CHARS,
-        sha256=digest,
-    )
     return compact
 
 

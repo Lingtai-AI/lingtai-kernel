@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
+import threading
 import time
 from pathlib import Path
 
@@ -200,6 +201,133 @@ def test_content_addressed_reuse_and_distinct_files(tmp_path):
     assert len(list(findings_dir.iterdir())) == 2
 
 
+def test_repeated_externalization_logs_once_per_digest(tmp_path):
+    agent = _Agent(tmp_path)
+    body = {"title": "Repeated finding", "detail": "w" * 20_000, "source": "producer"}
+
+    upsert(agent, "repeated", dict(body))
+    upsert(agent, "repeated", dict(body))
+    events = [event for event, _fields in agent.logs if event == "nudge_finding_externalized"]
+    assert len(events) == 1
+
+    upsert(agent, "repeated", {**body, "detail": "x" * 20_000})
+    events = [event for event, _fields in agent.logs if event == "nudge_finding_externalized"]
+    assert len(events) == 2
+
+
+def test_concurrent_same_digest_externalization_logs_once(tmp_path):
+    agents = [_Agent(tmp_path), _Agent(tmp_path)]
+    body = {"title": "Concurrent finding", "detail": "c" * 20_000, "source": "producer"}
+    errors = []
+
+    def _run(agent):
+        try:
+            upsert(agent, "concurrent", dict(body))
+        except BaseException as exc:  # pragma: no cover - assertion reports any race
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_run, args=(agent,)) for agent in agents]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert errors == []
+    events = [
+        event
+        for agent in agents
+        for event, _fields in agent.logs
+        if event == "nudge_finding_externalized"
+    ]
+    assert len(events) == 1
+    assert len(list(_findings_dir(tmp_path).glob("concurrent-*.json"))) == 1
+
+
+def test_cross_process_same_digest_has_one_sidecar_winner_and_event(tmp_path):
+    """The content-addressed target is once-only across independent PIDs."""
+    import os
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).parents[1]
+    workdir = tmp_path / "cross-process"
+    workdir.mkdir()
+    start = workdir / "start"
+    child_result = r'''
+import json
+import sys
+import time
+from pathlib import Path
+
+from lingtai.kernel.nudge import upsert
+from tests._notification_store_helpers import notification_store_for
+
+workdir = Path(sys.argv[1])
+start = Path(sys.argv[2])
+result = Path(sys.argv[3])
+class Agent:
+    def __init__(self):
+        self._working_dir = workdir
+        self._notification_store = notification_store_for(workdir)
+        self._notification_fp = ()
+        self.logs = []
+    def _log(self, event, **fields):
+        self.logs.append((event, fields))
+
+agent = Agent()
+print("READY", flush=True)
+deadline = time.monotonic() + 5
+while not start.exists() and time.monotonic() < deadline:
+    time.sleep(0.005)
+if not start.exists():
+    raise SystemExit("barrier was not released")
+upsert(agent, "cross-process", {"title": "same", "detail": "c" * 20_000, "source": "producer"})
+result.write_text(json.dumps({"externalized_events": sum(
+    event == "nudge_finding_externalized" for event, _fields in agent.logs
+)}))
+print("DONE", flush=True)
+'''
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(repo_root / "src"), str(repo_root), env.get("PYTHONPATH", "")]
+    )
+    processes = []
+    try:
+        for index in range(2):
+            result = workdir / f"child-{index}.json"
+            process = subprocess.Popen(
+                [sys.executable, "-c", child_result, str(workdir), str(start), str(result)],
+                cwd=repo_root,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            processes.append((process, result))
+        for process, _result in processes:
+            assert process.stdout.readline().strip() == "READY"
+        start.touch()
+        for process, result in processes:
+            stdout, stderr = process.communicate(timeout=10)
+            assert process.returncode == 0, (stdout, stderr)
+            assert result.is_file()
+    finally:
+        for process, _result in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+
+    event_counts = [
+        json.loads(result.read_text())["externalized_events"]
+        for _process, result in processes
+    ]
+    assert sum(event_counts) == 1
+    findings_dir = _findings_dir(workdir)
+    assert len(list(findings_dir.glob("cross-process-*.json"))) == 1
+    assert list(findings_dir.glob(".*.tmp")) == []
+
+
 def test_sidecar_and_dir_permissions_owner_only_including_preexisting_loose_dir(tmp_path):
     findings_dir = _findings_dir(tmp_path)
 
@@ -300,6 +428,13 @@ def test_ordinary_small_nudge_behavior_is_unchanged(tmp_path):
 
 def test_dismissal_round_trip_for_capped_finding(tmp_path, monkeypatch):
     agent = _Agent(tmp_path)
+    from types import SimpleNamespace
+    from lingtai.kernel import nudge as nudge_module
+
+    # Use a deterministic clock so the tiny repeat interval cannot make this
+    # persistence round-trip flaky on a busy CI host.
+    now = [100.0]
+    monkeypatch.setattr(nudge_module, "time", SimpleNamespace(time=lambda: now[0]))
     monkeypatch.setenv("LINGTAI_NUDGE_REPEAT_INTERVAL", "0.001s")
     body = {"title": "Capped finding", "detail": "r" * 30_000, "source": "s"}
 
@@ -319,7 +454,7 @@ def test_dismissal_round_trip_for_capped_finding(tmp_path, monkeypatch):
     entries = snapshot_notifications(tmp_path).get("nudge", {}).get("data", {}).get("nudges", [])
     assert entries == []
 
-    time.sleep(0.01)
+    now[0] += 0.01
     upsert(agent, "capped-dismiss", dict(body))
     entries = snapshot_notifications(tmp_path).get("nudge", {}).get("data", {}).get("nudges", [])
     assert len(entries) == 1
