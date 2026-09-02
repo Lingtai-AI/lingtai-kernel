@@ -50,15 +50,15 @@ High-attention tool-result summarization guidance lives in the runtime
 guidance catalog as resident `meta_guidance`; reference/manual
 layers explain the rationale, edge cases, examples, and troubleshooting.
 
-**Summarize cadence.** Prefer a priori `summary=true` on `shell`, `file`
-(read/glob/grep), or `daemon` when you can predict bulky output and already know the facts, counts,
-anchors, or conclusion you need from the call; put that retention contract in
-`reasoning` so raw bulk never spends context. Leave it off when exact raw text or
-unknown high-information details may matter. After digesting a completed tool
-result whose raw text no longer needs inspection, summarize it with enough key
-facts, evidence, paths, IDs, validation, risks, and next steps for future-you.
-Batch already-digested results when practical, and keep noisy/bulky work out of
-main context by using daemons before it lands here.
+**Summarize cadence.** Strongly prefer a priori `summary=true` on `shell`,
+`file` (read/glob/grep), or `daemon` when you can predict bulky output and
+already know the facts, counts, anchors, or conclusion you need from the call;
+put that retention contract in `reasoning` so raw bulk never spends context.
+Leave it off when exact raw text or unknown high-information details may matter.
+Treat a posteriori `context(action="summarize")` as a last resort, not routine
+cleanup: use it only when context is close to overflowing and a molt is
+unsuitable. Otherwise prefer a priori summary before the call, narrower work,
+or a daemon; at a whole-session boundary, tend durable stores and molt instead.
 
 **Forced context rebuild boundary.** `context(action="summarize")` records a
 compact replacement (`status: pending`) but does not rebuild the active provider
