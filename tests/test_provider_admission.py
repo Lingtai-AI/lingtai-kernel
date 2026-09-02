@@ -15,6 +15,7 @@ from lingtai.kernel.provider_admission import (
     DerivedLaunchCapability,
     DerivedLaunchDecision,
     ProviderAdmittedLLMService,
+    ProviderAdmissionDecisionSource,
     ProviderAdmissionError,
     ProviderAdmissionState,
     ProviderCallClass,
@@ -877,6 +878,57 @@ def test_malformed_admission_decision_fails_closed_before_provider_io():
     token = bind_provider_admission(RootProviderAdmission("turn-a", "test"))
     try:
         with pytest.raises(ProviderAdmissionError, match="malformed"):
+            service.create_session("system").send("attempt provider call")
+    finally:
+        clear_provider_admission(token)
+
+    assert inner.session.calls == []
+
+
+def test_malformed_denial_source_defaults_to_local_policy():
+    """An untyped source is never misreported as a Driver policy decision."""
+
+    class _MalformedDenialSourcePort:
+        def authorize_provider_call(self, _parent, _call_class):
+            return ProviderCallDecision(
+                ProviderAdmissionState.DENIED,
+                "malformed_denial_source",
+                source=object(),
+            )
+
+    inner = _InnerService()
+    service = ProviderAdmittedLLMService(inner, _MalformedDenialSourcePort())
+    token = bind_provider_admission(RootProviderAdmission("turn-a", "test"))
+    try:
+        with pytest.raises(
+            ProviderAdmissionError, match="malformed_denial_source"
+        ) as raised:
+            service.create_session("system").send("attempt provider call")
+    finally:
+        clear_provider_admission(token)
+
+    assert raised.value.source is ProviderAdmissionDecisionSource.LOCAL_POLICY
+    assert inner.session.calls == []
+
+
+def test_granted_admission_with_an_untyped_source_fails_closed_before_provider_io():
+    """A malformed grant must not reach provider I/O as a valid authority decision."""
+
+    class _MalformedGrantSourcePort:
+        def authorize_provider_call(self, _parent, _call_class):
+            return ProviderCallDecision(
+                ProviderAdmissionState.GRANTED,
+                "malformed_grant_source",
+                source=object(),
+            )
+
+    inner = _InnerService()
+    service = ProviderAdmittedLLMService(inner, _MalformedGrantSourcePort())
+    token = bind_provider_admission(RootProviderAdmission("turn-a", "test"))
+    try:
+        with pytest.raises(
+            ProviderAdmissionError, match="malformed_grant_source"
+        ):
             service.create_session("system").send("attempt provider call")
     finally:
         clear_provider_admission(token)
