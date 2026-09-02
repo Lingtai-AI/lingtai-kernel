@@ -172,6 +172,12 @@ lingtai = [
     "bin/lingtai-search-sidecar",
     "bin/lingtai-search-sidecar.exe",
 ]
+# Project-creation assets are their own subpackage, so the parent `lingtai`
+# globs above do not reach them (package-data globs do not recurse into
+# subpackages). These are the localized covenant bodies `lingtai-agent project
+# create` stamps into a new agent's system/covenant.md — without this entry the
+# wheel ships the CLI but silently drops the text it writes.
+"lingtai.project_assets" = ["covenant/*/*.md"]
 "lingtai.mcp_servers.telegram" = ["notification_header.md", "SKILL.md", "reference/**/*", "assets/**/*"]
 # The Telegram-owned programmable Task Card unit is its own subpackage, so its
 # strict-family manual and architecture documents are NOT covered by the parent telegram glob

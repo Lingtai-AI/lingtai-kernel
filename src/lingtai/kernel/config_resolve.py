@@ -96,26 +96,29 @@ def _strip_trailing_commas(text: str) -> str:
     return "".join(out)
 
 
-def parse_jsonc(text: str) -> dict:
+def parse_jsonc(text: str, **json_load_kwargs) -> dict:
     """Parse JSON or JSONC text (strips // comments and trailing commas).
 
     Pure text→object transform with no I/O, so callers holding raw text (e.g.
     migration transforms) use it directly. Both normalisations are string-aware:
     // inside a quoted string is never a comment (URLs like "https://host/..."
     survive), and a string value containing `, ]` or `, }` is left intact.
+    Keyword arguments are forwarded to :func:`json.loads`, allowing the narrow
+    project-generation read-modify-write path to retain numeric token lexemes.
     """
     text = _strip_comments(text)
     text = _strip_trailing_commas(text)
-    return json.loads(text)
+    return json.loads(text, **json_load_kwargs)
 
 
-def load_jsonc(path: str | Path) -> dict:
+def load_jsonc(path: str | Path, **json_load_kwargs) -> dict:
     """Load a JSON or JSONC file (strips // comments and trailing commas).
 
     Thin I/O wrapper: reads UTF-8 text from *path* and delegates the parse to
-    :func:`parse_jsonc`, which owns the comment/trailing-comma stripping rules.
+    :func:`parse_jsonc`, which owns the comment/trailing-comma stripping rules
+    and accepts the same JSON decoder keyword arguments.
     """
-    return parse_jsonc(Path(path).read_text(encoding="utf-8"))
+    return parse_jsonc(Path(path).read_text(encoding="utf-8"), **json_load_kwargs)
 
 
 def resolve_env(value: str | None, env_name: str | None) -> str | None:

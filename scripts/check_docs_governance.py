@@ -31,6 +31,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 DOCS_YAML = ROOT / "docs.yaml"
 
+# These files are packaged runtime bodies copied verbatim into new projects, not
+# repository documents with governance metadata.
+_RUNTIME_DATA_PATH_PREFIXES = ("src/lingtai/project_assets/covenant/",)
+
 EXPECTED_TOP_LEVEL_KEYS = frozenset(
     {
         "name", "version", "extensions", "discovery", "required_fields",
@@ -462,7 +466,11 @@ def discover_doc_paths(contract: dict) -> list[Path]:
         if contract["discovery"].get("untracked_not_ignored") else []
     )
     all_paths = sorted(set(tracked) | set(untracked))
-    return [ROOT / p for p in all_paths if p.endswith(exts)]
+    return [
+        ROOT / p
+        for p in all_paths
+        if p.endswith(exts) and not p.startswith(_RUNTIME_DATA_PATH_PREFIXES)
+    ]
 
 
 def check_one_document_path(path: Path, contract: dict, *, repo_root: Path) -> list[str]:

@@ -44,13 +44,17 @@ def test_contract_has_no_path_or_content_exemptions():
     assert "must_resolve_to_repo_file" not in contract["field_constraints"]["related_files"]
 
 
-def test_discovery_unions_tracked_and_untracked_via_git_files(monkeypatch):
+def test_discovery_unions_tracked_and_untracked_but_excludes_runtime_covenant_assets(monkeypatch):
     contract = checker.load_docs_contract()
     calls = []
+    covenant_assets = [
+        f"src/lingtai/project_assets/covenant/{lang}/covenant.md"
+        for lang in ("en", "zh", "wen")
+    ]
 
     def fake_git_files(*args):
         calls.append(args)
-        return ["a.md", "shared.md"] if args == () else ["b.md", "shared.md"]
+        return ["a.md", "shared.md", *covenant_assets] if args == () else ["b.md", "shared.md"]
 
     monkeypatch.setattr(checker, "_git_files", fake_git_files)
     result = checker.discover_doc_paths(contract)

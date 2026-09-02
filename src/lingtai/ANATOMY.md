@@ -56,6 +56,10 @@ related_files:
   - src/lingtai/mcp_servers/wechat/manager.py
   - src/lingtai/network.py
   - src/lingtai/presets.py
+  - src/lingtai/project_assets/__init__.py
+  - src/lingtai/project_assets/covenant/en/covenant.md
+  - src/lingtai/project_assets/covenant/zh/covenant.md
+  - src/lingtai/project_assets/covenant/wen/covenant.md
   - src/lingtai/prompts/ANATOMY.md
   - src/lingtai/services/ANATOMY.md
   - src/lingtai/services/mcp.py
@@ -67,6 +71,7 @@ related_files:
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/nudge/init_config.py
   - src/lingtai/kernel/presets.py
+  - src/lingtai/kernel/project_create.py
   - src/lingtai/kernel/snapshot/ANATOMY.md
   - src/lingtai/kernel/workdir.py
   - src/lingtai/kernel/session_stats/ANATOMY.md
@@ -74,6 +79,7 @@ related_files:
   - tests/test_agent_preset_manifest.py
   - tests/test_agent_config_hydration.py
   - tests/test_cli.py
+  - tests/test_project_create.py
   - tests/test_cli_daemon.py
   - tests/test_deep_refresh.py
   - tests/test_kernel_migrate.py
@@ -113,9 +119,9 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `adapters/lifecycle_clock.py` | The one portable production `SystemLifecycleClockAdapter` for the Core-owned `LifecycleClockPort` — direct `wall_seconds()`→`time.time()` / `monotonic_seconds()`→`time.monotonic()`, no caching or policy. Not POSIX (no filesystem/`fcntl`/platform selection), so it sits at the top of `adapters/` rather than under `adapters/posix/`; its promise/navigation are owned by the kernel `lifecycle_clock/` governed pair (`src/lingtai/kernel/lifecycle_clock/CONTRACT.md` + `ANATOMY.md`). |
 | `adapters/project_workspace.py` | Filesystem implementation of the Project Core Port: exclusively creates one fresh `.lingtai` tree, writes its seed, and applies an injected init-reader validation. |
 | `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent acp --agent-dir <dir>` / `lingtai-agent acp --profile puffo-v0 --runtime-id <id>` / `lingtai-agent puffo-v0 provision\|revoke` / `lingtai-agent project create ...` / `lingtai-agent check-caps` / `lingtai-agent log ...` / `lingtai-agent maintenance cleanup <target>` entry points; the `run` composition root performs a post-stop hard exit only when existing worker-poison state would otherwise keep the old process alive and block the refresh watcher |
-| `cli_project.py` | Inbound composition for one fresh `project create` seed: caller inputs, wrapper preset loading, current-reader validation, Project adapter, and output; it does not start an Agent. |
 | `cli_acp.py` / `adapters/acp/puffo_v0.py` / `cli_puffo_v0.py` | ACP outer composition and Puffo full-tool profile: generic ACP accepts a local existing agent directory; `puffo-v0` resolves only an operator-provisioned opaque runtime id to canonical identity/workspace, forces no session MCP, admits only authenticated ACP-origin provider turns, and provides local provision/revoke control. It is a controlled-entrypoint gate, not same-OS host isolation or runtime containment. |
 | `cli_daemon.py` | `lingtai-agent daemon emanate|list|check` — the programmatic (shell/Python/CI) skin over the daemon engine. `_CliDaemonAgent` is the minimal parent-agent facade `DaemonManager` reads (no lease, heartbeat, or agent identity), built from the agent's effective config through the canonical `init_reader.read_init`; `emanate` validates the tasks file against the tool's own emanate schema and enforces the preset allowlist and effective capability policy before previewing, then dispatches through the `DaemonFamilyDispatcher` envelope only under `--yes`; `_ReadOnlyDaemonView` binds the manager's unmodified `_handle_list`/`_handle_check` with both of its write paths (startup reconciliation, lazy daemon.json repair) removed |
+| `cli_project.py` | `lingtai-agent project create` — the CLI skin over kernel-owned project creation (`lingtai.kernel.project_create`). Scaffolds `.lingtai/`, writes the agent's `init.json`/`.agent.json` from a preset path, and stamps the packaged covenant body into `<agent>/system/covenant.md`. Recipe/skills injection, global asset bootstrap, and project-registry registration stay with the caller (the Go TUI) |
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai.kernel.presets`) |
 | `init.jsonc` / `init_reader.py` / `init_schema.py` | Kernel canonical shape plus the one real parse → materialize → validate → resolve reader. `InitReadOutcome` reports fully-effective, ignored-field, or failed reads with typed PASS/NUDGE/BLOCKED/UNKNOWN shape evidence without rewriting user-owned init.json; `validate_init()` remains the schema validator. See `CONTRACT.md`. |
@@ -133,7 +139,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **`cli_acp.py`**: `add_acp_parser` · `run_acp` · `handle_acp_command`
 
-**`cli_project.py`**: `add_project_parser` · `_request` · `_validate_agent` · `handle_project_command`
+**`cli_project.py`**: `add_project_parser` · `handle_project_command` · `_opts_from_args` · `_handle_create` — all semantics delegated to `lingtai.kernel.project_create`
 
 **`cli_daemon.py`**: `_CliDaemonAgent` (`for_dispatch` reads effective config via `init_reader.read_init`; `for_inspection` reads none) · `_CliDaemonAgent.effective_capabilities` / `install_tool_surface` (`registry.apply_core_defaults` — honors `manifest.disable` and authored kwargs) · `_ReadOnlyDaemonView` (overrides `_load_or_rebuild_daemon_state` so inspection reconstructs in memory instead of repairing on disk) · `_read_effective_init` · `_load_tasks_file` · `_check_schema` / `_validate_emanate_input` (interprets the tool's own `_emanate_input_schema` at preview time) · `_enforce_preset_allowlist` · `_enforce_capability_policy` · `_dispatch_through_tool_family` · `add_daemon_parser` · `handle_daemon_command`
 
@@ -151,8 +157,6 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Inbound:** `lingtai-tui` calls `cli.run()` to boot agents; imports `load_preset`, `discover_presets_in_dirs` for UI. Kernel's `BaseAgent` is the parent class.
 
-**Project creation:** `cli_project` composes caller inputs, wrapper `load_preset`, the current init reader, and `FilesystemProjectWorkspaceAdapter` for `kernel.project`; it writes a seed only and never starts an Agent.
-
 **Outbound — kernel:** `lingtai.kernel.base_agent.{BaseAgent,StopResult,StopStatus}`, `.config.AgentConfig`, `.event_journal.EventJournalPort`, `.mail_transport.MailTransportPort`, `.workdir_lease.WorkdirLeasePort`, `.notification_store.NotificationStorePort` (S4: capability-native persistence for `.notification/` channel mirrors; see `kernel/notification_store/CONTRACT.md`), `.agent_presence.AgentPresenceStorePort` (own-heartbeat + foreign liveness; see `kernel/agent_presence/CONTRACT.md`), `.lifecycle_clock.LifecycleClockPort` (S7b: wall/monotonic lifecycle time; see `kernel/lifecycle_clock/CONTRACT.md`), `.snapshot.{SnapshotPort,SourceRevisionPort}` (S5: workdir capture and bounded source identity; see `kernel/snapshot/CONTRACT.md`), `.prompt.build_system_prompt`, `.handshake.resolve_address`, and the shared `lingtai.init_reader.read_init` / `lingtai.kernel.workdir.write_resolved_manifest` path. Legacy migration modules remain outside this production reader path; see `../lingtai/kernel/migrate/CONTRACT.md` for their retained historical/test surface.
 
 **Outbound — adapters:** the CLI composition root injects `lingtai.adapters.posix.mail.PosixFilesystemMailAdapter` (the production `MailTransportPort` implementation, back-compat public name `FilesystemMailService`), `lingtai.adapters.posix.event_journal.PosixJsonlEventJournalAdapter`, `lingtai.adapters.posix.notification_store.PosixNotificationStoreAdapter` (S4: the production `NotificationStorePort` implementation), `lingtai.adapters.posix.git_cli.PosixGitCliAdapter` (S5: distinct workdir and running-source instances), the portable `lingtai.adapters.lifecycle_clock.SystemLifecycleClockAdapter` (S7b: the production `LifecycleClockPort` implementation, constructed by `Agent` fallback and explicitly by `cli.build_agent`), and — via `lingtai.adapters.workdir_lease.select_workdir_lease` — the production `WorkdirLeasePort` (`lingtai.adapters.posix.workdir_lease.PosixWorkdirLeaseAdapter`) for both agent construction and the `log rebuild` command; and — via `lingtai.adapters.refresh_watcher.select_refresh_watcher` — the production `RefreshWatcherPort` for `Agent` and CLI construction. Both selectors fail loud on unsupported platforms. The unified `web` capability composes `lingtai.adapters.browser_transport.VettedHttpTransport` only inside its retained web owner; the browse Core policy and `BrowserPort` remain in the internal browser child pair. The avatar capability
@@ -162,7 +166,7 @@ Windows launcher (`WindowsAvatarLauncherAdapter`) is wired for
 `sys.platform == "win32"` alongside the POSIX one; only genuinely
 unsupported platforms fail loudly.
 
-**Cross-module:** `agent.py` → `lingtai.tools.registry.{setup_capability,INTRINSICS,CORE_DEFAULTS}`; unified web setup → `lingtai.adapters.browser_transport.VettedHttpTransport` (lazy composition only), `services.mcp_registry.{decompress_addons,read_registry}`, `services.mcp_inbox.MCPInboxPoller`, `services.mcp.{MCPClient,HTTPMCPClient}`, `llm.service.LLMService`, `presets`, `lingtai.kernel.config_resolve`, `init_schema`. `cli.py` → `agent.Agent`, `lingtai.tools.registry.{CORE_DEFAULTS,get_all_providers}`, `lingtai.kernel.config_resolve`, `presets`.
+**Cross-module:** `agent.py` → `lingtai.tools.registry.{setup_capability,INTRINSICS,CORE_DEFAULTS}`; unified web setup → `lingtai.adapters.browser_transport.VettedHttpTransport` (lazy composition only), `services.mcp_registry.{decompress_addons,read_registry}`, `services.mcp_inbox.MCPInboxPoller`, `services.mcp.{MCPClient,HTTPMCPClient}`, `llm.service.LLMService`, `presets`, `lingtai.kernel.config_resolve`, `init_schema`. `cli_project.py` → `lingtai.kernel.project_create` → `lingtai.kernel.presets.{load_preset,home_shortened}`, `lingtai.kernel._fsutil.{atomic_write_text,atomic_write_json}`, and the packaged `lingtai/project_assets/covenant/<lang>/covenant.md` bodies (ported byte-for-byte from the Go TUI's embedded copies; declared in `pyproject.toml` as `"lingtai.project_assets" = ["covenant/*/*.md"]`). `cli.py` → `agent.Agent`, `lingtai.tools.registry.{CORE_DEFAULTS,get_all_providers}`, `lingtai.kernel.config_resolve`, `presets`.
 
 **Agent → BaseAgent:** Three-layer hierarchy: `BaseAgent` (kernel) → `Agent` (capabilities) → `CustomAgent` (domain). Agent adds capability registration, MCP auto-loading, preset swap, full init.json reconstruct, and composes `PosixJsonlEventJournalAdapter`, `PosixNotificationStoreAdapter`, and distinct `PosixGitCliAdapter` snapshot/source-revision instances for callers that did not supply those dependencies (`agent.py:115-151`).
 

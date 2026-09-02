@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import uuid
 from datetime import datetime, timezone
@@ -39,6 +40,7 @@ from typing import Any, Callable, Iterator, Optional, Union
 __all__ = [
     "atomic_write_text",
     "atomic_write_json",
+    "JSONNumber",
     "read_json",
     "append_jsonl",
     "iter_jsonl_records",
@@ -51,6 +53,26 @@ PathLike = Union[str, "os.PathLike[str]"]
 # Sentinel so ``read_json(path)`` can distinguish "no default given" (raise on
 # error) from ``read_json(path, default=None)`` (return None on error).
 _NO_DEFAULT = object()
+
+# RFC 8259 JSON number grammar.  A string subclass lets a decoder retain the
+# exact lexeme (like Go's json.Number) while callers can still compare it as a
+# JSON scalar.
+_JSON_NUMBER_RE = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\Z")
+
+
+class JSONNumber(str):
+    """A validated raw JSON number token for lossless JSON read-modify-write.
+
+    ``json.loads(..., parse_int=JSONNumber, parse_float=JSONNumber)`` retains
+    the input token rather than converting it to an int or float.  Pass an
+    object containing these values to :func:`atomic_write_json` with
+    ``preserve_number_tokens=True`` to emit them as JSON numbers, not strings.
+    """
+
+    def __new__(cls, value: str) -> "JSONNumber":
+        if not isinstance(value, str) or not _JSON_NUMBER_RE.fullmatch(value):
+            raise ValueError(f"invalid JSON number token: {value!r}")
+        return super().__new__(cls, value)
 
 
 def _unique_tmp(target: Path) -> Path:
@@ -131,6 +153,68 @@ def atomic_write_text(
     return target
 
 
+def _contains_string(value: Any, candidate: str) -> bool:
+    """Return whether *candidate* occurs as a string anywhere in JSON-like data."""
+    if isinstance(value, str):
+        return value == candidate
+    if isinstance(value, dict):
+        return any(
+            _contains_string(key, candidate) or _contains_string(item, candidate)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_string(item, candidate) for item in value)
+    return False
+
+
+def _json_dumps_preserving_number_tokens(
+    obj: Any,
+    *,
+    ensure_ascii: bool,
+    indent: Optional[int],
+    sort_keys: bool,
+    default: Optional[Callable[[Any], Any]],
+) -> str:
+    """Serialize JSONNumber values as validated raw JSON numbers.
+
+    The stdlib encoder correctly handles all ordinary values and formatting, but
+    treats a ``str`` subclass as a JSON string.  Substitute collision-free
+    markers for only the raw-number leaves, run the standard encoder with
+    ``allow_nan=False``, then replace each complete encoded marker with its
+    already-validated numeric token.  The strict mode guarantees a caller cannot
+    produce non-standard ``NaN``/``Infinity`` output while preserving values
+    decoded with ``parse_int``/``parse_float`` exactly.
+    """
+    markers: dict[str, str] = {}
+
+    def replace_numbers(value: Any) -> Any:
+        if isinstance(value, JSONNumber):
+            marker = f"__lingtai_json_number_{uuid.uuid4().hex}__"
+            while _contains_string(obj, marker) or marker in markers:
+                marker = f"__lingtai_json_number_{uuid.uuid4().hex}__"
+            markers[marker] = str(value)
+            return marker
+        if isinstance(value, dict):
+            return {key: replace_numbers(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [replace_numbers(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(replace_numbers(item) for item in value)
+        return value
+
+    text = json.dumps(
+        replace_numbers(obj),
+        ensure_ascii=ensure_ascii,
+        indent=indent,
+        sort_keys=sort_keys,
+        default=default,
+        allow_nan=False,
+    )
+    for marker, token in markers.items():
+        text = text.replace(json.dumps(marker, ensure_ascii=ensure_ascii), token)
+    return text
+
+
 def atomic_write_json(
     path: PathLike,
     obj: Any,
@@ -141,6 +225,7 @@ def atomic_write_json(
     default: Optional[Callable[[Any], Any]] = None,
     fsync: bool = False,
     preserve_existing_mode: bool = False,
+    preserve_number_tokens: bool = False,
 ) -> Path:
     """Atomically write ``obj`` as JSON to ``path``.
 
@@ -150,15 +235,27 @@ def atomic_write_json(
     leaving a temp file or clobbering the target.
 
     ``preserve_existing_mode`` is forwarded to :func:`atomic_write_text` and
-    remains disabled by default.
+    remains disabled by default.  ``preserve_number_tokens`` is a strict,
+    opt-in read-modify-write mode for :class:`JSONNumber`: it emits those
+    validated lexemes as numbers and rejects non-standard float constants.  The
+    default remains the ordinary ``json.dumps`` path for all existing callers.
     """
-    text = json.dumps(
-        obj,
-        ensure_ascii=ensure_ascii,
-        indent=indent,
-        sort_keys=sort_keys,
-        default=default,
-    )
+    if preserve_number_tokens:
+        text = _json_dumps_preserving_number_tokens(
+            obj,
+            ensure_ascii=ensure_ascii,
+            indent=indent,
+            sort_keys=sort_keys,
+            default=default,
+        )
+    else:
+        text = json.dumps(
+            obj,
+            ensure_ascii=ensure_ascii,
+            indent=indent,
+            sort_keys=sort_keys,
+            default=default,
+        )
     return atomic_write_text(
         path,
         text,

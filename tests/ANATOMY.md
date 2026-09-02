@@ -294,6 +294,7 @@ related_files:
   - tests/test_preset_swap_e2e.py
   - tests/test_presets.py
   - tests/test_project_creation.py
+  - tests/test_project_create.py
   - tests/test_process_identity.py
   - tests/test_process_match.py
   - tests/test_process_scan.py

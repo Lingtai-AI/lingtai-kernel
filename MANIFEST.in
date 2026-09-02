@@ -41,6 +41,11 @@ graft src/lingtai/intrinsic_skills
 recursive-include src/lingtai/prompts *.md
 recursive-include src/lingtai/prompts *.yaml
 
+# Project-creation assets (localized covenant bodies written into a new
+# agent's system/covenant.md by `lingtai-agent project create`). Mirror the
+# wheel package-data glob so source releases carry the same text.
+recursive-include src/lingtai/project_assets *.md
+
 # Kernel i18n catalogs ship with the runtime; mirror the wheel package-data
 # glob so source releases carry the same localized strings.
 recursive-include src/lingtai/kernel/i18n *.json

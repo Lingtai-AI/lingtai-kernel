@@ -109,6 +109,24 @@ def test_atomic_write_json_default_format_has_no_trailing_newline(tmp_path):
     assert not expected.endswith("\n")
 
 
+def test_atomic_write_json_preserves_raw_number_tokens_in_strict_mode(tmp_path):
+    target = tmp_path / "numbers.json"
+    _fsutil.atomic_write_json(
+        target,
+        {"large": _fsutil.JSONNumber("1e400"), "nested": [_fsutil.JSONNumber("1.00")]},
+        preserve_number_tokens=True,
+    )
+
+    raw = target.read_text(encoding="utf-8")
+    assert '"large": 1e400' in raw
+    assert '"nested": [\n    1.00\n  ]' in raw
+    parsed = json.loads(raw, parse_int=_fsutil.JSONNumber, parse_float=_fsutil.JSONNumber)
+    assert parsed == {"large": _fsutil.JSONNumber("1e400"), "nested": [_fsutil.JSONNumber("1.00")]}
+
+    with pytest.raises(ValueError):
+        _fsutil.atomic_write_json(target, {"bad": float("nan")}, preserve_number_tokens=True)
+
+
 def test_atomic_write_json_fsync_opt_in(tmp_path):
     # fsync=True must not change file content; just exercises the durability path.
     target = tmp_path / "a.json"
