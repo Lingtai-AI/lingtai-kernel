@@ -5,8 +5,8 @@ description: >
   sources, defaults, accepted values, invalid behavior, redaction, timing,
   authorized change procedures, and explicit non-settings.
 tags: [lingtai, system, settings, init, llm, environment, read-only]
-version: 1.1.1
-last_changed_at: "2026-08-29T00:00:00Z"
+version: 1.1.2
+last_changed_at: "2026-09-01T00:00:00Z"
 related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/adapters/posix/mail.py
@@ -287,5 +287,6 @@ not an adjustable kernel policy:
 - `LINGTAI_FAKE_APP_SERVER_MODE`
 - `LINGTAI_FAKE_CLI_REPORT`
 - `LINGTAI_RUN_LIVE_KIMI_CODE`
+- `LINGTAI_TEST_CAPSULE_SOCKET_FD`
 - `LINGTAI_TEST_CONFIG`
 - `LINGTAI_TEST_FAKE_CLAUDE_SIGNAL_RECORD`

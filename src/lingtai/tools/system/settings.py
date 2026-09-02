@@ -472,6 +472,7 @@ SYSTEM_ENVIRONMENT_CLASSIFICATION: dict[str, frozenset[str]] = {
             "LINGTAI_FAKE_APP_SERVER_MODE",
             "LINGTAI_FAKE_CLI_REPORT",
             "LINGTAI_RUN_LIVE_KIMI_CODE",
+            "LINGTAI_TEST_CAPSULE_SOCKET_FD",
             "LINGTAI_TEST_CONFIG",
             "LINGTAI_TEST_FAKE_CLAUDE_SIGNAL_RECORD",
         }

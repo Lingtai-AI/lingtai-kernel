@@ -3,7 +3,7 @@ name: environment-variable-registry
 description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
-version: 1.9.0
+version: 1.9.1
 last_changed_at: "2026-09-01"
 related_files:
 - ANATOMY.md
@@ -15,8 +15,6 @@ related_files:
 - src/lingtai/adapters/windows/ANATOMY.md
 - src/lingtai/adapters/acp/ANATOMY.md
 - src/lingtai/adapters/acp/CONTRACT.md
-- src/lingtai/adapters/acp/driver_authority.py
-- src/lingtai/cli_acp.py
 - src/lingtai/auth/ANATOMY.md
 - src/lingtai/intrinsic_skills/ANATOMY.md
 - src/lingtai/kernel/ANATOMY.md
@@ -148,7 +146,7 @@ surface is explicit; do not set test hooks in a production agent environment.
 |---|---|---|---|---|---|---|---|
 | `LINGTAI_DAEMON_CAPSULE_FD` | unset | Supervisor-provided integer file descriptor | POSIX supervised daemon | Once at daemon start; restart daemon | Missing or invalid value fails the supervised path | `src/lingtai/kernel/daemon_supervisor` | Accept only a supervisor-validated inherited descriptor |
 | `LINGTAI_DAEMON_CAPSULE_HANDLE` | unset | Integer OS handle in the spawn `handle_list` | Windows supervised daemon | Once at Windows entrypoint; restart daemon | Missing or invalid value fails the supervised path | `src/lingtai/adapters/windows/daemon_supervisor.py` | Convert only a validated inherited handle; it carries no capsule data |
-| `LINGTAI_DRIVER_AUTHORITY_FD` | unset | Puffo Driver-injected integer file descriptor | One ACP child process's local provider-admission authority endpoint | ACP child startup; a new process is required to change it | Missing, malformed, stale, or role-mismatched endpoints fail the guarded admission path closed | `src/lingtai/adapters/acp/driver_authority.py` | One-use local handoff descriptor; never log it or treat its numeric value as an authority grant by itself |
+| `LINGTAI_TEST_CAPSULE_SOCKET_FD` | unset | Test-injected inherited POSIX AF_UNIX stream descriptor number | One subprocess in the truncated-capsule regression test | Read once by the child test script at startup; rerun the test to change it | Missing, non-integer, or unusable descriptors fail the child and therefore the test | `tests/test_daemon_detached_supervisor.py` | Test-only descriptor locator; never set it in production or expose its numeric value |
 | `LINGTAI_DAEMON_COMPLETION_FILE` | unset | Supervisor-owned local path | Daemon completion reporting | Daemon start; restart daemon | Invalid path fails completion reporting | Daemon completion MCP and runner | Keep the path inside the assigned run directory |
 | `LINGTAI_DAEMON_MANAGER_TOKEN` | unset; central-manager launcher injects a fresh opaque token | Launcher-generated opaque string | One central daemon-manager process handoff and its private manager record | Injected when the manager child starts; restart/recreate the manager to change it | The production launcher always supplies it; a manually started manager records a missing value as null rather than inventing one | POSIX Daemon manager adapter — `src/lingtai/adapters/posix/daemon_manager.py` | Handoff identity, not an operator setting; keep it out of logs and model-visible output |
 | `LINGTAI_DAEMON_RUN_ID` | unset | Opaque run identifier | One daemon run and its event/token writes | Daemon startup and each relevant write; restart to change | Missing or invalid value is a run-integrity error where required | Daemon run directory | Do not use as a secret or expose unrelated run IDs |
