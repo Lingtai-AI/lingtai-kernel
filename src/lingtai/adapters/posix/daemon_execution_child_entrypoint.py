@@ -95,6 +95,8 @@ def _run_execution_child(
                 adopted_fd=owned_fd,
             )
             owned_fd = None
+            if capsule.get("driver_authority_required") is True:
+                host.adopt_derived_driver_authority()
             if mode == "resume":
                 host.run_resume(generation or "")
             else:

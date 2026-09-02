@@ -3459,6 +3459,7 @@ class DaemonManager:
         preset_llm: dict | None = None,
         preset_capabilities: dict | None = None,
         secret_capsule: dict | None = None,
+        authority_lease=None,
         use_central_manager: bool = False,
     ) -> None:
         """Write the run manifest and spawn an already-authorized detached run.
@@ -3513,6 +3514,11 @@ class DaemonManager:
         capsule.setdefault("task", task)
         capsule.setdefault("prompt", prompt)
         capsule.setdefault("mcp", list(mcp or []))
+        if authority_lease is not None:
+            # This is a fail-closed delivery expectation, not a bearer. The
+            # actual endpoint travels only as SCM_RIGHTS through the B8a
+            # capsule wire and never enters argv, env, or durable state.
+            capsule["driver_authority_required"] = True
         runtime_llm = {}
         # Resolve an explicit api_key_env reference in the parent while its
         # environment/config is available, then carry only the resulting value
@@ -3537,16 +3543,41 @@ class DaemonManager:
             runtime_llm["provider_defaults"] = normalized_defaults
         if runtime_llm:
             capsule.setdefault("llm", {}).update(runtime_llm)
-        if use_central_manager:
-            self._enqueue_central_daemon_manager_run(
-                request,
-                capsule=capsule,
-                pool_size=self._manager_pool_size,
-                run_dir=run_dir,
-            )
-        else:
-            select_daemon_supervisor_adapter().spawn_detached(request, capsule=capsule)
-            self._await_supervisor_startup(run_dir)
+        adopted_fd = self._consume_driver_authority_lease_for_posix_handoff(
+            authority_lease
+        )
+        try:
+            if use_central_manager:
+                enqueue_kwargs = {
+                    "capsule": capsule,
+                    "pool_size": self._manager_pool_size,
+                    "run_dir": run_dir,
+                }
+                if adopted_fd is not None:
+                    enqueue_kwargs["adopted_fd"] = adopted_fd
+                # The public manager boundary owns the descriptor at call
+                # entry, including when it closes it and then raises. Drop
+                # this caller's stale integer before invoking it so the outer
+                # cleanup cannot close a number another resource reuses.
+                adopted_fd = None
+                self._enqueue_central_daemon_manager_run(request, **enqueue_kwargs)
+            else:
+                supervisor = select_daemon_supervisor_adapter()
+                spawn_kwargs = {"capsule": capsule}
+                if adopted_fd is not None:
+                    spawn_kwargs["adopted_fd"] = adopted_fd
+                # The public adapter boundary owns the descriptor at call
+                # entry, including its failure paths. Drop this caller's
+                # stale integer before it can close and raise.
+                adopted_fd = None
+                supervisor.spawn_detached(request, **spawn_kwargs)
+                self._await_supervisor_startup(run_dir)
+        finally:
+            if adopted_fd is not None:
+                try:
+                    os.close(adopted_fd)
+                except OSError:
+                    pass
 
     def _await_supervisor_startup(self, run_dir: DaemonRunDir) -> None:
         """Bounded poll for the supervisor to record its own PID.
@@ -3597,6 +3628,7 @@ class DaemonManager:
         capsule: dict,
         pool_size: int,
         run_dir: DaemonRunDir,
+        adopted_fd: int | None = None,
     ) -> None:
         """Submit one already-materialized run to the resident POSIX manager.
 
@@ -3604,14 +3636,28 @@ class DaemonManager:
         queued runs have no manager assignment, and therefore no pid, until pool
         capacity frees up.
         """
-        from lingtai.adapters.posix.daemon_manager import enqueue_manager_run
+        try:
+            from lingtai.adapters.posix.daemon_manager import enqueue_manager_run
 
-        enqueue_manager_run(
-            agent_working_dir=self._workdir.path,
-            request=request,
-            capsule=capsule,
-            pool_size=pool_size,
-        )
+            agent_working_dir = self._workdir.path
+            # The lower public boundary owns this descriptor from its call
+            # entry. Keep it here through all wrapper setup, then relinquish
+            # it immediately before that call.
+            transferred_fd = adopted_fd
+            adopted_fd = None
+            enqueue_manager_run(
+                agent_working_dir=agent_working_dir,
+                request=request,
+                capsule=capsule,
+                pool_size=pool_size,
+                adopted_fd=transferred_fd,
+            )
+        finally:
+            if adopted_fd is not None:
+                try:
+                    os.close(adopted_fd)
+                except OSError:
+                    pass
 
     def _run_emanation(self, em_id: str, run_dir, schemas, dispatch,
                        task: str,
@@ -3724,6 +3770,15 @@ class DaemonManager:
             service_kwargs["key_resolver"] = effective_preset_llm["key_resolver"]
         service_kwargs["context_window"] = context_window
         service = LLMService(**service_kwargs)
+        provider_call_admission_port = getattr(
+            self, "_provider_call_admission_port", None
+        )
+        if provider_call_admission_port is not None:
+            from lingtai.kernel.provider_admission import ProviderAdmittedLLMService
+
+            service = ProviderAdmittedLLMService(
+                service, provider_call_admission_port
+            )
 
         session = service.create_session(
             system_prompt=run_dir.prompt_path.read_text(encoding="utf-8"),
@@ -5390,9 +5445,6 @@ class DaemonManager:
             )
         except DerivedLaunchAdmissionError as error:
             return self._admission_error_result(error)
-        if self._has_unhandoffable_driver_leases(launch_decisions):
-            self._close_unconsumed_derived_launch_decisions(launch_decisions)
-            return self._driver_handoff_unavailable_result()
 
         ids = []
         group_id = DaemonRunDir.new_group_id()
@@ -5409,6 +5461,7 @@ class DaemonManager:
                     group_id, task_files_rows
                 )
             except (OSError, ValueError) as exc:
+                self._close_unconsumed_derived_launch_decisions(launch_decisions)
                 return {"status": "error", "message": f"task_files: {exc}"}
 
         for i, spec in enumerate(tasks):
@@ -5437,6 +5490,7 @@ class DaemonManager:
                 task_files_catalog = self._render_task_files_catalog(task_files_rows[i])
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
+                self._close_unconsumed_derived_launch_decisions(launch_decisions)
                 return {"status": "error", "message": str(e)}
             # Plugin skills join the skill catalog; plugin mcp.json servers join
             # the task MCP registrations (mounted as task-scoped clients below).
@@ -5489,6 +5543,7 @@ class DaemonManager:
                 )
             except OSError as e:
                 self._close_task_mcp_clients(task_mcp_clients)
+                self._close_unconsumed_derived_launch_decisions(launch_decisions)
                 return {"status": "error",
                         "message": f"Failed to create daemon folder: {e}"}
 
@@ -5530,6 +5585,7 @@ class DaemonManager:
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
                 run_dir.mark_failed(e)
+                self._close_unconsumed_derived_launch_decisions(launch_decisions)
                 return {"status": "error", "message": str(e)}
 
             self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
@@ -5549,10 +5605,12 @@ class DaemonManager:
                     preset_name=resolved["name"] if resolved else None,
                     preset_llm=resolved["llm"] if resolved else None,
                     preset_capabilities=resolved["capabilities"] if resolved else None,
+                    authority_lease=launch_decisions[i].child_endpoint_lease,
                     use_central_manager=use_central_manager,
                 )
             except Exception as e:
                 run_dir.mark_failed(e)
+                self._close_unconsumed_derived_launch_decisions(launch_decisions)
                 result = {"status": "error", "message": str(e)}
                 from lingtai.kernel.provider_admission import DerivedLaunchAdmissionError
 
@@ -9573,6 +9631,30 @@ class DaemonManager:
                     lease.close()
                 except OSError:
                     pass
+
+    @staticmethod
+    def _consume_driver_authority_lease_for_posix_handoff(lease) -> int | None:
+        """Transfer one opaque Driver lease into B8a's POSIX FD capsule.
+
+        Daemon Core never interprets the lease. This outer composition method
+        is the sole daemon-side bridge to the POSIX transport; Windows must
+        release and reject rather than silently launch without authority.
+        """
+        if lease is None:
+            return None
+        if os.name != "posix":
+            try:
+                lease.close()
+            except OSError:
+                pass
+            raise RuntimeError(
+                "Driver child-endpoint handoff requires POSIX SCM_RIGHTS"
+            )
+        from lingtai.adapters.acp.driver_authority import (
+            consume_posix_child_endpoint_lease,
+        )
+
+        return consume_posix_child_endpoint_lease(lease)
 
     @staticmethod
     def _has_unhandoffable_driver_leases(

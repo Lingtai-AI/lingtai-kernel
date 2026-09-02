@@ -327,6 +327,14 @@ when it is absent, invalid, or not a root endpoint; this does not give the
 protocol client ownership of profile composition. Every hello and decision
 request carries a fresh `call_id`;
 a missing or mismatched response id closes the transport and fails closed.
+The typed `source` field is the sole authority for where a non-grant
+originated; consumers MUST NOT infer that origin from `reason_code`. A reason
+code is a stable policy label, not an origin namespace: in particular,
+`nested_derived_launch_denied` is valid with either `DRIVER` (the remote
+authority refused a request) or `LOCAL_POLICY` (the client rejected an
+impossible nested request before exchanging). Consumers that need different
+handling for those cases MUST branch on `source` as well as any policy reason
+they display or record.
 Granted derived-launch endpoints are opaque, one-use leases and remain within
 the typed in-memory launch decision only. `DriverDerivedLaunchAdmissionAdapter`
 performs that narrow projection; it does not serialize, consume, or otherwise

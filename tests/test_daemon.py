@@ -1910,10 +1910,10 @@ def test_profile_external_cli_rejects_before_requesting_driver_admission(
     assert not (daemon_root / "_task_files").exists()
 
 
-def test_profile_driver_grant_batch_fails_closed_until_manager_handoff_exists(
+def test_profile_driver_grant_batch_hands_each_lease_to_the_supervisor(
     tmp_path, monkeypatch
 ):
-    """A valid Driver batch never queues while its leases lack an FD transport."""
+    """Each admitted launch sends its one endpoint only through B8a's wire."""
     from lingtai.adapters.acp.driver_authority import (
         DriverChildEndpointLease,
         DriverDerivedLaunchAdmissionAdapter,
@@ -1963,7 +1963,7 @@ def test_profile_driver_grant_batch_fails_closed_until_manager_handoff_exists(
     monkeypatch.setattr(
         PosixDaemonSupervisorAdapter,
         "spawn_detached",
-        lambda *_args, **_kwargs: supervisor_calls.append(True),
+        lambda *_args, **kwargs: supervisor_calls.append(kwargs),
     )
     source = agent._working_dir / "driver-sensitive-input.txt"
     source.write_text("sensitive driver task input\n", encoding="utf-8")
@@ -1988,32 +1988,315 @@ def test_profile_driver_grant_batch_fails_closed_until_manager_handoff_exists(
         clear_provider_admission(token)
 
     try:
-        assert result == {
-            "status": "error",
-            "message": "Driver child-endpoint handoff is unavailable",
-            "reason_code": "driver_child_endpoint_handoff_unavailable",
-            "audit_id": None,
-        }
+        assert result["status"] == "dispatched"
+        assert result["count"] == 2
         assert authority.calls == [(root, DerivedLaunchCapability.DAEMON)] * 2
-        assert queued == []
         assert supervisor_calls == []
-        assert daemon_dispatch.read_dispatches(
-            agent._working_dir, full_history=True
-        ).records == ()
+        assert len(queued) == 2
+        for call in queued:
+            assert call["capsule"]["driver_authority_required"] is True
+            adopted_fd = call["adopted_fd"]
+            os.fstat(adopted_fd)
+            assert os.get_inheritable(adopted_fd) is False
+            os.close(adopted_fd)
         for peer in (first_peer, second_peer):
             peer.settimeout(2)
             assert peer.recv(1) == b""
-        daemon_root = agent._working_dir / "daemons"
-        assert not (daemon_root / "_task_files").exists()
-        assert not daemon_root.exists() or not any(
-            path.is_dir() and path.name.startswith("em-")
-            for path in daemon_root.iterdir()
-        )
     finally:
         first_lease.close()
         second_lease.close()
         first_peer.close()
         second_peer.close()
+
+
+def test_direct_supervisor_startup_failure_never_closes_reused_authority_fd(
+    tmp_path, monkeypatch
+):
+    """The caller drops ownership before the post-handoff startup wait."""
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    run_dir = _make_run_dir(agent, em_id="em-reused-authority-fd")
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+    replacement_fd = os.open(os.devnull, os.O_RDONLY)
+    reused_fd: int | None = None
+
+    def handoff_then_reuse(_self, _request, *, adopted_fd, **_kwargs):
+        nonlocal reused_fd
+        os.close(adopted_fd)
+        os.dup2(replacement_fd, adopted_fd)
+        reused_fd = adopted_fd
+
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter, "spawn_detached", handoff_then_reuse
+    )
+    monkeypatch.setattr(
+        daemon_tool.DaemonManager,
+        "_consume_driver_authority_lease_for_posix_handoff",
+        staticmethod(lambda _lease: adopted_fd),
+    )
+    monkeypatch.setattr(
+        mgr,
+        "_await_supervisor_startup",
+        lambda _run_dir: (_ for _ in ()).throw(RuntimeError("startup failed")),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="startup failed"):
+            mgr._spawn_detached_lingtai_run(
+                run_dir,
+                task="authority handoff",
+                tools=[],
+                max_turns=1,
+                timeout_s=30,
+                group_id=None,
+                effective_llm={"provider": "fake", "model": "fake"},
+                context_token_limit=None,
+                prompt="",
+                authority_lease=object(),
+            )
+        assert reused_fd is not None
+        os.fstat(reused_fd)
+    finally:
+        if reused_fd is not None:
+            os.close(reused_fd)
+        else:
+            try:
+                os.close(adopted_fd)
+            except OSError:
+                pass
+        os.close(replacement_fd)
+        peer.close()
+
+
+def test_direct_supervisor_boundary_failure_never_closes_reused_authority_fd(
+    tmp_path, monkeypatch
+):
+    """The caller relinquishes ownership before the adapter can raise."""
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    run_dir = _make_run_dir(agent, em_id="em-boundary-reused-authority-fd")
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+    replacement_fd = os.open(os.devnull, os.O_RDONLY)
+    reused_fd: int | None = None
+
+    def close_reuse_then_raise(_self, _request, *, adopted_fd, **_kwargs):
+        nonlocal reused_fd
+        os.close(adopted_fd)
+        os.dup2(replacement_fd, adopted_fd)
+        reused_fd = adopted_fd
+        raise RuntimeError("adapter boundary failed")
+
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter, "spawn_detached", close_reuse_then_raise
+    )
+    monkeypatch.setattr(
+        daemon_tool.DaemonManager,
+        "_consume_driver_authority_lease_for_posix_handoff",
+        staticmethod(lambda _lease: adopted_fd),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="adapter boundary failed"):
+            mgr._spawn_detached_lingtai_run(
+                run_dir,
+                task="authority handoff",
+                tools=[],
+                max_turns=1,
+                timeout_s=30,
+                group_id=None,
+                effective_llm={"provider": "fake", "model": "fake"},
+                context_token_limit=None,
+                prompt="",
+                authority_lease=object(),
+            )
+        assert reused_fd is not None
+        os.fstat(reused_fd)
+    finally:
+        if reused_fd is not None:
+            os.close(reused_fd)
+        else:
+            try:
+                os.close(adopted_fd)
+            except OSError:
+                pass
+        os.close(replacement_fd)
+        peer.close()
+
+
+def test_central_manager_boundary_failure_never_closes_reused_authority_fd(
+    tmp_path, monkeypatch
+):
+    """The caller relinquishes ownership before the manager can raise."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    run_dir = _make_run_dir(agent, em_id="em-manager-boundary-reused-authority-fd")
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+    replacement_fd = os.open(os.devnull, os.O_RDONLY)
+    reused_fd: int | None = None
+
+    def close_reuse_then_raise(_request, *, adopted_fd, **_kwargs):
+        nonlocal reused_fd
+        os.close(adopted_fd)
+        os.dup2(replacement_fd, adopted_fd)
+        reused_fd = adopted_fd
+        raise RuntimeError("manager boundary failed")
+
+    monkeypatch.setattr(mgr, "_enqueue_central_daemon_manager_run", close_reuse_then_raise)
+    monkeypatch.setattr(
+        daemon_tool.DaemonManager,
+        "_consume_driver_authority_lease_for_posix_handoff",
+        staticmethod(lambda _lease: adopted_fd),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="manager boundary failed"):
+            mgr._spawn_detached_lingtai_run(
+                run_dir,
+                task="authority handoff",
+                tools=[],
+                max_turns=1,
+                timeout_s=30,
+                group_id=None,
+                effective_llm={"provider": "fake", "model": "fake"},
+                context_token_limit=None,
+                prompt="",
+                authority_lease=object(),
+                use_central_manager=True,
+            )
+        assert reused_fd is not None
+        os.fstat(reused_fd)
+    finally:
+        if reused_fd is not None:
+            os.close(reused_fd)
+        else:
+            try:
+                os.close(adopted_fd)
+            except OSError:
+                pass
+        os.close(replacement_fd)
+        peer.close()
+
+
+def test_central_manager_wrapper_failure_closes_untransferred_authority_fd(
+    tmp_path, monkeypatch
+):
+    """The wrapper owns the fd until it reaches the manager boundary."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = endpoint.detach()
+
+    class _FailingWorkdir:
+        @property
+        def path(self):
+            raise RuntimeError("workdir unavailable")
+
+    monkeypatch.setattr(mgr, "_workdir", _FailingWorkdir())
+    try:
+        with pytest.raises(RuntimeError, match="workdir unavailable"):
+            mgr._enqueue_central_daemon_manager_run(
+                object(),
+                capsule={},
+                pool_size=1,
+                run_dir=object(),
+                adopted_fd=adopted_fd,
+            )
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        try:
+            os.close(adopted_fd)
+        except OSError:
+            pass
+        peer.close()
+
+
+@pytest.mark.parametrize("handoff", ["manager", "supervisor"])
+def test_profile_driver_handoff_failure_closes_authority_fd(
+    tmp_path, monkeypatch, handoff
+):
+    """Every failed profile handoff leaves the authority endpoint closed."""
+    from lingtai.adapters.acp.driver_authority import (
+        DriverChildEndpointLease,
+        DriverDerivedLaunchAdmissionAdapter,
+        DriverDerivedLaunchGrant,
+    )
+    from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
+
+    class _GrantingAuthority:
+        def request_derived_launch(self, _parent, _capability):
+            return DriverDerivedLaunchGrant(
+                ProviderAdmissionState.GRANTED,
+                "driver_grant",
+                audit_id="audit-driver-grant",
+                child_endpoint_lease=lease,
+            )
+
+    child, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    adopted_fd = child.fileno()
+    lease = DriverChildEndpointLease(child)
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent._requires_derived_launch_admission_port = True
+    agent._derived_launch_admission_port = DriverDerivedLaunchAdmissionAdapter(
+        _GrantingAuthority()
+    )
+    monkeypatch.setattr(
+        daemon_tool.DaemonManager,
+        "_should_use_central_daemon_manager",
+        lambda _self, _batch_count: handoff == "manager",
+    )
+
+    def fail_before_handoff(*_args, **_kwargs):
+        raise RuntimeError(f"{handoff} handoff failed")
+
+    if handoff == "manager":
+        def consume_then_fail(_self, _request, *, adopted_fd, **_kwargs):
+            os.close(adopted_fd)
+            raise RuntimeError(f"{handoff} handoff failed")
+
+        monkeypatch.setattr(
+            daemon_tool.DaemonManager,
+            "_enqueue_central_daemon_manager_run",
+            consume_then_fail,
+        )
+    else:
+        monkeypatch.setattr(
+            "lingtai.tools.daemon.supervisor_runtime.select_daemon_supervisor_adapter",
+            fail_before_handoff,
+        )
+
+    root = RootProviderAdmission(
+        f"root-driver-{handoff}-failure", RUNTIME_POLICY.policy_version
+    )
+    token = bind_provider_admission(root)
+    try:
+        result = agent.get_capability("daemon").handle(
+            {
+                "action": "emanate",
+                "tasks": [{"task": "test", "tools": []}],
+            }
+        )
+        assert result == {
+            "status": "error",
+            "message": f"{handoff} handoff failed",
+        }
+        peer.settimeout(1)
+        assert peer.recv(1) == b""
+    finally:
+        clear_provider_admission(token)
+        lease.close()
+        try:
+            os.close(adopted_fd)
+        except OSError:
+            pass
+        peer.close()
 
 
 def test_profile_driver_later_batch_denial_closes_earlier_lease_before_writes(

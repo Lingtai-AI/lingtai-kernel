@@ -444,6 +444,12 @@ Clause IDs are stable; each rule composes the linked normative source.
       call list for a legal root-to-one-hop path and `provider_calls == []` for
       each refused nested daemon/avatar path. This proves the recorder is live
       and rules out an empty assertion caused by a disconnected recorder.
+   9. The typed decision `source` is the exclusive indicator of where a
+      non-grant originated. Consumers MUST NOT infer origin from `reason_code`:
+      a policy label may legitimately be emitted by both Driver and local
+      policy. In particular, `nested_derived_launch_denied` is valid with
+      `DRIVER` and with `LOCAL_POLICY`; code that distinguishes those cases
+      MUST branch on `source`.
 
    Dynamic revoke freshness and propagation remain explicitly undelivered;
    these requirements reserve no claim that they are already implemented. A host that

@@ -44,6 +44,20 @@ class ProviderAdmissionState(str, Enum):
     INDETERMINATE = "indeterminate"
 
 
+class ProviderAdmissionDecisionSource(str, Enum):
+    """Where an admission decision's non-grant outcome originated.
+
+    A caller must not infer this from a reason string: a Driver policy denial
+    and a local transport failure are both fail-closed, but only the former is
+    a response from the remote authority.  ``LOCAL_POLICY`` covers checks made
+    before a Driver exchange (for example, a parent/capability mismatch).
+    """
+
+    DRIVER = "driver"
+    TRANSPORT = "transport"
+    LOCAL_POLICY = "local_policy"
+
+
 class DerivedLaunchEndpointLease(Protocol):
     """Opaque one-use child handoff with exactly one required cleanup action."""
 
@@ -133,6 +147,7 @@ class ProviderCallDecision:
 
     state: ProviderAdmissionState
     reason_code: str
+    source: ProviderAdmissionDecisionSource = ProviderAdmissionDecisionSource.LOCAL_POLICY
 
     @property
     def allowed(self) -> bool:
@@ -158,6 +173,7 @@ class DerivedLaunchDecision:
     child_endpoint_lease: DerivedLaunchEndpointLease | None = field(
         default=None, repr=False, compare=False
     )
+    source: ProviderAdmissionDecisionSource = ProviderAdmissionDecisionSource.LOCAL_POLICY
 
     @property
     def allowed(self) -> bool:
@@ -203,9 +219,11 @@ class ProviderAdmissionError(PermissionError):
         self,
         reason_code: str,
         state: ProviderAdmissionState = ProviderAdmissionState.DENIED,
+        source: ProviderAdmissionDecisionSource = ProviderAdmissionDecisionSource.LOCAL_POLICY,
     ):
         self.reason_code = reason_code
         self.state = state
+        self.source = source
         super().__init__(f"provider call was not admitted: {reason_code}")
 
 
@@ -338,6 +356,7 @@ def require_derived_launch_admission(
         or not isinstance(decision.state, ProviderAdmissionState)
         or not isinstance(decision.reason_code, str)
         or not decision.reason_code
+        or not isinstance(decision.source, ProviderAdmissionDecisionSource)
         or (
             decision.audit_id is not None
             and (not isinstance(decision.audit_id, str) or not decision.audit_id)
@@ -378,6 +397,7 @@ def require_provider_admission(port: ProviderCallAdmissionPort | None) -> None:
         or not isinstance(decision.state, ProviderAdmissionState)
         or not isinstance(decision.reason_code, str)
         or not decision.reason_code
+        or not isinstance(decision.source, ProviderAdmissionDecisionSource)
         or decision.state is not ProviderAdmissionState.GRANTED
     ):
         reason = (
@@ -393,7 +413,13 @@ def require_provider_admission(port: ProviderCallAdmissionPort | None) -> None:
             and isinstance(decision.state, ProviderAdmissionState)
             else ProviderAdmissionState.INDETERMINATE
         )
-        raise ProviderAdmissionError(reason, state)
+        source = (
+            decision.source
+            if isinstance(decision, ProviderCallDecision)
+            and isinstance(decision.source, ProviderAdmissionDecisionSource)
+            else ProviderAdmissionDecisionSource.LOCAL_POLICY
+        )
+        raise ProviderAdmissionError(reason, state, source)
 
 
 class ProviderAdmittedChatSession:

@@ -83,6 +83,9 @@ class DetachedDaemonExecutionHost:
         self._manifest = manifest
         self._capsule = capsule if isinstance(capsule, dict) else {}
         self._adopted_fd = adopted_fd
+        self._driver_authority = None
+        self._provider_call_admission_port = None
+        self._provider_admission_parent = None
         self._agent = DaemonSupervisorAgentStub(
             Path(manifest["parent_working_dir"]),
             log_fn=lambda event, **fields: run_dir.append_event(event, **fields),
@@ -194,6 +197,62 @@ class DetachedDaemonExecutionHost:
         self._manager_type = DaemonManager
         self._task_mcp_clients: list[object] = []
 
+    def adopt_derived_driver_authority(self) -> None:
+        """Consume this host's adopted daemon endpoint before derived work.
+
+        The endpoint is delivered only through B8's SCM_RIGHTS capsule.  This
+        execution child must never call ``authority_adapter_from_environment``:
+        that profile-only helper rejects and closes a derived endpoint by
+        design.  The capsule marker is not authority; it makes a lost
+        descriptor fail closed instead of running an unconstrained daemon.
+
+        The execution-child entrypoint calls this only after construction has
+        transferred descriptor ownership to this host.  On return or failure,
+        this method (or the Driver client it invokes) owns cleanup; callers
+        must not close the original descriptor number afterwards.
+        """
+        expected = self._capsule.get("driver_authority_required") is True
+        if not expected:
+            # B8a transports a generic optional descriptor too. Only the
+            # explicit Driver marker authorizes this host to consume it as an
+            # authority endpoint; otherwise the execution-child boundary
+            # retains ownership and will close it in its normal finally path.
+            return
+        adopted_fd = self._take_adopted_fd()
+        if adopted_fd is None:
+            from lingtai.adapters.acp.driver_authority import (
+                DriverAuthorityTransportError,
+            )
+
+            raise DriverAuthorityTransportError(
+                "derived daemon authority endpoint was not delivered"
+            )
+
+        from lingtai.adapters.acp.driver_authority import (
+            DriverAuthorityClient,
+            DriverAuthorityEndpointBindingMismatch,
+        )
+        from lingtai.kernel.provider_admission import ProviderCallClass
+
+        authority = None
+        try:
+            authority = DriverAuthorityClient.from_inherited_fd(adopted_fd)
+            if authority.identity.role != "derived":
+                raise DriverAuthorityEndpointBindingMismatch(
+                    "daemon execution requires a derived authority endpoint"
+                )
+            parent = authority.derived_provider_parent(ProviderCallClass.DAEMON)
+        except Exception:
+            if authority is not None:
+                authority.close()
+            # ``from_inherited_fd`` takes (and closes) the descriptor on its
+            # own failure. Preserve the typed endpoint error for callers.
+            raise
+
+        self._driver_authority = authority
+        self._provider_call_admission_port = authority
+        self._provider_admission_parent = parent
+
     def _take_adopted_fd(self) -> int | None:
         """Transfer the received child endpoint to its runtime consumer."""
         adopted_fd = self._adopted_fd
@@ -202,6 +261,7 @@ class DetachedDaemonExecutionHost:
 
     def close_adopted_fd(self) -> None:
         """Close an endpoint that was not consumed by authority composition."""
+        self._close_driver_authority()
         adopted_fd = self._adopted_fd
         self._adopted_fd = None
         if adopted_fd is None:
@@ -210,6 +270,15 @@ class DetachedDaemonExecutionHost:
             os.close(adopted_fd)
         except OSError:
             pass
+
+    def _close_driver_authority(self) -> None:
+        """Release the derived endpoint after its execution lifetime ends."""
+        authority = self._driver_authority
+        self._driver_authority = None
+        self._provider_call_admission_port = None
+        self._provider_admission_parent = None
+        if authority is not None:
+            authority.close()
 
     def __getattr__(self, name):
         """Forward unmodified parser/helper units to the production manager."""
@@ -549,7 +618,13 @@ class DetachedDaemonExecutionHost:
         if backend == "lingtai":
             schemas, dispatch = self._build_lingtai_surface()
             preset_llm = self._manifest.get("preset_llm") or self._manifest.get("llm")
+            provider_admission_token = None
             try:
+                parent = self._provider_admission_parent
+                if parent is not None:
+                    from lingtai.kernel.provider_admission import bind_provider_admission
+
+                    provider_admission_token = bind_provider_admission(parent)
                 return self._manager_type._run_emanation(
                     self,
                     self._run_dir.handle,
@@ -567,22 +642,30 @@ class DetachedDaemonExecutionHost:
                 )
             finally:
                 self._task_mcp_clients = []
+                if provider_admission_token is not None:
+                    from lingtai.kernel.provider_admission import clear_provider_admission
+
+                    clear_provider_admission(provider_admission_token)
+                self._close_driver_authority()
 
         self._rehydrate_native_mcp_files()
         spec = _backend_spec(backend)
         if spec is None or not spec.runner_attr:
             raise ValueError(f"unknown detached backend {backend!r}")
         runner = getattr(self._manager_type, spec.runner_attr)
-        return runner(
-            self,
-            self._run_dir.handle,
-            self._run_dir,
-            self._manifest["task"],
-            self._cancel_event,
-            self._timeout_event,
-            list(self._manifest.get("backend_argv") or []),
-            self._runtime_backend_env(),
-        )
+        try:
+            return runner(
+                self,
+                self._run_dir.handle,
+                self._run_dir,
+                self._manifest["task"],
+                self._cancel_event,
+                self._timeout_event,
+                list(self._manifest.get("backend_argv") or []),
+                self._runtime_backend_env(),
+            )
+        finally:
+            self._close_driver_authority()
 
     def _runtime_backend_env(self) -> dict[str, str]:
         """Return the reserved ``backend_options.env`` overlay for this run.
