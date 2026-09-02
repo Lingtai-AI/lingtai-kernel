@@ -38,10 +38,12 @@ from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 # ---------------------------------------------------------------------------
 
 # The exact current public enum order. Every lifecycle/preset/admin action
-# keeps its pre-migration spelling and position; ``summarize`` left for
+# keeps its spelling and stable position; ``target_refresh`` is the
+# post-migration other-agent refresh addition after self ``refresh``.
+# ``summarize`` left for
 # ``context`` and the two name actions arrived from ``psyche``.
 _LEGACY_ACTIONS = (
-    "refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear",
+    "refresh", "target_refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear",
     "nirvana", "presets", "name_set", "name_nickname", "manual",
 )
 _PUBLIC_ACTIONS = (*_LEGACY_ACTIONS[:-1], "settings", "manual")
@@ -445,7 +447,7 @@ def test_self_actions_need_no_karma(tmp_path: Path) -> None:
         "sleep", "refresh", "presets", "name_set", "name_nickname", "settings", "manual",
     }
     assert self_actions.isdisjoint(gated)
-    assert gated == {"lull", "interrupt", "suspend", "cpr", "clear", "nirvana"}
+    assert gated == {"target_refresh", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana"}
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ from .karma import (
     _cpr,
     _interrupt,
     _lull,
+    _target_refresh,
     _nirvana,
     _sleep,
     sleep_use_case,
@@ -53,6 +54,7 @@ __all__ = [
 _DESCRIPTION = get_description()
 _ACTION_HANDLERS = {
     "refresh": _refresh,
+    "target_refresh": _target_refresh,
     "sleep": _sleep,
     "lull": _lull,
     "interrupt": _interrupt,

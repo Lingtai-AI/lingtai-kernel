@@ -118,6 +118,39 @@ class TestSystemIntrinsicKarma:
         assert result["status"] == "asleep"
         assert (target_dir / ".sleep").is_file()
 
+    def test_target_refresh_requires_karma_admin(self, tmp_path):
+        agent = _make_agent(tmp_path, admin={})
+        from lingtai.tools.system import handle
+        result = handle(agent, {"action": "target_refresh", "input": {"address": "/some/path"}})
+        assert "error" in result
+
+    def test_target_refresh_writes_refresh_signal_file(self, tmp_path):
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        (target_dir / ".agent.json").write_text('{"agent_id": "t1"}')
+        (target_dir / ".agent.heartbeat").write_text(str(time.time()))
+
+        sender_base = tmp_path / "sender"
+        sender_base.mkdir()
+        agent = _make_agent(sender_base, admin={"karma": True})
+        from lingtai.tools.system import handle
+        result = handle(agent, {"action": "target_refresh", "input": {"address": str(target_dir)}})
+        assert result["status"] == "refresh_requested"
+        assert (target_dir / ".refresh").is_file()
+
+    def test_target_refresh_rejects_not_running_target(self, tmp_path):
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        (target_dir / ".agent.json").write_text('{"agent_id": "t1", "admin": {}}')
+
+        sender_base = tmp_path / "sender"
+        sender_base.mkdir()
+        agent = _make_agent(sender_base, admin={"karma": True})
+        from lingtai.tools.system import handle
+        result = handle(agent, {"action": "target_refresh", "input": {"address": str(target_dir)}})
+        assert "error" in result
+        assert not (target_dir / ".refresh").exists()
+
     def test_lull_rejects_asleep_target(self, tmp_path):
         target_dir = tmp_path / "target"
         target_dir.mkdir()

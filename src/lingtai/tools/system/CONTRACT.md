@@ -287,7 +287,8 @@ siblings.
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
 | `refresh` | — | `reason`, `preset`, `revert_preset` | `{status: "ok", message}` | `{status: "error", message}` on preset/revert conflict, unauthorized preset, oversize context, or activation failure |
-| `sleep` | — | `reason`, `force`, `delay` | `{status: "ok", message}` (self-sleep; refuses with an ok+message when notifications pending and not `force`; a finite positive `delay` arms the last-resort alarm) | `{status: "error", message}` for a non-number, bool, non-finite, zero, or negative `delay` |
+| `target_refresh` | `address`, `reason` | none | `{status: "refresh_requested", address}` | `{error: true, message}` if the caller lacks karma, the target is self/non-agent, or the target is not running |
+| `sleep` | - | `reason`, `force`, `delay` | `{status: "ok", message}` (self-sleep; refuses with an ok+message when notifications pending and not `force`; a finite positive `delay` arms the last-resort alarm) | `{status: "error", message}` for a non-number, bool, non-finite, zero, or negative `delay` |
 | `lull` | `address` | `reason` | `{status: "asleep", address}` | `{error: True, message}` (no karma, no/invalid address, self-target, target not running) |
 | `suspend` | `address` | `reason` | `{status: "suspended", address}` | `{error: True, message}` (as above) |
 | `cpr` | `address` | `reason` | `{status: "resuscitated", address}` | `{error: True, message}` (target already running, CPR unsupported, or observed child exit before a fresh heartbeat) |

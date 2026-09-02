@@ -847,21 +847,19 @@ uses that port for the two Notification-owned effective rows; no generic
 configuration or mutation surface is added (see
 `src/lingtai/tools/notification/CONTRACT.md`).
 
-`system` (`refresh | sleep | lull | interrupt | suspend | cpr | clear |
+`system` (`refresh | target_refresh | sleep | lull | interrupt | suspend | cpr | clear |
 nirvana | presets | name_set | name_nickname | settings | manual`) is the
-eleventh, and
-the third
-migrated *intrinsic*: its final model-facing root is likewise exactly `action`,
-`input`, `reasoning`, and `summarize`, and each action's arguments live only in
-that action's own strict `input` — so `address` belongs to the six address
-verbs, `preset`/`revert_preset` only to `refresh`, and `content` only to the
-two name actions; there is no public `system(action='summarize')`, and
-`items`/`rebuild` belong to no `system` action
-(see `src/lingtai/tools/system/CONTRACT.md`). It is also the eleventh declared
-official family: its static `DECLARATION` binds only `workdir`,
-`system_runtime`, and `identity`, and `karma.sleep_use_case` is the single
-self-sleep policy owner for both mounted and direct routes. Two facts are worth
-naming here because they are envelope consequences rather than local details.
+eleventh, and the third migrated *intrinsic*: its final model-facing root is
+likewise exactly `action`, `input`, `reasoning`, and `summarize`, and each
+action's arguments live only in that action's own strict `input` - so `address`
+belongs to the seven address verbs (including `target_refresh`),
+`preset`/`revert_preset` only to `refresh`, and `content` only to the two name
+actions; there is no public `system(action='summarize')`, and `items`/`rebuild`
+belong to no `system` action (see `src/lingtai/tools/system/CONTRACT.md`). It is
+also the eleventh declared official family: its static `DECLARATION` binds only
+`workdir`, `system_runtime`, and `identity`, and `karma.sleep_use_case` is the
+single self-sleep policy owner for both mounted and direct routes. Two facts are
+worth naming here because they are envelope consequences rather than local details.
 First, the family's three privilege classes (self, karma, karma+nirvana) are
 *per action*, so the closed per-action `input` is load-bearing for safety, not
 just for tidiness: `address` is undeclared on `sleep`, which means the
