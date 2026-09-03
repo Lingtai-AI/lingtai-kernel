@@ -104,9 +104,10 @@ capability names and lazy adapters.
 - `BEHAVIORS.md` — the paired LABT file: LP001 guards the closed LTP envelope,
   LP002 guards the Tool-to-MCP Plugin Contract's status, its two-class governed
   surface, its single selected wrapper form, the document graph, and the
-  current inventory: fourteen static official families (`mcp`, `avatar`,
-  `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
-  `soul`, `system`, `task_card`, `vision`, `web`), twenty grantable host names,
+  current inventory: fifteen static official families (`mcp`, `avatar`,
+  `context`, `daemon`, `email`, `file`, `plugin`, `psyche`, `notification`,
+  `shell`, `soul`, `system`, `task_card`, `vision`, `web`), twenty-one grantable
+  host names,
   and an empty former later-family target register.
 - `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
   defaults, normalization, setup, and check-caps metadata
@@ -140,6 +141,10 @@ capability names and lazy adapters.
   ninth, `notification` its tenth, `system` its eleventh, `daemon` its
   twelfth, `context` its thirteenth, and `plugin` its fourteenth
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
+- `psyche/` — mandatory public durable-self family: its static fifteenth
+  declaration preserves the six-action signpost/settings surface, binds only
+  `workdir` plus read-only `psyche_settings`, and retains Pad/LingTai composition
+  through its intrinsic lifecycle shim (`src/lingtai/tools/psyche/ANATOMY.md`).
 - `plugin/` — the `plugin` capability: the per-agent Agent Plugins
   (agent-plugins.org, v1.0.0) catalog and registration snapshot, structural twin
   of `mcp` with the same tool/service split; both independently opt into the

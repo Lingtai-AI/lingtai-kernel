@@ -155,15 +155,17 @@ handler exists to acquire a side effect. The flat
 dispatch in this package's own Host layer, per the no-double-wrap rule.
 
 Schema composition opts in with an inert callable so the reserved `settings`
-child is injected immediately before `manual`; per-call dispatch binds
-`build_settings_provider(agent)` to that same family. The provider captures the
-Agent-owned `(pad, pad_file)` snapshot and performs no file I/O. Agent
-reconstruction alone uses the canonical reader and resolver, then replaces the
-snapshot only after the complete prompt-section pass succeeds.
+child is injected immediately before `manual`. The static `DECLARATION` binds
+only `workdir` and `PsycheSettingsPort`; the provider reads the Agent-owned
+`(pad, pad_file)` snapshot through that one read-only operation and performs no
+file I/O. Agent reconstruction alone uses the canonical reader and resolver,
+then replaces the snapshot only after the complete prompt-section pass succeeds.
 
-`psyche` is a mandatory intrinsic: `tools/registry.py` wires it through
-`INTRINSICS`, and it composes its dispatching family per call rather than owning
-per-Agent state.
+`psyche` remains mandatory in `INTRINSICS`, marked `official_plugin=True`: the
+intrinsic entry is only the kernel hook/dispatch shim. `boot` runs the private
+Pad/LingTai composers and registers the static declaration, so the public schema
+and handler are claimed and mounted exactly once through the official registrar.
+Neither the binder nor settings provider receives an Agent.
 
 ## Contract rules
 

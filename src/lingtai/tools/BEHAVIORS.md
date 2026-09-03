@@ -84,10 +84,10 @@ repo root with the project's Python.
 ### Pass / Fail
 Pass when the suite passes and the closed-envelope observation holds for a real migrated family. Fail on an extra root property, on `reasoning`/`summarize` leaking into `input`, or on a summary replacing the recorded raw output; record the evidence trail in the task report.
 
-## Behavior LP002 — the shared declared host-plugin contract matches the current fourteen-family and twenty-grant inventory
+## Behavior LP002 — the shared declared host-plugin contract matches the current fifteen-family and twenty-one-grant inventory
 
 - **id**: LP002
-- **title**: the shared declared host-plugin contract matches the current fourteen-family and twenty-grant inventory
+- **title**: the shared declared host-plugin contract matches the current fifteen-family and twenty-one-grant inventory
 - **guards**: `lingtai-tool-protocol` §
   [Tool-to-MCP Plugin Contract](CONTRACT.md#tool-to-mcp-plugin-contract)
 - **runner**: any LingTai agent with `shell` and `file` access to a clean
@@ -105,13 +105,13 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 1. Read `src/lingtai/tools/CONTRACT.md`, section `### Tool-to-MCP Plugin
    Contract` (it sits under `## Contract rules`, between `### Non-goals` and
    `### Relationship to current runtime`). Confirm its opening **Status**
-   paragraph names exactly the fourteen static official families: `mcp`,
-   `avatar`, `context`, `daemon`, `email`, `file`, `plugin`, `notification`,
-   `shell`, `soul`, `system`, `task_card`, `vision`, and `web`, in that order;
-   identifies `mcp` as the base reference; names the exact twenty grantable host
+   paragraph names exactly the fifteen static official families: `mcp`,
+   `avatar`, `context`, `daemon`, `email`, `file`, `plugin`, `psyche`,
+   `notification`, `shell`, `soul`, `system`, `task_card`, `vision`, and `web`, in that order;
+   identifies `mcp` as the base reference; names the exact twenty-one grantable host
    names (`workdir`, `prompt_section`, `avatar_parent`, `context_runtime`,
    `daemon_runtime`, `email_runtime`, `file_io`, `plugin_catalog`,
-   `notification_state`, `notifications`, `configuration`, `soul_runtime`,
+   `psyche_settings`, `notification_state`, `notifications`, `configuration`, `soul_runtime`,
    `system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
    `task_card_notifications`, `active_provider`, `web_runtime`, and
    `provider_identity`); and says the former later-family target register is
@@ -167,7 +167,7 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
    Expect no output and shell exit status 1.
 
-   Then prove all fourteen landed declarations — the current base `mcp`, Avatar,
+   Then prove all fifteen landed declarations — the current base `mcp`, Avatar,
    Context, Daemon, Email, File, Plugin, Notification, Shell, Soul, System,
    Task Card, Vision, and Web — none of which goes through packaging:
 
@@ -180,13 +180,14 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
      tests/test_web_official_plugin.py tests/test_web_composition_port.py
    ```
 
-   Expect fourteen ordered pairs whose names are `mcp, avatar, context, daemon,
-   email, file, plugin, notification, shell, soul, system, task_card, vision,
-   web`,
+   Expect fifteen ordered pairs whose names are `mcp, avatar, context, daemon,
+   email, file, plugin, psyche, notification, shell, soul, system, task_card,
+   vision, web`,
    with requires respectively `workdir/prompt_section`, `workdir/avatar_parent`,
    `workdir/context_runtime`, `workdir/daemon_runtime`,
    `workdir/email_runtime`, `workdir/file_io`,
-   `workdir/prompt_section/plugin_catalog`, `workdir/notification_state`,
+   `workdir/prompt_section/plugin_catalog`, `workdir/psyche_settings`,
+   `workdir/notification_state`,
    `workdir/notifications/configuration`, `workdir/soul_runtime`,
    `workdir/system_runtime/identity`,
    `workdir/shutdown/task_card_lifecycle/task_card_notifications`,
@@ -194,7 +195,7 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
    `workdir/web_runtime/provider_identity`; then expect
    exactly `('mcp', 'avatar', 'context', 'daemon', 'email', 'file', 'plugin',
    'notification', 'shell', 'soul', 'system', 'task_card', 'vision', 'web')`,
-   then `True`. All fourteen declarations construct at import with no Agent,
+   then `True`. All fifteen declarations construct at import with no Agent,
    server, transport, or catalog record. The two File focused suites pass, proving its narrow
    adapter/grant, one mount, unchanged operations, sole package manual body at
    `file-manual`, and absent `capabilities/file`;
@@ -321,8 +322,8 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
 ### Expected evidence
 
-- [ ] Step 1: the Status paragraph names the fourteen static official families
-      in official order, the exact twenty grantable host names, and the empty
+- [ ] Step 1: the Status paragraph names the fifteen static official families
+      in official order, the exact twenty-one grantable host names, and the empty
       former later-family target register; its remaining claims stay scoped to
       their current declaration, registry, transport, or LTP-envelope owner.
 - [ ] Step 2: no unqualified "No LingTai-owned family ships as an MCP plugin"
@@ -333,7 +334,7 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
       Plugins and raw third-party schemas, and introduces no generic manifest
       compiler, admission engine, or wrapper runtime.
 - [ ] Step 4: `registry.py` contains no MCP-server packaging reference; all
-      fourteen declarations import without an Agent; their names and narrow
+      fifteen declarations import without an Agent; their names and narrow
       requirements match the exact `OFFICIAL_TOOL_PLUGIN_NAMES` tuple; and the
       selected focused suites pass.
 - [ ] Step 5: the curated descriptor/catalog route agrees with the governed
@@ -359,7 +360,7 @@ Pass when every box above is observed. **Fail loudly** — do not soften the
 report — if the contract section does not name exactly `mcp`, `avatar`,
 `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
 `soul`, `system`, `task_card`, `vision`, and `web` as the static official
-families, does not name the exact twenty grantable host names, or leaves the
+families, does not name the exact twenty-one grantable host names, or leaves the
 former later-family target register nonempty; if File does not require exactly
 `workdir`/`file_io`, exposes Agent/generic dispatch/mount authority, or installs
 a second/non-`file-manual` body; if Plugin does not require exactly

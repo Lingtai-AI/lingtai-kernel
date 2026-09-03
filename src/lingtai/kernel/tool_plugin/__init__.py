@@ -53,6 +53,7 @@ __all__ = [
     "DaemonRuntimePort",
     "PluginCatalogState",
     "PluginCatalogPort",
+    "PsycheSettingsPort",
     "NotificationStatePort",
     "NotificationPort",
     "ConfigurationPort",
@@ -99,9 +100,10 @@ def _settings_input_schema() -> dict[str, Any]:
 #:
 #: Earned, not enumerated: each name below is consumed by a real vertical
 #: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
-#: ``email``, ``file``, ``plugin``, ``notification``, ``shell``, ``soul``,
-#: ``system``, ``task_card``, ``vision``, or ``web``). Plugin
-#: consumes only the read-only ``plugin_catalog`` projection; File consumes
+#: ``email``, ``file``, ``plugin``, ``psyche``, ``notification``, ``shell``,
+#: ``soul``, ``system``, ``task_card``, ``vision``, or ``web``). Plugin
+#: consumes only the read-only ``plugin_catalog`` projection; Psyche consumes
+#: only its last-applied Pad configuration through ``psyche_settings``; File consumes
 #: ``workdir``/``file_io`` plus its factory-applied bounded
 #: ``configuration`` snapshot; Shell consumes
 #: ``workdir`` plus its explicit setup ``configuration`` and durable
@@ -132,6 +134,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "email_runtime",
     "file_io",
     "plugin_catalog",
+    "psyche_settings",
     "notification_state",
     "notifications",
     "configuration",
@@ -156,8 +159,8 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
 OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
-    "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "notification",
-    "shell", "soul", "system", "task_card", "vision", "web",
+    "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "psyche",
+    "notification", "shell", "soul", "system", "task_card", "vision", "web",
 )
 
 
@@ -230,6 +233,17 @@ class WorkdirPort(Protocol):
     @property
     def path(self) -> Path:
         """The agent working directory."""
+
+
+class PsycheSettingsPort(Protocol):
+    """Read Psyche's last successfully applied Pad configuration.
+
+    The tuple is the exact reconstruction-owned ``(pad, pad_file)`` snapshot.
+    It grants no prompt mutation, reconstruction, settings write, or Agent access.
+    """
+
+    def read_snapshot(self) -> tuple[str, str | None]:
+        """Return the current applied ``(pad, pad_file)`` snapshot."""
 
 
 class PromptSectionPort(Protocol):

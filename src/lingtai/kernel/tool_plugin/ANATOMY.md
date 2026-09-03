@@ -33,6 +33,10 @@ related_files:
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/plugin/manual/SKILL.md
+  - src/lingtai/tools/psyche/ANATOMY.md
+  - src/lingtai/tools/psyche/CONTRACT.md
+  - src/lingtai/tools/psyche/__init__.py
+  - src/lingtai/tools/psyche/settings.py
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/tools/notification/__init__.py
@@ -120,9 +124,10 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the nineteen kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+  - the twenty kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
     `FileIOPort`, `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
     read-only `PluginCatalogPort` (with detached `PluginCatalogState`),
+    read-only `PsycheSettingsPort`,
     `NotificationStatePort`, Shell's narrow durable `NotificationPort` and
     setup-only `ConfigurationPort`, Soul's explicit live-self `SoulRuntimePort`,
     System's bounded lifecycle `SystemRuntimePort` and durable naming
@@ -138,7 +143,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     label, never the service),
     and host-only `ToolMountPort`, plus File's
     structural `FileGrepMatch`/`FileTraversalStats` result Protocols;
-    `email_runtime` and `web_runtime` are also grantable (twenty grant names
+    `email_runtime` and `web_runtime` are also grantable (twenty-one grant names
     in `GRANTABLE_HOST_PORTS`) but their Protocols remain family-owned —
     Email's `EmailRuntimePort` and Web's `WebCompositionPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
@@ -164,7 +169,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   concrete operations/facts, Plugin's detached read-only catalog projection,
   and Notification Core's dismissal, delay, hook, and logging operations,
   alongside the existing MCP, Avatar, Context, Daemon, and Email adapters,
-  plus `AgentSoulRuntimeAdapter`/`agent_soul_runtime` for Soul's explicit
+  plus `AgentPsycheSettingsAdapter` for the one read-through applied Pad settings
+  snapshot, and `AgentSoulRuntimeAdapter`/`agent_soul_runtime` for Soul's explicit
   live-self runtime operations and
   `AgentSystemRuntimeAdapter`/`AgentIdentityAdapter`/`agent_system_runtime`
   for System's lifecycle and naming vocabularies (whose sleep members are
@@ -192,7 +198,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 - `src/lingtai/tools/mcp/__init__.py` — the current base reference slice.
   Its static declaration opts into the reserved SHOW-only settings child and
   binds the per-host family and protected prompt
-  section; Avatar, Context, Daemon, Email, File, Plugin, Notification, Shell,
+  section; Avatar, Context, Daemon, Email, File, Plugin, Psyche, Notification, Shell,
   Soul, System, Task Card, Vision, and Web are separately accepted vertical
   slices. The later-family target register is now empty; the reserved list is
   not an admission path.
@@ -535,8 +541,8 @@ component does not own.
   reviewed contract change), build its module-level `DECLARATION`, and route
   its approved composition hook through `register_agent_tool_plugins`; do not
   infer that every official family must be a dynamic `setup()` capability.
-  The fourteen actual slices are `mcp`, `avatar`, `context`, `daemon`, `email`,
-  `file`, `plugin`, `notification`, `shell`, `soul`, `system`, `task_card`,
+  The fifteen actual slices are `mcp`, `avatar`, `context`, `daemon`, `email`,
+  `file`, `plugin`, `psyche`, `notification`, `shell`, `soul`, `system`, `task_card`,
   `vision`, and `web`;
   Notification demonstrates an always-on injected family rather than a
   later-family target or normal opt-in capability, Task Card demonstrates a

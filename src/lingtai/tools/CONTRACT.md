@@ -70,9 +70,9 @@ maintenance: |
   tool; changing either choice is a normative change, so move
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
   `src/lingtai/mcp_catalog.json` in related_files with it. `mcp`, `avatar`,
-  `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
-  `soul`, `system`, `task_card`, `vision`, and `web` are the fourteen static
-  declared families today, in that official order; do not widen that claim
+  `context`, `daemon`, `email`, `file`, `plugin`, `psyche`, `notification`,
+  `shell`, `soul`, `system`, `task_card`, `vision`, and `web` are the fifteen
+  static declared families today, in that official order; do not widen that claim
   without another family's evidence.
 ---
 # LingTai Tool Protocol (LTP)
@@ -296,12 +296,12 @@ Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 
 **Status.** This section fixes the declaration, activation, dispatch, manual,
 host, identifier, and migration vocabulary that every official model-facing tool
-family shares. The accepted declared evidence is exactly the fourteen static
+family shares. The accepted declared evidence is exactly the fifteen static
 official families `mcp`, `avatar`, `context`, `daemon`, `email`, `file`,
 `plugin`, `notification`, `shell`, `soul`, `system`, `task_card`, `vision`, and
 `web`, in that order. `mcp` is the base reference; the remaining thirteen are
 accepted vertical slices with their narrow earned ports. The kernel's closed
-`GRANTABLE_HOST_PORTS` inventory has twenty grantable names: `workdir`,
+`GRANTABLE_HOST_PORTS` inventory has twenty-one grantable names: `workdir`,
 `prompt_section`, `avatar_parent`, `context_runtime`, `daemon_runtime`,
 `email_runtime`, `file_io`, `plugin_catalog`, `notification_state`,
 `notifications`, `configuration`, `soul_runtime`, `system_runtime`, `identity`,
@@ -351,7 +351,7 @@ this contract's classification:
   registered through `src/lingtai/tools/registry.py`. `mcp`, `avatar`,
   `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
   `soul`, `system`, `task_card`, `vision`, and `web` are first-party families
-  in scope; all fourteen are declared under the selected form. Every other
+  in scope; all fifteen are declared under the selected form. Every other
   family in this class is a future migration unit, and no family in this class
   is wrapped as an MCP plugin package today.
 - **Kernel-shipped MCP families** — the model-facing families this
@@ -904,7 +904,7 @@ Daemon manual rather than this shared contract.
 archive | delete | contacts | add_contact | remove_contact | edit_contact |
 manual`) is the thirteenth family migrated to this contract, and the widest
 child registry so far. Its final model-facing root is exactly `action`,
-`input`, `reasoning`, and `summarize`; the public tool name and all fourteen
+`input`, `reasoning`, and `summarize`; the public tool name and all fifteen
 action values are unchanged, and each action's arguments now live only in that
 action's own strict `input` (so `query` belongs to `search`, `filter`/`n` to
 `check`, and `attachments`/`delay`/`mode` to `send`) instead of the one open

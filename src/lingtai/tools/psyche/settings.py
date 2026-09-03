@@ -1,18 +1,21 @@
 """Read-only five-field settings provider for the Psyche family."""
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 from ..tool_family import SettingRow, SettingsProvider
+
+if TYPE_CHECKING:
+    from lingtai.kernel.tool_plugin import PsycheSettingsPort
 
 __all__ = ["build_settings_provider"]
 
 
-def build_settings_provider(agent: Any) -> SettingsProvider:
-    """Bind Psyche SHOW to the Agent's last applied Pad configuration."""
-    snapshot = getattr(agent, "_psyche_settings_snapshot", None)
+def build_settings_provider(settings: "PsycheSettingsPort") -> SettingsProvider:
+    """Bind Psyche SHOW to the host's last applied Pad configuration."""
 
     def provide() -> list[SettingRow]:
+        snapshot = settings.read_snapshot()
         if (
             not isinstance(snapshot, tuple)
             or len(snapshot) != 2
