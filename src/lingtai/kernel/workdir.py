@@ -130,11 +130,11 @@ def workdir_layout(path: Path | str) -> WorkdirLayout:
     root = Path(path) if isinstance(path, str) else path
     return WorkdirLayout(root)
 
-# Key names that carry (or point at) secret material — dropped recursively
-# before the resolved manifest is published. `*_env` names are included to
-# stay consistent with the `.agent.json` `_SENSITIVE_KEYS` hygiene. The token
-# alternative is anchored on `_`/edges so plural "tokens" fields
-# (e.g. `max_tokens`) survive.
+# Key names that carry secret material — dropped recursively before the
+# resolved manifest is published. `api_key_env` is deliberately retained: an
+# environment-variable name is non-secret configuration metadata, unlike the
+# value resolved from it. The token alternative is anchored on `_`/edges so
+# plural "tokens" fields (e.g. `max_tokens`) survive.
 _SECRET_KEY_RE = re.compile(
     r"(^|_)(api_?key|secret|secrets|password|passwd|credential|credentials"
     r"|private_key|access_key|token)(_|$)",
@@ -152,6 +152,11 @@ def _is_secret_key(key: Any) -> bool:
     """
     raw = str(key)
     normalized = re.sub(r"[^a-z0-9]+", "_", raw.lower()).strip("_")
+    # The variable name is safe to publish so consumers can explain how the
+    # runtime credential is resolved; only the resolved api_key value is
+    # secret-bearing.
+    if normalized == "api_key_env":
+        return False
     if _SECRET_KEY_RE.search(normalized):
         return True
     compact = re.sub(r"[^a-z0-9]+", "", raw.lower())
@@ -164,8 +169,9 @@ def _redact_secrets(value: Any) -> Any:
     """Return a deep copy of *value* with secret-bearing keys removed.
 
     Recurses through dicts and lists; any dict key matching
-    ``_SECRET_KEY_RE`` is dropped entirely (value and all). Non-container
-    leaves are returned as-is.
+    ``_SECRET_KEY_RE`` is dropped entirely (value and all), except the safe
+    ``api_key_env`` variable-name metadata. Non-container leaves are returned
+    as-is.
     """
     if isinstance(value, dict):
         return {
@@ -175,6 +181,30 @@ def _redact_secrets(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_redact_secrets(v) for v in value]
+    return value
+
+
+def _redact_persisted_api_keys(value: Any) -> Any:
+    """Return a JSON-shaped copy with plaintext API-key fields removed.
+
+    This is intentionally narrower than :func:`_redact_secrets`.  The latter
+    publishes a deliberately secret-free *derived* manifest and therefore
+    removes token/password/credential-like keys too.  ``init.json`` is
+    user-owned configuration: preset activation/default persistence must only
+    remove the supported credential field, ``api_key`` (including its common
+    punctuation/case spellings), while preserving every other authored field,
+    including the non-secret ``api_key_env`` variable name.
+    """
+    if isinstance(value, dict):
+        result: dict[Any, Any] = {}
+        for key, item in value.items():
+            compact = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+            if compact == "apikey":
+                continue
+            result[key] = _redact_persisted_api_keys(item)
+        return result
+    if isinstance(value, list):
+        return [_redact_persisted_api_keys(item) for item in value]
     return value
 
 

@@ -2051,7 +2051,6 @@ class Agent(BaseAgent):
             OSError: the on-disk write failed (init.json untouched)
         """
         import json
-        import os
 
         init_path = self._working_dir / "init.json"
         data = json.loads(init_path.read_text(encoding="utf-8"))
@@ -2064,8 +2063,10 @@ class Agent(BaseAgent):
 
         preset_llm = dict(preset_manifest.get("llm") or manifest.get("llm") or {})
         # Context limits are System-owned runtime policy, never init.json
-        # configuration.  Keep a preset's provider/model selection but do not
-        # hand its context value into the activated init document.
+        # configuration. Keep a preset's provider/model selection but do not
+        # hand its context value into the activated init document. The selected
+        # preset's API key is runtime material: the active preset is
+        # re-materialized on every read rather than persisted here.
         preset_llm.pop("context_limit", None)
         manifest["llm"] = preset_llm
         manifest["capabilities"] = preset_manifest.get(
@@ -2093,11 +2094,22 @@ class Agent(BaseAgent):
 
         self._strip_hidden_runtime_manifest_settings(data)
 
-        # Atomic write
-        tmp = init_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False),
-                       encoding="utf-8")
-        os.replace(str(tmp), str(init_path))
+        # Sanitize the complete persistent document, including nested
+        # capability kwargs that may carry provider api_key fields. This
+        # targeted copy removes only the supported plaintext API-key field,
+        # retaining provider/model/base_url/api_key_env and all other authored
+        # configuration.
+        from .kernel._fsutil import atomic_write_text
+        from .kernel.workdir import _redact_persisted_api_keys
+        persistent = _redact_persisted_api_keys(data)
+
+        # Atomic write. The shared writer uses a unique same-directory temp and
+        # removes it on every failed write/replace, so no credential-bearing
+        # or stale temporary document can remain.
+        atomic_write_text(
+            init_path,
+            json.dumps(persistent, indent=2, ensure_ascii=False),
+        )
 
     def _activate_default_preset(self) -> None:
         """Read manifest.preset.default and activate it. Used by AED auto-fallback."""

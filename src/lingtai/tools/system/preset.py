@@ -15,14 +15,25 @@ def _update_default_preset(agent, preset_name: str) -> None:
     """
     import json as _json
     try:
+        from lingtai.kernel._fsutil import atomic_write_text
+        from lingtai.kernel.workdir import _redact_persisted_api_keys
+
         init_path = agent._working_dir / "init.json"
         data = _json.loads(init_path.read_text(encoding="utf-8"))
         preset_block = data.setdefault("manifest", {}).setdefault("preset", {})
         if preset_block.get("default") != preset_name:
             preset_block["default"] = preset_name
-            init_path.write_text(
-                _json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
+            # This writer runs after activation and must not reintroduce any
+            # plaintext credentials that were present in the old init snapshot.
+            # Use the shared unique-sibling-temp writer so failed writes clean up
+            # and concurrent writers cannot collide on one fixed temp name.
+            atomic_write_text(
+                init_path,
+                _json.dumps(
+                    _redact_persisted_api_keys(data),
+                    indent=2,
+                    ensure_ascii=False,
+                ) + "\n",
             )
             agent._log("preset_default_persisted", preset=preset_name)
     except Exception as exc:

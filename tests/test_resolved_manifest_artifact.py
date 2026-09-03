@@ -108,7 +108,7 @@ def test_redact_secrets_drops_secret_keys_keeps_public():
     assert llm["api_compat"] == "openai"
     assert llm["context_limit"] == 128000
     assert "api_key" not in llm
-    assert "api_key_env" not in llm  # consistent with .agent.json hygiene
+    assert llm["api_key_env"] == "DEEPSEEK_API_KEY"
     caps = out["capabilities"]
     assert "api_key" not in caps["web_search"]
     assert caps["telegram"] == {"chat_id": 123}
@@ -210,17 +210,16 @@ def test_artifact_redacts_api_key_like_secrets(tmp_path, monkeypatch):
     wd = _make_workdir(
         tmp_path,
         llm={"provider": "deepseek", "model": "deepseek-v4-flash",
-             "api_key": secret},
+             "api_key": secret, "api_key_env": "DEEPSEEK_API_KEY"},
         manifest_extra={"capabilities": {
-            "file": {},
-            "web_search": {"provider": "inherit"},
+            "file": {"provider": "inherit"},
         }},
     )
     a = _make_probe_agent(wd)
     data = a._read_init()
     assert data is not None
     # inherit expansion really copied the secret into capability kwargs
-    assert data["manifest"]["capabilities"]["web_search"]["api_key"] == secret
+    assert data["manifest"]["capabilities"]["file"]["api_key"] == secret
 
     artifact_text = (wd / "system" / "manifest.resolved.json").read_text()
     assert secret not in artifact_text
@@ -229,7 +228,8 @@ def test_artifact_redacts_api_key_like_secrets(tmp_path, monkeypatch):
     assert "api_key" not in llm
     assert llm["provider"] == "deepseek"
     assert llm["model"] == "deepseek-v4-flash"
-    assert "api_key" not in artifact["manifest"]["capabilities"]["web_search"]
+    assert llm["api_key_env"] == "DEEPSEEK_API_KEY"
+    assert "api_key" not in artifact["manifest"]["capabilities"]["file"]
     # no half-written temp file left behind by the atomic write
     assert not (wd / "system" / "manifest.resolved.json.tmp").exists()
 
