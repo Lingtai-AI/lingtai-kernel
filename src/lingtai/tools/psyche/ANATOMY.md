@@ -5,6 +5,10 @@ related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/skills/ANATOMY.md
   - src/lingtai/tools/tool_family/ANATOMY.md
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/tools/registry.py
   - src/lingtai/tools/psyche/__init__.py
   - src/lingtai/tools/psyche/settings.py
   - src/lingtai/agent.py
@@ -29,39 +33,42 @@ Mandatory LTP v2 family that is the one public root for the four durable
 domains (`pad + lingtai + knowledge + skills = psyche`). Five actions are
 read-only manual loaders; the reserved `settings` child returns two fully
 redacted Psyche-owned Pad rows. The package owns no domain state, catalog, or
-composer of its own. Its only non-dispatch lifecycle code is `boot`, which
-invokes composers the domain packages still own.
+composer of its own. Its static official declaration binds only `workdir` and
+the read-only `psyche_settings` snapshot Port. Its `boot` keeps the mandatory
+intrinsic lifecycle shim, invokes the domain-owned composers, then mounts the
+one public handler through the declared ToolPlugin registrar.
 
 ## Components
 
 - `DOMAIN_MANUALS` — the one fixed registry mapping each domain action to the
-  installed manual it loads (`src/lingtai/tools/psyche/__init__.py:74-90`).
+  installed manual it loads (`src/lingtai/tools/psyche/__init__.py:58-64`).
 - `ACTION_ORDER` — the exact public inventory `pad | lingtai | knowledge |
   skills | settings | manual`, derived from the composed family so injected
-  settings cannot drift (`src/lingtai/tools/psyche/__init__.py:124-128`).
+  settings cannot drift (`src/lingtai/tools/psyche/__init__.py:195-211`).
 - `_ROUTER_MANUAL` — the routing-table manual name loaded by the reserved
-  `manual` child (`src/lingtai/tools/psyche/__init__.py:92-94`).
+  `manual` child (`src/lingtai/tools/psyche/__init__.py:66-72`).
 - `_build_children` — builds all five manual children from the shared
   `build_manual_child` loader with one strict-empty input schema
-  (`src/lingtai/tools/psyche/__init__.py:99-121`).
+  (`src/lingtai/tools/psyche/__init__.py:95-106`).
 - `_FAMILY`, `_ACTION_ENUM_DESCRIPTION`, `get_description`, `get_schema` —
   settings-opted schema-only family plus the model-facing routing prose
-  (`src/lingtai/tools/psyche/__init__.py:124-177`).
+  (`src/lingtai/tools/psyche/__init__.py:109-149`).
 - `settings.py::build_settings_provider` — binds the Agent's last successfully
   reconstructed Pad snapshot into the exact two-row provider; both rows carry
   the private full-redaction marker and the provider performs no source I/O
-  (`src/lingtai/tools/psyche/settings.py:11-43`).
+  (`src/lingtai/tools/psyche/settings.py:14-46`).
 - `_adapt_manual_result` — the one post-dispatch Host adapter producing the flat
   `{status, manual, manual_path}` shape
-  (`src/lingtai/tools/psyche/__init__.py:180-195`).
-- `handle` — drops intrinsic `_tc_id`, binds the per-Agent settings provider,
-  dispatches through the generic family, and renders Psyche-shaped
-  unknown-action errors
-  (`src/lingtai/tools/psyche/__init__.py:198-224`).
+  (`src/lingtai/tools/psyche/__init__.py:152-161`).
+- `_bind` / `DECLARATION` — statically declare the four operational actions plus
+  reserved settings/manual children, bind only `workdir`/`psyche_settings`, drop
+  intrinsic `_tc_id`, dispatch through the generic family, and preserve
+  Psyche-shaped unknown-action errors
+  (`src/lingtai/tools/psyche/__init__.py:164-211`).
 - `boot` — lifecycle only: runs the Pad and LingTai domains' private composers
   once at construction, since those packages are no longer registered intrinsics
   and the kernel boot loop no longer reaches them
-  (`src/lingtai/tools/psyche/__init__.py:227-252`).
+  (`src/lingtai/tools/psyche/__init__.py:214-227`).
 
 ## Connections
 
@@ -88,7 +95,7 @@ invokes composers the domain packages still own.
   delegates composition to `pad._pad_load`, and commits the narrow
   `(pad, pad_file)` discovery snapshot only after the complete section pass
   succeeds. No Psyche public action reaches that edge or rereads either source
-  (`src/lingtai/agent.py:2479-2784`).
+  (`src/lingtai/agent.py:2479-2788`).
 
 ## Composition
 

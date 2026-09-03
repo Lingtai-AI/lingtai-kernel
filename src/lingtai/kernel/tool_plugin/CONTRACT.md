@@ -234,6 +234,7 @@ capability.
 | `NotificationStatePort` | `dismiss(channel, *, force, reason, event_id=None, ref_id=None)`, `delay(channel, seconds)`, hook operations, `read_settings() -> tuple[int, int]`, bounded `log` | Notification-only Core delegation. `read_settings` returns the fresh effective payload cap and delay ceiling through canonical resolvers; it grants no configuration object or writer. `AgentNotificationStateAdapter` owns only callbacks bound to the live Agent; it hands the family no Agent, Store, fingerprint, producer state, generic dispatch, or mount seam. Notification Core retains dismissal authorization, stale-delivery comparison, producer guards, acknowledgement, delay/timer, hook-manifest, and logging policy. |
 | `EmailRuntimePort` (Email-owned) | `handle_email(EmailRuntimeRequest) -> EmailResult` | Email-only manager boundary. The host `AgentEmailRuntimeAdapter` rejects foreign declared actions, reads the current `agent._email_manager` at call time, and invokes it once with already-normalized `{'action': request.action, **dict(request.input)}`; it neither captures `_intrinsics` nor recurses through an official handler. |
 | `PluginCatalogPort` | `read_state() -> PluginCatalogState` | Return a detached read-only projection of Agent Plugins registration/discovery facts: boot snapshot, configured plugin paths, inherited skill paths, and skills availability. It cannot validate, register, prune, launch, write, or mount. |
+| `PsycheSettingsPort` | `read_snapshot() -> tuple[str, str | None]` | Return only Psyche's last successfully applied `(pad, pad_file)` reconstruction snapshot. It grants no Agent, source read, prompt mutation, reconstruction, or settings write. |
 | `NotificationPort` | `publish_system(...) -> bool`; `publish_channel(channel, payload, ref_id=...) -> bool` | Publish an idempotent durable system event or a latest-channel payload without reaching an Agent/store. Shell uses exactly these two operations for its existing async watchdog and completion wake semantics. It is distinct from `NotificationStatePort`, which grants Notification Core's mirror/hook administration. |
 | `ConfigurationPort` | `values -> Mapping[str, Any]` | Immutable copied values explicitly selected by capability setup for this one bind (Shell policy and dialect override, and Vision's `VisionConfiguration` snapshot fields, today); no Agent configuration lookup or write operation. |
 | `SoulRuntimePort` | bounded self-state, consultation, cadence, and Soul-notification operations | Soul's explicit live-self vocabulary; no Agent, generic attribute escape hatch, tool mount, or unrelated capability API. |
@@ -248,10 +249,10 @@ capability.
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-exactly twenty grantable names: `workdir`, `prompt_section`, `avatar_parent`,
+exactly twenty-one grantable names: `workdir`, `prompt_section`, `avatar_parent`,
 `context_runtime`,
 `daemon_runtime`, `email_runtime`, `file_io`, `plugin_catalog`,
-`notification_state`, `notifications`, `configuration`, `soul_runtime`,
+`psyche_settings`, `notification_state`, `notifications`, `configuration`, `soul_runtime`,
 `system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
 `task_card_notifications`, `active_provider`, `web_runtime`, and
 `provider_identity`: `mcp`
@@ -262,7 +263,8 @@ Email-owned `email_runtime`; File consumes exactly `workdir`, kernel-owned
 bounded factory snapshot (the sensitive sidecar value is private and redacted
 before projection); and Plugin consumes `workdir`, its own
 `prompt_section`, and the
-read-only `plugin_catalog` projection; Shell consumes `workdir` plus
+read-only `plugin_catalog` projection; Psyche consumes `workdir` plus only the
+read-only `psyche_settings` snapshot; Shell consumes `workdir` plus
 `notifications` and `configuration` for its existing durable async execution
 semantics; Soul consumes `workdir` plus its explicit `soul_runtime`
 live-self operations vocabulary; System consumes `workdir` plus its

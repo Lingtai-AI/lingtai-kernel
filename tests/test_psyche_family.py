@@ -44,6 +44,15 @@ def _call(agent, action, action_input=None, **root):
     return agent._intrinsics["psyche"](args)
 
 
+def _settings_provider(agent):
+    from lingtai.adapters.tool_plugin_host import AgentPsycheSettingsAdapter
+    from lingtai.tools.psyche.settings import build_settings_provider
+
+    return build_settings_provider(
+        AgentPsycheSettingsAdapter(lambda: agent._psyche_settings_snapshot)
+    )
+
+
 def _fs_digest(root):
     h = hashlib.sha256()
     for f in sorted(p for p in root.rglob("*") if p.is_file()):
@@ -95,16 +104,28 @@ def test_root_allof_correlates_each_action_const_with_its_input_schema():
         assert cond["then"]["properties"]["input"]["additionalProperties"] is False
 
 
-def test_registered_exactly_once_as_an_intrinsic(tmp_path):
+def test_registered_exactly_once_as_a_mandatory_official_plugin(tmp_path):
+    from lingtai.adapters.tool_plugin_host import agent_host_ports
+    from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
     from lingtai.tools.registry import BUILTIN_TOOLS, INTRINSICS
 
-    assert INTRINSICS["psyche"]["module"] is psyche_tool
+    assert INTRINSICS["psyche"] == {
+        "module": psyche_tool,
+        "official_plugin": True,
+    }
+    assert "psyche" in OFFICIAL_TOOL_PLUGIN_NAMES
     assert "psyche" not in BUILTIN_TOOLS
 
     agent = _agent(tmp_path)
     try:
-        schema_names = [s.name for s in agent._build_tool_schemas()]
-        assert schema_names.count("psyche") == 1
+        assert psyche_tool.DECLARATION.requires == ("workdir", "psyche_settings")
+        assert set(agent_host_ports(agent, "psyche")) == {"workdir", "psyche_settings"}
+        assert agent.official_tool_plugins["psyche"] is psyche_tool.DECLARATION
+        assert [s.name for s in agent._tool_schemas].count("psyche") == 1
+        assert list(name for name in agent._tool_handlers if name == "psyche") == [
+            "psyche"
+        ]
+        assert [s.name for s in agent._build_tool_schemas()].count("psyche") == 1
     finally:
         agent.stop(timeout=1.0)
 
@@ -183,8 +204,6 @@ def test_router_manual_is_a_routing_table_naming_all_four_domains(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_settings_provider_has_exact_applied_reconstruction_rows(tmp_path):
-    from lingtai.tools.psyche.settings import build_settings_provider
-
     agent = _agent(tmp_path)
     try:
         pad_source = agent._working_dir / "pad-source.md"
@@ -202,7 +221,7 @@ def test_settings_provider_has_exact_applied_reconstruction_rows(tmp_path):
         )
         agent._reconstruct_context()
 
-        provider = build_settings_provider(agent)
+        provider = _settings_provider(agent)
         rows = provider()
         assert [row.key for row in rows] == ["pad", "pad_file"]
         assert [row.current for row in rows] == [
@@ -218,9 +237,9 @@ def test_settings_provider_has_exact_applied_reconstruction_rows(tmp_path):
         ]
 
         pad_source.write_text("FRESH PAD FROM FILE", encoding="utf-8")
-        assert build_settings_provider(agent)()[0].current == "PAD FROM FILE"
+        assert _settings_provider(agent)()[0].current == "PAD FROM FILE"
         agent._reconstruct_context()
-        assert build_settings_provider(agent)()[0].current == "FRESH PAD FROM FILE"
+        assert _settings_provider(agent)()[0].current == "FRESH PAD FROM FILE"
 
         (agent._working_dir / "init.json").write_text(
             json.dumps({
@@ -233,12 +252,12 @@ def test_settings_provider_has_exact_applied_reconstruction_rows(tmp_path):
             }),
             encoding="utf-8",
         )
-        assert [row.current for row in build_settings_provider(agent)()] == [
+        assert [row.current for row in _settings_provider(agent)()] == [
             "FRESH PAD FROM FILE",
             str(pad_source),
         ]
         agent._reconstruct_context()
-        fallback_rows = build_settings_provider(agent)()
+        fallback_rows = _settings_provider(agent)()
         assert [row.current for row in fallback_rows] == [
             "INLINE FALLBACK",
             str(agent._working_dir / "missing-pad-source.md"),
@@ -252,8 +271,6 @@ def test_settings_provider_has_exact_applied_reconstruction_rows(tmp_path):
 
 
 def test_full_setup_binds_resolved_pad_snapshot_and_prompt(tmp_path):
-    from lingtai.tools.psyche.settings import build_settings_provider
-
     agent = _agent(tmp_path)
     try:
         pad_source = agent._working_dir / "setup-pad-source.md"
@@ -275,7 +292,7 @@ def test_full_setup_binds_resolved_pad_snapshot_and_prompt(tmp_path):
 
         agent._setup_from_init()
 
-        assert [row.current for row in build_settings_provider(agent)()] == [
+        assert [row.current for row in _settings_provider(agent)()] == [
             "SETUP PAD",
             str(pad_source),
         ]
@@ -329,8 +346,6 @@ def test_settings_success_is_exactly_five_projected_fields_and_redacted(tmp_path
 
 
 def test_malformed_ambient_init_preserves_applied_settings_snapshot(tmp_path):
-    from lingtai.tools.psyche.settings import build_settings_provider
-
     agent = _agent(tmp_path)
     try:
         (agent._working_dir / "init.json").write_text(
@@ -344,7 +359,7 @@ def test_malformed_ambient_init_preserves_applied_settings_snapshot(tmp_path):
             encoding="utf-8",
         )
         agent._reconstruct_context()
-        assert build_settings_provider(agent)()[0].current == "APPLIED PRIVATE CONTENT"
+        assert _settings_provider(agent)()[0].current == "APPLIED PRIVATE CONTENT"
 
         (agent._working_dir / "init.json").write_text(
             '{"pad":"private content"', encoding="utf-8",
@@ -352,11 +367,11 @@ def test_malformed_ambient_init_preserves_applied_settings_snapshot(tmp_path):
         result = _call(agent, "settings")
         assert [row["key"] for row in result["settings"]] == ["pad", "pad_file"]
         assert "private content" not in repr(result)
-        assert build_settings_provider(agent)()[0].current == "APPLIED PRIVATE CONTENT"
+        assert _settings_provider(agent)()[0].current == "APPLIED PRIVATE CONTENT"
 
         with pytest.raises(RuntimeError, match="init.json exists but could not be read"):
             agent._reconstruct_context()
-        assert build_settings_provider(agent)()[0].current == "APPLIED PRIVATE CONTENT"
+        assert _settings_provider(agent)()[0].current == "APPLIED PRIVATE CONTENT"
         assert "settings" in _call(agent, "settings")
     finally:
         agent.stop(timeout=1.0)
@@ -638,8 +653,10 @@ def test_any_input_key_is_rejected_before_the_selected_child_runs(
         def _boom(*_a, **_k):  # pragma: no cover - must never run
             raise AssertionError("selected Psyche child ran despite invalid input")
 
+        from lingtai.adapters.tool_plugin_host import AgentPsycheSettingsAdapter
+
         monkeypatch.setattr(manual_loader, "load_installed_manual", _boom)
-        monkeypatch.setattr(psyche_tool, "build_settings_provider", lambda _agent: _boom)
+        monkeypatch.setattr(AgentPsycheSettingsAdapter, "read_snapshot", _boom)
         result = _call(agent, action, {"files": ["x"]})
         assert result["error_code"] == "INVALID_ARGUMENT"
         assert result["message"] == "unsupported psyche input field"

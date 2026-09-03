@@ -75,7 +75,7 @@ INTRINSICS: dict[str, dict[str, Any]] = {
     "email": {"module": email, "official_plugin": True},
     "system": {"module": system, "official_plugin": True},
     "context": {"module": context, "official_plugin": True},
-    "psyche": {"module": psyche},
+    "psyche": {"module": psyche, "official_plugin": True},
     "soul": {"module": soul},
 }
 

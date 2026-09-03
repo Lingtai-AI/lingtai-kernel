@@ -44,6 +44,7 @@ from lingtai.kernel.tool_plugin import (
 
 __all__ = [
     "AgentWorkdirAdapter",
+    "AgentPsycheSettingsAdapter",
     "AgentActiveProviderAdapter",
     "AgentProviderIdentityAdapter",
     "AgentPromptSectionAdapter",
@@ -85,6 +86,19 @@ class AgentWorkdirAdapter:
 
     @property
     def path(self) -> Path:
+        return self._read()
+
+
+class AgentPsycheSettingsAdapter:
+    """``PsycheSettingsPort`` over the last applied reconstruction snapshot."""
+
+    __slots__ = ("_read",)
+
+    def __init__(self, read: Callable[[], tuple[str, str | None]]) -> None:
+        self._read = read
+
+    def read_snapshot(self) -> tuple[str, str | None]:
+        """Return the current immutable ``(pad, pad_file)`` pair."""
         return self._read()
 
 
@@ -1583,8 +1597,9 @@ def agent_host_ports(
 ) -> dict[str, Any]:
     """Build the complete grantable table for one declaration on *agent*.
 
-    The table preserves the landed MCP, Avatar, Plugin, Context, Daemon, Email,
-    and File wiring while constructing only each declaration's earned adapter.
+    The table preserves the landed MCP, Avatar, Plugin, Psyche, Context, Daemon,
+    Email, and File wiring while constructing only each declaration's earned adapter.
+    Psyche receives only its read-through applied Pad settings snapshot;
     Notification receives its narrow state port at this composition boundary, and
     Shell receives its narrow durable-notification port here too; Shell's
     setup-selected ``configuration`` port arrives through ``extra_ports``.
@@ -1630,6 +1645,10 @@ def agent_host_ports(
         ports["plugin_catalog"] = AgentPluginCatalogAdapter(
             lambda: getattr(agent, "_plugin_registration", {}),
             lambda: getattr(agent, "_capabilities", ()),
+        )
+    elif plugin_name == "psyche":
+        ports["psyche_settings"] = AgentPsycheSettingsAdapter(
+            lambda: getattr(agent, "_psyche_settings_snapshot", None)
         )
     elif plugin_name == "notification":
         # Import Notification Core lazily at the composition-root boundary. The
