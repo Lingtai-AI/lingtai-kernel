@@ -21,6 +21,7 @@ __all__ = [
     "build_settings_provider",
     "read_prompt_owner_values",
     "read_resolved_prompt_inputs",
+    "serialize_prompt_owner_document",
 ]
 
 
@@ -62,6 +63,42 @@ class PsycheSettingsSnapshot:
     covenant_file: str | None = None
     comment: str = ""
     comment_file: str | None = None
+
+
+def serialize_prompt_owner_document(
+    *,
+    base_prompt: str | None = None,
+    base_prompt_file: str | None = None,
+    covenant: str | None = None,
+    covenant_file: str | None = None,
+    comment: str | None = None,
+    comment_file: str | None = None,
+) -> str:
+    """Serialize one strict v1 Psyche prompt-owner document.
+
+    ``None`` omits an optional owner field; every present value must be a
+    string. This is the one writer-side authority for the schema read below.
+    """
+    values = {
+        "base_prompt": base_prompt,
+        "base_prompt_file": base_prompt_file,
+        "covenant": covenant,
+        "covenant_file": covenant_file,
+        "comment": comment,
+        "comment_file": comment_file,
+    }
+    document: dict[str, int | str] = {"schema_version": _SCHEMA_VERSION}
+    for key in _OWNER_VALUE_KEYS:
+        value = values[key]
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise PsycheSettingsError(f"Psyche settings {key} must be a string")
+        document[key] = value
+    content = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
+    if len(content.encode("utf-8")) > _MAX_SETTINGS_BYTES:
+        raise PsycheSettingsError("Psyche settings exceeds the 64 KiB limit")
+    return content
 
 
 def _closed_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -223,9 +260,32 @@ def build_settings_provider(settings: "PsycheSettingsPort") -> SettingsProvider:
     """Bind Psyche SHOW to the host's last applied owner configuration."""
 
     def provide() -> list[SettingRow]:
-        snapshot = settings.read_snapshot()
-        if not isinstance(snapshot, PsycheSettingsSnapshot):
-            raise RuntimeError("Psyche configuration snapshot is unavailable")
+        source = settings.read_snapshot()
+        try:
+            values = {
+                "pad": source.pad,
+                "pad_file": source.pad_file,
+                "base_prompt": source.base_prompt,
+                "base_prompt_file": source.base_prompt_file,
+                "covenant": source.covenant,
+                "covenant_file": source.covenant_file,
+                "comment": source.comment,
+                "comment_file": source.comment_file,
+            }
+        except (AttributeError, TypeError) as exc:
+            raise RuntimeError("Psyche configuration snapshot is unavailable") from exc
+        for key in ("pad", "base_prompt", "covenant", "comment"):
+            if not isinstance(values[key], str):
+                raise RuntimeError("Psyche configuration snapshot is unavailable")
+        for key in (
+            "pad_file",
+            "base_prompt_file",
+            "covenant_file",
+            "comment_file",
+        ):
+            if values[key] is not None and not isinstance(values[key], str):
+                raise RuntimeError("Psyche configuration snapshot is unavailable")
+        snapshot = PsycheSettingsSnapshot(**values)
         return [
             SettingRow(
                 "pad",

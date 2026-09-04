@@ -13,12 +13,18 @@ related_files:
   - src/lingtai/tools/psyche/__init__.py
   - src/lingtai/tools/psyche/settings.py
   - src/lingtai/agent.py
+  - src/lingtai/cli_project.py
+  - src/lingtai/kernel/project/__init__.py
+  - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/psyche/glossary-en.md
   - src/lingtai/tools/psyche/glossary-zh.md
   - src/lingtai/tools/psyche/glossary-wen.md
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
   - tests/test_psyche_family.py
   - tests/test_psyche_prompt_settings.py
+  - tests/test_deep_refresh.py
+  - tests/test_project_creation.py
+  - tests/test_tool_family_avatar_migration.py
   - tests/test_tool_settings_contract.py
 maintenance: |
   Keep paths real, repo-relative, duplicate-free, and reciprocal with the paired
@@ -57,11 +63,12 @@ registrar.
 - `_FAMILY`, `_ACTION_ENUM_DESCRIPTION`, `get_description`, `get_schema` —
   settings-opted schema-only family plus the model-facing routing prose
   (`src/lingtai/tools/psyche/__init__.py:109-149`).
-- `settings.py::{read_resolved_prompt_inputs,build_settings_provider}` — reads
-  the bounded stable closed owner document once per reconstruction, resolves its
-  three pairs with the existing helper, and binds the Agent's last successfully
-  applied eight-value snapshot through `PsycheSettingsPort` into the
-  full-redaction provider. SHOW performs no source I/O and receives no Agent.
+- `settings.py::{serialize_prompt_owner_document,read_resolved_prompt_inputs,build_settings_provider}`
+  — owns the one v1 writer, reads the bounded stable closed owner document once
+  per reconstruction, resolves its three pairs with the existing helper, and
+  structurally copies and validates the Agent's last successfully applied
+  eight-value snapshot through `PsycheSettingsPort` into the full-redaction
+  provider. SHOW performs no source I/O and receives no Agent.
 - `_adapt_manual_result` — the one post-dispatch Host adapter producing the flat
   `{status, manual, manual_path}` shape
   (`src/lingtai/tools/psyche/__init__.py:152-161`).
@@ -96,13 +103,17 @@ registrar.
   catalog composers do not import Psyche. The sole reverse composition edge is
   `Agent._reload_prompt_sections` importing this package's closed settings
   reader; no Psyche public action reaches that edge.
-- `Agent._reload_prompt_sections` consumes Pad plus one resolved Psyche owner
-  read, overlays only the six prompt values into its local composition input,
-  preserves the existing base/covenant mirrors and comment non-mirroring, and
-  commits the applied eight-value snapshot only after the successful final
-  prompt flush. `PsycheSettingsPort` exposes only that immutable snapshot to
-  SHOW; no Psyche public action reaches the reconstruction edge or rereads a
-  source.
+- Live refresh resolves one immutable Psyche owner candidate immediately after
+  its successful init read and before teardown; active rebuild and molt resolve
+  one candidate inside `Agent._reload_prompt_sections`. Reconstruction overlays
+  only those six prompt values, preserves the existing base/covenant mirrors and
+  comment non-mirroring, and commits the applied eight-value snapshot only after
+  the successful final prompt flush. A failed candidate restores the prior
+  prompt-manager sections, wrapper base prompt, derived mirrors, and SHOW as one
+  generation. `PsycheSettingsPort` exposes only that immutable snapshot to SHOW;
+  no Psyche public action reaches reconstruction or rereads a source.
+- `cli_project` and Avatar call `serialize_prompt_owner_document`; Project Core
+  receives the already-serialized content and knows no Psyche schema keys.
 
 ## Composition
 

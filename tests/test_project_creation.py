@@ -15,6 +15,7 @@ from lingtai.kernel.project import (
     ProjectSeed,
     ProjectWorkspacePort,
 )
+from lingtai.tools.psyche import settings as psyche_settings
 
 
 class _Workspace(ProjectWorkspacePort):
@@ -31,11 +32,13 @@ def _request(name: str = "alpha") -> ProjectCreateRequest:
         preset_ref="/presets/local.json",
         llm={"provider": "openai", "model": "test-model"},
         capabilities={"shell": {"yolo": False}},
-        covenant="caller covenant",
+        psyche_settings_json=psyche_settings.serialize_prompt_owner_document(
+            covenant="caller covenant"
+        ),
     )
 
 
-def test_core_builds_one_seed_through_its_port() -> None:
+def test_core_forwards_one_psyche_serialized_seed_through_its_port() -> None:
     workspace = _Workspace()
     result = ProjectCreationUseCase(workspace).create(_request())
 
@@ -44,6 +47,9 @@ def test_core_builds_one_seed_through_its_port() -> None:
     psyche = json.loads(workspace.seed.psyche_settings_json)
     assert "covenant" not in init
     assert psyche == {"covenant": "caller covenant", "schema_version": 1}
+    assert workspace.seed.psyche_settings_json == (
+        psyche_settings.serialize_prompt_owner_document(covenant="caller covenant")
+    )
     assert init["manifest"]["preset"]["allowed"] == ["/presets/local.json"]
     assert "context_limit" not in init["manifest"]
     assert result.to_payload()["status"] == "created"

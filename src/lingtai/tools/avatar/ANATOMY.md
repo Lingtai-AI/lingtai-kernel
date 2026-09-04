@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/settings.py
   - src/lingtai/kernel/_fsutil.py
+  - src/lingtai/kernel/prompt.py
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
@@ -130,7 +131,7 @@ avatar/__init__.py
   │  Spawn pipeline:
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
   ├── _make_avatar_init()           — builds avatar's init.json from parent's (strips identity, reroots paths)
-  ├── _make_avatar_psyche_settings() — carries only base/covenant owner inputs and replaces spawn comment
+  ├── _make_avatar_psyche_settings() — delegates to Psyche's v1 serializer with inherited base/covenant inputs and the replacement spawn comment
   ├── _prepare_deep()               — copies system/ + knowledge/ + exports/ + combo.json for deep mode
   ├── _launch()                     — resolves argv and delegates to the launcher Port
   ├── _wait_for_boot()              — polls .agent.heartbeat or Port exit truth
@@ -162,7 +163,7 @@ avatar/__init__.py
   handoff, and invocation/session state are omitted rather than sampled.
 - **Name validation:** Avatar names must match `^[\w-]+$` (Unicode-aware), max 64 chars, no dots or path separators. The name doubles as the working directory basename.
 - **Path scope:** The avatar's working directory must be a direct sibling of the parent's (same parent directory). Resolved path is checked against the network root to prevent escape.
-- **No identity inheritance:** Avatars get no name (`agent_name` is set to the avatar name), no admin privileges, no comment, no brief, no addons (IMAP/Telegram). The inherited `lingtai` seed is blanked; the first turn still arrives via a separate `.prompt` signal file.
+- **No identity inheritance:** Avatars get no inherited name (`agent_name` is set to the avatar name), admin privileges, parent comment, brief, or addons (IMAP/Telegram). The inherited `lingtai` seed is blanked; the spawn comment is newly authored and the first turn still arrives via a separate `.prompt` signal file.
 - **Preset stability:** Avatars always spawn on the parent's DEFAULT preset, not its currently-active one. Materialized `llm` + `capabilities` are stripped so the avatar re-materializes from the preset on first boot.
 - **Relative path re-rooting:** Preset paths (`default`, `active`, `allowed`) that are relative are re-rooted against the parent's working dir so they remain valid from the avatar's different directory.
 - **Liveness check:** Before spawning, existing ledger entries are observed through a target-bound `PosixAgentPresenceStoreAdapter` and Core `observe_alive()` policy. If a live avatar with the same name exists, the spawn is refused with `already_active`.

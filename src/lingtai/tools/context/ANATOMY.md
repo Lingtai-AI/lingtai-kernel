@@ -68,11 +68,13 @@ passive lifecycle scenarios.
 - `_snapshots.py` — atomic pre-molt snapshots and retrospective persistence.
 - `agent.py`
   - `_reload_prompt_sections` is the authoritative all-source composer and
-    reuses private `_lingtai_load`/`_pad_load`;
-  - `_reconstruct_context` wraps that composer and performs the final full
-    prompt flush;
-  - `_setup_from_init` routes refresh through this method and registers exactly
-    this method as the one post-molt hook.
+    reuses private `_lingtai_load`/`_pad_load`, consuming either its caller's
+    immutable Psyche candidate or one owner read;
+  - `_reconstruct_context` wraps that composer and the final full prompt flush
+    in one applied-prompt-generation rollback boundary;
+  - `_setup_from_init` validates one Psyche candidate before live teardown,
+    routes refresh through this method, and registers exactly this method as the
+    one post-molt hook.
 - `kernel/base_agent/prompt.py::_flush_system_prompt` calls the virtual
   `agent._build_system_prompt`, preserving Agent-owned `base_prompt` and tool
   composition in the published/provider-visible prompt.
@@ -95,9 +97,11 @@ context official mount handler
 
 Bare rebuild follows the same flow even when there are no pending markers.
 Refresh supplies already-resolved init data and later rebuilds its session with
-preserved history. Molt invokes the one registered `_reconstruct_context` hook
-before `ensure_session`. Pad/LingTai boot functions only perform initial
-composition; they do not register hooks.
+preserved history; its Psyche candidate is resolved before teardown and reused
+by reconstruction. Molt invokes the one registered `_reconstruct_context` hook
+before `ensure_session`. A failed reconstruction restores the prior in-memory
+prompt generation and derived base/covenant/system mirrors. Pad/LingTai boot
+functions only perform initial composition; they do not register hooks.
 
 ## State and invariants
 

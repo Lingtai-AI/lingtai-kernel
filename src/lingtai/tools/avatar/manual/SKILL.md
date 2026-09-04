@@ -10,6 +10,7 @@ related_files:
 - src/lingtai/tools/avatar/ANATOMY.md
 - src/lingtai/tools/avatar/CONTRACT.md
 - src/lingtai/tools/CONTRACT.md
+- src/lingtai/kernel/prompt.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -201,7 +202,7 @@ If you are an avatar (your `admin` block is empty or all admin privileges are fa
 
 ## 8. The `comment` Field — Persistent System Note
 
-The `input.comment` field (spawn only) is a persistent system-level note injected into the avatar's system prompt (rendered last, after memory). Key properties:
+The `input.comment` field (spawn only) is a persistent system-level note injected into the avatar's system prompt in the `comment` section, after `meta_guidance` and before `rules`. This position does not imply precedence over the sections that follow it. Key properties:
 
 - **Not inherited from parent** — defaults to empty
 - **Survives everything**: molt, refresh, sleep/wake

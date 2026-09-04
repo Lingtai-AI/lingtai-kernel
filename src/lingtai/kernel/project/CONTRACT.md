@@ -1,6 +1,6 @@
 ---
 name: project-creation
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/project/ANATOMY.md
@@ -28,13 +28,17 @@ runtime, provider, MCP, registry, venv, or TUI state.
 The Core owns request validation and a complete `ProjectSeed`. Its one
 technology-neutral `ProjectWorkspacePort.create(seed)` operation is implemented
 by the filesystem adapter. `cli_project` is the composition root: it reads the
-caller covenant, uses wrapper `load_preset`, and injects the current init and
-Psyche owner readers as the adapter validator.
+caller covenant, serializes it through Psyche's public v1 owner-document
+serializer, uses wrapper `load_preset`, and injects both the opaque serialized
+content and the current init/Psyche readers. Project Core neither imports Psyche
+nor names its schema version or value keys.
 
 ## Guarantees
 
 - The root must already be a directory; an existing `.lingtai` is refused.
 - The caller supplies a nonempty UTF-8 covenant and a loadable preset.
+- Psyche is the only owner-document serialization authority; Project Core
+  forwards the composition-root-provided content byte-for-byte into its seed.
 - The adapter creates the `.lingtai` directory exclusively, writes the complete
   seed, then verifies that initial init and Psyche owner documents can be read
   by the current reconstruction seams.

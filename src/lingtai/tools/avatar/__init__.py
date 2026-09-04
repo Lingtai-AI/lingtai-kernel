@@ -634,7 +634,7 @@ class AvatarManager:
             )
             (avatar_working_dir / "settings").mkdir(exist_ok=True)
             (avatar_working_dir / "settings" / "psyche.json").write_text(
-                json.dumps(avatar_psyche, indent=2, ensure_ascii=False),
+                avatar_psyche,
                 encoding="utf-8",
             )
 
@@ -859,7 +859,7 @@ class AvatarManager:
     @staticmethod
     def _make_avatar_psyche_settings(
         parent_values: Mapping[str, str], *, comment: str,
-    ) -> dict[str, object]:
+    ) -> str:
         """Build the narrow child prompt-owner document.
 
         Only Psyche's base-prompt and covenant pairs carry forward. A parent
@@ -868,15 +868,15 @@ class AvatarManager:
         or another owner's settings document. The child always gets its spawn
         comment and never inherits a parent comment pointer.
         """
-        child: dict[str, object] = {"schema_version": 1}
-        for key in (
-            "base_prompt", "base_prompt_file",
-            "covenant", "covenant_file",
-        ):
-            if key in parent_values:
-                child[key] = parent_values[key]
-        child["comment"] = comment
-        return child
+        from lingtai.tools.psyche.settings import serialize_prompt_owner_document
+
+        return serialize_prompt_owner_document(
+            base_prompt=parent_values.get("base_prompt"),
+            base_prompt_file=parent_values.get("base_prompt_file"),
+            covenant=parent_values.get("covenant"),
+            covenant_file=parent_values.get("covenant_file"),
+            comment=comment,
+        )
 
     # ------------------------------------------------------------------
     # Deep copy — 二重身

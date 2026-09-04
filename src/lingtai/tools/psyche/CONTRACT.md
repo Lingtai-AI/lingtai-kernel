@@ -8,6 +8,9 @@ related_files:
   - src/lingtai/tools/psyche/__init__.py
   - src/lingtai/tools/psyche/settings.py
   - src/lingtai/agent.py
+  - src/lingtai/cli_project.py
+  - src/lingtai/kernel/project/__init__.py
+  - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -18,6 +21,10 @@ related_files:
   - src/lingtai/tools/skills/CONTRACT.md
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
   - tests/test_psyche_family.py
+  - tests/test_psyche_prompt_settings.py
+  - tests/test_deep_refresh.py
+  - tests/test_project_creation.py
+  - tests/test_tool_family_avatar_migration.py
   - tests/test_context_ownership_redesign.py
   - tests/test_tool_family_context_migration.py
   - tests/test_tool_settings_contract.py
@@ -103,6 +110,13 @@ canonical reconstruction and return exactly `pad`, `pad_file`, `base_prompt`,
 Ambient edits to init, Pad, or the owner document MUST NOT change SHOW until
 active or passive reconstruction successfully consumes them; a malformed owner
 document or a failed reconstruction MUST leave the prior SHOW available.
+Live refresh MUST resolve the owner document exactly once immediately after a
+successful init read and before any runtime teardown; an owner failure leaves
+the sealed runtime, service/session, tool/plugin/MCP bindings, prompt state,
+mirrors, and SHOW unchanged. If final prompt publication fails, reconstruction
+MUST restore the prior prompt-manager sections, wrapper base prompt,
+base/covenant and system mirrors, and SHOW together, so a rejected generation
+cannot be rebuilt or resurrected through later mirror fallback.
 Each row MUST project exactly `key`, `current`, `default`, `configurable`, and
 `comment` in that order. The current and default values of all eight rows MUST
 be fully redacted, including empty and null defaults. A provider/snapshot/row
@@ -161,11 +175,16 @@ dispatch in this package's own Host layer, per the no-double-wrap rule.
 Schema composition opts in with an inert callable so the reserved `settings`
 child is injected immediately before `manual`. The static `DECLARATION` binds
 only `workdir` and `PsycheSettingsPort`; the provider reads the Agent-owned
-applied eight-value snapshot through that one read-only operation and performs
-no file I/O or Agent access. Agent reconstruction reads Psyche's strict owner
-document exactly once, uses the existing prompt file-over-inline helper, then
-publishes the replacement snapshot only after the successful final prompt
-flush.
+applied eight-value snapshot through that one read-only operation, copies and
+validates its eight structural scalar fields, and performs no file I/O or Agent
+access. Agent reconstruction consumes one immutable Psyche owner candidate,
+uses the existing prompt file-over-inline helper, then publishes the replacement
+snapshot only after the successful final prompt flush.
+
+`serialize_prompt_owner_document` is Psyche's one public v1 owner-document
+writer. Avatar calls it directly; `cli_project` calls it at the composition root
+and injects the serialized content into Project Core, which remains opaque to
+Psyche schema keys.
 
 `psyche` remains mandatory in `INTRINSICS`, marked `official_plugin=True`: the
 intrinsic entry is only the kernel hook/dispatch shim. `boot` runs the private
@@ -194,8 +213,9 @@ Neither the binder nor settings provider receives an Agent.
   `system/pad.md`; it preserves every nonempty durable Pad before composing it,
   then retains the successfully resolved Pad inputs for settings discovery.
 - SHOW reads only that retained snapshot. Ambient source edits and failed
-  reconstruction attempts preserve the prior rows until a later successful
-  reconstruction replaces them.
+  reconstruction attempts preserve the prior applied prompt generation and rows
+  until a later successful reconstruction replaces them. Refresh rejects an
+  invalid owner candidate before destructive teardown.
 - `psyche` is in `_LTP_V2_MIGRATED_FAMILIES` and `EMANATION_BLACKLIST`.
 - Psyche owns exactly these settings rows:
   - `pad`: default `""`, configurable `true`, fully redacted, comment
@@ -221,7 +241,7 @@ Neither the binder nor settings provider receives an Agent.
 ## Contract tests
 
 ```bash
-python -m pytest -q tests/test_psyche_family.py
+python -m pytest -q tests/test_psyche_family.py tests/test_psyche_prompt_settings.py
 ```
 
 These pin the exact six-action inventory and order; strict-empty input on every

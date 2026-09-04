@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/settings.py
   - src/lingtai/kernel/_fsutil.py
+  - src/lingtai/kernel/prompt.py
   - src/lingtai/tools/psyche/settings.py
   - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
@@ -312,8 +313,11 @@ kernel/secretary prompt-override fields plus `addons` stripped, relative preset
 paths re-rooted, and the avatar pinned to the parent's **default** preset. Its
 separate Psyche document retains only parent base/covenant inputs, anchors their
 relative pointers to the parent workdir, replaces comment with the spawn comment,
-and omits `comment_file`. The spawn brief is delivered out-of-band via the
-`.prompt` signal file, not the `lingtai` seed.
+and omits `comment_file`. Avatar delegates the document bytes to Psyche's public
+v1 serializer rather than naming that schema itself. The spawn comment renders
+in the `comment` section after `meta_guidance` and before `rules`; this states
+position, not precedence over later sections. The spawn brief is delivered
+out-of-band via the `.prompt` signal file, not the `lingtai` seed.
 
 Each spawn appends a ledger record (`event: "avatar"`, `name`, `working_dir`,
 `mission`, `type`, `pid`, `boot_status`, optional `boot_error`). Rules

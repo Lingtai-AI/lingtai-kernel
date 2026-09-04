@@ -33,7 +33,10 @@ from lingtai.llm.service import (
 from lingtai.kernel.prompt import build_system_prompt
 
 if TYPE_CHECKING:
-    from lingtai.tools.psyche.settings import PsycheSettingsSnapshot
+    from lingtai.tools.psyche.settings import (
+        PsychePromptInputs,
+        PsycheSettingsSnapshot,
+    )
 
 
 # Runtime manual destinations remain stable even when a capability packages its
@@ -2123,6 +2126,14 @@ class Agent(BaseAgent):
             self._log("refresh_skipped", reason="no valid init.json")
             return
 
+        # Psyche's strict owner source is a refresh precondition, not one of
+        # the live objects being rebuilt. Resolve its immutable candidate now,
+        # before timers, clients, tools, plugins, prompt state, or sealing are
+        # touched, then thread that exact read through final reconstruction.
+        from lingtai.tools.psyche.settings import read_resolved_prompt_inputs
+
+        psyche_prompt_inputs = read_resolved_prompt_inputs(self._working_dir)
+
         from lingtai.kernel.config_resolve import (
             load_env_file,
             resolve_env_checked,
@@ -2141,7 +2152,7 @@ class Agent(BaseAgent):
 
         # Resolve only live init-owned Pad and LingTai seed pointers. Psyche's
         # six prompt pairs are compatibility-known but inert in init.json; the
-        # owner document is read once by the final reconstruction seam below.
+        # prevalidated owner candidate is passed to final reconstruction below.
         # Note: "soul" / "soul_file" were retired in v0.7.6 and remain
         # compatibility-known; they are intentionally not resolved here;
         # the shared reader reports them without rewriting init.json.
@@ -2444,7 +2455,11 @@ class Agent(BaseAgent):
         # manual, MCP route, and mechanical identity source is wired. The session
         # replay below must observe this same complete builder state, and the
         # system/system.md mirror must be byte-identical to it.
-        self._reconstruct_context(data, psyche_pad_file=psyche_pad_file)
+        self._reconstruct_context(
+            data,
+            psyche_pad_file=psyche_pad_file,
+            psyche_prompt_inputs=psyche_prompt_inputs,
+        )
 
         # Re-seal
         self._sealed = True
@@ -2464,6 +2479,7 @@ class Agent(BaseAgent):
         data: dict | None = None,
         *,
         psyche_pad_file: str | None = None,
+        psyche_prompt_inputs: PsychePromptInputs | None = None,
     ) -> None:
         """Recompose every canonical prompt source, then publish the final prompt.
 
@@ -2473,12 +2489,57 @@ class Agent(BaseAgent):
         omit it so configured and durable sources are re-read from scratch. The
         final flush is deliberately last, ensuring provider replay observes the
         fully composed prompt rather than an intermediate Pad/LingTai section.
+        Refresh supplies its pre-teardown Psyche candidate; other callers read
+        one candidate inside the composer.
         """
-        psyche_settings_snapshot = self._reload_prompt_sections(
-            data, psyche_pad_file=psyche_pad_file,
+        prior_sections = deepcopy(self._prompt_manager._sections)
+        missing_base_prompt = object()
+        prior_base_prompt = getattr(self, "_base_prompt", missing_base_prompt)
+        prior_snapshot = self._psyche_settings_snapshot
+        prior_token_decomp_dirty = self._token_decomp_dirty
+        system_dir = self._working_dir / "system"
+        generation_mirrors = (
+            system_dir / "base_prompt.md",
+            system_dir / "covenant.md",
+            system_dir / "system.md",
         )
-        self._token_decomp_dirty = True
-        self._flush_system_prompt()
+        prior_mirrors: dict[Path, str | None] = {}
+        for path in generation_mirrors:
+            try:
+                prior_mirrors[path] = path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                prior_mirrors[path] = None
+
+        try:
+            psyche_settings_snapshot = self._reload_prompt_sections(
+                data,
+                psyche_pad_file=psyche_pad_file,
+                psyche_prompt_inputs=psyche_prompt_inputs,
+            )
+            self._token_decomp_dirty = True
+            self._flush_system_prompt()
+        except Exception:
+            # Prompt-manager state, wrapper base prompt, derived fallback
+            # mirrors, the published system mirror, and SHOW form one applied
+            # generation. A failed candidate must not remain available to a
+            # later build or be resurrected through mirror fallback.
+            self._prompt_manager._sections.clear()
+            self._prompt_manager._sections.update(prior_sections)
+            if prior_base_prompt is missing_base_prompt:
+                self.__dict__.pop("_base_prompt", None)
+            else:
+                self._base_prompt = prior_base_prompt
+            self._psyche_settings_snapshot = prior_snapshot
+            self._token_decomp_dirty = prior_token_decomp_dirty
+
+            from lingtai.kernel._fsutil import atomic_write_text
+
+            for path, content in prior_mirrors.items():
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    atomic_write_text(path, content, encoding="utf-8")
+            raise
         self._psyche_settings_snapshot = psyche_settings_snapshot
 
     def _reload_prompt_sections(
@@ -2486,6 +2547,7 @@ class Agent(BaseAgent):
         data: dict | None = None,
         *,
         psyche_pad_file: str | None = None,
+        psyche_prompt_inputs: PsychePromptInputs | None = None,
     ) -> PsycheSettingsSnapshot:
         """Authoritative composer for every configured/durable prompt section."""
         resolve_init_files = data is None
@@ -2524,9 +2586,10 @@ class Agent(BaseAgent):
         # overlay only its resolved values into this local composition input.
         # `data` remains the effective init mapping and is never mutated with
         # owner fields, so legacy init values cannot regain prompt authority.
-        from lingtai.tools.psyche.settings import read_resolved_prompt_inputs
+        if psyche_prompt_inputs is None:
+            from lingtai.tools.psyche.settings import read_resolved_prompt_inputs
 
-        psyche_prompt_inputs = read_resolved_prompt_inputs(self._working_dir)
+            psyche_prompt_inputs = read_resolved_prompt_inputs(self._working_dir)
         data = dict(data)
         data.update({
             "base_prompt": psyche_prompt_inputs.base_prompt,

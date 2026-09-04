@@ -22,7 +22,8 @@ wrapper preset loader.
 On success the command writes `ROOT/.lingtai/` with a `human` pseudo-agent and
 one named agent, including their mailboxes, manifests, and the named agent's
 `init.json` plus `settings/psyche.json` (which receives the caller covenant).
-It validates both generated owner documents before reporting success.
+The CLI serializes that document through Psyche's owner primitive and validates
+both generated owner documents before reporting success.
 
 The command is data-only: it does not start an Agent, install a venv, contact a
 provider, launch an MCP, or create TUI/global project state. Starting the agent

@@ -42,6 +42,7 @@ def _read_covenant(path: str) -> str:
 
 def _request(args: argparse.Namespace) -> ProjectCreateRequest:
     from lingtai.agent import load_preset
+    from lingtai.tools.psyche.settings import serialize_prompt_owner_document
 
     preset_ref = str(Path(args.preset).expanduser().resolve())
     try:
@@ -63,7 +64,9 @@ def _request(args: argparse.Namespace) -> ProjectCreateRequest:
         preset_ref=preset_ref,
         llm=llm,
         capabilities=dict(capabilities),
-        covenant=_read_covenant(args.covenant_file),
+        psyche_settings_json=serialize_prompt_owner_document(
+            covenant=_read_covenant(args.covenant_file)
+        ),
     )
 
 

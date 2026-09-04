@@ -5,8 +5,13 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
+from copy import deepcopy
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 def test_resolve_env_fields_resolves_env_var(monkeypatch):
@@ -394,6 +399,170 @@ def test_deep_refresh_invalid_init_keeps_old_config(tmp_path):
 
     # Old capabilities preserved (refresh was a no-op)
     assert agent._capabilities == old_caps
+
+
+@pytest.mark.parametrize(
+    "owner_failure",
+    [
+        "malformed",
+        "oversized",
+        "duplicate_key",
+        "invalid_utf8",
+        "symlink",
+        "race",
+        "read_failure",
+    ],
+)
+def test_invalid_psyche_owner_aborts_live_refresh_before_teardown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    owner_failure: str,
+) -> None:
+    """Owner validation failure preserves the complete last-good live runtime."""
+    from lingtai.tools.psyche import settings as psyche_settings
+    from lingtai.tools.psyche.settings import PsycheSettingsError
+
+    agent = _make_agent(
+        tmp_path,
+        _make_init(
+            capabilities={"file": {}},
+            base_prompt="APPLIED BASE",
+            covenant="APPLIED COVENANT",
+        ),
+    )
+    try:
+        agent._setup_from_init()
+        owner_path = tmp_path / "settings" / "psyche.json"
+
+        if owner_failure == "malformed":
+            owner_path.write_text("{", encoding="utf-8")
+        elif owner_failure == "oversized":
+            owner_path.write_bytes(b" " * (64 * 1024 + 1))
+        elif owner_failure == "duplicate_key":
+            owner_path.write_text(
+                '{"schema_version":1,"comment":"a","comment":"b"}',
+                encoding="utf-8",
+            )
+        elif owner_failure == "invalid_utf8":
+            owner_path.write_bytes(b"\xff")
+        elif owner_failure == "symlink":
+            target = tmp_path / "owner-target.json"
+            target.write_text('{"schema_version":1}', encoding="utf-8")
+            owner_path.unlink()
+            try:
+                owner_path.symlink_to(target)
+            except OSError:
+                pytest.skip("the platform does not permit symlink creation")
+        elif owner_failure == "race":
+            real_lstat = Path.lstat
+            calls = 0
+
+            def unstable_lstat(candidate: Path):
+                nonlocal calls
+                result = real_lstat(candidate)
+                if candidate == owner_path:
+                    calls += 1
+                    if calls == 2:
+                        return SimpleNamespace(
+                            st_dev=result.st_dev,
+                            st_ino=result.st_ino,
+                            st_mode=result.st_mode,
+                            st_size=result.st_size,
+                            st_mtime_ns=result.st_mtime_ns + 1,
+                            st_ctime_ns=result.st_ctime_ns,
+                        )
+                return result
+
+            monkeypatch.setattr(Path, "lstat", unstable_lstat)
+        elif owner_failure == "read_failure":
+            real_open = os.open
+
+            def unreadable(candidate, flags, *args, **kwargs):
+                if Path(candidate) == owner_path:
+                    raise OSError("owner became unreadable")
+                return real_open(candidate, flags, *args, **kwargs)
+
+            monkeypatch.setattr(psyche_settings.os, "open", unreadable)
+
+        client = MagicMock(name="last_good_mcp_client")
+        agent._mcp_clients = [client]
+        agent._mcp_clients_by_tool = {"last_good_tool": client}
+        agent._mcp_tool_collisions = {"last_good_collision"}
+        agent._mcp_tool_metadata = {"last_good_tool": {"title": "Last good"}}
+        agent._mcp_init_specs = {"last_good": {"command": "kept"}}
+
+        state = {
+            "sealed": agent._sealed,
+            "service": agent.service,
+            "session": agent._session,
+            "sections": deepcopy(agent._prompt_manager._sections),
+            "base_prompt": agent._base_prompt,
+            "handlers": dict(agent._tool_handlers),
+            "schemas": list(agent._tool_schemas),
+            "official_plugins": dict(agent._official_tool_plugins),
+            "official_bindings": dict(agent._official_tool_bindings),
+            "capabilities": list(agent._capabilities),
+            "capability_managers": dict(agent._capability_managers),
+            "intrinsics": dict(agent._intrinsics),
+            "intrinsic_modules": dict(agent._intrinsic_modules),
+            "post_molt_hooks": list(agent._post_molt_hooks),
+            "snapshot": agent._psyche_settings_snapshot,
+            "base_mirror": (tmp_path / "system/base_prompt.md").read_bytes(),
+            "covenant_mirror": (tmp_path / "system/covenant.md").read_bytes(),
+            "system_mirror": (tmp_path / "system/system.md").read_bytes(),
+        }
+        teardown_calls: list[str] = []
+        monkeypatch.setattr(
+            agent,
+            "_cancel_soul_timer",
+            lambda: teardown_calls.append("cancel_soul_timer"),
+        )
+        real_read = psyche_settings.read_resolved_prompt_inputs
+        owner_reads: list[Path] = []
+
+        def counted_read(root: Path):
+            owner_reads.append(Path(root))
+            return real_read(root)
+
+        monkeypatch.setattr(
+            psyche_settings,
+            "read_resolved_prompt_inputs",
+            counted_read,
+        )
+
+        with pytest.raises(PsycheSettingsError):
+            agent._setup_from_init()
+
+        assert owner_reads == [tmp_path]
+        assert teardown_calls == []
+        assert agent._sealed is state["sealed"] is True
+        assert agent.service is state["service"]
+        assert agent._session is state["session"]
+        assert agent._prompt_manager._sections == state["sections"]
+        assert agent._base_prompt == state["base_prompt"]
+        assert agent._tool_handlers == state["handlers"]
+        assert agent._tool_schemas == state["schemas"]
+        assert agent._official_tool_plugins == state["official_plugins"]
+        assert agent._official_tool_bindings == state["official_bindings"]
+        assert agent._capabilities == state["capabilities"]
+        assert agent._capability_managers == state["capability_managers"]
+        assert agent._intrinsics == state["intrinsics"]
+        assert agent._intrinsic_modules == state["intrinsic_modules"]
+        assert agent._post_molt_hooks == state["post_molt_hooks"]
+        assert agent._psyche_settings_snapshot is state["snapshot"]
+        assert agent._mcp_clients == [client]
+        assert agent._mcp_clients_by_tool == {"last_good_tool": client}
+        assert agent._mcp_tool_collisions == {"last_good_collision"}
+        assert agent._mcp_tool_metadata == {
+            "last_good_tool": {"title": "Last good"}
+        }
+        assert agent._mcp_init_specs == {"last_good": {"command": "kept"}}
+        assert (tmp_path / "system/base_prompt.md").read_bytes() == state["base_mirror"]
+        assert (tmp_path / "system/covenant.md").read_bytes() == state["covenant_mirror"]
+        assert (tmp_path / "system/system.md").read_bytes() == state["system_mirror"]
+        client.close.assert_not_called()
+    finally:
+        agent.stop(timeout=1.0)
 
 
 def test_deep_refresh_removes_old_capabilities(tmp_path):

@@ -30,8 +30,10 @@ Project seed. Its Contract defines the CLI-visible behavior.
 
 ## Connections
 
-`cli_project` calls wrapper `agent.load_preset` and supplies the same init and
-Psyche owner readers used by reconstruction. Core depends only on `ProjectWorkspacePort`; the adapter
+`cli_project` calls wrapper `agent.load_preset`, asks Psyche's public v1
+serializer for the owner-document content, and supplies the same init and
+Psyche owner readers used by reconstruction. Project Core receives that content
+as an opaque seed string and depends only on `ProjectWorkspacePort`; the adapter
 depends inward on Core values.
 
 ## Composition

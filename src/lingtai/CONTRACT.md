@@ -78,8 +78,11 @@ shapes. The six former init prompt fields (`base_prompt`, `base_prompt_file`,
 `covenant`, `covenant_file`, `comment`, `comment_file`) are compatibility-known
 but inert: this reader does not type-check, path-resolve, or consume them.
 Psyche owns the active six-field surface through its independent strict
-`settings/psyche.json` v1 reader at Agent reconstruction. If active validation
-encounters a conflict or unsupported value it fails closed; the reader does not
+`settings/psyche.json` v1 reader at Agent reconstruction. Live refresh resolves
+that owner exactly once immediately after a successful init read and before any
+destructive teardown, then passes the immutable candidate through prompt
+reconstruction. If active validation encounters a conflict or unsupported value
+it fails closed with the prior sealed runtime wholly intact; the reader does not
 guess an effective value or silently claim success.
 There is no automatic rewrite, strip-and-write-back, migration registry, version
 chain, stored progress, or remote runtime dependency in this read path. Explicit

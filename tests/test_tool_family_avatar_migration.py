@@ -24,6 +24,7 @@ from lingtai.tools.avatar.settings import (
     SPAWN_TYPE_DEFAULT,
     SPAWN_TYPES,
 )
+from lingtai.tools.psyche import settings as psyche_settings
 
 
 class _Workdir:
@@ -409,7 +410,28 @@ def test_avatar_spawn_carries_only_psyche_prompt_owner_for_both_modes(
         "covenant": "PARENT COVENANT",
         "comment": "CHILD COMMENT",
     }
+    assert (child / "settings" / "psyche.json").read_text(encoding="utf-8") == (
+        psyche_settings.serialize_prompt_owner_document(
+            base_prompt="base fallback",
+            base_prompt_file=str(base_source),
+            covenant="PARENT COVENANT",
+            comment="CHILD COMMENT",
+        )
+    )
     assert not (child / "settings" / "system.json").exists()
+
+
+def test_avatar_manual_states_the_real_spawn_comment_prompt_position() -> None:
+    from lingtai.kernel.prompt import SystemPromptManager
+
+    manual = (Path(avatar.__file__).parent / "manual" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    order = SystemPromptManager._DEFAULT_ORDER
+
+    assert "rendered last, after memory" not in manual
+    assert "after `meta_guidance` and before `rules`" in manual
+    assert order.index("meta_guidance") < order.index("comment") < order.index("rules")
 
 
 def test_agent_mounts_avatar_only_through_the_official_registrar(tmp_path):

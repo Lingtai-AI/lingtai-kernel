@@ -101,7 +101,10 @@ must execute in this order:
 3. perform exactly one final full prompt build/flush through the Agent override
    after every section is composed; private Pad/LingTai composers must not
    publish intermediate prompts, and the live interface plus `system/system.md`
-   must contain the same newly composed prompt;
+   must contain the same newly composed prompt. If composition or the final
+   flush fails, restore the prior prompt-manager sections, wrapper base prompt,
+   derived base/covenant/system mirrors, and applied Psyche snapshot as one
+   generation;
 4. only then record newly supplied summaries and/or mark already-pending
    summaries applied;
 5. only then request provider history replay/rebuild with the new prompt and
@@ -120,7 +123,10 @@ Refresh and molt are passive scenarios invoking the same internal
 `Agent._reconstruct_context` contract:
 
 - refresh passes its already-resolved init mapping, completes the final prompt
-  flush, then rebuilds the session with preserved history;
+  flush, then rebuilds the session with preserved history. It resolves the
+  strict Psyche owner candidate exactly once immediately after the successful
+  init read and before timers, MCPs, tools, plugins, prompts, services, session,
+  or sealing are torn down or replaced;
 - Agent registers exactly one post-molt hook (`_reconstruct_context`), invoked
   before the fresh session is created;
 - Pad/LingTai `boot` functions do initial private composition only and register

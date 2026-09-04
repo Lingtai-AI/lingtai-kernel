@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,6 +53,96 @@ def _settings_provider(agent: Agent):
     )
 
 
+@dataclass(frozen=True)
+class _AlternateSnapshot:
+    """Independent structural implementation of PsycheSettingsSnapshotPort."""
+
+    pad: str
+    pad_file: str | None
+    base_prompt: str
+    base_prompt_file: str | None
+    covenant: str
+    covenant_file: str | None
+    comment: str
+    comment_file: str | None
+
+
+class _AlternateSettingsPort:
+    def read_snapshot(self) -> _AlternateSnapshot:
+        return _AlternateSnapshot(
+            pad="alternate pad",
+            pad_file="pad.md",
+            base_prompt="alternate base",
+            base_prompt_file=None,
+            covenant="alternate covenant",
+            covenant_file="covenant.md",
+            comment="alternate comment",
+            comment_file=None,
+        )
+
+
+def test_settings_provider_accepts_an_independent_structural_snapshot() -> None:
+    rows = build_settings_provider(_AlternateSettingsPort())()
+
+    assert [row.current for row in rows] == [
+        "alternate pad",
+        "pad.md",
+        "alternate base",
+        None,
+        "alternate covenant",
+        "covenant.md",
+        "alternate comment",
+        None,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("pad", None),
+        ("pad_file", 1),
+        ("base_prompt", False),
+        ("base_prompt_file", []),
+        ("covenant", {}),
+        ("covenant_file", object()),
+        ("comment", 3.5),
+        ("comment_file", True),
+    ],
+)
+def test_settings_provider_validates_every_structural_snapshot_field(
+    field: str, value: object,
+) -> None:
+    values = {
+        "pad": "",
+        "pad_file": None,
+        "base_prompt": "",
+        "base_prompt_file": None,
+        "covenant": "",
+        "covenant_file": None,
+        "comment": "",
+        "comment_file": None,
+    }
+    values[field] = value
+
+    @dataclass(frozen=True)
+    class InvalidSnapshot:
+        pad: object
+        pad_file: object
+        base_prompt: object
+        base_prompt_file: object
+        covenant: object
+        covenant_file: object
+        comment: object
+        comment_file: object
+
+    class InvalidSettingsPort:
+        def read_snapshot(self) -> InvalidSnapshot:
+            return InvalidSnapshot(**values)
+
+    with pytest.raises(RuntimeError, match="snapshot is unavailable"):
+        build_settings_provider(InvalidSettingsPort())()
+
+
 def test_missing_owner_document_defaults_all_six_values(tmp_path: Path) -> None:
     assert read_prompt_owner_values(tmp_path) == {}
     inputs = read_resolved_prompt_inputs(tmp_path)
@@ -63,6 +154,32 @@ def test_missing_owner_document_defaults_all_six_values(tmp_path: Path) -> None:
         inputs.comment,
         inputs.comment_file,
     ) == ("", None, "", None, "", None)
+
+
+def test_owner_document_serializer_round_trips_through_the_owner_reader(
+    tmp_path: Path,
+) -> None:
+    content = psyche_settings.serialize_prompt_owner_document(
+        base_prompt="BASE",
+        base_prompt_file="base.md",
+        covenant="COVENANT",
+        covenant_file="covenant.md",
+        comment="COMMENT",
+        comment_file="comment.md",
+    )
+    path = tmp_path / "settings" / "psyche.json"
+    path.parent.mkdir()
+    path.write_text(content, encoding="utf-8")
+
+    assert read_prompt_owner_values(tmp_path) == {
+        "base_prompt": "BASE",
+        "base_prompt_file": str(tmp_path / "base.md"),
+        "covenant": "COVENANT",
+        "covenant_file": str(tmp_path / "covenant.md"),
+        "comment": "COMMENT",
+        "comment_file": str(tmp_path / "comment.md"),
+    }
+    assert json.loads(content)["schema_version"] == 1
 
 
 @pytest.mark.parametrize(
@@ -284,10 +401,21 @@ def test_show_snapshot_commits_only_after_final_prompt_flush(
         provider = _settings_provider(agent)
         agent._reconstruct_context()
         applied = [row.current for row in provider()]
+        applied_sections = {
+            name: dict(section)
+            for name, section in agent._prompt_manager._sections.items()
+        }
+        applied_prompt = agent._build_system_prompt()
+        applied_system_mirror = (
+            tmp_path / "system" / "system.md"
+        ).read_text(encoding="utf-8")
 
         _write_owner(tmp_path, base_prompt="PENDING BASE", covenant="PENDING COVENANT")
 
+        original_flush = agent._flush_system_prompt
+
         def fail_final_flush() -> None:
+            original_flush()
             raise RuntimeError("final prompt publication failed")
 
         monkeypatch.setattr(agent, "_flush_system_prompt", fail_final_flush)
@@ -295,10 +423,33 @@ def test_show_snapshot_commits_only_after_final_prompt_flush(
             agent._reconstruct_context()
 
         assert [row.current for row in provider()] == applied
+        assert agent._prompt_manager._sections == applied_sections
+        assert agent._base_prompt == "APPLIED BASE"
+        assert agent._build_system_prompt() == applied_prompt
+        assert (
+            tmp_path / "system" / "base_prompt.md"
+        ).read_text(encoding="utf-8") == "APPLIED BASE"
+        assert (
+            tmp_path / "system" / "covenant.md"
+        ).read_text(encoding="utf-8") == "APPLIED COVENANT"
+        assert (
+            tmp_path / "system" / "system.md"
+        ).read_text(encoding="utf-8") == applied_system_mirror
         assert applied == [
             "", None, "APPLIED BASE", None, "APPLIED COVENANT", None,
             "", None,
         ]
+
+        # Clearing the rejected generation must fall back to the last-good
+        # mirrors, never to values written by the failed candidate.
+        monkeypatch.setattr(agent, "_flush_system_prompt", original_flush)
+        _write_owner(tmp_path)
+        agent._reconstruct_context()
+        prompt_after_clear = agent._build_system_prompt()
+        assert "APPLIED BASE" in prompt_after_clear
+        assert "APPLIED COVENANT" in prompt_after_clear
+        assert "PENDING BASE" not in prompt_after_clear
+        assert "PENDING COVENANT" not in prompt_after_clear
     finally:
         agent.stop(timeout=1.0)
 
@@ -349,3 +500,21 @@ def test_base_and_covenant_mirrors_fall_back_but_comment_does_not(tmp_path: Path
         assert "COMMENT" not in prompt
     finally:
         agent.stop(timeout=1.0)
+
+
+def test_psyche_labt_and_contract_commands_run_both_focused_suites() -> None:
+    root = Path(__file__).resolve().parents[1]
+    behaviors = (root / "src/lingtai/tools/psyche/BEHAVIORS.md").read_text(
+        encoding="utf-8"
+    )
+    contract = (root / "src/lingtai/tools/psyche/CONTRACT.md").read_text(
+        encoding="utf-8"
+    )
+    command = (
+        "python -m pytest -q tests/test_psyche_family.py "
+        "tests/test_psyche_prompt_settings.py"
+    )
+
+    assert "  - tests/test_psyche_prompt_settings.py" in behaviors
+    assert command in behaviors
+    assert command in contract
