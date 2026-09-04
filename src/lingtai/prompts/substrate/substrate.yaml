@@ -1,10 +1,12 @@
 kind: prompt-section-definition
 section: substrate
 name_definition: >
-  "substrate" is the kernel-owned, cross-app-stable operating model rendered right
-  after `## tools`. It is named for the substrate it describes: the agent's own
-  architecture — bodies, lifecycle states, communication channels, memory layers,
-  idle/soul, and system operations — the operational wisdom that spans multiple tools.
+  "substrate" is the static, cross-app-stable operating model rendered right after
+  `## tools`. The kernel owns its slot and rendering mechanics while the Psyche plan
+  supplies the packaged body. It is named for the substrate it describes: the
+  agent's own architecture — bodies, lifecycle states, communication channels,
+  memory layers, idle/soul, and system operations — the operational wisdom that
+  spans multiple tools.
 purpose: >
   Exists as a compact resident layer so the agent carries a stable model of how
   LingTai works for it, while the tool schemas above it carry mechanical reference and
@@ -21,17 +23,24 @@ scope:
     - Narrow runtime-signal interpretation for `_meta`/notification/token state (owned by meta_guidance).
     - The root map and operating principle (owned by principle).
 injection_contract:
-  defined_by: kernel
-  injected_by: kernel_prompt_builder
+  defined_by: psyche
+  injected_by: agent_prompt_reconstruction
   content_source: src/lingtai/prompts/substrate/substrate.md
+  resident_source: substrate/substrate.md
+  disclosure_source: null
   mirror_path: system/substrate.md
   override_policy: not_user_overridable
   notes: >
-    Kernel-owned. Legacy init.json `substrate`/`substrate_file` were retired and
-    archived by the init-prompt-contract migration; the packaged body overwrites the
-    on-disk mirror on every boot/refresh. Mirror keeps frontmatter; rendered section is
-    body-only.
+    Psyche's static plan owns the packaged source contribution; the Agent keeps
+    injection mechanics. Legacy init.json `substrate`/`substrate_file` were
+    retired and archived by the init-prompt-contract migration; the packaged body
+    overwrites the on-disk mirror on every boot/refresh. Mirror keeps frontmatter;
+    rendered section is body-only.
 related_files:
+  - path: src/lingtai/tools/psyche/prompt.py
+    why: >
+      The PR A registry composes this packaged body into the immutable Psyche
+      prompt plan before Agent reconstruction applies it.
   - path: src/lingtai/prompts/ANATOMY.md
     why: >
       The owning prompt-source anatomy: it shows where substrate sits in render order

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,7 +12,9 @@ import pytest
 
 from lingtai.adapters.tool_plugin_host import AgentPsycheSettingsAdapter
 from lingtai.agent import Agent
+from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
 from lingtai.tools.psyche import settings as psyche_settings
+from lingtai.tools.psyche import prompt as psyche_prompt
 from lingtai.tools.psyche.settings import (
     PsycheSettingsError,
     build_settings_provider,
@@ -22,9 +24,12 @@ from lingtai.tools.psyche.settings import (
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-def _write_init(root: Path, **legacy: object) -> None:
+def _write_init(
+    root: Path, *, provider: str = "openai", model: str = "test",
+    **legacy: object,
+) -> None:
     data: dict[str, object] = {
-        "manifest": {"llm": {"provider": "openai", "model": "test"}},
+        "manifest": {"llm": {"provider": provider, "model": model}},
         "pad": "",
     }
     data.update(legacy)
@@ -41,8 +46,14 @@ def _write_owner(root: Path, **values: object) -> Path:
 
 
 def _agent(root: Path) -> Agent:
+    service = make_mock_service()
+    # Keep the existing fake service on the no-rebuild path used by startup
+    # tests; no real provider adapter or credential is needed here.
+    service._base_url = None
+    service._context_window = CONSERVATIVE_CONTEXT_WINDOW
+    service._provider_defaults = {"gemini": {"max_rpm": 60}}
     return Agent(
-        service=make_mock_service(), agent_name="test", working_dir=root,
+        service=service, agent_name="test", working_dir=root,
         capabilities=[],
     )
 
@@ -319,6 +330,174 @@ def test_owner_file_pairs_win_and_relative_paths_anchor_to_agent_workdir(
     assert read_resolved_prompt_inputs(tmp_path).base_prompt == "base fallback"
 
 
+def test_prompt_plan_is_immutable_and_reads_static_sources_without_writes(
+    tmp_path: Path,
+) -> None:
+    _write_owner(tmp_path, base_prompt="PLAN BASE")
+
+    plan = psyche_prompt.compose_prompt_plan(tmp_path)
+
+    assert [section.name for section in plan.sections] == [
+        "principle", "substrate", "procedures",
+    ]
+    assert plan.inputs.base_prompt == "PLAN BASE"
+    assert all(section.protected for section in plan.sections)
+    assert plan.sections[0].raw is True
+    assert all(section.disclosure is None for section in plan.sections)
+    assert all(section.references == () for section in plan.sections)
+    assert not (tmp_path / "system").exists()
+
+    with pytest.raises(FrozenInstanceError):
+        plan.sections[0].resident = "changed"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        plan.inputs.base_prompt = "changed"  # type: ignore[misc]
+
+    for section in plan.sections:
+        assert section.mirror is not None
+        assert section.mirror_text is not None
+        assert section.resident
+        assert section.mirror_text.endswith("\n")
+
+
+def test_startup_resolves_and_applies_one_identical_prompt_plan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _write_init(tmp_path, provider="gemini", model="gemini-test")
+    agent = _agent(tmp_path)
+    candidates = []
+    applied = []
+    real_compose = psyche_prompt.compose_prompt_plan
+    real_reload = agent._reload_prompt_sections
+
+    def counted_compose(root: Path):
+        candidate = real_compose(root)
+        candidates.append(candidate)
+        return candidate
+
+    def capture_reload(*args, **kwargs):
+        applied.append(kwargs["psyche_prompt_plan"])
+        return real_reload(*args, **kwargs)
+
+    monkeypatch.setattr(psyche_prompt, "compose_prompt_plan", counted_compose)
+    monkeypatch.setattr(agent, "_reload_prompt_sections", capture_reload)
+    try:
+        agent._setup_from_init()
+    finally:
+        agent.stop(timeout=1.0)
+
+    assert len(candidates) == 1
+    assert applied == candidates
+    assert applied[0] is candidates[0]
+    assert agent._psyche_prompt_plan is candidates[0]
+
+
+def test_packaged_mirror_write_failure_uses_captured_fallback_without_reread(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _write_init(tmp_path, provider="gemini", model="gemini-test")
+    _write_owner(tmp_path)
+    agent = _agent(tmp_path)
+    mirror = tmp_path / "system" / "substrate.md"
+    mirror.parent.mkdir(exist_ok=True)
+    fallback = "# Existing fallback\nMIRROR_FALLBACK_SENTINEL\n"
+    mirror.write_text(fallback, encoding="utf-8")
+    real_read = Path.read_text
+    real_write = Path.write_text
+    reads: list[Path] = []
+
+    def counted_read(path: Path, *args, **kwargs):
+        if path == mirror:
+            reads.append(path)
+        return real_read(path, *args, **kwargs)
+
+    def denied_write(path: Path, *args, **kwargs):
+        if path == mirror:
+            raise PermissionError("injected mirror write failure")
+        return real_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted_read)
+    monkeypatch.setattr(Path, "write_text", denied_write)
+    try:
+        agent._reconstruct_context()
+    finally:
+        agent.stop(timeout=1.0)
+
+    assert agent._prompt_manager.read_section("substrate") == fallback
+    assert real_read(mirror, encoding="utf-8") == fallback
+    # The only read is the plan-time capture; no fallback re-read occurs after
+    # the denied mirror write.
+    assert reads == [mirror]
+
+
+def test_packaged_missing_does_not_write_existing_fallback_mirror(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _write_init(tmp_path, provider="gemini", model="gemini-test")
+    _write_owner(tmp_path)
+    agent = _agent(tmp_path)
+    mirror = tmp_path / "system" / "substrate.md"
+    mirror.parent.mkdir(exist_ok=True)
+    fallback = "MIRROR_FALLBACK_ONLY"
+    mirror.write_text(fallback, encoding="utf-8")
+    real_write = Path.write_text
+    writes: list[Path] = []
+
+    def tracked_write(path: Path, *args, **kwargs):
+        if path == mirror:
+            writes.append(path)
+            raise AssertionError("fallback mirror must not be rewritten")
+        return real_write(path, *args, **kwargs)
+
+    def missing_files(_package):
+        raise FileNotFoundError("packaged resources unavailable")
+
+    monkeypatch.setattr(Path, "write_text", tracked_write)
+    monkeypatch.setattr("importlib.resources.files", missing_files)
+    try:
+        agent._reconstruct_context()
+    finally:
+        agent.stop(timeout=1.0)
+
+    assert writes == []
+    assert agent._prompt_manager.read_section("substrate") == fallback
+    assert mirror.read_text(encoding="utf-8") == fallback
+
+
+def test_static_mirror_read_failure_does_not_block_packaged_write(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _write_init(tmp_path, provider="gemini", model="gemini-test")
+    _write_owner(tmp_path)
+    agent = _agent(tmp_path)
+    mirror = tmp_path / "system" / "substrate.md"
+    mirror.parent.mkdir(exist_ok=True)
+    mirror.write_text("STALE FALLBACK", encoding="utf-8")
+    real_read = Path.read_text
+    reads: list[Path] = []
+
+    def denied_read(path: Path, *args, **kwargs):
+        if path == mirror:
+            reads.append(path)
+            raise PermissionError("injected mirror read failure")
+        return real_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", denied_read)
+    try:
+        agent._reconstruct_context()
+    finally:
+        agent.stop(timeout=1.0)
+
+    from importlib.resources import files
+    from lingtai.kernel._frontmatter import strip_frontmatter
+
+    packaged = files("lingtai.prompts").joinpath(
+        "substrate/substrate.md"
+    ).read_text(encoding="utf-8")
+    assert agent._prompt_manager.read_section("substrate") == strip_frontmatter(packaged)
+    assert reads == [mirror]
+    assert real_read(mirror, encoding="utf-8") == packaged
+
+
 def test_reconstruction_uses_only_psyche_owner_and_preserves_prompt_contract(
     tmp_path: Path,
 ) -> None:
@@ -409,6 +588,7 @@ def test_show_snapshot_commits_only_after_final_prompt_flush(
         applied_system_mirror = (
             tmp_path / "system" / "system.md"
         ).read_text(encoding="utf-8")
+        applied_plan = agent._psyche_prompt_plan
 
         _write_owner(tmp_path, base_prompt="PENDING BASE", covenant="PENDING COVENANT")
 
@@ -425,6 +605,7 @@ def test_show_snapshot_commits_only_after_final_prompt_flush(
         assert [row.current for row in provider()] == applied
         assert agent._prompt_manager._sections == applied_sections
         assert agent._base_prompt == "APPLIED BASE"
+        assert agent._psyche_prompt_plan is applied_plan
         assert agent._build_system_prompt() == applied_prompt
         assert (
             tmp_path / "system" / "base_prompt.md"
@@ -463,15 +644,25 @@ def test_each_successful_reconstruction_reads_once_and_advances_show(
     provider = _settings_provider(agent)
     real_read = psyche_settings.read_resolved_prompt_inputs
     reads: list[Path] = []
+    real_compose = psyche_prompt.compose_prompt_plan
+    plans = []
 
     def counted_read(root):
         reads.append(Path(root))
         return real_read(root)
 
+    def counted_compose(root):
+        plan = real_compose(root)
+        plans.append(plan)
+        return plan
+
     monkeypatch.setattr(psyche_settings, "read_resolved_prompt_inputs", counted_read)
+    monkeypatch.setattr(psyche_prompt, "compose_prompt_plan", counted_compose)
     try:
         agent._reconstruct_context()
         assert reads == [tmp_path]
+        assert len(plans) == 1
+        assert agent._psyche_prompt_plan is plans[0]
         assert [row.current for row in provider()] == [
             "", None, "BASE A", None, "", None, "COMMENT A", None,
         ]
@@ -479,6 +670,8 @@ def test_each_successful_reconstruction_reads_once_and_advances_show(
         _write_owner(tmp_path, base_prompt="BASE B", covenant="COVENANT B")
         agent._reconstruct_context()
         assert reads == [tmp_path, tmp_path]
+        assert len(plans) == 2
+        assert agent._psyche_prompt_plan is plans[1]
         assert [row.current for row in provider()] == [
             "", None, "BASE B", None, "COVENANT B", None, "", None,
         ]

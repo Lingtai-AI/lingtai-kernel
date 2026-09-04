@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/tools/psyche/BEHAVIORS.md
   - src/lingtai/tools/psyche/__init__.py
   - src/lingtai/tools/psyche/settings.py
+  - src/lingtai/tools/psyche/prompt.py
   - src/lingtai/agent.py
   - src/lingtai/cli_project.py
   - src/lingtai/kernel/project/__init__.py
@@ -90,19 +91,39 @@ about the *root*. The normative statement is narrower and remains true: no old
 `psyche` action is reachable, and the one reused action name carries only its
 new meaning.
 
-### The `substrate` prompt section is unrelated and unchanged
+### Prompt-plan composition (PR A)
 
-The kernel-owned `substrate` *prompt section*
-(`lingtai/prompts/substrate/substrate.md` → `system/substrate.md`) keeps its
-name, content, ownership, and render order. This family briefly carried the name
-`substrate` as a public root; that root is gone, and the prompt section was never
-part of it. Nothing keys the two together.
+Psyche owns the pure composition input for the static `principle`, `substrate`,
+and `procedures` contributions. `compose_prompt_plan` reads the existing
+`PsychePromptInputs` once and packages those three ordered resident bodies plus
+their mirror metadata into one immutable `PromptPlan`. It does not write a
+mirror, mutate a prompt manager, own the kernel's raw first slot, change cache
+batches, or perform provider/session publication. The Agent resolves the full
+plan once before refresh teardown (or before an active/passive reconstruction
+transaction), carries that same object through the existing seam, and commits
+it only after the final flush succeeds. Packaged bodies retain the existing
+on-disk mirror fallback and frontmatter-stripping behavior; no public Psyche
+action or prompt body changes in this slice.
+
+### The `substrate` prompt section keeps its kernel render mechanics
+
+The `substrate` *prompt section* (`lingtai/prompts/substrate/substrate.md` →
+`system/substrate.md`) keeps its name, content, and render order. Its static
+source contribution is carried by the Psyche plan, while the kernel retains the
+render slot and cache mechanics. This family briefly carried the name `substrate`
+as a public root; that root is gone, and nothing keys the two namespaces together.
 
 ## Behavior
 
 Agents MUST treat every `psyche` action as read-only. No action authors,
 edits, pins, installs, migrates, rescans a catalog, writes a prompt or source
 file, or reloads prompt state.
+
+The static prompt plan is an internal composition boundary, not a new action.
+Its section tuple is ordered and immutable, and a reconstruction MUST apply the
+same candidate that was resolved before the seam began. A failed final flush
+MUST restore the prior plan object together with the existing prompt-manager
+sections, configurable prompt mirrors, and SHOW.
 
 `settings` MUST report the applied snapshot consumed by the last successful
 canonical reconstruction and return exactly `pad`, `pad_file`, `base_prompt`,
@@ -177,8 +198,8 @@ child is injected immediately before `manual`. The static `DECLARATION` binds
 only `workdir` and `PsycheSettingsPort`; the provider reads the Agent-owned
 applied eight-value snapshot through that one read-only operation, copies and
 validates its eight structural scalar fields, and performs no file I/O or Agent
-access. Agent reconstruction consumes one immutable Psyche owner candidate,
-uses the existing prompt file-over-inline helper, then publishes the replacement
+access. Agent reconstruction consumes one immutable Psyche prompt plan, uses the
+existing prompt file-over-inline helper, then publishes the replacement plan and
 snapshot only after the successful final prompt flush.
 
 `serialize_prompt_owner_document` is Psyche's one public v1 owner-document

@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/psyche/ANATOMY.md
   - src/lingtai/tools/psyche/__init__.py
   - src/lingtai/tools/psyche/settings.py
+  - src/lingtai/tools/psyche/prompt.py
   - src/lingtai/tools/psyche/glossary-en.md
   - src/lingtai/agent.py
   - tests/test_psyche_family.py
@@ -46,6 +47,10 @@ Pinned pytest commands must run from the repo root with the project's Python.
    applied snapshot. Call settings with any input key and record the rejection.
    Hash all prompt/source files around each SHOW call.
 4. Make a durable change with `file.edit` on the domain's own source and confirm the prompt section does not change until one explicit `context(action="rebuild", input={}, reasoning="...")` (or passive refresh/molt) is applied.
+5. Inspect the focused prompt-plan tests and confirm the three static sections are
+   composed in order as one immutable candidate, startup passes the exact same
+   object through reconstruction, and a failed final flush restores that plan
+   with the prior generation's existing rollback state.
 
 ### Expected evidence
 - [ ] Step 1: both focused Psyche suites pass, pinning exact manual routing,
@@ -60,6 +65,9 @@ Pinned pytest commands must run from the repo root with the project's Python.
       without rows. No `psyche` action authors, edits, pins, installs, migrates,
       rescans, writes, or reloads — hashes are unchanged.
 - [ ] Step 4: file mutation never hot-loads the prompt; the prompt section updates only after an explicit rebuild or passive reconstruction.
+- [ ] Step 5: the static plan is read/applied once per reconstruction, cannot be
+      mutated through its dataclass/tuple fields, and a failed final flush
+      restores the prior plan and the existing rollback state.
 
 ### Pass / Fail
 Pass when the suite passes, SHOW stays bound to the last applied reconstruction,

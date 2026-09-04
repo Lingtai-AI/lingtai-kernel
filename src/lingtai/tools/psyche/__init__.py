@@ -31,7 +31,8 @@ The capabilities themselves remain private lifecycle owners:
 - one explicit ``context.rebuild`` or passive refresh/molt reconstruction makes
   durable content prompt-visible.
 
-The kernel-owned ``substrate`` prompt section is a separate, unchanged concept.
+The static-plan ``substrate`` prompt contribution is separate from this family;
+the kernel's render slot and mechanics remain unchanged.
 """
 from __future__ import annotations
 

@@ -1,9 +1,10 @@
 kind: prompt-section-definition
 section: procedures
 name_definition: >
-  "procedures" is the kernel-owned resident action playbook. It is named for the
-  operational procedures it carries: triggers, checklists, routing steps, reporting
-  discipline, and concrete tool-use rules — how to act.
+  "procedures" is the static resident action playbook. The kernel owns its slot and
+  rendering mechanics while the Psyche plan supplies the packaged body. It is named
+  for the operational procedures it carries: triggers, checklists, routing steps,
+  reporting discipline, and concrete tool-use rules — how to act.
 purpose: >
   Exists as the concise resident how-to layer that routes the agent to the canonical
   rule. It carries the compact playbook (tool choice, communication discipline,
@@ -21,16 +22,23 @@ scope:
     - The root map and operating principle (owned by principle).
     - The operator/recipe constitution content (owned by covenant).
 injection_contract:
-  defined_by: kernel
-  injected_by: kernel_prompt_builder
+  defined_by: psyche
+  injected_by: agent_prompt_reconstruction
   content_source: src/lingtai/prompts/procedures/procedures.md
+  resident_source: procedures/procedures.md
+  disclosure_source: null
   mirror_path: system/procedures.md
   override_policy: not_user_overridable
   notes: >
-    Kernel-owned. Legacy init.json `procedures`/`procedures_file` are legacy-migrated
-    and ignored; the packaged body wins on every boot/refresh. The on-disk mirror is a
-    debug artifact; rendered section is body-only.
+    Psyche's static plan owns the packaged source contribution; the Agent keeps
+    injection mechanics. Legacy init.json `procedures`/`procedures_file` are
+    legacy-migrated and ignored; the packaged body wins on every boot/refresh. The
+    on-disk mirror is a debug artifact; rendered section is body-only.
 related_files:
+  - path: src/lingtai/tools/psyche/prompt.py
+    why: >
+      The PR A registry composes this packaged body into the immutable Psyche
+      prompt plan before Agent reconstruction applies it.
   - path: src/lingtai/prompts/ANATOMY.md
     why: >
       The owning prompt-source anatomy: it maps where procedures sits and how the

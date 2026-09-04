@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/prompts/meta_guidance/catalog/INDEX.md
   - src/lingtai/kernel/base_agent/tools.py
   - src/lingtai/kernel/tool_glossary.py
+  - src/lingtai/tools/psyche/prompt.py
   - tests/test_prompt_catalog.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/prompts/brief/brief.yaml
@@ -45,11 +46,13 @@ maintenance: |
 ---
 # lingtai/prompts
 
-Packaged prompt-source root: the kernel-owned system-prompt section bodies, the
+Packaged prompt-source root: the static system-prompt section bodies, the
 per-section semantic **definitions**, and the runtime-guidance catalog (under
-`meta_guidance/catalog/`) that generates the `meta_guidance` body. This is the
-local navigation anchor for a coding agent editing prompt sources — descend here
-instead of entering through the large kernel-root anatomy.
+`meta_guidance/catalog/`) that generates the `meta_guidance` body. Psyche's
+three-entry prompt-plan registry owns the static body composition input; the
+kernel still owns rendering mechanics. This is the local navigation anchor for
+a coding agent editing prompt sources — descend here instead of entering
+through the large kernel-root anatomy.
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues.
 
@@ -63,7 +66,7 @@ Two concerns live here and must stay separate:
   for coding agents editing the kernel; they are never rendered into the LLM
   prompt.
 - **Injection / body** — the actual content rendered into the prompt. For a few
-  kernel-owned sections this is a packaged `<section>/<section>.md` body; for most
+  static sections this is a packaged `<section>/<section>.md` body; for most
   sections the content is generated (from the `meta_guidance/catalog/` guidance
   catalog, tool registry, MCP state, skills/knowledge index) or injected by
   init/recipe/operator, and there is no packaged body.
@@ -90,7 +93,7 @@ sources, catalog INDEX ↔ catalog sections).
 |---|---|
 | `<section>/` | One directory per prompt section. The complete set is `brief`, `character`, `comment`, `covenant`, `identity`, `knowledge`, `mcp`, `meta_guidance`, `pad`, `principle`, `procedures`, `rules`, `skills`, `substrate`, and `tools` — every one holds `<section>.yaml`, and the three body-backed ones also hold `<section>.md`. `related_files` enumerates each packaged payload individually, so no prompt source is reachable only by directory convention. |
 | `<section>/<section>.yaml` | `prompt-section-definition` YAML: `name_definition`, `purpose`, `scope`, `injection_contract`, `related_files`, `maintenance`. Present for every section. |
-| `principle/principle.md`, `substrate/substrate.md`, `procedures/procedures.md` | The three kernel-owned, packaged section bodies (skill-style frontmatter + Markdown body; frontmatter stripped on render). |
+| `principle/principle.md`, `substrate/substrate.md`, `procedures/procedures.md` | The three Psyche-plan-owned, packaged section bodies (skill-style frontmatter + Markdown body; frontmatter stripped on render). |
 | `meta_guidance/catalog/` | Runtime-guidance Markdown catalog: `INDEX.md` (manifest frontmatter) + one `<id>.md` per section, nested under the `meta_guidance` section it generates. Assembled into the `meta_guidance` body; order is code-owned in `GUIDANCE_SECTION_ORDER`. |
 | `tools/tools.yaml` | Semantic contract for the generated `tools` section. The section is opt-in and default off (`LINGTAI_TOOL_PROSE_SECTION_ENABLED`): when opted in the resident tool inventory renders each canonical-English description/schema plus the selected package-owned glossary body and provider tool definitions carry the fixed generic wire pointer; by default the section is omitted and that prose rides on the provider tool definition instead. Nested parameters are unchanged either way. |
 
@@ -103,10 +106,12 @@ comment → rules → brief → mcp → skills → knowledge → identity → ch
 
 Each section has a `<section>/<section>.yaml` definition. Bodies split three ways:
 
-- **Body-backed kernel sections** — `principle`, `substrate`, `procedures`. Packaged
-  `<section>/<section>.md`; loaded by `agent.py` via
-  `files("lingtai.prompts").joinpath("<section>/<section>.md")`; kernel-owned, not
-  operator-overridable; mirrored to `system/<section>.md`.
+- **Body-backed static sections** — `principle`, `substrate`, `procedures`. Packaged
+  `<section>/<section>.md`; the Psyche prompt-plan registry loads them through
+  `tools/psyche/prompt.py`, and the Agent applies the candidate via its existing
+  reconstruction seam. They are not operator-overridable; the Agent mirrors
+  them to `system/<section>.md` while the kernel owns the raw first slot,
+  protection, cache batches, and rendering.
 - **Generated sections** — `meta_guidance` (from `meta_guidance/catalog/`), `tools`
   (tool registry), `mcp` (MCP state), `skills`/`knowledge` (registries), `identity`
   (runtime facts). No packaged body; content is built each turn.
@@ -137,13 +142,16 @@ schema remains canonical English.
 
 The `injection_contract` block in each YAML is the authority for which of these a
 section is: `defined_by`, `injected_by`, `content_source`, optional
-`mirror_path`/`derived_mirror`, and `override_policy`.
+`resident_source`/`disclosure_source`, optional `mirror_path`/`derived_mirror`,
+and `override_policy`.
 
 ## Composition
 
 - **Parent:** `src/lingtai/ANATOMY.md` (the `lingtai` wrapper package).
-- **Loader:** `src/lingtai/agent.py` reads the three packaged bodies and assembles
-  the catalog-derived `system/guidance.json` (catalog now at `meta_guidance/catalog/`).
+- **Loader:** `src/lingtai/tools/psyche/prompt.py` composes the three static bodies
+  into an immutable candidate; `src/lingtai/agent.py` applies that candidate and
+  assembles the catalog-derived `system/guidance.json` (catalog now at
+  `meta_guidance/catalog/`).
 - **Render order + catalog loader:** `src/lingtai/kernel/prompt.py` (order) and
   `src/lingtai/kernel/prompt_catalog.py` (`load_guidance_catalog`), mapped in
   `src/lingtai/kernel/ANATOMY.md`.

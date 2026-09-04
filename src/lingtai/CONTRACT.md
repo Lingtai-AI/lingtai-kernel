@@ -18,6 +18,7 @@ related_files:
   - src/lingtai/tools/system/settings.py
   - src/lingtai/tools/psyche/settings.py
   - src/lingtai/tools/psyche/CONTRACT.md
+  - src/lingtai/tools/psyche/prompt.py
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
   - ENVIRONMENT_VARIABLES.md
@@ -79,9 +80,9 @@ shapes. The six former init prompt fields (`base_prompt`, `base_prompt_file`,
 but inert: this reader does not type-check, path-resolve, or consume them.
 Psyche owns the active six-field surface through its independent strict
 `settings/psyche.json` v1 reader at Agent reconstruction. Live refresh resolves
-that owner exactly once immediately after a successful init read and before any
-destructive teardown, then passes the immutable candidate through prompt
-reconstruction. If active validation encounters a conflict or unsupported value
+one immutable Psyche prompt plan exactly once immediately after a successful init
+read and before any destructive teardown, then passes that same candidate through
+prompt reconstruction. If active validation encounters a conflict or unsupported value
 it fails closed with the prior sealed runtime wholly intact; the reader does not
 guess an effective value or silently claim success.
 There is no automatic rewrite, strip-and-write-back, migration registry, version
