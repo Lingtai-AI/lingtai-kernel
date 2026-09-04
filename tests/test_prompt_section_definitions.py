@@ -210,9 +210,11 @@ def test_brief_section_is_marked_deprecated():
 
 def test_covenant_body_source_is_external_not_packaged():
     ic = _load("covenant")["injection_contract"]
-    assert ic["content_source"] == "operator_recipe_or_init_covenant_mirror"
-    assert ic["injected_by"] == "init_recipe_or_operator_surface"
-    assert ic["override_policy"] == "operator_recipe_may_supply_content"
+    assert ic["content_source"] == (
+        "settings_psyche_covenant_pair_with_system_covenant_mirror_fallback"
+    )
+    assert ic["injected_by"] == "psyche_prompt_owner_document"
+    assert ic["override_policy"] == "psyche_owner_pair_may_supply_content"
     # It must not claim a packaged covenant/covenant.md body anywhere.
     blob = _yaml_path("covenant").read_text(encoding="utf-8")
     assert "covenant/covenant.md" not in blob or "no such body" in blob.lower() \

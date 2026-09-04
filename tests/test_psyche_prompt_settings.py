@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from lingtai.adapters.tool_plugin_host import AgentPsycheSettingsAdapter
 from lingtai.agent import Agent
 from lingtai.tools.psyche import settings as psyche_settings
 from lingtai.tools.psyche.settings import (
@@ -42,6 +43,12 @@ def _agent(root: Path) -> Agent:
     return Agent(
         service=make_mock_service(), agent_name="test", working_dir=root,
         capabilities=[],
+    )
+
+
+def _settings_provider(agent: Agent):
+    return build_settings_provider(
+        AgentPsycheSettingsAdapter(lambda: agent._psyche_settings_snapshot)
     )
 
 
@@ -237,7 +244,7 @@ def test_reconstruction_uses_only_psyche_owner_and_preserves_prompt_contract(
         assert (tmp_path / "system" / "base_prompt.md").read_text(encoding="utf-8") == "OWNER BASE"
         assert (tmp_path / "system" / "covenant.md").read_text(encoding="utf-8") == "OWNER COVENANT"
 
-        snapshot = build_settings_provider(agent)()
+        snapshot = _settings_provider(agent)()
         assert [row.key for row in snapshot] == [
             "pad", "pad_file", "base_prompt", "base_prompt_file",
             "covenant", "covenant_file", "comment", "comment_file",
@@ -259,7 +266,7 @@ def test_reconstruction_uses_only_psyche_owner_and_preserves_prompt_contract(
         with pytest.raises(PsycheSettingsError):
             agent._reconstruct_context()
         assert agent._build_system_prompt() == prompt
-        assert [row.current for row in build_settings_provider(agent)()] == [
+        assert [row.current for row in _settings_provider(agent)()] == [
             "", None, "OWNER BASE", None, "OWNER COVENANT", None,
             "OWNER COMMENT", None,
         ]
@@ -274,7 +281,7 @@ def test_show_snapshot_commits_only_after_final_prompt_flush(
     _write_owner(tmp_path, base_prompt="APPLIED BASE", covenant="APPLIED COVENANT")
     agent = _agent(tmp_path)
     try:
-        provider = build_settings_provider(agent)
+        provider = _settings_provider(agent)
         agent._reconstruct_context()
         applied = [row.current for row in provider()]
 
@@ -302,7 +309,7 @@ def test_each_successful_reconstruction_reads_once_and_advances_show(
     _write_init(tmp_path)
     _write_owner(tmp_path, base_prompt="BASE A", comment="COMMENT A")
     agent = _agent(tmp_path)
-    provider = build_settings_provider(agent)
+    provider = _settings_provider(agent)
     real_read = psyche_settings.read_resolved_prompt_inputs
     reads: list[Path] = []
 

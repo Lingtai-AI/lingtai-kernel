@@ -18,6 +18,7 @@ related_files:
   - src/lingtai/tools/psyche/glossary-wen.md
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
   - tests/test_psyche_family.py
+  - tests/test_psyche_prompt_settings.py
   - tests/test_tool_settings_contract.py
 maintenance: |
   Keep paths real, repo-relative, duplicate-free, and reciprocal with the paired
