@@ -134,9 +134,9 @@ regardless of `summarize`.
 
 ### Settings
 
-There is no skills settings file at all — neither a family-level
-`settings/psyche.json` nor an action-level `settings/psyche.skills.json`.
-Nothing is read from either address, and creating one has no effect. The
+There is no Skills-owned settings file — in particular no action-level
+`settings/psyche.skills.json`. Psyche's separate `settings/psyche.json` does
+not configure Skills. The
 catalogue's only configuration input is `manifest.capabilities.skills.paths`
 in `init.json`, described above.
 

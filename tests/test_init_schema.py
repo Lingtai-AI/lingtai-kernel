@@ -21,7 +21,6 @@ def _valid_init() -> dict:
             "max_turns": 50,
             "admin": {"karma": True},
         },
-        "covenant": "",
         "pad": "",
         "lingtai": "",
         "soul": "",
@@ -34,8 +33,8 @@ def test_valid_init_passes():
 
 def test_missing_top_level_key():
     data = _valid_init()
-    del data["covenant"]
-    with pytest.raises(ValueError, match="covenant"):
+    del data["pad"]
+    with pytest.raises(ValueError, match="pad"):
         validate_init(data)
 
 
@@ -56,7 +55,6 @@ def test_minimal_init_passes():
                 "model": "claude-sonnet-4-20250514",
             },
         },
-        "covenant": "",
         "pad": "",
         "lingtai": "",
         "soul": "",
@@ -71,11 +69,21 @@ def test_missing_llm_field():
         validate_init(data)
 
 
-def test_wrong_type_top_level():
+@pytest.mark.parametrize(
+    "key",
+    [
+        "base_prompt", "base_prompt_file",
+        "covenant", "covenant_file",
+        "comment", "comment_file",
+    ],
+)
+def test_legacy_psyche_prompt_inputs_are_known_but_inert(key):
     data = _valid_init()
-    data["covenant"] = 123
-    with pytest.raises(ValueError, match="covenant.*str"):
-        validate_init(data)
+    data[key] = {"not": "type-checked or honored"}
+
+    warnings = validate_init(data)
+
+    assert all(key not in warning for warning in warnings)
 
 
 @pytest.mark.parametrize(

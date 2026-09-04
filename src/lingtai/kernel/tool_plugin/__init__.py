@@ -53,6 +53,7 @@ __all__ = [
     "DaemonRuntimePort",
     "PluginCatalogState",
     "PluginCatalogPort",
+    "PsycheSettingsSnapshotPort",
     "PsycheSettingsPort",
     "NotificationStatePort",
     "NotificationPort",
@@ -103,8 +104,9 @@ def _settings_input_schema() -> dict[str, Any]:
 #: ``email``, ``file``, ``plugin``, ``psyche``, ``notification``, ``shell``,
 #: ``soul``, ``system``, ``task_card``, ``vision``, or ``web``). Plugin
 #: consumes only the read-only ``plugin_catalog`` projection; Psyche consumes
-#: only its last-applied Pad configuration through ``psyche_settings``; File consumes
-#: ``workdir``/``file_io`` plus its factory-applied bounded
+#: only its last-applied Pad and prompt-owner configuration through
+#: ``psyche_settings``; File consumes ``workdir``/``file_io`` plus its
+#: factory-applied bounded
 #: ``configuration`` snapshot; Shell consumes
 #: ``workdir`` plus its explicit setup ``configuration`` and durable
 #: ``notifications`` ports; System consumes its ``system_runtime`` lifecycle
@@ -235,15 +237,29 @@ class WorkdirPort(Protocol):
         """The agent working directory."""
 
 
-class PsycheSettingsPort(Protocol):
-    """Read Psyche's last successfully applied Pad configuration.
+class PsycheSettingsSnapshotPort(Protocol):
+    """Structural view of Psyche's last completely applied owner inputs."""
 
-    The tuple is the exact reconstruction-owned ``(pad, pad_file)`` snapshot.
-    It grants no prompt mutation, reconstruction, settings write, or Agent access.
+    pad: str
+    pad_file: str | None
+    base_prompt: str
+    base_prompt_file: str | None
+    covenant: str
+    covenant_file: str | None
+    comment: str
+    comment_file: str | None
+
+
+class PsycheSettingsPort(Protocol):
+    """Read Psyche's last completely applied prompt-owner configuration.
+
+    The immutable structural snapshot contains Pad plus the three configurable
+    prompt pairs. It grants no prompt mutation, reconstruction, settings write,
+    owner-source read, or Agent access.
     """
 
-    def read_snapshot(self) -> tuple[str, str | None]:
-        """Return the current applied ``(pad, pad_file)`` snapshot."""
+    def read_snapshot(self) -> PsycheSettingsSnapshotPort:
+        """Return the current applied Psyche owner-input snapshot."""
 
 
 class PromptSectionPort(Protocol):

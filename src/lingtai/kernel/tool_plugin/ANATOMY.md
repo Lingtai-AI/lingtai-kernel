@@ -124,10 +124,11 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the twenty kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `FileIOPort`, `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
-    read-only `PluginCatalogPort` (with detached `PluginCatalogState`),
-    read-only `PsycheSettingsPort`,
+  - the twenty-one kernel host/value Port Protocols `WorkdirPort`,
+    `PromptSectionPort`, `FileIOPort`, `AvatarParentPort`, `ContextRuntimePort`,
+    `DaemonRuntimePort`, read-only `PluginCatalogPort` (with detached
+    `PluginCatalogState`), read-only `PsycheSettingsPort` (returning the
+    structural `PsycheSettingsSnapshotPort`),
     `NotificationStatePort`, Shell's narrow durable `NotificationPort` and
     setup-only `ConfigurationPort`, Soul's explicit live-self `SoulRuntimePort`,
     System's bounded lifecycle `SystemRuntimePort` and durable naming
@@ -169,8 +170,9 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   concrete operations/facts, Plugin's detached read-only catalog projection,
   and Notification Core's dismissal, delay, hook, and logging operations,
   alongside the existing MCP, Avatar, Context, Daemon, and Email adapters,
-  plus `AgentPsycheSettingsAdapter` for the one read-through applied Pad settings
-  snapshot, and `AgentSoulRuntimeAdapter`/`agent_soul_runtime` for Soul's explicit
+  plus `AgentPsycheSettingsAdapter` for the one read-through applied Psyche
+  owner-input snapshot, and `AgentSoulRuntimeAdapter`/`agent_soul_runtime` for
+  Soul's explicit
   live-self runtime operations and
   `AgentSystemRuntimeAdapter`/`AgentIdentityAdapter`/`agent_system_runtime`
   for System's lifecycle and naming vocabularies (whose sleep members are

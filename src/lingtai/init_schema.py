@@ -28,15 +28,6 @@ TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # mcp is the per-MCP activation map — see lingtai/tools/mcp/skills/mcp-manual/SKILL.md.
     # Keys must match registered names; values are subprocess specs.
     "mcp": dict,
-    # base_prompt is the third-party (application / recipe / preset) system-
-    # prompt injection point — one of the three externally changeable prompt
-    # surfaces (with `covenant` and `comment`). It renders right after the raw
-    # kernel-owned `principle` section and before the rest of Batch 1 (see
-    # lingtai.kernel.prompt.build_system_prompt_batches). Inline value or
-    # `base_prompt_file` path; type-checked alongside the other optional text
-    # fields in validate_init().
-    "base_prompt": str,
-    "base_prompt_file": str,
 }
 
 # Top-level fields retired in past versions. The current production reader keeps
@@ -55,15 +46,16 @@ DEPRECATED_TOP_FIELDS: set[str] = {
 # known to validation only so stale/restored init.json files do not look like
 # active supported schema fields and do not get type-checked as prompt sections.
 #
-# The externally changeable system-prompt surface is exactly `base_prompt`,
-# `covenant`, and `comment` (the init-prompt contract). Kernel-owned prompt
-# layers — `principle`, `procedures`, and `substrate` — are no longer external
-# overrides; `brief` (secretary-written life context) is likewise retired as an
-# init-injected prompt section. Their inline/_file fields are migrated-legacy-
-# known here: tolerated on old/restored init.json (no error, no warning) but
-# never honored. See agent_m003_init_prompt_contract for the inline-content
-# archival migration.
+# The configurable system-prompt surface is owned by Psyche's closed
+# ``settings/psyche.json`` document. Its former top-level init fields are
+# compatibility-known only: tolerated on old/restored init.json (no error, no
+# warning and no type/path/content handling) but never honored. Kernel-owned
+# prompt layers — `principle`, `procedures`, and `substrate` — and
+# secretary-written `brief` follow the same inert compatibility treatment.
 LEGACY_MIGRATED_TOP_FIELDS: set[str] = {
+    "base_prompt", "base_prompt_file",
+    "covenant", "covenant_file",
+    "comment", "comment_file",
     "principle", "principle_file",
     "procedures", "procedures_file",
     "substrate", "substrate_file",
@@ -72,10 +64,7 @@ LEGACY_MIGRATED_TOP_FIELDS: set[str] = {
 
 TOP_KNOWN: set[str] = {
     "manifest", "env_file", "venv_path", "addons", "mcp",
-    "covenant", "covenant_file",
-    "base_prompt", "base_prompt_file",
     "pad", "pad_file", "lingtai", "lingtai_file",
-    "comment", "comment_file",
 } | DEPRECATED_TOP_FIELDS | LEGACY_MIGRATED_TOP_FIELDS
 
 MANIFEST_REQUIRED: dict[str, type | tuple[type, ...]] = {
@@ -269,7 +258,7 @@ def validate_init(data: dict) -> list[str]:
     # Note: "soul" / "soul_file" was removed in v0.7.6 — the soul-flow
     # voice lives at manifest.soul.{voice,voice_prompt} now. The legacy
     # fields are kept in TOP_KNOWN for silent ignore (no warning).
-    for key in ("covenant", "pad"):
+    for key in ("pad",):
         file_key = f"{key}_file"
         has_inline = key in data
         has_file = file_key in data
@@ -280,17 +269,10 @@ def validate_init(data: dict) -> list[str]:
         if has_file and not isinstance(data[file_key], str):
             raise ValueError(f"{file_key}: expected str, got {type(data[file_key]).__name__}")
 
-    # Optional text fields: inline value OR _file path (neither required).
-    # These are the externally changeable prompt surfaces under the init-prompt
-    # contract beyond the required `covenant`:
-    #   - `comment`     — operator note section.
-    #   - `base_prompt` — the third-party (application / recipe / preset) system-
-    #                     prompt injection point. Renders right after the raw
-    #                     kernel-owned `principle` section and before the rest of
-    #                     Batch 1 (lingtai.kernel.prompt.build_system_prompt_batches).
-    # `substrate` and `brief` were retired as external overrides (kernel-owned /
-    # secretary-disk-only respectively) — see LEGACY_MIGRATED_TOP_FIELDS.
-    for key in ("lingtai", "comment", "base_prompt"):
+    # `lingtai` remains an optional init seed. Psyche's base_prompt, covenant,
+    # and comment pairs are intentionally absent: their legacy init spellings
+    # are known-but-inert and their strict schema lives in settings/psyche.json.
+    for key in ("lingtai",):
         file_key = f"{key}_file"
         if key in data and not isinstance(data[key], str):
             raise ValueError(f"{key}: expected str, got {type(data[key]).__name__}")

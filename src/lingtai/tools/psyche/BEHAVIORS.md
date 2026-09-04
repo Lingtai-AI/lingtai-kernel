@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/tools/psyche/glossary-en.md
   - src/lingtai/agent.py
   - tests/test_psyche_family.py
+  - tests/test_psyche_prompt_settings.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
@@ -21,7 +22,7 @@ maintenance: |
 # Psyche Tool Behavior Tests
 
 Self-contained agent behavior tasks guarding the observable behavior clauses of
-`src/lingtai/tools/psyche/CONTRACT.md` (five read-only manual actions, two-row
+`src/lingtai/tools/psyche/CONTRACT.md` (five read-only manual actions, eight-row
 redacted settings SHOW, and durable changes via file + explicit rebuild).
 Pinned pytest commands must run from the repo root with the project's Python.
 
@@ -35,24 +36,26 @@ Pinned pytest commands must run from the repo root with the project's Python.
 - **estimate**: ≈ 15 minutes
 
 ### Steps
-1. From `<repo>`, run `python -m pytest tests/test_psyche_family.py -q` and capture the outcome.
+1. From `<repo>`, run `python -m pytest -q tests/test_psyche_family.py tests/test_psyche_prompt_settings.py` and capture the outcome.
 2. Call `pad | lingtai | knowledge | skills | manual` with strict empty input;
    confirm each returns its intended manual.
-3. Call `settings` with strict empty input and record the two rows. Edit the
-   referenced Pad source without reconstructing, then temporarily make
-   `init.json` malformed; confirm SHOW remains available and unchanged. Restore
-   a valid init, reconstruct, and confirm the focused provider assertion sees
-   the newly applied snapshot. Call settings with any input key and record the
-   rejection. Hash all prompt/source files around each SHOW call.
+3. Call `settings` with strict empty input and record the eight rows. Edit the
+   Psyche owner document without reconstructing, then make it malformed;
+   confirm SHOW remains available and unchanged. Restore a valid owner document,
+   reconstruct, and confirm the focused provider assertion sees the newly
+   applied snapshot. Call settings with any input key and record the rejection.
+   Hash all prompt/source files around each SHOW call.
 4. Make a durable change with `file.edit` on the domain's own source and confirm the prompt section does not change until one explicit `context(action="rebuild", input={}, reasoning="...")` (or passive refresh/molt) is applied.
 
 ### Expected evidence
-- [ ] Step 1: the psyche family suite passes, pinning exact manual routing,
-      settings discovery, and read-only behavior.
+- [ ] Step 1: both focused Psyche suites pass, pinning exact manual routing,
+      settings discovery, strict owner parsing, and read-only behavior.
 - [ ] Step 2: the five manual bodies are nonempty and distinct.
-- [ ] Step 3: success is exactly `pad`, then `pad_file`; each row has exactly
-      `key,current,default,configurable,comment`, both values are `<redacted>`,
-      an ambient source edit or malformed init cannot change/make SHOW
+- [ ] Step 3: success is exactly `pad`, `pad_file`, `base_prompt`,
+      `base_prompt_file`, `covenant`, `covenant_file`, `comment`, then
+      `comment_file`; each row has exactly `key,current,default,configurable,comment`,
+      both values are `<redacted>`, an ambient source edit or malformed owner
+      document cannot change/make SHOW
       unavailable before successful reconstruction, and invalid input fails
       without rows. No `psyche` action authors, edits, pins, installs, migrates,
       rescans, writes, or reloads — hashes are unchanged.

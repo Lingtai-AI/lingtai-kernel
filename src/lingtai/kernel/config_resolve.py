@@ -222,8 +222,9 @@ def _resolve_env_fields(d: dict) -> dict:
 def resolve_paths(data: dict, working_dir: str | Path) -> None:
     """Make every path field in init.json absolute, resolved against working_dir.
 
-    Mutates *data* in place. Handles top-level: env_file, venv_path, and
-    *_file (covenant_file, principle_file, etc.).
+    Mutates *data* in place. Handles live init-owned top-level paths:
+    env_file, venv_path, pad_file, and lingtai_file. Psyche prompt pointers
+    have their own closed owner reader.
 
     MCP-related paths (init.json's `mcp.<name>.env.LINGTAI_*_CONFIG`) are
     intentionally left relative — each MCP server resolves its own config
@@ -231,18 +232,13 @@ def resolve_paths(data: dict, working_dir: str | Path) -> None:
     """
     wd = Path(working_dir)
 
-    # Note: principle_file / procedures_file / substrate_file / brief_file are
-    # retired init prompt-override fields (see
-    # lingtai.init_schema.LEGACY_MIGRATED_TOP_FIELDS). They are left out of
-    # active path resolution — the kernel no longer reads them — but tolerated
-    # if present on stale init.json (resolve_paths simply ignores unknown keys).
-    # The init-prompt contract's third-party injection point is `base_prompt`
-    # (inline or `base_prompt_file`).
+    # Psyche-owned prompt pairs and the retired kernel/secretary prompt pairs
+    # are compatibility-known init fields, deliberately left out of active path
+    # resolution. They must not become observable sources simply because an old
+    # init.json carries them.
     for key in ("env_file", "venv_path",
-                "covenant_file",
-                "base_prompt_file",
                 "pad_file",
-                "lingtai_file", "comment_file"):
+                "lingtai_file"):
         if key in data and isinstance(data[key], str) and data[key]:
             p = Path(data[key]).expanduser()
             if not p.is_absolute():
@@ -259,5 +255,3 @@ def _resolve_capabilities(capabilities: dict) -> dict:
         else:
             resolved[name] = kwargs
     return resolved
-
-

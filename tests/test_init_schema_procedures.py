@@ -152,46 +152,42 @@ def test_legacy_prompt_field_is_unknown_no_alias():
     assert all("lingtai" not in w for w in warnings)
 
 
-# --- init prompt contract: base_prompt is the third-party injection point ---
+# --- Psyche prompt-owner compatibility boundary ---
 
 
-def test_base_prompt_is_active_optional_text_field():
-    """`base_prompt` is the contract's third-party (application / recipe /
-    preset) system-prompt injection point — an active, type-checked optional
-    text field with inline + _file forms."""
-    from lingtai.init_schema import TOP_OPTIONAL, TOP_KNOWN
+def test_psyche_prompt_pairs_are_known_but_inert_init_compatibility_fields():
+    from lingtai.init_schema import LEGACY_MIGRATED_TOP_FIELDS, TOP_KNOWN, TOP_OPTIONAL
 
-    assert "base_prompt" in TOP_OPTIONAL
-    assert "base_prompt" in TOP_KNOWN
-    assert "base_prompt_file" in TOP_KNOWN
+    for key in (
+        "base_prompt", "base_prompt_file", "covenant", "covenant_file",
+        "comment", "comment_file",
+    ):
+        assert key in LEGACY_MIGRATED_TOP_FIELDS
+        assert key in TOP_KNOWN
+        assert key not in TOP_OPTIONAL
 
     data = _valid_init()
-    data["base_prompt"] = "Recipe-injected base prompt."
+    data.update({
+        "base_prompt": {"intentionally": "untyped"},
+        "base_prompt_file": 1,
+        "covenant": ["inert"],
+        "covenant_file": False,
+        "comment": {"legacy": True},
+        "comment_file": 2,
+    })
     warnings = validate_init(data)
-    assert all("base_prompt" not in w for w in warnings)
+    assert not [warning for warning in warnings if "prompt" in warning or "covenant" in warning or "comment" in warning]
 
 
-def test_base_prompt_wrong_type_rejected():
+def test_covenant_is_not_required_but_pad_still_is():
     data = _valid_init()
-    data["base_prompt"] = 123
+    data.pop("covenant")
+    validate_init(data)
+
+    data.pop("pad")
     import pytest
-    with pytest.raises(ValueError, match="base_prompt.*str"):
+    with pytest.raises(ValueError, match="missing required field: pad"):
         validate_init(data)
-
-
-def test_base_prompt_file_wrong_type_rejected():
-    data = _valid_init()
-    data["base_prompt_file"] = 123
-    import pytest
-    with pytest.raises(ValueError, match="base_prompt_file.*str"):
-        validate_init(data)
-
-
-def test_base_prompt_not_required():
-    """base_prompt is optional; absence is valid."""
-    data = _valid_init()
-    assert "base_prompt" not in data
-    validate_init(data)  # no raise, no required-field error
 
 
 # --- init prompt contract: brief and substrate retired as external overrides ---

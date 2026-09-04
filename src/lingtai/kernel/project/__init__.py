@@ -24,7 +24,7 @@ class ProjectCreateRequest:
     preset_ref: str
     llm: dict[str, object]
     capabilities: dict[str, object]
-    covenant: str
+    psyche_settings_json: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +34,7 @@ class ProjectSeed:
     human_manifest_json: str
     agent_manifest_json: str
     init_json: str
+    psyche_settings_json: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,8 +72,14 @@ def _validate(request: ProjectCreateRequest) -> None:
         raise _error("invalid_agent_name", "agent name must be a new non-reserved segment")
     if name != name.strip() or "/" in name or "\\" in name or "\x00" in name:
         raise _error("invalid_agent_name", "agent name must be one safe segment")
-    if not isinstance(request.covenant, str) or not request.covenant:
-        raise _error("invalid_covenant", "covenant content must be supplied by the caller")
+    if (
+        not isinstance(request.psyche_settings_json, str)
+        or not request.psyche_settings_json
+    ):
+        raise _error(
+            "invalid_covenant",
+            "Psyche owner content must be supplied by the caller",
+        )
     if not isinstance(request.preset_ref, str) or not request.preset_ref:
         raise _error("invalid_preset", "preset reference must be supplied")
     if not isinstance(request.llm, dict) or not isinstance(request.capabilities, dict):
@@ -100,7 +107,8 @@ def _seed(request: ProjectCreateRequest) -> ProjectSeed:
             "address": request.agent_name,
             "admin": {},
         }),
-        init_json=_json({"manifest": manifest, "covenant": request.covenant, "pad": ""}),
+        init_json=_json({"manifest": manifest, "pad": ""}),
+        psyche_settings_json=request.psyche_settings_json,
     )
 
 

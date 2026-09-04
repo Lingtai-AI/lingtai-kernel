@@ -30,6 +30,7 @@ from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.kernel.time_veil import now_iso as render_now_iso
 
 if TYPE_CHECKING:
+    from lingtai.kernel.tool_plugin import PsycheSettingsSnapshotPort
     from lingtai.tools.email import EmailResult, EmailRuntimeRequest
 
 from lingtai.kernel import notifications
@@ -94,11 +95,14 @@ class AgentPsycheSettingsAdapter:
 
     __slots__ = ("_read",)
 
-    def __init__(self, read: Callable[[], tuple[str, str | None]]) -> None:
+    def __init__(
+        self,
+        read: Callable[[], "PsycheSettingsSnapshotPort"],
+    ) -> None:
         self._read = read
 
-    def read_snapshot(self) -> tuple[str, str | None]:
-        """Return the current immutable ``(pad, pad_file)`` pair."""
+    def read_snapshot(self) -> "PsycheSettingsSnapshotPort":
+        """Return the current immutable Psyche owner-input snapshot."""
         return self._read()
 
 

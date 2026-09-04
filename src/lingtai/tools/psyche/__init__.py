@@ -6,8 +6,8 @@ set remains ``pad | lingtai | knowledge | skills | settings | manual``:
 
 - ``pad``, ``lingtai``, ``knowledge``, and ``skills`` each return that domain's
   own installed manual;
-- ``settings`` returns the two fully redacted Psyche-owned Pad configuration
-  rows;
+- ``settings`` returns eight fully redacted Psyche-owned prompt-configuration
+  rows (Pad plus the three configurable prompt pairs);
 - ``manual`` returns the psyche routing-table manual, which explains the four
   durable domains and their shared mutation/rebuild model.
 
@@ -83,7 +83,7 @@ _ACTION_ENUM_DESCRIPTION = (
     "skills: return the skills manual (your catalog under .library/ plus any "
     "configured skills paths).\n"
     "settings: return the redacted five-field inventory of Psyche-owned Pad "
-    "configuration.\n"
+    "and prompt-owner configuration.\n"
     "manual: return the psyche routing table — which action loads which "
     "domain manual, and the shared mutation/rebuild model.\n"
     "To CHANGE any durable source, use file.write for a full rewrite or "
@@ -129,8 +129,8 @@ def get_description(lang: str = "en") -> str:
         "edits, pins, installs, rescans, or loads anything. "
         "psyche(action='pad'|'lingtai'|'knowledge'|'skills', "
         "input={}, reasoning='why') returns that domain's manual; "
-        "psyche(action='settings', input={}, reasoning='why') returns the two "
-        "Psyche-owned Pad settings with both values redacted; "
+        "psyche(action='settings', input={}, reasoning='why') returns the eight "
+        "Psyche-owned Pad and prompt settings with both values redacted; "
         "psyche(action='manual', input={}, reasoning='why') returns the "
         "routing table that says which one you want and how the domains relate. "
         "Durable content is changed with file.write (full rewrite) or file.edit "

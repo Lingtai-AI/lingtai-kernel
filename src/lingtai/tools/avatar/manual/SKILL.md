@@ -10,6 +10,7 @@ related_files:
 - src/lingtai/tools/avatar/ANATOMY.md
 - src/lingtai/tools/avatar/CONTRACT.md
 - src/lingtai/tools/CONTRACT.md
+- src/lingtai/kernel/prompt.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -107,7 +108,8 @@ and launcher review, the focused tests, and relaunch as described above.
 
 An avatar (他我) is a **fully independent agent process** spawned from you. It:
 
-- Inherits your `init.json` (model config, capabilities, covenant, language)
+- Inherits your `init.json` model config/capabilities/language and a narrow
+  Psyche document carrying only base-prompt/covenant inputs
 - Boots on your **default** preset (not your active preset — this keeps the avatar's "home" stable in the network)
 - Is recorded in `delegates/ledger.jsonl`
 - Communicates with you via `mail` or `email`
@@ -126,7 +128,7 @@ and `bash` for one-off commands. The full body-selection model lives in
 
 | Type | What it gets | When to use |
 |------|-------------|-------------|
-| `shallow` (default, 初生) | `init.json` only — blank slate | Most tasks. The avatar starts clean and learns what it needs. |
+| `shallow` (default, 初生) | `init.json` plus narrow Psyche base/covenant owner inputs — blank slate | Most tasks. The avatar starts clean and learns what it needs. |
 | `deep` (二重身) | Full copy of your lingtai (character), pad, and knowledge | When the avatar needs to hit the ground running with your accumulated knowledge. |
 
 ## 3. Naming Rules
@@ -200,7 +202,7 @@ If you are an avatar (your `admin` block is empty or all admin privileges are fa
 
 ## 8. The `comment` Field — Persistent System Note
 
-The `input.comment` field (spawn only) is a persistent system-level note injected into the avatar's system prompt (rendered last, after memory). Key properties:
+The `input.comment` field (spawn only) is a persistent system-level note injected into the avatar's system prompt in the `comment` section, after `meta_guidance` and before `rules`. This position does not imply precedence over the sections that follow it. Key properties:
 
 - **Not inherited from parent** — defaults to empty
 - **Survives everything**: molt, refresh, sleep/wake

@@ -143,8 +143,9 @@ capability names and lazy adapters.
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `psyche/` — mandatory public durable-self family: its static fifteenth
   declaration preserves the six-action signpost/settings surface, binds only
-  `workdir` plus read-only `psyche_settings`, and retains Pad/LingTai composition
-  through its intrinsic lifecycle shim (`src/lingtai/tools/psyche/ANATOMY.md`).
+  `workdir` plus the read-only last-applied eight-value `psyche_settings`
+  snapshot, and retains Pad/LingTai composition through its intrinsic lifecycle
+  shim (`src/lingtai/tools/psyche/ANATOMY.md`).
 - `plugin/` — the `plugin` capability: the per-agent Agent Plugins
   (agent-plugins.org, v1.0.0) catalog and registration snapshot, structural twin
   of `mcp` with the same tool/service split; both independently opt into the

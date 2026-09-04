@@ -183,12 +183,13 @@ def test_avatar_strips_materialized_when_active_equals_default(tmp_path):
     assert "capabilities" not in avatar_init["manifest"]
 
 
-def test_avatar_init_keeps_base_prompt_and_drops_kernel_prompt_overrides(tmp_path):
-    """Avatar init keeps the active app prompt injection point while dropping
-    retired kernel/secretary-owned prompt override fields."""
+def test_avatar_prompt_owner_document_inherits_only_base_and_covenant(tmp_path):
+    """Avatar init has no live prompt pairs; a narrow Psyche document carries
+    base/covenant and replaces the spawn comment without a comment pointer."""
     parent_init = _baseline_parent_init()
-    parent_init["base_prompt"] = "recipe base prompt"
+    parent_init["base_prompt"] = "legacy inert base prompt"
     parent_init["base_prompt_file"] = "relative/base_prompt.md"
+    parent_init["covenant"] = "legacy inert covenant"
     # The avatar must not inherit the parent's 灵台 character seed.
     parent_init["lingtai"] = "parent self-authored identity"
     parent_init["lingtai_file"] = "relative/lingtai.md"
@@ -207,11 +208,35 @@ def test_avatar_init_keeps_base_prompt_and_drops_kernel_prompt_overrides(tmp_pat
     from lingtai.tools.avatar import AvatarManager
     avatar_init = AvatarManager._make_avatar_init(parent_init, "child")
 
-    assert avatar_init["base_prompt"] == "recipe base prompt"
-    assert avatar_init["base_prompt_file"] == "relative/base_prompt.md"
+    for key in (
+        "base_prompt", "base_prompt_file", "covenant", "covenant_file",
+        "comment", "comment_file",
+    ):
+        assert key not in avatar_init
     # The 灵台 seed is blanked (required field stays present, but empty) and the
     # _file form is dropped — the avatar starts with no inherited character.
     assert avatar_init["lingtai"] == ""
     assert "lingtai_file" not in avatar_init
     for key in retired:
         assert key not in avatar_init
+
+    owner = AvatarManager._make_avatar_psyche_settings(
+        {
+            "base_prompt": "recipe base prompt",
+            "base_prompt_file": str(tmp_path / "parent-base.md"),
+            "covenant": "parent covenant",
+            "covenant_file": str(tmp_path / "parent-covenant.md"),
+            "comment": "parent comment",
+            "comment_file": str(tmp_path / "parent-comment.md"),
+        },
+        comment="child spawn comment",
+    )
+    from lingtai.tools.psyche.settings import serialize_prompt_owner_document
+
+    assert owner == serialize_prompt_owner_document(
+        base_prompt="recipe base prompt",
+        base_prompt_file=str(tmp_path / "parent-base.md"),
+        covenant="parent covenant",
+        covenant_file=str(tmp_path / "parent-covenant.md"),
+        comment="child spawn comment",
+    )

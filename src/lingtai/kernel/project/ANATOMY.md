@@ -5,6 +5,7 @@ related_files:
   - src/lingtai/kernel/project/__init__.py
   - src/lingtai/adapters/project_workspace.py
   - src/lingtai/cli_project.py
+  - src/lingtai/tools/psyche/settings.py
   - docs/references/project-create.md
   - tests/test_project_creation.py
 maintenance: |
@@ -29,8 +30,10 @@ Project seed. Its Contract defines the CLI-visible behavior.
 
 ## Connections
 
-`cli_project` calls wrapper `agent.load_preset` and supplies the same init reader
-callbacks used by boot. Core depends only on `ProjectWorkspacePort`; the adapter
+`cli_project` calls wrapper `agent.load_preset`, asks Psyche's public v1
+serializer for the owner-document content, and supplies the same init and
+Psyche owner readers used by reconstruction. Project Core receives that content
+as an opaque seed string and depends only on `ProjectWorkspacePort`; the adapter
 depends inward on Core values.
 
 ## Composition
@@ -42,8 +45,8 @@ and emits a small result. It never calls `Agent.start` or `cli.run`.
 ## State
 
 Success writes `ROOT/.lingtai/` with `human` and the named agent, their
-mailboxes and manifests, plus the named agent's `init.json`. No global or runtime
-state is written.
+mailboxes and manifests, plus the named agent's `init.json` and
+`settings/psyche.json`. No global or runtime state is written.
 
 ## Notes
 

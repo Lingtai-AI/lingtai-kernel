@@ -1,13 +1,16 @@
 ---
 name: avatar-contract
 tool: avatar
-contract_version: 7
+contract_version: 8
 related_files:
   - src/lingtai/tools/avatar/BEHAVIORS.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/settings.py
   - src/lingtai/kernel/_fsutil.py
+  - src/lingtai/kernel/prompt.py
+  - src/lingtai/tools/psyche/settings.py
+  - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/adapters/tool_plugin_host.py
@@ -22,6 +25,7 @@ related_files:
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - tests/test_tool_family_avatar_migration.py
+  - tests/test_avatar_preset_inheritance.py
   - tests/test_tool_plugin_declaration.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
@@ -112,7 +116,7 @@ Guarded by: [AV001](BEHAVIORS.md#behavior-av001),
 - You are editing avatar spawning (shallow 初生 / deep 二重身), the spawn ledger,
   boot verification, or rules distribution.
 - You are reviewing the mission-quality gate, avatar-name validation, the
-  init.json rewrite for a newborn avatar, or the `.prompt` / `.rules` signal
+  init.json plus narrow Psyche owner-document rewrite for a newborn avatar, or the `.prompt` / `.rules` signal
   files.
 
 **Do not use this for:**
@@ -142,7 +146,8 @@ storage; detached-process launch -> §Cross-platform invariants.
   are enforced both by the child schema and again in the handler.
 - `action="spawn"` (must be passed explicitly — there is no default action)
   creates a sibling agent directory named after the avatar and launches it via
-  the global venv. Shallow copies only `init.json` (no identity/pad/history);
+  the global venv. Shallow copies `init.json` plus only Psyche base/covenant
+  owner inputs (no identity/pad/history);
   deep also copies `system/`, `knowledge/`, `exports/`, and `combo.json`.
 - `action="rules"` writes a `.rules` signal to the caller and every descendant
   so each agent refreshes its own `system/rules.md`-derived prompt. It carries
@@ -293,6 +298,7 @@ the network root (`<parent>/..`):
 
 <network-root>/<avatar-name>/     # sibling of the parent
   init.json                       # rewritten copy of parent's init.json
+  settings/psyche.json            # base/covenant inheritance + spawn comment
   .prompt                         # first-turn brief (parent identity + reasoning), consumed once
   .rules                          # distributed rules signal
   logs/spawn.stderr               # captured child stderr for boot diagnosis
@@ -302,10 +308,16 @@ the network root (`<parent>/..`):
 ```
 
 The avatar's `init.json` is a deep copy of the parent's with: `agent_name` set,
-`lingtai` seed blanked, `admin` cleared, `comment` reset, kernel/secretary
-prompt-override fields and `addons` stripped, relative preset paths re-rooted,
-and the avatar pinned to the parent's **default** preset. The spawn brief is
-delivered out-of-band via the `.prompt` signal file, not the `lingtai` seed.
+`lingtai` seed blanked, `admin` cleared, all six inert legacy prompt fields and
+kernel/secretary prompt-override fields plus `addons` stripped, relative preset
+paths re-rooted, and the avatar pinned to the parent's **default** preset. Its
+separate Psyche document retains only parent base/covenant inputs, anchors their
+relative pointers to the parent workdir, replaces comment with the spawn comment,
+and omits `comment_file`. Avatar delegates the document bytes to Psyche's public
+v1 serializer rather than naming that schema itself. The spawn comment renders
+in the `comment` section after `meta_guidance` and before `rules`; this states
+position, not precedence over later sections. The spawn brief is delivered
+out-of-band via the `.prompt` signal file, not the `lingtai` seed.
 
 Each spawn appends a ledger record (`event: "avatar"`, `name`, `working_dir`,
 `mission`, `type`, `pid`, `boot_status`, optional `boot_error`). Rules

@@ -223,17 +223,27 @@ def test_settings_provider_has_exact_applied_reconstruction_rows(tmp_path):
 
         provider = _settings_provider(agent)
         rows = provider()
-        assert [row.key for row in rows] == ["pad", "pad_file"]
+        assert [row.key for row in rows] == [
+            "pad", "pad_file", "base_prompt", "base_prompt_file",
+            "covenant", "covenant_file", "comment", "comment_file",
+        ]
         assert [row.current for row in rows] == [
             "PAD FROM FILE",
             str(pad_source),
+            "", None, "", None, "", None,
         ]
-        assert [row.default for row in rows] == ["", None]
+        assert [row.default for row in rows] == ["", None, "", None, "", None, "", None]
         assert all(row.configurable is True for row in rows)
         assert all(row._sensitive is True for row in rows)
         assert [row.comment for row in rows] == [
             "psyche-manual#setting-pad",
             "psyche-manual#setting-pad-file",
+            "psyche-manual#setting-base-prompt",
+            "psyche-manual#setting-base-prompt-file",
+            "psyche-manual#setting-covenant",
+            "psyche-manual#setting-covenant-file",
+            "psyche-manual#setting-comment",
+            "psyche-manual#setting-comment-file",
         ]
 
         pad_source.write_text("FRESH PAD FROM FILE", encoding="utf-8")
@@ -252,13 +262,13 @@ def test_settings_provider_has_exact_applied_reconstruction_rows(tmp_path):
             }),
             encoding="utf-8",
         )
-        assert [row.current for row in _settings_provider(agent)()] == [
+        assert [row.current for row in _settings_provider(agent)()][:2] == [
             "FRESH PAD FROM FILE",
             str(pad_source),
         ]
         agent._reconstruct_context()
         fallback_rows = _settings_provider(agent)()
-        assert [row.current for row in fallback_rows] == [
+        assert [row.current for row in fallback_rows][:2] == [
             "INLINE FALLBACK",
             str(agent._working_dir / "missing-pad-source.md"),
         ]
@@ -292,7 +302,7 @@ def test_full_setup_binds_resolved_pad_snapshot_and_prompt(tmp_path):
 
         agent._setup_from_init()
 
-        assert [row.current for row in _settings_provider(agent)()] == [
+        assert [row.current for row in _settings_provider(agent)()][:2] == [
             "SETUP PAD",
             str(pad_source),
         ]
@@ -301,7 +311,7 @@ def test_full_setup_binds_resolved_pad_snapshot_and_prompt(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_settings_success_is_exactly_five_projected_fields_and_redacted(tmp_path):
+def test_settings_success_is_exactly_eight_projected_rows_and_redacted(tmp_path):
     agent = _agent(tmp_path)
     try:
         source = agent._working_dir / "private-pad-source.md"
@@ -318,22 +328,24 @@ def test_settings_success_is_exactly_five_projected_fields_and_redacted(tmp_path
         )
         agent._reconstruct_context()
         result = _call(agent, "settings")
-        assert result == {"settings": [
-            {
-                "key": "pad",
-                "current": "<redacted>",
-                "default": "<redacted>",
-                "configurable": True,
-                "comment": "psyche-manual#setting-pad",
-            },
-            {
-                "key": "pad_file",
-                "current": "<redacted>",
-                "default": "<redacted>",
-                "configurable": True,
-                "comment": "psyche-manual#setting-pad-file",
-            },
-        ]}
+        rows = result["settings"]
+        assert [row["key"] for row in rows] == [
+            "pad", "pad_file", "base_prompt", "base_prompt_file",
+            "covenant", "covenant_file", "comment", "comment_file",
+        ]
+        assert all(row["current"] == "<redacted>" for row in rows)
+        assert all(row["default"] == "<redacted>" for row in rows)
+        assert all(row["configurable"] is True for row in rows)
+        assert [row["comment"] for row in rows] == [
+            "psyche-manual#setting-pad",
+            "psyche-manual#setting-pad-file",
+            "psyche-manual#setting-base-prompt",
+            "psyche-manual#setting-base-prompt-file",
+            "psyche-manual#setting-covenant",
+            "psyche-manual#setting-covenant-file",
+            "psyche-manual#setting-comment",
+            "psyche-manual#setting-comment-file",
+        ]
         assert list(result["settings"][0]) == [
             "key", "current", "default", "configurable", "comment",
         ]
@@ -365,7 +377,10 @@ def test_malformed_ambient_init_preserves_applied_settings_snapshot(tmp_path):
             '{"pad":"private content"', encoding="utf-8",
         )
         result = _call(agent, "settings")
-        assert [row["key"] for row in result["settings"]] == ["pad", "pad_file"]
+        assert [row["key"] for row in result["settings"]] == [
+            "pad", "pad_file", "base_prompt", "base_prompt_file",
+            "covenant", "covenant_file", "comment", "comment_file",
+        ]
         assert "private content" not in repr(result)
         assert _settings_provider(agent)()[0].current == "APPLIED PRIVATE CONTENT"
 

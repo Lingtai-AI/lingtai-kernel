@@ -341,7 +341,7 @@ Top-level prompt/env/venv/addons/MCP/manifest field groups follow the same raw
 
 | Field group | Real owner | Materialization / derived state | Refresh / restart |
 |---|---|---|---|
-| Prompt pairs (`covenant`, `pad`, `lingtai`, `base_prompt`, `comment`) | Prompt reload (`agent.py` `_reload_prompt_sections`); kernel-owned `principle`/`substrate`/`procedures` ignore init overrides | `system/<section>.md` mirrors, prompt-manager sections | Reloaded on boot/refresh/molt |
+| Psyche prompt pairs (`base_prompt`, `covenant`, `comment`) plus init Pad/LingTai seeds | Prompt reload (`agent.py` `_reload_prompt_sections`); Psyche reads `settings/psyche.json`, while kernel-owned `principle`/`substrate`/`procedures` ignore init overrides | `system/<section>.md` mirrors, prompt-manager sections | Reloaded on boot/refresh/molt |
 | `env_file`, `venv_path` | `init_reader.py`, CLI boot / `venv_resolve.py` | Resolved process environment, venv marker state (in memory; raw input is unchanged) | Boot resolves; refresh/restart reuse |
 | `addons`, `mcp` | MCP registry/addon decompression, capability setup | MCP clients, `_mcp_init_specs`, registry records | Boot loads; refresh retries failed then reloads |
 | `manifest` (LLM, capabilities, agent identity, limits) | Schema + composition roots + capability registry | LLM service, `AgentConfig`, `.agent.json` sanitized projection | Boot/refresh reconstruct; some fields need full refresh, not summarize |

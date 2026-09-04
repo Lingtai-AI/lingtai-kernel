@@ -147,10 +147,10 @@ def test_public_export_and_exact_production_opt_ins():
         name: importlib.import_module(f"lingtai.tools.{modules.get(name, name)}").DECLARATION
         for name in OFFICIAL_TOOL_PLUGIN_NAMES
     }
-    expected_official = {"avatar", "daemon", "email", "file", "mcp", "notification", "plugin", "shell", "soul", "system", "task_card", "vision", "web"}
+    expected_official = {"avatar", "daemon", "email", "file", "mcp", "notification", "plugin", "psyche", "shell", "soul", "system", "task_card", "vision", "web"}
     assert {name for name, item in declarations.items() if item.settings} == expected_official
     assert expected_curated | expected_official == {
-        "avatar", "cloud_mail", "daemon", "email", "feishu", "file", "imap", "mcp", "notification", "plugin", "shell", "soul", "system", "task_card", "telegram", "vision", "web", "wechat", "whatsapp"
+        "avatar", "cloud_mail", "daemon", "email", "feishu", "file", "imap", "mcp", "notification", "plugin", "psyche", "shell", "soul", "system", "task_card", "telegram", "vision", "web", "wechat", "whatsapp"
     }
     for name, item in declarations.items():
         assert ("settings" in item.public_actions) is (name in expected_official)

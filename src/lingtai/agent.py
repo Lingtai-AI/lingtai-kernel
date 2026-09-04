@@ -13,7 +13,7 @@ import contextlib
 import json
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lingtai.kernel.base_agent import BaseAgent, StopResult
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
@@ -31,6 +31,12 @@ from lingtai.llm.service import (
     build_provider_defaults_from_manifest_llm,
 )
 from lingtai.kernel.prompt import build_system_prompt
+
+if TYPE_CHECKING:
+    from lingtai.tools.psyche.settings import (
+        PsychePromptInputs,
+        PsycheSettingsSnapshot,
+    )
 
 
 # Runtime manual destinations remain stable even when a capability packages its
@@ -257,10 +263,12 @@ class Agent(BaseAgent):
         self._requires_derived_launch_admission_port = (
             _requires_derived_launch_admission_port
         )
-        # Psyche SHOW reports only the Pad configuration successfully consumed
-        # by canonical reconstruction. Direct construction begins at the two
-        # meaningful defaults; ambient init/source edits never mutate this pair.
-        self._psyche_settings_snapshot: tuple[str, str | None] = ("", None)
+        # Psyche SHOW reports only inputs successfully consumed by canonical
+        # reconstruction. Direct construction starts at the eight meaningful
+        # defaults; ambient init/source edits never mutate this applied state.
+        from lingtai.tools.psyche.settings import PsycheSettingsSnapshot
+
+        self._psyche_settings_snapshot = PsycheSettingsSnapshot()
 
         # Default karma authority for the primary agent (本我)
         kwargs.setdefault("admin", {"karma": True})
@@ -980,8 +988,8 @@ class Agent(BaseAgent):
     def _build_system_prompt(self) -> str:
         """Override kernel's prompt builder to inject app tool descriptions.
 
-        ``base_prompt`` is the init-prompt contract's third-party (application /
-        recipe / preset) injection point, resolved from init.json by
+        ``base_prompt`` is Psyche's third-party (application / recipe / preset)
+        injection point, resolved from ``settings/psyche.json`` by
         ``_reload_prompt_sections`` into ``self._base_prompt``. The kernel
         builder renders it right after the raw ``principle`` section and before
         the rest of Batch 1.
@@ -2118,6 +2126,14 @@ class Agent(BaseAgent):
             self._log("refresh_skipped", reason="no valid init.json")
             return
 
+        # Psyche's strict owner source is a refresh precondition, not one of
+        # the live objects being rebuilt. Resolve its immutable candidate now,
+        # before timers, clients, tools, plugins, prompt state, or sealing are
+        # touched, then thread that exact read through final reconstruction.
+        from lingtai.tools.psyche.settings import read_resolved_prompt_inputs
+
+        psyche_prompt_inputs = read_resolved_prompt_inputs(self._working_dir)
+
         from lingtai.kernel.config_resolve import (
             load_env_file,
             resolve_env_checked,
@@ -2134,20 +2150,13 @@ class Agent(BaseAgent):
         if overwrite_env_file:
             os.environ.pop("LINGTAI_REFRESH_ENV_OVERWRITE", None)
 
-        # Resolve *_file fields for active top-level text content.
-        # The externally changeable prompt surface is exactly `base_prompt`,
-        # `covenant`, and `comment` (plus the agent identity/state fields
-        # `lingtai` and `pad`). `lingtai` is the agent's configured 灵台 /
-        # character value (system/lingtai.md → `character` section), distinct from
-        # `base_prompt` (third-party injection point); it was renamed from
-        # `prompt` with no legacy alias. Retired prompt-override `_file` fields
-        # (principle_file / procedures_file / substrate_file / brief_file) are
-        # legacy-known and intentionally not resolved here.
+        # Resolve only live init-owned Pad and LingTai seed pointers. Psyche's
+        # six prompt pairs are compatibility-known but inert in init.json; the
+        # prevalidated owner candidate is passed to final reconstruction below.
         # Note: "soul" / "soul_file" were retired in v0.7.6 and remain
         # compatibility-known; they are intentionally not resolved here;
         # the shared reader reports them without rewriting init.json.
-        for key in ("covenant", "base_prompt",
-                    "pad", "lingtai", "comment"):
+        for key in ("pad", "lingtai"):
             file_key = f"{key}_file"
             if file_key in data:
                 data[key] = resolve_file(data.get(key), data.pop(file_key))
@@ -2446,7 +2455,11 @@ class Agent(BaseAgent):
         # manual, MCP route, and mechanical identity source is wired. The session
         # replay below must observe this same complete builder state, and the
         # system/system.md mirror must be byte-identical to it.
-        self._reconstruct_context(data, psyche_pad_file=psyche_pad_file)
+        self._reconstruct_context(
+            data,
+            psyche_pad_file=psyche_pad_file,
+            psyche_prompt_inputs=psyche_prompt_inputs,
+        )
 
         # Re-seal
         self._sealed = True
@@ -2466,6 +2479,7 @@ class Agent(BaseAgent):
         data: dict | None = None,
         *,
         psyche_pad_file: str | None = None,
+        psyche_prompt_inputs: PsychePromptInputs | None = None,
     ) -> None:
         """Recompose every canonical prompt source, then publish the final prompt.
 
@@ -2475,17 +2489,66 @@ class Agent(BaseAgent):
         omit it so configured and durable sources are re-read from scratch. The
         final flush is deliberately last, ensuring provider replay observes the
         fully composed prompt rather than an intermediate Pad/LingTai section.
+        Refresh supplies its pre-teardown Psyche candidate; other callers read
+        one candidate inside the composer.
         """
-        self._reload_prompt_sections(data, psyche_pad_file=psyche_pad_file)
-        self._token_decomp_dirty = True
-        self._flush_system_prompt()
+        prior_sections = deepcopy(self._prompt_manager._sections)
+        missing_base_prompt = object()
+        prior_base_prompt = getattr(self, "_base_prompt", missing_base_prompt)
+        prior_snapshot = self._psyche_settings_snapshot
+        prior_token_decomp_dirty = self._token_decomp_dirty
+        system_dir = self._working_dir / "system"
+        generation_mirrors = (
+            system_dir / "base_prompt.md",
+            system_dir / "covenant.md",
+            system_dir / "system.md",
+        )
+        prior_mirrors: dict[Path, str | None] = {}
+        for path in generation_mirrors:
+            try:
+                prior_mirrors[path] = path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                prior_mirrors[path] = None
+
+        try:
+            psyche_settings_snapshot = self._reload_prompt_sections(
+                data,
+                psyche_pad_file=psyche_pad_file,
+                psyche_prompt_inputs=psyche_prompt_inputs,
+            )
+            self._token_decomp_dirty = True
+            self._flush_system_prompt()
+        except Exception:
+            # Prompt-manager state, wrapper base prompt, derived fallback
+            # mirrors, the published system mirror, and SHOW form one applied
+            # generation. A failed candidate must not remain available to a
+            # later build or be resurrected through mirror fallback.
+            self._prompt_manager._sections.clear()
+            self._prompt_manager._sections.update(prior_sections)
+            if prior_base_prompt is missing_base_prompt:
+                self.__dict__.pop("_base_prompt", None)
+            else:
+                self._base_prompt = prior_base_prompt
+            self._psyche_settings_snapshot = prior_snapshot
+            self._token_decomp_dirty = prior_token_decomp_dirty
+
+            from lingtai.kernel._fsutil import atomic_write_text
+
+            for path, content in prior_mirrors.items():
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    atomic_write_text(path, content, encoding="utf-8")
+            raise
+        self._psyche_settings_snapshot = psyche_settings_snapshot
 
     def _reload_prompt_sections(
         self,
         data: dict | None = None,
         *,
         psyche_pad_file: str | None = None,
-    ) -> None:
+        psyche_prompt_inputs: PsychePromptInputs | None = None,
+    ) -> PsycheSettingsSnapshot:
         """Authoritative composer for every configured/durable prompt section."""
         resolve_init_files = data is None
         if resolve_init_files:
@@ -2509,22 +2572,38 @@ class Agent(BaseAgent):
             psyche_pad_file = resolved_pad_file
 
         if resolve_init_files:
-            # Resolve active *_file fields (covenant_file, base_prompt_file,
-            # lingtai_file, comment_file). Retired prompt-override `_file` fields
-            # are legacy-known and not resolved — see _setup_from_init.
+            # Resolve active init-owned Pad and LingTai seed pointers. Psyche's
+            # prompt pairs are read separately below and are never copied into
+            # this effective init mapping.
             from lingtai.kernel.config_resolve import resolve_file
-            for key in ("covenant", "base_prompt", "pad", "lingtai", "comment"):
+            for key in ("pad", "lingtai"):
                 file_key = f"{key}_file"
                 if file_key in data:
                     data[key] = resolve_file(data.get(key), data.pop(file_key))
+
+        # Psyche owns the three configurable prompt pairs. Read and resolve the
+        # small closed document exactly once per complete reconstruction, then
+        # overlay only its resolved values into this local composition input.
+        # `data` remains the effective init mapping and is never mutated with
+        # owner fields, so legacy init values cannot regain prompt authority.
+        if psyche_prompt_inputs is None:
+            from lingtai.tools.psyche.settings import read_resolved_prompt_inputs
+
+            psyche_prompt_inputs = read_resolved_prompt_inputs(self._working_dir)
+        data = dict(data)
+        data.update({
+            "base_prompt": psyche_prompt_inputs.base_prompt,
+            "covenant": psyche_prompt_inputs.covenant,
+            "comment": psyche_prompt_inputs.comment,
+        })
 
         system_dir = self._working_dir / "system"
         system_dir.mkdir(exist_ok=True)
 
         # --- Base prompt (third-party prompt injection point) ---
-        # `base_prompt` is the init-prompt contract's third-party (application /
-        # recipe / preset) system-prompt injection point — one of the three
-        # externally changeable prompt surfaces (with `covenant` and `comment`).
+        # `base_prompt` is the Psyche-owned third-party (application / recipe /
+        # preset) system-prompt injection point — one of the three configurable
+        # prompt surfaces (with `covenant` and `comment`).
         # It is NOT a prompt-manager section: the kernel builder renders it right
         # after the raw kernel-owned `principle` section and before the rest of
         # Batch 1 (see lingtai.kernel.prompt.build_system_prompt_batches), so it
@@ -2532,8 +2611,8 @@ class Agent(BaseAgent):
         # `_build_system_prompt` / `_build_system_prompt_batches`.
         #
         # Resolution precedence:
-        #   1. data["base_prompt"]      — inline init.json string (already merged
-        #                                 with base_prompt_file by _setup_from_init)
+        #   1. data["base_prompt"]      — Psyche owner value (already merged
+        #                                 with base_prompt_file by its reader)
         #   2. system/base_prompt.md    — on-disk mirror (fallback)
         # The on-disk mirror lets the resolved injection survive a post-molt
         # reload that re-reads init.json from scratch and lets operators inspect
@@ -2546,7 +2625,7 @@ class Agent(BaseAgent):
             base_prompt = base_prompt_file.read_text(encoding="utf-8")
         self._base_prompt = base_prompt or ""
 
-        # --- Covenant (operator contract — covenant.md alone) ---
+        # --- Covenant (Psyche owner input — covenant.md mirror/fallback) ---
         covenant = data.get("covenant", "")
         covenant_file = system_dir / "covenant.md"
         if covenant:
@@ -2583,8 +2662,8 @@ class Agent(BaseAgent):
         # the agent's architecture to itself (tool tiers, data-flow
         # topology, life states, channel discipline, attention model).
         #
-        # Substrate is kernel-owned: under the init-prompt contract it is NOT an
-        # external override. Legacy init.json `substrate` / `substrate_file`
+        # Substrate is kernel-owned and is not an external override. Legacy
+        # init.json `substrate` / `substrate_file`
         # values remain compatibility-known, are reported by the shared reader,
         # and are ignored here; the packaged default wins on every boot/refresh.
         #
@@ -2758,9 +2837,8 @@ class Agent(BaseAgent):
             if not guidance_file.is_file():
                 guidance_file.write_text("{}\n", encoding="utf-8")
         # --- Brief (secretary-maintained life context — disk only) ---
-        # Under the init-prompt contract `brief` is no longer an external
-        # init.json prompt override (the external prompt surface is exactly
-        # base_prompt / covenant / comment). Legacy init.json `brief` /
+        # `brief` is not an external init.json prompt override. Psyche owns
+        # base_prompt / covenant / comment; legacy init.json `brief` /
         # `brief_file` values remain compatibility-known, are reported by the
         # shared reader, and are ignored here. The `brief` section is now sourced
         # solely from system/brief.md,
@@ -2782,10 +2860,20 @@ class Agent(BaseAgent):
         else:
             self._prompt_manager.delete_section("comment")
 
-        # Commit settings discovery state only after the entire canonical
-        # section reconstruction succeeds. A later ambient edit or a failed
-        # reconstruction therefore cannot replace consumer-applied truth.
-        self._psyche_settings_snapshot = (pad_seed, psyche_pad_file)
+        # Return discovery state to the full reconstruction seam. It publishes
+        # this immutable snapshot only after the final prompt flush succeeds.
+        from lingtai.tools.psyche.settings import PsycheSettingsSnapshot
+
+        return PsycheSettingsSnapshot(
+            pad=pad_seed,
+            pad_file=psyche_pad_file,
+            base_prompt=psyche_prompt_inputs.base_prompt,
+            base_prompt_file=psyche_prompt_inputs.base_prompt_file,
+            covenant=psyche_prompt_inputs.covenant,
+            covenant_file=psyche_prompt_inputs.covenant_file,
+            comment=psyche_prompt_inputs.comment,
+            comment_file=psyche_prompt_inputs.comment_file,
+        )
 
     def _build_launch_cmd(self) -> list[str] | None:
         """Return the command to relaunch this agent via lingtai-agent run."""

@@ -125,8 +125,9 @@ part of `input`.
 
 ### Settings
 
-There is no Knowledge settings surface: no `settings/psyche.json` and no
-`settings/psyche.knowledge.json`. Nothing here reads settings.
+Knowledge owns no settings surface. Psyche's separate `settings/psyche.json`
+does not configure Knowledge, and no `settings/psyche.knowledge.json` exists.
+Nothing here reads settings.
 
 ## Nesting and sub-knowledge
 
