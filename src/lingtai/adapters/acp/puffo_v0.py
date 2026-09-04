@@ -126,6 +126,16 @@ class PuffoV0Runtime:
     policy_version: str
 
 
+@dataclass(frozen=True, slots=True)
+class PuffoV0DiscoveryCandidate:
+    """One initialized identity found under an operator-selected directory."""
+
+    agent_dir: Path
+    workspace: Path | None
+    display_name: str
+    runtime_id: str | None
+
+
 def default_registry_path() -> Path:
     """Return the one operator-managed registry location for this profile."""
 
@@ -297,6 +307,12 @@ def _read_revoked_runtime_ids(path: Path) -> frozenset[str]:
     tombstones = _revocation_log_path(path)
     if not _secure_registry_file(tombstones):
         raise PuffoV0RegistryError("puffo-v0 revocation log is unavailable or invalid")
+    return _parse_revocation_log(tombstones)
+
+
+def _parse_revocation_log(tombstones: Path) -> frozenset[str]:
+    """Parse a tombstone file without changing its permissions or contents."""
+
     try:
         lines = tombstones.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError) as exc:
@@ -311,6 +327,21 @@ def _read_revoked_runtime_ids(path: Path) -> frozenset[str]:
             raise PuffoV0RegistryError("puffo-v0 revocation log is unavailable or invalid")
         revoked.add(_valid_runtime_id(entry["runtime_id"]))
     return frozenset(revoked)
+
+
+def _read_revoked_runtime_ids_read_only(path: Path) -> frozenset[str]:
+    """Read tombstones for discovery without creating or hardening artifacts."""
+
+    tombstones = _revocation_log_path(path)
+    try:
+        mode = tombstones.lstat().st_mode
+    except FileNotFoundError as exc:
+        raise PuffoV0RegistryError("puffo-v0 revocation log is unavailable or invalid") from exc
+    except OSError as exc:
+        raise PuffoV0RegistryError("puffo-v0 revocation log is unavailable or invalid") from exc
+    if not stat.S_ISREG(mode):
+        raise PuffoV0RegistryError("puffo-v0 revocation log is unavailable or invalid")
+    return _parse_revocation_log(tombstones)
 
 
 def _append_revocation_tombstone(path: Path, runtime_id: str) -> None:
@@ -373,6 +404,33 @@ def _registry_mutation_lock(path: Path) -> Iterator[None]:
 
 def _read_registry(path: Path) -> dict[str, Any]:
     _secure_registry_file(path)
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PuffoV0RegistryError("puffo-v0 runtime registry is unavailable or invalid") from exc
+    if not isinstance(data, dict) or set(data) != {"revocation_log", "runtimes", "version"}:
+        raise PuffoV0RegistryError("puffo-v0 runtime registry has an invalid shape")
+    if (
+        data["version"] != REGISTRY_VERSION
+        or data["revocation_log"] != REVOCATION_LOG_REQUIRED
+        or not isinstance(data["runtimes"], dict)
+    ):
+        raise PuffoV0RegistryError("puffo-v0 runtime registry has an unsupported version")
+    return data
+
+
+def _read_registry_read_only(path: Path) -> dict[str, Any]:
+    """Read a registry for discovery without mutating its security metadata."""
+
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError as exc:
+        raise PuffoV0RegistryError("puffo-v0 runtime registry is unavailable or invalid") from exc
+    except OSError as exc:
+        raise PuffoV0RegistryError("puffo-v0 runtime registry is unavailable or invalid") from exc
+    if not stat.S_ISREG(mode):
+        raise PuffoV0RegistryError("puffo-v0 runtime registry has an invalid file type")
     try:
         raw = path.read_text(encoding="utf-8")
         data = json.loads(raw)
@@ -531,6 +589,137 @@ def revoke_runtime(runtime_id: str, *, registry_path: Path | None = None) -> Non
         _write_registry(path, registry)
 
 
+_RUNTIME_ENTRY_KEYS = frozenset({
+    "agent_dir", "agent_dir_binding", "entry_digest", "mcp_servers",
+    "profile", "runtime_id", "runtime_policy_version", "status", "tool_surface",
+    "turn_origins", "workspace", "workspace_binding",
+})
+
+
+def _has_runtime_entry_shape(entry: object) -> bool:
+    """Return whether an entry has the complete, exact registry schema."""
+
+    return isinstance(entry, dict) and set(entry) == _RUNTIME_ENTRY_KEYS
+
+
+def _is_active_discovery_entry(runtime_id: str, entry: object) -> bool:
+    """Return whether an entry can safely identify an active local binding."""
+
+    if not _has_runtime_entry_shape(entry):
+        return False
+    canonical = {key: value for key, value in entry.items() if key != "entry_digest"}
+    return (
+        entry.get("profile") == PROFILE_NAME
+        and entry.get("runtime_id") == runtime_id
+        and entry.get("status") == "active"
+        and entry.get("mcp_servers") == []
+        and entry.get("tool_surface") == RUNTIME_POLICY.tool_surface
+        and entry.get("turn_origins") == [TurnOrigin.AUTHENTICATED_ADAPTER.value]
+        and entry.get("runtime_policy_version") == RUNTIME_POLICY.policy_version
+        and isinstance(entry.get("agent_dir"), str)
+        and isinstance(entry.get("workspace"), str)
+        and isinstance(entry.get("entry_digest"), str)
+        and entry["entry_digest"] == _digest(canonical)
+    )
+
+
+def _active_discovery_bindings(path: Path) -> dict[Path, PuffoV0Runtime]:
+    """Load active bindings without creating files, locks, or permission writes."""
+
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise PuffoV0RegistryError("puffo-v0 runtime registry is unavailable or invalid") from exc
+
+    revoked_runtime_ids = _read_revoked_runtime_ids_read_only(path)
+    registry = _read_registry_read_only(path)
+    bindings: dict[Path, PuffoV0Runtime] = {}
+    for runtime_id, entry in registry["runtimes"].items():
+        if not isinstance(runtime_id, str) or runtime_id in revoked_runtime_ids:
+            continue
+        if not _is_active_discovery_entry(runtime_id, entry):
+            continue
+        agent_dir = Path(entry["agent_dir"])
+        if agent_dir in bindings:
+            raise PuffoV0RegistryError("multiple active runtimes bind the same agent_dir")
+        bindings[agent_dir] = PuffoV0Runtime(
+            runtime_id=runtime_id,
+            agent_dir=agent_dir,
+            workspace=Path(entry["workspace"]),
+            entry_digest=entry["entry_digest"],
+            agent_dir_binding=_parse_binding(entry["agent_dir_binding"]),
+            workspace_binding=_parse_binding(entry["workspace_binding"]),
+            policy_version=entry["runtime_policy_version"],
+        )
+    return bindings
+
+
+def _is_within_root(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def discover_runtimes(
+    root: Path,
+    *,
+    registry_path: Path | None = None,
+) -> list[PuffoV0DiscoveryCandidate]:
+    """List initialized agents below one user-selected root without side effects.
+
+    Directory symlinks are never followed.  The registry is read directly rather
+    than through its mutation/security-hardening helpers so discovery cannot
+    create a lock, initialize a registry, or rewrite permissions.
+    """
+
+    _require_posix_registry_security()
+    canonical_root = _canonical_directory(root, field="root")
+    bindings = _active_discovery_bindings(registry_path or default_registry_path())
+    candidates: list[PuffoV0DiscoveryCandidate] = []
+
+    def _ignore_walk_error(_error: OSError) -> None:
+        return None
+
+    for raw_current, directory_names, _file_names in os.walk(
+        canonical_root,
+        topdown=True,
+        followlinks=False,
+        onerror=_ignore_walk_error,
+    ):
+        current = Path(raw_current)
+        directory_names[:] = [
+            name
+            for name in directory_names
+            if not name.startswith(".") and not (current / name).is_symlink()
+        ]
+        try:
+            agent_dir = current.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if not _is_within_root(agent_dir, canonical_root):
+            continue
+        try:
+            initialized = (agent_dir / "init.json").is_file()
+        except OSError:
+            continue
+        if not initialized:
+            continue
+        binding = bindings.get(agent_dir)
+        candidates.append(
+            PuffoV0DiscoveryCandidate(
+                agent_dir=agent_dir,
+                workspace=binding.workspace if binding is not None else None,
+                display_name=agent_dir.name,
+                runtime_id=binding.runtime_id if binding is not None else None,
+            )
+        )
+    return sorted(candidates, key=lambda candidate: str(candidate.agent_dir))
+
+
 def resolve_runtime(
     runtime_id: str, *, registry_path: Path | None = None
 ) -> PuffoV0Runtime:
@@ -545,25 +734,9 @@ def resolve_runtime(
     entry = registry["runtimes"].get(runtime_id)
     if not isinstance(entry, dict):
         raise PuffoV0RegistryError("runtime_id is not provisioned")
-    expected_keys = {
-        "agent_dir", "agent_dir_binding", "entry_digest", "mcp_servers",
-        "profile", "runtime_id", "runtime_policy_version", "status", "tool_surface",
-        "turn_origins", "workspace", "workspace_binding",
-    }
-    if set(entry) != expected_keys:
+    if not _has_runtime_entry_shape(entry):
         raise PuffoV0RegistryError("runtime registry entry has an invalid shape")
-    canonical = {key: value for key, value in entry.items() if key != "entry_digest"}
-    if (
-        entry.get("profile") != PROFILE_NAME
-        or entry.get("runtime_id") != runtime_id
-        or entry.get("status") != "active"
-        or entry.get("mcp_servers") != []
-        or entry.get("tool_surface") != RUNTIME_POLICY.tool_surface
-        or entry.get("turn_origins") != [TurnOrigin.AUTHENTICATED_ADAPTER.value]
-        or entry.get("runtime_policy_version") != RUNTIME_POLICY.policy_version
-        or not isinstance(entry.get("entry_digest"), str)
-        or entry["entry_digest"] != _digest(canonical)
-    ):
+    if not _is_active_discovery_entry(runtime_id, entry):
         raise PuffoV0RegistryError("runtime registry entry is inactive or does not match puffo-v0")
     agent_dir, agent_dir_binding = _bound_directory(
         entry.get("agent_dir"), entry.get("agent_dir_binding"), field="agent_dir"
@@ -587,11 +760,13 @@ def resolve_runtime(
 __all__ = [
     "DirectoryBinding",
     "PROFILE_NAME",
+    "PuffoV0DiscoveryCandidate",
     "PuffoV0RegistryError",
     "PuffoV0Runtime",
     "PuffoV0RuntimePolicy",
     "RUNTIME_POLICY",
     "default_registry_path",
+    "discover_runtimes",
     "provision_runtime",
     "resolve_runtime",
     "revoke_runtime",

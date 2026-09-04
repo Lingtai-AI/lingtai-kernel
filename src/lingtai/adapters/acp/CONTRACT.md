@@ -1,6 +1,6 @@
 ---
 name: acp-local-stdio
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/adapters/acp/ANATOMY.md
@@ -255,8 +255,16 @@ argv, environment, or MCP command from the remote caller.
     no background descendants, or network containment. “Authenticated Adapter”
     is a typed handoff from the Puffo driver that owns the local ACP process;
     LingTai's stdio server does not independently authenticate a remote Puffo
-    user. Registry provision/revoke
-    mutations are process-serialized; revocation additionally writes an
+    user. Registry provision/revoke mutations are process-serialized.
+    `lingtai-agent puffo-v0 discover --root <directory> --json` is a separate
+    read-only control-plane query: it lists only initialized directories below
+    the caller-selected canonical root, never follows directory symlinks, skips
+    unreadable descendants, and creates or rewrites no registry, lock, or
+    tombstone artifact. Each item returns canonical `agent_dir`, an optional
+    `workspace` (null when the identity is not actively bound), a directory-name
+    display label, and an active valid `runtime_id` when present.
+    A revoked binding is returned as available without a runtime id, so it can
+    be provisioned again. Revocation additionally writes an
     append-only tombstone before the mutable registry, so a stale full-registry
     snapshot cannot reactivate an id. The versioned registry declares this log
     mandatory: a missing, unreadable, malformed, or mismatched log rejects
