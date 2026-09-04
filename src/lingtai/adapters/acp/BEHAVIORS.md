@@ -109,9 +109,9 @@ the evidence trail in the task report.
   revoked entries, including a missing required revocation log, fail before
   composition. An active identity and workspace cannot be bound twice. A
   discovery query stays below its explicit root, skips symlink escapes and
-  unreadable descendants, returns the active runtime id only for a valid active
-  binding, reports revoked identities as available, and leaves registry bytes
-  unchanged.
+  unreadable descendants, returns the active runtime id and workspace only for
+  a valid active binding, reports revoked identities as available with no
+  inferred workspace, and leaves registry bytes and modes unchanged.
 3. Inspect the profile session and turn-origin cases: another workspace and
    every non-empty `mcpServers` input fail; the operator-managed tool surface is
    retained, but legacy/inbox/internal events cannot queue or dispatch any

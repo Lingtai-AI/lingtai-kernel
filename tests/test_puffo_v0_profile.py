@@ -110,6 +110,9 @@ def test_discover_lists_only_initialized_agents_and_preserves_registry_bytes(tmp
     registry = tmp_path / "registry.json"
     provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
     registry_before = registry.read_bytes()
+    registry_mode_before = stat.S_IMODE(registry.stat().st_mode)
+    tombstone = registry.with_name(f".{registry.name}.revocations.jsonl")
+    tombstone_mode_before = stat.S_IMODE(tombstone.stat().st_mode)
 
     candidates = discover_runtimes(root, registry_path=registry)
 
@@ -120,6 +123,8 @@ def test_discover_lists_only_initialized_agents_and_preserves_registry_bytes(tmp
     assert candidate.display_name == "identity"
     assert candidate.runtime_id == "runtime-a"
     assert registry.read_bytes() == registry_before
+    assert stat.S_IMODE(registry.stat().st_mode) == registry_mode_before
+    assert stat.S_IMODE(tombstone.stat().st_mode) == tombstone_mode_before
 
 
 def test_discover_skips_symlink_escape_and_revoked_bindings_are_available(tmp_path):
@@ -142,7 +147,7 @@ def test_discover_skips_symlink_escape_and_revoked_bindings_are_available(tmp_pa
 
     assert [candidate.agent_dir for candidate in candidates] == [agent_dir.resolve()]
     assert candidates[0].runtime_id is None
-    assert candidates[0].workspace == agent_dir.resolve()
+    assert candidates[0].workspace is None
 
 
 def test_discover_skips_unreadable_descendant_errors(tmp_path, monkeypatch):
@@ -193,9 +198,20 @@ def test_discover_cli_emits_stable_json(tmp_path, monkeypatch, capsys):
             "display_name": "identity",
             "runtime_id": None,
             "status": "available",
-            "workspace": str(agent_dir.resolve()),
+            "workspace": None,
         }]
     }
+
+
+def test_discover_fails_closed_when_posix_registry_security_is_unavailable(tmp_path, monkeypatch):
+    import lingtai.adapters.acp.puffo_v0 as puffo_v0
+
+    root = tmp_path / "selected-root"
+    root.mkdir()
+    monkeypatch.setattr(puffo_v0.os, "name", "nt")
+
+    with pytest.raises(PuffoV0RegistryError, match="requires POSIX"):
+        discover_runtimes(root, registry_path=tmp_path / "missing-registry.json")
 
 
 def test_registry_rejects_tampering_and_revoked_runtime(tmp_path):
@@ -211,6 +227,12 @@ def test_registry_rejects_tampering_and_revoked_runtime(tmp_path):
     data["runtimes"]["opaque-id"]["workspace"] = str(tmp_path)
     registry.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(PuffoV0RegistryError, match="does not match"):
+        resolve_runtime("opaque-id", registry_path=registry)
+
+    data = json.loads(registry.read_text(encoding="utf-8"))
+    data["runtimes"]["opaque-id"]["unexpected"] = True
+    registry.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(PuffoV0RegistryError, match="invalid shape"):
         resolve_runtime("opaque-id", registry_path=registry)
 
     other_agent_dir = tmp_path / "other-identity"

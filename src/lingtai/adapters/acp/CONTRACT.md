@@ -260,8 +260,9 @@ argv, environment, or MCP command from the remote caller.
     read-only control-plane query: it lists only initialized directories below
     the caller-selected canonical root, never follows directory symlinks, skips
     unreadable descendants, and creates or rewrites no registry, lock, or
-    tombstone artifact. Each item returns canonical `agent_dir`, `workspace`, a
-    directory-name display label, and an active valid `runtime_id` when present.
+    tombstone artifact. Each item returns canonical `agent_dir`, an optional
+    `workspace` (null when the identity is not actively bound), a directory-name
+    display label, and an active valid `runtime_id` when present.
     A revoked binding is returned as available without a runtime id, so it can
     be provisioned again. Revocation additionally writes an
     append-only tombstone before the mutable registry, so a stale full-registry

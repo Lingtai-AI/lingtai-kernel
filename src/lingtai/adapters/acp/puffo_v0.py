@@ -131,7 +131,7 @@ class PuffoV0DiscoveryCandidate:
     """One initialized identity found under an operator-selected directory."""
 
     agent_dir: Path
-    workspace: Path
+    workspace: Path | None
     display_name: str
     runtime_id: str | None
 
@@ -589,17 +589,23 @@ def revoke_runtime(runtime_id: str, *, registry_path: Path | None = None) -> Non
         _write_registry(path, registry)
 
 
+_RUNTIME_ENTRY_KEYS = frozenset({
+    "agent_dir", "agent_dir_binding", "entry_digest", "mcp_servers",
+    "profile", "runtime_id", "runtime_policy_version", "status", "tool_surface",
+    "turn_origins", "workspace", "workspace_binding",
+})
+
+
+def _has_runtime_entry_shape(entry: object) -> bool:
+    """Return whether an entry has the complete, exact registry schema."""
+
+    return isinstance(entry, dict) and set(entry) == _RUNTIME_ENTRY_KEYS
+
+
 def _is_active_discovery_entry(runtime_id: str, entry: object) -> bool:
     """Return whether an entry can safely identify an active local binding."""
 
-    if not isinstance(entry, dict):
-        return False
-    expected_keys = {
-        "agent_dir", "agent_dir_binding", "entry_digest", "mcp_servers",
-        "profile", "runtime_id", "runtime_policy_version", "status", "tool_surface",
-        "turn_origins", "workspace", "workspace_binding",
-    }
-    if set(entry) != expected_keys:
+    if not _has_runtime_entry_shape(entry):
         return False
     canonical = {key: value for key, value in entry.items() if key != "entry_digest"}
     return (
@@ -670,6 +676,7 @@ def discover_runtimes(
     create a lock, initialize a registry, or rewrite permissions.
     """
 
+    _require_posix_registry_security()
     canonical_root = _canonical_directory(root, field="root")
     bindings = _active_discovery_bindings(registry_path or default_registry_path())
     candidates: list[PuffoV0DiscoveryCandidate] = []
@@ -705,7 +712,7 @@ def discover_runtimes(
         candidates.append(
             PuffoV0DiscoveryCandidate(
                 agent_dir=agent_dir,
-                workspace=binding.workspace if binding is not None else agent_dir,
+                workspace=binding.workspace if binding is not None else None,
                 display_name=agent_dir.name,
                 runtime_id=binding.runtime_id if binding is not None else None,
             )
@@ -727,6 +734,8 @@ def resolve_runtime(
     entry = registry["runtimes"].get(runtime_id)
     if not isinstance(entry, dict):
         raise PuffoV0RegistryError("runtime_id is not provisioned")
+    if not _has_runtime_entry_shape(entry):
+        raise PuffoV0RegistryError("runtime registry entry has an invalid shape")
     if not _is_active_discovery_entry(runtime_id, entry):
         raise PuffoV0RegistryError("runtime registry entry is inactive or does not match puffo-v0")
     agent_dir, agent_dir_binding = _bound_directory(

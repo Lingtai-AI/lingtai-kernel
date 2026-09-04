@@ -67,7 +67,11 @@ def handle_puffo_v0_command(args: argparse.Namespace) -> None:
                         "display_name": candidate.display_name,
                         "runtime_id": candidate.runtime_id,
                         "status": "bound" if candidate.runtime_id is not None else "available",
-                        "workspace": str(candidate.workspace),
+                        "workspace": (
+                            str(candidate.workspace)
+                            if candidate.workspace is not None
+                            else None
+                        ),
                     }
                     for candidate in candidates
                 ]
