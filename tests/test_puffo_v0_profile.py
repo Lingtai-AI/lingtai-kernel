@@ -18,6 +18,7 @@ import pytest
 from lingtai.adapters.acp.puffo_v0 import (
     PuffoV0RegistryError,
     RUNTIME_POLICY,
+    discover_runtimes,
     provision_runtime,
     resolve_runtime,
     revoke_runtime,
@@ -94,6 +95,107 @@ def test_provisioned_runtime_resolves_only_the_canonical_local_paths(tmp_path):
     assert entry["tool_surface"] == "operator_managed_full"
     assert entry["turn_origins"] == ["authenticated_adapter"]
     assert entry["runtime_policy_version"] == RUNTIME_POLICY.policy_version
+
+
+def test_discover_lists_only_initialized_agents_and_preserves_registry_bytes(tmp_path):
+    root = tmp_path / "selected-root"
+    root.mkdir()
+    agent_dir = root / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    ordinary_directory = root / "ordinary"
+    ordinary_directory.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = tmp_path / "registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    registry_before = registry.read_bytes()
+
+    candidates = discover_runtimes(root, registry_path=registry)
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.agent_dir == agent_dir.resolve()
+    assert candidate.workspace == workspace.resolve()
+    assert candidate.display_name == "identity"
+    assert candidate.runtime_id == "runtime-a"
+    assert registry.read_bytes() == registry_before
+
+
+def test_discover_skips_symlink_escape_and_revoked_bindings_are_available(tmp_path):
+    root = tmp_path / "selected-root"
+    root.mkdir()
+    agent_dir = root / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "init.json").write_text("{}", encoding="utf-8")
+    (root / "outside-link").symlink_to(outside, target_is_directory=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = tmp_path / "registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    revoke_runtime("runtime-a", registry_path=registry)
+
+    candidates = discover_runtimes(root, registry_path=registry)
+
+    assert [candidate.agent_dir for candidate in candidates] == [agent_dir.resolve()]
+    assert candidates[0].runtime_id is None
+    assert candidates[0].workspace == agent_dir.resolve()
+
+
+def test_discover_skips_unreadable_descendant_errors(tmp_path, monkeypatch):
+    import lingtai.adapters.acp.puffo_v0 as puffo_v0
+
+    root = tmp_path / "selected-root"
+    root.mkdir()
+    agent_dir = root / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+
+    def unreadable_walk(path, *, topdown, followlinks, onerror):
+        assert path == root.resolve()
+        assert topdown is True
+        assert followlinks is False
+        yield str(path), ["blocked", "identity"], []
+        onerror(PermissionError("blocked"))
+        yield str(agent_dir), [], ["init.json"]
+
+    monkeypatch.setattr(puffo_v0.os, "walk", unreadable_walk)
+
+    candidates = discover_runtimes(root, registry_path=tmp_path / "missing-registry.json")
+
+    assert [candidate.agent_dir for candidate in candidates] == [agent_dir.resolve()]
+
+
+def test_discover_cli_emits_stable_json(tmp_path, monkeypatch, capsys):
+    import lingtai.adapters.acp.puffo_v0 as puffo_v0
+    import lingtai.cli_puffo_v0 as cli_puffo_v0
+
+    root = tmp_path / "selected-root"
+    root.mkdir()
+    agent_dir = root / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    registry = tmp_path / "registry.json"
+    monkeypatch.setattr(puffo_v0, "default_registry_path", lambda: registry)
+    parser = argparse.ArgumentParser()
+    commands = parser.add_subparsers(dest="command", required=True)
+    cli_puffo_v0.add_puffo_v0_parser(commands)
+    args = parser.parse_args(["puffo-v0", "discover", "--root", str(root), "--json"])
+
+    cli_puffo_v0.handle_puffo_v0_command(args)
+
+    assert json.loads(capsys.readouterr().out) == {
+        "runtimes": [{
+            "agent_dir": str(agent_dir.resolve()),
+            "display_name": "identity",
+            "runtime_id": None,
+            "status": "available",
+            "workspace": str(agent_dir.resolve()),
+        }]
+    }
 
 
 def test_registry_rejects_tampering_and_revoked_runtime(tmp_path):

@@ -107,6 +107,20 @@ Revocation does not terminate an already-running ACP host or invalidate its
 in-progress turn; stop that host separately when incident response must stop
 existing work.
 
+To show importable identities, scan only a directory explicitly selected by the
+operator:
+
+```bash
+lingtai-agent puffo-v0 discover --root /operator/selected/root --json
+```
+
+The command is read-only: it lists only descendant directories containing
+`init.json`, skips unreadable descendants and directory symlinks, and never
+creates or rewrites the registry, lock, or tombstone log. Each result includes
+canonical `agent_dir`, `workspace`, a directory-name `display_name`, and an
+active `runtime_id` when bound. Revoked identities are returned as `available`
+without a runtime id, so they can be bound again.
+
 Provision stores each directory's canonical path and POSIX device/inode/owner/
 group identity. An active agent directory or workspace may be bound to only one
 runtime. At launch the profile rejects symlink retargeting, a changed canonical
