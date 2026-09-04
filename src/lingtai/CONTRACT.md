@@ -1,6 +1,6 @@
 ---
 name: init-reader
-contract_version: 2
+contract_version: 3
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/ANATOMY.md

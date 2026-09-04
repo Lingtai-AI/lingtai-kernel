@@ -124,6 +124,15 @@ and relative pointers resolve against the agent workdir. Edit the owner document
 with `file.write`/`file.edit`, then use `context.rebuild` (or refresh/molt) to
 apply it atomically.
 
+**Upgrade / external-writer note:** before reconstructing an agent that still
+stores any of these six values in `init.json`, copy them into
+`settings/psyche.json`; the runtime never migrates or writes them back. An
+existing resolved `base_prompt` or `covenant` may continue through its
+`system/base_prompt.md` or `system/covenant.md` mirror, but `comment` has no
+mirror and is removed when the owner document does not supply it. Fresh project,
+recipe, TUI, Avatar, or other external seed writers must emit the Psyche owner
+document instead of relying on the inert init spellings.
+
 ### Setting pad
 
 - **Meaning and default:** the configured UTF-8 initial Pad seed. Its meaningful

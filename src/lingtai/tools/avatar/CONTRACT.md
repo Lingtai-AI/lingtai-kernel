@@ -1,7 +1,7 @@
 ---
 name: avatar-contract
 tool: avatar
-contract_version: 7
+contract_version: 8
 related_files:
   - src/lingtai/tools/avatar/BEHAVIORS.md
   - src/lingtai/tools/avatar/__init__.py
