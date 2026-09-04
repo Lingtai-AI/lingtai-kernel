@@ -109,6 +109,9 @@ def test_discover_lists_only_initialized_agents_and_preserves_registry_bytes(tmp
     workspace.mkdir()
     registry = tmp_path / "registry.json"
     provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    # Discovery is read-only: it must not opportunistically harden a legacy
+    # registry mode while scanning candidates.
+    registry.chmod(0o644)
     registry_before = registry.read_bytes()
     registry_mode_before = stat.S_IMODE(registry.stat().st_mode)
     tombstone = registry.with_name(f".{registry.name}.revocations.jsonl")
