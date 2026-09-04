@@ -115,6 +115,7 @@ def test_discover_lists_only_initialized_agents_and_preserves_registry_bytes(tmp
     registry_before = registry.read_bytes()
     registry_mode_before = stat.S_IMODE(registry.stat().st_mode)
     tombstone = registry.with_name(f".{registry.name}.revocations.jsonl")
+    tombstone.chmod(0o644)
     tombstone_mode_before = stat.S_IMODE(tombstone.stat().st_mode)
 
     candidates = discover_runtimes(root, registry_path=registry)
