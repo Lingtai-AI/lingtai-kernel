@@ -49,10 +49,6 @@ related_files:
     why: >
       comment must not duplicate the general procedures; keep them together so a
       mode-specific adaptation does not restate or fork the kernel playbook.
-  - path: src/lingtai/prompts/brief/brief.yaml
-    why: >
-      brief supplies project context and comment supplies behavior adaptation for the
-      same project; edit together so project context and behavior tuning stay distinct.
 maintenance:
   - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical owner/loader files that define the concrete construction rules. Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
   - comment has no kernel body or durable mirror; do not add one. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs, never a prompt body or a test.

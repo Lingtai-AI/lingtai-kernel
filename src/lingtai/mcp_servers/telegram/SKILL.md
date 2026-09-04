@@ -197,7 +197,7 @@ Telegram has two separate slash-command layers:
    from each account's optional `commands` config list.
 2. **Runtime handling**: what happens when a user sends the slash command. A
    small built-in set is handled locally by the addon without an LLM call
-   (`/help`, `/status`, `/kanban`, `/system`, `/brief`, `/refresh`, `/sleep`,
+   (`/help`, `/status`, `/kanban`, `/system`, `/refresh`, `/sleep`,
    `/clear`, `/taskcard`). Other slash commands are not
    swallowed; they pass through as normal inbound messages for the host agent to
    answer or route.

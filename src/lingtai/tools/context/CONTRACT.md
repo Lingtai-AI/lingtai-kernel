@@ -93,7 +93,7 @@ must execute in this order:
    configured, durable, and packaged prompt sources: base prompt, covenant,
    configured/self-authored character, substrate, rules, Pad body plus pinned
    references, the enabled Skills and Knowledge catalogs, principle, procedures,
-   guidance mirror, brief, and comment. The Skills and Knowledge catalogs are
+   guidance mirror and comment. The Skills and Knowledge catalogs are
    rescanned from disk through their capabilities' own private composers; a
    disabled domain is skipped entirely (no section written, no scan), and the
    Knowledge one-time legacy migration is **not** reachable from this path — it

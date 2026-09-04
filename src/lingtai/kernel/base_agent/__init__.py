@@ -498,7 +498,6 @@ class BaseAgent:
         principle: str = "",
         substrate: str = "",
         procedures: str = "",
-        brief: str = "",
         pad: str = "",
         comment: str = "",
     ):
@@ -601,14 +600,13 @@ class BaseAgent:
         # MailService: None means mail intrinsic disabled
         self._mail_service = mail_service
 
-        # Covenant, principle, substrate, procedures, brief, and pad file paths
+        # Covenant, principle, substrate, procedures, and pad file paths
         system_dir = self._working_dir / "system"
         pad_file = system_dir / "pad.md"
         covenant_file = system_dir / "covenant.md"
         principle_file = system_dir / "principle.md"
         substrate_file = system_dir / "substrate.md"
         procedures_file = system_dir / "procedures.md"
-        brief_file = system_dir / "brief.md"
 
         system_dir.mkdir(exist_ok=True)
 
@@ -645,13 +643,6 @@ class BaseAgent:
         elif procedures_file.is_file():
             procedures = _strip_frontmatter(procedures_file.read_text(encoding="utf-8"))
 
-        # Brief: disk-owned context (normally written by secretary/briefing
-        # flows). Init.json brief overrides are retired at the Agent wrapper.
-        if brief and not brief_file.is_file():
-            brief_file.write_text(brief, encoding="utf-8")
-        elif brief_file.is_file():
-            brief = brief_file.read_text(encoding="utf-8")
-
         # Pad: constructor value seeds the file if it doesn't exist
         if pad and not pad_file.is_file():
             pad_file.write_text(pad, encoding="utf-8")
@@ -671,8 +662,6 @@ class BaseAgent:
             self._prompt_manager.write_section("substrate", substrate, protected=True)
         if procedures:
             self._prompt_manager.write_section("procedures", procedures, protected=True)
-        if brief:
-            self._prompt_manager.write_section("brief", brief, protected=True)
         # Load existing rules from system/rules.md (survives molts, refreshes, and resumes)
         rules_md = system_dir / "rules.md"
         if rules_md.is_file():

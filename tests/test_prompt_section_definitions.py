@@ -54,7 +54,6 @@ _REQUIRED_SECTIONS = [
     "comment",
     "tools",
     "rules",
-    "brief",
     "mcp",
     "skills",
     "knowledge",
@@ -198,14 +197,6 @@ def test_yaml_only_sections_have_no_packaged_md_body():
         assert not _md_path(section).is_file(), (
             f"{section} is a YAML-only section and must not ship a body .md"
         )
-
-
-def test_brief_section_is_marked_deprecated():
-    defn = _load("brief")
-    assert defn.get("deprecated") is True
-    note = defn.get("deprecation_note", "")
-    assert "Deprecated compatibility slot" in note
-    assert "system/brief.md" in note
 
 
 def test_covenant_body_source_is_external_not_packaged():

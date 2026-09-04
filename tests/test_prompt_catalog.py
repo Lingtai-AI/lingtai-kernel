@@ -241,7 +241,6 @@ def test_principle_body_starts_with_system_prompt_map_and_lingtai_principles():
         "meta_guidance",
         "comment",
         "rules",
-        "brief",
         "mcp",
         "skills",
         "knowledge",

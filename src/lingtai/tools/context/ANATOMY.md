@@ -109,7 +109,7 @@ Context-owned persistent paths are `system/summaries/`, `history/snapshots/`,
 `history/chat_history.jsonl`, `history/chat_history_archive.jsonl`, and the
 post-molt notification. Pad and LingTai files are durable sources owned by their
 families/file mutation, but the context reconstruction path composes them along
-with base prompt, covenant, packaged layers, rules, brief, comment, guidance,
+with base prompt, covenant, packaged layers, rules, comment, guidance,
 and current tool/meta sections.
 
 `summarize` never reconstructs. `rebuild` always composes before history

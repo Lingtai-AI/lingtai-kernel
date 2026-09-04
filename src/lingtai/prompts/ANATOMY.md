@@ -15,7 +15,6 @@ related_files:
   - src/lingtai/tools/psyche/prompt.py
   - tests/test_prompt_catalog.py
   - ENVIRONMENT_VARIABLES.md
-  - src/lingtai/prompts/brief/brief.yaml
   - src/lingtai/prompts/character/character.yaml
   - src/lingtai/prompts/comment/comment.yaml
   - src/lingtai/prompts/covenant/covenant.yaml
@@ -91,7 +90,7 @@ sources, catalog INDEX ↔ catalog sections).
 
 | Path | Role |
 |---|---|
-| `<section>/` | One directory per prompt section. The complete set is `brief`, `character`, `comment`, `covenant`, `identity`, `knowledge`, `mcp`, `meta_guidance`, `pad`, `principle`, `procedures`, `rules`, `skills`, `substrate`, and `tools` — every one holds `<section>.yaml`, and the three body-backed ones also hold `<section>.md`. `related_files` enumerates each packaged payload individually, so no prompt source is reachable only by directory convention. |
+| `<section>/` | One directory per prompt section. The complete set is `character`, `comment`, `covenant`, `identity`, `knowledge`, `mcp`, `meta_guidance`, `pad`, `principle`, `procedures`, `rules`, `skills`, `substrate`, and `tools` — every one holds `<section>.yaml`, and the three body-backed ones also hold `<section>.md`. `related_files` enumerates each packaged payload individually, so no prompt source is reachable only by directory convention. |
 | `<section>/<section>.yaml` | `prompt-section-definition` YAML: `name_definition`, `purpose`, `scope`, `injection_contract`, `related_files`, `maintenance`. Present for every section. |
 | `principle/principle.md`, `substrate/substrate.md`, `procedures/procedures.md` | The three Psyche-plan-owned, packaged section bodies (skill-style frontmatter + Markdown body; frontmatter stripped on render). |
 | `meta_guidance/catalog/` | Runtime-guidance Markdown catalog: `INDEX.md` (manifest frontmatter) + one `<id>.md` per section, nested under the `meta_guidance` section it generates. Assembled into the `meta_guidance` body; order is code-owned in `GUIDANCE_SECTION_ORDER`. |
@@ -102,7 +101,7 @@ sources, catalog INDEX ↔ catalog sections).
 Rendered system-prompt order (owned by `src/lingtai/kernel/prompt.py`, mapped in
 the kernel-root anatomy):
 `principle → covenant → tools → substrate → procedures → meta_guidance →
-comment → rules → brief → mcp → skills → knowledge → identity → character → pad`.
+comment → rules → mcp → skills → knowledge → identity → character → pad`.
 
 Each section has a `<section>/<section>.yaml` definition. Bodies split three ways:
 
@@ -118,7 +117,7 @@ Each section has a `<section>/<section>.yaml` definition. Bodies split three way
 - **Injected sections** — `covenant` and `comment` are supplied by Psyche's
   closed `settings/psyche.json` owner document. Covenant keeps
   `system/covenant.md` as a durable mirror/fallback; comment has no mirror or
-  fallback. `rules`, `brief`, `character`, and `pad` come from their existing
+  fallback. `rules`, `character`, and `pad` come from their existing
   persistent/configured sources. None has a packaged prompt body.
 
 For the generated `tools` section, `src/lingtai/kernel/base_agent/tools.py`
@@ -173,7 +172,7 @@ and `override_policy`.
   `system/covenant.md` mirror fallback, while meta_guidance's body is generated
   from `meta_guidance/catalog/`. This is intentional; do not add
   `covenant/covenant.md` or `meta_guidance/meta_guidance.md`.
-- YAML-only sections (`comment`, `tools`, `rules`, `brief`, `mcp`, `skills`,
+- YAML-only sections (`comment`, `tools`, `rules`, `mcp`, `skills`,
   `knowledge`, `identity`, `character`, `pad`) exist so coding agents have a
   crawlable semantic contract for generated/injected sections even though the
   kernel ships no body for them.

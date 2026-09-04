@@ -44,7 +44,7 @@ def test_system_prompt_manager_reads_never_written_section_as_none():
 def test_rules_renders_after_covenant_and_tools():
     """Section order is grouped by mutation frequency for cache stability:
     Batch 1 (immovable, prefix-cacheable) — principle, covenant, tools, substrate, ...
-    Batch 2 (rarely mutated)              — rules, brief, skills, library, ...
+    Batch 2 (rarely mutated)              — rules, skills, library, ...
 
     So both ``covenant`` and ``tools`` precede ``rules`` in the rendered
     prompt, since adjusting rules at runtime should invalidate as little
@@ -72,13 +72,12 @@ def test_set_order_reorders_within_batch():
     """set_order() reorders sections inside their cache batch; batch membership is unchanged."""
     mgr = SystemPromptManager()
     mgr.write_section("rules", "Rule A", protected=True)
-    mgr.write_section("brief", "Brief B", protected=True)
     mgr.write_section("skills", "Skill C", protected=True)
-    mgr.set_order(["skills", "rules", "brief"])
+    mgr.set_order(["skills", "rules"])
     prompt = mgr.render()
-    assert prompt.index("## skills") < prompt.index("## rules") < prompt.index("## brief")
+    assert prompt.index("## skills") < prompt.index("## rules")
     batches = mgr.render_batches()
-    for marker in ("Rule A", "Brief B", "Skill C"):
+    for marker in ("Rule A", "Skill C"):
         assert marker in batches[1]
         assert marker not in batches[0]
 
@@ -110,12 +109,11 @@ def test_set_order_omitted_sections_render_after_named_ones():
     """Unlisted sections keep their batch and original relative order, after listed ones."""
     mgr = SystemPromptManager()
     mgr.write_section("rules", "Rules", protected=True)
-    mgr.write_section("brief", "Brief", protected=True)
     mgr.write_section("skills", "Skills", protected=True)
     mgr.set_order(["skills"])
     prompt = mgr.render()
-    # skills listed first; rules/brief unlisted keep batch order (rules before brief).
-    assert prompt.index("## skills") < prompt.index("## rules") < prompt.index("## brief")
+    # skills listed first; rules remains in its batch after the named section.
+    assert prompt.index("## skills") < prompt.index("## rules")
 
 
 def test_set_order_default_noop_is_byte_identical():

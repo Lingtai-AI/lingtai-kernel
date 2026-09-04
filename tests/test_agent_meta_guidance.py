@@ -269,21 +269,20 @@ def test_base_agent_seeds_body_only_from_frontmatter_mirror(tmp_path):
     assert "kind: prompt-section" not in (section or "")
 
 
-def test_init_brief_override_is_not_honored(tmp_path):
-    """`brief` is no longer an init.json prompt override; an inline value is
-    ignored and the section comes only from system/brief.md on disk."""
+def test_retired_brief_source_is_not_loaded(tmp_path):
+    """An existing system/brief.md is not a prompt source after retirement."""
+    brief_md = tmp_path / "agent" / "system" / "brief.md"
+    brief_md.parent.mkdir(parents=True)
+    brief_md.write_text("DISK-BRIEF-CONTEXT", encoding="utf-8")
     agent = _agent_with_static_comment(tmp_path)
-    agent._reload_prompt_sections({"brief": "INIT-BRIEF-OVERRIDE"})
+    assert "DISK-BRIEF-CONTEXT" not in agent._build_system_prompt()
 
+    agent._reload_prompt_sections({"brief": "INIT-BRIEF-OVERRIDE"})
     prompt = agent._build_system_prompt()
     assert "INIT-BRIEF-OVERRIDE" not in prompt
+    assert "DISK-BRIEF-CONTEXT" not in prompt
     assert agent._prompt_manager.read_section("brief") is None
-
-    # Disk-sourced brief still renders.
-    brief_md = agent._working_dir / "system" / "brief.md"
-    brief_md.write_text("DISK-BRIEF-CONTEXT", encoding="utf-8")
-    agent._reload_prompt_sections({})
-    assert "DISK-BRIEF-CONTEXT" in agent._build_system_prompt()
+    assert brief_md.read_text(encoding="utf-8") == "DISK-BRIEF-CONTEXT"
 
 
 def test_agent_batched_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):

@@ -28,7 +28,6 @@ DEFAULT_COMMANDS: list[dict[str, str]] = [
 HIDDEN_COMMANDS: list[dict[str, str]] = [
     {"command": "status", "description": "Show agent status (also in /kanban)"},
     {"command": "system", "description": "Browse system files (tap to view)"},
-    {"command": "brief", "description": "Show current briefing"},
 ]
 
 
@@ -36,12 +35,6 @@ HIDDEN_COMMANDS: list[dict[str, str]] = [
 class SignalResult:
     status: str
     error: str | None = None
-
-
-@dataclass(frozen=True)
-class BriefResult:
-    status: str
-    content: str | None = None
 
 
 @dataclass(frozen=True)
@@ -179,37 +172,6 @@ class LocalCommandCore:
         except OSError as exc:
             return SignalResult("failed", str(exc))
         return SignalResult("sent")
-
-    def read_brief(self) -> BriefResult:
-        """Read the established briefing fallback chain."""
-        agent_path = self._agent_path()
-        if agent_path is None:
-            return BriefResult("agent_dir_missing")
-        content: str | None = None
-        brief_path = agent_path / "system" / "brief.md"
-        if brief_path.is_file():
-            try:
-                content = brief_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                content = None
-        if not content:
-            for path in sorted((agent_path / "knowledge").glob("*/brief.md")):
-                try:
-                    content = path.read_text(encoding="utf-8")
-                    break
-                except (OSError, UnicodeDecodeError):
-                    continue
-        if not content:
-            try:
-                init = json.loads(
-                    (agent_path / "init.json").read_text(encoding="utf-8")
-                )
-                content = init.get("brief") or init.get("manifest", {}).get("brief")
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-                content = None
-        if not content or not content.strip():
-            return BriefResult("not_found")
-        return BriefResult("ok", content)
 
     def system_documents(self, query: str | None = None) -> SystemDirectoryResult:
         """List or read Markdown documents from the Agent system directory."""

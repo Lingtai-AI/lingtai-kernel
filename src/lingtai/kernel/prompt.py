@@ -10,7 +10,7 @@ breakpoints can be placed between batches:
         principle (no header) → covenant → tools → substrate → procedures →
         meta_guidance → comment
     Batch 2 — rarely mutated (most stable first):
-        rules → brief → skills → plugin → mcp → knowledge → identity → character → pad
+        rules → skills → plugin → mcp → knowledge → identity → character → pad
 
 `substrate` sits **right after tools** so it functions as the long-form
 companion to the schemas above it: tool schemas carry mechanical
@@ -54,7 +54,7 @@ class SystemPromptManager:
     # sections are ordered most-stable-first so later mutations invalidate
     # as little prior content as possible.
     #   Batch 1 (resident prefix):  principle, covenant, tools, substrate, procedures, meta_guidance, comment
-    #   Batch 2 (rarely-mutated):    rules, brief, skills, plugin, mcp, knowledge, identity, character, pad
+    #   Batch 2 (rarely-mutated):    rules, skills, plugin, mcp, knowledge, identity, character, pad
     # Resident kernel runtime guidance sits before operator/project comment
     # so comment can remain the final stable prefix-layer instruction.
     # First entry (principle) is rendered without ## header (raw text).
@@ -73,7 +73,7 @@ class SystemPromptManager:
             "meta_guidance", "comment",
         ),
         (
-            "rules", "brief", "skills", "plugin", "mcp", "knowledge",
+            "rules", "skills", "plugin", "mcp", "knowledge",
             "identity", "character", "pad",
         ),
     )

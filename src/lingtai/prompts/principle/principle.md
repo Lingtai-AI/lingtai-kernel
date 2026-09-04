@@ -43,7 +43,6 @@ The system prompt is a layered operating contract. This opening section names th
 | `meta_guidance` | Resident static rules for interpreting dynamic runtime `_meta` blocks, notifications, token economy, and adapter guidance. |
 | `comment` | Operator-, recipe-, or project-specific behavior that adapts the general kernel to this network's current mode. |
 | `rules` | Optional network or avatar rules that constrain descendants when present. |
-| `brief` | Optional life/project briefing supplied by the surrounding application when present. |
 | `mcp` | Optional external-integration catalog: registered MCP services and their ownership/configuration boundaries. |
 | `skills` | Progressive-disclosure catalog of reusable procedures; load the relevant skill only when the task needs it. |
 | `knowledge` | Private durable memory catalog: project facts, decisions, journals, and local context that survive molt. |

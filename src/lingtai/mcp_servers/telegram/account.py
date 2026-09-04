@@ -463,9 +463,6 @@ class TelegramAccount:
         if cmd == "/system":
             self._cmd_system(chat_id, text)
             return True
-        if cmd == "/brief":
-            self._cmd_brief(chat_id)
-            return True
         if cmd == "/clear":
             self._cmd_clear(chat_id)
             return True
@@ -891,41 +888,6 @@ class TelegramAccount:
         lines.append("")
         lines.append("Other messages are sent to the agent as normal chat.")
         self.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
-
-    def _cmd_brief(self, chat_id: int) -> None:
-        """Handle /brief — show the agent's briefing. Pure filesystem read, no LLM."""
-        result = self._local_commands.read_brief()
-        if result.status == "agent_dir_missing":
-            self.send_message(chat_id, "⚠️ LINGTAI_AGENT_DIR not set — cannot read briefing.")
-            return
-        if result.status == "not_found" or result.content is None:
-            self.send_message(chat_id, "📄 No brief found — ask the operator to set one up.")
-            return
-
-        # Send the brief, splitting at 4000 chars per message (mirror _cmd_system)
-        MAX_MSG = 4000
-        content = result.content.strip()
-        header = "📋 *Brief*\n"
-        available = MAX_MSG - len(header)
-        if len(content) <= available:
-            self.send_message(chat_id, header + content, parse_mode="Markdown")
-            return
-
-        chunks: list[str] = []
-        while content:
-            if len(content) <= available:
-                chunks.append(content)
-                break
-            split_at = available
-            newline = content.rfind("\n", 0, available)
-            if newline > available // 2:
-                split_at = newline + 1
-            chunks.append(content[:split_at])
-            content = content[split_at:]
-
-        for i, chunk in enumerate(chunks):
-            part_header = f"📋 *Brief* ({i+1}/{len(chunks)})\n"
-            self.send_message(chat_id, part_header + chunk, parse_mode="Markdown")
 
     def _cmd_clear(self, chat_id: int) -> None:
         """Handle /clear — write the .clear forced-molt signal. No LLM call."""

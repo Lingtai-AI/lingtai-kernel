@@ -1,6 +1,6 @@
 """Telegram slash-command local handling (PR: fix/telegram-slash-commands).
 
-Covers the audited local-command contract: all 9 DEFAULT_COMMANDS are handled
+Covers the audited local-command contract: the built-in commands are handled
 locally without reaching the agent; the /kanban layered overview + drill-down
 (kb: callbacks) works; /clear writes the .clear forced-molt signal; unknown
 commands still pass through to the agent.
@@ -67,7 +67,6 @@ def agent_dir(tmp_path: Path) -> Path:
     d = tmp_path / "agent"
     d.mkdir()
     (d / "system").mkdir()
-    (d / "system" / "brief.md").write_text("# Brief\n\nTest briefing body.\n", encoding="utf-8")
     (d / ".agent.json").write_text(
         json.dumps({
             "name": "test-agent",
@@ -109,13 +108,7 @@ def test_all_default_commands_stay_local(acct: tuple[TelegramAccount, list[dict]
     assert acct[1] == []
 
     handled = acct[0]._handle_slash_command(
-        {"update_id": 3, "message": _msg(text="/brief")}
-    )
-    assert handled is True
-    assert acct[1] == []
-
-    handled = acct[0]._handle_slash_command(
-        {"update_id": 4, "message": _msg(text="/clear")}
+        {"update_id": 3, "message": _msg(text="/clear")}
     )
     assert handled is True
     assert acct[1] == []
@@ -235,7 +228,7 @@ def test_kanban_layer_invalid_key_no_crash(acct: tuple[TelegramAccount, list[dic
 
 
 # ---------------------------------------------------------------------------
-# /help lists all commands; /brief reads the brief file
+# /help lists all commands
 # ---------------------------------------------------------------------------
 
 def test_help_lists_all_default_commands(acct: tuple[TelegramAccount, list[dict]]) -> None:
@@ -248,19 +241,17 @@ def test_help_lists_all_default_commands(acct: tuple[TelegramAccount, list[dict]
     for cmd in ["/help", "/kanban", "/taskcard", "/refresh", "/sleep", "/clear"]:
         assert cmd in body
     # Hidden commands still documented as hidden, still work if typed
-    for cmd in ["/status", "/system", "/brief"]:
+    for cmd in ["/status", "/system"]:
         assert cmd in body
     assert "Hidden" in body
 
 
-def test_brief_reads_file(acct: tuple[TelegramAccount, list[dict]]) -> None:
-    sent: list[str] = []
-    acct[0].send_message = (  # type: ignore[method-assign]
-        lambda chat_id, text, **kw: sent.append(text)
-    )
-    acct[0]._cmd_brief(123)
-    assert len(sent) == 1
-    assert "Test briefing body" in sent[0]
+def test_retired_brief_command_passes_through(
+    acct: tuple[TelegramAccount, list[dict]],
+) -> None:
+    assert acct[0]._handle_slash_command(
+        {"update_id": 6, "message": _msg(text="/brief")}
+    ) is False
 
 
 def test_status_compact(acct: tuple[TelegramAccount, list[dict]]) -> None:
@@ -271,4 +262,3 @@ def test_status_compact(acct: tuple[TelegramAccount, list[dict]]) -> None:
     acct[0]._cmd_status(123)
     assert len(sent) == 1
     assert "test-agent" in sent[0] or "sonnet" in sent[0]
-

@@ -6,14 +6,14 @@ sections that used to accept init.json overrides are retired here:
 
 - ``substrate`` — kernel-owned architecture model. The packaged
   ``lingtai/prompts/substrate/substrate.md`` is now the sole source.
-- ``brief`` — secretary-written life context. Now sourced solely from
-  ``system/brief.md`` on disk, not init.json.
+- ``brief`` — retired prompt data. Historical callers may remove its old
+  ``init.json`` fields, but no live source replaces them.
 
 This agent-domain migration preserves non-empty legacy ``substrate`` content
 through the workspace archive and removes the inline + ``_file`` fields from
-``init.json`` for both. ``brief`` is already deprecated and is intentionally
-ignored: the migration removes ``brief`` / ``brief_file`` without seeding prompt
-content. Active brief context must live in ``system/brief.md``.
+``init.json`` for both. ``brief`` is deprecated and is intentionally ignored:
+the migration removes ``brief`` / ``brief_file`` without seeding prompt
+content. Production boot and refresh do not invoke this historical transform.
 
 Idempotency is provided by the versioned migration runner: this migration runs
 at most once per agent workdir version. Within the migration itself, missing
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 
 def migrate_init_prompt_contract(workspace: MigrationWorkspacePort) -> None:
-    """Archive/remove legacy substrate/brief overrides from an agent init.json."""
+    """Archive legacy substrate and remove retired prompt fields from init.json."""
     from .migrate import (
         INIT_DOCUMENT_REF,
         MigrationArchiveKind,

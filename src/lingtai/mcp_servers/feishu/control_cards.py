@@ -21,7 +21,6 @@ COMMANDS = frozenset(
         "status",
         "kanban",
         "system",
-        "brief",
         "refresh",
         "sleep",
         "clear",
@@ -46,7 +45,6 @@ _TEXT = {
         "status": "Status",
         "kanban": "Kanban",
         "system": "System",
-        "brief": "Brief",
         "refresh": "Refresh",
         "sleep": "Sleep",
         "clear": "Clear",
@@ -56,7 +54,6 @@ _TEXT = {
         "back": "Back",
         "all": "All layers",
         "unavailable": "Agent data is unavailable.",
-        "not_found": "No briefing was found.",
         "no_system": "No system documents were found.",
         "choose_system": "Choose a system document",
         "truncated": "Content was truncated.",
@@ -83,7 +80,6 @@ _TEXT = {
         "status": "状态",
         "kanban": "看板",
         "system": "系统文件",
-        "brief": "任务简报",
         "refresh": "刷新",
         "sleep": "休眠",
         "clear": "清空会话",
@@ -93,7 +89,6 @@ _TEXT = {
         "back": "返回",
         "all": "全部层级",
         "unavailable": "暂时无法读取 Agent 数据。",
-        "not_found": "没有找到任务简报。",
         "no_system": "没有找到系统文档。",
         "choose_system": "选择系统文档",
         "truncated": "内容已截断。",
@@ -120,7 +115,6 @@ _TEXT = {
         "status": "态势",
         "kanban": "全局",
         "system": "系统诸篇",
-        "brief": "要旨",
         "refresh": "更始",
         "sleep": "休止",
         "clear": "涤除前言",
@@ -130,7 +124,6 @@ _TEXT = {
         "back": "返",
         "all": "尽览七层",
         "unavailable": "机况未可得也。",
-        "not_found": "未见要旨。",
         "no_system": "系统无篇可览。",
         "choose_system": "择一篇而观",
         "truncated": "篇幅所限，文有所略。",
@@ -273,7 +266,6 @@ class FeishuControlCards:
                 "clear": "清空当前会话",
                 "status": "查看简要状态",
                 "system": "浏览系统文件",
-                "brief": "查看当前任务简报",
             },
             "wen": {
                 "help": "陈列诸令",
@@ -284,7 +276,6 @@ class FeishuControlCards:
                 "clear": "涤除前言",
                 "status": "察机之态",
                 "system": "览系统诸篇",
-                "brief": "观其要旨",
             },
         }[language]
         lines = [f"**{_t(language, 'available')}**"]
@@ -293,7 +284,7 @@ class FeishuControlCards:
             lines.append(f"- `/{command}` — {descriptions[command]}")
         buttons = [
             _button(language, command)
-            for command in ("status", "kanban", "system", "brief", "taskcard")
+            for command in ("status", "kanban", "system", "taskcard")
         ]
         buttons.extend(
             _button(language, command) for command in ("refresh", "sleep", "clear")
@@ -449,18 +440,6 @@ class FeishuControlCards:
             body = "\n\n".join(blocks)
             buttons = [_button(language, "system"), _button(language, "help")]
         return _card(language, _t(language, "system"), body, buttons)
-
-    def _render_brief(
-        self, language: str, _argument: str, _data: dict[str, Any] | None
-    ) -> dict[str, Any]:
-        result = self._core.read_brief()
-        if result.status != "ok" or result.content is None:
-            body = _t(language, "not_found")
-        else:
-            body = result.content[:_CONTENT_LIMIT]
-            if len(result.content) > _CONTENT_LIMIT:
-                body += f"\n\n_{_t(language, 'truncated')}_"
-        return _card(language, _t(language, "brief"), body, [_button(language, "help")])
 
     def _render_taskcard(
         self, language: str, argument: str, _data: dict[str, Any] | None

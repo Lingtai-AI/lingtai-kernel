@@ -40,6 +40,9 @@ DEPRECATED_TOP_FIELDS: set[str] = {
     # now owned by the agent via soul(action='voice') and stored under
     # manifest.soul.{voice,voice_prompt}.
     "soul", "soul_file",
+    # The retired brief prompt and its file selector are tolerated as generic
+    # deprecated input, but are never typed, resolved, or consumed.
+    "brief", "brief_file",
 }
 
 # Legacy fields removed by version-controlled agent-domain migrations. They are
@@ -50,8 +53,9 @@ DEPRECATED_TOP_FIELDS: set[str] = {
 # ``settings/psyche.json`` document. Its former top-level init fields are
 # compatibility-known only: tolerated on old/restored init.json (no error, no
 # warning and no type/path/content handling) but never honored. Kernel-owned
-# prompt layers — `principle`, `procedures`, and `substrate` — and
-# secretary-written `brief` follow the same inert compatibility treatment.
+# prompt layers — `principle`, `procedures`, and `substrate` — follow the
+# same inert treatment. Retired `brief` input is handled by the generic
+# deprecated field set above rather than this historical migration-only set.
 LEGACY_MIGRATED_TOP_FIELDS: set[str] = {
     "base_prompt", "base_prompt_file",
     "covenant", "covenant_file",
@@ -59,7 +63,6 @@ LEGACY_MIGRATED_TOP_FIELDS: set[str] = {
     "principle", "principle_file",
     "procedures", "procedures_file",
     "substrate", "substrate_file",
-    "brief", "brief_file",
 }
 
 TOP_KNOWN: set[str] = {

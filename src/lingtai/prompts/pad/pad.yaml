@@ -8,14 +8,13 @@ name_definition: >
 purpose: >
   Exists so the agent's current work survives molt in a fixed slot, distinct from
   durable self (character), mechanical facts (identity), and durable project context
-  (brief).
+  (persistent project files and catalogs).
 scope:
   owns:
     - Current working state: active tasks, plans, handoffs, pinned references that reload across molts.
   does_not_own:
     - The self-authored identity (owned by character).
     - Mechanical runtime facts (owned by identity).
-    - Durable life/project briefing (owned by brief).
     - The operator/recipe constitution (owned by covenant).
 injection_contract:
   defined_by: kernel_section_contract
@@ -31,7 +30,7 @@ related_files:
   - path: src/lingtai/prompts/ANATOMY.md
     why: >
       The owning prompt-source anatomy: it records pad as the persistent current-work
-      section. Read it before confusing pad with durable identity or briefing.
+      section. Read it before confusing pad with durable identity.
   - path: src/lingtai/tools/pad/_pad.py
     why: >
       Owns the concrete pad-section injection rule: it reads system/pad.md and layers
@@ -45,10 +44,6 @@ related_files:
     why: >
       pad is current work and character is durable self; edit together so transient task
       state does not leak into identity-shaping content.
-  - path: src/lingtai/prompts/brief/brief.yaml
-    why: >
-      pad is current work and brief is durable project context; edit together so
-      transient tasks and durable briefing do not blur.
   - path: src/lingtai/prompts/procedures/procedures.yaml
     why: >
       procedures tells when to write to pad; edit together so pad-write discipline is
@@ -56,4 +51,4 @@ related_files:
 maintenance:
   - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical builder/navigation files that own the concrete injection rules (here tools/pad/_pad.py). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
   - pad is injected from persistent state, not a kernel body; do not add one. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
-  - Keep the pad (current work) vs character (self) vs identity (facts) vs brief (context) boundary explicit.
+  - Keep the pad (current work) vs character (self) vs identity (facts) boundary explicit.
