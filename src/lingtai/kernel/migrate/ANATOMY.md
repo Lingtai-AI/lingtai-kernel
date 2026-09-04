@@ -42,7 +42,7 @@ Retained historical/test-only migration machinery for older kernel-managed on-di
 - `m002_description_object.py` — preset m002: promotes string `description` to `{summary, tier?}`; folds `tags:[tier:N]` into `description.tier`; deletes `tags`. Same Port surface; `_extract_tier()` helper.
 - `agent_m001_init_procedures_override.py` — agent m001: archives non-empty `init.json.procedures` via `workspace.archive(INIT_PROCEDURES, ...)`, removes `procedures`/`procedures_file`, replaces `init.json`, and `append_audit`s `init_procedures_override_migrated` (or `…_failed`).
 - `agent_m002_mcp_launch_args_rewrite.py` — agent m002: rewrites legacy `["-m", "lingtai_<name>"]` MCP launch args to `lingtai.mcp_servers.<name>` in the `INIT_DOCUMENT` and `MCP_REGISTRY` entries; `append_audit`s on change.
-- `agent_m003_init_prompt_contract.py` — agent m003: archives non-empty inline `substrate` via `workspace.archive(INIT_SUBSTRATE, ...)`, removes retired `substrate`/`substrate_file` and deprecated `brief`/`brief_file`, replaces `init.json`, and `append_audit`s `init_prompt_contract_migrated`.
+- `agent_m003_init_prompt_contract.py` — retained historical agent m003: archives non-empty inline `substrate` via `workspace.archive(INIT_SUBSTRATE, ...)`, removes retired `substrate`/`substrate_file` and deprecated historical `brief`/`brief_file` fields, replaces `init.json`, and `append_audit`s `init_prompt_contract_migrated`; production boot/refresh never invokes it and no live brief source exists.
 
 ## Connections
 

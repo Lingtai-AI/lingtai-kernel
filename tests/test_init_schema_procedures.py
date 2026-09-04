@@ -190,30 +190,10 @@ def test_covenant_is_not_required_but_pad_still_is():
         validate_init(data)
 
 
-# --- init prompt contract: brief and substrate retired as external overrides ---
+# --- init prompt contract: substrate remains a migration-only override ---
 #
 # The externally changeable system-prompt surface is exactly base_prompt,
-# covenant, and comment. `brief` (secretary-written life context) and
-# `substrate` (kernel-owned architecture model) are no longer external prompt
-# overrides: their inline/_file init.json fields are migrated-legacy-known
-# (tolerated on old init.json, never honored) and the kernel owns the rendered
-# sections (substrate from the packaged default; brief from disk only).
-
-
-def test_brief_no_longer_active_optional_prompt_field():
-    from lingtai.init_schema import LEGACY_MIGRATED_TOP_FIELDS, TOP_KNOWN, TOP_OPTIONAL
-
-    assert "brief" in LEGACY_MIGRATED_TOP_FIELDS
-    assert "brief" in TOP_KNOWN
-    assert "brief" not in TOP_OPTIONAL
-
-    data = _valid_init()
-    data["brief"] = {"not": "a string"}  # untyped now
-    warnings = validate_init(data)
-    assert all("brief" not in w for w in warnings)
-
-
-def test_brief_file_no_longer_active_prompt_field():
+def test_retired_brief_uses_generic_deprecated_field_handling():
     from lingtai.init_schema import (
         DEPRECATED_TOP_FIELDS,
         LEGACY_MIGRATED_TOP_FIELDS,
@@ -222,19 +202,17 @@ def test_brief_file_no_longer_active_prompt_field():
         strip_deprecated,
     )
 
-    assert "brief_file" not in DEPRECATED_TOP_FIELDS
-    assert "brief_file" in LEGACY_MIGRATED_TOP_FIELDS
-    assert "brief_file" in TOP_KNOWN
-    assert "brief_file" not in TOP_OPTIONAL
+    assert {"brief", "brief_file"} <= DEPRECATED_TOP_FIELDS
+    assert not {"brief", "brief_file"} & LEGACY_MIGRATED_TOP_FIELDS
+    assert {"brief", "brief_file"} <= TOP_KNOWN
+    assert not {"brief", "brief_file"} & set(TOP_OPTIONAL)
 
     data = _valid_init()
+    data["brief"] = {"retired": True}
     data["brief_file"] = 123
-    stripped = strip_deprecated(data)
-    warnings = validate_init(data)
-
-    assert stripped == []
-    assert "brief_file" in data
-    assert all("brief_file" not in w for w in warnings)
+    assert validate_init(data) == []
+    assert set(strip_deprecated(data)) == {"brief", "brief_file"}
+    assert validate_init(data) == []
 
 
 def test_substrate_no_longer_active_optional_prompt_field():

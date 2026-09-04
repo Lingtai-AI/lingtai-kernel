@@ -250,7 +250,7 @@ def test_canonical_reconstruction_rereads_all_durable_prompt_sources(tmp_path):
         ref = agent._working_dir / "ref.txt"
         ref.write_text("PINNED-SOURCE", encoding="utf-8")
         (system / "pad_append.json").write_text('["ref.txt"]', encoding="utf-8")
-        for section in ("covenant", "character", "rules", "pad", "brief"):
+        for section in ("covenant", "character", "rules", "pad"):
             agent._prompt_manager.write_section(section, f"STALE-{section}")
         agent._base_prompt = "STALE-BASE"
 
@@ -272,13 +272,14 @@ def test_canonical_reconstruction_rereads_all_durable_prompt_sources(tmp_path):
         assert agent._prompt_manager.read_section("rules") == "RULES-SOURCE"
         assert "PAD-SOURCE" in agent._prompt_manager.read_section("pad")
         assert "PINNED-SOURCE" in agent._prompt_manager.read_section("pad")
-        assert agent._prompt_manager.read_section("brief") == "BRIEF-SOURCE"
+        assert agent._prompt_manager.read_section("brief") is None
         rendered = (system / "system.md").read_text(encoding="utf-8")
         for sentinel in (
             "BASE-SOURCE", "COVENANT-SOURCE", "LINGTAI-SOURCE",
-            "RULES-SOURCE", "PAD-SOURCE", "PINNED-SOURCE", "BRIEF-SOURCE",
+            "RULES-SOURCE", "PAD-SOURCE", "PINNED-SOURCE",
         ):
             assert sentinel in rendered
+        assert "BRIEF-SOURCE" not in rendered
 
         # Recomposition is replacement, not overlay: removing a durable source
         # must remove its stale in-memory section on the next full rebuild.

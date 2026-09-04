@@ -221,7 +221,7 @@ getter again and never writes the file.
 
 ## LOCAL COMMANDS AND CONTROL CARDS
 
-- `/help`, `/status`, `/kanban`, `/system`, `/brief`, `/refresh`, `/sleep`,
+- `/help`, `/status`, `/kanban`, `/system`, `/refresh`, `/sleep`,
   `/clear`, and `/taskcard` execute inside the Feishu MCP without an LLM call.
   Direct-message commands are handled immediately. Group and topic commands
   still pass the normal account `allowed_users` gate and require an explicit

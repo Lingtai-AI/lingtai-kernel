@@ -3,7 +3,6 @@
 from .core import (
     DEFAULT_COMMANDS,
     HIDDEN_COMMANDS,
-    BriefResult,
     LocalCommandCore,
     SignalResult,
     SystemDirectoryResult,
@@ -15,7 +14,6 @@ from .core import (
 __all__ = [
     "DEFAULT_COMMANDS",
     "HIDDEN_COMMANDS",
-    "BriefResult",
     "LocalCommandCore",
     "SignalResult",
     "SystemDirectoryResult",

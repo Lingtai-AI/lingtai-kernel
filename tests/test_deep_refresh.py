@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import json
 import os
 from copy import deepcopy
@@ -43,7 +42,6 @@ def _make_init(
     memory: str = "",
     base_prompt: str | None = None,
     substrate: str | None = None,
-    brief: str | None = None,
 ) -> dict:
     """Build a minimal valid init.json dict."""
     data = {
@@ -76,8 +74,6 @@ def _make_init(
         data["base_prompt"] = base_prompt
     if substrate is not None:
         data["substrate"] = substrate
-    if brief is not None:
-        data["brief"] = brief
     if addons:
         data["addons"] = addons
     return data
@@ -941,46 +937,6 @@ def test_init_substrate_override_is_migrated_not_prompted(tmp_path):
     # A second setup reads the same compatibility input without changing it.
     agent._setup_from_init()
     assert json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))["substrate"] == legacy
-
-
-def test_init_brief_override_is_ignored_as_deprecated(tmp_path):
-    """Legacy init brief override is deprecated: remove it and do not render or
-    seed prompt content from the ignored field."""
-    legacy = "LEGACY-BRIEF-CONTEXT"
-    agent = _make_agent(tmp_path, _make_init(brief=legacy))
-
-    agent._setup_from_init()
-
-    data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
-    assert data["brief"] == legacy
-    assert not (tmp_path / "system" / "brief.md").exists()
-    assert legacy not in agent._prompt_manager.render()
-
-    digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
-    archive = tmp_path / "system" / "migrations" / f"init-brief-{digest}.md"
-    assert not archive.exists()
-
-
-def test_init_brief_file_override_is_ignored_as_deprecated(tmp_path):
-    """Legacy brief_file override is deprecated: remove it and do not read,
-    archive, seed, or render the referenced content."""
-    legacy = "CUSTOM-BRIEF-FILE"
-    custom = tmp_path / "custom-brief.md"
-    custom.write_text(legacy, encoding="utf-8")
-    init = _make_init()
-    init["brief_file"] = "custom-brief.md"
-    agent = _make_agent(tmp_path, init)
-
-    agent._setup_from_init()
-
-    data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
-    assert data["brief_file"] == "custom-brief.md"
-    assert not (tmp_path / "system" / "brief.md").exists()
-    assert legacy not in agent._prompt_manager.render()
-
-    digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
-    archive = tmp_path / "system" / "migrations" / f"init-brief-file-{digest}.md"
-    assert not archive.exists()
 
 
 def test_procedures_falls_back_to_system_file_when_packaged_missing(tmp_path):

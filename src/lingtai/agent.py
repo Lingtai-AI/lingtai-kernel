@@ -2776,23 +2776,6 @@ class Agent(BaseAgent):
         except Exception:
             if not guidance_file.is_file():
                 guidance_file.write_text("{}\n", encoding="utf-8")
-        # --- Brief (secretary-maintained life context — disk only) ---
-        # `brief` is not an external init.json prompt override. Psyche owns
-        # base_prompt / covenant / comment; legacy init.json `brief` /
-        # `brief_file` values remain compatibility-known, are reported by the
-        # shared reader, and are ignored here. The `brief` section is now sourced
-        # solely from system/brief.md,
-        # which the secretary agent writes directly.
-        brief_file = system_dir / "brief.md"
-        if brief_file.is_file():
-            brief = brief_file.read_text(encoding="utf-8")
-            if brief:
-                self._prompt_manager.write_section("brief", brief, protected=True)
-            else:
-                self._prompt_manager.delete_section("brief")
-        else:
-            self._prompt_manager.delete_section("brief")
-
         # --- Comment ---
         comment = data.get("comment", "")
         if comment:

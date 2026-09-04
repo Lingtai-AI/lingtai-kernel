@@ -51,7 +51,6 @@ def test_command_catalog_preserves_telegram_menu_and_hidden_order() -> None:
     assert [item["command"] for item in HIDDEN_COMMANDS] == [
         "status",
         "system",
-        "brief",
     ]
 
 
@@ -120,31 +119,8 @@ def test_signal_and_reads_report_missing_agent_dir(
     core = LocalCommandCore()
 
     assert core.send_signal("refresh", source="telegram").status == "agent_dir_missing"
-    assert core.read_brief().status == "agent_dir_missing"
     assert core.system_documents().status == "agent_dir_missing"
     assert core.collect_kanban_data() is None
-
-
-def test_brief_uses_established_fallback_order(tmp_path: Path) -> None:
-    core = LocalCommandCore(tmp_path)
-    system = tmp_path / "system"
-    knowledge = tmp_path / "knowledge" / "alpha"
-    system.mkdir()
-    knowledge.mkdir(parents=True)
-    system_brief = system / "brief.md"
-    knowledge_brief = knowledge / "brief.md"
-    system_brief.write_text("system brief", encoding="utf-8")
-    knowledge_brief.write_text("knowledge brief", encoding="utf-8")
-    (tmp_path / "init.json").write_text(
-        json.dumps({"manifest": {"brief": "manifest brief"}}),
-        encoding="utf-8",
-    )
-
-    assert core.read_brief().content == "system brief"
-    system_brief.unlink()
-    assert core.read_brief().content == "knowledge brief"
-    knowledge_brief.unlink()
-    assert core.read_brief().content == "manifest brief"
 
 
 def test_system_documents_return_neutral_listing_and_filtered_content(

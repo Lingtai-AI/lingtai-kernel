@@ -34,6 +34,8 @@ def test_real_reader_reports_ignored_legacy_paths_without_mutating_input(tmp_pat
         "covenant_file": False,
         "comment": {"legacy": "inert"},
         "comment_file": None,
+        "brief": {"retired": True},
+        "brief_file": 1,
     }
     raw = json.dumps({
         **_REQUIRED,

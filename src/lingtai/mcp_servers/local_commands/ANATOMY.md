@@ -24,7 +24,7 @@ maintenance: |
 # Local Messaging Command Core Anatomy
 
 Channel-neutral read/control logic for local messaging commands. The core reads
-Agent status, briefing, system Markdown, command catalogs, and Task Card
+Agent status, system Markdown, command catalogs, and Task Card
 preferences; it writes only the established `.refresh`, `.sleep`, and `.clear`
 signals. It never admits a chat actor, chooses a recipient, builds Telegram
 keyboards/Markdown or Feishu cards, or sends a provider request.
@@ -41,7 +41,7 @@ unrelated static/config state, not live session status, and is unchanged.
 ## Components
 
 - `core.py` — immutable result records plus `LocalCommandCore` for command
-  catalogs, kanban/status data collection, brief/system reads, signal writes,
+  catalogs, kanban/status data collection, system reads, signal writes,
   and Task Card preference parsing through injected callbacks.
 - `__init__.py` — the stable import surface used by messaging adapters.
 
