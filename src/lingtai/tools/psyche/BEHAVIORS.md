@@ -50,7 +50,7 @@ Pinned pytest commands must run from the repo root with the project's Python.
 5. Inspect the focused prompt-plan tests and confirm the three static sections are
    composed in order as one immutable candidate, startup passes the exact same
    object through reconstruction, and a failed final flush restores that plan
-   and its mirrors with the prior generation.
+   with the prior generation's existing rollback state.
 
 ### Expected evidence
 - [ ] Step 1: both focused Psyche suites pass, pinning exact manual routing,
@@ -66,8 +66,8 @@ Pinned pytest commands must run from the repo root with the project's Python.
       rescans, writes, or reloads — hashes are unchanged.
 - [ ] Step 4: file mutation never hot-loads the prompt; the prompt section updates only after an explicit rebuild or passive reconstruction.
 - [ ] Step 5: the static plan is read/applied once per reconstruction, cannot be
-      mutated through its dataclass/tuple fields, and cannot leave a rejected
-      generation's section mirrors behind.
+      mutated through its dataclass/tuple fields, and a failed final flush
+      restores the prior plan and the existing rollback state.
 
 ### Pass / Fail
 Pass when the suite passes, SHOW stays bound to the last applied reconstruction,

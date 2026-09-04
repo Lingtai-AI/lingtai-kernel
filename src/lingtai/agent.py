@@ -2507,11 +2507,6 @@ class Agent(BaseAgent):
         generation_mirrors = (
             system_dir / "base_prompt.md",
             system_dir / "covenant.md",
-            *(
-                self._working_dir / section.mirror
-                for section in psyche_prompt_plan.sections
-                if section.mirror is not None
-            ),
             system_dir / "system.md",
         )
         prior_mirrors: dict[Path, str | None] = {}

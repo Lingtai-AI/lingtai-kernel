@@ -424,9 +424,9 @@ def test_packaged_mirror_write_failure_uses_captured_fallback_without_reread(
 
     assert agent._prompt_manager.read_section("substrate") == fallback
     assert real_read(mirror, encoding="utf-8") == fallback
-    # One plan-time capture plus the pre-transaction generation snapshot; no
-    # fallback re-read occurs after the denied mirror write.
-    assert reads == [mirror, mirror]
+    # The only read is the plan-time capture; no fallback re-read occurs after
+    # the denied mirror write.
+    assert reads == [mirror]
 
 
 def test_packaged_missing_does_not_write_existing_fallback_mirror(
@@ -461,6 +461,41 @@ def test_packaged_missing_does_not_write_existing_fallback_mirror(
     assert writes == []
     assert agent._prompt_manager.read_section("substrate") == fallback
     assert mirror.read_text(encoding="utf-8") == fallback
+
+
+def test_static_mirror_read_failure_does_not_block_packaged_write(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _write_init(tmp_path, provider="gemini", model="gemini-test")
+    _write_owner(tmp_path)
+    agent = _agent(tmp_path)
+    mirror = tmp_path / "system" / "substrate.md"
+    mirror.parent.mkdir(exist_ok=True)
+    mirror.write_text("STALE FALLBACK", encoding="utf-8")
+    real_read = Path.read_text
+    reads: list[Path] = []
+
+    def denied_read(path: Path, *args, **kwargs):
+        if path == mirror:
+            reads.append(path)
+            raise PermissionError("injected mirror read failure")
+        return real_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", denied_read)
+    try:
+        agent._reconstruct_context()
+    finally:
+        agent.stop(timeout=1.0)
+
+    from importlib.resources import files
+    from lingtai.kernel._frontmatter import strip_frontmatter
+
+    packaged = files("lingtai.prompts").joinpath(
+        "substrate/substrate.md"
+    ).read_text(encoding="utf-8")
+    assert agent._prompt_manager.read_section("substrate") == strip_frontmatter(packaged)
+    assert reads == [mirror]
+    assert real_read(mirror, encoding="utf-8") == packaged
 
 
 def test_reconstruction_uses_only_psyche_owner_and_preserves_prompt_contract(
@@ -554,10 +589,6 @@ def test_show_snapshot_commits_only_after_final_prompt_flush(
             tmp_path / "system" / "system.md"
         ).read_text(encoding="utf-8")
         applied_plan = agent._psyche_prompt_plan
-        applied_static_mirrors = {
-            name: (tmp_path / "system" / f"{name}.md").read_bytes()
-            for name in ("principle", "substrate", "procedures")
-        }
 
         _write_owner(tmp_path, base_prompt="PENDING BASE", covenant="PENDING COVENANT")
 
@@ -585,10 +616,6 @@ def test_show_snapshot_commits_only_after_final_prompt_flush(
         assert (
             tmp_path / "system" / "system.md"
         ).read_text(encoding="utf-8") == applied_system_mirror
-        assert {
-            name: (tmp_path / "system" / f"{name}.md").read_bytes()
-            for name in ("principle", "substrate", "procedures")
-        } == applied_static_mirrors
         assert applied == [
             "", None, "APPLIED BASE", None, "APPLIED COVENANT", None,
             "", None,

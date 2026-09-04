@@ -122,8 +122,8 @@ file, or reloads prompt state.
 The static prompt plan is an internal composition boundary, not a new action.
 Its section tuple is ordered and immutable, and a reconstruction MUST apply the
 same candidate that was resolved before the seam began. A failed final flush
-MUST restore the prior plan object and the plan-declared mirrors together with
-the existing prompt-manager sections, configurable prompt mirrors, and SHOW.
+MUST restore the prior plan object together with the existing prompt-manager
+sections, configurable prompt mirrors, and SHOW.
 
 `settings` MUST report the applied snapshot consumed by the last successful
 canonical reconstruction and return exactly `pad`, `pad_file`, `base_prompt`,

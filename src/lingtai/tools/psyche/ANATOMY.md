@@ -117,7 +117,7 @@ registrar.
   the existing base/covenant mirrors and comment non-mirroring, and commits the
   applied plan plus eight-value snapshot only after the successful final prompt
   flush. A failed candidate restores the prior prompt-manager sections, wrapper
-  base prompt, plan mirrors, derived mirrors, and SHOW as one generation.
+  base prompt, existing derived mirrors, and SHOW as one generation.
   `PsycheSettingsPort` exposes only that immutable snapshot to SHOW; no Psyche
   public action reaches reconstruction or rereads a source.
 - `cli_project` and Avatar call `serialize_prompt_owner_document`; Project Core
