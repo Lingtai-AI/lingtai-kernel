@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/tools/registry.py
   - src/lingtai/tools/psyche/__init__.py
   - src/lingtai/tools/psyche/settings.py
+  - src/lingtai/tools/psyche/prompt.py
   - src/lingtai/agent.py
   - src/lingtai/cli_project.py
   - src/lingtai/kernel/project/__init__.py
@@ -41,8 +42,9 @@ Mandatory LTP v2 family that is the one public root for the four durable
 domains (`pad + lingtai + knowledge + skills = psyche`). Five actions are
 read-only manual loaders; the reserved `settings` child returns eight fully
 redacted Psyche-owned rows: Pad plus the three configurable prompt pairs. The
-package owns no domain catalog or composer; its closed `settings/psyche.json`
-v1 parser owns only those six prompt inputs. Its static official declaration
+package owns the closed `settings/psyche.json` v1 parser and a pure immutable
+prompt-plan composer for only those six inputs plus the three static resident
+sections; it owns no domain catalog composer. Its static official declaration
 binds only `workdir` and the read-only `psyche_settings` snapshot Port. Its
 `boot` keeps the mandatory intrinsic lifecycle shim, invokes the domain-owned
 composers, then mounts the one public handler through the declared ToolPlugin
@@ -69,6 +71,11 @@ registrar.
   structurally copies and validates the Agent's last successfully applied
   eight-value snapshot through `PsycheSettingsPort` into the full-redaction
   provider. SHOW performs no source I/O and receives no Agent.
+- `prompt.py::{PromptSectionDefinition,PromptSection,PromptPlan,compose_prompt_plan}`
+  — the closed three-entry static section registry and pure composition boundary
+  that reads one owner-input candidate plus packaged/fallback section bodies into
+  immutable values. It does not write mirrors or touch the kernel prompt manager;
+  the Agent applies its candidate transactionally.
 - `_adapt_manual_result` — the one post-dispatch Host adapter producing the flat
   `{status, manual, manual_path}` shape
   (`src/lingtai/tools/psyche/__init__.py:152-161`).
@@ -101,17 +108,18 @@ registrar.
   at construction; those are the domains' own composers, the same ones
   `Agent._reload_prompt_sections` reuses. The Pad/LingTai domain packages and
   catalog composers do not import Psyche. The sole reverse composition edge is
-  `Agent._reload_prompt_sections` importing this package's closed settings
-  reader; no Psyche public action reaches that edge.
-- Live refresh resolves one immutable Psyche owner candidate immediately after
-  its successful init read and before teardown; active rebuild and molt resolve
-  one candidate inside `Agent._reload_prompt_sections`. Reconstruction overlays
-  only those six prompt values, preserves the existing base/covenant mirrors and
-  comment non-mirroring, and commits the applied eight-value snapshot only after
-  the successful final prompt flush. A failed candidate restores the prior
-  prompt-manager sections, wrapper base prompt, derived mirrors, and SHOW as one
-  generation. `PsycheSettingsPort` exposes only that immutable snapshot to SHOW;
-  no Psyche public action reaches reconstruction or rereads a source.
+  `Agent._reload_prompt_sections` importing this package's prompt-plan composer;
+  no Psyche public action reaches that edge.
+- Live refresh resolves one immutable Psyche prompt plan immediately after its
+  successful init read and before teardown; active rebuild and molt resolve one
+  plan before `Agent._reload_prompt_sections`. Reconstruction applies the plan's
+  three static sections and overlays only its six configurable values, preserves
+  the existing base/covenant mirrors and comment non-mirroring, and commits the
+  applied plan plus eight-value snapshot only after the successful final prompt
+  flush. A failed candidate restores the prior prompt-manager sections, wrapper
+  base prompt, plan mirrors, derived mirrors, and SHOW as one generation.
+  `PsycheSettingsPort` exposes only that immutable snapshot to SHOW; no Psyche
+  public action reaches reconstruction or rereads a source.
 - `cli_project` and Avatar call `serialize_prompt_owner_document`; Project Core
   receives the already-serialized content and knows no Psyche schema keys.
 
@@ -127,9 +135,10 @@ their manuals and reads only Pad configuration plus its six prompt-owner inputs.
 ## State
 
 The package writes no persistent state. `Agent` owns one narrow ephemeral
-`_psyche_settings_snapshot`, initialized to eight meaningful defaults and
-replaced only by successful canonical reconstruction; SHOW binds to that state
-and does not inspect ambient sources. The independently user-authored
+`_psyche_prompt_plan` candidate and one `_psyche_settings_snapshot`, initialized
+to empty/default values and replaced only by successful canonical reconstruction;
+SHOW binds to the snapshot and does not inspect ambient sources. The
+independently user-authored
 `settings/psyche.json` is a strict owner source, not package state. Prompt
 sections, catalogs, `system/pad.md`,
 `system/pad_append.json`, `system/lingtai.md`, `knowledge/`, and `.library/` are
@@ -139,9 +148,10 @@ composer runs.
 
 ## Notes
 
-The kernel-owned prompt section named `substrate` is a different concept in a
-disjoint namespace and is unchanged by this family's naming; the old `psyche`
-family's actions live in `context`/`system` and are not reachable here. Both
-points are owned by the paired Contract. The five manual children share one
-loader and settings is the generic SHOW-only child; every child has strict-empty
-input. The read-only promise is structural, not conventional.
+The prompt section named `substrate` is a different concept from this family's
+old public root name; its kernel render slot and content bytes are unchanged.
+The old `psyche` family's actions live in `context`/`system` and are not
+reachable here. Both points are owned by the paired Contract. The five manual
+children share one loader and settings is the generic SHOW-only child; every
+child has strict-empty input. The read-only promise is structural, not
+conventional.

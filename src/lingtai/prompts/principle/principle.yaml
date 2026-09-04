@@ -1,15 +1,17 @@
 kind: prompt-section-definition
 section: principle
 name_definition: >
-  "principle" is the opening, kernel-owned system-prompt section. It is named for
-  the LingTai operating principle it carries and for its job of stating the root
-  contract before any territory: the map of every resident section, the operating
-  principle, and the progressive-disclosure and token-efficiency boundaries.
+  "principle" is the opening static system-prompt section. The kernel owns its
+  slot and rendering mechanics while the Psyche plan supplies the packaged body.
+  It is named for the LingTai operating principle it carries and for its job of
+  stating the root contract before any territory: the map of every resident
+  section, the operating principle, and the progressive-disclosure and
+  token-efficiency boundaries.
 purpose: >
   Exists as the first resident prompt layer so the agent sees the map before the
   territory — which section owns what, why the layers exist, and how to route to a
   compact resident section or a manual instead of duplicating long procedures. It is
-  the single source of truth for kernel-owned root principle guidance so that rule
+  the single packaged source of truth for root principle guidance so that the rule
   does not drift across files.
 scope:
   owns:
@@ -23,17 +25,24 @@ scope:
     - Runtime `_meta`/notification/token-signal interpretation (owned by meta_guidance).
     - The operator/recipe constitution content (owned by covenant).
 injection_contract:
-  defined_by: kernel
-  injected_by: kernel_prompt_builder
+  defined_by: psyche
+  injected_by: agent_prompt_reconstruction
   content_source: src/lingtai/prompts/principle/principle.md
+  resident_source: principle/principle.md
+  disclosure_source: null
   mirror_path: system/principle.md
   override_policy: not_user_overridable
   notes: >
-    Kernel-owned. init.json `principle`/`principle_file` are legacy-migrated and
-    ignored; the packaged body wins on every boot/refresh. The on-disk mirror keeps
-    developer-facing frontmatter but the rendered prompt section is body-only
-    (frontmatter stripped on read).
+    Psyche's static plan owns the packaged source contribution; the Agent keeps
+    injection mechanics. init.json `principle`/`principle_file` are
+    legacy-migrated and ignored; the packaged body wins on every boot/refresh.
+    The on-disk mirror keeps developer-facing frontmatter but the rendered prompt
+    section is body-only (frontmatter stripped on read).
 related_files:
+  - path: src/lingtai/tools/psyche/prompt.py
+    why: >
+      The PR A registry composes this packaged body into the immutable Psyche
+      prompt plan before Agent reconstruction applies it.
   - path: src/lingtai/prompts/ANATOMY.md
     why: >
       The owning prompt-source anatomy: it maps the per-section directories vs

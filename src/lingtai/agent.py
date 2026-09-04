@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any
 
 from lingtai.kernel.base_agent import BaseAgent, StopResult
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
-from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
 from lingtai.kernel.config import (
     AgentConfig,
     HEARTBEAT_LIVENESS_SECONDS,
@@ -34,9 +33,9 @@ from lingtai.kernel.prompt import build_system_prompt
 
 if TYPE_CHECKING:
     from lingtai.tools.psyche.settings import (
-        PsychePromptInputs,
         PsycheSettingsSnapshot,
     )
+    from lingtai.tools.psyche.prompt import PromptPlan
 
 
 # Runtime manual destinations remain stable even when a capability packages its
@@ -269,6 +268,7 @@ class Agent(BaseAgent):
         from lingtai.tools.psyche.settings import PsycheSettingsSnapshot
 
         self._psyche_settings_snapshot = PsycheSettingsSnapshot()
+        self._psyche_prompt_plan: PromptPlan | None = None
 
         # Default karma authority for the primary agent (本我)
         kwargs.setdefault("admin", {"karma": True})
@@ -2130,9 +2130,9 @@ class Agent(BaseAgent):
         # the live objects being rebuilt. Resolve its immutable candidate now,
         # before timers, clients, tools, plugins, prompt state, or sealing are
         # touched, then thread that exact read through final reconstruction.
-        from lingtai.tools.psyche.settings import read_resolved_prompt_inputs
+        from lingtai.tools.psyche.prompt import compose_prompt_plan
 
-        psyche_prompt_inputs = read_resolved_prompt_inputs(self._working_dir)
+        psyche_prompt_plan = compose_prompt_plan(self._working_dir)
 
         from lingtai.kernel.config_resolve import (
             load_env_file,
@@ -2458,7 +2458,7 @@ class Agent(BaseAgent):
         self._reconstruct_context(
             data,
             psyche_pad_file=psyche_pad_file,
-            psyche_prompt_inputs=psyche_prompt_inputs,
+            psyche_prompt_plan=psyche_prompt_plan,
         )
 
         # Re-seal
@@ -2479,7 +2479,7 @@ class Agent(BaseAgent):
         data: dict | None = None,
         *,
         psyche_pad_file: str | None = None,
-        psyche_prompt_inputs: PsychePromptInputs | None = None,
+        psyche_prompt_plan: PromptPlan | None = None,
     ) -> None:
         """Recompose every canonical prompt source, then publish the final prompt.
 
@@ -2489,18 +2489,29 @@ class Agent(BaseAgent):
         omit it so configured and durable sources are re-read from scratch. The
         final flush is deliberately last, ensuring provider replay observes the
         fully composed prompt rather than an intermediate Pad/LingTai section.
-        Refresh supplies its pre-teardown Psyche candidate; other callers read
-        one candidate inside the composer.
+        Refresh supplies its pre-teardown Psyche candidate; other callers resolve
+        one candidate before the transaction begins.
         """
+        if psyche_prompt_plan is None:
+            from lingtai.tools.psyche.prompt import compose_prompt_plan
+
+            psyche_prompt_plan = compose_prompt_plan(self._working_dir)
+
         prior_sections = deepcopy(self._prompt_manager._sections)
         missing_base_prompt = object()
         prior_base_prompt = getattr(self, "_base_prompt", missing_base_prompt)
         prior_snapshot = self._psyche_settings_snapshot
+        prior_prompt_plan = self._psyche_prompt_plan
         prior_token_decomp_dirty = self._token_decomp_dirty
         system_dir = self._working_dir / "system"
         generation_mirrors = (
             system_dir / "base_prompt.md",
             system_dir / "covenant.md",
+            *(
+                self._working_dir / section.mirror
+                for section in psyche_prompt_plan.sections
+                if section.mirror is not None
+            ),
             system_dir / "system.md",
         )
         prior_mirrors: dict[Path, str | None] = {}
@@ -2514,7 +2525,7 @@ class Agent(BaseAgent):
             psyche_settings_snapshot = self._reload_prompt_sections(
                 data,
                 psyche_pad_file=psyche_pad_file,
-                psyche_prompt_inputs=psyche_prompt_inputs,
+                psyche_prompt_plan=psyche_prompt_plan,
             )
             self._token_decomp_dirty = True
             self._flush_system_prompt()
@@ -2530,6 +2541,7 @@ class Agent(BaseAgent):
             else:
                 self._base_prompt = prior_base_prompt
             self._psyche_settings_snapshot = prior_snapshot
+            self._psyche_prompt_plan = prior_prompt_plan
             self._token_decomp_dirty = prior_token_decomp_dirty
 
             from lingtai.kernel._fsutil import atomic_write_text
@@ -2541,15 +2553,21 @@ class Agent(BaseAgent):
                     atomic_write_text(path, content, encoding="utf-8")
             raise
         self._psyche_settings_snapshot = psyche_settings_snapshot
+        self._psyche_prompt_plan = psyche_prompt_plan
 
     def _reload_prompt_sections(
         self,
         data: dict | None = None,
         *,
         psyche_pad_file: str | None = None,
-        psyche_prompt_inputs: PsychePromptInputs | None = None,
+        psyche_prompt_plan: PromptPlan | None = None,
     ) -> PsycheSettingsSnapshot:
         """Authoritative composer for every configured/durable prompt section."""
+        if psyche_prompt_plan is None:
+            from lingtai.tools.psyche.prompt import compose_prompt_plan
+
+            psyche_prompt_plan = compose_prompt_plan(self._working_dir)
+
         resolve_init_files = data is None
         if resolve_init_files:
             data = self._read_init()
@@ -2573,7 +2591,7 @@ class Agent(BaseAgent):
 
         if resolve_init_files:
             # Resolve active init-owned Pad and LingTai seed pointers. Psyche's
-            # prompt pairs are read separately below and are never copied into
+            # prompt-plan inputs are already resolved and are never copied into
             # this effective init mapping.
             from lingtai.kernel.config_resolve import resolve_file
             for key in ("pad", "lingtai"):
@@ -2581,15 +2599,12 @@ class Agent(BaseAgent):
                 if file_key in data:
                     data[key] = resolve_file(data.get(key), data.pop(file_key))
 
-        # Psyche owns the three configurable prompt pairs. Read and resolve the
-        # small closed document exactly once per complete reconstruction, then
-        # overlay only its resolved values into this local composition input.
-        # `data` remains the effective init mapping and is never mutated with
-        # owner fields, so legacy init values cannot regain prompt authority.
-        if psyche_prompt_inputs is None:
-            from lingtai.tools.psyche.settings import read_resolved_prompt_inputs
-
-            psyche_prompt_inputs = read_resolved_prompt_inputs(self._working_dir)
+        # Psyche owns the three configurable prompt pairs. The complete
+        # immutable plan was resolved before this composition transaction, then
+        # its inputs are overlaid only into this local composition input. `data`
+        # remains the effective init mapping and is never mutated with owner
+        # fields, so legacy init values cannot regain prompt authority.
+        psyche_prompt_inputs = psyche_prompt_plan.inputs
         data = dict(data)
         data.update({
             "base_prompt": psyche_prompt_inputs.base_prompt,
@@ -2599,6 +2614,30 @@ class Agent(BaseAgent):
 
         system_dir = self._working_dir / "system"
         system_dir.mkdir(exist_ok=True)
+
+        # Psyche supplies content and metadata; the Agent remains responsible
+        # for applying the sections to the kernel manager and for mirroring the
+        # exact packaged/fallback source bytes.
+        for section in psyche_prompt_plan.sections:
+            resident = section.resident
+            if section.mirror is not None and section.mirror_text is not None:
+                mirror_path = self._working_dir / section.mirror
+                try:
+                    mirror_path.write_text(section.mirror_text, encoding="utf-8")
+                except (FileNotFoundError, ModuleNotFoundError, OSError):
+                    if section.fallback_error is not None:
+                        raise section.fallback_error
+                    resident = section.fallback or ""
+            if resident:
+                self._prompt_manager.write_section(
+                    section.name,
+                    resident,
+                    protected=section.protected,
+                )
+            else:
+                self._prompt_manager.delete_section(section.name)
+            if section.raw:
+                self._prompt_manager.set_raw(section.name)
 
         # --- Base prompt (third-party prompt injection point) ---
         # `base_prompt` is the Psyche-owned third-party (application / recipe /
@@ -2656,46 +2695,6 @@ class Agent(BaseAgent):
         # post-molt hook ordering.
         from lingtai.tools.lingtai import _lingtai_load
         _lingtai_load(self, {}, publish=False)
-
-        # --- Substrate (kernel-owned, cross-app stable; #39) ---
-        # The substrate section sits right after `## tools` and describes
-        # the agent's architecture to itself (tool tiers, data-flow
-        # topology, life states, channel discipline, attention model).
-        #
-        # Substrate is kernel-owned and is not an external override. Legacy
-        # init.json `substrate` / `substrate_file`
-        # values remain compatibility-known, are reported by the shared reader,
-        # and are ignored here; the packaged default wins on every boot/refresh.
-        #
-        # Resolution order:
-        #   1. packaged prompts/substrate/substrate.md — kernel default, refreshed on boot
-        #   2. system/substrate.md           — fallback only if package missing
-        #
-        # The packaged default overwrites the on-disk file on every boot so
-        # that `pip install -e .` + `system(refresh)` actually propagates
-        # kernel updates. The on-disk file is a mirror/debug artifact.
-        #
-        # The packaged source carries skill-style YAML frontmatter (developer-
-        # facing metadata: purpose/summary/audience). The mirror keeps that
-        # frontmatter so the on-disk artifact stays self-explanatory, but only
-        # the Markdown body is written into the prompt section — the rendered
-        # LLM prompt and final system.md must be body-only.
-        substrate = ""
-        substrate_file = system_dir / "substrate.md"
-        try:
-            from importlib.resources import files
-            packaged = files("lingtai.prompts").joinpath("substrate/substrate.md").read_text(encoding="utf-8")
-            substrate_file.write_text(packaged, encoding="utf-8")
-            substrate = _strip_frontmatter(packaged)
-        except (FileNotFoundError, ModuleNotFoundError, OSError):
-            if substrate_file.is_file():
-                substrate = _strip_frontmatter(substrate_file.read_text(encoding="utf-8"))
-            else:
-                substrate = ""
-        if substrate:
-            self._prompt_manager.write_section("substrate", substrate, protected=True)
-        else:
-            self._prompt_manager.delete_section("substrate")
 
         # --- Rules (from system/rules.md, not init.json) ---
         rules_md = system_dir / "rules.md"
@@ -2763,60 +2762,6 @@ class Agent(BaseAgent):
         if "knowledge" in enabled_capabilities:
             from lingtai.tools import knowledge as _knowledge
             _knowledge._compose_catalog(self, publish=False)
-
-        # --- Principle (kernel-owned top-level progressive-disclosure contract) ---
-        # The principle section is LingTai-owned, not operator-owned: init.json
-        # `principle` / `principle_file` values are intentionally ignored here.
-        #
-        # Resolution order:
-        #   1. packaged prompts/principle/principle.md — kernel default, refreshed on boot
-        #   2. system/principle.md          — fallback only if package missing
-        #
-        # The packaged default owns the raison d'être of the resident prompt
-        # layers (meta_guidance/procedures/substrate/references) so the rule does
-        # not drift across files. The on-disk file is a mirror/debug artifact.
-        # As with substrate, the packaged source carries developer-facing YAML
-        # frontmatter; the mirror keeps it but the prompt section gets body-only.
-        principle = ""
-        principle_file = system_dir / "principle.md"
-        try:
-            from importlib.resources import files
-            packaged = files("lingtai.prompts").joinpath("principle/principle.md").read_text(encoding="utf-8")
-            principle_file.write_text(packaged, encoding="utf-8")
-            principle = _strip_frontmatter(packaged)
-        except (FileNotFoundError, ModuleNotFoundError, OSError):
-            if principle_file.is_file():
-                principle = _strip_frontmatter(principle_file.read_text(encoding="utf-8"))
-        if principle:
-            self._prompt_manager.write_section("principle", principle, protected=True)
-        else:
-            self._prompt_manager.delete_section("principle")
-
-        # --- Procedures ---
-        # Kernel-owned resident procedures. Legacy init.json procedures values
-        # remain compatibility-known, are reported by the shared reader, and
-        # are ignored here; the packaged default wins on every boot/refresh.
-        # system/procedures.md is only a packaged
-        # mirror/debug artifact, and is read as fallback if the package
-        # resource is unavailable.
-        # Packaged source carries developer-facing YAML frontmatter; the mirror
-        # keeps it but the prompt section gets body-only.
-        procedures = ""
-        procedures_file = system_dir / "procedures.md"
-        try:
-            from importlib.resources import files
-            packaged = files("lingtai.prompts").joinpath("procedures/procedures.md").read_text(encoding="utf-8")
-            procedures_file.write_text(packaged, encoding="utf-8")
-            procedures = _strip_frontmatter(packaged)
-        except (FileNotFoundError, ModuleNotFoundError, OSError):
-            if procedures_file.is_file():
-                procedures = _strip_frontmatter(procedures_file.read_text(encoding="utf-8"))
-            else:
-                procedures = ""
-        if procedures:
-            self._prompt_manager.write_section("procedures", procedures, protected=True)
-        else:
-            self._prompt_manager.delete_section("procedures")
 
         # --- Runtime guidance mirror ---
         # `_meta.agent_meta.guidance` is latest-only tool-result metadata, but the TUI
