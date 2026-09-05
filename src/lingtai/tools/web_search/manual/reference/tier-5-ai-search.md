@@ -1,78 +1,36 @@
 ---
 related_files:
+  - src/lingtai/tools/web_search/manual/reference/search-strategies.md
   - src/lingtai/tools/web_search/manual/SKILL.md
 maintenance: |
   Keep this bundled web-search reference synchronized with its parent manual and implementation when behavior or routing changes.
 ---
 # Tier 5 — AI-Native Search (Tavily / Exa)
 
+> External legacy recipe, not a built-in `web` engine or installed-capability
+> promise. Start with public `web(search/browse)`; select a separate fallback
+> explicitly through [web-manual](../SKILL.md) only when needed. Check the
+> selected vendor's current API, dependencies, account access and quotas before
+> use. These examples grant no install, credential/config change, paid use or
+> access-control bypass authority. No live vendor validation is claimed here.
+
 > Part of the [web-manual](../SKILL.md) skill.
 > See also: [search-strategies.md](./search-strategies.md) for comprehensive search strategy guidance.
 
-**When it applies:** You need to *discover* content, not extract a known URL. AI-native search returns clean content with the results.
-**Tools:** `requests` (Tavily/Exa APIs).
-**Speed:** ~3-5s.
-**Cost:** Tavily 1000 req/month free, Exa 1000 req/month free.
+**When it applies:** discover content rather than extract a known URL.
+For the one maintained example set, read
+[Search Strategies — Engine Reference](search-strategies.md#engine-reference):
 
-### Tavily — Search + Extract + Answer in One Call
+| Need | Recipe / route |
+|---|---|
+| Search + optional AI answer + raw page content | `search_tavily`; `include_answer` and `include_raw_content` |
+| Semantic, keyword or automatic matching; domain filters | `search_exa`; `contents.text` |
+| No-key local-library example, including news/images/videos | `search_ddg` and the installed DDGS library's help |
+| Google-style search | Serper example; vendor docs for Google Custom Search |
+| Academic discovery | [Academic pipeline](academic-pipeline.md): OpenAlex / Semantic Scholar, DBLP for CS |
+| News | [News and RSS](news-and-rss.md): RSS or the library's news search |
 
-```python
-import requests
-
-def tavily_search(query, api_key, max_results=5, include_answer=True):
-    """AI-native search: returns search results + AI-generated answer + page content."""
-    r = requests.post("https://api.tavily.com/search", json={
-        "api_key": api_key,
-        "query": query,
-        "search_depth": "advanced",  # "basic" or "advanced"
-        "include_answer": include_answer,
-        "include_raw_content": True,  # Full page content
-        "max_results": max_results,
-    })
-    data = r.json()
-    return {
-        "answer": data.get("answer"),  # AI-generated answer
-        "results": data.get("results", []),  # Each: title, url, content, raw_content, score
-    }
-```
-
-### Exa — Neural/Semantic Search
-
-```python
-def exa_search(query, api_key, num_results=5):
-    """Neural search — finds content by meaning, not keywords."""
-    r = requests.post("https://api.exa.ai/search",
-        headers={"x-api-key": api_key},
-        json={
-            "query": query,
-            "type": "auto",  # "neural", "keyword", or "auto"
-            "numResults": num_results,
-            "contents": {"text": {"maxCharacters": 3000}},  # Extract full content
-        })
-    return r.json()
-```
-
-### DuckDuckGo — Free, No-Key Search (Python library)
-
-```python
-# pip install duckduckgo-search (already available)
-from duckduckgo_search import DDGS
-
-with DDGS() as ddgs:
-    results = list(ddgs.text("machine learning frameworks 2025", max_results=10))
-    # Also: ddgs.news(), ddgs.images(), ddgs.videos()
-    for r in results:
-        print(r["title"], r["href"], r["body"])
-```
-
-**Search strategy decision tree:**
-```
-Need search → Free & no setup? → DuckDuckGo (ddgs)
-           → AI agent workflow? → Tavily (search + answer + content)
-           → Semantic/meaning search? → Exa
-           → Google quality? → Serper or Google Custom Search
-           → Academic? → OpenAlex > Semantic Scholar > DBLP (CS)
-           → News? → Google News RSS (free) or ddgs.news()
-```
-
-**Use when:** you need to search the web and get content, not just links. Tavily and Exa combine search + extraction in a single call.
+The strategy page owns selection order, query reformulation, extraction,
+pagination and failure handling. Its Exa example returns `results`; retain the
+raw response JSON too if you need provider metadata. Vendor availability,
+latency, price and free tiers are not LingTai constants.

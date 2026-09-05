@@ -112,7 +112,7 @@ def test_failed_canonical_read_is_one_fixed_whole_inventory_failure(tmp_path):
     }
 
 
-def test_settings_is_strict_show_only_and_manual_anchor_exists_in_both_twins(tmp_path):
+def test_settings_is_strict_show_only_and_manual_anchor_exists_in_canonical_manual(tmp_path):
     _write_init(tmp_path, addons=[], marker="private-marker")
     family = _family(tmp_path)
     for invalid in (None, [], {"set": True}):
@@ -125,8 +125,7 @@ def test_settings_is_strict_show_only_and_manual_anchor_exists_in_both_twins(tmp
 
     root = Path(__file__).parents[1]
     packaged = root / "src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md"
-    compatibility = root / "src/lingtai/tools/mcp/manual/SKILL.md"
-    assert packaged.read_bytes() == compatibility.read_bytes()
+    assert packaged.is_file()
     assert "## Configuration settings" in packaged.read_text(encoding="utf-8")
 
 

@@ -10,6 +10,7 @@ description: >
 version: 1.0.0
 last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
+- src/lingtai/tools/skills/manual/reference/cleanup-footprint-contract.md
 - src/lingtai/tools/knowledge/__init__.py
 - src/lingtai/tools/knowledge/ANATOMY.md
 - src/lingtai/tools/knowledge/CONTRACT.md
@@ -190,22 +191,18 @@ renaming, or archiving stale entries after review; never delete knowledge just t
 save space unless the user explicitly agrees after a dry-run report and the content is backed up or no
 longer useful.
 
-Footprint check (read-only, records the audit):
+Footprint check: load the [shared inspection recipe](../../skills/manual/reference/cleanup-footprint-contract.md#shared-footprint-check-recipe)
+through `skills-manual` → `reference/cleanup-footprint-contract.md`. Combine
+its definitions with this tool-specific selection in one task-owned script;
+the selection is not a standalone executable. Inspection writes nothing.
+Appending `logs/cleanup.jsonl` is the separate, explicitly selected audit step
+in that recipe; retain this manual's cleanup/approval rules below.
 
-```bash
-python3 - <<'PY'
-import json, time
-from pathlib import Path
-agent = Path.cwd(); root = agent / "knowledge"
-entries = [p for p in root.iterdir() if p.is_dir()] if root.is_dir() else []
-def size(p): return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-rows = [(p, size(p)) for p in entries]
-total = sum(s for _, s in rows)
-print(f"knowledge entries: {len(rows)}; bytes: {total}")
-for p, s in sorted(rows, key=lambda r: r[1], reverse=True)[:30]: print(f"{s:>12}  {p.name}")
-log = agent / "logs" / "cleanup.jsonl"; log.parent.mkdir(parents=True, exist_ok=True)
-log.open("a", encoding="utf-8").write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tool": "knowledge", "dry_run": True, "candidates": len(rows), "bytes": total, "human_approved": False, "summary": "knowledge footprint audit"}) + "\n")
-PY
+```python
+agent = Path.cwd()  # the relevant agent directory, not a repository root
+root = agent / "knowledge"
+items = [p for p in root.iterdir() if p.is_dir()] if root.is_dir() else []
+rows, total = footprint_check(items, tool="knowledge", top_n=30)
 ```
 
 Recommended cadence: before molt if knowledge sprawl is confusing, after major

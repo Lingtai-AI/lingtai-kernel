@@ -17,8 +17,8 @@ description: >
   Goose, OpenHands, and Crush are shell-only harnesses with no LingTai backend
   id. This manual owns only the shell-side supervision discipline (async +
   poll, reminders, scheduling, debugging, cleanup).
-version: 1.12.0
-last_changed_at: 2026-08-29T00:00:00Z
+version: 1.12.1
+last_changed_at: 2026-09-05T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/__init__.py
 - src/lingtai/tools/bash/_tool_family.py
@@ -73,21 +73,21 @@ files, not standalone top-level skills.
 Coding-CLI reference pages have moved to `daemon-manual` (ownership change,
 not a prohibition — `shell` remains a supported way to run them).
 
-These coding CLIs (claude/codex/opencode/cursor/mimocode/qwen/kimi/oh-my-pi/deepseek) are supported — as **daemon
-backends** (see `daemon-manual`) and via `shell`. The per-backend operational
-details (flags, env, caveats) are owned by `daemon-manual`'s corresponding
-submanuals — `reference/cli-backends/SKILL.md` and its per-backend pages under
-`reference/cli-backends/reference/backends/` — which **supersede the old bash
-reference guides**. This manual keeps only the shell-side discipline that
-applies no matter which CLI you run: the async + poll supervision rules in
-`## Core rules to keep resident` and the CLI-vs-daemon choice in
-`## Coding-CLI harness baseline` below.
+The nine coding CLIs with daemon backends (named in the frontmatter above) are
+supported both as **daemon backends** (see `daemon-manual`) and via `shell`.
+The per-backend operational details (flags, env, caveats) are owned by
+`daemon-manual`'s corresponding submanuals — `reference/cli-backends/SKILL.md`
+and its per-backend pages under `reference/cli-backends/reference/backends/`
+— which **supersede the old bash reference guides**. This manual keeps only
+the shell-side discipline that applies no matter which CLI you run: the async
++ poll supervision rules in `## Core rules to keep resident` and the
+CLI-vs-daemon choice in `## Coding-CLI harness baseline` below.
 
 ## Router table
 
 | Need / keywords | Read |
 |---|---|
-| Running a long-running agent/coding CLI as a sub-process: `claude -p`, `codex exec`, `opencode run`, Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider, Goose, OpenHands, Crush; "run an agent in the background"; avoid blocking the turn | Supported via `shell` (run with `input.async=true` and poll — keep `## Core rules to keep resident` and `## Coding-CLI harness baseline` resident). The nine with daemon backends (claude/codex/opencode/cursor/mimocode/qwen/kimi/oh-my-pi/deepseek) can also be dispatched as daemon backends; per-CLI operational detail (flags, env, caveats): `daemon-manual` → `reference/cli-backends/SKILL.md`. Gemini CLI, Aider, Goose, OpenHands, Crush are shell-only harnesses — no LingTai backend id |
+| Running a long-running agent/coding CLI as a sub-process (see frontmatter for the named CLIs); "run an agent in the background"; avoid blocking the turn | Supported via `shell` (run with `input.async=true` and poll — keep `## Core rules to keep resident` and `## Coding-CLI harness baseline` resident). The nine with daemon backends can also be dispatched as daemon backends; per-CLI operational detail (flags, env, caveats): `daemon-manual` → `reference/cli-backends/SKILL.md`. Gemini CLI, Aider, Goose, OpenHands, Crush are shell-only harnesses — no LingTai backend id |
 | Human asks for time-driven recurring work: "every hour", "daily", "weekdays at 9", "write/check/send on a schedule"; choose cron vs event watcher; create launchd/systemd/crontab wiring; understand wake-by-mailbox-drop; write scheduler prompt/script hygiene | `reference/scheduled-work/SKILL.md` |
 | Need a one-shot reminder or wakeup nudge while work is pending; `.notification/cron.json`; atomic reminder writer; rest checklist | `reference/notification-reminders/SKILL.md` |
 | Scheduled job is silent, fires twice, exits immediately, gets killed by launchd, fails to deliver mail, or must be retired/cleaned up | `reference/debugging-cleanup/SKILL.md` |
@@ -97,13 +97,11 @@ applies no matter which CLI you run: the async + poll supervision rules in
 1. **Short deterministic host work** (finishes in seconds: `ls`, `git status`,
    `grep`, a quick build)? Use `shell` synchronously; this manual is not needed
    unless the command is risky, scheduled, or failing mysteriously.
-2. **Long-running agent/coding CLI** (`claude -p`, `codex exec`, `opencode run`,
-   Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider,
-   Goose, OpenHands, Crush, or any sub-agent that may think/run tools for minutes)?
-   **Never run it synchronously.** Use `input.async=true` and poll — see the
-   resident rule below. Running these CLIs via `shell` is supported; the nine
-   with daemon backends (claude/codex/opencode/cursor/mimocode/qwen/kimi/
-   oh-my-pi/deepseek) can also be dispatched as daemon backends — Gemini CLI, Aider,
+2. **Long-running agent/coding CLI** (any named in the frontmatter, or any
+   sub-agent that may think/run tools for minutes)? **Never run it
+   synchronously.** Use `input.async=true` and poll — see the resident rule
+   below. Running these CLIs via `shell` is supported; the nine with daemon
+   backends can also be dispatched as daemon backends — Gemini CLI, Aider,
    Goose, OpenHands, and Crush have no LingTai backend id. Per-CLI detail
    (flags, env, ask/resume status): `daemon-manual` →
    `reference/cli-backends/SKILL.md`.

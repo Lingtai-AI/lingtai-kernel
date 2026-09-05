@@ -6,7 +6,7 @@ description: >-
   the urgent and idle cadences, delayed provider reconstruction and the
   0.85/1.0 rebuild boundaries, recovery by `tool_call_id`, and summarize
   versus molt.
-last_changed_at: "2026-08-07T00:00:00Z"
+last_changed_at: "2026-09-04T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/tools/system/summarize.py
@@ -51,8 +51,8 @@ both with molt.
 
 Any LingTai Tool Protocol v2-migrated family — `web`, `mcp`, `file` (covering
 read/grep/glob-style bulky reads), `vision`, `avatar`, `soul`, `shell`,
-`notification`, `system`, `daemon`, `email`, `task_card`, `context`, `psyche`
-— accepts an optional boolean root `summarize` (legacy spelling `summary` is
+`notification`, `system`, `daemon`, `email`, `task_card`, `context`, `psyche`,
+`plugin` — accepts an optional boolean root `summarize` (legacy spelling `summary` is
 also honored on any call, for backward compatibility). Default `false`. When
 `true`:
 
@@ -106,6 +106,13 @@ to be trusted, do not rely on the lossy summary — inspect the preserved raw
 original via the retrieval hint / `raw_locator` (by `tool_call_id`, see §4)
 before acting on it. This critique is ordinary summary prose, not a separate
 field — read it, don't parse it.
+
+**Track the a-priori savings.** Each `summary=true` result also carries
+`summary_kind` and generated-summary `summary_effect` fields (`prev_chars`,
+`after_chars`, `saved_chars`). When the savings are weak or negative, or the
+closing critique says the retention spec was vague, sharpen future
+`reasoning`/tool choice and deposit the lesson into pad, knowledge, skills, or
+lingtai as appropriate.
 
 ## 1 · The principle: progressive disclosure
 

@@ -9,10 +9,11 @@ description: >
   the 50,000-char send cap. INTERNAL only — real internet email is `mcp-manual`;
   recurring schedules are `shell-manual`. Calls use the LTP v2
   action/input/reasoning envelope.
-version: 1.2.1
+version: 1.2.2
 tags: [capabilities, email, communication]
-last_changed_at: "2026-08-29T00:00:00Z"
+last_changed_at: "2026-09-04T00:00:00Z"
 related_files:
+- src/lingtai/tools/skills/manual/reference/cleanup-footprint-contract.md
 - src/lingtai/tools/email/__init__.py
 - src/lingtai/tools/email/_family_schema.py
 - src/lingtai/tools/email/manager.py
@@ -267,7 +268,7 @@ When you mention the sender in a reply body or in a summary you give the human, 
 
 ### `read` vs `dismiss` — when to use which
 
-Unread email bodies are injected in full into `_meta.agent_meta.notifications.persistent.email` (up to the 50,000-character send-layer cap below). You do **not** need `read` merely to see ordinary message text. When the whole persistent notification envelope exceeds its model-visible cap (default 10,000 characters; live-configurable via the `LINGTAI_NOTIFICATION_MAX_CHARS` environment variable, clamped to at most 10,000), the full block is spilled to `<workdir>/logs/notification-overflow-<ts>.json` and the block carries an `overflow` marker with the path; read that file (or the producer tool) for the full bodies. After you have handled the visible content, prefer `dismiss`: same read-state effect, no body returned, and the unread notification clears once count reaches zero.
+Unread email bodies are injected in full into `_meta.agent_meta.notifications.persistent.email` (up to the 50,000-character send-layer cap below). You do **not** need `read` merely to see ordinary message text. When the whole persistent notification envelope exceeds its model-visible cap (see `notification-manual` → "Block size cap" for the exact default/ceiling/floor and `LINGTAI_NOTIFICATION_MAX_CHARS` precedence), the full block is spilled to `<workdir>/logs/notification-overflow-<ts>.json` and the block carries an `overflow` marker with the path; read that file (or the producer tool) for the full bodies. After you have handled the visible content, prefer `dismiss`: same read-state effect, no body returned, and the unread notification clears once count reaches zero.
 
 Use `read` when you need to refresh the source-of-truth mailbox record, inspect attachment/metadata details, or deliberately fetch the producer state before a reply/audit. Use `reply`/`reply_all` when answering. Failing to `dismiss`, `read`, `archive`, or `delete` a handled mail keeps the notification reminding you on every heartbeat.
 
@@ -404,24 +405,18 @@ blindly delete it. Prefer `email(archive)` or `email(delete)` verbs over `rm`,
 and never delete mail that is the only copy of a decision, handoff, or
 attachment the human may expect you to retain.
 
-Footprint check (read-only, records the audit):
+Footprint check: load the [shared inspection recipe](../../skills/manual/reference/cleanup-footprint-contract.md#shared-footprint-check-recipe)
+through `skills-manual` → `reference/cleanup-footprint-contract.md`. Combine
+its definitions with this tool-specific selection in one task-owned script;
+the selection is not a standalone executable. Inspection writes nothing.
+Appending `logs/cleanup.jsonl` is the separate, explicitly selected audit step
+in that recipe; retain this manual's cleanup/approval rules below.
 
-```bash
-python3 - <<'PY'
-import json, time
-from pathlib import Path
-agent = Path.cwd()
-roots = [p for p in [agent / "mailbox", agent / "mail", agent / "email"] if p.exists()]
-def size(p):
-    return p.stat().st_size if p.is_file() else sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-rows = [(p, size(p)) for r in roots for p in ([r] if r.is_file() else r.iterdir())]
-total = sum(s for _, s in rows)
-print(f"internal email roots: {[str(r) for r in roots]}")
-print(f"top-level entries: {len(rows)}; bytes: {total}")
-for p, s in sorted(rows, key=lambda r: r[1], reverse=True)[:20]: print(f"{s:>12}  {p}")
-log = agent / "logs" / "cleanup.jsonl"; log.parent.mkdir(parents=True, exist_ok=True)
-log.open("a", encoding="utf-8").write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tool": "email", "dry_run": True, "candidates": len(rows), "bytes": total, "human_approved": False, "summary": "internal email footprint audit"}) + "\n")
-PY
+```python
+agent = Path.cwd()  # the relevant agent directory, not a repository root
+roots = [p for p in (agent / "mailbox", agent / "mail", agent / "email") if p.exists()]
+items = [p for root in roots for p in ([root] if root.is_file() else root.iterdir())]
+rows, total = footprint_check(items, tool="email", top_n=20)
 ```
 
 Recommended cadence: when large attachments are exchanged, before exporting or

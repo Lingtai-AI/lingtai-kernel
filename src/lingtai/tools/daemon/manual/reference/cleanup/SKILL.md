@@ -4,9 +4,10 @@ description: >
   Nested daemon-manual reference for scope boundaries and daemon footprint
   cleanup: what the manual does not cover, reclaim persistence, and safe cleanup
   of old daemon artifacts.
-version: 1.0.0
-last_changed_at: "2026-06-01T01:56:31-07:00"
+version: 1.0.1
+last_changed_at: "2026-09-04T00:00:00Z"
 related_files:
+- src/lingtai/tools/skills/manual/reference/cleanup-footprint-contract.md
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
 maintenance: |
@@ -22,7 +23,9 @@ artifact cleanup, and scope boundaries.
 
 - Provider routing / LLM presets — deferred to a separate spec.
 - Cross-process recovery — if your kernel restarted mid-daemon, the folder may show `state=running` indefinitely. Compare `now()` vs `.heartbeat` mtime to detect orphans.
-- Folder cleanup — there is none. Molts wipe the working dir. For non-molting agents, you may eventually want to `rm -rf daemons/em-*-2026-04-*` manually.
+- Automatic folder cleanup — there is none, and molt does not wipe the working
+  directory or any `daemons/em-*` run folder; see "Cleanup / Footprint" below
+  for the actual, consent-gated deletion procedure.
 
 ## Cleanup / Footprint
 
@@ -31,25 +34,17 @@ Daemon runs are intentionally persistent forensic records. Each emanation leaves
 transcript/history, result files, and token ledgers. Do not delete an active
 run, and do not delete a run you still need for a report, review, or cost audit.
 
-Footprint check (read-only, records the audit):
+Footprint check: load the [shared inspection recipe](../../../../skills/manual/reference/cleanup-footprint-contract.md#shared-footprint-check-recipe)
+through `skills-manual` → `reference/cleanup-footprint-contract.md`. Combine
+its definitions with this tool-specific selection in one task-owned script;
+the selection is not a standalone executable. Inspection writes nothing.
+Appending `logs/cleanup.jsonl` is the separate, explicitly selected audit step
+in that recipe; retain this manual's cleanup/approval rules below.
 
-```bash
-python3 - <<'PY'
-import json, time
-from pathlib import Path
-agent = Path.cwd()
-daemons = agent / "daemons"
-items = [p for p in daemons.glob("em-*") if p.is_dir()] if daemons.is_dir() else []
-def size(p):
-    return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-rows = [(p, size(p)) for p in items]
-total = sum(s for _, s in rows)
-print(f"daemon runs: {len(rows)}; bytes: {total}")
-for p, s in sorted(rows, key=lambda r: r[1], reverse=True)[:20]:
-    print(f"{s:>12}  {p}")
-log = agent / "logs" / "cleanup.jsonl"; log.parent.mkdir(parents=True, exist_ok=True)
-log.open("a", encoding="utf-8").write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tool": "daemon", "dry_run": True, "candidates": len(rows), "bytes": total, "human_approved": False, "summary": "daemon footprint audit"}) + "\n")
-PY
+```python
+agent = Path.cwd()  # the relevant agent directory, not a repository root
+items = [p for p in (agent / "daemons").glob("em-*") if p.is_dir()]
+rows, total = footprint_check(items, tool="daemon", top_n=20)
 ```
 
 Recommended cadence: after daemon-heavy debugging sessions, before molt if a

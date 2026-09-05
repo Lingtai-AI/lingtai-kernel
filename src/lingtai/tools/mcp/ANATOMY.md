@@ -32,12 +32,7 @@ related_files:
   - src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md
   - src/lingtai/tools/mcp/skills/mcp-manual/reference/troubleshooting.md
   - src/lingtai/tools/mcp/skills/mcp-manual/scripts/find_readme.py
-  - src/lingtai/tools/mcp/manual/scripts/find_readme.py
   - src/lingtai/tools/ANATOMY.md
-  - src/lingtai/tools/mcp/manual/SKILL.md
-  - src/lingtai/tools/mcp/manual/reference/curated-addons.md
-  - src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md
-  - src/lingtai/tools/mcp/manual/reference/troubleshooting.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -138,7 +133,7 @@ existing strict-empty inputs, and existing result shapes including the
 tool-specific `mcp_manual` body key stay unchanged
 (`tests/test_tool_family_mcp_migration_parity.py`, `tests/test_mcp_capability.py`,
 `tests/test_mcp_settings.py`).
-- `mcp/plugin.json` + `mcp/skills/mcp-manual/` — the built-in Agent Plugins v1.0.0 documentation package. `Agent._install_intrinsic_manuals` validates this one-skill package through `services.plugin_registry.read_plugin` and mounts the skill as `intrinsic/capabilities/mcp/`; it does not register a plugin or an MCP server. The retained `mcp/manual/` tree is a source-layout compatibility copy, never the installed manual source.
+- `mcp/plugin.json` + `mcp/skills/mcp-manual/` — the built-in Agent Plugins v1.0.0 documentation package. `Agent._install_intrinsic_manuals` validates this one-skill package through `services.plugin_registry.read_plugin` and mounts the skill as `intrinsic/capabilities/mcp/`; it does not register a plugin or an MCP server. `mcp/skills/mcp-manual/` is the only manual source; there is no separate `mcp/manual/` compatibility copy.
 
 ## Public API
 

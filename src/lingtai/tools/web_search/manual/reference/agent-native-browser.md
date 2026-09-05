@@ -5,8 +5,8 @@ description: >
   CDP, dedicated lightweight profile, snapshot-first workflow, SPA form
   filling (fill_form + JS native setter for Angular), receipt uploads, and
   when to choose it over static browse.
-version: 1.0.0
-last_changed_at: "2026-08-05T08:40:00-07:00"
+version: 1.0.1
+last_changed_at: "2026-09-04T00:00:00Z"
 related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/tools/web_search/manual/reference/tier-3-playwright.md
@@ -26,9 +26,12 @@ cookies, or forms. When a task needs an actual browser session, use
 chrome-devtools-mcp (Google's official Chrome DevTools MCP) instead of
 browser automation from scratch.
 
-**Why agent-native:** chrome-devtools-mcp drives **real Chrome** over CDP with
-the user's real profile. Cookies and SSO sessions survive between turns, so a
-human can log in once (SSO/Duo) and the agent continues. It is the tested
+**Why agent-native:** chrome-devtools-mcp drives **real Chrome** over CDP
+against a dedicated lightweight profile (see §2 below — not the user's actual
+heavy default profile, which cold-starts too slowly for the MCP tool
+timeout). Cookies and SSO sessions still survive between turns within that
+dedicated profile, so a human can log in once there (SSO/Duo) and the agent
+continues. It is the tested
 first choice over playwright-mcp / browser-use / stagehand / steel for
 interactive work; playwright scripts remain the fallback for pure headless
 scraping (see [tier-3-playwright.md](./tier-3-playwright.md)).

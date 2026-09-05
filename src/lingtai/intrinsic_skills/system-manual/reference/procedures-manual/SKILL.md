@@ -6,9 +6,9 @@ description: >
   the daemon workflow methodology, depositing work, idle/lifecycle, skill
   routing, deliverables, artifact sharing, and issue reporting. Route via
   `system-manual` when it is unclear whether this is the right node.
-version: 1.4.0
+version: 1.4.1
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
-last_changed_at: "2026-09-05T05:26:00Z"
+last_changed_at: "2026-09-05T05:30:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -205,24 +205,16 @@ still cheap. Do not reconstruct molt mechanics in this reference.
 ## 7. Skill routing
 
 Resident `procedures` keeps a compact 7-row routing table pointed at broad
-categories; this is the full situation→manual map behind it. `system-manual`'s
-own router table owns routing into this manual's sibling references — do not
-maintain a third copy of that one.
+categories. `system-manual`'s own router table is the routing authority for
+substrate/procedures expansion, molt/pad tending, MCP/addon configuration,
+daemon/skills/knowledge/shell/avatar routing, SQLite/trace inspection, and
+kernel architecture — read it there rather than a third copy here. This table
+adds only the situations that router does not already cover:
 
 | Situation | Load |
 |---|---|
-| Agent runtime, lifecycle, communication, memory layers, resident substrate expansion | `system-manual` → `reference/substrate-manual/SKILL.md` |
-| Resident procedures expansion, action discipline, deliverables, issue/reporting workflow | `system-manual` → `reference/procedures-manual/SKILL.md` |
-| Molt, pad tending, session journaling, post-wipe recovery | `context-manual` |
-| Spawning/managing avatars | `avatar-manual` |
 | Internal email protocol | `email-manual` |
 | Real email/chat/MCP configuration | `mcp-manual` plus the addon's README/resources |
-| Daemon inspection/debugging | `daemon-manual` |
-| Skill authoring/publishing | `skills-manual` |
-| Knowledge entries | `knowledge-manual` |
-| Shell commands, cron, host scheduling | `shell-manual` |
-| SQLite / log.sqlite / LingTai runtime logs / `lingtai-agent log doctor\|query\|rebuild` / trace inspection | `system-manual` → `reference/sqlite-log-query/SKILL.md` |
-| Kernel architecture / breaking changes | `lingtai-kernel-anatomy` |
 | TUI / portal code navigation | `lingtai-tui-anatomy` |
 | Web fetching/search/scraping | `web-manual` |
 | Image understanding | `vision` |

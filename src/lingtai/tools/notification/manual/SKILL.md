@@ -11,6 +11,7 @@ version: 0.13.0
 tags: [lingtai, notifications, channels, dismiss, delay, alarm, settings, manual, force, stale, nudge, hooks, whitelist]
 last_changed_at: "2026-08-29T00:00:00Z"
 related_files:
+- src/lingtai/prompts/meta_guidance/catalog/notification_handling.md
 - src/lingtai/tools/notification/ANATOMY.md
 - src/lingtai/tools/notification/CONTRACT.md
 - src/lingtai/tools/notification/__init__.py

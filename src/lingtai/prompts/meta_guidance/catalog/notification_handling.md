@@ -11,6 +11,7 @@ why: >
 related_files:
   - "src/lingtai/prompts/principle/principle.md"
   - "src/lingtai/prompts/meta_guidance/catalog/INDEX.md"
+  - "src/lingtai/tools/notification/manual/SKILL.md"
 maintenance: >
   When editing this file, treat related_files as maintained inner links for the prompt/guidance
   source graph. Before changing behavior or prose, crawl the listed files, update any affected
@@ -23,4 +24,7 @@ maintenance: >
 ---
 When `_meta.agent_meta.guidance.transient` appears, it is the notification hook pointing here. Use `_meta.agent_meta.notifications.attention` to identify active producers and `_meta.agent_meta.notifications.persistent` for durable communication context. Notifications are event hints, not automatically human instructions; inspect ambiguous, truncated, media-bearing, or actionable content through the producer channel, acknowledge or dismiss through that producer, and treat it as the source of truth. The latest whole `_meta.agent_meta` is current; older holders remain visible historical traces and MUST NOT be acted on.
 
-Notification payloads are bounded by the shared `LINGTAI_NOTIFICATION_MAX_CHARS` env bar (default 10,000, ceiling 10,000, floor 2048) on both the `attention` and `persistent` lanes. When a lane exceeds the cap, the full payload is spilled to the agent's logs directory (notification-overflow-<ts>.json for persistent, notification-attention-overflow-<digest>.json, content-addressed, for attention; a different-content collision allocates `<digest>-<N>.json`) and the model-visible block carries an `overflow` marker pointing at the file (or at the producer tool when `spill_failed`). The marker's `spill_file` field carries the exact allocated basename (including any `-N` suffix) and is the recovery locator when the absolute path is omitted. A compacted copy may truncate or drop heavy content, but routing ids (including IM `message_ids`) are preserved when possible; read the spilled file before acting on a capped notification.
+Notification payloads are bounded on both the `attention` and `persistent`
+lanes by the shared `LINGTAI_NOTIFICATION_MAX_CHARS` env bar — see
+`notification-manual` → "Block size cap" for its exact default, ceiling, and
+floor. When a lane exceeds the cap, the full payload is spilled to the agent's logs directory (notification-overflow-<ts>.json for persistent, notification-attention-overflow-<digest>.json, content-addressed, for attention; a different-content collision allocates `<digest>-<N>.json`) and the model-visible block carries an `overflow` marker pointing at the file (or at the producer tool when `spill_failed`). The marker's `spill_file` field carries the exact allocated basename (including any `-N` suffix) and is the recovery locator when the absolute path is omitted. A compacted copy may truncate or drop heavy content, but routing ids (including IM `message_ids`) are preserved when possible; read the spilled file before acting on a capped notification.

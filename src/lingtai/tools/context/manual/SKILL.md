@@ -2,8 +2,8 @@
 name: context-manual
 description: |
   Router and operational guide for the context tool: molt, summarize/rebuild, session journaling, and post-wipe recovery. Read it when molting, compacting or rebuilding provider context, tending the four durable stores, or waking from a system-performed wipe. Routes consequential handoffs to assets/molt-template.md and the summarize/rebuild procedure to reference/summarize-manual.
-version: 2.1.1
-last_changed_at: "2026-08-29T00:00:00Z"
+version: 2.1.2
+last_changed_at: "2026-09-04T00:00:00Z"
 related_files:
 - src/lingtai/tools/context/__init__.py
 - src/lingtai/tools/context/_molt.py
@@ -43,7 +43,7 @@ The fact that is only here: **generic durable mutations do not hot-load.** Write
 
 Molt is yours to perform. The covenant teaches the philosophy (§V); this is the recipe.
 
-Save anything you need to pad, lingtai, knowledge, and skills beforehand, then molt — there is no need to wait for the context window to fill up, and molting early saves tokens.
+Save anything you need to pad, lingtai, knowledge, and skills beforehand, then molt. Molt is not routine housekeeping: do it once context pressure (≥85%), an explicit human request, or conversation confusion actually makes the fresh briefing worth its cost (see `reference/summarize-manual/SKILL.md`) — not merely because the window still has room. Once a molt is actually warranted, tending the stores and molting promptly still saves tokens over a rushed, late one.
 
 **Tend the stores first, every time.** The four stores are the real persistence and the summary is only the briefing on top of them: molt without tending them and the next you wakes with the briefing alone — no character evolution, no pad state, no new knowledge, no new skills.
 

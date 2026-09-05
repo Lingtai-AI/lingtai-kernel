@@ -41,6 +41,7 @@ description: >
 version: 3.5.0
 last_changed_at: 2026-08-29T00:00:00Z
 related_files:
+- src/lingtai/tools/skills/manual/reference/cleanup-footprint-contract.md
 - src/lingtai/tools/mcp/__init__.py
 - src/lingtai/tools/mcp/settings.py
 - src/lingtai/tools/mcp/ANATOMY.md
@@ -258,22 +259,17 @@ stores; their README/manual is responsible for declaring addon-specific cleanup
 such as downloaded voice/audio attachments. Do not delete credentials or active
 registry entries as a cleanup shortcut.
 
-Footprint check (read-only, records the audit):
+Footprint check: load the [shared inspection recipe](../../../skills/manual/reference/cleanup-footprint-contract.md#shared-footprint-check-recipe)
+through `skills-manual` → `reference/cleanup-footprint-contract.md`. Combine
+its definitions with this tool-specific selection in one task-owned script;
+the selection is not a standalone executable. Inspection writes nothing.
+Appending `logs/cleanup.jsonl` is the separate, explicitly selected audit step
+in that recipe; retain this manual's cleanup/approval rules below.
 
-```bash
-python3 - <<'PY'
-import json, time
-from pathlib import Path
-agent = Path.cwd()
-roots = [p for p in [agent / "mcp_registry.jsonl", agent / "mcp", agent / ".mcp_inbox"] if p.exists()]
-def size(p): return p.stat().st_size if p.is_file() else sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-rows = [(p, size(p)) for p in roots]
-total = sum(s for _, s in rows)
-print(f"mcp roots: {len(rows)}; bytes: {total}")
-for p, s in rows: print(f"{s:>12}  {p}")
-log = agent / "logs" / "cleanup.jsonl"; log.parent.mkdir(parents=True, exist_ok=True)
-log.open("a", encoding="utf-8").write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tool": "mcp", "dry_run": True, "candidates": len(rows), "bytes": total, "human_approved": False, "summary": "mcp footprint audit"}) + "\n")
-PY
+```python
+agent = Path.cwd()  # the relevant agent directory, not a repository root
+items = [p for p in (agent / "mcp_registry.jsonl", agent / "mcp", agent / ".mcp_inbox") if p.exists()]
+rows, total = footprint_check(items, tool="mcp", top_n=None)
 ```
 
 Recommended cadence: after adding/removing MCP servers, when `.mcp_inbox` grows,

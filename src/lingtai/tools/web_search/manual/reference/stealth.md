@@ -1,10 +1,18 @@
 ---
 related_files:
+  - src/lingtai/tools/web_search/manual/reference/tier-3-playwright.md
   - src/lingtai/tools/web_search/manual/SKILL.md
 maintenance: |
   Keep this bundled web-search reference synchronized with its parent manual and implementation when behavior or routing changes.
 ---
 # Stealth Browsing & Anti-Detection
+
+> External legacy recipe, not a built-in `web` engine or installed-capability
+> promise. Start with public `web(search/browse)`; select a separate fallback
+> explicitly through [web-manual](../SKILL.md) only when needed. Check the
+> selected vendor's current API, dependencies, account access and quotas before
+> use. These examples grant no install, credential/config change, paid use or
+> access-control bypass authority. No live vendor validation is claimed here.
 
 > Part of the [web-manual](../SKILL.md) skill, and the deep-dive for Tier 3's
 > stealth story — see [tier-3-playwright.md](./tier-3-playwright.md) for the
@@ -30,48 +38,21 @@ Understanding detection methods helps you choose the right countermeasure.
 ## playwright-stealth: Primary Defense
 
 **When to use:** Default for Tier 3 (JS-rendered pages). Patches most detection vectors.
-**Installed:** ✅ in LingTai environment (`playwright-stealth` 2.0.3)
+**Dependency:** inspect the actual selected environment; this manual does not install it.
 
-> **NOTE:** `playwright-stealth` v2.0.3+ removed `stealth_sync()`. Use `Stealth().use_sync(page)` instead. All code blocks below use a compatibility shim (`_apply_stealth`) that works with both v1 and v2.
+> **API compatibility:** the linked baseline selects the installed package API.
+> Verify it against installed help rather than assuming a pinned version.
 
 ### Basic Usage
 
-```python
-from playwright.sync_api import sync_playwright
-
-# playwright-stealth v2.0.3+ compatibility
-try:
-    from playwright_stealth import Stealth
-    _apply_stealth = lambda page: Stealth().use_sync(page)
-except ImportError:
-    from playwright_stealth import stealth_sync
-    _apply_stealth = lambda page: stealth_sync(page)
-
-def stealth_fetch(url, wait_until="domcontentloaded", timeout=30000, wait_seconds=3):
-    """Fetch a page with full stealth patches applied.
-
-    _apply_stealth patches: navigator.webdriver, chrome object, permissions,
-    plugins, languages, WebGL vendor, and more.
-    """
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        _apply_stealth(page)  # Apply all stealth patches
-
-        page.goto(url, wait_until=wait_until, timeout=timeout)
-        page.wait_for_timeout(wait_seconds * 1000)
-
-        content = page.inner_text("body")
-        html = page.content()
-        title = page.title()
-        final_url = page.url
-
-        browser.close()
-        return {
-            "url": final_url, "title": title,
-            "body": content, "html": html,
-        }
-```
+Use [Tier 3's baseline](tier-3-playwright.md) as the single owner of the
+Playwright import, installed-API compatibility shim and browser lifecycle.
+For a full-body fetch, keep `content` and `html` before closing the browser
+instead of returning only its body preview/HTML length. A caller may expose
+`wait_until`, navigation timeout and post-load wait as parameters; the
+Nature/Springer restriction below still applies. `_apply_stealth` in the
+following enhancement examples refers to that baseline's shim, not a new
+installed LingTai function.
 
 ### ⚠️ Nature/Springer Gotcha
 
@@ -328,8 +309,7 @@ async def nodriver_fetch(url):
 ## Complete Stealth Workflow
 
 Escalate through the cheapest methods first, same fallback shape as the auto-tier
-extractor: plain `requests` → `trafilatura` → Playwright stealth (`stealth_fetch`,
-defined above) → Jina Reader. Each step is wrapped in `try/except` and only
+extractor: plain `requests` → `trafilatura` → Playwright stealth (the Tier-3 baseline linked above) → Jina Reader. Each step is wrapped in `try/except` and only
 advances on failure or a too-short result (see
 [tier-4-jina-firecrawl.md](./tier-4-jina-firecrawl.md) for the Jina call and
 [tier-1-5-trafilatura.md](./tier-1-5-trafilatura.md) for the trafilatura call).
@@ -340,7 +320,7 @@ Call `rate_limiter.wait(domain)` before the first attempt.
 ## Dependencies
 
 ```bash
-# Core (already installed in LingTai)
+# External dependencies — install only with appropriate authorization
 pip install playwright playwright-stealth
 playwright install chromium
 

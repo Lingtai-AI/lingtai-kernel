@@ -3,7 +3,7 @@ name: task_card-manual
 description: >
   Manual for the intrinsic `task_card` capability: the declarative Task Card
   artifact, its renderer watch lifecycle, and the one-card-per-agent contract.
-last_changed_at: 2026-08-29T00:00:00Z
+last_changed_at: 2026-09-04T00:00:00Z
 related_files:
 - src/lingtai/tools/task_card/__init__.py
 - src/lingtai/tools/task_card/ANATOMY.md
@@ -155,7 +155,7 @@ exhaustion. The port also exposes only `submit_reminder(turns)` and
 either a typed event or a native operation, so Task Card code cannot publish a
 foreign source or another channel through this capability.
 
-## Resident meta projection and the 2000-char cap
+## Resident meta projection and the body-length cap
 
 The card body is projected into the agent's own meta block as
 `_meta.agent_meta.taskcard`, so the human (via Telegram/Feishu/etc) and the
@@ -165,13 +165,14 @@ first appearance attach a fresh payload. When no card is present the meta block
 carries a generic hint (`no taskcard present, consider maintaining one, see
 task_card manual`).
 
-A rendered body longer than **2000 chars is refused**, never truncated. This
-keeps the card a bounded, high-attention goal. Treat the card itself as a
-progressive-disclosure summary: keep the top of the card to the current goal,
-status, and the single next step, and push complex progress detail into files
-(reports, logs, checklists) referenced from the card rather than into the card
-body. If a renderer tries to publish more than 2000 chars, `start`/`retry`
-refuse that update and keep the last valid body.
+A rendered body longer than the configured `max-body-chars` (see above) is
+**refused, never truncated**. This keeps the card a bounded, high-attention
+goal. Treat the card itself as a progressive-disclosure summary: keep the top
+of the card to the current goal, status, and the single next step, and push
+complex progress detail into files (reports, logs, checklists) referenced
+from the card rather than into the card body. If a renderer tries to publish
+an over-limit body, `start`/`retry` refuse that update and keep the last
+valid body.
 
 ## Absent / stale reminders
 
@@ -222,10 +223,9 @@ updater is actually stopped.
 ## Cadence and safety defaults
 
 `start` accepts optional `interval_s`, `timeout_s` (one renderer execution,
-not the watch's whole lifetime), and `max_refreshes`. Omitted values use this
-agent's configured defaults, persisted at `taskcard/taskcard.json`: `interval_s:
-5`, `timeout_s: 10`, `max_refreshes: 2000`, `reminder_turns: 10`, unless an
-operator has configured different values in that file.
+not the watch's whole lifetime), and `max_refreshes`; see the `interval-s` /
+`timeout-s` / `max-refreshes` / `reminder-turns` settings sections above for
+their exact sources and defaults.
 
 `timeout_s` and `max_refreshes` are safety ceilings: an explicit value may
 lower the configured ceiling but never exceed it — a request above the

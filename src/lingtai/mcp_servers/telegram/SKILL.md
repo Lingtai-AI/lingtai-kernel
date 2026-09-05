@@ -9,8 +9,8 @@ description: |
   the programmable Task Card (task_card tool) — including task-specific watcher
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
-version: 1.7.0
-last_changed_at: 2026-08-29T00:00:00Z
+version: 1.7.1
+last_changed_at: 2026-09-04T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/task_card/event_projection.py
@@ -484,18 +484,10 @@ chat-history cardinality. Normative source:
   [`../../tools/task_card/manual/SKILL.md`](../../tools/task_card/manual/SKILL.md)
   before authoring a watcher. Telegram does not own that tool, does not run
   renderers, and does not accept Task Card JSON/controller instructions.
-- Use a Python renderer file inside the agent working directory. Each successful
-  run must exit `0` and print a nonempty full Markdown/text body to stdout. The
-  intrinsic producer writes that body atomically to
-  `<workdir>/taskcard/taskcard.md`, then writes exact `active` to
-  `<workdir>/taskcard/status`. `stop` and agent shutdown write exact `inactive`;
-  the last body remains on disk.
-- Actions are `start | inspect | retry | stop | remove | manual`. `start`
-  performs the first render synchronously and starts no watch on failure.
-  `retry` updates only the body for the active watch. `stop` deactivates the
-  intrinsic artifact while preserving its body; `remove` is terminal cleanup
-  that retires the watch and deletes the body. One intrinsic-owned watch may be
-  active per agent.
+- Actions are `start | inspect | retry | stop | remove | settings | manual`;
+  read the canonical manual linked above for the renderer contract, each
+  action's exact semantics, and lifecycle/cleanup — this page does not
+  restate that producer contract.
 - Telegram owns the resident message, automatic/mechanical event-journal slot,
   composition, persistence, and message updates. It reads
   `taskcard/status` and `taskcard/taskcard.md` only for the agent-owned

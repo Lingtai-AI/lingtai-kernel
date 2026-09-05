@@ -6,9 +6,9 @@ description: >
   kernel sync, voluntary check behavior, and canonical producer state versus
   notification mirrors. Read after notification-manual when interpreting,
   producing, or debugging notification payloads; skip for dismissal policy.
-version: 0.5.0
+version: 0.5.1
 tags: [lingtai, notifications, channels, protocol, sync, delay, alarm, nudge, hooks, whitelist]
-last_changed_at: "2026-08-20T00:00:00Z"
+last_changed_at: "2026-09-04T00:00:00Z"
 related_files:
 - src/lingtai/tools/notification/manual/SKILL.md
 - src/lingtai/tools/notification/schema.py
@@ -114,9 +114,8 @@ causes the coherent consumer snapshot, delivery fingerprint, synthetic wake, and
 voluntary `check` projection to omit exactly one allowed target while it is live;
 the target file itself continues receiving and retaining producer updates. A
 nonzero delay replaces the prior one, and `seconds: 0` cancels the matching target
-and makes it visible again. The nonzero limit is read at each action from
-`LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS` (default 600); invalid/non-positive
-values log and fall back to that finite default.
+and makes it visible again. See `notification-manual` → "Consumer delay and
+expiry alarm" for the exact nonzero-cap source, default, and precedence.
 
 The process timer is only a prompt path. Every coherent sync also recovers a
 persisted overdue delay. Recovery stops filtering and publishes one high-priority

@@ -123,7 +123,6 @@ _WEB_SEARCH_MANUAL_FILES = (
 
 # The three per-tool glossary languages that each package must ship.
 _GLOSSARY_LANGS = ("en", "zh", "wen")
-_BROWSER_MANUAL_FILES = ("lingtai/tools/browser/manual/SKILL.md",)
 
 _MCP_BUILTIN_PLUGIN_FILES = (
     "lingtai/tools/mcp/plugin.json",
@@ -216,14 +215,19 @@ def test_wheel_ships_vision_manual(wheel_entries: set[str]):
     assert "lingtai/tools/vision/manual/SKILL.md" in wheel_entries
 
 
-def test_wheel_ships_browser_manual(wheel_entries: set[str]):
-    missing = [path for path in _BROWSER_MANUAL_FILES if path not in wheel_entries]
-    assert not missing, "browser manual files missing from wheel: %r" % missing
-
-
 def test_wheel_ships_mcp_owned_plugin_manual(wheel_entries: set[str]):
     missing = [path for path in _MCP_BUILTIN_PLUGIN_FILES if path not in wheel_entries]
     assert not missing, "mcp built-in plugin files missing from wheel: %r" % missing
+
+
+@pytest.mark.parametrize("entries_fixture", ("wheel_entries", "sdist_entries"), ids=("wheel", "sdist"))
+def test_archives_retire_duplicate_manuals_keep_canonical_mcp(request, entries_fixture):
+    entries = request.getfixturevalue(entries_fixture)
+    assert not any(path.startswith("lingtai/tools/mcp/manual/") for path in entries)
+    assert "lingtai/tools/browser/manual/SKILL.md" not in entries
+    assert set(_MCP_BUILTIN_PLUGIN_FILES) <= entries
+    assert "lingtai/tools/web_search/manual/SKILL.md" in entries
+    assert "lingtai/tools/browser/core.py" in entries  # internal mechanism retained
 
 
 def test_wheel_ships_complete_web_search_manual_bundle(wheel_entries: set[str]):
@@ -418,13 +422,6 @@ def sdist_entries(tmp_path_factory) -> set[str]:
 def test_sdist_ships_mcp_owned_plugin_manual(sdist_entries: set[str]):
     missing = [path for path in _MCP_BUILTIN_PLUGIN_FILES if path not in sdist_entries]
     assert not missing, "mcp built-in plugin files missing from sdist: %r" % missing
-
-
-def test_sdist_ships_browser_manual(sdist_entries: set[str]):
-    missing = [path for path in _BROWSER_MANUAL_FILES if path not in sdist_entries]
-    assert not missing, "browser manual files missing from sdist: %r" % missing
-
-
 
 
 def test_sdist_ships_every_glossary_resource(sdist_entries: set[str]):

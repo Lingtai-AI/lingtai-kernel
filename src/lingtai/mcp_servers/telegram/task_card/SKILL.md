@@ -5,7 +5,7 @@ description: |
   public `task_card` tool is intrinsic and documented at
   src/lingtai/tools/task_card/manual/SKILL.md; Telegram only projects the
   intrinsic taskcard/status + taskcard/taskcard.md artifact read-only.
-last_changed_at: 2026-07-29T00:00:00Z
+last_changed_at: 2026-09-04T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/telegram/SKILL.md
 - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -28,20 +28,12 @@ The authoritative public capability owner is
 model-facing instructions live at
 [`src/lingtai/tools/task_card/manual/SKILL.md`](../../../tools/task_card/manual/SKILL.md).
 Use that intrinsic manual for renderer authoring, the
-`start | inspect | retry | stop | remove | manual` actions, refresh limits,
-failure handling, and terminal cleanup.
+`start | inspect | retry | stop | remove | settings | manual` actions, refresh
+limits, failure handling, and terminal cleanup — this notice does not restate
+that producer/lifecycle contract.
 
-Current contract summary:
+Telegram's own projection contract:
 
-- A renderer is a Python file inside the agent working directory.
-- Each successful renderer run exits `0` and prints a nonempty full
-  Markdown/text Task Card body to stdout.
-- The intrinsic producer atomically writes that body to
-  `<workdir>/taskcard/taskcard.md`, then writes exact `active` to
-  `<workdir>/taskcard/status`.
-- `stop` and agent shutdown write exact `inactive`; the last body remains on
-  disk.
-- At most one intrinsic-owned watch may be active per agent.
 - Telegram is a read-only projector for the intrinsic artifact. It polls
   `taskcard/status` and `taskcard/taskcard.md`, projects exact active +
   nonempty bodies into the resident programmable slot, and preserves the
