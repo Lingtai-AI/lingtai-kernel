@@ -112,8 +112,8 @@ field — read it, don't parse it.
 A raw tool result is the first layer: it is useful while you inspect it. After
 you have consumed it and no longer need the raw text visible, the better layer is
 an index that future-you can reason from without carrying the raw bulk. Strongly
-prefer summarizing already-digested completed tool results regardless of length;
-keep raw output visible only for active inspection, quotation, or comparison.
+prefer the compact index once summarization is warranted by the §2 gate;
+keep raw output visible while needed for inspection, quotation, or comparison.
 
 A good summary should let future-you decide whether the hidden raw result must
 be reopened. Preserve:
@@ -131,9 +131,23 @@ progressive-disclosure entry point.
 
 ## 2 · The two summarize cadences
 
+**Summarize cadence.** Strongly prefer a priori `summary=true` on `shell`,
+`file` (read/glob/grep), or `daemon` when you can predict bulky output and
+already know the facts, counts, anchors, or conclusion you need from the call;
+put that retention contract in `reasoning` so raw bulk never spends context.
+Leave it off when exact raw text or unknown high-information details may matter.
+Treat a posteriori `context(action="summarize")` as a last resort, not routine
+cleanup: use it only when context is close to overflowing and a molt is
+unsuitable. Otherwise prefer a priori summary before the call, narrower work,
+or a daemon; at a whole-session boundary, tend durable stores and molt instead.
+
+The urgent and idle patterns below operate within that gate; neither makes
+a-posteriori summarization a routine housekeeping obligation.
+
 ### Urgent cadence: summarize the bulky result now
 
-Use this when a tool result is long or noisy — typically one that ranks high in
+When the §2 execution gate is met, prioritize a long or noisy result — typically
+one that ranks high in
 `_meta.agent_meta.agent_state.current_tool_result_chars.top_results` (above its `threshold`,
 counted in `over_threshold_count`). `agent_meta` is a complete current final-carrier snapshot attached to each eligible final carrier. Its nested `agent_state.current_tool_result_chars` is current on the newest emitted snapshot; older snapshots remain retained historical traces and are not actionable.
 
@@ -146,11 +160,11 @@ counted in `over_threshold_count`). `agent_meta` is a complete current final-car
 
 ### Idle cleanup cadence: sweep what is already consumed
 
-Use this when the task quiets down, before the context window becomes urgent.
-Look back over older tool results that are already digested, obsolete, or only
-useful as evidence anchors, and replace them with summaries regardless of length
-when you are continuing in the same session. This lowers token per API call and
-improves cache/continuation efficiency for the next turn.
+When the task quiets down, inspect older results that are already digested,
+obsolete, or useful only as evidence anchors. This is a decision point, not an
+automatic summarize call: apply the §2 execution gate before replacing them
+with summaries. Prefer avoiding raw bulk in the first place; keep only the
+context the continuing task actually needs.
 
 Idle cleanup is also the right time to decide whether a deliberate molt is
 worth its cost. If the current task is complete, necessary reporting/durable

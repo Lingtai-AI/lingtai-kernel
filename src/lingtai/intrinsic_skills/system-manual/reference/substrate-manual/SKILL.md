@@ -27,6 +27,10 @@ skill-reference owned by `system-manual`, not a top-level catalog skill. Read it
 when the short resident rule is not enough; route via `system-manual` when it is
 unclear whether this is the right node.
 
+The resident substrate is kernel-owned and cross-app stable. It holds the
+minimal operating model every LingTai agent must keep resident; this manual
+expands that model without making the resident layer an operations handbook.
+
 ## 1. Body and extensions
 
 An agent has one active mind—the LLM turn loop—and several extensions:
@@ -120,7 +124,9 @@ producers (`email.read`, `email.dismiss`, Telegram `read`, other MCP read
 actions); a generic channel dismiss is for channels that do not own their own
 read state, or for stale mirrors when the producer-owned state is already
 handled. Never treat a notification preview as the full source of truth — §4
-lists when to read the producer channel instead.
+lists when to read the producer channel instead. Read the matching producer
+channel manual for its exact message/read/reply contract, alongside
+`notification-manual` for the notification layer.
 
 Everything else — allowlist, envelope shape, protected channels,
 stale-version/force, large-result ranking and the legacy `large_tool_result`
@@ -266,6 +272,9 @@ admin ownership of an MCP, do not reconfigure the orchestrator-owned
 integration; escalate or ask the orchestrator.
 
 ## 9. Idle and soul
+
+Soul flow is advice, not command; verify external-event claims through the
+relevant channel.
 
 With no concrete task, go idle/asleep rather than spinning, polling, or using
 timed sleeps — idle keeps listeners available (resident substrate's Life and
