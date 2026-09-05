@@ -79,7 +79,10 @@ def test_real_agent_suspend_rename_rebase_and_resume(tmp_path: Path):
         assert _wait_for(old / ".agent.json"), boot_log.read_text()
         before = json.loads((old / ".agent.json").read_text())
         result = subprocess.run(
-            [str(venv / "bin" / "python"), str(helper), str(old), "new", "--timeout", "20"],
+            [
+                str(venv / "bin" / "python"), str(helper), str(old), "new",
+                "--timeout", "20", "--no-known-external-writers",
+            ],
             cwd=old, env=env, text=True, capture_output=True, timeout=20,
         )
         assert result.returncode == 0, result.stdout + result.stderr + boot_log.read_text()

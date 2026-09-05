@@ -111,3 +111,60 @@ def test_root_cli_creates_reader_accepted_data_without_starting_agent(
     assert "context_limit" not in init["manifest"]["llm"]
     assert psyche == {"covenant": "caller covenant", "schema_version": 1}
     assert json.loads(preset.read_text(encoding="utf-8"))["manifest"]["llm"]["context_limit"] == 8192
+
+
+def test_root_cli_rename_waits_for_foreground_helper_proof(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from lingtai import cli
+    from lingtai import cli_project
+
+    commands: list[list[str]] = []
+
+    class _Completed:
+        returncode = 0
+
+    def _run(command, *, check):
+        commands.append(command)
+        assert check is False
+        return _Completed()
+
+    monkeypatch.setattr(cli_project.subprocess, "run", _run)
+    monkeypatch.setattr(sys, "argv", [
+        "lingtai-agent", "project", "rename", "--agent-dir", str(tmp_path / "old"),
+        "--new-address", "new", "--timeout", "11",
+        "--no-known-external-writers",
+    ])
+
+    cli.main()
+
+    assert commands and commands[0][-3:] == [
+        "--timeout", "11.0", "--no-known-external-writers",
+    ]
+    assert "--foreground" in commands[0]
+
+
+def test_root_cli_rename_nonzero_helper_outcome_is_not_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from lingtai import cli
+    from lingtai import cli_project
+
+    monkeypatch.setattr(
+        cli_project.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type("Completed", (), {"returncode": 1})(),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "lingtai-agent", "project", "rename", "--agent-dir", str(tmp_path / "old"),
+        "--new-address", "new", "--no-known-external-writers",
+    ])
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main()
+
+    assert raised.value.code == 1
+    assert "agent_rename_failed" in capsys.readouterr().err

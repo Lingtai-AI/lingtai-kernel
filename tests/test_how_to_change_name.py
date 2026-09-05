@@ -23,7 +23,9 @@ def test_missing_old_never_writes_existing_destination(tmp_path: Path):
     destination.mkdir()
     sentinel = destination / "keep"
     sentinel.write_text("unchanged", encoding="utf-8")
-    assert change_name.main([str(tmp_path / "missing"), "new"]) == 1
+    assert change_name.main([
+        str(tmp_path / "missing"), "new", "--no-known-external-writers",
+    ]) == 1
     assert sentinel.read_text(encoding="utf-8") == "unchanged"
 
 
@@ -59,3 +61,44 @@ def test_runtime_probe_does_not_create_pyc(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("PYTHONPATH", str(site))
     change_name._probe(venv / "bin" / "python", tmp_path)
     assert not (package / "__pycache__").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX v1")
+def test_preflight_requires_external_writer_confirmation_without_suspend(tmp_path: Path):
+    old = tmp_path / "old"
+    old.mkdir()
+
+    with pytest.raises(change_name.ChangeNameError, match="confirm"):
+        change_name.preflight(old, "new")
+
+    assert not (old / ".suspend").exists()
+
+
+@pytest.mark.parametrize("state", ["running", "unknown"])
+def test_active_or_uncertain_daemon_state_refuses_rename(tmp_path: Path, state: str):
+    daemons = tmp_path / "old" / "daemons"
+    run = daemons / state
+    run.mkdir(parents=True)
+    (run / "daemon.json").write_text('{"state": "' + state + '"}', encoding="utf-8")
+
+    with pytest.raises(change_name.ChangeNameError, match="daemon"):
+        change_name._assert_no_active_daemon(daemons.parent)
+
+
+def test_known_path_bearing_writer_refuses_rename(monkeypatch, tmp_path: Path):
+    old = tmp_path / "old"
+    monkeypatch.setattr(
+        change_name,
+        "_process_rows",
+        lambda: [(101, f"python -m lingtai run {old}"), (202, f"external --agent-dir {old}")],
+    )
+
+    with pytest.raises(change_name.ChangeNameError, match="external writer"):
+        change_name._assert_no_known_path_writer(old, agent_pids=[101])
+
+
+def test_unsupported_no_replace_platform_refuses_before_suspend(monkeypatch):
+    monkeypatch.setattr(change_name.sys, "platform", "freebsd13")
+
+    with pytest.raises(change_name.ChangeNameError, match="no-replace"):
+        change_name._require_no_replace_support()

@@ -20,6 +20,9 @@ related_files:
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py
+- src/lingtai/cli_project.py
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/openai/adapter.py
 - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
@@ -118,7 +121,8 @@ The router table is the routing authority; this list is the inventory.
 - name: how-to-change-name
   location: reference/how-to-change-name/SKILL.md
   description: |
-    Changing a live agent workdir/address on POSIX: suspend, an atomic
+    Changing one POSIX agent workdir/address through `lingtai-agent project
+    rename`: explicit external-writer acknowledgement, suspend, an atomic
     no-replace rename, and a verified resume.
 - name: llm-adapters
   location: reference/llm-adapters/SKILL.md
@@ -152,7 +156,7 @@ The router table is the routing authority; this list is the inventory.
 | Add or inspect a ToolFamily SHOW-only settings provider | `reference/tool-plugin-settings/SKILL.md` |
 | Inspect System settings; kernel catch-all ownership; effective init/preset/LLM/env values; setting defaults, precedence, redaction, invalid behavior, timing, exclusions, or authorized external change procedures | `reference/settings-inventory/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
-| Change an agent workdir basename/address; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
+| Change an agent workdir basename/address through `lingtai-agent project rename`; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
 | LLM adapters; named adapter inventory; provider configuration; Codex REST vs WebSocket transport; `LINGTAI_CODEX_TRANSPORT` / `LINGTAI_CODEX_WS` opt-in; provider special behaviors | `reference/llm-adapters/SKILL.md` |
 | Authorized external attach; macOS `/usr/bin/sample`; exact PID/agent-dir incarnation verification; bounded content-free stacks; guarded controlled external `mcp.*` burst; diagnostic privacy | `reference/external-attach-diagnostic/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `context-manual` |

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -24,6 +25,20 @@ def add_project_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     create.add_argument("--preset", required=True, help="Preset JSON/JSONC reference")
     create.add_argument("--covenant-file", required=True, dest="covenant_file", help="UTF-8 caller covenant")
     create.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON result or error")
+
+    rename = commands.add_parser(
+        "rename",
+        help="Rename one POSIX agent workdir/address after a proved stop and restart",
+    )
+    rename.add_argument("--agent-dir", required=True, help="Current canonical absolute agent workdir")
+    rename.add_argument("--new-address", required=True, help="New safe one-segment workdir basename/address")
+    rename.add_argument("--timeout", type=float, default=30.0, help="Positive seconds for stop and restart proof")
+    rename.add_argument(
+        "--no-known-external-writers",
+        action="store_true",
+        required=True,
+        help="Confirm separately launched MCP/LICC or other old-path writers are stopped",
+    )
 
 
 def _error(code: str, message: str) -> ProjectCreationError:
@@ -96,7 +111,60 @@ def _emit_error(error: ProjectError, *, as_json: bool) -> None:
         print(f"error[{error.code}]: {error.message}", file=sys.stderr)
 
 
+def _rename_helper_path() -> Path:
+    return (
+        Path(__file__).parent
+        / "intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py"
+    )
+
+
+def _handle_rename_command(args: argparse.Namespace) -> None:
+    if args.timeout <= 0:
+        _emit_error(ProjectError("invalid_timeout", "timeout must be positive"), as_json=False)
+        raise SystemExit(1)
+    helper = _rename_helper_path()
+    if not helper.is_file():
+        _emit_error(
+            ProjectError("rename_helper_unavailable", "address rename helper is not installed"),
+            as_json=False,
+        )
+        raise SystemExit(1)
+    command = [
+        sys.executable,
+        str(helper),
+        str(Path(args.agent_dir).expanduser()),
+        args.new_address,
+        "--foreground",
+        "--timeout",
+        str(args.timeout),
+        "--no-known-external-writers",
+    ]
+    try:
+        completed = subprocess.run(command, check=False)
+    except OSError:
+        _emit_error(
+            ProjectError(
+                "agent_rename_outcome_unknown",
+                "rename helper could not start; inspect both old and requested paths before any retry",
+            ),
+            as_json=False,
+        )
+        raise SystemExit(1) from None
+    if completed.returncode != 0:
+        _emit_error(
+            ProjectError(
+                "agent_rename_failed",
+                "rename did not prove success; follow helper recovery guidance and inspect the retained path",
+            ),
+            as_json=False,
+        )
+        raise SystemExit(1)
+
+
 def handle_project_command(args: argparse.Namespace) -> None:
+    if args.project_command == "rename":
+        _handle_rename_command(args)
+        return
     if args.project_command != "create":
         raise SystemExit(2)
     try:

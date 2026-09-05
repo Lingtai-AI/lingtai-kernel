@@ -1,70 +1,95 @@
 ---
 name: how-to-change-name
 description: >
-  Nested system-manual reference for renaming a live POSIX agent workdir/address.
-  Use after system-manual for the deliberately narrow suspend, no-replace rename,
-  and resume procedure; Windows, network filesystems, and bulk address rewrites are out of scope.
-version: 1.0.0
-last_changed_at: "2026-07-20T00:00:00Z"
+  Nested system-manual reference for renaming one POSIX agent workdir/address.
+  Use through the Project CLI after stopping known external writers; Windows,
+  network filesystems, and bulk address rewrites are out of scope.
+version: 1.1.0
+last_changed_at: "2026-08-27T00:00:00Z"
 tags: [lingtai, system-manual, posix, rename]
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py
 - src/lingtai/cli.py
+- src/lingtai/cli_project.py
 - src/lingtai/kernel/base_agent/lifecycle.py
 - src/lingtai/kernel/base_agent/identity.py
 - tests/test_how_to_change_name.py
 - tests/test_how_to_change_name_e2e.py
+- tests/test_project_creation.py
 maintenance: |
-  Keep this small POSIX procedure aligned with the executable's preflight, suspend, no-replace rename, and resume behavior.
+  Keep this small POSIX procedure aligned with the executable's preflight,
+  suspend, no-replace rename, and resume behavior. Preserve truthful recovery:
+  this procedure must never claim success before restart evidence is complete.
 ---
 
 # Change an agent address (POSIX v1)
 
-This changes the workdir basename and derived address, **not** the true
-`agent_name` or `agent_id`. It does not rewrite contacts, history, ledgers, or
-other agents' old addresses.
+This changes exactly one workdir basename and its derived address. It does
+**not** change the true `agent_name`, `agent_id`, or nickname, and it does not
+rewrite contacts, history, ledgers, or other agents' old addresses.
 
-## Run
+## Public Project CLI
 
-Use an absolute canonical workdir path and a new safe basename:
+Use the foreground Project-management command with an absolute canonical
+workdir and a safe new basename:
 
-```sh
-python /path/to/change_name.py /absolute/old-address new-address
+```text
+lingtai-agent project rename --agent-dir /absolute/old-address --new-address new-address --no-known-external-writers [--timeout SECONDS]
 ```
 
-The default command first performs a read-only preflight, then starts a detached
-supervisor so suspending the agent cannot kill the rename operation. Its log
-starts at `old-address/logs/change-name.log` and moves with the directory. An
-external operator can wait for the final result with `--foreground`.
+`--no-known-external-writers` is an explicit operator confirmation that any
+separately launched MCP/LICC or other process that can write using the old
+absolute path has been stopped. Do not pass it while such a writer is known.
+The command also refuses another visible local command line carrying the old
+path, but a process-table scan cannot prove arbitrary environment-only writers
+are absent. The command waits in the foreground and returns success only after
+its restart proof completes; it does not emit a JSON success shortcut.
+
+The bundled helper is the same implementation. Its default starts a detached
+supervisor and therefore reports only that the supervisor started, not rename
+success. Use `--foreground` when the caller must await terminal evidence:
+
+```sh
+python /path/to/change_name.py /absolute/old-address new-address \
+  --no-known-external-writers --foreground
+```
 
 ## V1 contract
 
-The helper is POSIX-only and requires a local, live agent with a fresh heartbeat,
-held lease, exactly one `python -m lingtai run <old>` process, strict-JSON
-`init.json`, matching `manifest.agent_name`, and an absolute `venv_path` that can
-import `lingtai`. Its import probe sets `PYTHONDONTWRITEBYTECODE=1`.
+This slice is POSIX-only and supports only Linux `renameat2(RENAME_NOREPLACE)`
+or macOS `renamex_np(RENAME_EXCL)`. Unsupported platforms or unavailable native
+primitives refuse **before** `.suspend` is touched. It requires:
 
-It then:
+- a canonical non-symlink source directory and an absent, non-symlink sibling
+  destination whose basename is one non-dot letters/digits/underscore/hyphen
+  segment of at most 64 characters;
+- non-symlink identity/config/liveness/lease files, strict-JSON `init.json`, a
+  matching `manifest.agent_name`, an absolute `venv_path`, and a runtime that
+  imports `lingtai` without writing bytecode;
+- exactly one live `python -m lingtai run <old>` process, a fresh heartbeat, and
+  a genuinely held exclusive lease; process-scan failure or no quiescence is a
+  refusal, never proof of absence; and
+- no nonterminal, malformed, symlinked, or recovery-marked detached daemon run
+  under the agent's own `daemons/` state.
 
-1. touches `.suspend` and waits for the exact process to disappear, heartbeat to
-   go stale, and lease to release; a failed `ps` scan is a failure, never proof
-   that the process is absent;
-2. renames once with Linux `renameat2(RENAME_NOREPLACE)` or macOS
-   `renamex_np(RENAME_EXCL)`, so a destination that appears after preflight is
-   never replaced;
-3. rebases an in-workdir `venv_path`, changes only `.agent.json` `address`, and
-   starts the rebased runtime; and
-4. requires the new exact process, a post-launch heartbeat, and unchanged
-   `agent_id`/`agent_name` before reporting success.
+After preflight it touches `.suspend`, waits for the exact runtime to disappear,
+heartbeat to become stale, and a freshly acquired lease to remain held through
+one native no-replace directory move. It then rebases only an in-workdir
+`venv_path`, changes only `.agent.json.address`, removes `.suspend`, and starts
+the new workdir. Success additionally requires the new exact process, a fresh
+post-launch heartbeat, the new manifest address, and unchanged `agent_id` and
+`agent_name`.
 
-There is no copy/delete fallback, automatic rollback, venv creation, or repair
-of unrelated config paths. A missing/invalid old path never writes to a
-pre-existing destination.
+There is no copy/delete fallback, overwrite, automatic rollback, venv creation,
+JSONC rewrite, alias/forwarding address, generic filesystem rename API, or
+rewrite of unrelated paths. Old peer addresses intentionally stop resolving.
 
 ## Recover honestly
 
-Before rename failure leaves the old directory in place; it may be suspended, so
-restart that same old path before retrying. After rename failure leaves the new
-directory in place and the log there; inspect and repair that new path. Do not
-retry against a missing old path or delete either directory automatically.
+A failure before the native directory move leaves the old directory in place; it
+may be suspended, so restart that same old path before a separately chosen retry.
+A failure after the move leaves the new directory and its log at
+`new-address/logs/change-name.log`; inspect and repair that new path. A CLI
+launch failure or any nonzero helper outcome is not success: inspect the
+retained path(s), do not silently retry, and do not delete either directory.
