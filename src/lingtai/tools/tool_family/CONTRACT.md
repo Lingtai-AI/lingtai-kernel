@@ -287,9 +287,10 @@ knowledge's exact pre-migration unknown-action result.
 `avatar/__init__.py` is the fourth production Adapter/consumer to touch this
 contract (after `file` and `vision`, which adopt this package per
 `../CONTRACT.md` without a dedicated Adapter paragraph here):
-`AvatarManager.__init__` builds a per-instance `ToolFamily` with
-`spawn`/`rules` handlers bound to that instance, the generic `settings` child
-bound to the static no-I/O `AvatarSettingsProvider`, and Avatar's local
+`AvatarManager.__init__` builds a per-instance `ToolFamily` with a `spawn`
+handler bound to that instance (the former `rules` handler was removed, not
+relocated — avatar CONTRACT.md contract_version 9), the generic `settings`
+child bound to the static no-I/O `AvatarSettingsProvider`, and Avatar's local
 `manual` handler. `settings` is injected immediately before `manual`, and
 `AvatarManager.handle()` calls `self._family.handle(args)`. It is a deliberate
 **partial** adoption, which this package permits: `avatar` reuses `ChildTool`

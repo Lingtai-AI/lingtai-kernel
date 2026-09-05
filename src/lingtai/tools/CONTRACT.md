@@ -733,11 +733,12 @@ public tool name and existing action result shapes including the tool-specific
 body through two granted host ports instead of the whole `Agent` (see
 `src/lingtai/tools/mcp/CONTRACT.md`).
 
-`avatar` (`spawn | rules | manual`) is the second family declared under
-`### Tool-to-MCP Plugin Contract`: its static declaration preserves the public
-tool name, action values, strict action inputs, and result behavior while
-binding `AvatarManager` only to `workdir` and `avatar_parent`, never the whole
-`Agent` (see `src/lingtai/tools/avatar/CONTRACT.md`).
+`avatar` (`spawn | settings | manual`, `rules` removed at contract_version 9) is the
+second family declared under `### Tool-to-MCP Plugin Contract`: its static
+declaration preserves the public tool name, action values, strict action
+inputs, and result behavior while binding `AvatarManager` only to `workdir`
+and `avatar_parent`, never the whole `Agent` (see
+`src/lingtai/tools/avatar/CONTRACT.md`).
 
 `context` (`molt | summarize | rebuild | manual`) is the current in-process lifecycle
 vertical slice. It keeps Context's LTP shape, molt transport seam, and live
@@ -806,15 +807,18 @@ workdir-relative `settings/vision.json` remains the only Vision-owned document
 and configures only the generic `local` provider. SHOW adds no settings file,
 parser, writer, or generic control plane.
 
-`avatar` (`spawn | rules | manual`) is the sixth family migrated, keeping its
-public name and action values unchanged (see
+`avatar` (`spawn | rules | manual` at the time of this migration) is the sixth
+family migrated, keeping its public name unchanged (see
 `src/lingtai/tools/avatar/CONTRACT.md`, contract_version 4). It owns no
-settings file at either level, and its manual says so explicitly. Two
-avatar-specific facts are worth naming here because they are envelope
-consequences, not local details: its `spawn` mission brief is root `reasoning`
-(never an `input` property, per "Envelope"), and its `rules` action is
-karma-gated while `spawn` and `manual` are not — a family must not hide a
-stronger child action behind a weaker family posture.
+settings file at either level, and its manual says so explicitly. One
+avatar-specific fact is worth naming here because it is an envelope
+consequence, not a local detail: its `spawn` mission brief is root
+`reasoning` (never an `input` property, per "Envelope"). At the time, its
+`rules` action was karma-gated while `spawn` and `manual` were not — the
+precedent this established, that a family must not hide a stronger child
+action behind a weaker family posture, outlived the action itself: `rules`
+and its automatic post-spawn fan-out were later removed rather than
+relocated (contract_version 9), so `avatar` today is `spawn | settings | manual`.
 
 `shell` (`run | poll | cancel | settings | manual`) is the eighth: its final model-facing
 root is likewise exactly `action`, `input`, `reasoning`, and `summarize`, its
@@ -1116,10 +1120,11 @@ child inputs, root `allOf` correlation surviving both wires, cross-action and
 unknown-root-field rejection *before* any handler I/O, `summarize` never
 reaching a child handler and `avatar` actually being on the kernel allowlist,
 the preserved unknown-action envelope, spawn's dry-run/mission-guard/identity
-and path validation, the karma gate and distribution for `rules`, and `manual`
-performing no spawn or rules I/O. Every test there builds its own isolated
-temporary network and fakes the launcher Port, so it neither creates a live
-avatar nor writes a live `.rules` signal.
+and path validation, and `manual` performing no spawn I/O. Every test there
+builds its own isolated temporary network and fakes the launcher Port, so it
+neither creates a live avatar nor mutates anything outside its own temporary
+tree; `tests/test_avatar_rules.py` separately covers the retired `rules`
+action's absence and the removed post-spawn fan-out (contract_version 9).
 
 `context`'s evidence (`tests/test_tool_family_context_migration.py`,
 plus the updated `tests/test_context.py`, `tests/test_pad.py`,

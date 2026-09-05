@@ -10,6 +10,8 @@ related_files:
   - src/lingtai/tools/avatar/settings.py
   - src/lingtai/kernel/_fsutil.py
   - src/lingtai/kernel/prompt.py
+  - src/lingtai/kernel/base_agent/lifecycle.py
+  - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
@@ -55,8 +57,8 @@ independent life — its existence does not depend on yours.
 ## Components
 
 - `avatar/__init__.py` — static official `DECLARATION`, settings binding, local
-  manual child, validation, preparation, boot policy, ledger, rules, schemas,
-  and registrar setup. The core class is `AvatarManager`.
+  manual child, validation, preparation, boot policy, ledger, schemas, and
+  registrar setup. The core class is `AvatarManager`.
 - `avatar/_launcher.py` — immutable launch request/receipt, the avatar-local
   opaque-handle Port, current restrictive child-boot marker name, read-only
   legacy-marker compatibility path, and their shared present/absent/unknown
@@ -76,9 +78,15 @@ family (`src/lingtai/tools/CONTRACT.md`) whose actions are canonical children:
 | Action | Own strict `input` | Description |
 |------|------|-------------|
 | `spawn` | `name`, `type`, `comment`, `dry_run`, `confirm` | Spawn a new avatar agent (shallow or deep). `dry_run` previews only; `confirm` acknowledges the mission-quality gate. |
-| `rules` | `rules_content` | Set rules content and distribute via `.rules` signal files to self + all descendants. Karma-gated. |
 | `settings` | `{}` | Return 16 immutable Avatar defaults, validation constraints, and lifecycle policies as exact five-field rows. |
-| `manual` | *(empty)* | Read-only: returns the exact `manual/SKILL.md` body plus its host-local `manual_path`. No spawn or rules I/O. |
+| `manual` | *(empty)* | Read-only: returns the exact `manual/SKILL.md` body plus its host-local `manual_path`. No spawn I/O. |
+
+Avatar no longer owns a `rules` action or an automatic post-spawn rules
+fan-out (removed, not relocated — see `src/lingtai/tools/avatar/CONTRACT.md`
+contract_version 9). The `.rules` heartbeat signal and `system/rules.md`
+persistence remain real, unchanged kernel state owned by
+`src/lingtai/kernel/base_agent/lifecycle.py`; see `psyche-manual` for that
+protocol.
 
 The model-facing root is exactly `action` + `input` + required `reasoning` +
 optional `summarize`, `additionalProperties: false`. Each action owns exactly
@@ -108,7 +116,7 @@ unknown-action error string.
 
 ```
 avatar/__init__.py
-  ├── _SPAWN/_RULES_INPUT_SCHEMA    — canonical strict operational inputs
+  ├── _SPAWN_INPUT_SCHEMA           — canonical strict operational input
   ├── DECLARATION                   — static official identity, actions,
   │                                    settings/manual reservations, and exact
   │                                    `(workdir, avatar_parent)` grant
@@ -120,8 +128,8 @@ avatar/__init__.py
   │                                    delegates to ToolFamily.handle(), then
   │                                    normalizes ACTION_REQUIRED back to
   │                                    avatar's pinned unknown-action error
-  ├── _dispatch_spawn/_rules        — operational child handlers; strip nulls,
-  │                                    thread the mission brief to _spawn
+  ├── _dispatch_spawn               — operational child handler; strips nulls,
+  │                                    threads the mission brief to _spawn
   ├── _strip_nulls()                — nullable-optional → absent
   ├── _manual_payload()             — plugin-owned local `manual/SKILL.md`
   │                                    result; no manager/host mutation
@@ -138,20 +146,21 @@ avatar/__init__.py
   │
   │  Ledger:
   ├── _append_ledger()              — appends spawn event to delegates/ledger.jsonl
-  ├── _read_ledger()                — reads all ledger records
-  │
-  │  Rules distribution:
-  ├── _rules()                      — admin-gated rules update, distributes via .rules signal files
-  ├── _walk_avatar_tree()           — recursively discovers all descendants from ledger files
-  └── _distribute_rules_to_descendants() — writes .rules signal file to every descendant
+  └── _read_ledger()                — reads all ledger records
 ```
+
+`_rules()`, `_walk_avatar_tree()`, and `_distribute_rules_to_descendants()`
+(the admin-gated rules update and its BFS descendant fan-out) plus the
+post-spawn canonical-rules read they fed are removed entirely — not renamed
+or relocated (contract_version 9). Nothing in this package writes `.rules`
+anymore.
 
 ## Key Invariants
 
 - **Declared least privilege:** `AvatarManager` receives a `ToolPluginHost`, not
   an Agent. `workdir` supplies every local path; `avatar_parent` supplies only
-  the current parent identity, optional venv inheritance, and the already-made
-  rules authorization decision. The binder cannot mount itself.
+  the current parent identity and optional venv inheritance. The binder cannot
+  mount itself.
 - **Local manual:** `manual` is the declaration-appended reserved child but
   remains package-local: it returns `manual/SKILL.md` and performs no host or
   manager I/O.
@@ -200,13 +209,12 @@ avatar/__init__.py
   routes `DECLARATION` through `register_agent_tool_plugins`; the kernel checks
   the reserved `avatar` name, grants only `workdir`/`avatar_parent`, binds the
   manager, and mounts the issued transaction. `AvatarManager` internally
-  dispatches `spawn`/`rules`, the generic declaration-bound `settings` child,
+  dispatches `spawn`, the generic declaration-bound `settings` child,
   and the declaration-owned local `manual` child through `ToolFamily`. `avatar`
   is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist
   (`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean
   it advertises is actually honored by the single central summarizer. The daemon
-  capability blacklists `avatar` to prevent avatar-in-daemon recursion and rules
-  mutation from emanations.
+  capability blacklists `avatar` to prevent avatar-in-daemon recursion.
 
 Platform process mechanics are in `adapters/avatar_launcher.py` plus the POSIX
 and Windows adapters. A Driver child-endpoint handoff is POSIX-only: the POSIX

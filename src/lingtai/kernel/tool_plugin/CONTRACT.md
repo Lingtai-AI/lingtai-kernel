@@ -1,6 +1,6 @@
 ---
 name: declared-host-tool-plugin
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
@@ -228,7 +228,7 @@ capability.
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
 | `FileIOPort` | `read`, `write`, `glob`, `grep`, `last_traversal`, `max_result_chars` | File-only bounded UTF-8 text operations and concrete match/traversal facts. It exposes neither the backing generic service nor the Agent; path rooting remains the separate `WorkdirPort`. |
-| `AvatarParentPort` | `parent_name`, `venv_path`, `has_rule_privilege()` | Avatar-only parent context: the identity placed in a newborn prompt, optional runtime location inherited into its init, and the existing any-admin-value gate for rules. It grants no mutable admin/configuration surface or Agent reference. |
+| `AvatarParentPort` | `parent_name`, `venv_path` | Avatar-only parent context: the identity placed in a newborn prompt and optional runtime location inherited into its init. It grants no mutable admin/configuration surface or Agent reference. Avatar owns no rules-distribution action, so this port no longer carries an authorization-bit method for one (**contract_version 4**, breaking: `has_rule_privilege()` removed). |
 | `ContextRuntimePort` | `molt(args)`, `summarize(args)`, `rebuild(args)` | Context-only lifecycle-operation boundary. It preserves the live molt, record-only summary, and reconstruction/replay engines without granting Context the Agent or unrelated private state. |
 | `DaemonRuntimePort` | named model/tool/preset/notification/log operations | Daemon-only parent-runtime boundary: inherited service and regular tool snapshots, preset sandbox/load, live notification route, time, Task Card, logging, and resolved manager options. It never grants the Agent or a mount operation. |
 | `NotificationStatePort` | `dismiss(channel, *, force, reason, event_id=None, ref_id=None)`, `delay(channel, seconds)`, hook operations, `read_settings() -> tuple[int, int]`, bounded `log` | Notification-only Core delegation. `read_settings` returns the fresh effective payload cap and delay ceiling through canonical resolvers; it grants no configuration object or writer. `AgentNotificationStateAdapter` owns only callbacks bound to the live Agent; it hands the family no Agent, Store, fingerprint, producer state, generic dispatch, or mount seam. Notification Core retains dismissal authorization, stale-delivery comparison, producer guards, acknowledgement, delay/timer, hook-manifest, and logging policy. |

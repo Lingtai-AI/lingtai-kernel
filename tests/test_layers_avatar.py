@@ -636,9 +636,9 @@ class TestMissionQualityGate:
         """The dry_run/confirm gates stay model-visible after the LTP v2 migration.
 
         Under the action-separated envelope they live inside the ``spawn``
-        branch of ``input.anyOf`` (and ``rules_content`` inside the ``rules``
-        branch) rather than at the root, but they must still be declared with
-        their gate types so the model can actually reach them.
+        branch of ``input.anyOf`` rather than at the root, but they must still
+        be declared with their gate types so the model can actually reach
+        them.
         """
         from lingtai.tools.avatar import get_schema
         sch = get_schema("en")
@@ -648,10 +648,10 @@ class TestMissionQualityGate:
         assert spawn_props["dry_run"]["type"] == ["boolean", "null"]
         assert "confirm" in spawn_props
         assert spawn_props["confirm"]["type"] == ["boolean", "null"]
-        assert "rules_content" in branches["rules input"]["properties"]
+        assert "rules input" not in branches
         assert sch["required"] == ["action", "input", "reasoning"]
         assert sch["properties"]["action"]["enum"] == [
-            "spawn", "rules", "settings", "manual"
+            "spawn", "settings", "manual"
         ]
 
     def test_description_points_to_avatar_manual_after_prompt_compaction(self):
@@ -729,7 +729,9 @@ class TestAddCapability:
 
 
 class TestUnifiedAvatarTool:
-    """Regression coverage for the avatar_spawn + avatar_rules → avatar merge."""
+    """Regression coverage for the avatar_spawn + avatar_rules → avatar merge,
+    and for the later removal of the ``rules`` action and its automatic
+    post-spawn fan-out (Option B)."""
 
     def test_schema_is_ltp_v2_action_separated_envelope(self):
         """The root is exactly the LTP v2 envelope, not the old flat object.
@@ -747,9 +749,9 @@ class TestUnifiedAvatarTool:
         assert sch["additionalProperties"] is False
         assert sch["properties"]["action"]["type"] == "string"
         assert sch["properties"]["action"]["enum"] == [
-            "spawn", "rules", "settings", "manual"
+            "spawn", "settings", "manual"
         ]
-        assert len(sch["properties"]["input"]["anyOf"]) == 4
+        assert len(sch["properties"]["input"]["anyOf"]) == 3
 
     def test_spawn_dispatch_preserves_behavior_and_reasoning(self, tmp_path, fake_avatar_launch):
         """action='spawn' preserves outputs and _reasoning → first-prompt propagation."""
@@ -767,28 +769,31 @@ class TestUnifiedAvatarTool:
         prompt_path = parent._working_dir.parent / "helper" / ".prompt"
         assert "Investigate the heartbeat regression" in prompt_path.read_text(encoding="utf-8")
 
-    def test_rules_dispatch_preserves_admin_gate_and_content_validation(self, tmp_path):
-        """action='rules' keeps admin gate + non-empty content validation."""
+    def test_rules_action_is_unknown_regardless_of_admin(self, tmp_path):
+        """action='rules' no longer exists — it fails for admin and non-admin alike."""
         from lingtai.agent import Agent
         no_admin = Agent(service=make_mock_service(), agent_name="worker",
                           working_dir=tmp_path / "worker", capabilities=["avatar"], admin={})
         mgr = no_admin.get_capability("avatar")
         result = mgr.handle({"action": "rules", "input": {"rules_content": "No deleting."}})
         assert "error" in result
+        assert not (no_admin._working_dir / ".rules").exists()
 
         admin = Agent(service=make_mock_service(), agent_name="admin",
                        working_dir=tmp_path / "admin", capabilities=["avatar"],
                        admin={"karma": True})
         mgr2 = admin.get_capability("avatar")
-        empty_result = mgr2.handle({"action": "rules", "input": {"rules_content": ""}})
-        assert "error" in empty_result
+        admin_result = mgr2.handle({"action": "rules", "input": {"rules_content": "Be concise."}})
+        assert admin_result == {
+            "error": (
+                "unknown action: 'rules', only 'spawn', 'settings', "
+                "or 'manual' is supported"
+            ),
+        }
+        assert not (admin._working_dir / ".rules").exists()
 
-        ok_result = mgr2.handle({"action": "rules", "input": {"rules_content": "Be concise."}})
-        assert ok_result["status"] == "ok"
-        assert (admin._working_dir / ".rules").read_text() == "Be concise."
-
-    def test_spawn_does_not_inherit_rules_permission_gate(self, tmp_path, fake_avatar_launch):
-        """A non-admin agent can still spawn — the rules admin gate must not leak into spawn."""
+    def test_spawn_never_required_admin(self, tmp_path, fake_avatar_launch):
+        """A non-admin agent can spawn — unaffected by the rules action's removal."""
         from lingtai.agent import Agent
         no_admin = Agent(service=make_mock_service(), agent_name="worker",
                           working_dir=tmp_path / "worker", capabilities=["avatar"], admin={})
@@ -819,7 +824,7 @@ class TestUnifiedAvatarTool:
         assert not (parent._working_dir / ".rules").exists()
 
     def test_daemon_excludes_avatar_from_child_surface(self, tmp_path):
-        """The daemon's emanation blacklist covers the new canonical 'avatar' name only."""
+        """The daemon's emanation blacklist covers the canonical 'avatar' name only."""
         from lingtai.tools.daemon import EMANATION_BLACKLIST
         assert "avatar" in EMANATION_BLACKLIST
         assert "avatar_spawn" not in EMANATION_BLACKLIST
@@ -846,11 +851,11 @@ class TestUnifiedAvatarTool:
                         admin={"karma": True})
         mgr = parent.get_capability("avatar")
         expected_error = (
-            "unknown action: '', only 'spawn', 'rules', 'settings', "
+            "unknown action: '', only 'spawn', 'settings', "
             "or 'manual' is supported"
         )
 
-        # Payload shaped like a valid rules call, but action omitted.
+        # Payload shaped like a formerly-valid rules call, but action omitted.
         rules_shaped = mgr.handle({"rules_content": "Be concise."})
         assert rules_shaped["error"] == expected_error
         assert rules_shaped.get("status") != "ok"
@@ -879,9 +884,6 @@ class TestUnifiedAvatarTool:
         spawn_result = mgr.handle({"action": "spawn", "input": {}})
         assert "error" in spawn_result
         assert "name is required" in spawn_result["error"]
-
-        rules_result = mgr.handle({"action": "rules", "input": {"rules_content": "Be concise."}})
-        assert rules_result["status"] == "ok"
 
         manual_result = mgr.handle({"action": "manual", "input": {}})
         assert manual_result["status"] == "ok"

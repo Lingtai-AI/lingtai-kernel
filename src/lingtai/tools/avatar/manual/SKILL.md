@@ -2,8 +2,8 @@
 name: avatar-manual
 description: |
   Complete operational guide for the avatar tool — spawning, managing, and communicating with 他我 (alter-ego agents). Read this when: you are about to spawn an avatar; an avatar you spawned goes quiet; you need to decide between avatar, daemon, or bash; or you are an avatar and need to know how to escalate to your parent. Covers spawn types, naming rules, discipline, escalation protocol, and the parent_prompt contract.
-version: 1.2.0
-last_changed_at: 2026-08-29T00:00:00Z
+version: 1.3.0
+last_changed_at: 2026-09-04T00:00:00Z
 related_files:
 - src/lingtai/tools/avatar/__init__.py
 - src/lingtai/tools/avatar/settings.py
@@ -11,6 +11,8 @@ related_files:
 - src/lingtai/tools/avatar/CONTRACT.md
 - src/lingtai/tools/CONTRACT.md
 - src/lingtai/kernel/prompt.py
+- src/lingtai/kernel/base_agent/lifecycle.py
+- src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -19,24 +21,24 @@ maintenance: |
 
 ## 0. How to Call `avatar`
 
-One tool, four actions, each with its own strict `input` object:
+One tool, three actions, each with its own strict `input` object:
 
 ```
 avatar(action="spawn",  input={"name": "researcher"},        reasoning="<mission briefing>")
 avatar(action="spawn",  input={"name": "clone", "type": "deep"}, reasoning="<mission briefing>")
-avatar(action="rules",  input={"rules_content": "..."},      reasoning="why these rules")
 avatar(action="settings", input={},                           reasoning="inventory Avatar policy")
 avatar(action="manual", input={},                            reasoning="load avatar guidance")
 ```
 
 - `action` is **required** — there is no default. Omitting it never spawns.
 - `input` is **required** and closed. `spawn` owns `name`, `type`, `comment`,
-  `dry_run`, `confirm`; `rules` owns `rules_content`; `settings` and `manual`
-  each take only `{}`.
+  `dry_run`, `confirm`; `settings` and `manual` each take only `{}`.
   Putting one action's field in another's `input` is rejected before anything
-  happens — no process, no ledger entry, no `.rules` write.
+  happens — no process, no ledger entry.
 - `reasoning` is **required** and lives at the root, never inside `input`. For
   `spawn` it *is* the mission briefing (see §4).
+- Avatar has no `rules` action. Network rules (`.rules`) are a separate,
+  unchanged kernel mechanism — see §9.
 
 **Settings:** `avatar` has no settings file at either the family or action
 level and reads no `LINGTAI_AVATAR_*` environment variable. The read-only
@@ -44,7 +46,7 @@ level and reads no `LINGTAI_AVATAR_*` environment variable. The read-only
 does not make them mutable.
 
 **`summarize` (short-result profile).** Every action here returns a small
-result — a spawn receipt, a distribution list, or a manual body you asked for
+result — a spawn receipt, a settings inventory, or a manual body you asked for
 verbatim. `summarize` is available but normally unnecessary: leave it false.
 Keep it false for `manual` in particular, so exact procedure and constraints
 are not summarized away, and for `spawn`, whose receipt carries the address,
@@ -210,21 +212,20 @@ The `input.comment` field (spawn only) is a persistent system-level note injecte
 
 Leave empty unless you have something the avatar should never forget.
 
-## 9. Network Rules (`avatar(action="rules", input={"rules_content": ...})`)
+## 9. Network Rules — see `psyche-manual`
 
-The `rules` action writes a `.rules` file to your directory and distributes it to **all descendants** in the avatar tree. Properties:
+Avatar does **not** own a rules action or an automatic post-spawn rules
+fan-out. Spawning an avatar (shallow or deep) never distributes rules to it
+or to any other descendant on your behalf.
 
-- Requires **karma** privilege (admin)
-- Rules are injected into the system prompt (after covenant, before tools)
-- Persist across molts
-- Plain text — one rule per line
-- These are **non-negotiable constraints**, not suggestions
-
-Example:
-```
-Always report findings via email.
-Do not spawn more than 3 avatars.
-```
+`.rules` is a real, unchanged mechanism, but it is not an Avatar capability:
+any agent may write a `.rules` file directly (e.g. with `shell`) to its own
+directory, or to another agent's directory it can explicitly reach, and that
+agent's own heartbeat applies it to `system/rules.md` and its protected
+prompt section. Read `psyche-manual` for the complete protocol — the
+replacement/empty/no-op/no-flush semantics, how to verify canonical vs.
+effective rules, and how this differs from an ordinary Psyche source edit
+plus `context.rebuild`.
 
 ## Cleanup / Footprint
 

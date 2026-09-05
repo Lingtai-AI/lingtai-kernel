@@ -358,10 +358,9 @@ class AvatarParentPort(Protocol):
     """The parent facts Avatar needs to spawn and control its own subtree.
 
     This is deliberately Avatar-specific rather than a second whole-Agent
-    facade: spawning needs the parent identity and inherited runtime location,
-    while rules control needs only the already-decided authorization bit.  It
-    grants no mutable administration surface, no generic configuration, and no
-    tool mounting capability.
+    facade: spawning needs only the parent identity and inherited runtime
+    location. It grants no mutable administration surface, no generic
+    configuration, and no tool mounting capability.
     """
 
     @property
@@ -371,9 +370,6 @@ class AvatarParentPort(Protocol):
     @property
     def venv_path(self) -> str | None:
         """Optional parent runtime location inherited by a newborn avatar."""
-
-    def has_rule_privilege(self) -> bool:
-        """Whether this parent may distribute rules through its avatar subtree."""
 
     def authorize_derived_launch(self, capability: Any) -> Any:
         """Decide one avatar-derived process launch before side effects."""

@@ -489,16 +489,15 @@ class AgentContextRuntimeAdapter:
 class AgentAvatarParentAdapter:
     """Avatar's narrow parent-context port over the live Agent.
 
-    The adapter exposes only the three current-Agent facts Avatar already uses:
-    parent identity for the first prompt, an optional venv inheritance value,
-    and the existing any-admin-value rule gate.  It owns no Agent object; each
-    value is read through its one narrow closure when Avatar asks for it.
+    The adapter exposes only the two current-Agent facts Avatar already uses:
+    parent identity for the first prompt and an optional venv inheritance
+    value.  It owns no Agent object; each value is read through its one
+    narrow closure when Avatar asks for it.
     """
 
     __slots__ = (
         "_parent_name",
         "_venv_path",
-        "_has_rule_privilege",
         "_authorize_derived_launch",
     )
 
@@ -506,12 +505,10 @@ class AgentAvatarParentAdapter:
         self,
         parent_name: Callable[[], str],
         venv_path: Callable[[], str | None],
-        has_rule_privilege: Callable[[], bool],
         authorize_derived_launch: Callable[[Any], Any],
     ) -> None:
         self._parent_name = parent_name
         self._venv_path = venv_path
-        self._has_rule_privilege = has_rule_privilege
         self._authorize_derived_launch = authorize_derived_launch
 
     @property
@@ -521,9 +518,6 @@ class AgentAvatarParentAdapter:
     @property
     def venv_path(self) -> str | None:
         return self._venv_path()
-
-    def has_rule_privilege(self) -> bool:
-        return self._has_rule_privilege()
 
     def authorize_derived_launch(self, capability: Any) -> Any:
         return self._authorize_derived_launch(capability)
@@ -1642,7 +1636,6 @@ def agent_host_ports(
         ports["avatar_parent"] = AgentAvatarParentAdapter(
             lambda: agent.agent_name or agent.working_dir.name,
             lambda: getattr(agent, "_venv_path", None),
-            lambda: any((getattr(agent, "_admin", {}) or {}).values()),
             _authorize_derived_launch,
         )
     elif plugin_name == "plugin":
