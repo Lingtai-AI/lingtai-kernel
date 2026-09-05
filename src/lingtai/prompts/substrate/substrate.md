@@ -72,6 +72,6 @@ runtime actually in use; `refresh` reloads but does not fetch or install code.
 summarization, prompt rebuild, and molt; `notification` owns notification
 inspection and mirror dismissal. Prefer producer-specific message handling.
 
-Read the owning manual before consequential operations. Preset mechanics,
-Nudge controls, update procedures, and context thresholds live below this layer,
-not in a second resident handbook.
+Settings are runtime facts, not numbers to memorize here. Query the owning
+tool's `settings`; `system(action="settings", input={})` covers kernel settings
+without another tool owner. Follow each row's manual pointer for detail.

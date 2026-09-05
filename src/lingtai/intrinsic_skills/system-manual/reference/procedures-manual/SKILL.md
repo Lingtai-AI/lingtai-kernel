@@ -8,7 +8,7 @@ description: >
   `system-manual` when it is unclear whether this is the right node.
 version: 1.4.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
-last_changed_at: "2026-08-07T00:00:00Z"
+last_changed_at: "2026-09-05T05:26:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -58,14 +58,18 @@ task, give exact paths/commands and the expected artifacts, then review the
 concise report. Use daemons to keep raw bulk out of main context; use summarize
 for the bulk that already landed there. §3 owns the daemon workflow methodology.
 
-### Delayed summarization reconstruction threshold
+### Query settings and runtime guidance
 
-`context-manual` → `reference/summarize-manual/SKILL.md` §3a owns this mechanism
-in full (the 0.85 stamp, the 1.0 forced replay, the reconstruction warning, the
-persistent-overflow line, the task-boundary threshold). The procedural invariants:
-pending summarized history is not a failure, `refresh` is not a way to force a
-rebuild, do not loop rebuild/summarize, and if you still cannot get below
-`0.75 * context_window`, tend durable stores and molt deliberately.
+For effective values, defaults, and configurability, call the owning tool's
+`settings` first. Use `system(action="settings", input={})` for kernel-level
+settings without another concrete tool owner. Follow `comment` to the owning
+manual before an authorized change; a SHOW result grants no mutation authority.
+Do not reproduce adjustable numeric defaults in general workflow guidance.
+
+`context-manual` → `reference/summarize-manual/SKILL.md` §3a owns reconstruction
+mechanics and boundaries. Follow the current runtime pressure guidance instead
+of duplicating thresholds here: pending summaries are normal, `refresh` is not
+an apply-summary shortcut, and rebuild/summarize must not become a loop.
 
 ## 2. Action and responsiveness
 

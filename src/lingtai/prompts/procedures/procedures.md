@@ -63,9 +63,12 @@ Report what was actually verified and what remains untested.
 
 ### Load detail when the task needs it
 
-Respect each tool's required-manual gate. Otherwise load only the relevant
-manual, not the whole library. The skill catalog supplies locations;
-`system-manual` routes uncertain runtime/workflow questions.
+Respect required-manual gates. For current values and defaults, query the
+owning tool's `settings` first; use `system(action="settings", input={})` for
+kernel-level settings without another owner. Read the returned `comment`
+manual pointer for meaning and authorized changes; SHOW grants no write
+authority. Do not duplicate adjustable numbers here. Load only relevant detail;
+`system-manual` routes uncertain questions.
 
 | Before doing this | Read |
 |---|---|

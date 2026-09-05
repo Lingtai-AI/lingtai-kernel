@@ -8,7 +8,7 @@ description: >
   Route via `system-manual` when it is unclear whether this is the right node.
 version: 1.5.1
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, alarm, communication, memory, notifications, mcp, preset]
-last_changed_at: "2026-08-29T00:00:00Z"
+last_changed_at: "2026-09-05T05:26:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/substrate/substrate.md
@@ -71,6 +71,16 @@ only for recovery when a conversation must be shed externally.
 
 ## 3. The `system` tool in practice
 
+### Query settings instead of memorizing values
+
+Use the owning tool's `settings` action for its current values and defaults.
+`system(action="settings", input={})` is the kernel-level catch-all for settings
+without another concrete tool owner; it is not a duplicate of every tool's
+inventory. Together these owner surfaces are the settings discovery route.
+Follow the row's `comment` into the owning manual for meaning and authorized
+changes. Do not keep adjustable numeric defaults in this general model, and
+do not treat a read-only SHOW result as permission to change a setting.
+
 Read the tool schema before acting; lifecycle operations can affect other peers.
 General guidance:
 
@@ -99,8 +109,8 @@ Refresh is also a passive full-context reconstruction path with broader
 lifecycle effects: reach for it when runtime context/configuration is broken or
 stale, never merely to apply a summary. Active reconstruction belongs to
 `context(action="rebuild")` — see `context-manual` →
-`reference/summarize-manual/SKILL.md` for the rebuild contract and the 0.85/1.0
-boundaries.
+`reference/summarize-manual/SKILL.md` for the rebuild contract and its
+proactive/forced boundaries.
 
 ### `presets`
 
@@ -137,10 +147,9 @@ dismiss — is owned by the first-level `notification-manual` skill.
 `system` exposes **no** `summarize` action. The three deliberate compression
 modes — a-priori `summary=true`, a-posteriori `context(action="summarize")`, and
 molt — are owned in full by `context-manual` → `reference/summarize-manual/SKILL.md`
-§0. Read that reference for the 0.85
-proactive-rebuild stamp, the 1.0 forced-rebuild boundary and its overflow
-warning, urgent versus idle-cleanup cadence, summary quality, original-result
-recovery by `tool_call_id`, and the summarize-versus-molt distinction.
+§0. Read that owner reference for rebuild boundaries, cadence, recovery, and
+the summarize-versus-molt distinction; follow current runtime guidance rather
+than copying its thresholds into this general model.
 
 Two boundaries are worth restating only as boundaries: summarize records history
 now while provider-side reconstruction is delayed, so a pending summary is

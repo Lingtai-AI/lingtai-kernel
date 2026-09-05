@@ -1171,3 +1171,15 @@ def test_context_manual_routes_skill_sharing_through_custom_by_default():
     ).read_text(encoding="utf-8")
     assert "peers install it into their own `.library/custom/<name>/`" in manual
     assert "explicit opt-in local-network shared root" in manual
+
+
+def test_resident_layers_query_settings_instead_of_copying_adjustable_defaults():
+    root = Path(__file__).resolve().parents[1]
+    for name in ("substrate", "procedures"):
+        source = root / "src" / "lingtai" / "prompts" / name / f"{name}.md"
+        body = " ".join(source.read_text(encoding="utf-8").split("---", 2)[2].split())
+        assert "settings" in body
+        assert 'system(action="settings", input={})' in body
+        assert "without another" in body
+        assert "1,000,000" not in body
+        assert "2,000,000" not in body
