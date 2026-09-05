@@ -19,9 +19,14 @@ Usage (LTP v2 envelope — one action, one strict child input):
     Agent(capabilities=["avatar"])
     # avatar(action="spawn", input={"name": "researcher"}, reasoning="...")
     # avatar(action="spawn", input={"name": "clone", "type": "deep"}, reasoning="...")
-    # avatar(action="rules", input={"rules_content": "..."}, reasoning="...")
     # avatar(action="settings", input={}, reasoning="...")
     # avatar(action="manual", input={}, reasoning="...")
+
+Avatar no longer owns a rules-distribution action or an automatic post-spawn
+rules fan-out; the shared `.rules` heartbeat signal/consumer described in
+`src/lingtai/kernel/base_agent/lifecycle.py` is unchanged, and any agent may
+still write a `.rules` file to an explicitly targeted path (e.g. via `shell`).
+See `psyche-manual` for that protocol.
 
 The spawn mission brief is root ``reasoning`` (normalized to ``_reasoning`` by
 ToolExecutor), never an ``input`` property — see ``handle()``.
@@ -175,37 +180,18 @@ _SPAWN_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_RULES_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "rules_content": {
-            "type": "string",
-            "description": (
-                "Plain text, one rule per line. Non-negotiable constraints "
-                "distributed to self and all descendants. Requires karma."
-            ),
-        },
-    },
-    "required": ["rules_content"],
-    "additionalProperties": False,
-}
-
 # Avatar's own action registry. The reserved ``manual`` child is appended by
 # this module's official declaration rather than being an operational action.
 _DECLARED_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("spawn", _SPAWN_INPUT_SCHEMA),
-    ("rules", _RULES_INPUT_SCHEMA),
 )
 
 _DESCRIPTION = (
-    "Spawn an independent agent (他我), set network rules for descendants, "
-    "inventory Avatar settings, or read the avatar manual. Requires an "
-    "explicit action — no default. "
+    "Spawn an independent agent (他我), inventory Avatar settings, or read "
+    "the avatar manual. Requires an explicit action — no default. "
     "avatar(action='spawn', input={'name': 'researcher', ...}, "
     "reasoning='<the avatar's mission>'): inherits init.json, boots on "
     "default preset; your reasoning becomes the avatar's first prompt. "
-    "avatar(action='rules', input={'rules_content': '...'}, reasoning='...'): "
-    "distribute rules to self + all descendants (requires karma). "
     "avatar(action='settings', input={}, reasoning='...'): show immutable "
     "defaults, constraints, and lifecycle policy. "
     "avatar(action='manual', input={}, reasoning='...'): return the "
@@ -342,7 +328,6 @@ class AvatarManager:
         self._family = _build_family(
             {
                 "spawn": self._dispatch_spawn,
-                "rules": self._dispatch_rules,
             }
         )
         self._pending_reasoning: str | None = None
@@ -407,9 +392,6 @@ class AvatarManager:
 
     def _dispatch_spawn(self, action_input: Mapping[str, Any]) -> dict:
         return self._spawn(self._strip_nulls(action_input), self._pending_reasoning)
-
-    def _dispatch_rules(self, action_input: Mapping[str, Any]) -> dict:
-        return self._rules(self._strip_nulls(action_input))
 
     # ------------------------------------------------------------------
     # Ledger (append-only JSONL log of avatar spawn events)
@@ -699,16 +681,6 @@ class AvatarManager:
                     "agent_name": peer_name,
                     "pid": pid,
                 }
-
-        # Auto-distribute rules to all descendants (including newborn) — read from canonical system/rules.md
-            parent_rules_md = parent_working_dir / "system" / "rules.md"
-            if parent_rules_md.is_file():
-                try:
-                    rules_content = parent_rules_md.read_text(encoding="utf-8")
-                except OSError:
-                    rules_content = ""
-                if rules_content.strip():
-                    self._distribute_rules_to_descendants(rules_content, parent_working_dir)
 
             result = {
                 "status": "ok",
@@ -1056,113 +1028,6 @@ class AvatarManager:
                 except json.JSONDecodeError:
                     continue
         return records
-
-    # ------------------------------------------------------------------
-    # Rules distribution
-    # ------------------------------------------------------------------
-
-    def _rules(self, args: dict) -> dict:
-        """Set rules and distribute via .rules signal files to self + descendants.
-
-        Self and descendants are handled uniformly: a `.rules` signal file is
-        written to every agent directory in the subtree (including the caller's
-        own). Each agent's heartbeat loop (`_check_rules_file`) then consumes
-        the signal, diffs it against `system/rules.md`, and refreshes its own
-        system prompt if the content changed. The caller's own prompt refresh
-        happens on its next heartbeat tick (within ~1s).
-        """
-        parent_working_dir = self._host.workdir.path
-        content = args.get("rules_content", "").strip()
-        if not content:
-            return {"error": "rules_content is required"}
-
-        # The host decides the existing any-admin-value rule once and exposes
-        # only this action-specific authorization bit to the plugin.
-        if not self._host.avatar_parent.has_rule_privilege():
-            return {"error": "Not authorized — admin privilege required to set rules"}
-
-        # Write .rules signal to self — heartbeat will consume and persist
-        try:
-            (parent_working_dir / ".rules").write_text(content, encoding="utf-8")
-        except OSError as e:
-            return {"error": f"failed to write .rules signal: {e}"}
-
-        # Write .rules signal file to all descendants
-        distributed = self._distribute_rules_to_descendants(content, parent_working_dir)
-
-        # Include self in the reported distribution for transparency
-        return {
-            "status": "ok",
-            "message": f"Rules set; signal written to self and {len(distributed)} descendant(s).",
-            "distributed_to": [parent_working_dir.name] + distributed,
-        }
-
-    @staticmethod
-    def _walk_avatar_tree(root: Path) -> list[Path]:
-        """Recursively collect all descendant working-dir Paths from ledger files.
-
-        Ledger entries store relative names (e.g. 'researcher'); we resolve each
-        against the *parent agent's parent directory* since avatars live as
-        siblings in .lingtai/. Returns absolute Paths of live descendant dirs.
-        """
-        from lingtai.kernel.handshake import resolve_address
-
-        visited: set[str] = {str(Path(root))}
-        queue: list[Path] = [Path(root)]
-        result: list[Path] = []
-
-        while queue:
-            current = queue.pop(0)
-            ledger_path = current / "delegates" / "ledger.jsonl"
-            if not ledger_path.is_file():
-                continue
-            try:
-                lines = ledger_path.read_text(encoding="utf-8").splitlines()
-            except OSError:
-                continue
-            # Siblings of `current` live in current.parent
-            base_dir = current.parent
-            for line in lines:
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if record.get("event") != "avatar":
-                    continue
-                wd = record.get("working_dir", "")
-                if not wd:
-                    continue
-                # Resolve relative name to absolute Path
-                child_dir = resolve_address(wd, base_dir)
-                key = str(child_dir)
-                if key in visited:
-                    continue
-                if not child_dir.is_dir():
-                    continue  # dead avatar, directory gone
-                visited.add(key)
-                result.append(child_dir)
-                queue.append(child_dir)
-
-        return result
-
-    def _distribute_rules_to_descendants(self, content: str, root: Path) -> list[str]:
-        """Write `.rules` signal file to every descendant in the avatar tree.
-
-        Returns the list of descendant directory names that were successfully written.
-        Failures are silently swallowed (caller has no visibility), consistent with
-        the best-effort, idempotent design of signal files.
-        """
-        distributed: list[str] = []
-        for child_dir in self._walk_avatar_tree(root):
-            try:
-                (child_dir / ".rules").write_text(content, encoding="utf-8")
-                distributed.append(child_dir.name)
-            except OSError:
-                pass
-        return distributed
-
 
 def setup(agent: "BaseAgent", **_ignored) -> AvatarManager:
     """Register Avatar through the official declared-host-plugin route."""

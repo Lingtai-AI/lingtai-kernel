@@ -1,6 +1,6 @@
 ---
 name: tool-family-behavior-tests
-behavior_version: 4
+behavior_version: 5
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -40,7 +40,8 @@ LABT v1. These are self-contained agent-executable behavioral tests for the
 families built on the generic `src/lingtai/tools/tool_family/` infrastructure.
 They prove the *observable* promises of the family contracts this package
 serves: the `file` read/write/edit surface and its fail-closed envelope, the
-`avatar` spawn/rules/settings/manual migration envelope, the reserved `manual` child's
+`avatar` spawn/settings/manual envelope (and the absence of the retired
+`rules` action), the reserved `manual` child's
 canonical result contract (no double wrap), the `psyche` five-manual router
 plus redacted Pad settings (pad + lingtai + knowledge + skills = psyche), `mcp` identity
 discovery with secret-safe projection, and `email` abs-mode reply routing with
@@ -241,8 +242,8 @@ tree untouched.
    `avatar(input={"name": "x", "confirm": true}, reasoning="...")` with the
    `action` key omitted entirely.
 6. Call `avatar(action="spawn", input={"name": "x", "rules_content": "no"},
-   reasoning="a genuine mission brief, long enough to pass")` (a key from the
-   `rules` branch smuggled into spawn input) and then
+   reasoning="a genuine mission brief, long enough to pass")` (an unknown key
+   — `rules_content` names no current avatar action's input) and then
    `avatar(action="spawn", input={"name": "x", "confirm": true},
    reasoning="...", summarize="yes")`.
 7. Call `avatar(action="manual", input={}, reasoning="...")`; record
@@ -266,11 +267,11 @@ tree untouched.
       created (names must match `^[\w-]+$`, be ≤64 chars, with no dot, slash,
       or leading `.`).
 - [ ] Step 5 returns exactly `{"error": "unknown action: 'bogus', only
-      'spawn', 'rules', 'settings', or 'manual' is supported"}` and `{"error":
-      "unknown action: '', only 'spawn', 'rules', 'settings', or 'manual' is
+      'spawn', 'settings', or 'manual' is supported"}` and `{"error":
+      "unknown action: '', only 'spawn', 'settings', or 'manual' is
       supported"}` for the
       omitted case — no spawn, no ledger, no process.
-- [ ] Step 6: the cross-action key fails with `{"status": "failed",
+- [ ] Step 6: the unknown key fails with `{"status": "failed",
       "error_code": "INVALID_ARGUMENT", "message": "unsupported avatar input
       field"}` before any I/O, and `summarize: "yes"` fails with
       `INVALID_ARGUMENT` before any spawn.
@@ -286,50 +287,49 @@ name is accepted, `action`-less payload is inferred as `spawn`, or the
 manual result is wrapped. Forbidden side effect: any failed spawn must leave
 no avatar dir, no ledger record, and no live process.
 
-## Behavior T005 — avatar rules gate: authorization and distribution
+## Behavior T005 — avatar has no rules action or automatic rules fan-out
 
 - **id**: T005
-- **title**: `avatar` rules requires admin.karma, writes the `.rules` signal,
-  and distributes to the caller — with cross-action keys rejected before
-  authorization
-- **guards**: `avatar-contract` § Tool surface — rules
+- **title**: `avatar` owns no `rules` action and performs no automatic
+  post-spawn rules broadcast; `.rules` is unaffected as a separate, unchanged
+  heartbeat mechanism
+- **guards**: `avatar-contract` § Tool surface — contract_version 9
   ([CONTRACT.md](../avatar/CONTRACT.md#tool-surface))
-- **supersedes**: `tests/test_tool_family_avatar_migration.py` (rules tests);
-  the no-admin refusal path stays covered by
-  `tests/test_avatar_rules.py::test_rules_requires_admin`
+- **supersedes**: `tests/test_avatar_rules.py::TestAvatarRulesActionRemoved`,
+  `::TestSpawnNoAutoRulesDistribution`;
+  `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_rules_action_is_unknown_regardless_of_admin`
 - **runner**: an agent with the `avatar` capability whose `admin` block
   includes at least one truthy privilege (e.g. `admin: {"karma": true}`)
-- **prerequisites**: `<wd>` writable; no `<wd>/.rules` file before the run
+- **prerequisites**: `<wd>` writable; no `<wd>/.rules` file before the run;
+  `<wd>/system/rules.md` pre-populated with some content
 - **estimate**: 1 min
 
 ### Steps
-1. Call `avatar(action="rules", input={"rules_content": "   "},
-   reasoning="...")` (whitespace-only content) and check whether
-   `<wd>/.rules` exists.
-2. Call `avatar(action="rules", input={"rules_content": "Be concise.",
-   "name": "helper"}, reasoning="...")` (a spawn-branch key smuggled into
-   rules input), then check `<wd>/.rules` again.
-3. Call `avatar(action="rules", input={"rules_content": "Be concise."},
-   reasoning="...")`; read `<wd>/.rules` and the returned `distributed_to`.
-4. Call `avatar(action="manual", input={}, reasoning="...")` once more and
-   list `<wd>` before/after to confirm no spawn or rules side effect.
+1. Call `avatar(action="rules", input={"rules_content": "Be concise."},
+   reasoning="...")` and check whether `<wd>/.rules` exists.
+2. Call `avatar(action="spawn", input={"name": "helper", "confirm": true},
+   reasoning="a genuine mission brief, long enough to pass")`; check the new
+   sibling directory for a `.rules` file.
+3. Call `avatar(action="manual", input={}, reasoning="...")` once more and
+   list `<wd>` before/after to confirm no spawn or filesystem side effect.
 
 ### Expected evidence
-- [ ] Step 1 returns an `error` (empty `rules_content`) and no `.rules` file
-      was written.
-- [ ] Step 2 returns `{"status": "failed", "error_code": "INVALID_ARGUMENT",
-      "message": "unsupported avatar input field"}` and no `.rules` file was
-      written (rejected before the authorization check and before any write).
-- [ ] Step 3 returns `{"status": "ok", "message": ..., "distributed_to":
-      [<your agent name>]}` and `<wd>/.rules` contains exactly `Be concise.`
-- [ ] Step 4: the manual result is the same no-I/O flat shape as T004 step 7
+- [ ] Step 1 returns avatar's ordinary unknown-action error (see T004 step 5's
+      exact string) regardless of the caller's admin karma, and no `<wd>/.rules`
+      file is written.
+- [ ] Step 2: the spawn succeeds, but the newborn sibling directory has no
+      `.rules` file even though `<wd>/system/rules.md` was pre-populated
+      (shallow spawn never copies `system/` at all; deep spawn's ordinary
+      copy of `system/` is a separate, unaffected mechanism — not exercised
+      by this step).
+- [ ] Step 3: the manual result is the same no-I/O flat shape as T004 step 7
       and the file listing is unchanged.
 
 ### Pass / Fail
-Pass when every evidence item holds. Fail if rules are written without
-content, a cross-action key passes dispatch, or the `.rules` self signal is
-missing on success. Forbidden side effect: a rejected rules call must write
-no `.rules` file and no ledger record.
+Pass when every evidence item holds. Fail if `action="rules"` performs any
+write, or if a spawn writes a `.rules` file to the newborn. Forbidden side
+effect: this behavior must not observe any `.rules` file appear anywhere as
+a result of an `avatar` call.
 
 ## Behavior T006 — manual action contract: canonical result, no double wrap
 

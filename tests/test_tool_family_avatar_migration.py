@@ -34,14 +34,10 @@ class _Workdir:
 
 class _AvatarParent:
     def __init__(
-        self, *, name: str = "parent", venv_path: str | None = None, rules: bool = False
+        self, *, name: str = "parent", venv_path: str | None = None
     ) -> None:
         self.parent_name = name
         self.venv_path = venv_path
-        self._rules = rules
-
-    def has_rule_privilege(self) -> bool:
-        return self._rules
 
     def authorize_derived_launch(self, _capability):
         from lingtai.kernel.provider_admission import (
@@ -57,12 +53,12 @@ class _Launcher:
         return None
 
 
-def _host(parent_dir: Path, *, rules: bool = False, venv_path: str | None = None):
+def _host(parent_dir: Path, *, venv_path: str | None = None):
     return ToolPluginHost.grant(
         avatar.DECLARATION,
         {
             "workdir": _Workdir(parent_dir),
-            "avatar_parent": _AvatarParent(venv_path=venv_path, rules=rules),
+            "avatar_parent": _AvatarParent(venv_path=venv_path),
         },
     )
 
@@ -81,8 +77,8 @@ def test_avatar_declaration_is_static_and_matches_its_composed_public_surface():
     declaration = avatar.DECLARATION
 
     assert declaration.name == "avatar"
-    assert declaration.actions == ("spawn", "rules")
-    assert declaration.public_actions == ("spawn", "rules", "settings", "manual")
+    assert declaration.actions == ("spawn",)
+    assert declaration.public_actions == ("spawn", "settings", "manual")
     assert declaration.settings is True
     assert declaration.requires == ("workdir", "avatar_parent")
     assert declaration.name in OFFICIAL_TOOL_PLUGIN_NAMES
@@ -105,7 +101,6 @@ def test_avatar_settings_inventory_is_exact_fresh_and_excludes_private_state(
             "avatar_parent": _AvatarParent(
                 name=private_parent,
                 venv_path=private_runtime,
-                rules=True,
             ),
         },
     )
@@ -292,7 +287,7 @@ def test_avatar_settings_provider_failure_is_one_bounded_result():
         raise RuntimeError("private provider detail")
 
     family = avatar._build_family(
-        {"spawn": lambda _input: {}, "rules": lambda _input: {}},
+        {"spawn": lambda _input: {}},
         settings_provider=unavailable,
     )
 
@@ -303,7 +298,7 @@ def test_avatar_settings_provider_failure_is_one_bounded_result():
     }
 
 
-def test_avatar_manager_uses_only_granted_ports_for_local_manual_and_rules(tmp_path):
+def test_avatar_manager_uses_only_granted_ports_for_local_manual(tmp_path):
     parent_dir = _parent_dir(tmp_path)
     host = _host(parent_dir)
     manager = AvatarManager(host, launcher=_Launcher())
@@ -323,13 +318,18 @@ def test_avatar_manager_uses_only_granted_ports_for_local_manual_and_rules(tmp_p
     assert sorted(path.name for path in parent_dir.iterdir()) == before
 
     denied = manager({"action": "rules", "input": {"rules_content": "No deleting."}})
-    assert denied == {"error": "Not authorized — admin privilege required to set rules"}
+    assert denied == {
+        "error": (
+            "unknown action: 'rules', only 'spawn', 'settings', "
+            "or 'manual' is supported"
+        ),
+    }
     assert not (parent_dir / ".rules").exists()
 
 
-def test_avatar_spawn_preserves_workdir_identity_venv_and_rules_control(tmp_path, monkeypatch):
+def test_avatar_spawn_preserves_workdir_identity_and_venv(tmp_path, monkeypatch):
     parent_dir = _parent_dir(tmp_path)
-    host = _host(parent_dir, rules=True, venv_path="/parent/runtime")
+    host = _host(parent_dir, venv_path="/parent/runtime")
     manager = AvatarManager(host, launcher=_Launcher())
     receipt = AvatarLaunchReceipt(pid=4242, handle=object())
     monkeypatch.setattr(manager, "_launch", lambda working_dir, **_kwargs: (receipt, working_dir / "stderr"))
@@ -356,11 +356,8 @@ def test_avatar_spawn_preserves_workdir_identity_venv_and_rules_control(tmp_path
     assert spawned["status"] == "ok"
     assert "parent" in (child_dir / ".prompt").read_text(encoding="utf-8")
     assert json.loads((child_dir / "init.json").read_text(encoding="utf-8"))["venv_path"] == "/parent/runtime"
-
-    rules = manager({"action": "rules", "input": {"rules_content": "Be concise."}})
-    assert rules["distributed_to"] == ["parent", "child"]
-    assert (parent_dir / ".rules").read_text(encoding="utf-8") == "Be concise."
-    assert (child_dir / ".rules").read_text(encoding="utf-8") == "Be concise."
+    # No automatic .rules fan-out after spawn (Option B).
+    assert not (child_dir / ".rules").exists()
 
 
 @pytest.mark.parametrize("avatar_type", ["shallow", "deep"])

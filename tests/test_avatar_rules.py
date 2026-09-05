@@ -148,35 +148,20 @@ class TestRulesHeartbeatWatch:
 
 
 
-class TestAvatarRulesAction:
-    """Test avatar_rules distribution."""
+class TestAvatarRulesActionRemoved:
+    """Avatar no longer owns a dedicated rules-distribution action.
 
-    def test_rules_requires_admin(self, tmp_path):
-        """Non-admin agent cannot set rules."""
-        from lingtai.agent import Agent
+    Option B (see avatar CONTRACT.md contract_version 9): the admin-gated
+    `action="rules"` child and its fan-out were removed entirely rather than
+    replaced by a new guard. `.rules` remains a real, unchanged heartbeat
+    signal (see ``TestRulesHeartbeatWatch`` above and ``psyche-manual``); any
+    agent may still write one to an explicitly targeted path itself (e.g. via
+    `shell`), but Avatar performs no such write and enforces no privilege
+    check for it.
+    """
 
-        agent = Agent(
-            service=make_mock_service(),
-            agent_name="worker",
-            working_dir=tmp_path / "worker",
-            capabilities=["avatar"],
-            admin={},
-        )
-        mgr = agent.get_capability("avatar")
-        result = mgr.handle({
-            "action": "rules",
-            "input": {"rules_content": "No deleting."},
-        })
-        assert "error" in result
-
-    def test_rules_writes_self_signal_then_heartbeat_persists(self, tmp_path):
-        """Admin should write .rules signal to self; heartbeat persists to system/rules.md.
-
-        After calling _rules(), the caller's own directory has a .rules signal file.
-        The prompt section and system/rules.md are NOT updated synchronously — they're
-        applied by the caller's own heartbeat loop on its next tick. This test simulates
-        one heartbeat tick via _check_rules_file() to verify the end-to-end path.
-        """
+    def test_rules_is_an_unknown_action(self, tmp_path):
+        """action='rules' now fails the same way as any other unknown action."""
         from lingtai.agent import Agent
 
         agent = Agent(
@@ -191,124 +176,13 @@ class TestAvatarRulesAction:
             "action": "rules",
             "input": {"rules_content": "Always log actions."},
         })
-        assert result["status"] == "ok"
-
-        # .rules signal file was written to self (not yet consumed)
-        assert (agent._working_dir / ".rules").read_text() == "Always log actions."
-        # Canonical file and prompt section NOT yet updated — heartbeat hasn't ticked
-        assert not (agent._working_dir / "system" / "rules.md").is_file()
-        assert agent._prompt_manager.read_section("rules") is None
-
-        # Simulate one heartbeat tick
-        agent._check_rules_file()
-
-        # Now canonical file and prompt section are updated
-        assert (agent._working_dir / "system" / "rules.md").read_text() == "Always log actions."
-        assert agent._prompt_manager.read_section("rules") == "Always log actions."
-        # Signal consumed
-        assert not (agent._working_dir / ".rules").is_file()
-
-    def test_rules_distributes_signals_to_descendants(self, tmp_path):
-        """Rules should write .rules signal files to all descendant directories.
-
-        IMPORTANT: As of v0.5.13, the ledger stores relative directory names
-        (e.g. 'child_a'), not absolute paths. Descendants live as siblings of
-        the parent agent in the same `.lingtai/` directory.
-        """
-        from lingtai.agent import Agent
-
-        # All agents are siblings under tmp_path (mimicking .lingtai/ layout)
-        parent_dir = tmp_path / "parent"
-        child_a_dir = tmp_path / "child_a"
-        child_b_dir = tmp_path / "child_b"
-        child_a_dir.mkdir(parents=True)
-        child_b_dir.mkdir(parents=True)
-
-        parent = Agent(
-            service=make_mock_service(),
-            agent_name="parent",
-            working_dir=parent_dir,
-            capabilities=["avatar"],
-            admin={"karma": True},
-        )
-
-        # Write ledger entries with RELATIVE names (current convention)
-        ledger_dir = parent_dir / "delegates"
-        ledger_dir.mkdir(parents=True, exist_ok=True)
-        ledger_path = ledger_dir / "ledger.jsonl"
-        with open(ledger_path, "w") as f:
-            f.write(json.dumps({"event": "avatar", "name": "a", "working_dir": "child_a"}) + "\n")
-            f.write(json.dumps({"event": "avatar", "name": "b", "working_dir": "child_b"}) + "\n")
-
-        mgr = parent.get_capability("avatar")
-        result = mgr.handle({
-            "action": "rules",
-            "input": {"rules_content": "No external API calls."},
-        })
-        assert result["status"] == "ok"
-        # Self + descendants uniformly get .rules signal files
-        assert (parent_dir / ".rules").read_text() == "No external API calls."
-        assert (child_a_dir / ".rules").read_text() == "No external API calls."
-        assert (child_b_dir / ".rules").read_text() == "No external API calls."
-        # distributed_to reports relative names for self + descendants
-        assert set(result["distributed_to"]) == {"parent", "child_a", "child_b"}
-
-    def test_rules_distributes_recursively(self, tmp_path):
-        """Rules should propagate to grandchildren (avatars of avatars).
-
-        All three agents are siblings under tmp_path. The ledger records use
-        relative names; resolution happens against the parent's parent dir.
-        """
-        from lingtai.agent import Agent
-
-        parent_dir = tmp_path / "parent"
-        child_dir = tmp_path / "child"
-        grandchild_dir = tmp_path / "grandchild"
-        for d in (parent_dir, child_dir, grandchild_dir):
-            d.mkdir(parents=True)
-
-        parent = Agent(
-            service=make_mock_service(),
-            agent_name="parent",
-            working_dir=parent_dir,
-            capabilities=["avatar"],
-            admin={"karma": True},
-        )
-
-        # Parent → child ledger (relative name "child")
-        p_ledger = parent_dir / "delegates" / "ledger.jsonl"
-        p_ledger.parent.mkdir(parents=True, exist_ok=True)
-        p_ledger.write_text(json.dumps({"event": "avatar", "name": "child", "working_dir": "child"}) + "\n")
-
-        # Child → grandchild ledger (relative name "grandchild")
-        c_ledger = child_dir / "delegates" / "ledger.jsonl"
-        c_ledger.parent.mkdir(parents=True, exist_ok=True)
-        c_ledger.write_text(json.dumps({"event": "avatar", "name": "gc", "working_dir": "grandchild"}) + "\n")
-
-        mgr = parent.get_capability("avatar")
-        result = mgr.handle({
-            "action": "rules",
-            "input": {"rules_content": "Be concise."},
-        })
-        assert result["status"] == "ok"
-        # All descendants get .rules signal files
-        assert (child_dir / ".rules").read_text() == "Be concise."
-        assert (grandchild_dir / ".rules").read_text() == "Be concise."
-
-    def test_rules_requires_content(self, tmp_path):
-        """avatar_rules without rules_content should error."""
-        from lingtai.agent import Agent
-
-        agent = Agent(
-            service=make_mock_service(),
-            agent_name="admin",
-            working_dir=tmp_path / "admin",
-            capabilities=["avatar"],
-            admin={"karma": True},
-        )
-        mgr = agent.get_capability("avatar")
-        result = mgr.handle({"action": "rules", "input": {}})
-        assert "error" in result
+        assert result == {
+            "error": (
+                "unknown action: 'rules', only 'spawn', 'settings', "
+                "or 'manual' is supported"
+            ),
+        }
+        assert not (agent._working_dir / ".rules").exists()
 
     def test_explicit_spawn_action_required(self, tmp_path):
         """action='spawn' must be explicit; omitting action must NOT spawn.
@@ -345,7 +219,7 @@ class TestAvatarRulesAction:
             omitted = mgr.handle({"name": "child", "confirm": True})
             assert "error" in omitted
             assert omitted["error"] == (
-                "unknown action: '', only 'spawn', 'rules', 'settings', "
+                "unknown action: '', only 'spawn', 'settings', "
                 "or 'manual' is supported"
             )
             launch.assert_not_called()
@@ -357,58 +231,14 @@ class TestAvatarRulesAction:
         assert result["agent_name"] == "child"
         assert result["address"] == "child"  # relative name (current convention)
 
-    def test_rules_root_not_duplicated_via_cycle(self, tmp_path):
-        """Cycles through root should not cause root to appear twice in distributed_to.
+class TestSpawnNoAutoRulesDistribution:
+    """Avatar's post-spawn automatic rules fan-out is removed (Option B).
 
-        The caller's own directory is included once (via the explicit self-write).
-        _walk_avatar_tree seeds its visited set with root so that cycles pointing
-        back to root from any descendant don't produce a duplicate entry.
-        """
-        from lingtai.agent import Agent
-
-        parent_dir = tmp_path / "parent"
-        child_dir = tmp_path / "child"
-        child_dir.mkdir(parents=True)
-
-        parent = Agent(
-            service=make_mock_service(),
-            agent_name="parent",
-            working_dir=parent_dir,
-            capabilities=["avatar"],
-            admin={"karma": True},
-        )
-
-        # parent → child
-        p_ledger = parent_dir / "delegates" / "ledger.jsonl"
-        p_ledger.parent.mkdir(parents=True, exist_ok=True)
-        p_ledger.write_text(json.dumps({"event": "avatar", "name": "child", "working_dir": "child"}) + "\n")
-
-        # child → parent (malicious cycle pointing back to root)
-        c_ledger = child_dir / "delegates" / "ledger.jsonl"
-        c_ledger.parent.mkdir(parents=True, exist_ok=True)
-        c_ledger.write_text(json.dumps({"event": "avatar", "name": "parent", "working_dir": "parent"}) + "\n")
-
-        mgr = parent.get_capability("avatar")
-        result = mgr.handle({
-            "action": "rules",
-            "input": {"rules_content": "Cycle test."},
-        })
-        assert result["status"] == "ok"
-        # Both self and child receive .rules signals
-        assert (parent_dir / ".rules").read_text() == "Cycle test."
-        assert (child_dir / ".rules").read_text() == "Cycle test."
-        # 'parent' appears exactly once in distributed_to (from self-write,
-        # not duplicated by the BFS walk through the cycle)
-        assert result["distributed_to"].count("parent") == 1
-        assert "child" in result["distributed_to"]
-
-
-class TestAutoDistributeAfterSpawn:
-    """After avatar_spawn, parent's rules should be distributed to newborn.
-
-    These tests mock _launch to avoid actually spawning subprocesses, and
-    pre-create the parent's init.json so the spawn code path can proceed
-    to ledger append and rules distribution.
+    Ordinary deep-copy behavior is unchanged: a deep clone still gets
+    `system/rules.md` because `_prepare_deep` copies the whole `system/`
+    tree, exactly as before. What is gone is the dedicated read-canonical-
+    then-write-`.rules`-signal step that used to run after every successful
+    spawn — shallow or deep — regardless of copy mode.
     """
 
     def _setup_spawnable_parent(self, tmp_path, with_rules: bool):
@@ -432,8 +262,8 @@ class TestAutoDistributeAfterSpawn:
             (system_dir / "rules.md").write_text("Always be concise.")
         return parent, parent_dir
 
-    def test_spawn_distributes_existing_rules(self, tmp_path):
-        """If parent has system/rules.md, spawning should write .rules to new avatar."""
+    def test_shallow_spawn_no_longer_writes_a_rules_signal(self, tmp_path):
+        """Even with a canonical system/rules.md, a shallow spawn writes no .rules."""
         parent, parent_dir = self._setup_spawnable_parent(tmp_path, with_rules=True)
 
         mgr = parent.get_capability("avatar")
@@ -441,27 +271,13 @@ class TestAutoDistributeAfterSpawn:
             result = mgr.handle({"action": "spawn", "input": {"name": "child", "confirm": True}})
         assert result["status"] == "ok"
 
-        # Child dir is a sibling of parent_dir (avatar_working_dir = parent.parent / name)
         child_dir = parent_dir.parent / "child"
-        # Child gets .rules signal file (heartbeat will consume and persist it)
-        assert (child_dir / ".rules").read_text() == "Always be concise."
+        assert not (child_dir / ".rules").exists()
+        # Shallow spawn never copies system/ at all — unaffected by this change.
+        assert not (child_dir / "system" / "rules.md").exists()
 
-    def test_spawn_without_rules_no_distribution(self, tmp_path):
-        """If parent has no system/rules.md, spawn should not create .rules in child."""
-        parent, parent_dir = self._setup_spawnable_parent(tmp_path, with_rules=False)
-
-        mgr = parent.get_capability("avatar")
-        with _patch_avatar_launch():
-            result = mgr.handle({"action": "spawn", "input": {"name": "child", "confirm": True}})
-        assert result["status"] == "ok"
-
-        child_dir = parent_dir.parent / "child"
-        assert not (child_dir / ".rules").is_file()
-
-    def test_spawn_deep_clone_also_gets_rules_signal(self, tmp_path):
-        """Deep clone already has system/rules.md from _prepare_deep,
-        but auto-distribute still writes .rules (redundant but harmless —
-        the heartbeat will diff and skip)."""
+    def test_deep_spawn_still_copies_rules_md_but_writes_no_signal(self, tmp_path):
+        """Deep copy of system/ (unchanged) supplies rules.md; no .rules signal is added."""
         parent, parent_dir = self._setup_spawnable_parent(tmp_path, with_rules=True)
 
         mgr = parent.get_capability("avatar")
@@ -470,10 +286,10 @@ class TestAutoDistributeAfterSpawn:
         assert result["status"] == "ok"
 
         clone_dir = parent_dir.parent / "clone"
-        # system/rules.md was copied by _prepare_deep
+        # Ordinary deep copy of system/ is preserved.
         assert (clone_dir / "system" / "rules.md").read_text() == "Always be concise."
-        # .rules signal was also written (redundant but harmless)
-        assert (clone_dir / ".rules").read_text() == "Always be concise."
+        # No dedicated .rules signal is written anymore.
+        assert not (clone_dir / ".rules").exists()
 
 
 class TestSpawnNameValidation:

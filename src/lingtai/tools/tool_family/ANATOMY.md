@@ -190,7 +190,9 @@ pre-migration unknown-action result.
 `avatar/__init__.py` ([`../avatar/ANATOMY.md`](../avatar/ANATOMY.md)) is the
 sixth real consumer, and shows partial adoption is conforming: it reuses
 `ChildTool`/`ToolFamily` and the exported `MANUAL_INPUT_SCHEMA` for
-`spawn`/`rules`/`settings`/`manual` schema composition and dispatch. Its
+`spawn`/`settings`/`manual` schema composition and dispatch (the former
+`rules` child was removed, not relocated — see avatar CONTRACT.md
+contract_version 9). Its
 declaration opts into the generic settings child with the no-I/O provider from
 `avatar/settings.py`, while its operational actions remain one
 `_DECLARED_CHILD_SPECS` source and its public listing derives from the
