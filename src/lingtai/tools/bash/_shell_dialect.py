@@ -169,6 +169,27 @@ def _darwin_default_shell(env: dict[str, str] | None = None) -> str:
     return "/bin/bash"
 
 
+_POSIX_SHELL_DISPLAY_BY_BASENAME: dict[str, str] = {"zsh": "Zsh (POSIX)", "bash": "Bash (POSIX)"}
+
+
+def posix_shell_display_name(env: dict[str, str] | None = None) -> str:
+    """Truthful model-facing label for the POSIX ``ShellKind``.
+
+    The static ``Bash (POSIX)`` label is only accurate when the interpreter
+    that actually executes the command is bash. On Darwin, execution spawns
+    the resolved login shell (:func:`_darwin_default_shell`, zsh by default
+    since Catalina), so the description must derive the label from that same
+    resolution rather than assert a fixed name that can disagree with reality
+    (Lingtai-AI/lingtai#934). Non-Darwin platforms keep the historical static
+    label: ``shell=True`` there is unchanged and does not resolve a login
+    shell at all.
+    """
+    if platform.system() != "Darwin":
+        return _DISPLAY_NAMES[ShellKind.POSIX]
+    basename = os.path.basename(_darwin_default_shell(env))
+    return _POSIX_SHELL_DISPLAY_BY_BASENAME.get(basename, _DISPLAY_NAMES[ShellKind.POSIX])
+
+
 def posix_login_env(
     base_env: dict[str, str] | None = None,
 ) -> dict[str, str] | None:
