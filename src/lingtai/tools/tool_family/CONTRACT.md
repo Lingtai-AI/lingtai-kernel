@@ -350,7 +350,7 @@ registered directly and unwrapped with a post-dispatch `_adapt_manual_result`
 flattening to the family's pinned flat `status`/`manual`/`manual_path` shape,
 the kernel-injected `_tc_id` dropped at its own Host boundary, and the generic
 `ACTION_REQUIRED` failure normalized back to its pinned unknown-action string.
-It is this package's largest consumer at eleven children, and the one where the
+It is this package's largest consumer at twelve action children, and the one where the
 allowed-key check carries the most weight: `system`'s privilege classes are
 per action, so rejecting an `input` key outside the selected child's own schema
 is what stops a smuggled `address` on a non-karma action from reaching a

@@ -45,7 +45,7 @@ from typing import Any
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from .plugin import SYSTEM_DECLARED_ACTIONS
 
-# Canonical compatibility order for the eleven operational actions plus
+# Canonical compatibility order for the twelve operational actions plus
 # ``manual``. The ToolPlugin declaration owns operational child registration;
 # ToolFamily's reserved settings-provider opt-in mechanically inserts
 # ``settings`` immediately before ``manual`` in the final model-facing family.
@@ -54,13 +54,13 @@ ACTION_ORDER = (*SYSTEM_DECLARED_ACTIONS, "manual")
 # --- Shared field descriptions, carried over verbatim from the flat schema ---
 
 _REASON_DESCRIPTION = (
-    "Reason for sleep, refresh, or clear (logged to the event log; for clear, "
+    "Reason for sleep, refresh, target_refresh, or clear (logged to the event log; for clear, "
     "becomes the source tag in the recovery summary)."
 )
 
 _ADDRESS_DESCRIPTION = (
     "Target agent's address (working directory path). Required for interrupt, "
-    "lull, suspend, cpr, clear, nirvana."
+    "lull, suspend, cpr, clear, target_refresh, nirvana."
 )
 
 _PRESET_DESCRIPTION = (
@@ -88,7 +88,7 @@ _FORCE_DESCRIPTION = (
 )
 
 def _address_input_schema() -> dict[str, Any]:
-    """Build the shared input shape for the six address-taking verbs.
+    """Build the shared input shape for the address-taking verbs.
 
     ``lull``/``interrupt``/``suspend``/``cpr``/``clear``/``nirvana`` take
     exactly the same two fields, so they are generated rather than restated
@@ -196,6 +196,7 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "suspend": _address_input_schema(),
     "cpr": _address_input_schema(),
     "clear": _address_input_schema(),
+    "target_refresh": _address_input_schema(),
     "nirvana": _address_input_schema(),
     "presets": _PRESETS_INPUT_SCHEMA,
     "name_set": _NAME_SET_INPUT_SCHEMA,
@@ -224,6 +225,7 @@ ACTION_ENUM_DESCRIPTION = (
     "cpr: resuscitate suspended agent (karma).\n\n"
     "interrupt: cancel another agent's turn (karma).\n\n"
     "clear: force molt on another agent (karma). See system-manual.\n\n"
+    "target_refresh: submit an asynchronous refresh request to another agent (karma). The target performs the refresh; the receipt confirms only submission, not completion. See system-manual.\n\n"
     "nirvana: permanently destroy an agent (karma + nirvana). See "
     "system-manual.\n\n"
     "name_set: set your true name (真名) — input={'content': '<name>'}. Once "
@@ -248,12 +250,12 @@ def get_description(lang: str = "en") -> str:
         "Self-actions (no permissions needed): sleep, refresh, presets, "
         "name_set, name_nickname, settings, manual.\n"
         "Karma actions (require admin.karma=True): lull, interrupt, suspend, "
-        "cpr, clear.\n"
+        "cpr, clear, target_refresh.\n"
         "Nirvana (require admin.karma=True AND admin.nirvana=True): nirvana — "
         "this permanently destroys an agent and is irreversible.\n\n"
         "Every call takes action + input + reasoning; input is the strict "
         "argument object for the selected action. The karma verbs take "
-        "input={'address': '<agent working dir>', 'reason': ...}; refresh "
+        "input={'address': '<agent working dir>', 'reason': ...}; target_refresh submits the target's .refresh signal and does not change preset/config; refresh "
         "takes input={'reason': ..., 'preset': ..., 'revert_preset': ...}; "
         "the two name actions take input={'content': ...}; presets, settings, "
         "and manual take input={}.\n\n"

@@ -1,4 +1,4 @@
-"""Karma-gated lifecycle actions — sleep, lull, suspend, cpr, interrupt, clear, nirvana."""
+"""Karma-gated lifecycle actions — sleep, lull, suspend, cpr, interrupt, clear, target_refresh, nirvana."""
 from __future__ import annotations
 
 import time
@@ -17,7 +17,7 @@ from lingtai.kernel.handshake import resolve_address
 # Karma / Nirvana gate mapping
 # ---------------------------------------------------------------------------
 
-_KARMA_ACTIONS = {"interrupt", "lull", "suspend", "cpr", "clear"}
+_KARMA_ACTIONS = {"interrupt", "lull", "suspend", "cpr", "clear", "target_refresh"}
 _NIRVANA_ACTIONS = {"nirvana"}
 
 
@@ -329,6 +329,35 @@ def _clear(agent, args: dict) -> dict:
     (resolved / ".clear").write_text(source, encoding="utf-8")
     agent._log("karma_clear", target=address, source=source)
     return {"status": "cleared", "address": address, "source": source}
+
+
+_TARGET_REFRESH_SUBMITTED_MESSAGE = (
+    "Refresh request submitted. The target refreshes asynchronously; "
+    "verify completion by observing the target."
+)
+
+
+def _target_refresh(agent, args: dict) -> dict:
+    """Submit an asynchronous refresh request to another agent."""
+    err = _check_karma_gate(agent, "target_refresh", args)
+    if err:
+        return err
+    address = args["address"]
+    resolved = args["_resolved_address"]
+    if not _is_alive(resolved):
+        return {"error": True, "message": f"Agent at {address} is not running"}
+    # The target heartbeat owns marker consumption and the refresh handshake.
+    (resolved / ".refresh").write_text("", encoding="utf-8")
+    agent._log(
+        "karma_target_refresh",
+        target=address,
+        reason=str(args.get("reason") or ""),
+    )
+    return {
+        "status": "refresh_requested",
+        "address": address,
+        "message": _TARGET_REFRESH_SUBMITTED_MESSAGE,
+    }
 
 
 def _nirvana(agent, args: dict) -> dict:

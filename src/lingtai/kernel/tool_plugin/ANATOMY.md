@@ -280,8 +280,9 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   installed at the historical `soul-manual` destination.
 - `src/lingtai/tools/system/__init__.py` is the eleventh accepted vertical
   slice. Its static `DECLARATION` preserves the public
-  `refresh | sleep | lull | interrupt | suspend | cpr | clear | nirvana |
-  presets | name_set | name_nickname | manual` family (no public `summarize`)
+  `refresh | sleep | lull | interrupt | suspend | cpr | clear | target_refresh |
+  nirvana | presets | name_set | name_nickname | manual` family (no public
+  `summarize`)
   and binds the retained handlers through the private `_SystemHandlerHost`
   bridge to exactly `workdir`, `system_runtime`, and `identity`. The one
   self-sleep policy — fingerprint comparison, refusal/force, receipts, audit

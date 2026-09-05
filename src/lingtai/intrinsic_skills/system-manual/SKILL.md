@@ -189,8 +189,10 @@ in the substrate manual; pass `null` unless that exceptional route applies.
 
 `presets` can return a large allowed-only catalog, so use the root
 `summarize=true` only when exact entries are unnecessary. Refresh, sleep, lull,
-suspend, cpr, interrupt, clear, nirvana, both name actions, and errors return
-short receipts; leave `summarize=false` and read them exactly. The `settings`
+suspend, cpr, interrupt, clear, target_refresh, nirvana, both name actions, and
+errors return short receipts; leave `summarize=false` and read them exactly. A
+`target_refresh` receipt (`refresh_requested`) means the request was submitted
+to the target, not that the target has refreshed. The `settings`
 action is read-only SHOW and accepts only `input={}`. Its normal success has no
 `status` wrapper and each row has exactly `key`, `current`, `default`,
 `configurable`, and `comment`. The `manual` action itself must always use `summarize=false`,

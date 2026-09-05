@@ -14,6 +14,8 @@ related_files:
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - tests/test_karma.py
   - tests/test_system_declared_plugin.py
+  - tests/test_system_target_refresh.py
+  - tests/_refresh_watcher_helpers.py
   - tests/_workdir_lease_helpers.py
   - tests/_snapshot_helpers.py
   - tests/_lifecycle_clock_helpers.py
@@ -288,3 +290,27 @@ Pass only when mounted and direct routes agree on refusal, force escape, receipt
 ### Pass / Fail
 Pass only when all evidence holds. Fail on an omitted/duplicate row, partial
 inventory, secret disclosure, mutation, or an unresolved manual pointer.
+
+
+## Behavior B010 — target_refresh submits the marker; the target owns the refresh
+
+- **id**: B010
+- **title**: target_refresh reports submission, not completion
+- **guards**: `system-contract` § [Target refresh submission](CONTRACT.md#target-refresh-submission)
+- **supersedes**: `tests/test_system_target_refresh.py::test_target_refresh_submits_only_the_marker_and_truthful_receipt`, `tests/test_system_target_refresh.py::test_mounted_action_enters_the_targets_existing_refresh_handshake`
+- **runner**: an agent with `admin: {"karma": true}`
+- **prerequisites**: a disposable live target using the process-free refresh-watcher fake
+- **estimate**: 1 min
+
+### Steps
+1. Call `target_refresh` against a stale target; inspect the refusal and signal files.
+2. Restore a fresh heartbeat, call the mounted action, and inspect the target before its heartbeat runs.
+3. Run one target heartbeat tick and inspect the marker and watcher request.
+
+### Expected evidence
+- [ ] The stale target is refused and writes neither `.refresh` nor `.refresh.taken`.
+- [ ] The live-target call returns `refresh_requested`, creates only an empty `.refresh`, and does not start the target refresh.
+- [ ] The target heartbeat replaces the marker with `.refresh.taken` and records one target-owned watcher request.
+
+### Pass / Fail
+Pass when the caller proves only submission and the target heartbeat owns the refresh handshake. Fail if the caller claims completion or bypasses that handshake.

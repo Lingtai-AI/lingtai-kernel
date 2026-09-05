@@ -16,3 +16,4 @@ maintenance: |
 **术语对照**
 
 - `system`：原 locale catalog 未定义 model-facing 本地化别名；调用名、action 枚举值和参数名均保持上方 canonical English。
+- `target_refresh`：对另一个 agent 提交异步 refresh 请求（karma 门控，只写入目标的 `.refresh` 标记）；`refresh_requested` 回执仅表示请求已提交，不表示目标已完成 refresh。

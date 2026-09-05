@@ -16,3 +16,4 @@ maintenance: |
 **名相对照**
 
 - `system`：原 locale catalog 未载 model-facing 本地名；召名、action 枚举之值与参名皆仍书上文 canonical English。
+- `target_refresh`：请他 agent 自行 refresh 之异步之请（karma 所守，惟书彼 `.refresh` 之记）；`refresh_requested` 之据但言请已达，非谓彼已 refresh 毕。

@@ -245,7 +245,7 @@ registry's collision check) behind `get_schema()`, an agent-bound family per
 `handle(agent, args)` call, `build_manual_child(agent, "system-manual")`
 registered directly with a post-dispatch flattening adapter, `_tc_id` dropped
 at its own Host boundary, and the generic `ACTION_REQUIRED` failure normalized
-to its own pinned unknown-action string. At eleven children it is this
+to its own pinned unknown-action string. At twelve action children it is this
 package's largest consumer, and the one where the allowed-key rejection does
 the most safety work — `system`'s privilege classes are per action, so an
 `input` key outside the selected child's schema is refused before any

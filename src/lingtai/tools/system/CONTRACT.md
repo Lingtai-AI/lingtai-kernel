@@ -26,6 +26,7 @@ related_files:
   - tests/test_tool_family_system_migration.py
   - tests/test_system_sleep_alarm.py
   - tests/test_system_declared_plugin.py
+  - tests/test_system_target_refresh.py
 maintenance: |
   Keep related_files as repo-relative paths to real files, including the
   paired ANATOMY.md, the LTP/ToolFamily contracts this family is governed by,
@@ -68,7 +69,7 @@ action, and `system(action='summarize')` fails loudly as an unknown action.
 `system` is an **LTP v2 family** (`src/lingtai/tools/CONTRACT.md`): its final
 model-facing root is exactly `action`, `input`, `reasoning`, and `summarize`
 with `additionalProperties: false`, and each action's arguments live only in
-that action's own strict `input` object — so `address` belongs to the six
+that action's own strict `input` object — so `address` belongs to the seven
 address verbs, `preset`/`revert_preset` only to `refresh`, and `content` only
 to the two name actions. It is the third migrated *intrinsic* (after `soul` and
 `notification`) and therefore composes its dispatching family per call rather
@@ -289,7 +290,8 @@ siblings.
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
 | `refresh` | — | `reason`, `preset`, `revert_preset` | `{status: "ok", message}` | `{status: "error", message}` on preset/revert conflict, unauthorized preset, oversize context, or activation failure |
-| `sleep` | — | `reason`, `force`, `delay` | `{status: "ok", message}` (self-sleep; refuses with an ok+message when notifications pending and not `force`; a finite positive `delay` arms the last-resort alarm) | `{status: "error", message}` for a non-number, bool, non-finite, zero, or negative `delay` |
+| `target_refresh` | `address` | `reason` | `{status: "refresh_requested", address, message}` — the request was *submitted* (`<target>/.refresh` written); it is not evidence the target refreshed | `{error: True, message}` if the caller lacks karma, the target is self/non-agent, or the target is not running |
+| `sleep` | - | `reason`, `force`, `delay` | `{status: "ok", message}` (self-sleep; refuses with an ok+message when notifications pending and not `force`; a finite positive `delay` arms the last-resort alarm) | `{status: "error", message}` for a non-number, bool, non-finite, zero, or negative `delay` |
 | `lull` | `address` | `reason` | `{status: "asleep", address}` | `{error: True, message}` (no karma, no/invalid address, self-target, target not running) |
 | `suspend` | `address` | `reason` | `{status: "suspended", address}` | `{error: True, message}` (as above) |
 | `cpr` | `address` | `reason` | `{status: "resuscitated", address}` | `{error: True, message}` (target already running, CPR unsupported, or observed child exit before a fresh heartbeat) |
@@ -347,7 +349,7 @@ of the pre-migration *schema*:
   inner layer for direct in-process callers that bypass the envelope.
 
 The karma gate (`_check_karma_gate`) requires `admin.karma=True` for the
-five control verbs and `admin.karma AND admin.nirvana` for `nirvana`; it also
+six control verbs and `admin.karma AND admin.nirvana` for `nirvana`; it also
 rejects a missing address, a self-target, and a non-agent target.
 
 **Behavioral tests**: the agent-observable promises of this clause are guarded
@@ -356,9 +358,22 @@ by [`BEHAVIORS.md`](BEHAVIORS.md) — authorization gate
 ([B002](BEHAVIORS.md#behavior-b002), [B003](BEHAVIORS.md#behavior-b003)),
 refusal paths ([B004](BEHAVIORS.md#behavior-b004),
 [B005](BEHAVIORS.md#behavior-b005)), nirvana privilege
-([B006](BEHAVIORS.md#behavior-b006)), and CPR launch confirmation
-([B007](BEHAVIORS.md#behavior-b007)). Change any of these behaviors, update the
+([B006](BEHAVIORS.md#behavior-b006)), CPR launch confirmation
+([B007](BEHAVIORS.md#behavior-b007)), and target refresh submission
+([B010](BEHAVIORS.md#behavior-b010)). Change any of these behaviors, update the
 matching behavior entry and this clause together.
+
+### Target refresh submission
+
+`target_refresh` reuses the shared karma, address, and live-target gates. It
+writes only the empty `<target>/.refresh` marker, logs
+`karma_target_refresh(target, reason)`, and returns
+`{status: "refresh_requested", address, message}`. The target heartbeat owns
+marker consumption and the existing refresh handshake; the caller never writes
+`.refresh.taken`, calls the target refresh implementation, or edits target
+configuration. The receipt proves submission only, so completion requires a
+separate target observation. Guarded by
+[B010](BEHAVIORS.md#behavior-b010) and `tests/test_system_target_refresh.py`.
 
 ### CPR launch confirmation
 
@@ -440,8 +455,9 @@ drive it are `context`'s.
 | PRIVATE ENGINE: no items with the rebuild discriminator off is an invalid no-op | `src/lingtai/tools/system/summarize.py:_summarize` | `tests/test_system_summarize.py::test_missing_items_without_rebuild_is_invalid_no_op` |
 | PRIVATE ENGINE: runtime threshold mutation is rejected | `src/lingtai/tools/system/summarize.py:_summarize` | `tests/test_system_summarize.py::test_summarize_runtime_threshold_change_rejected` |
 | Notification/dismiss actions are dropped from the `system` schema | `src/lingtai/tools/system/schema.py` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss`, `tests/test_notification_tool.py::test_system_rejects_dismiss_action` |
+| `target_refresh` is karma-gated, refuses self/non-agent/dead targets with no marker, writes only `<target>/.refresh`, and returns a submission-only receipt; the target heartbeat consumes the marker into `.refresh.taken`/its refresh process | `src/lingtai/tools/system/karma.py:_target_refresh` | `tests/test_system_target_refresh.py` |
 | Karma signal files clear a target channel path end-to-end | `src/lingtai/tools/system/karma.py` | `tests/test_system_dismiss.py` |
-| The model-facing root is the closed LTP v2 envelope with eleven operational actions followed by reserved `settings`, `manual` | `src/lingtai/tools/system/__init__.py:get_schema` | `tests/test_tool_family_system_migration.py::test_root_envelope_is_exactly_the_four_ltp_v2_fields`, `::test_public_tool_name_and_action_inventory_adds_only_reserved_settings` |
+| The model-facing root is the closed LTP v2 envelope with twelve operational actions followed by reserved `settings`, `manual` | `src/lingtai/tools/system/__init__.py:get_schema` | `tests/test_tool_family_system_migration.py::test_root_envelope_is_exactly_the_four_ltp_v2_fields`, `::test_public_tool_name_and_action_inventory_adds_only_reserved_settings` |
 | Each action's arguments live only in its own strict `input` | `src/lingtai/tools/system/schema.py:INPUT_SCHEMAS` | `tests/test_tool_family_system_migration.py::test_action_input_fields_match_what_the_handler_reads` |
 | A cross-action smuggle is rejected before any lifecycle I/O | `src/lingtai/tools/tool_family/__init__.py:ToolFamily.handle` | `tests/test_tool_family_system_migration.py::test_cross_action_input_is_rejected_before_any_lifecycle_io` |
 | Envelope metadata never reaches a child handler | `src/lingtai/tools/system/__init__.py:_build_children` | `tests/test_tool_family_system_migration.py::test_envelope_metadata_never_reaches_a_child_handler` |

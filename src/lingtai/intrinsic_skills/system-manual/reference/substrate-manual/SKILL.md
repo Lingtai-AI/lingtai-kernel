@@ -142,7 +142,7 @@ the guidance catalog under `src/lingtai/prompts/meta_guidance/catalog/`
 (`INDEX.md` + one `<id>.md` per section), which owns its own semantics. Follow
 that latest guidance first when it appears.
 
-### Sleep, lull, interrupt, suspend, CPR, clear, nirvana
+### Sleep, lull, interrupt, suspend, CPR, clear, target_refresh, nirvana
 
 - `sleep`: self-sleep until a wake event; appropriate when there is no concrete
   task and listeners should remain available.
@@ -153,6 +153,12 @@ that latest guidance first when it appears.
 - `suspend`: terminate another agent's process; stronger than sleep.
 - `cpr`: revive a suspended/dead agent when you own the recovery.
 - `clear`: force another agent to molt/clear conversation for recovery.
+- `target_refresh`: ask another agent to refresh itself (the cross-process twin
+  of your own `refresh`). It only writes the target's `.refresh` marker; the
+  target's own heartbeat performs the refresh and restart, so the
+  `refresh_requested` receipt confirms submission, never completion — confirm
+  by observing the target afterwards. It is disruptive: use it only when you
+  are responsible for that agent's lifecycle.
 - `nirvana`: permanent destruction; requires special authority and an explicit
   reason.
 

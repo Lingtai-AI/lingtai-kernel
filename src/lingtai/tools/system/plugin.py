@@ -14,6 +14,7 @@ SYSTEM_DECLARED_ACTIONS: tuple[str, ...] = (
     "suspend",
     "cpr",
     "clear",
+    "target_refresh",
     "nirvana",
     "presets",
     "name_set",
