@@ -34,7 +34,7 @@ from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 
 from ..tool_family import ChildTool, SettingRow, SettingsProvider, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA as _MANUAL_INPUT_SCHEMA, build_manual_child
-from ._shell_dialect import ShellKind
+from ._shell_dialect import ShellKind, posix_shell_display_name
 
 if TYPE_CHECKING:
     from lingtai.kernel.tool_plugin import ToolPluginHost
@@ -248,8 +248,12 @@ def get_description(
 ) -> str:
     host = f" Host OS: {host_os}." if host_os else ""
     kind = ShellKind.coerce(shell_kind) or ShellKind.coerce(dialect)
+    display_name = (
+        posix_shell_display_name() if kind is ShellKind.POSIX
+        else kind.display_name if kind is not None else None
+    )
     shell_prose = (
-        f" Active shell: {kind.display_name}. {kind.sequencing_guidance}"
+        f" Active shell: {display_name}. {kind.sequencing_guidance}"
         if kind is not None else ""
     )
     return (

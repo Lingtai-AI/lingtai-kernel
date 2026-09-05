@@ -241,13 +241,72 @@ def test_description_exposes_shell_kind_and_sequencing():
     assert "Active shell: cmd.exe" in desc_cmd
 
 
-def test_description_keeps_legacy_shape_without_kind():
+def test_description_keeps_legacy_shape_without_kind(monkeypatch):
     from lingtai.tools.bash._tool_family import get_description
 
+    # Pin the non-Darwin path so the static label is deterministic on every
+    # host (macOS CI included) -- see test_posix_description_reflects_resolved_
+    # darwin_login_shell below for the Darwin-truthful behavior.
+    monkeypatch.setattr(dialect_mod.platform, "system", lambda: "Linux")
     desc = get_description(dialect="posix")
     assert "Active shell dialect: posix" in desc
     assert "Active shell: Bash (POSIX)" in desc
     assert "Host OS" not in desc
+
+
+def test_posix_display_name_is_static_on_non_darwin(monkeypatch):
+    from lingtai.tools.bash._shell_dialect import posix_shell_display_name
+
+    monkeypatch.setattr(dialect_mod.platform, "system", lambda: "Linux")
+    assert posix_shell_display_name() == "Bash (POSIX)"
+
+
+def test_posix_display_name_reflects_resolved_darwin_login_shell(monkeypatch):
+    # Reproduces Lingtai-AI/lingtai#934: on a zsh-default macOS host, the
+    # model-facing label must say Zsh, not a hardcoded "Bash (POSIX)" claim
+    # that disagrees with the interpreter execution actually spawns.
+    from lingtai.tools.bash._shell_dialect import posix_shell_display_name
+
+    monkeypatch.setattr(dialect_mod.platform, "system", lambda: "Darwin")
+    assert posix_shell_display_name({"SHELL": "/bin/zsh"}) == "Zsh (POSIX)"
+    assert posix_shell_display_name({"SHELL": "/bin/bash"}) == "Bash (POSIX)"
+
+
+def test_description_reflects_resolved_darwin_login_shell(monkeypatch):
+    from lingtai.tools.bash._tool_family import get_description
+
+    monkeypatch.setattr(dialect_mod.platform, "system", lambda: "Darwin")
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    desc = get_description(dialect="posix", shell_kind=ShellKind.POSIX)
+    assert "Active shell dialect: posix" in desc
+    assert "Active shell: Zsh (POSIX)" in desc
+    assert "Active shell: Bash (POSIX)" not in desc
+
+
+def test_setup_posix_description_reflects_resolved_darwin_login_shell(monkeypatch, tmp_path):
+    # End-to-end through the real composition path (bash.setup -> _bind ->
+    # get_description), not just the description helper in isolation.
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from lingtai.adapters import shell as shell_adapter
+    from lingtai.tools.bash import setup
+
+    monkeypatch.setattr(shell_adapter.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(shell_adapter.platform, "mac_ver", lambda: ("15.5", ("", "", ""), ""))
+    monkeypatch.setattr(dialect_mod.platform, "system", lambda: "Darwin")
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+
+    agent = MagicMock()
+    agent.official_tool_plugins = {}
+    agent.working_dir = Path(tmp_path)
+
+    manager = setup(agent, yolo=True)
+    assert manager.shell_kind is ShellKind.POSIX
+    description = agent._mount_official_tool.call_args.args[0].plugin.description
+    assert "Active shell dialect: posix" in description
+    assert "Active shell: Zsh (POSIX)" in description
+    assert "Host OS: macOS 15.5" in description
 
 
 def test_setup_honors_shell_kind_override(tmp_path):

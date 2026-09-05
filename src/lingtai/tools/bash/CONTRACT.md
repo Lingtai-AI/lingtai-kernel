@@ -385,6 +385,13 @@ native Job Object and cross-process state-lock adapters. A legacy durable record
 with neither dialect nor invocation remains readable evidence but is explicitly
 unrecoverable on a non-POSIX host rather than being reinterpreted as PowerShell.
 
+The `Active shell: <name>` label for the POSIX kind is not a fixed string: on
+Darwin it uses the same login-shell resolver (`_darwin_default_shell`) as the
+sync/async execution path, so under the same host environment it reads
+`Zsh (POSIX)` or `Bash (POSIX)` instead of always claiming Bash
+(Lingtai-AI/lingtai#934). Non-Darwin platforms keep the static
+`Bash (POSIX)` label because `shell=True` there does not resolve a login shell.
+
 ## Cross-platform invariants
 
 Guarded by: [S001](BEHAVIORS.md#behavior-s001)
