@@ -67,10 +67,9 @@ also honored on any call, for backward compatibility). Default `false`. When
 - The replacement is clearly marked **generated and non-canonical** and carries
   a retrieval hint pointing back at the preserved raw by `tool_call_id`.
 
-Resident substrate §VII carries the when-to-use rule (prefer it when you can
-state the retention spec before the call and the output is large — rule of thumb
->10k chars; leave it `false` when you need exact line/file/diff/stderr text you
-will quote, diff, patch, or compare).
+Prefer it when you can state the retention spec before the call and the output
+is large — rule of thumb >10k chars; leave it `false` when you need exact
+line/file/diff/stderr text you will quote, diff, patch, or compare.
 
 **A priori is preferred but still lossy.** The runtime discards everything
 outside what your `reasoning` named, with no chance for you to notice what
@@ -206,6 +205,11 @@ Summarize has two decoupled effects:
    summaries (markers flip to `status: done`), then requests provider replay with
    the new prompt/history. The automatic 1.0 hard forced path uses the
    same full prompt reconstruction contract before fresh replay.
+
+The rebuild action's own result reports the provider round that requested the rebuild.
+Post-rebuild context usage does not exist yet at that point; it only becomes
+observable on the next provider round. Do not read the requesting round's usage
+number as if it already reflects the rebuilt context.
 
 The dynamic pending totals in the result comment scan only `status: pending`
 markers — already-applied (`done`) markers and legacy markers without a status

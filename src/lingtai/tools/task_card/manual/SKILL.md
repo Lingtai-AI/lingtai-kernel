@@ -25,15 +25,19 @@ Use `task_card` to maintain one agent-local declarative Task Card artifact.
 
 Start a watch proactively — without waiting to be asked — whenever a human is
 following meaningful long-running, multi-step, or parallel work and a durable
-progress view would materially help them track it. Skip it for quick
-single-step work: starting a watch you will stop moments later is ritual
-noise, not progress reporting. Only keep a watch running while you can make
-its renderer output truthful and current; a stale or inaccurate card misleads
-more than no card at all. Optionally `retry` once more to publish a final
+progress view would materially help them track it: multi-daemon fleets (two or
+more), multi-PR batches, long review→merge flows, anything running past
+roughly ten minutes. Skip it for quick single-step work or ritual updates:
+starting a watch you will stop moments later is ritual noise, not progress
+reporting. Only keep a watch running while you can make its renderer output
+truthful and current; a stale or inaccurate card misleads more than no card at
+all. When a watch expires mid-task (`max_refreshes`), start a new watch rather
+than letting the card go dark. Optionally `retry` once more to publish a final
 state before winding down. Use `stop` to pause a watch while preserving its
 last body for a possible later `retry`/inspection; use `remove` once the
 underlying work is completed, cancelled, or abandoned, so `/taskcard` and
-other consumers cannot keep exposing a stale card.
+other consumers cannot keep exposing a stale card — never reach around it with
+a shell/file-tool delete.
 
 The capability owns exactly two files under your working directory:
 

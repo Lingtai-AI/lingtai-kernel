@@ -1126,14 +1126,12 @@ def test_resident_prompts_route_to_system_manual_nested_references():
     substrate = (root / "src" / "lingtai" / "prompts" / "substrate" / "substrate.md").read_text(
         encoding="utf-8"
     )
-    assert "expanded runtime/substrate\nrouter is `system-manual`" in substrate
-    assert "reference/substrate-manual/SKILL.md" in substrate
+    assert "read\n`system-manual` → `reference/substrate-manual/SKILL.md`" in substrate
 
     procedures = (root / "src" / "lingtai" / "prompts" / "procedures" / "procedures.md").read_text(
         encoding="utf-8"
     )
-    assert "unified runtime/procedure router is\n`system-manual`" in procedures
-    assert "reference/procedures-manual/SKILL.md" in procedures
+    assert "`system-manual` → `reference/procedures-manual/SKILL.md`" in procedures
 
 
 def test_tool_plugin_settings_reference_is_catalogued_and_routable():

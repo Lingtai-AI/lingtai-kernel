@@ -45,9 +45,9 @@ not bloat the resident prompt with one-off details.
 
 ### Tool-result digestion
 
-Progressive disclosure applies to tool results as much as to manuals. The
-summarize cadence itself is resident (summarize already-digested results, batch
-rather than discharging each one); the addition here: **if an adapter/provider
+Progressive disclosure applies to tool results as much as to manuals. Resident
+`meta_guidance` owns summarize cadence and current pressure guidance; the addition
+here: **if an adapter/provider
 comment is present, follow its adapter-specific summarize rules on top of the
 general ones.**
 
@@ -99,6 +99,11 @@ research, or spawn/contact an avatar when the capability should persist. For the
 runtime model, read `reference/substrate-manual/SKILL.md`; for a specific tool, read
 that tool's manual.
 
+When the same coding harness is available as a daemon backend option, prefer the
+daemon backend over launching that harness through shell async, using the
+first-class daemon context-isolation and supervision path. Read `daemon-manual`
+for backend details.
+
 ### Daemon workflow methodology
 
 The resident prompt owns the framing (parent stays strategic, daemons carry
@@ -141,6 +146,8 @@ same call.
 
 ## 4. Write skills and knowledge as you work
 
+If rediscovering a workflow would be painful, make or update a skill immediately.
+
 After non-trivial work, deposit the grain into the layer that fits its lifetime
 — the pad / knowledge / skill / character routing is resident, and `psyche-manual`
 carries the canonical store table. What this section adds:
@@ -150,24 +157,35 @@ carries the canonical store table. What this section adds:
 - Before authoring skills read `skills-manual`; before authoring knowledge read
   `knowledge-manual`. Do not put private project facts into a portable skill.
 
+### Feedback after meaningful use
+
+At a meaningful use-cycle or stage boundary, rather than every turn, ask one
+focused question about what helped, failed, or should change. Use the answer first
+to improve the current instance. Then route reusable lessons to the appropriate
+durable layer: character/lingtai for operating style, knowledge for private facts
+and patterns, a skill for a reusable procedure, or the product implementation for
+code behavior. Do not turn collecting feedback into ritual or user harassment;
+skip it when there has been no meaningful use or the question would add noise.
+
 ## 5. Idle, sleep, and lifecycle procedure
 
 When there is nothing concrete to do, go idle/asleep. Do not use timed sleeps as
 a default wait loop. If waiting for a human or peer, ensure the current state is
 in pad/knowledge and then sleep or stop the turn.
 
-**Idle care for unverified long-running work.** Before entering idle, if you have
-launched any async/long-running child — a backgrounded `shell(async=true)` agent
-CLI, a daemon emanation, a scheduled job, a PR/CI run — whose health you have not
-just verified, do **not** hand yourself entirely to its completion/IDLE
-notification. Arm at least one self-wake (a `.notification/cron.json` reminder or
-an internal delayed self-email) sized to the task's *expected* duration, not a
-fixed interval. On wake, health-check before assuming progress: log growing,
-PID/child/daemon events alive, output file/worktree advancing, not stuck on an
-interactive prompt or a provider/model error. If there is no progress, act —
-cancel/downgrade/switch path and report to the human — rather than waiting
-indefinitely. Mechanics live in `shell-manual` (async + reminders) and
-`daemon-manual` → `reference/inspection/SKILL.md` (daemon health checks).
+**Idle care for unverified long-running work.** Relying on reliable completion
+notifications is the normal wait, not a fallback — do not layer a default
+self-wake on top of every async child. A backgrounded `shell(async=true)` job's
+own completion notification and reminder backstop are owned by `shell-manual`.
+A daemon emanation's terminal notification already covers every finish state;
+`daemon-manual` → `reference/inspection/SKILL.md` owns the narrower
+defense-in-depth exception (arm one self-wake only when work is pending and
+genuinely unverified-healthy, sized to the task's expected duration) — read it
+before inventing a parallel policy here. On any such wake, health-check before
+assuming progress: log growing, PID/child/daemon events alive, output
+file/worktree advancing, not stuck on an interactive prompt or a provider/model
+error. If there is no progress, act — cancel/downgrade/switch path and report to
+the human — rather than waiting indefinitely.
 
 Use `reference/substrate-manual/SKILL.md` for lifecycle semantics. Use forceful karma
 actions only after diagnosis and only when you are responsible for that peer's
@@ -182,16 +200,35 @@ still cheap. Do not reconstruct molt mechanics in this reference.
 
 ## 7. Skill routing
 
-The situation→manual table is resident in `procedures`, and the `system-manual`
-router table owns routing into this manual's sibling references. Do not maintain
-a third copy here.
+Resident `procedures` keeps a compact 7-row routing table pointed at broad
+categories; this is the full situation→manual map behind it. `system-manual`'s
+own router table owns routing into this manual's sibling references — do not
+maintain a third copy of that one.
+
+| Situation | Load |
+|---|---|
+| Agent runtime, lifecycle, communication, memory layers, resident substrate expansion | `system-manual` → `reference/substrate-manual/SKILL.md` |
+| Resident procedures expansion, action discipline, deliverables, issue/reporting workflow | `system-manual` → `reference/procedures-manual/SKILL.md` |
+| Molt, pad tending, session journaling, post-wipe recovery | `context-manual` |
+| Spawning/managing avatars | `avatar-manual` |
+| Internal email protocol | `email-manual` |
+| Real email/chat/MCP configuration | `mcp-manual` plus the addon's README/resources |
+| Daemon inspection/debugging | `daemon-manual` |
+| Skill authoring/publishing | `skills-manual` |
+| Knowledge entries | `knowledge-manual` |
+| Shell commands, cron, host scheduling | `shell-manual` |
+| SQLite / log.sqlite / LingTai runtime logs / `lingtai-agent log doctor\|query\|rebuild` / trace inspection | `system-manual` → `reference/sqlite-log-query/SKILL.md` |
+| Kernel architecture / breaking changes | `lingtai-kernel-anatomy` |
+| TUI / portal code navigation | `lingtai-tui-anatomy` |
+| Web fetching/search/scraping | `web-manual` |
+| Image understanding | `vision` |
+| Bug/stale-doc/missing-capability reports | `lingtai-issue-report` |
 
 ## 8. Web, files, and local artifacts
 
-Use existing producer/tool capabilities before inventing workflows. Resident
-`procedures` ("Skill Routing — When to Load What") names the owner for web
-fetching/search/scraping (`web-manual`) and image understanding (`vision`); that
-table does not carry the one below, so it lives here:
+Use existing producer/tool capabilities before inventing workflows. §7 above
+names the owner for web fetching/search/scraping (`web-manual`) and image
+understanding (`vision`). For file-specific detail:
 
 - For tricky file encodings, large files, binary-like data, or careful edit
   workflows, read `file-manual`.

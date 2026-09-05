@@ -67,13 +67,19 @@ def test_migration_is_a_post_tag_manual_correction_for_legacy_daemon_config():
 
 
 def test_kernel_update_guidance_uses_only_the_installer_route():
-    for path in (_SUBSTRATE, _CHANNEL_MODEL, _RUNTIME_UPDATE):
+    for path in (_CHANNEL_MODEL, _RUNTIME_UPDATE):
         text = path.read_text(encoding="utf-8")
         assert "https://lingtai.ai/install.sh" in text
         assert "--help" in text
         assert "update --help" not in text
         assert "explicit human/config-owner" in text
         assert "https://lingtai.ai/skill.md" not in text
+    # Resident substrate no longer restates the installer route; it routes to
+    # `system-manual`, whose router sends runtime/update questions to
+    # `runtime-update-checks` — the actual owner asserted above.
+    substrate = _SUBSTRATE.read_text(encoding="utf-8")
+    assert "https://lingtai.ai/install.sh" not in substrate
+    assert "`system-manual`" in substrate
 
 
 def test_repository_kernel_version_guidance_cannot_restore_obsolete_routes():
@@ -103,10 +109,15 @@ def test_repository_kernel_version_guidance_cannot_restore_obsolete_routes():
 
 
 def test_update_guidance_keeps_source_drift_local_only():
-    substrate = _SUBSTRATE.read_text(encoding="utf-8")
     channel = _CHANNEL_MODEL.read_text(encoding="utf-8")
     runtime = _RUNTIME_UPDATE.read_text(encoding="utf-8")
-    for text in (substrate, channel, runtime):
+    for text in (channel, runtime):
         assert "source_drift" in text
         assert "local" in text
         assert "release-migration" in text
+    # Resident substrate no longer restates source_drift mechanics; it routes
+    # to `system-manual`, whose router sends this to `runtime-update-checks` —
+    # the actual owner asserted above.
+    substrate = _SUBSTRATE.read_text(encoding="utf-8")
+    assert "source_drift" not in substrate
+    assert "`system-manual`" in substrate

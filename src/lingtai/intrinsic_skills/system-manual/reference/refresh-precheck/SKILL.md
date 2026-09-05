@@ -24,8 +24,8 @@ related_files:
 - src/lingtai/kernel/presets.py
 maintenance: |
   Sequencing-only node: every check here cites the owner that holds the fact
-  (preset runtime model → substrate-manual §11; installer/update authority →
-  runtime-update-checks + resident substrate §I; env var catalogue →
+  (preset runtime model → substrate-manual §11; installer/update authority and
+  runtime/version probe → runtime-update-checks; env var catalogue →
   environment-variables → root ENVIRONMENT_VARIABLES.md; MCP registry health →
   mcp-manual; molt/rebuild → context-manual). Do not restate an owned fact
   here — add or reorder a step and keep the citation. Update when
@@ -40,10 +40,10 @@ takes on itself: it rebuilds LLM/config, capabilities, MCP clients, addons,
 prompt sections, and identity projection from `init.json`, optionally swapping
 the active preset.
 
-Every fact needed to run one safely is already owned somewhere — resident
-substrate §I (authorization), `substrate-manual` §3/§11 (refresh and preset
-semantics), `runtime-update-checks` (update/nudge lifecycle and installer
-ownership), `environment-variables` (env var catalogue), `mcp-manual` (registry
+Every fact needed to run one safely is already owned somewhere — `substrate-manual`
+§3/§11 (refresh and preset semantics), `runtime-update-checks` (authorization,
+runtime/version probe, update/nudge lifecycle, and installer ownership),
+`environment-variables` (env var catalogue), `mcp-manual` (registry
 health), `context-manual` (molt/rebuild). What is *not* owned anywhere else is
 the **ordering**: which check runs at the moment before you press the button,
 and what you verify after. That is this node's only job. It adds sequencing,
@@ -61,7 +61,7 @@ human/config-owner authorized, or is it a self-initiated reload?
 
 - Any refresh that **applies** an update, migration, or configuration write requires
   explicit human/config-owner authority *before* the write and *before* the refresh
-  (substrate §I; `runtime-update-checks` steps 8–10). A nudge is a fact, not a command,
+  (`runtime-update-checks` steps 8–10). A nudge is a fact, not a command,
   and never grants authority.
 - A refresh that could **interrupt active work** (running daemons, an in-flight
   collaboration, a peer waiting on a reply) is gated by work safety and the human's
@@ -120,7 +120,7 @@ cat "$SP"/lingtai-*.dist-info/direct_url.json 2>/dev/null
 
 Resolve the interpreter through `LINGTAI_RUNTIME_PYTHON` / the runtime venv and read module
 `__file__`, never a PATH `python` — the version/provenance rule is owned by
-resident substrate §I runtime/version checks; this step only sequences it.
+`runtime-update-checks`; this step only sequences it.
 
 **Refuse to refresh if:** more than one lingtai path marker is live; any `.pth` entry does
 not exist on disk; or the marker and `lingtai.__file__` disagree. Repairing an install is a
@@ -324,11 +324,11 @@ the expected surface — the third attempt is not the answer.
    agent *reads*; it does not ship a script that edits `init.json`,
    `mcp_registry.jsonl`, `manifest.preset.allowed`, or any durable store.
 3. **It grants no authorization.** Completing every check does not substitute for the
-   human/config-owner authority required by substrate §I. A checklist is not consent.
-   Explicitly: "the pre-flight passed" is never a reason to skip asking.
+   human/config-owner authority required by `runtime-update-checks`. A checklist is not
+   consent. Explicitly: "the pre-flight passed" is never a reason to skip asking.
 4. **It does not restate owned facts.** Preset runtime model → `substrate-manual` §11.
    Runtime/version provenance probe (`LINGTAI_RUNTIME_PYTHON` / module `__file__`, never a
-   PATH `python`) → resident substrate §I; step 2 sequences that rule, it does not restate it.
+   PATH `python`) → `runtime-update-checks`; step 2 sequences that rule, it does not restate it.
    Env var catalogue → `environment-variables`. Update/nudge lifecycle →
    `runtime-update-checks`. MCP registry mechanics → `mcp-manual`. Molt/rebuild →
    `context-manual`. Notification dismissal safety → `notification-manual`. Each check
