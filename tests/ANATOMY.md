@@ -335,6 +335,7 @@ related_files:
   - tests/test_silence_kill.py
   - tests/test_site_schema_quirks.py
   - tests/test_skills.py
+  - tests/test_manual_cleanup_routes.py
   - tests/test_snapshot.py
   - tests/test_soul.py
   - tests/test_soul_consultation.py

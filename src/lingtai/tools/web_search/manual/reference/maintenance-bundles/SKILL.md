@@ -4,8 +4,8 @@ description: >
   Nested web-manual reference for maintenance protocol, semantic sweeps,
   dirty-first testing, bundled JSON asset files, deep-dive reference files, and the
   explicit decision flowchart.
-version: 1.0.0
-last_changed_at: "2026-07-26T20:55:00-07:00"
+version: 1.0.1
+last_changed_at: "2026-09-04T00:00:00Z"
 related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
 maintenance: "If you find stale or incorrect information here, use the lingtai-issue-report skill to assemble evidence and obtain per-issue human consent before filing an issue. Never include secrets, credentials, tokens, or private paths."
@@ -90,61 +90,16 @@ For more than quick-reference snippets, load the appropriate reference file:
 
 ---
 
-## Explicit Decision Flowchart
+## Explicit Decision Order
 
-```
-                         ┌──────────────────┐
-                         │  URL or query    │
-                         └────────┬─────────┘
-                                  │
-                     ┌──────────────────────────┐
-                     │ Is it a URL or a keyword? │
-                     └─────┬──────────────┬─────┘
-                       URL  │              │ keyword
-                             ▼              ▼
-                    ┌──────────────┐   ┌──────────────┐
-                    │ Is it PDF?   │   │ Tier 5:      │
-                    └──┬──────┬───┘   │ AI Search    │
-                   yes│    no│       │ (DDG/Tavily/ │
-                      ▼      │       │  Exa)        │
-               ┌──────────┐  │       └──────────────┘
-               │ Tier 0:  │  │
-               │ PDF+fitz │  │
-               └──────────┘  │
-                             ▼
-                    ┌──────────────────┐
-                    │ Known API?       │
-                    │ (arXiv, DOI,     │
-                    │  PubMed, etc.)   │
-                    └──┬──────────┬───┘
-                   yes│        no│
-                      ▼          ▼
-               ┌──────────┐  ┌──────────────────┐
-               │ Tier 1:  │  │ Static HTML?     │
-               │ API query│  │ (article/blog)   │
-               └──────────┘  └──┬──────────┬─────┘
-                            yes│       no│
-                               ▼         ▼
-                        ┌──────────┐  ┌──────────────────┐
-                        │ Tier 1.5:│  │ Structured data? │
-                        │trafilat. │  │ (tables, lists)  │
-                        └──────────┘  └──┬──────────┬─────┘
-                                     yes│       no│
-                                        ▼         ▼
-                                 ┌──────────┐  ┌──────────────┐
-                                 │ Tier 2:  │  │ JS-rendered? │
-                                 │   BS4    │  │ Protected?   │
-                                 └──────────┘  └──┬──────┬─────┘
-                                              yes│    no│
-                                                 ▼      ▼
-                                          ┌──────────┐ ┌──────────┐
-                                          │ Tier 3:  │ │ Tier 4:  │
-                                          │Playwright│ │   Jina   │
-                                          │ stealth  │ │  Reader  │
-                                          └──────────┘ └──────────┘
-```
-
-The compact decision tree near the top is the rule list; this flowchart shows the order of decisions and what each "no" branch does. Read `scripts/extract_page.py::auto_tier()` for the same logic in code (source of truth when this manual drifts).
+See `routing-and-sites/SKILL.md` → "Auto-Tier Decision Tree" for the rule
+table (URL feature → assigned tier). The evaluation **order** those rules are
+applied in — which is not obvious from a table alone — is: URL vs keyword →
+(if URL) PDF? → known academic API? → static HTML? → structured data needing
+BS4? → JS-rendered/protected? → Tier 3 (Playwright) or Tier 4 (Jina) →
+fallback Tier 1.5; (if keyword) Tier 5 AI search. Read
+`scripts/extract_page.py::auto_tier()` for the same logic in code (source of
+truth when this manual drifts).
 
 ---
 > **Found a bug or issue?** If you encounter any problems with this skill, load the `lingtai-issue-report` skill and follow its instructions to report it.

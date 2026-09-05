@@ -4,8 +4,8 @@ description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
   right lower reference; route from the table, then open that node.
-version: 1.19.1
-last_changed_at: "2026-08-29T00:00:00Z"
+version: 1.20.0
+last_changed_at: "2026-09-04T00:00:00Z"
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, alarm, memory, communication, skills, settings, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
@@ -209,98 +209,18 @@ whole inventory without partial rows.
 
 ### Cache-miss budget
 
-The cache-budget row is exactly:
-
-```json
-{"key":"cache_miss_budget","current":2000000,"default":2000000,"configurable":true,"comment":"system-manual#cache-miss-budget"}
-```
-
-`current` is resolved from a valid live `LINGTAI_CACHE_MISS_BUDGET`, then
-`<agent-workdir>/settings/system.json`, then the fixed `2,000,000` default.
-`configurable: true` means an authorized owner procedure exists outside SHOW;
-`system(action="settings", input={})` itself never writes, resets, or removes
-anything. This advisory budget is public, not sensitive, and is not redacted.
-
-The environment value is a positive base-10 integer string. The owner-file
-value is a positive JSON integer (a boolean is not an integer here). Invalid
-environment input falls through. A missing owner file selects the default; a
-present unreadable, malformed, duplicate-key, wrong-version, or otherwise
-invalid owner document makes SHOW return the fixed whole-inventory unavailable
-failure unless a valid environment value bypasses it. The runtime consumer
-retains its established safe-default fallback.
-
-System owns the exact owner document for this one setting; there is no
-per-action settings file. Its complete shape is:
-
-```json
-{"schema_version": 1, "cache_miss_budget": 2000000}
-```
-
-Both values must be JSON integers (not booleans), the version must be `1`, the
-budget must be positive, and no other or duplicate keys are accepted. Resolution
-is live valid `LINGTAI_CACHE_MISS_BUDGET`, then live valid System JSON (the v1
-budget, or the v2 `cache_miss_budget` field below), then the fixed `2,000,000`
-default. Invalid env falls through; missing, unreadable, malformed, or invalid
-JSON uses the default. A valid env bypasses the file. The reader never creates
-or rewrites it.
-
-budget must be positive, and no other or duplicate keys are accepted.
-
-An authorized owner changes the value outside SHOW through one of the existing
-configuration procedures:
-
-1. Set `LINGTAI_CACHE_MISS_BUDGET` in the process launcher or the agent's
-   configured `env_file`; an `env_file` edit requires refresh before the
-   running agent sees it.
-2. When no valid environment value should override it, use the existing File or
-   Shell capability to create the `settings/` directory and replace
-   `settings/system.json` with the exact closed document above. Remove that
-   owner file through the same authorized capability to return to the default.
-3. Call `system(action="settings", input={})` again and verify `current` before
-   relying on the change. If the environment source still wins, change or
-   remove it at its launcher/`env_file` owner instead of editing the lower
-   precedence file repeatedly.
-
-Direct process-env and unshadowed file changes apply on the next metadata
-snapshot; an `env_file` edit still needs refresh. Threshold changes and refreshes
-do not reset cumulative `token_usage.session.cache_miss_tokens`; only molt does.
-The threshold is advisory and never blocks a request. This path is unrelated to
-`.notification/system.json`. Legacy `init.json`
-`manifest.cache_miss_budget` is ignored and has no runtime effect.
+This heading preserves the `system-manual#cache-miss-budget` settings-row
+anchor. Query `system(action="settings", input={})`, then read
+`reference/settings-inventory/SKILL.md` → "Cache-miss budget" for the current
+row, owner document, precedence, validation and authorized change procedure.
+SHOW is read-only and grants no change authority.
 
 ### Runtime policy (v2)
 
-The same file may instead be a closed v2 document carrying any subset of the
-ordinary runtime-policy fields, for example:
-
-```json
-{"schema_version": 2, "context_limit": 200000, "max_rpm": 30, "streaming": true}
-```
-
-Accepted keys are exactly `context_limit` (positive integer or `null` = no
-configured limit), `max_rpm` (integer `>= 0`; `0` disables gating), `streaming`
-(boolean), `aed_timeout` (finite positive seconds), `max_aed_attempts` (integer
-`>= 1`), `snapshot_interval` (finite positive seconds or `null` = off),
-`activeness` (non-blank string or `null`), `cache_miss_budget` (positive
-integer), and `notification_max_chars` (positive integer; Core still clamps it to
-2048–10000 and `LINGTAI_NOTIFICATION_MAX_CHARS` still wins). Booleans never stand
-in for numbers, `NaN`/`Infinity` are rejected, and an unknown, duplicate, or
-invalid key rejects the whole document so nothing is applied partially. An
-absent key and an explicit `null` are different: absent falls through to the
-fixed default, `null` is the configured value.
-
-Each ordinary field resolves as valid `LINGTAI_CONTEXT_LIMIT` / `LINGTAI_MAX_RPM`
-/ `LINGTAI_STREAMING` / `LINGTAI_AED_TIMEOUT` / `LINGTAI_MAX_AED_ATTEMPTS` /
-`LINGTAI_SNAPSHOT_INTERVAL` (`off` disables) / `LINGTAI_ACTIVENESS` > valid v2
-field > fixed default; `init.json` is not a runtime-policy source. The policy is
-resolved once at CLI boot, before the first LLM service is built, and once on
-every refresh, so the service, `AgentConfig`, and the session streaming flag
-always agree; `init.json` and `system/manifest.resolved.json` are never
-rewritten to reflect it. Enabling `snapshot_interval` by refresh on a running
-agent initializes the snapshot repository first; if that fails, snapshots stay
-off for the process and `snapshot_initialize_failed` is logged. The kernel-fixed
-context-pressure thresholds (0.85 / 1.0 / 3 rounds / 0.75) and the legacy
-`molt_*` fields are not settings: naming them makes the document invalid.
+This heading preserves the `system-manual#runtime-policy-v2` settings-row
+anchor. `reference/settings-inventory/SKILL.md` → "Runtime-policy v2 document
+shape" owns the closed grammar, per-field timing and authorized change
+procedure; do not copy its adjustable values into this router.
 
 Use `presets` and the refresh pre-check route before any authorized preset swap
 or refresh.

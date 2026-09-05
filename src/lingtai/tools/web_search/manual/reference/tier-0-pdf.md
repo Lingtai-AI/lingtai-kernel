@@ -16,8 +16,8 @@ maintenance: |
 # Direct PDF link
 curl -L "https://arxiv.org/pdf/1706.03762.pdf" -o paper.pdf
 
-# arXiv ID → derive the PDF path
-curl -L "https://arxiv.org/pdf/$(echo "2401.12345" | sed 's/\.//').pdf" -o paper.pdf
+# arXiv ID → PDF path is the ID as-is (keep the dot; do not strip it)
+curl -L "https://arxiv.org/pdf/2401.12345.pdf" -o paper.pdf
 ```
 
 **Python (extract PDF text):**

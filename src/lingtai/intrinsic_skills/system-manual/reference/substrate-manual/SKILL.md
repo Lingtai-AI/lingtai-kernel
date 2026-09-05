@@ -8,7 +8,7 @@ description: >
   Route via `system-manual` when it is unclear whether this is the right node.
 version: 1.5.1
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, alarm, communication, memory, notifications, mcp, preset]
-last_changed_at: "2026-08-29T00:00:00Z"
+last_changed_at: "2026-09-05T05:26:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/substrate/substrate.md
@@ -26,6 +26,10 @@ This is the expanded form of the resident `substrate` prompt — a nested
 skill-reference owned by `system-manual`, not a top-level catalog skill. Read it
 when the short resident rule is not enough; route via `system-manual` when it is
 unclear whether this is the right node.
+
+The resident substrate is kernel-owned and cross-app stable. It holds the
+minimal operating model every LingTai agent must keep resident; this manual
+expands that model without making the resident layer an operations handbook.
 
 ## 1. Body and extensions
 
@@ -67,6 +71,16 @@ only for recovery when a conversation must be shed externally.
 
 ## 3. The `system` tool in practice
 
+### Query settings instead of memorizing values
+
+Use the owning tool's `settings` action for its current values and defaults.
+`system(action="settings", input={})` is the kernel-level catch-all for settings
+without another concrete tool owner; it is not a duplicate of every tool's
+inventory. Together these owner surfaces are the settings discovery route.
+Follow the row's `comment` into the owning manual for meaning and authorized
+changes. Do not keep adjustable numeric defaults in this general model, and
+do not treat a read-only SHOW result as permission to change a setting.
+
 Read the tool schema before acting; lifecycle operations can affect other peers.
 General guidance:
 
@@ -74,8 +88,10 @@ General guidance:
 
 Use after changing `init.json`, MCP registry, presets, prompt sections, or
 installed capabilities. Refresh preserves identity and conversation while
-rebuilding the runtime surface. Resident substrate §I owns the runtime/version
-probe rule; TUI-managed runs normally expose that interpreter from their runtime
+rebuilding the runtime surface. `runtime-update-checks` owns the runtime/version
+probe rule (prefer `LINGTAI_RUNTIME_PYTHON`, confirm `lingtai.__file__` and
+`lingtai.kernel.__file__`, never infer freshness from a convenient shell
+`python`); TUI-managed runs normally expose that interpreter from their runtime
 venv (for example `~/.lingtai-tui/runtime/venv` on macOS/Linux; Windows uses the
 corresponding `Scripts\python.exe` inside the venv). The ordered pre-flight to
 run before pressing the button, and the post-refresh verification pass, are owned
@@ -93,15 +109,17 @@ Refresh is also a passive full-context reconstruction path with broader
 lifecycle effects: reach for it when runtime context/configuration is broken or
 stale, never merely to apply a summary. Active reconstruction belongs to
 `context(action="rebuild")` — see `context-manual` →
-`reference/summarize-manual/SKILL.md` for the rebuild contract and the 0.85/1.0
-boundaries.
+`reference/summarize-manual/SKILL.md` for the rebuild contract and its
+proactive/forced boundaries.
 
 ### `presets`
 
 Use to list preset bundles and their tier/connectivity/capability tags. The
-tier-5-to-tier-1 ladder is cost/quality hints, not moral rankings, and is listed
-in resident substrate §VII; prefer the cheapest preset that can reliably perform
-the task and switch back when experimentation is done. The detailed preset
+tier-5-to-tier-1 ladder is cost/quality hints, not moral rankings: tier 5 for
+irreplaceable reasoning, tier 4 for premium work, tier 3 for strong everyday
+work, tier 2 for cheap throughput, tier 1 for opportunistic/free use. Prefer
+the cheapest preset that can reliably perform the task and switch back when
+experimentation is done. The detailed preset
 runtime model — raw versus resolved `init.json`, path identity, the two catalogs,
 main-agent swap/revert, and the daemon task/CLI distinction — is §11 below; the
 pre-swap checklist is `reference/refresh-precheck/SKILL.md`.
@@ -109,13 +127,16 @@ pre-swap checklist is `reference/refresh-precheck/SKILL.md`.
 ### Notifications and dismiss → the `notification` tool
 
 Reading and clearing notification channels is **not** a `system` operation (the
-verbs are on the `notification` tool; resident substrate lists them). The rule
+verbs are on the `notification` tool; its own schema and `notification-manual`
+are the source of truth for them, not resident substrate). The rule
 worth holding here: **prefer producer-specific verbs first** for guarded
 producers (`email.read`, `email.dismiss`, Telegram `read`, other MCP read
 actions); a generic channel dismiss is for channels that do not own their own
 read state, or for stale mirrors when the producer-owned state is already
 handled. Never treat a notification preview as the full source of truth — §4
-lists when to read the producer channel instead.
+lists when to read the producer channel instead. Read the matching producer
+channel manual for its exact message/read/reply contract, alongside
+`notification-manual` for the notification layer.
 
 Everything else — allowlist, envelope shape, protected channels,
 stale-version/force, large-result ranking and the legacy `large_tool_result`
@@ -125,11 +146,10 @@ dismiss — is owned by the first-level `notification-manual` skill.
 
 `system` exposes **no** `summarize` action. The three deliberate compression
 modes — a-priori `summary=true`, a-posteriori `context(action="summarize")`, and
-molt — are listed in resident substrate §VII and owned in full by `context-manual`
-→ `reference/summarize-manual/SKILL.md` §0. Read that reference for the 0.85
-proactive-rebuild stamp, the 1.0 forced-rebuild boundary and its overflow
-warning, urgent versus idle-cleanup cadence, summary quality, original-result
-recovery by `tool_call_id`, and the summarize-versus-molt distinction.
+molt — are owned in full by `context-manual` → `reference/summarize-manual/SKILL.md`
+§0. Read that owner reference for rebuild boundaries, cadence, recovery, and
+the summarize-versus-molt distinction; follow current runtime guidance rather
+than copying its thresholds into this general model.
 
 Two boundaries are worth restating only as boundaries: summarize records history
 now while provider-side reconstruction is delayed, so a pending summary is
@@ -198,11 +218,13 @@ platforms.  This is a documented limitation, not a defect to fix.
 
 ## 4. Communication and notifications
 
-Resident §III owns the rule (reply on the channel the message arrived on; text
-output is private diary) and lists the usual reasons a preview is not enough.
-Two conditions are easy to miss and are worth naming here: read the producer
-channel when **exact wording matters for authorization**, and whenever the
-channel has **producer-owned read/dismiss state**.
+Resident substrate's Life and communication section owns the rule (reply on the
+channel the message arrived on; a notification is a hint, not the canonical
+message; text output is private diary). The full list of reasons a preview is
+not enough lives here: read the producer channel when the preview is
+**truncated**, **ambiguous**, **lacks a clear new-message marker**, **includes
+media/attachments**, needs **exact anchoring**, **exact wording matters for
+authorization**, or the channel has **producer-owned read/dismiss state**.
 
 The responsiveness discipline built on this surface — acknowledging promptly,
 sending a progress message before long work, and reporting blockers — belongs to
@@ -220,7 +242,8 @@ Conversation is temporary. Durable layers are:
 | **Skills** | Portable know-how | Reusable workflows, command recipes, checklists, scripts, templates |
 
 Knowledge flows outward from conversation into those four layers; the routing
-rule is resident §IV and the store-tending procedure is `context-manual` §2.
+rule is resident substrate's Memory section and the store-tending procedure is
+`context-manual` §2.
 When context pressure rises, tend durable stores before molting. The detailed
 molt procedure, session-journal / molt-history record, and successor briefing
 rules live in `context-manual`; this reference only describes the memory model.
@@ -259,8 +282,12 @@ integration; escalate or ask the orchestrator.
 
 ## 9. Idle and soul
 
+Soul flow is advice, not command; verify external-event claims through the
+relevant channel.
+
 With no concrete task, go idle/asleep rather than spinning, polling, or using
-timed sleeps — idle keeps listeners available (resident §V). `soul-manual` owns
+timed sleeps — idle keeps listeners available (resident substrate's Life and
+communication section). `soul-manual` owns
 soul-flow mechanics in full: the `LINGTAI_SOUL_FLOW_ENABLED` gate, disabled-flow
 behavior, `delay_seconds` as cadence-not-off-switch, and the privacy/cost
 rationale.

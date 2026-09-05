@@ -5,8 +5,8 @@ description: >
   sources, defaults, accepted values, invalid behavior, redaction, timing,
   authorized change procedures, and explicit non-settings.
 tags: [lingtai, system, settings, init, llm, environment, read-only]
-version: 1.1.1
-last_changed_at: "2026-08-29T00:00:00Z"
+version: 1.2.0
+last_changed_at: "2026-09-04T00:00:00Z"
 related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/adapters/posix/mail.py
@@ -93,8 +93,93 @@ Legacy `manifest.context_limit`, `snapshot_interval`, `max_rpm`,
 `max_aed_attempts`, `aed_timeout`, `streaming`, and `activeness` are
 recognized-and-ignored compatibility data. SHOW never reports them as current
 truth and an active preset cannot override these runtime-policy rows. The row
-comment routes to `system-manual#runtime-policy-v2`, which owns the authorized
-File/Shell change procedure and exact closed-document grammar.
+comment routes through the stable `system-manual#runtime-policy-v2` anchor
+to the document grammar and authorized procedure below; that router does not
+own another copy of this policy.
+
+### Runtime-policy v2 document shape
+
+The same `settings/system.json` file may be a closed v2 document naming any
+subset of the seven ordinary runtime-policy fields above plus `cache_miss_budget`
+(positive integer; see "Cache-miss budget" below) and `notification_max_chars`
+(positive integer; Core still clamps it to 2048–10000 and
+`LINGTAI_NOTIFICATION_MAX_CHARS` still wins), for example:
+
+```json
+{"schema_version": 2, "context_limit": 200000, "max_rpm": 30, "streaming": true}
+```
+
+Booleans never stand in for numbers, `NaN`/`Infinity` are rejected, and an
+unknown, duplicate, or invalid key rejects the whole document so nothing is
+applied partially. An absent key and an explicit `null` are different: absent
+falls through to the fixed default, `null` is the configured value. The
+kernel-fixed context-pressure thresholds (0.85 / 1.0 / 3 rounds / 0.75) and the
+legacy `molt_*` fields are not settings: naming them makes the document
+invalid. The seven ordinary runtime-policy fields are resolved at CLI boot, before
+the first LLM service is built, and once on every refresh, so the service,
+`AgentConfig`, and the session streaming flag always agree; `init.json` and
+`system/manifest.resolved.json` are never rewritten to reflect it. Enabling
+`snapshot_interval` by refresh on a running agent initializes the snapshot
+repository first; if that fails, snapshots stay off for the process and
+`snapshot_initialize_failed` is logged.
+
+After explicit owner/human authorization, edit the intended environment value
+at its launcher owner or the corresponding v2 field with File/Shell, preserving
+unrelated fields. Follow `refresh-precheck` before applying a change at the
+boot/refresh timing in the table, then query System settings again. An
+invalid owner document applies no partial subset; this does not authorize
+repair, runtime refresh or configuration writes by itself. Cache-budget live
+resolution is separate and described below.
+
+### Cache-miss budget
+
+Default-only row illustration (query SHOW for the actual current value):
+
+```json
+{"key":"cache_miss_budget","current":2000000,"default":2000000,"configurable":true,"comment":"system-manual#cache-miss-budget"}
+```
+
+`current` resolves from a valid live `LINGTAI_CACHE_MISS_BUDGET`, then a live
+valid `settings/system.json` (the v1-only document below, or the v2
+`cache_miss_budget` field above), then the fixed `2,000,000` default. The
+environment value is a positive base-10 integer string; the owner-file value
+is a positive JSON integer (a boolean is not an integer here). Invalid
+environment input falls through. A missing owner file selects the default; a
+present unreadable, malformed, duplicate-key, wrong-version, or otherwise
+invalid owner document makes SHOW return the fixed whole-inventory unavailable
+failure unless a valid environment value bypasses it. The runtime consumer
+retains its existing safe-default fallback on missing, unreadable, malformed
+or invalid owner JSON; this is distinct from SHOW failing the whole inventory.
+The reader never creates or rewrites the owner file. `configurable: true`
+means an authorized owner procedure exists outside SHOW; SHOW itself never
+writes, resets, or removes anything. This advisory budget is public, not
+sensitive, and is not redacted.
+
+The v1-only document shape (for an agent that only ever needs this one
+setting) is:
+
+```json
+{"schema_version": 1, "cache_miss_budget": 2000000}
+```
+
+Both values must be JSON integers (not booleans), the version must be `1`,
+the budget must be positive, and no other or duplicate keys are accepted.
+
+Authorized change procedure: after explicit owner/human authorization, set
+`LINGTAI_CACHE_MISS_BUDGET` in the launcher or the agent's configured
+`env_file` (an `env_file` edit needs refresh before the running agent sees
+it), or use the existing File/Shell capability to write one of the two
+document shapes above to `settings/system.json` (remove the file through the
+same capability to return to the default), then call
+`system(action="settings", input={})` again and verify `current`. If the
+environment source still wins, change or remove it at its launcher/`env_file`
+owner instead of editing the lower-precedence file repeatedly. Direct
+process-env and unshadowed file changes apply on the next metadata snapshot;
+an `env_file` edit still needs refresh. Threshold changes and refreshes do
+not reset cumulative `token_usage.session.cache_miss_tokens`; only molt does.
+The threshold is advisory and never blocks a request. This path is unrelated
+to `.notification/system.json`. Legacy `init.json` `manifest.cache_miss_budget`
+is ignored and has no runtime effect.
 
 `manifest.summarize_notification_threshold` remains System-owned: it controls
 cross-cutting Agent/ToolExecutor result hints, not the Context ToolPlugin's

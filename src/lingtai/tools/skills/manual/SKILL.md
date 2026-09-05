@@ -11,6 +11,7 @@ description: >
 version: 1.2.0
 last_changed_at: "2026-07-27T04:30:00-07:00"
 related_files:
+- src/lingtai/tools/skills/manual/reference/cleanup-footprint-contract.md
 - src/lingtai/tools/skills/__init__.py
 - src/lingtai/tools/skills/ANATOMY.md
 - src/lingtai/tools/skills/CONTRACT.md
@@ -490,22 +491,17 @@ skills are runtime-owned; do not delete them. Custom skills are portable
 procedure memory: cleanup should usually mean validation, renaming,
 consolidation, or git removal through a reviewed PR — not ad-hoc `rm`.
 
-Footprint check (read-only, records the audit):
+Footprint check: load the [shared inspection recipe](reference/cleanup-footprint-contract.md#shared-footprint-check-recipe)
+through `skills-manual` → `reference/cleanup-footprint-contract.md`. Combine
+its definitions with this tool-specific selection in one task-owned script;
+the selection is not a standalone executable. Inspection writes nothing.
+Appending `logs/cleanup.jsonl` is the separate, explicitly selected audit step
+in that recipe; retain this manual's cleanup/approval rules below.
 
-```bash
-python3 - <<'PY'
-import json, time
-from pathlib import Path
-agent = Path.cwd()
-roots = [p for p in [agent / ".library" / "custom", agent / ".library" / "intrinsic", agent.parent / ".library_shared"] if p.exists()]
-def size(p): return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-rows = [(p, size(p)) for p in roots]
-total = sum(s for _, s in rows)
-print(f"skill roots: {len(rows)}; bytes: {total}")
-for p, s in rows: print(f"{s:>12}  {p}")
-log = agent / "logs" / "cleanup.jsonl"; log.parent.mkdir(parents=True, exist_ok=True)
-log.open("a", encoding="utf-8").write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tool": "skills", "dry_run": True, "candidates": len(rows), "bytes": total, "human_approved": False, "summary": "skills footprint audit"}) + "\n")
-PY
+```python
+agent = Path.cwd()  # the relevant agent directory, not a repository root
+items = [p for p in (agent / ".library" / "custom", agent / ".library" / "intrinsic", agent.parent / ".library_shared") if p.exists()]
+rows, total = footprint_check(items, tool="skills", top_n=None)
 ```
 
 Recommended cadence: after authoring/publishing skills, before recipe export, and

@@ -217,7 +217,7 @@ arrays — map each through `_parse_status`. Common instances: `mastodon.social`
 
 ## 5. X/Twitter 公开页面（边界与限制）
 
-X 的数据获取面临严重限制：官方 API 需付费（最低 $100/月，Free tier 仅能发推不能读）；
+X 的数据获取受当前账号与服务政策限制；价格、读写额度和可用等级请查 [X 官方开发者文档](https://docs.x.com/)，不以此处旧价格表为准。
 公开页面严重依赖 JS 渲染且反爬严格；Nitter 实例 2024 年后大量关闭。
 
 **伦理边界（严格遵守）：**

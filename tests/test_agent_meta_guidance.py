@@ -192,18 +192,21 @@ def test_init_substrate_override_is_not_honored(tmp_path):
     assert agent._prompt_manager.read_section("substrate") == strip_frontmatter(packaged)
 
 
-def test_packaged_substrate_explains_rebuild_context_observation_timing(tmp_path):
-    """Resident substrate must prevent agents from reading the rebuild action's
-    requesting-round telemetry as post-rebuild context usage."""
-    agent = _agent_with_static_comment(tmp_path)
-    agent._reload_prompt_sections({})
+def test_summarize_manual_explains_rebuild_context_observation_timing():
+    """This detail moved off resident substrate to its actual owner,
+    `summarize-manual`, which must still prevent agents from reading the
+    rebuild action's requesting-round telemetry as post-rebuild context usage."""
+    from pathlib import Path
 
-    prompt = agent._build_system_prompt()
-    assert "reports the provider round" in prompt
-    assert "that requested the rebuild" in prompt
-    assert "Post-rebuild context usage" in prompt
-    assert "does not exist yet" in prompt
-    assert "next provider round" in prompt
+    root = Path(__file__).resolve().parents[1]
+    summarize_manual = (
+        root
+        / "src/lingtai/tools/context/manual/reference/summarize-manual/SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "reports the provider round" in summarize_manual
+    assert "that requested the rebuild" in summarize_manual
+    assert "does not exist yet" in summarize_manual
+    assert "next provider round" in summarize_manual
 
 
 def test_section_mirrors_keep_frontmatter_but_prompt_is_body_only(tmp_path):

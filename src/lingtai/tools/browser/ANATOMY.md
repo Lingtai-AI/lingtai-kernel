@@ -17,7 +17,6 @@ related_files:
   - src/lingtai/tools/browser/glossary-en.md
   - src/lingtai/tools/browser/glossary-wen.md
   - src/lingtai/tools/browser/glossary-zh.md
-  - src/lingtai/tools/browser/manual/SKILL.md
 maintenance: |
   This map describes only the internal browse subcomponent of unified web.
   Keep its Contract edge and parent/child links reciprocal. Browser files are
@@ -50,11 +49,10 @@ public `web` manager. It is deliberately not registered independently.
 - `__init__.py` — the internal-subcomponent surface. Only the parent `web`
   manager exposes model-facing actions; the concrete network adapter is
   imported inside `setup` so importing the registry stays lazy, and this
-  retained module never registers a public browser tool.
-- `manual/SKILL.md` — the retained browser manual. `browser` is an internal
-  browse child rather than a public capability, so agent manual installation
-  deliberately skips it and installs only the `web` owner's manual; the file
-  stays packaged as navigation for the internal Core.
+  retained module never registers a public browser tool. `browser` is an
+  internal browse child rather than a public capability, so agent manual
+  installation installs only the `web` owner's manual; there is no separate
+  `browser/manual/`.
 
 ## Connections
 
@@ -81,6 +79,6 @@ It writes no persistent state and never shares refs across Agents.
 
 ## Notes
 
-The old browser manual and setup entry remain physically retained for source
-compatibility, but the Agent installer skips them and `browser.setup()` does not
-call `add_tool`. All public documentation routes through `web-manual`.
+`browser.setup()` does not call `add_tool`; there is no browser-owned manual.
+All public documentation routes through `web-manual`
+(`src/lingtai/tools/web_search/manual/SKILL.md`).

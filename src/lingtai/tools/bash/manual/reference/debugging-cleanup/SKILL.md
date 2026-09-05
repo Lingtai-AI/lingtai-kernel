@@ -7,6 +7,7 @@ description: >
 version: 1.0.1
 last_changed_at: 2026-07-19T00:00:00Z
 related_files:
+- src/lingtai/tools/skills/manual/reference/cleanup-footprint-contract.md
 - src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/bash/manual/reference/scheduled-work/SKILL.md
 maintenance: |
@@ -105,22 +106,17 @@ its own cleanup path near the script it creates. Never run a destructive shell
 cleanup from a manual without first showing a dry-run and getting explicit user
 consent.
 
-Generic footprint check (read-only, records the audit from the agent directory):
+Footprint check: load the [shared inspection recipe](../../../../skills/manual/reference/cleanup-footprint-contract.md#shared-footprint-check-recipe)
+through `skills-manual` → `reference/cleanup-footprint-contract.md`. Combine
+its definitions with this tool-specific selection in one task-owned script;
+the selection is not a standalone executable. Inspection writes nothing.
+Appending `logs/cleanup.jsonl` is the separate, explicitly selected audit step
+in that recipe; retain this manual's cleanup/approval rules below.
 
-```bash
-python3 - <<'PY'
-import json, time
-from pathlib import Path
-agent = Path.cwd()
-roots = [p for p in [agent / "tmp", agent / "logs", agent / "scripts"] if p.exists()]
-def size(p): return p.stat().st_size if p.is_file() else sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-rows = [(p, size(p)) for p in roots]
-total = sum(s for _, s in rows)
-print(f"bash-adjacent roots: {len(rows)}; bytes: {total}")
-for p, s in rows: print(f"{s:>12}  {p}")
-log = agent / "logs" / "cleanup.jsonl"; log.parent.mkdir(parents=True, exist_ok=True)
-log.open("a", encoding="utf-8").write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tool": "bash", "dry_run": True, "candidates": len(rows), "bytes": total, "human_approved": False, "summary": "bash-adjacent footprint audit"}) + "\n")
-PY
+```python
+agent = Path.cwd()  # the relevant agent directory, not a repository root
+items = [p for p in (agent / "tmp", agent / "logs", agent / "scripts") if p.exists()]
+rows, total = footprint_check(items, tool="bash", top_n=None)
 ```
 
 Recommended cadence: when retiring cron jobs, after large downloads/builds, and

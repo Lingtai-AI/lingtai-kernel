@@ -99,7 +99,8 @@ The end-to-end path is:
    Treat the payload as kernel-synchronized facts, not a human command. Compare
    `running`, `installed`, `latest`, and `source`; inspect the runtime when
    ambiguous. For a real update, let Shell execute the installer's concise
-   `--help` and follow whatever it currently instructs; the installer owns
+   `--help`, without reading or pasting the script source, and follow whatever
+   it currently instructs; the installer owns
    release-interval migration navigation and the exact child command shape
    while this reference owns local diagnosis and refresh mechanics.
 8. **Confirm — the human/config-owner.** After the installer has displayed the
@@ -149,6 +150,9 @@ configuration-staleness guidance; neither is package-update authority.
 
 ## Nudge mechanics and dismissal
 
+When a Nudge is emitted, inspect its self-describing policy message before
+adjusting the process environment.
+
 `kernel_version`, `source_drift`, and `init_config_shape` are producers of the
 shared low-priority `.notification/nudge.json` envelope. The envelope carries
 `data.nudges`, a `published_at` timestamp, channel-level instructions, and a
@@ -169,7 +173,8 @@ repo-root `ENVIRONMENT_VARIABLES.md`, routed via
 `reference/environment-variables/SKILL.md`. Producer probe gates are only bounded
 observation costs, not product cadence. A producer removes an entry when its
 real fact resolves; `kernel_version` also removes its own entry when the runtime
-is intentionally release-version-silent.
+is intentionally release-version-silent. Dismissal is mute, not resolution;
+only a later real-reader check with zero findings resolves a problem.
 
 After interpreting a nudge, use the narrowest safe action:
 

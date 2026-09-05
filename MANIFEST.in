@@ -74,4 +74,3 @@ graft src/lingtai/tools/avatar/manual
 graft src/lingtai/tools/daemon/manual
 graft src/lingtai/tools/mcp/skills
 graft src/lingtai/tools/web_search/manual
-graft src/lingtai/tools/browser/manual

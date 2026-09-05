@@ -8,14 +8,15 @@ description: |
   consistency, newly introduced env vars, context-vs-target-context_limit,
   durable-store and working-tree state, source_drift, and what to check when
   a refresh fails or comes back with a broken surface.
-version: 1.1.0
-last_changed_at: "2026-08-27T00:00:00Z"
+version: 1.1.2
+last_changed_at: "2026-09-05T00:00:00Z"
 tags: [lingtai, system, refresh, preset, precheck, checklist, mcp, env, pth, editable-install, verification, lifecycle]
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md
 - src/lingtai/tools/context/manual/SKILL.md
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -24,8 +25,8 @@ related_files:
 - src/lingtai/kernel/presets.py
 maintenance: |
   Sequencing-only node: every check here cites the owner that holds the fact
-  (preset runtime model → substrate-manual §11; installer/update authority →
-  runtime-update-checks + resident substrate §I; env var catalogue →
+  (preset runtime model → substrate-manual §11; installer/update authority and
+  runtime/version probe → runtime-update-checks; env var catalogue →
   environment-variables → root ENVIRONMENT_VARIABLES.md; MCP registry health →
   mcp-manual; molt/rebuild → context-manual). Do not restate an owned fact
   here — add or reorder a step and keep the citation. Update when
@@ -40,10 +41,10 @@ takes on itself: it rebuilds LLM/config, capabilities, MCP clients, addons,
 prompt sections, and identity projection from `init.json`, optionally swapping
 the active preset.
 
-Every fact needed to run one safely is already owned somewhere — resident
-substrate §I (authorization), `substrate-manual` §3/§11 (refresh and preset
-semantics), `runtime-update-checks` (update/nudge lifecycle and installer
-ownership), `environment-variables` (env var catalogue), `mcp-manual` (registry
+Every fact needed to run one safely is already owned somewhere — `substrate-manual`
+§3/§11 (refresh and preset semantics), `runtime-update-checks` (authorization,
+runtime/version probe, update/nudge lifecycle, and installer ownership),
+`environment-variables` (env var catalogue), `mcp-manual` (registry
 health), `context-manual` (molt/rebuild). What is *not* owned anywhere else is
 the **ordering**: which check runs at the moment before you press the button,
 and what you verify after. That is this node's only job. It adds sequencing,
@@ -61,7 +62,7 @@ human/config-owner authorized, or is it a self-initiated reload?
 
 - Any refresh that **applies** an update, migration, or configuration write requires
   explicit human/config-owner authority *before* the write and *before* the refresh
-  (substrate §I; `runtime-update-checks` steps 8–10). A nudge is a fact, not a command,
+  (`runtime-update-checks` steps 8–10). A nudge is a fact, not a command,
   and never grants authority.
 - A refresh that could **interrupt active work** (running daemons, an in-flight
   collaboration, a peer waiting on a reply) is gated by work safety and the human's
@@ -77,7 +78,9 @@ writes are validated, never the first.
 ### Step 1 — Know what you are actually running (unconditional)
 
 ```bash
-PYTHON=${LINGTAI_RUNTIME_PYTHON:-$HOME/.lingtai-tui/runtime/venv/bin/python}
+# POSIX. Uses only the exported runtime interpreter; never guesses a path.
+PYTHON="$LINGTAI_RUNTIME_PYTHON"
+[ -n "$PYTHON" ] || { echo "LINGTAI_RUNTIME_PYTHON is unset — stop; locate the actual launcher/runtime venv via runtime-update-checks instead of guessing one." >&2; return 1 2>/dev/null || exit 1; }
 "$PYTHON" -c 'import sys, lingtai, lingtai.kernel; print(sys.executable); print(lingtai.__file__); print(lingtai.kernel.__file__); print(getattr(lingtai,"__version__","unknown"))'
 ```
 
@@ -118,9 +121,11 @@ cat "$SP"/lingtai-*.dist-info/direct_url.json 2>/dev/null
    `sys.path` happens to favour, and you will have no evidence of which. Resolve the
    provenance first.
 
-Resolve the interpreter through `LINGTAI_RUNTIME_PYTHON` / the runtime venv and read module
-`__file__`, never a PATH `python` — the version/provenance rule is owned by
-resident substrate §I runtime/version checks; this step only sequences it.
+Resolve the interpreter from the exported `LINGTAI_RUNTIME_PYTHON` only and read
+module `__file__`, never a PATH `python` and never a guessed venv path — if it
+is unset, stop and locate the actual launcher via `runtime-update-checks`
+rather than assuming a default venv location; that rule is owned by
+`runtime-update-checks`, this step only sequences it.
 
 **Refuse to refresh if:** more than one lingtai path marker is live; any `.pth` entry does
 not exist on disk; or the marker and `lingtai.__file__` disagree. Repairing an install is a
@@ -153,13 +158,10 @@ a refresh substitute.**
 system(action="presets", input={}, reasoning="confirm exact allowed preset paths before swap")
 ```
 
-- Use an **exact returned path**. The returned catalog is **allowed-only** — it reads
-  `manifest.preset.allowed` and performs no directory scan. A path from the preset
-  library screen that is not in this list is **not** usable.
-- Never pass both a non-empty `preset` and `revert_preset: true` — that is a conflict
-  error. An empty `preset` string normalizes to absent.
-- `revert_preset: true` reads `manifest.preset.default`; it errors if no default is
-  configured.
+Use only an exact path from this call's result. See `substrate-manual` §11
+for the allowed-only catalog mechanics, the `preset`/`revert_preset` conflict
+rule, and `revert_preset`'s default-lookup behavior — this step only
+sequences the check before activation, it does not restate those rules.
 
 ### Step 5 — Context fits the target's `context_limit` (trigger: preset swap)
 
@@ -172,10 +174,10 @@ have already told a human "switching now" is a self-inflicted incident. Order is
 tend durable stores → `context(action="molt", …)` → re-check → swap.
 
 The cache-miss total accumulates **since last molt and survives a refresh** —
-refreshing does not reset it. Its System-owned budget resolves from live valid
-`LINGTAI_CACHE_MISS_BUDGET`, then the v1/v2 `settings/system.json` budget,
-then the fixed `2,000,000` default; inspect it through
-`system(action="settings", input={})`. Legacy `manifest.cache_miss_budget` is ignored.
+refreshing does not reset it, so do not expect this precheck's refresh to clear
+it. Inspect the live value through `system(action="settings", input={})`; see
+`reference/settings-inventory/SKILL.md` → "Cache-miss budget" for its exact
+source precedence and document shape.
 
 ### Step 6 — Newly introduced environment variables (trigger: the change adds an env read)
 
@@ -324,11 +326,11 @@ the expected surface — the third attempt is not the answer.
    agent *reads*; it does not ship a script that edits `init.json`,
    `mcp_registry.jsonl`, `manifest.preset.allowed`, or any durable store.
 3. **It grants no authorization.** Completing every check does not substitute for the
-   human/config-owner authority required by substrate §I. A checklist is not consent.
-   Explicitly: "the pre-flight passed" is never a reason to skip asking.
+   human/config-owner authority required by `runtime-update-checks`. A checklist is not
+   consent. Explicitly: "the pre-flight passed" is never a reason to skip asking.
 4. **It does not restate owned facts.** Preset runtime model → `substrate-manual` §11.
    Runtime/version provenance probe (`LINGTAI_RUNTIME_PYTHON` / module `__file__`, never a
-   PATH `python`) → resident substrate §I; step 2 sequences that rule, it does not restate it.
+   PATH `python`) → `runtime-update-checks`; step 2 sequences that rule, it does not restate it.
    Env var catalogue → `environment-variables`. Update/nudge lifecycle →
    `runtime-update-checks`. MCP registry mechanics → `mcp-manual`. Molt/rebuild →
    `context-manual`. Notification dismissal safety → `notification-manual`. Each check
@@ -345,7 +347,9 @@ the expected surface — the third attempt is not the answer.
 ### Recipe A — Pre-refresh health check (run before any config-motivated refresh)
 
 ```bash
-PYTHON=${LINGTAI_RUNTIME_PYTHON:-$HOME/.lingtai-tui/runtime/venv/bin/python}
+# POSIX. Uses only the exported runtime interpreter; never guesses a path.
+PYTHON="$LINGTAI_RUNTIME_PYTHON"
+[ -n "$PYTHON" ] || { echo "LINGTAI_RUNTIME_PYTHON is unset — stop; locate the actual launcher/runtime venv via runtime-update-checks instead of guessing one." >&2; return 1 2>/dev/null || exit 1; }
 "$PYTHON" -c 'import sys, lingtai, lingtai.kernel; print("py=",sys.executable); print("lingtai=",lingtai.__file__); print("kernel=",lingtai.kernel.__file__)'
 SP=$("$PYTHON" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
 ls -1d "$SP"/*lingtai* 2>/dev/null; for f in "$SP"/*lingtai*.pth; do echo "== $f"; cat "$f"; done
@@ -367,9 +371,8 @@ trigger.
 
 ```text
 1. system(action="presets", input={}, reasoning="read the allowed-only catalog")
-2. # If the path you want is absent: it is NOT authorized. Ask the config owner to add
-   #   that exact path to manifest.preset.allowed (preserving every existing entry and
-   #   the existing active/default), then:
+2. # If the path you want is absent, it is NOT authorized (allowed-catalog
+   #   mechanics: substrate-manual §11). Ask the config owner to add it, then:
    system(action="refresh", input={"reason": "pick up new allowed preset entry"},
           reasoning="apply the config owner's allowed-list edit")
 3. system(action="presets", input={}, reasoning="confirm the new path is now listed")
@@ -385,7 +388,9 @@ resolution entirely — this recipe does not apply to them.
 ### Recipe C — Post-refresh verification (always, immediately after refresh returns)
 
 ```bash
-PYTHON=${LINGTAI_RUNTIME_PYTHON:-$HOME/.lingtai-tui/runtime/venv/bin/python}
+# POSIX. Uses only the exported runtime interpreter; never guesses a path.
+PYTHON="$LINGTAI_RUNTIME_PYTHON"
+[ -n "$PYTHON" ] || { echo "LINGTAI_RUNTIME_PYTHON is unset — stop; locate the actual launcher/runtime venv via runtime-update-checks instead of guessing one." >&2; return 1 2>/dev/null || exit 1; }
 "$PYTHON" -c 'import sys, lingtai, lingtai.kernel; print(sys.executable, lingtai.__file__, lingtai.kernel.__file__)'
 SP=$("$PYTHON" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])'); ls -1d "$SP"/*lingtai*
 sed -n '1,200p' system/manifest.resolved.json 2>/dev/null

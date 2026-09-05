@@ -1,10 +1,18 @@
 ---
 related_files:
+  - src/lingtai/tools/web_search/manual/reference/academic-pipeline.md
   - src/lingtai/tools/web_search/manual/SKILL.md
 maintenance: |
   Keep this bundled web-search reference synchronized with its parent manual and implementation when behavior or routing changes.
 ---
 # Tier 1 — API Metadata Queries
+
+> External legacy recipe, not a built-in `web` engine or installed-capability
+> promise. Start with public `web(search/browse)`; select a separate fallback
+> explicitly through [web-manual](../SKILL.md) only when needed. Check the
+> selected vendor's current API, dependencies, account access and quotas before
+> use. These examples grant no install, credential/config change, paid use or
+> access-control bypass authority. No live vendor validation is claimed here.
 
 > Part of the [web-manual](../SKILL.md) skill.
 
@@ -14,95 +22,42 @@ maintenance: |
 
 ### Academic APIs
 
-| API | Endpoint | Free? | Best for |
-|-----|----------|-------|----------|
-| **arXiv** | `GET https://export.arxiv.org/api/query?id_list={ID}` | ✅ | CS/Physics/Math papers |
-| **OpenAlex** | `GET https://api.openalex.org/works/https://doi.org/{DOI}` | ✅ | Any DOI → full metadata + citations |
-| **CrossRef** | `GET https://api.crossref.org/works/{DOI}` | ✅ | DOI → metadata (title, authors, journal) |
-| **Semantic Scholar** | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI}?fields=...` | ✅* | AI/ML papers, citation graphs |
-| **PubMed E-utilities** | `GET https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={PMID}` | ✅ | Biomedical literature |
-| **CORE** | `GET https://api.core.ac.uk/v3/search/works?q={query}` | ✅† | Open access full text (30M+ papers) |
-| **Unpaywall** | `GET https://api.unpaywall.org/v2/{DOI}?email=lingtai@users.noreply.github.com` | ✅ | Find free PDF for any paper |
-| **Europe PMC** | `GET https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={q}&format=json` | ✅ | Biomedical + PMC full text |
-| **DBLP** | `GET https://dblp.org/search/publ/api?q={query}&format=json&h=10` | ✅ | Computer science conference papers |
-| **Papers With Code** | `GET https://paperswithcode.com/api/v1/search/?q={query}` | ✅ | ML/AI papers with code + benchmarks |
-| **DOAJ** | `GET https://doaj.org/api/search/articles/{query}` | ✅ | Open access journal articles |
-| **Zenodo** | `GET https://zenodo.org/api/records?q={query}` | ✅ | Research data, software, datasets |
-| **NASA ADS** | `GET https://ui.adsabs.harvard.edu/abs/{arxiv_id}/bibtex` | ✅ | Astrophysics/astronomy |
+| API | Endpoint | Best for |
+|-----|----------|----------|
+| **arXiv** | `GET https://export.arxiv.org/api/query?id_list={ID}` | CS/Physics/Math papers |
+| **OpenAlex** | `GET https://api.openalex.org/works/https://doi.org/{DOI}` | Any DOI → full metadata + citations |
+| **CrossRef** | `GET https://api.crossref.org/works/{DOI}` | DOI → metadata (title, authors, journal) |
+| **Semantic Scholar** | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI}?fields=...` | AI/ML papers, citation graphs |
+| **PubMed E-utilities** | `GET https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={PMID}` | Biomedical literature |
+| **CORE** | `GET https://api.core.ac.uk/v3/search/works?q={query}` | Open access full text (30M+ papers) |
+| **Unpaywall** | `GET https://api.unpaywall.org/v2/{DOI}?email=lingtai@users.noreply.github.com` | Find free PDF for any paper |
+| **Europe PMC** | `GET https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={q}&format=json` | Biomedical + PMC full text |
+| **DBLP** | `GET https://dblp.org/search/publ/api?q={query}&format=json&h=10` | Computer science conference papers |
+| **Papers With Code** | `GET https://paperswithcode.com/api/v1/search/?q={query}` | ML/AI papers with code + benchmarks |
+| **DOAJ** | `GET https://doaj.org/api/search/articles/{query}` | Open access journal articles |
+| **Zenodo** | `GET https://zenodo.org/api/records?q={query}` | Research data, software, datasets |
+| **NASA ADS** | `GET https://ui.adsabs.harvard.edu/abs/{arxiv_id}/bibtex` | Astrophysics/astronomy |
 
-\* Semantic Scholar: 100 req/5min without key, 10k/day with key.
-† CORE: free API key at https://core.ac.uk/services/api, 1000/day.
 
 ### Quick Examples
 
-```python
-import requests
-
-# OpenAlex — most powerful, completely free
-r = requests.get("https://api.openalex.org/works/https://doi.org/10.1038/s41586-023-05995-9")
-data = r.json()
-# Returns: title, authors, abstract, citation_count, topics, pdf_link
-
-# Unpaywall — find free PDF for any DOI
-r = requests.get(f"https://api.unpaywall.org/v2/{doi}?email=lingtai@users.noreply.github.com")
-oa = r.json()
-if oa.get("best_oa_location"):
-    pdf_url = oa["best_oa_location"].get("url_for_pdf")
-
-# DBLP — computer science papers
-r = requests.get("https://dblp.org/search/publ/api?q=transformer+attention&format=json&h=5")
-# Returns: title, authors, venue, year, DOI, URL
-
-# Papers With Code — ML papers with implementations
-r = requests.get("https://paperswithcode.com/api/v1/search/?q=vision+transformer")
-# Returns: papers linked to GitHub repos + benchmark results
-
-# Europe PMC — biomedical, includes PMC full text
-r = requests.get("https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=malaria+ vaccine&format=json&pageSize=5")
-```
+The runnable academic recipes have one owner:
+[Academic pipeline](academic-pipeline.md#doi-resolution-chain) for CrossRef,
+OpenAlex and Semantic Scholar; [PDF acquisition](academic-pipeline.md#pdf-acquisition-chain)
+for Unpaywall/CORE/Europe PMC; its DBLP/Papers With Code section for CS/ML.
 
 ### Academic Search Pipeline: Find → Enrich → Get PDF
 
-```python
-def academic_search_pipeline(query, max_results=10):
-    """Complete pipeline: search → enrich with metadata → find OA PDF."""
-    # Step 1: Search via OpenAlex (best general academic search)
-    r = requests.get("https://api.openalex.org/works",
-                     params={"search": query, "per_page": max_results,
-                             "sort": "cited_by_count:desc"})
-    papers = []
-    for result in r.json()["results"]:
-        paper = {
-            "title": result["title"],
-            "doi": result.get("doi", "").replace("https://doi.org/", ""),
-            "year": result.get("publication_year"),
-            "citations": result.get("cited_by_count", 0),
-            "authors": [a["author"]["display_name"] for a in result.get("authorships", [])],
-        }
-        # Step 2: Find OA PDF via Unpaywall
-        if paper["doi"]:
-            try:
-                oa = requests.get(
-                    f"https://api.unpaywall.org/v2/{paper['doi']}?email=lingtai@users.noreply.github.com",
-                    timeout=5).json()
-                if oa.get("best_oa_location"):
-                    paper["pdf_url"] = oa["best_oa_location"].get("url_for_pdf")
-                    paper["oa_url"] = oa["best_oa_location"].get("url")
-            except Exception:
-                pass
-        papers.append(paper)
-    return papers
-```
+Use [the end-to-end pipeline](academic-pipeline.md#end-to-end-pipeline), not a
+second local copy. For keyword batches, search OpenAlex with `per_page` and
+`sort=cited_by_count:desc`, retain title/DOI/year/citations/authors, and enrich
+each DOI with the owner's Unpaywall routine; missing OA or a failed lookup
+must not discard the search result. Preserve both `url_for_pdf` and landing
+`url` when available.
 
 ### ID Resolution Chain
 
-```
-Given any identifier:
-  DOI? → CrossRef / OpenAlex / Unpaywall
-  arXiv ID? → arXiv API
-  PMID? → PubMed E-utilities / Europe PMC
-  Title only? → OpenAlex search / Semantic Scholar / DBLP (CS)
-  Need PDF? → Unpaywall → arXiv (if CS) → CORE → Europe PMC (biomedical)
-```
-
-**Use when:** you have a DOI, arXiv ID, PMID, or just need metadata + abstract quickly.
+The [academic routing table](academic-pipeline.md#quick-routing-table) owns
+DOI/arXiv/PMID/title/field routing and fallback order; its PDF acquisition
+chain owns Unpaywall → arXiv → CORE → Europe PMC (biomedical) ordering.
+Metadata-only callers need not fetch a PDF. Never bypass a paywall or login.

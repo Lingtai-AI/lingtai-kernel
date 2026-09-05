@@ -1126,14 +1126,12 @@ def test_resident_prompts_route_to_system_manual_nested_references():
     substrate = (root / "src" / "lingtai" / "prompts" / "substrate" / "substrate.md").read_text(
         encoding="utf-8"
     )
-    assert "expanded runtime/substrate\nrouter is `system-manual`" in substrate
-    assert "reference/substrate-manual/SKILL.md" in substrate
+    assert "read\n`system-manual` → `reference/substrate-manual/SKILL.md`" in substrate
 
     procedures = (root / "src" / "lingtai" / "prompts" / "procedures" / "procedures.md").read_text(
         encoding="utf-8"
     )
-    assert "unified runtime/procedure router is\n`system-manual`" in procedures
-    assert "reference/procedures-manual/SKILL.md" in procedures
+    assert "`system-manual` → `reference/procedures-manual/SKILL.md`" in procedures
 
 
 def test_tool_plugin_settings_reference_is_catalogued_and_routable():
@@ -1173,3 +1171,15 @@ def test_context_manual_routes_skill_sharing_through_custom_by_default():
     ).read_text(encoding="utf-8")
     assert "peers install it into their own `.library/custom/<name>/`" in manual
     assert "explicit opt-in local-network shared root" in manual
+
+
+def test_resident_layers_query_settings_instead_of_copying_adjustable_defaults():
+    root = Path(__file__).resolve().parents[1]
+    for name in ("substrate", "procedures"):
+        source = root / "src" / "lingtai" / "prompts" / name / f"{name}.md"
+        body = " ".join(source.read_text(encoding="utf-8").split("---", 2)[2].split())
+        assert "settings" in body
+        assert 'system(action="settings", input={})' in body
+        assert "without another" in body
+        assert "1,000,000" not in body
+        assert "2,000,000" not in body

@@ -1,10 +1,18 @@
 ---
 related_files:
+  - src/lingtai/tools/web_search/manual/reference/tier-1-apis.md
   - src/lingtai/tools/web_search/manual/SKILL.md
 maintenance: |
   Keep this bundled web-search reference synchronized with its parent manual and implementation when behavior or routing changes.
 ---
 # Academic Search Pipeline
+
+> External legacy recipe, not a built-in `web` engine or installed-capability
+> promise. Start with public `web(search/browse)`; select a separate fallback
+> explicitly through [web-manual](../SKILL.md) only when needed. Check the
+> selected vendor's current API, dependencies, account access and quotas before
+> use. These examples grant no install, credential/config change, paid use or
+> access-control bypass authority. No live vendor validation is claimed here.
 
 > Part of the [web-manual](../SKILL.md) skill.
 > Academic paper search, resolution, and acquisition — from a DOI string to a
@@ -14,32 +22,12 @@ maintenance: |
 
 ## Decision Tree: What Do You Have?
 
-```
-Input arrives ────────┐
-                   │
-    ┌─────────────────┼──────────────────────────────┐
-    │              │                          │
-  DOI string    arXiv ID                  Keywords only
- (10.xxx/...)  (2401.12345)                  │
-    │              │                          │
-    ▼              ▼                          ▼
- Unpaywall     arXiv API               What field?
- (free PDF?)   (metadata+PDF)               │
-    │              │              ┌───────────┼───────────┐
-    ▼              ▼              │           │           │
- CrossRef     Direct PDF       CS/ML      Biomedical    General
- (metadata)   download           │           │           │
-    │                          ▼           ▼           ▼
-    ▼                       DBLP      PubMed/     OpenAlex →
- OpenAlex                  arXiv     EuropePMC   CrossRef
- (citations,            Semantic     CORE        Semantic
-  concepts)             Scholar                  Scholar
-    │                      │           │           │
-    └──────────────┬───────────┘           │           │
-               ▼                       ▼           ▼
-         Papers With Code         Zenodo      DOAJ
-         (if ML+code)           (datasets)   (OA journals)
-```
+Identify the input first, then follow the routing table below. DOI requests
+check OA through Unpaywall and enrich metadata through CrossRef/OpenAlex;
+arXiv identifiers permit a direct PDF route. For keywords, choose the field
+before enrichment; ML code, datasets and OA journals route respectively to
+Papers With Code, Zenodo and DOAJ. The table and implementation below retain
+the identifier-specific failure paths.
 
 ### Quick Routing Table
 
@@ -58,15 +46,15 @@ Input arrives ────────┐
 
 ## PDF Acquisition Chain
 
-The goal: get a free PDF for any paper. Try in this order — all are free `requests.get`
+The goal: get a free PDF for any paper. Try in this order — these are illustrative `requests.get`
 calls against JSON APIs; see [tier-1-apis.md](./tier-1-apis.md) for the shared endpoint
-table (base URLs, params, free tiers):
+table (base URLs and parameters):
 
 | Order | Source | When | Speed | Key needed |
 |---|---|---|---|---|
-| 1 | Unpaywall | Have a DOI, check OA first | ~0.5s | No (email param, 100k/day) |
+| 1 | Unpaywall | Have a DOI, check OA first | ~0.5s | Email parameter; verify policy |
 | 2 | arXiv | CS/Physics/Math, ID known or discoverable | ~1s | No |
-| 3 | CORE | Need OA full text, 30M+ articles | ~1s | Recommended (1000/day) |
+| 3 | CORE | Need OA full text, 30M+ articles | ~1s | Verify current key policy |
 | 4 | Europe PMC | Biomedical, PMC full-text XML available | ~1s | No |
 
 Unpaywall is the representative example — its email-format gotcha applies to the
@@ -207,7 +195,7 @@ def openalex_work(doi):
 ### 3. Semantic Scholar (DOI → AI Summary + Citation Graph)
 
 **When to use:** AI/ML papers, need TLDR summary or citation graph.
-**Speed:** ~1s | **Free:** ✅ (100/5min without key) | **Key needed:** Recommended
+**Access:** inspect the current API/account policy; a key may be required.
 
 ```python
 def semantic_scholar_paper(doi):
@@ -455,7 +443,7 @@ def academic_pipeline(query_or_id):
 | Unpaywall returns no OA | Paper is behind paywall | Try CORE full text → Europe PMC (if biomedical) → Playwright (Tier 3) on publisher page |
 | arXiv API timeout | arXiv servers slow | Retry once (3s delay) → Semantic Scholar by title |
 | Semantic Scholar 404 | Paper not indexed | CrossRef → Google Scholar via SerpAPI |
-| CORE requires key | Rate limit exceeded without key | Get free key at core.ac.uk/services/api |
+| CORE requires key | Rate limit exceeded without key | Check current CORE policy at core.ac.uk/services/api; use a key only within existing authorization |
 | All APIs fail | Obscure paper, network issues | Last resort: Playwright stealth on publisher page, or Google Scholar search |
 | BibTeX not available | CrossRef content negotiation fails | Construct manually from metadata |
 
@@ -463,18 +451,18 @@ def academic_pipeline(query_or_id):
 
 ## Rate Limits Summary
 
-| API | Free Tier | Rate Limit | Key Required? |
-|-----|-----------|------------|---------------|
-| Unpaywall | 100k/day | Generous | No (email param) |
-| arXiv | Unlimited | Be reasonable | No |
-| CrossRef | Unlimited | Be reasonable | No (add mailto) |
-| OpenAlex | Unlimited | 10 req/s | No (polite pool) |
-| Semantic Scholar | 100/5min | 1 req/s with key | Recommended |
-| CORE | 1000/day | Higher with key | Recommended |
-| Europe PMC | Unlimited | Reasonable use | No |
-| DBLP | Unlimited | Reasonable use | No |
-| Papers With Code | Unlimited | Reasonable use | No |
-| PubMed E-utilities | 10/sec (no key) | Higher with key | No |
+Do not treat remembered quotas or free tiers as current. Consult each selected
+API's documentation/account and response rate-limit headers before batching:
+[Unpaywall](https://unpaywall.org/products/api),
+[arXiv](https://info.arxiv.org/help/api/index.html),
+[CrossRef](https://www.crossref.org/documentation/retrieve-metadata/rest-api/),
+[OpenAlex](https://docs.openalex.org/),
+[Semantic Scholar](https://www.semanticscholar.org/product/api),
+[CORE](https://core.ac.uk/services/api), and
+[NCBI](https://www.ncbi.nlm.nih.gov/books/NBK25501/).
+Keep Unpaywall's email requirement and CrossRef's polite mailto contact;
+inspect whether the selected API/account requires a key. Honor retry/backoff
+and access restrictions; obtaining a key or spending resources needs authority.
 
 ---
 
@@ -490,4 +478,4 @@ pip install pymupdf  # fitz - extract text from downloaded PDFs
 
 ---
 
-*This sub-skill is part of `web-manual` v3.0. For general web browsing, search strategies, or stealth techniques, see the parent skill and other sub-skills.*
+*This sub-skill is part of the external-legacy references of `web-manual`. For general web browsing, search strategies, or stealth techniques, see the parent skill and other sub-skills.*

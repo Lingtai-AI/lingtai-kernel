@@ -6,12 +6,13 @@ description: >
   backend_options flag passing, preset/capability inheritance, and nested
   per-backend references (Codex, OpenCode, claude-p, MiMo Code, Qwen Code,
   Kimi Code, Cursor, and Oh-My-Pi flag discovery, built-in LingTai knowledge entrypoint).
-version: 1.17.0
-last_changed_at: 2026-08-13T00:00:00Z
+version: 1.17.1
+last_changed_at: 2026-09-04T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/lingtai/SKILL.md
+- src/lingtai/tools/daemon/manual/reference/dispatch-ledger/SKILL.md
 maintenance: |
   Tracks the daemon CLI backends topic it documents; update when that integration changes.
 ---
@@ -127,15 +128,18 @@ without reading the vendor's full billing docs.
 
 ## API note: `daemon(action="list", input={})`
 
-`list` is a compact index over both currently tracked runs and historical run
-folders. By default it scans `daemons/*/daemon.json` and returns completed,
-failed, cancelled, timed-out, and running entries with `run_id`, `group_id`,
-`status`, `backend`, task preview, visible call parameters (`task`, `tools`,
-`prompt`, `skills`, redacted `mcp`, system-prompt preview when recorded), result preview,
-and filesystem paths. If a historical run folder has no `daemon.json`, has
-invalid JSON, or has a mismatched `data_version`, `list` lazily writes a
-best-effort replacement using the folder name, `.prompt`, `result.txt`,
-`.heartbeat`/mtimes, and recent `events.jsonl`. Use `contains` for
+`list` tails the agent-local append-order dispatch ledger (see
+`reference/dispatch-ledger/SKILL.md`), not a folder scan. It returns
+completed, failed, cancelled, timed-out, and running entries with `run_id`,
+`group_id`, `status`, `backend`, task preview, visible call parameters
+(`task`, `tools`, `prompt`, `skills`, redacted `mcp`, system-prompt preview
+when recorded), result preview, and filesystem paths, each read from the
+ledger-selected run's own `daemon.json`. It does not enumerate historical run
+folders and does not lazily create or repair a missing or invalid
+`daemon.json`; inspect a known legacy run (one predating the ledger, or with
+a damaged file) directly with `daemon(action="check")` or manual filesystem
+inspection instead — an omitted `list` entry does not mean the run was
+deleted or failed. Use `contains` for
 case-insensitive substring search over that visible index, `status` for status
 filtering, and `last` as a positive result limit: omitted or null returns the
 newest 1000 rows, while an explicit value (including one above 1000) is honored.

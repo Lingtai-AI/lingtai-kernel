@@ -1,10 +1,18 @@
 ---
 related_files:
+  - src/lingtai/tools/web_search/manual/reference/tier-5-ai-search.md
   - src/lingtai/tools/web_search/manual/SKILL.md
 maintenance: |
   Keep this bundled web-search reference synchronized with its parent manual and implementation when behavior or routing changes.
 ---
 # Search Strategies
+
+> External legacy recipe, not a built-in `web` engine or installed-capability
+> promise. Start with public `web(search/browse)`; select a separate fallback
+> explicitly through [web-manual](../SKILL.md) only when needed. Check the
+> selected vendor's current API, dependencies, account access and quotas before
+> use. These examples grant no install, credential/config change, paid use or
+> access-control bypass authority. No live vendor validation is claimed here.
 
 > Part of the [web-manual](../SKILL.md) skill.
 > Decision trees, query optimization, engine comparison, and search+extract workflows.
@@ -48,14 +56,13 @@ Then: return results + optionally extract content from the top hits.
 All keyed engines read the key from an env var if not passed; keys go in
 `TAVILY_API_KEY` / `EXA_API_KEY` / `SERPER_API_KEY` / `BRAVE_API_KEY`.
 
-| Engine | Endpoint | Key | Free tier | Notes |
-|---|---|---|---|---|
-| DuckDuckGo | `ddgs`/`duckduckgo_search` lib | No | ∞ (be reasonable) | `.text`/`.news`/`.images`; add delays |
-| Tavily | `POST api.tavily.com/search` | Yes | 1000/mo | AI answer + `include_raw_content` (expensive) |
-| Exa | `POST api.exa.ai/search` (`x-api-key`) | Yes | 1000/mo | `type`=neural/keyword/auto; `contents.text` for body |
-| Serper | `POST google.serper.dev/search` (`X-API-KEY`) | Yes | 2500 once | Google proxy; `/scholar` for Scholar |
-| Brave | `GET api.search.brave.com/res/v1/web/search` | Yes | 2000/mo | Independent index |
-| SearXNG | `GET {instance}/search?format=json` | No | ∞ (self-host) | `docker run -d -p 8888:8080 searxng/searxng` |
+Historical endpoint examples below are illustrative, not a live service or
+pricing matrix. Use the vendor-owned documentation for current supported API
+fields, billing, quotas and account access:
+[Tavily](https://docs.tavily.com/), [Exa](https://docs.exa.ai/),
+[Serper](https://serper.dev/), [Brave](https://api-dashboard.search.brave.com/),
+[SearXNG](https://docs.searxng.org/). For DuckDuckGo wrappers, inspect the
+installed package's own help; availability is not guaranteed by LingTai.
 
 ```python
 import os, requests
@@ -69,14 +76,15 @@ def search_ddg(query, max_results=10):
     with DDGS() as ddgs:
         return [{"title": r["title"], "url": r["href"], "snippet": r["body"]}
                 for r in ddgs.text(query, max_results=max_results)]
-    # .news(query) / .images(query) for those verticals
+    # .news(query) / .images(query) / .videos(query) for those verticals
 
-def search_tavily(query, api_key=None, max_results=5, search_depth="advanced"):
+def search_tavily(query, api_key=None, max_results=5, search_depth="advanced",
+                  include_answer=True):
     """Tavily: AI answer + raw content. search_depth=basic|advanced."""
     api_key = api_key or os.environ["TAVILY_API_KEY"]
     r = requests.post("https://api.tavily.com/search",
                       json={"api_key": api_key, "query": query,
-                            "search_depth": search_depth, "include_answer": True,
+                            "search_depth": search_depth, "include_answer": include_answer,
                             "include_raw_content": True, "max_results": max_results},
                       timeout=30)
     r.raise_for_status()
@@ -162,22 +170,10 @@ returns fewer than `per_page` results, sleeping between pages to respect rate li
 
 ## Comparison & Failure Modes
 
-| Feature | DDG | Tavily | Exa | Serper | Brave | SearXNG |
-|---------|-----|--------|-----|--------|-------|---------|
-| Free tier | ∞ | 1K/mo | 1K/mo | 2.5K once | 2K/mo | ∞ |
-| No key | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Quality | Good | Good | Semantic | Google | Good | Best* |
-| Content extraction | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| AI answer | ❌ | ✅ | ❌ | ❌ | ✅ | ❌ |
-| Self-hostable | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Scholarly | ❌ | ❌ | Partial | ✅ | ❌ | ✅ |
-
-*SearXNG quality depends on the aggregated engines.
-
 | Failure | Cause | Fallback |
 |---------|-------|----------|
-| DuckDuckGo 429 | Too many requests | Wait 60s, or switch to Tavily |
-| Tavily/Exa/Brave quota exhausted | Monthly limit | Switch to DuckDuckGo |
+| DuckDuckGo 429 | Too many requests | Honor Retry-After/backoff; choose another authorized source if needed |
+| Tavily/Exa/Brave quota exhausted | Account limit | Inspect provider quota; choose an admitted available source |
 | Exa returns empty | Too specific | Switch to `type: "keyword"` |
 | Serper 401 | Invalid/expired key | Check key, fall back to DDG |
 | All engines fail | Outage | Use `web(action='search', input={'query': ...}, reasoning='retry with an admitted engine')` with an admitted available engine |

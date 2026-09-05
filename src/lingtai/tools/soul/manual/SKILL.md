@@ -2,8 +2,8 @@
 name: soul-manual
 description: |
   Operational guide for the `soul` tool — your inner voice: the seven-action call shape, read-only settings inventory, flow opt-in gate, cadence, consultation count, and voice procedures. Read it before calling `flow`, changing Soul configuration, or troubleshooting a `status: disabled` result.
-version: 1.3.0
-last_changed_at: "2026-08-29T00:00:00Z"
+version: 1.3.1
+last_changed_at: "2026-09-04T00:00:00Z"
 related_files:
 - src/lingtai/tools/soul/__init__.py
 - src/lingtai/tools/soul/CONTRACT.md
@@ -129,12 +129,8 @@ inspect the actual resolved prompt.
 ## 1. The soul-flow gate
 
 **Soul flow does not run unless an operator turns it on.** It is gated by one
-environment variable, `LINGTAI_SOUL_FLOW_ENABLED`:
-
-- **Enabled** when the value is `1`, `true`, `yes`, or `on` (case-insensitive,
-  surrounding whitespace ignored).
-- **Disabled** when unset, empty, or anything else (`0`, `false`, `no`,
-  `off`, ...).
+environment variable, `LINGTAI_SOUL_FLOW_ENABLED` — see "Flow enabled" above
+for the exact accepted values and default.
 
 The gate governs **both** firing paths:
 

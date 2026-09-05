@@ -6,7 +6,7 @@ description: >-
   the urgent and idle cadences, delayed provider reconstruction and the
   0.85/1.0 rebuild boundaries, recovery by `tool_call_id`, and summarize
   versus molt.
-last_changed_at: "2026-08-07T00:00:00Z"
+last_changed_at: "2026-09-04T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/tools/system/summarize.py
@@ -51,8 +51,8 @@ both with molt.
 
 Any LingTai Tool Protocol v2-migrated family — `web`, `mcp`, `file` (covering
 read/grep/glob-style bulky reads), `vision`, `avatar`, `soul`, `shell`,
-`notification`, `system`, `daemon`, `email`, `task_card`, `context`, `psyche`
-— accepts an optional boolean root `summarize` (legacy spelling `summary` is
+`notification`, `system`, `daemon`, `email`, `task_card`, `context`, `psyche`,
+`plugin` — accepts an optional boolean root `summarize` (legacy spelling `summary` is
 also honored on any call, for backward compatibility). Default `false`. When
 `true`:
 
@@ -67,10 +67,9 @@ also honored on any call, for backward compatibility). Default `false`. When
 - The replacement is clearly marked **generated and non-canonical** and carries
   a retrieval hint pointing back at the preserved raw by `tool_call_id`.
 
-Resident substrate §VII carries the when-to-use rule (prefer it when you can
-state the retention spec before the call and the output is large — rule of thumb
->10k chars; leave it `false` when you need exact line/file/diff/stderr text you
-will quote, diff, patch, or compare).
+Prefer it when you can state the retention spec before the call and the output
+is large — rule of thumb >10k chars; leave it `false` when you need exact
+line/file/diff/stderr text you will quote, diff, patch, or compare.
 
 **A priori is preferred but still lossy.** The runtime discards everything
 outside what your `reasoning` named, with no chance for you to notice what
@@ -108,13 +107,20 @@ original via the retrieval hint / `raw_locator` (by `tool_call_id`, see §4)
 before acting on it. This critique is ordinary summary prose, not a separate
 field — read it, don't parse it.
 
+**Track the a-priori savings.** Each `summary=true` result also carries
+`summary_kind` and generated-summary `summary_effect` fields (`prev_chars`,
+`after_chars`, `saved_chars`). When the savings are weak or negative, or the
+closing critique says the retention spec was vague, sharpen future
+`reasoning`/tool choice and deposit the lesson into pad, knowledge, skills, or
+lingtai as appropriate.
+
 ## 1 · The principle: progressive disclosure
 
 A raw tool result is the first layer: it is useful while you inspect it. After
 you have consumed it and no longer need the raw text visible, the better layer is
 an index that future-you can reason from without carrying the raw bulk. Strongly
-prefer summarizing already-digested completed tool results regardless of length;
-keep raw output visible only for active inspection, quotation, or comparison.
+prefer the compact index once summarization is warranted by the §2 gate;
+keep raw output visible while needed for inspection, quotation, or comparison.
 
 A good summary should let future-you decide whether the hidden raw result must
 be reopened. Preserve:
@@ -132,9 +138,23 @@ progressive-disclosure entry point.
 
 ## 2 · The two summarize cadences
 
+**Summarize cadence.** Strongly prefer a priori `summary=true` on `shell`,
+`file` (read/glob/grep), or `daemon` when you can predict bulky output and
+already know the facts, counts, anchors, or conclusion you need from the call;
+put that retention contract in `reasoning` so raw bulk never spends context.
+Leave it off when exact raw text or unknown high-information details may matter.
+Treat a posteriori `context(action="summarize")` as a last resort, not routine
+cleanup: use it only when context is close to overflowing and a molt is
+unsuitable. Otherwise prefer a priori summary before the call, narrower work,
+or a daemon; at a whole-session boundary, tend durable stores and molt instead.
+
+The urgent and idle patterns below operate within that gate; neither makes
+a-posteriori summarization a routine housekeeping obligation.
+
 ### Urgent cadence: summarize the bulky result now
 
-Use this when a tool result is long or noisy — typically one that ranks high in
+When the §2 execution gate is met, prioritize a long or noisy result — typically
+one that ranks high in
 `_meta.agent_meta.agent_state.current_tool_result_chars.top_results` (above its `threshold`,
 counted in `over_threshold_count`). `agent_meta` is a complete current final-carrier snapshot attached to each eligible final carrier. Its nested `agent_state.current_tool_result_chars` is current on the newest emitted snapshot; older snapshots remain retained historical traces and are not actionable.
 
@@ -147,11 +167,11 @@ counted in `over_threshold_count`). `agent_meta` is a complete current final-car
 
 ### Idle cleanup cadence: sweep what is already consumed
 
-Use this when the task quiets down, before the context window becomes urgent.
-Look back over older tool results that are already digested, obsolete, or only
-useful as evidence anchors, and replace them with summaries regardless of length
-when you are continuing in the same session. This lowers token per API call and
-improves cache/continuation efficiency for the next turn.
+When the task quiets down, inspect older results that are already digested,
+obsolete, or useful only as evidence anchors. This is a decision point, not an
+automatic summarize call: apply the §2 execution gate before replacing them
+with summaries. Prefer avoiding raw bulk in the first place; keep only the
+context the continuing task actually needs.
 
 Idle cleanup is also the right time to decide whether a deliberate molt is
 worth its cost. If the current task is complete, necessary reporting/durable
@@ -206,6 +226,11 @@ Summarize has two decoupled effects:
    summaries (markers flip to `status: done`), then requests provider replay with
    the new prompt/history. The automatic 1.0 hard forced path uses the
    same full prompt reconstruction contract before fresh replay.
+
+The rebuild action's own result reports the provider round that requested the rebuild.
+Post-rebuild context usage does not exist yet at that point; it only becomes
+observable on the next provider round. Do not read the requesting round's usage
+number as if it already reflects the rebuilt context.
 
 The dynamic pending totals in the result comment scan only `status: pending`
 markers — already-applied (`done`) markers and legacy markers without a status

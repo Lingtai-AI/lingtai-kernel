@@ -8,8 +8,8 @@ description: >
   Codex-vs-Claude style axis. It routes you to the installed CLI's live help via
   shell and shows how to translate that help into the generic `backend_options`
   mechanism. It is not a flag catalog.
-version: 0.3.0
-last_changed_at: 2026-08-07T00:00:00Z
+version: 0.3.1
+last_changed_at: 2026-09-04T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/claude-p/SKILL.md
@@ -58,68 +58,31 @@ LingTai does not validate, enumerate, or simulate effort levels. A value like
 
 ## Installation
 
-```bash
-npm install -g @openai/codex@0.130.0
-```
-
-Update an existing installation:
-
-```bash
-codex update
-# or
-npm i -g @openai/codex@latest
-```
-
-After installing, verify the installed CLI before relying on any flag
-(`codex --version`, `codex exec --help` — see "Discover flags" above).
+Use [OpenAI's current official Codex documentation](https://developers.openai.com/codex/)
+for installation and upgrades; this manual maintains no vendor install/update
+commands or pinned version. Any actual install or update still needs its
+owner's authorization. Verify the resulting `codex --version` and
+`codex exec --help` before relying on a flag.
 
 ## Configuration
 
 ### Auth & API key
 
-Billed through the **ChatGPT subscription** (Plus/Pro) via `codex login`, or a
-shared codex-pool (`~/.lingtai-tui/codex-auth-pool.json`). LingTai inherits the
-CLI's own credentials.
-
-Alternatively, set an OpenAI API key:
-
-```bash
-export OPENAI_API_KEY="your-api-key"
-```
-
-or configure it in `~/.codex/config.toml`:
-
-```toml
-[api]
-key = "your-api-key"
-```
-
-**AWS Bedrock:** use console-login credentials — `aws login`, then run codex:
-
-```bash
-aws login
-codex exec "your prompt"
-```
+The external CLI uses its existing authorized account and credential context.
+Consult installed help and OpenAI's documentation for subscription/API-key or
+other provider configuration; do not infer CLI account selection from a
+LingTai preset or pool label. This manual grants no login/logout, account/profile
+switch, credential read/copy or configuration-repair authority. Never print
+credentials or whole auth/config files while diagnosing; escalate an unavailable
+approved account rather than silently switching it.
 
 ### Models
 
-Codex supports several models:
-
-- `gpt-5.5` (latest, recommended)
-- `gpt-5.4`
-- `gpt-5.3-codex` (specialized for coding)
-
-Set the default in `~/.codex/config.toml`:
-
-```toml
-[model]
-default = "gpt-5.5"
-```
-
-The model-name vocabulary belongs to the installed CLI and the account — LingTai
-does not validate, enumerate, or simulate model names. Per-run model selection
-passes through `backend_options` (e.g. `"model": "gpt-5.5"` → `--model
-gpt-5.5`) via the parent's generic conversion rules.
+Model names and reasoning levels belong to the installed CLI and selected
+account. Query its help/vendor documentation instead of copying a "latest"
+model list or vendor configuration schema here. Per-run model selection passes
+through `backend_options` (`"model": "<name>"` → `--model <name>`), under the
+parent's generic conversion rules and the task's actual model/authority contract.
 
 ## Style axis: Codex vs Claude Code
 
@@ -153,29 +116,13 @@ breaks progress/result extraction and completion enforcement.
 
 ## Troubleshooting
 
-1. **Installation fails.** Clear the npm cache, then reinstall:
+Installation failures, missing/invalid credentials, and plugin-marketplace
+issues are the installed CLI's own concerns — use installed help and OpenAI's
+official docs above; do not print or `cat` a credential
+file/env var into agent-visible output while diagnosing. The one failure mode
+that is actually LingTai's contract to diagnose:
 
-   ```bash
-   npm cache clean --force
-   npm install -g @openai/codex@0.130.0
-   ```
-
-2. **`OPENAI_API_KEY` not found.**
-
-   ```bash
-   echo $OPENAI_API_KEY          # environment variable set?
-   cat ~/.codex/config.toml      # or the [api] key in the config file
-   ```
-
-3. **Plugin installation fails.** Check marketplace connectivity, then clear
-   the plugin cache:
-
-   ```bash
-   codex plugins search
-   rm -rf ~/.codex/plugins/cache
-   ```
-
-4. **Agent appears stuck while `codex exec` runs.** You likely used synchronous
+1. **Agent appears stuck while `codex exec` runs.** You likely used synchronous
    CLI for work that should have been daemon-backed or supervised in the
    background. Inspect the child process and worktree; if needed, kill the
    child so the blocking call returns, then resume with the Codex daemon

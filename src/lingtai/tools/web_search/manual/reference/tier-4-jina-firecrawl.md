@@ -11,9 +11,12 @@ maintenance: |
 **When it applies:** Everything else fails. Jina Reader is the universal fallback — it renders JS server-side and returns clean markdown.
 **Tools:** `requests` (Jina Reader) or `firecrawl-py` (Firecrawl).
 **Speed:** ~2-5s (server-side rendering).
-**Cost:** Jina Reader free (20 req/min), Firecrawl free (500 credits/month).
+**External legacy fallback only:** not an installed or built-in `web` engine.
+Check current [Jina Reader](https://jina.ai/reader/) and
+[Firecrawl](https://docs.firecrawl.dev/) account, API, price and quota policies;
+this page does not establish free use or authorize purchase/config changes.
 
-### Jina Reader — Universal Page-to-Markdown (FREE, no key)
+### Jina Reader — Page-to-Markdown example
 
 ```python
 import requests
@@ -49,4 +52,4 @@ app = FirecrawlApp(api_key="your-key")
 result = app.scrape_url(url, params={"formats": ["markdown", "html"]})
 ```
 
-**Use when:** All local methods fail (403, CAPTCHA, heavy JS, etc.). Jina Reader should be your first fallback — it's free, fast, and handles most cases.
+**Use when:** All local methods fail (403, CAPTCHA, heavy JS, etc.). Select Jina Reader explicitly only when suitable and authorized; verify access and rate limits rather than assuming free availability.

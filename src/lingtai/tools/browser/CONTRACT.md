@@ -82,5 +82,6 @@ this same live engine without causing a second public registration.
 
 Keep this internal Contract paired with its Anatomy and linked from the parent
 web Contract as an implementation boundary. Do not expose `browser` as a
-capability name or install its retained manual bundle.
+capability name or give it its own installed manual; `browser` has no
+`manual/` of its own.
 

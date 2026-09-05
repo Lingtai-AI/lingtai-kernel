@@ -24,6 +24,7 @@ from tests.test_task_card_controller import _FakeAgent, _OK_BODY, _manager, _wri
 
 ROOT = Path(__file__).resolve().parents[1]
 PROCEDURES = ROOT / "src/lingtai/prompts/procedures/procedures.md"
+TASK_CARD_MANUAL = ROOT / "src/lingtai/tools/task_card/manual/SKILL.md"
 
 
 class _StubCard:
@@ -200,9 +201,17 @@ def test_tool_description_asks_for_a_restart_after_expiry():
     assert "Restart a new watch when one expires mid-task." in get_description()
 
 
-def test_resident_procedures_name_the_card_worthy_triggers():
+def test_resident_procedures_routes_to_task_card_manual():
+    """Resident procedures keeps only the must-happen actions and routes detail
+    to the task_card manual, which now owns the concrete trigger examples."""
     text = PROCEDURES.read_text(encoding="utf-8")
-    section = text.split("### Task Card Lifecycle", 1)[1].split("\n### ", 1)[0]
+    assert "Use a truthful Task Card for" in text
+    assert "`daemon`, `avatar`, `shell`, or `task_card` manual" in text
+
+
+def test_task_card_manual_names_the_card_worthy_triggers():
+    text = TASK_CARD_MANUAL.read_text(encoding="utf-8")
+    section = text.split("## When to use it", 1)[1].split("\n## ", 1)[0]
     for fragment in (
         "multi-daemon fleets",
         "multi-PR batches",
@@ -211,4 +220,4 @@ def test_resident_procedures_name_the_card_worthy_triggers():
         "`max_refreshes`",
         "go dark",
     ):
-        assert fragment in section, f"{fragment!r} missing from Task Card Lifecycle"
+        assert fragment in section, f"{fragment!r} missing from task_card manual's When to use it"
