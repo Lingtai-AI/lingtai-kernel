@@ -38,7 +38,11 @@ data afterward.
    or an environment itself; it constructs a `RefreshWatcherRequest`
    (`src/lingtai/kernel/refresh_watcher/__init__.py`) from handshake paths it
    already computed and calls `spawn_detached(request)` exactly once, after
-   the ACK invariant is established and before setting `_cancel_event`/`_shutdown`.
+   the ACK invariant is established. Before handoff, the lifecycle singleflight
+   slot is released on every failure, so recurring worker-poison guards may
+   retry without a second wrapper latch. After handoff, turn-cancel and shutdown
+   are signaled before deferred-relaunch logging, so a logging failure cannot
+   keep the old process lease held.
    The agent's runtime-identity fields (`agent._runtime_identity_event_fields`)
    are serialized to `identity_fields_json` with `json.dumps(...)` at this
    same call site — not carried as a live dict or a shallow container —

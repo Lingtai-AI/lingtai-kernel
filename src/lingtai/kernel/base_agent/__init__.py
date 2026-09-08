@@ -559,6 +559,10 @@ class BaseAgent:
         # only once a real launch command exists and before any handshake or
         # shutdown mutation (see kernel/refresh_watcher/CONTRACT.md).
         self._refresh_watcher = refresh_watcher
+        # One process-local refresh gate exists before any runtime thread can
+        # enter lifecycle; lifecycle retains a fallback for partial test doubles.
+        self._refresh_singleflight_lock: threading.Lock = threading.Lock()
+        self._refresh_started: bool = False
         self._runtime_identity_event_fields = runtime_identity_event_fields(
             self._source_revision_port
         )
@@ -790,8 +794,6 @@ class BaseAgent:
         self._llm_worker_poison_artifact: str | None = None
         self._llm_worker_poisoned_at: str | None = None
         self._llm_worker_poison_turn_entry: str | None = None
-        self._llm_worker_refresh_requested: bool = False
-        self._llm_worker_refresh_source: str | None = None
 
         # system.sleep's persisted `.alarm` is shared by the tool handler and
         # the heartbeat. This narrow lock makes arm/expiry last-writer-wins

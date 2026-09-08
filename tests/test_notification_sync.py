@@ -2419,7 +2419,6 @@ def _make_poisoned_sync_agent(tmp_path: Path, state):
             self._llm_worker_poison_artifact = (
                 "history/unfinished_turns/worker_still_running_test.json"
             )
-            self._llm_worker_refresh_requested = False
             self.refresh_calls = []
 
         @property

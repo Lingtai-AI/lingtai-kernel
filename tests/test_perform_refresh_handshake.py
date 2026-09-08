@@ -33,7 +33,7 @@ from unittest.mock import MagicMock, patch
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
-from tests._notification_store_helpers import notification_store_for
+from tests._notification_store_helpers import notification_store_for, publish_test_payload
 from tests._agent_presence_helpers import make_test_presence_store
 from tests._refresh_watcher_helpers import make_test_refresh_watcher
 
@@ -1476,6 +1476,16 @@ def test_refresh_watcher_system_notification_lock_timeout_fails_open(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_base_agent_constructs_shared_refresh_singleflight_gate(tmp_path):
+    """A real agent owns one unclaimed refresh gate before runtime entry."""
+    import threading
+
+    agent = _make_agent_with_launch_cmd(tmp_path)
+
+    assert isinstance(agent._refresh_singleflight_lock, type(threading.Lock()))
+    assert agent._refresh_started is False
+
+
 def test_two_refresh_requests_coalesce_to_one_watcher(tmp_path):
     """Two near-concurrent refresh requests on the same agent must coalesce
     into ONE watcher spawn (lingtai#624 regression).
@@ -1664,6 +1674,10 @@ def test_successful_handoff_keeps_slot_claimed_even_if_post_handoff_logging_rais
     assert len(watcher.calls) == 1
     assert agent._refresh_started is True, \
         "a completed watcher handoff must keep the single-flight slot claimed"
+    assert agent._cancel_event.is_set(), \
+        "post-handoff logging failure must not prevent turn cancellation"
+    assert agent._shutdown.is_set(), \
+        "post-handoff logging failure must not leave the old process holding its lease"
 
     agent._perform_refresh()  # a later request must coalesce, not re-spawn
 
@@ -1673,6 +1687,159 @@ def test_successful_handoff_keeps_slot_claimed_even_if_post_handoff_logging_rais
         event == "refresh_skipped" and kw.get("reason") == "refresh_already_in_progress"
         for event, kw in log_events
     )
+
+
+@pytest.mark.parametrize(
+    "failure_mode, first_spawn_calls, final_spawn_calls",
+    [
+        ("launch_builder", 0, 1),
+        ("ack_return", 0, 1),
+        ("raising_spawn", 1, 2),
+    ],
+)
+def test_poison_guard_retries_every_pre_handoff_refresh_failure(
+    tmp_path,
+    monkeypatch,
+    failure_mode,
+    first_spawn_calls,
+    final_spawn_calls,
+):
+    """A normal later poison guard retries after any pre-handoff failure.
+
+    This drives the real ``BaseAgent._sync_notifications`` poison guard into
+    the real ``_perform_refresh`` lifecycle implementation.  The fake Port is
+    local and process-free; only the selected first attempt fails.
+    """
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    wd = agent._working_dir
+    good_cmd = ["python", "-c", "pass"]
+    build_calls = []
+    save_calls = []
+
+    def build_launch_cmd():
+        build_calls.append(True)
+        if failure_mode == "launch_builder" and len(build_calls) == 1:
+            raise RuntimeError("simulated launch builder failure")
+        return good_cmd
+
+    agent._build_launch_cmd = build_launch_cmd
+    agent._save_chat_history = lambda *a, **kw: save_calls.append((a, kw))
+    agent._llm_worker_interface_poisoned = True
+    agent._llm_worker_poison_artifact = (
+        "history/unfinished_turns/worker_still_running_test.json"
+    )
+
+    if failure_mode == "ack_return":
+        real_touch = Path.touch
+        failed = []
+
+        def fail_first_ack(path, *args, **kwargs):
+            if path == wd / ".refresh.taken" and not failed:
+                failed.append(True)
+                raise OSError("simulated ACK creation failure")
+            return real_touch(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "touch", fail_first_ack)
+    elif failure_mode == "raising_spawn":
+        class RaiseOnceWatcher(type(agent._refresh_watcher)):
+            def spawn_detached(self, request):
+                super().spawn_detached(request)
+                if len(self.calls) == 1:
+                    raise OSError("simulated detached spawn failure")
+
+        agent._refresh_watcher = RaiseOnceWatcher()
+
+    publish_test_payload(agent, "email", {"count": 1})
+
+    agent._sync_notifications()
+
+    assert len(agent._refresh_watcher.calls) == first_spawn_calls
+    assert agent._refresh_started is False
+    assert not agent._cancel_event.is_set()
+    assert not agent._shutdown.is_set()
+    assert save_calls == []
+
+    # The fingerprint remains uncommitted while poisoned, so an ordinary
+    # later heartbeat notification-sync pass naturally reaches the guard again.
+    agent._sync_notifications()
+
+    assert len(agent._refresh_watcher.calls) == final_spawn_calls
+    assert agent._refresh_started is True
+    assert agent._cancel_event.is_set()
+    assert agent._shutdown.is_set()
+    assert save_calls == []
+
+
+def test_concurrent_poison_refresh_requests_use_lifecycle_singleflight(tmp_path):
+    """A pending poison refresh coalesces a second real wrapper request."""
+    import threading
+
+    from lingtai.kernel.base_agent.worker_recovery import request_worker_hang_refresh
+
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    shared_gate = agent._refresh_singleflight_lock
+    agent._llm_worker_interface_poisoned = True
+    save_calls = []
+    agent._save_chat_history = lambda *a, **kw: save_calls.append((a, kw))
+    spawn_entered = threading.Event()
+    release_spawn = threading.Event()
+    second_returned = threading.Event()
+    log_events = []
+    agent._log = lambda event, **kw: log_events.append((event, kw))
+
+    class BlockingWatcher(type(agent._refresh_watcher)):
+        def spawn_detached(self, request):
+            spawn_entered.set()
+            if not release_spawn.wait(timeout=5):
+                raise AssertionError("timed out waiting to release held watcher spawn")
+            super().spawn_detached(request)
+
+    watcher = BlockingWatcher()
+    agent._refresh_watcher = watcher
+    errors = []
+
+    def request_refresh(source, returned=None):
+        try:
+            request_worker_hang_refresh(agent, source=source)
+        except BaseException as exc:  # pragma: no cover - failure reporting
+            errors.append(exc)
+        finally:
+            if returned is not None:
+                returned.set()
+
+    first = threading.Thread(target=request_refresh, args=("guard-first",))
+    second = None
+    first.start()
+    try:
+        assert spawn_entered.wait(timeout=5), "first request never reached watcher spawn"
+        second = threading.Thread(
+            target=request_refresh,
+            args=("guard-second", second_returned),
+        )
+        second.start()
+        assert second_returned.wait(timeout=5), \
+            "second request did not coalesce while the first spawn was pending"
+        assert watcher.calls == [], "held first spawn must not have completed yet"
+        assert agent._refresh_singleflight_lock is shared_gate
+        assert any(
+            event == "refresh_skipped"
+            and kw.get("reason") == "refresh_already_in_progress"
+            for event, kw in log_events
+        )
+    finally:
+        release_spawn.set()
+        first.join(timeout=5)
+        if second is not None:
+            second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert second is not None and not second.is_alive()
+    assert errors == []
+    assert len(watcher.calls) == 1
+    assert agent._refresh_singleflight_lock is shared_gate
+    assert agent._cancel_event.is_set()
+    assert agent._shutdown.is_set()
+    assert save_calls == []
 
 
 def test_concurrent_refresh_requests_spawn_exactly_one_watcher(tmp_path):

@@ -444,19 +444,12 @@ def request_worker_hang_refresh(
     artifact_relpath: str | None = None,
     source: str,
 ) -> None:
-    """Idempotently request a forced refresh that skips poisoned chat save."""
-    if getattr(agent, "_llm_worker_refresh_requested", False):
-        try:
-            agent._log(
-                "worker_hang_refresh_already_requested",
-                source=source,
-                artifact=artifact_relpath or getattr(agent, "_llm_worker_poison_artifact", None),
-            )
-        except Exception:
-            pass
-        return
-    agent._llm_worker_refresh_requested = True
-    agent._llm_worker_refresh_source = source
+    """Request a forced refresh that skips poisoned chat save.
+
+    ``_perform_refresh`` owns successful-request coalescing and releases its
+    single-flight slot after every pre-handoff failure.  Keep this wrapper
+    retryable so a later poison guard can use that released slot.
+    """
     try:
         agent._log(
             "worker_hang_refresh_requested",

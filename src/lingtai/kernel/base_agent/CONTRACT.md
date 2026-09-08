@@ -118,7 +118,8 @@ heartbeat withdrawal → lease release, with heartbeat fresh through teardown.
 Refresh is the `.refresh` → `.refresh.taken` handshake with
 exactly one detached watcher spawn; a refresh attempt that fails or raises
 before that handoff leaves the live process able to attempt refresh again,
-and only a completed handoff is terminal for the process
+including through a later recurring worker-poison guard, and only a completed
+handoff is terminal for the process
 ([BA002](BEHAVIORS.md#behavior-ba002)). Cooperative stop requests are the signal
 files (`.suspend`, `.sleep`, `.interrupt`), consumed by the agent's own
 heartbeat loop; OS signals and console events are translated into that channel
@@ -235,6 +236,8 @@ Clause IDs are stable; each rule composes the linked normative source.
    Per-process refresh is single-flight: near-concurrent requests coalesce
    into one watcher, and a request arriving after a completed handoff is
    skipped (`refresh_skipped`, `refresh_already_in_progress`). That
+   shared gate is initialized unclaimed by `BaseAgent` construction before
+   runtime threads can request refresh. The
    single-flight claim is released by every ordinary failure or exception
    before `spawn_detached` returns — including no launch command, a raising
    launch-command build (the wrapper's configured-`venv_path` precheck), a
@@ -246,7 +249,11 @@ Clause IDs are stable; each rule composes the linked normative source.
    exception may leave that handshake artifact, but still releases the
    claim and does not signal cancellation/shutdown. A completed handoff
    (the Port's normal return) keeps the claim for the rest of the process
-   lifetime even if logging or shutdown signaling after it fails.
+   lifetime. It signals turn cancellation and shutdown before deferred-relaunch
+   logging, so logging failure cannot leave the old process holding the lease.
+   The worker-poison request wrapper owns no second latch: later poison guards
+   may retry a released lifecycle slot, while a completed or concurrent request
+   still coalesces at this single-flight boundary.
    Guarded by: [BA002](BEHAVIORS.md#behavior-ba002)
    A forced refresh after `WorkerStillRunningError` (provider timeout plus
    grace with the worker thread still alive) relaunches to discard the

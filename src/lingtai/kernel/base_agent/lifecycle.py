@@ -1213,8 +1213,6 @@ def _perform_refresh(
             # and must be able to retry refresh later.
             with guard:
                 agent._refresh_started = False
-    agent._log("refresh_deferred_relaunch",
-               cmd=cmd[0], handshake=handshake_source)
     # Lock-clear signaling — direct callers (intrinsic system tool call,
     # AED preset fallback) reach this function without going through the
     # heartbeat's `_shutdown.set()` step at lifecycle.py:212. Without
@@ -1230,6 +1228,11 @@ def _perform_refresh(
             shutdown_event.set()
         except Exception:
             pass
+    # Logging is observability, not part of the successful handoff. Keep it
+    # after lock-clear signaling so an event-journal failure cannot strand the
+    # watcher behind the old process's lease.
+    agent._log("refresh_deferred_relaunch",
+               cmd=cmd[0], handshake=handshake_source)
 
 
 def _can_fallback_preset(agent) -> bool:
