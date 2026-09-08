@@ -5,11 +5,12 @@ description: |
   QR or headless login, read-only settings SHOW, per-account poller locking,
   session expiry, and safe owner procedures. Read before changing setup or
   diagnosing startup.
-version: 1.0.0
-last_changed_at: "2026-09-07T00:00:00Z"
+version: 1.0.1
+last_changed_at: "2026-09-08T00:00:00Z"
 related_files:
 - src/lingtai/mcp_servers/wechat/SKILL.md
 - src/lingtai/mcp_servers/wechat/server.py
+- src/lingtai/mcp_servers/wechat/manager.py
 - src/lingtai/mcp_servers/wechat/login.py
 - src/lingtai/mcp_servers/wechat/lockfile.py
 - src/lingtai/mcp_servers/wechat/settings.py
@@ -130,6 +131,34 @@ delete lockfiles blindly. Stop or reconfigure the other owner process, then
 restart the intended MCP. On a platform without `fcntl`, startup fails rather
 than pretending duplicate-poller safety exists.
 
-When startup fails, inspect the redacted status/startup error and fix the owner
-configuration or lock holder. Do not start a second poller as a workaround, and
-reconcile `read` history before sending after recovery.
+### Why `PollerLockBusy` can persist
+
+`PollerLockBusy` is decided when the MCP server starts, not on every tool call.
+If lock acquisition fails, the server keeps the manager unavailable and records
+the startup exception so later actions can return the same diagnostic. Those
+actions do not reacquire the lock or rebuild the manager. The reported holder PID
+is therefore a startup-time snapshot: if that process exits later, the operating
+system releases its POSIX lock, but the failed MCP server still needs a restart.
+The lockfile intentionally remains on disk; its presence alone does not mean the
+lock is still held.
+
+### Recovery sequence
+
+1. Inspect the holder named by the error before stopping anything:
+
+   ```text
+   ps -p <holder-pid> -o pid,command
+   lsof -p <holder-pid> 2>/dev/null | grep cwd
+   ```
+
+   Identify which project owns that process and confirm which project should keep
+   the account. Do not stop an unknown owner merely because the PID appears in an
+   earlier error.
+2. Gracefully stop or reconfigure the duplicate owner, then verify that the PID is
+   gone. Do not delete the lockfile: process exit releases the lock, while removing
+   the file can race with another acquisition.
+3. Restart or refresh the intended WeChat MCP through the host owner's supported
+   procedure. Repeating ordinary WeChat tool calls in the already-failed server
+   cannot recover its manager, and starting another poller is not a workaround.
+4. After recovery, use `check` or `read` to reconcile recent history before
+   sending or replying, so a recovered client does not duplicate a response.
