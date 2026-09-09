@@ -170,8 +170,8 @@ def test_manager_broadcast_composes_with_custom_display_expression(
 
     assert calls and calls[0][0] == "send"
     sent_text = calls[0][2]
-    header = TaskCardEventProjection.header("en")
-    footer = TaskCardEventProjection.footer(1, "en")
+    header = "📋 <b>ACTIVITIES</b>"
+    footer = TaskCardEventProjection.footer(1, "en").strip("_")
     assert sent_text == f"{footer}\n{header}"
 
 
@@ -224,8 +224,8 @@ def test_hot_reload_reaches_the_live_manager_projection(
     manager._ensure_task_card_resident("main", 123)
     assert calls[-1][0] == "send"
     default_text = calls[-1][2]
-    assert default_text.startswith("_Don't reply to this Task Card.")
-    assert default_text.splitlines()[1] == TaskCardEventProjection.header("en")
+    assert default_text.startswith("Don't reply to this Task Card.")
+    assert default_text.splitlines()[1] == "📋 <b>ACTIVITIES</b>"
 
     state_path = tmp_path / "telegram" / "taskcard.json"
     data = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {
@@ -238,8 +238,8 @@ def test_hot_reload_reaches_the_live_manager_projection(
     calls.clear()
     manager._broadcast_task_card_event_window(force=True)
     assert calls
-    header = TaskCardEventProjection.header("en")
-    footer = TaskCardEventProjection.footer(1, "en")
+    header = "📋 <b>ACTIVITIES</b>"
+    footer = TaskCardEventProjection.footer(1, "en").strip("_")
     assert calls[-1][-1] == f"{footer}\n{header}"
 
 
@@ -429,8 +429,8 @@ def test_setter_preserves_unseen_external_edit_through_manager_projection(
 
     assert calls and calls[0][0] == "send"
     sent_text = calls[0][2]
-    header = TaskCardEventProjection.header("en")
-    footer = TaskCardEventProjection.footer(1, "en")
+    header = "📋 <b>ACTIVITIES</b>"
+    footer = TaskCardEventProjection.footer(1, "en").strip("_")
     assert sent_text == f"{footer}\n{header}"
 
     persisted = json.loads(state_path.read_text(encoding="utf-8"))

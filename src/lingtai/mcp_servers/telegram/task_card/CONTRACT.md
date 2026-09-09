@@ -117,6 +117,16 @@ semantics live here. The public producer contract lives in
     reasoning but never projects command, working directory, environment,
     credentials, or any other raw argument. Completed rows keep normal result
     wording.
+13. Telegram sends and edits the one composed resident with original Bot API
+    `parse_mode=HTML`. The automatic renderer HTML-escapes every dynamic
+    shared automatic frame before replacing only exact static lines with
+    Telegram-supported bold, italic, and code markup; when the shared source
+    frame is within its budget, only escaped dynamic content may be shortened
+    to account for that fixed presentation overhead. The programmable slot
+    remains authored content: its Telegram-targeted
+    producer must emit valid Telegram HTML or common plain text. Invalid provider
+    markup is an ordinary failed edit/send and preserves the last committed card.
+    Feishu and other consumers keep their own rendering mode.
 
 ## Port
 
@@ -180,6 +190,11 @@ this component.
 13. Pending Shell wording may branch only on canonical tool/action names and the
     literal nested `input.async` boolean. No other Shell input field enters the
     projected row.
+14. Telegram Task Card transport must pass `parse_mode=HTML` on both send and
+    edit. The adapter escapes the whole shared automatic frame before adding its
+    exact static HTML lines, so dynamic text never becomes markup; programmable
+    HTML is producer-authored and is not rewritten by Telegram. Non-Telegram
+    consumers keep the shared Markdown frame unchanged.
 
 ## Tests
 

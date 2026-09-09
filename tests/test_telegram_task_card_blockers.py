@@ -153,24 +153,22 @@ def test_no_fallback_exhaustion_renders_terminal(tmp_path, monkeypatch):
 
 
 # ===========================================================================
-# B4 — the reasoning-excerpt budget keeps a MODERATE-row card under the ceiling
-#      (it is not a guarantee for every N; see the high-N boundary test below)
+# B4 — the shared reasoning budget plus fixed HTML presentation stays below
+#      Telegram's transport ceiling for moderate rows (not every N).
 # ===========================================================================
 
 _MODERATE_NOW = datetime(2026, 7, 12, 17, 18, 36, tzinfo=timezone(timedelta(hours=-7)))
 
 
 def test_timestamped_moderate_rows_stay_under_text_limit():
-    """At a moderate row count the excerpt budget has headroom, so shrinking the
-    (huge) per-row reasoning keeps the whole render under ``_TASK_CARD_TEXT_LIMIT``.
-    This proves the excerpt-shrinkage guarantee, not an all-N bound."""
+    """Moderate rows remain within Telegram's 4096-character transport ceiling."""
     rows = [
         {"tool": f"tool{i}", "tool_action": "run", "reasoning": "Z" * 600,
          "elapsed_s": i, "done": i % 2 == 0, "started_at": "04:08:08 UTC-07"}
         for i in range(12)
     ]
     text = TelegramManager._format_task_card_text("", "", "", rows=rows, now=_MODERATE_NOW)
-    assert len(text) <= TelegramManager._TASK_CARD_TEXT_LIMIT
+    assert len(text) <= 4096
     # Every row still represented and the footer survives.
     for i in range(12):
         assert f"tool{i}" in text
@@ -183,8 +181,8 @@ def test_timestamped_moderate_rows_stay_under_text_limit():
             assert "04:08:08 UTC-07" not in ln
     # The bottom line is the single render-time stamp, distinct from row stamps.
     assert text.splitlines()[-2:] == [
-        "Last Updated: 17:18:36 U-7",
-        '_Ask agent for "Task Card"_',
+        "🕒 Last Updated: 17:18:36 U-7",
+        '💬 <i>Ask agent for "Task Card"</i>',
     ]
 
 
@@ -217,8 +215,8 @@ def test_extreme_row_count_exceeds_budget_but_keeps_every_row():
     # The fixed footer and the single render-time line still render.
     assert _TASK_CARD_FOOTER in text
     assert text.splitlines()[-2:] == [
-        "Last Updated: 17:18:36 U-7",
-        '_Ask agent for "Task Card"_',
+        "🕒 Last Updated: 17:18:36 U-7",
+        '💬 <i>Ask agent for "Task Card"</i>',
     ]
 
 
@@ -230,7 +228,7 @@ def test_timestamped_rows_redaction_before_truncation():
         for i in range(12)
     ]
     text = TelegramManager._format_task_card_text("", "", "", rows=rows)
-    assert len(text) <= TelegramManager._TASK_CARD_TEXT_LIMIT
+    assert len(text) <= 4096
     assert "ghp_" not in text  # redacted even under heavy length pressure
     for i in range(12):
         assert f"t{i}" in text

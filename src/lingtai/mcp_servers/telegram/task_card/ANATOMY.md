@@ -84,7 +84,12 @@ onto its one tracked resident Task Card target per account+chat.
   grammar: an ordered, allowlisted selection of the fragments
   (`header`/`rows`/`blank`/`footer`/`divider`/`metadata`/`time`/`ask_agent`)
   `format_rows_task_card_text` already renders, never arbitrary interpolated
-  data. It renders only a pre-projected allowlisted pending-activity label;
+  data. Telegram's adapter converts this shared Markdown frame to supported
+  HTML by escaping the complete frame before substituting only exact static
+  presentation lines; within the shared source budget it shortens only escaped
+  dynamic content for fixed tag overhead, while Feishu consumes the shared frame
+  unchanged.
+  It renders only a pre-projected allowlisted pending-activity label;
   `TelegramManager` derives that label for canonical `shell.run` from literal
   `input.async`, so no command/path/environment argument enters the row
   (`src/lingtai/mcp_servers/task_card/event_projection.py:1221-1301`).
@@ -109,8 +114,12 @@ onto its one tracked resident Task Card target per account+chat.
   `TaskCardEventProjection` and keeps unrelated private helpers as compatibility
   wrappers.
 - `TelegramManager` constructs `TaskCardResidentTransport` with dynamic provider
-  callbacks. The shared core never imports Telegram, reads its state file, or
-  classifies Bot API errors.
+  callbacks and supplies Telegram's HTML programmable-section header. The shared
+  core only composes that injected provider label; it never imports Telegram,
+  reads its state file, or classifies Bot API errors. Telegram send/edit use
+  `parse_mode=HTML`; the programmable body is authored Telegram HTML or common
+  plain text, while the adapter escapes the complete automatic frame before it
+  adds the exact supported HTML presentation lines.
 - `TelegramManager._broadcast_programmable_task_card_file()` reads
   `taskcard/status` first: exact `active` reads the body and projects it
   (diff-only against the last committed programmable frame); exact `inactive`

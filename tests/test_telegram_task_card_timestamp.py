@@ -32,7 +32,7 @@ _NOW = datetime(2026, 7, 12, 17, 18, 36, tzinfo=timezone(timedelta(hours=-7)))
 
 
 def _current_time_line(text):
-    return next(ln for ln in text.splitlines() if ln.startswith("Last Updated: "))
+    return next(ln for ln in text.splitlines() if ln.startswith("🕒 Last Updated: "))
 
 
 def test_tool_row_never_renders_its_started_at_inline():
@@ -53,8 +53,8 @@ def test_manager_renders_current_time_line_from_render_instant_not_row_start():
     lines = text.splitlines()
     # The render-time stamp precedes the approved ask-agent final line.
     assert lines[-2:] == [
-        "Last Updated: 17:18:36 U-7",
-        '_Ask agent for "Task Card"_',
+        "🕒 Last Updated: 17:18:36 U-7",
+        '💬 <i>Ask agent for "Task Card"</i>',
     ]
 
 
@@ -65,9 +65,9 @@ def test_current_time_line_follows_the_footer():
     ], now=_NOW)
     lines = text.splitlines()
     footer_idx = next(i for i, ln in enumerate(lines) if _TASK_CARD_FOOTER in ln)
-    time_idx = next(i for i, ln in enumerate(lines) if ln.startswith("Last Updated: "))
+    time_idx = next(i for i, ln in enumerate(lines) if ln.startswith("🕒 Last Updated: "))
     assert time_idx > footer_idx
-    assert lines[time_idx] == "Last Updated: 17:18:36 U-7"
+    assert lines[time_idx] == "🕒 Last Updated: 17:18:36 U-7"
 
 
 def test_parallel_rows_never_renders_any_per_row_stamp():
@@ -83,7 +83,7 @@ def test_parallel_rows_never_renders_any_per_row_stamp():
         if ln.startswith(("•", "✓")):
             assert "UTC" not in ln
     # The bottom line is still the single render-time stamp.
-    assert _current_time_line(text) == "Last Updated: 17:18:36 U-7"
+    assert _current_time_line(text) == "🕒 Last Updated: 17:18:36 U-7"
 
 
 def test_current_time_line_present_even_when_no_row_has_a_stamp():
@@ -97,8 +97,8 @@ def test_current_time_line_present_even_when_no_row_has_a_stamp():
     # Last Updated never depends on any row carrying a stamp — it always
     # reflects the render instant.
     assert text.splitlines()[-2:] == [
-        "Last Updated: 17:18:36 U-7",
-        '_Ask agent for "Task Card"_',
+        "🕒 Last Updated: 17:18:36 U-7",
+        '💬 <i>Ask agent for "Task Card"</i>',
     ]
     # Tool rows never render an inline stamp even when one is supplied.
     for ln in text.splitlines():
@@ -120,6 +120,6 @@ def test_api_error_row_never_carries_a_stamp_alongside_a_tool_row():
     api_line = next(ln for ln in text.splitlines() if "API error" in ln)
     assert "UTC" not in api_line
     assert text.splitlines()[-2:] == [
-        "Last Updated: 17:18:36 U-7",
-        '_Ask agent for "Task Card"_',
+        "🕒 Last Updated: 17:18:36 U-7",
+        '💬 <i>Ask agent for "Task Card"</i>',
     ]

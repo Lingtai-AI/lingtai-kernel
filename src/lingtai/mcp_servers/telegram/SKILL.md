@@ -93,8 +93,17 @@ text/media choice. Content-bearing `send`, `reply`, and `edit` default to
 `entities` supplies `MessageEntity[]`, and `plain_text` omits `parse_mode`. Do
 not mix entity data with a parse-mode choice. Omit `rendering_mode` for ordinary
 messages and write valid Telegram Markdown; use `plain_text` only when literal,
-unformatted output is intentional, never as a generic safety fallback. Automatic
-and programmable Task Card sections use the same `Markdown` expectation.
+unformatted output is intentional, never as a generic safety fallback.
+
+The resident Telegram Task Card is separate: its automatic and programmable
+sections share one original Telegram `parse_mode='HTML'` message. Automatic rows
+HTML-escape their dynamic plain text before adding the small supported visual
+markup; when the shared frame is within its source budget, the adapter trims
+only escaped dynamic content to account for those fixed tags and emojis. A
+programmable renderer targeting Telegram must therefore emit valid
+Telegram HTML (or common plain text); unsupported or malformed markup fails the
+update and preserves the last delivered resident card. This changes no ordinary
+`send`/`reply`/`edit` default and no other channel's Task Card renderer.
 
 ### Reply vs send
 

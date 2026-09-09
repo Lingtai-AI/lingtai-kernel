@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from lingtai.mcp_servers.task_card import TaskCardEventProjection
-from lingtai.mcp_servers.telegram.manager import TelegramManager
+from lingtai.mcp_servers.telegram.manager import TelegramManager, _telegram_task_card_html
 
 
 def test_shared_projection_matches_telegram_safe_group_shape() -> None:
@@ -122,20 +122,38 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         now=now,
     )
 
-    assert shared == telegram
-    assert shared == (
-        "_Don't reply to this Task Card. Use /taskcard on|off to toggle; "
-        "/taskcard N sets normal rows (1-10, current: 1)._\n"
-        "*ACTIVITIES*\n"
+    assert _telegram_task_card_html(shared) == telegram
+    assert telegram == (
+        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+        "/taskcard N sets normal rows (1-10, current: 1).\n"
+        "📋 <b>ACTIVITIES</b>\n"
         f"{TaskCardEventProjection.API_CALL_DIVIDER}\n"
         "• public response\n"
         "• bash.run: build (0ms, running)\n"
         "\n"
         "────────\n"
         "Session · active · calls 2\n"
-        "Last Updated: 02:30:00 U+8\n"
-        "_Ask agent for \"Task Card\"_"
+        "🕒 Last Updated: 02:30:00 U+8\n"
+        "💬 <i>Ask agent for \"Task Card\"</i>"
     )
+
+
+def test_telegram_html_converter_escapes_dynamic_text_before_static_markup() -> None:
+    shared = TaskCardEventProjection.format_rows_task_card_text([
+        {"kind": "text", "text": "public <reply> & note"},
+        {
+            "tool": "shell",
+            "tool_action": "run",
+            "reasoning": "inspect <node> & preserve > state",
+            "status": "???",
+        },
+    ])
+    telegram = _telegram_task_card_html(shared)
+
+    assert "📋 <b>ACTIVITIES</b>" in telegram
+    assert "public &lt;reply&gt; &amp; note" in telegram
+    assert "inspect &lt;node&gt; &amp; preserve &gt; state" in telegram
+    assert "public <reply>" not in telegram
 
 
 def test_shared_render_rejects_malformed_pending_activity_labels() -> None:

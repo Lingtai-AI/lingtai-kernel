@@ -1,7 +1,7 @@
 """Tests for route B — single transient current-step Task Card.
 
 Product contract: cap 500 Unicode code points after redaction, current-step
-only (no cumulative history), no continuation/overflow, loud *ACTIVITIES*.
+only (no cumulative history), no continuation/overflow, loud 📋 HTML ACTIVITIES.
 """
 
 from __future__ import annotations
@@ -92,8 +92,22 @@ def test_task_card_update_same_message_id(tmp_path):
     # Only current step visible; previous step replaced
     assert "Step 2" in edited
     assert "Step 1" not in edited  # replaced, not cumulative
-    assert "*ACTIVITIES*" in edited
-    assert edit_calls[-1][4] == {"parse_mode": "Markdown"}
+    assert "📋 <b>ACTIVITIES</b>" in edited
+    assert edit_calls[-1][4] == {"parse_mode": "HTML"}
+
+
+def test_direct_send_and_edit_use_html_parse_mode(tmp_path):
+    """Compatibility send/edit paths use the resident HTML transport mode."""
+    manager, account = _manager(tmp_path)
+
+    sent = manager.send_progress_message("mybot", 999, "📋 <b>ACTIVITIES</b>")
+    assert sent == {"status": "sent", "message_id": "mybot:999:100"}
+    send = next(call for call in account.calls if call[0] == "send_message")
+    assert send[4] == {"parse_mode": "HTML"}
+
+    assert manager.update_progress_message(sent["message_id"], "📋 <b>ACTIVITIES</b>")
+    edit = next(call for call in account.calls if call[0] == "edit_message")
+    assert edit[4] == {"parse_mode": "HTML"}
 
 
 def test_task_card_finalize_shows_done_header(tmp_path):
@@ -141,7 +155,7 @@ def test_reasoning_499_fits_no_ellipsis(tmp_path):
     send_calls = [c for c in account.calls if c[0] == "send_message"]
     text = send_calls[0][2]
     assert "A" * 499 in text
-    assert "…" not in text.replace("*ACTIVITIES*", "").replace("bash:", "").replace("…", "CHECK")  # no ellipsis
+    assert "…" not in text.replace("📋 <b>ACTIVITIES</b>", "").replace("bash:", "").replace("…", "CHECK")  # no ellipsis
 
 
 def test_reasoning_500_fits_exact_no_ellipsis(tmp_path):
@@ -200,7 +214,7 @@ def test_redaction_before_cap(tmp_path):
     text = send_calls[0][2]
     # Secret must be gone after redaction
     assert "ghp_" not in text
-    assert "<REDACTED" in text or "github_token" in text
+    assert "&lt;REDACTED" in text or "github_token" in text
     # Prefix preserved (484 X's + space = 485 chars before secret)
     assert "X" * 484 in text
 
@@ -401,8 +415,8 @@ def test_full_routing_chain_create_update_finalize(tmp_path):
     send_calls = [c for c in account.calls if c[0] == "send_message"]
     assert len(send_calls) == 1
     text = send_calls[0][2]
-    assert "*ACTIVITIES*" in text
-    assert send_calls[0][4] == {"parse_mode": "Markdown"}
+    assert "📋 <b>ACTIVITIES</b>" in text
+    assert send_calls[0][4] == {"parse_mode": "HTML"}
     assert "bash.run" in text
     assert "Check project structure" in text
 

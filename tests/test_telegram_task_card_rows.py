@@ -49,7 +49,7 @@ def test_running_render_has_footer():
          "elapsed_s": 3, "done": False},
     ])
     assert _TASK_CARD_FOOTER in text
-    assert "*ACTIVITIES*" in text
+    assert "📋 <b>ACTIVITIES</b>" in text
 
 
 def test_frozen_render_has_footer():
@@ -186,7 +186,7 @@ def test_redaction_before_truncation_per_row():
          "elapsed_s": 1, "done": False},
     ])
     assert "ghp_" not in text
-    assert "<REDACTED" in text or "github_token" in text
+    assert "&lt;REDACTED" in text or "github_token" in text
 
 
 def test_moderate_rows_fit_under_transport_limit_with_every_row_represented():
@@ -337,7 +337,7 @@ def test_metadata_is_two_lines_bounded_and_between_footer_and_timestamp():
     )
     lines = text.splitlines()
     footer_idx = next(i for i, line in enumerate(lines) if _TASK_CARD_FOOTER in line)
-    time_idx = next(i for i, line in enumerate(lines) if line.startswith("Last Updated: "))
+    time_idx = next(i for i, line in enumerate(lines) if line.startswith("🕒 Last Updated: "))
     expected_metadata = (
         "Session · ctx 63% · 171.2k/272.0k · cache 87.8% · "
         "miss 170.6k/1.0M · calls 13"
