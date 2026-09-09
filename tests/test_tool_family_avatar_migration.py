@@ -426,8 +426,12 @@ def test_avatar_manual_states_the_real_spawn_comment_prompt_position() -> None:
     )
     order = SystemPromptManager._DEFAULT_ORDER
 
-    assert "rendered last, after memory" not in manual
-    assert "after `meta_guidance` and before `rules`" in manual
+    assert "reference/spawn.md" in manual
+    spawn = (Path(avatar.__file__).parent / "manual/reference/spawn.md").read_text(
+        encoding="utf-8"
+    )
+    assert "rendered last, after memory" not in manual + spawn
+    assert "after `meta_guidance` and before `rules`" in " ".join(spawn.split())
     assert order.index("meta_guidance") < order.index("comment") < order.index("rules")
 
 

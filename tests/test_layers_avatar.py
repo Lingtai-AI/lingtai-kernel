@@ -654,25 +654,25 @@ class TestMissionQualityGate:
             "spawn", "settings", "manual"
         ]
 
-    def test_description_points_to_avatar_manual_after_prompt_compaction(self):
-        """The terse tool description should route safety guidance to the manual.
+    def test_description_routes_only_consequential_avatar_guidance(self):
+        """Routine schema-sufficient spawn needs no mandatory manual round trip.
 
-        Prompt-token compaction moved verbose WARNING copy out of the always-on
-        tool description and into avatar-manual. The safety contract now lives
-        in the schema gates (dry_run/confirm, now inside the spawn branch of
-        ``input.anyOf``) plus the manual pointer, not in a long description
-        string.
+        The always-on description stays mechanical and points to avatar-manual
+        only for unfamiliar or consequential lifecycle decisions. Spawn's strict
+        schema still exposes the dry_run/confirm gates in its input branch.
         """
         from lingtai.tools.avatar import get_description, get_schema
         desc = get_description("en")
         schema = get_schema("en")
         assert "avatar-manual" in desc
-        assert "Before the first spawn, call avatar(action='manual'" in desc
+        assert "Read avatar-manual for unfamiliar or consequential" in desc
+        assert "Before the first spawn" not in desc
         assert "WARNING" not in desc
         manual = (
             Path(__file__).parents[1] / "src/lingtai/tools/avatar/manual/SKILL.md"
         ).read_text(encoding="utf-8")
-        assert "Before the first spawn" in manual
+        assert "Routine schema-sufficient" in manual
+        assert "do not load this manual as a ritual" in manual
         assert "reference/spawn.md" in manual
         assert "reference/lifecycle.md" in manual
         spawn_props = {
@@ -894,3 +894,39 @@ class TestUnifiedAvatarTool:
 
         manual_result = mgr.handle({"action": "manual", "input": {}})
         assert manual_result["status"] == "ok"
+
+
+def test_avatar_manual_package_links_resolve_from_returned_path():
+    import re
+    from lingtai.tools.avatar import _manual_payload
+    result = _manual_payload({})
+    root = Path(result["manual_path"])
+    for page in [root, *sorted((root.parent / "reference").glob("*.md"))]:
+        for target in re.findall(r"\[[^\]]*\]\(([^)]+)\)", page.read_text()):
+            if "://" not in target and not target.startswith("#"):
+                assert (page.parent / target.split("#")[0]).resolve().exists(), (page, target)
+
+
+def test_avatar_guidance_distinguishes_preview_and_conditional_init():
+    from lingtai.tools.avatar import _SPAWN_INPUT_SCHEMA
+    manual = Path(__file__).parents[1] / "src/lingtai/tools/avatar/manual"
+    text = (manual / "reference/spawn.md").read_text()
+    assert "not launch admission" in text
+    assert "Only when" in text and "manifest.preset.default" in text
+    assert "without a default" in text
+    assert "ASCII space" in text
+    props = _SPAWN_INPUT_SCHEMA["properties"]
+    assert "identity/knowledge" in props["type"]["description"]
+    assert "not inherited" in props["comment"]["description"]
+    assert "empty/short/placeholder" in props["confirm"]["description"]
+
+
+def test_avatar_guidance_preserves_boot_and_settings_limits():
+    manual = Path(__file__).parents[1] / "src/lingtai/tools/avatar/manual"
+    lifecycle = (manual / "reference/lifecycle.md").read_text()
+    root = (manual / "SKILL.md").read_text()
+    assert "freshness" in lifecycle and "not redacted" in lifecycle
+    assert "reads the entire" in lifecycle and "truncation prefix" in lifecycle
+    assert "permanent destruction" in lifecycle
+    assert "LINGTAI_AVATAR_*" in root
+    assert "relaunch" in root and "current=default" in root

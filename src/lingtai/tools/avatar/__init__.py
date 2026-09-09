@@ -1,40 +1,14 @@
-"""Avatar capability — spawn independent peer agents (分身).
+"""Avatar capability: spawn independent peer agents (分身) as detached processes.
 
-Shallow (初生): Copy init.json to a new working dir, strip name, launch.
-    The avatar gets the same LLM config + capabilities but no identity,
-    no pad, no history.  A fresh life — but its own, not yours.
+Shallow copies ``init.json`` plus narrow Psyche owner inputs; deep additionally
+copies durable identity/knowledge state. Both start a fresh conversation, use
+an append-only spawn ledger, and outlive the parent's context.
 
-Deep (二重身): Copy identity files (system/), knowledge/, and exports/
-    plus init.json to a new dir, strip name + history, launch.
-    The avatar is a doppelgänger — same character, pad, knowledge —
-    but starts a fresh conversation.
-
-Both modes launch `lingtai-agent run <dir>` as a fully detached process.
-The avatar is an independent life — its existence does not depend on yours.
-
-Maintains an append-only ledger (delegates/ledger.jsonl) that records
-every spawn event.
-
-Usage (LTP v2 envelope — one action, one strict child input):
-    Agent(capabilities=["avatar"])
-    # avatar(action="spawn", input={"name": "researcher"}, reasoning="...")
-    # avatar(action="spawn", input={"name": "clone", "type": "deep"}, reasoning="...")
-    # avatar(action="settings", input={}, reasoning="...")
-    # avatar(action="manual", input={}, reasoning="...")
-
-Avatar no longer owns a rules-distribution action or an automatic post-spawn
-rules fan-out; the shared `.rules` heartbeat signal/consumer described in
-`src/lingtai/kernel/base_agent/lifecycle.py` is unchanged, and any agent may
-still write a `.rules` file to an explicitly targeted path (e.g. via `shell`).
-See `psyche-manual` for that protocol.
-
-The spawn mission brief is root ``reasoning`` (normalized to ``_reasoning`` by
-ToolExecutor), never an ``input`` property — see ``handle()``.
-
-This module is the static declared official plugin slice: its binder receives
-only the `workdir` and Avatar-specific parent-context ports, while the kernel
-registrar alone reserves and mounts the public `avatar` name. The package-local
-manual child deliberately keeps Avatar's current local-manual behavior.
+The single public ``avatar`` tool exposes strict ``spawn``, read-only ``settings``,
+and package-local ``manual`` actions. Spawn's mission is root ``reasoning``
+(normalized to ``_reasoning``), never nested input. Avatar has no rules action or
+automatic rules fan-out; the shared ``.rules`` protocol remains kernel/Psyche
+state. The declared plugin receives only its workdir and Avatar-parent ports.
 """
 from __future__ import annotations
 
@@ -138,39 +112,24 @@ _SPAWN_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "name": {
             "type": "string",
-            "description": (
-                "Avatar name and sibling-directory basename: one segment of "
-                "letters/digits/_/-; 1-64 chars, with no dots or slashes."
-            ),
+            "description": "Canonical sibling basename: 1-64 Unicode letters/digits/_/-; no dots or slashes.",
         },
         "type": {
             "type": ["string", "null"],
             "enum": [*SPAWN_TYPES, None],
-            "description": (
-                "Spawn type: 'shallow' (default) copies init.json plus narrow "
-                "Psyche inputs; 'deep' also copies identity/knowledge. Null uses "
-                "shallow."
-            ),
+            "description": "'shallow' (default) copies init plus narrow Psyche inputs; 'deep' adds identity/knowledge. Null uses shallow.",
         },
         "comment": {
             "type": ["string", "null"],
-            "description": (
-                "Persistent child-prompt note; not inherited. Null or empty means "
-                "no note. See avatar-manual for placement and lifetime."
-            ),
+            "description": "Persistent child-prompt note; not inherited. Null or empty means none.",
         },
         "dry_run": {
             "type": ["boolean", "null"],
-            "description": (
-                "Preview with no files or process created; null defaults to false."
-            ),
+            "description": "Preview without writes/process, not launch admission; null is false.",
         },
         "confirm": {
             "type": ["boolean", "null"],
-            "description": (
-                "Acknowledge the mission review; required for empty/short/"
-                "placeholder reasoning. Null defaults to false."
-            ),
+            "description": "Acknowledge reviewed empty/short/placeholder reasoning; null is false.",
         },
     },
     "required": ["name", "type", "comment", "dry_run", "confirm"],
@@ -184,14 +143,13 @@ _DECLARED_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
 )
 
 _DESCRIPTION = (
-    "Spawn an independent, detached avatar, show its fixed settings, or read "
-    "the manual. Use an explicit action and strict input; there is no default. "
-    "Read avatar-manual first. Before the first spawn, call "
-    "avatar(action='manual', input={}, "
-    "reasoning='...'). For spawn, input.name is the canonical sibling-directory "
-    "basename, input.type is shallow (default) or deep, and root reasoning is "
-    "the required mission/first prompt. Use dry_run to preview and confirm only "
-    "after reviewing the mission. settings and manual are read-only."
+    "Spawn an independent detached avatar or inspect its fixed settings/manual. "
+    "Use explicit action and strict input; there is no default. For spawn, "
+    "input.name is the canonical sibling basename, input.type is shallow "
+    "(default) or deep, and root reasoning is the mission/first prompt. "
+    "Use dry_run to preview; confirm acknowledges only mission review. "
+    "settings and manual are read-only. Read avatar-manual for unfamiliar or "
+    "consequential lifecycle, authority, recovery, or footprint decisions."
 )
 
 
