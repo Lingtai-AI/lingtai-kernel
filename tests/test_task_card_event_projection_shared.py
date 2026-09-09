@@ -153,13 +153,24 @@ def test_shared_render_stays_unchanged_while_telegram_relayouts_metadata() -> No
         "• bash.run: build (0ms, running)\n"
         "\n"
         "📊 <b>SESSION</b>\n"
-        "active · gpt&lt;5&gt;&amp; · calls 2\n"
+        "<b>Agent</b> · active · gpt&lt;5&gt;&amp;\n"
+        "<b>Cache</b> · calls 2\n"
         "\n"
         "🪪 <b>IDENTITY</b>\n"
-        "device · dev-1 | path · /tmp/taskcard\n"
+        "<b>Device</b> · dev-1\n"
+        "<b>Path</b> · <code>/tmp/taskcard</code>\n"
         "🕒 Last Updated: 02:30:00 U+8\n"
         "💬 <i>Ask agent for \"Task Card\"</i>"
     )
+
+
+def test_telegram_html_converter_keeps_api_metrics_plain() -> None:
+    shared = "↻ 3.4s ↓1.2k (56.8k) ↑512.3k ◌ 259.8k | 55.0%"
+
+    telegram = _telegram_task_card_html(shared)
+
+    assert telegram == shared
+    assert "<code>" not in telegram
 
 
 def test_telegram_html_converter_escapes_dynamic_text_before_static_markup() -> None:

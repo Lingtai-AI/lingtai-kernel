@@ -1765,7 +1765,7 @@ def test_active_seconds_tick_does_not_edit_after_interval(
     manager._broadcast_task_card_event_window()
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert len(edits) == 2
-    assert "agent · idle" in edits[-1][3]
+    assert "<b>Agent</b> · idle" in edits[-1][3]
 
 
 def test_fingerprint_ignores_only_wall_clock_ticks(tmp_path):

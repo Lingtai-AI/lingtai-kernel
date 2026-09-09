@@ -196,6 +196,43 @@ def _telegram_task_card_html(text: str) -> str:
         ("Identity · ", "🪪 <b>IDENTITY</b>", "identity"),
         ("身份 · ", "🪪 <b>IDENTITY</b>", "identity"),
     )
+    def session_rows(payload: str) -> list[str]:
+        parts = payload.split(" · ")
+        cache_at = next(
+            (i for i, part in enumerate(parts) if part.startswith(("cache ", "miss ", "calls "))),
+            len(parts),
+        )
+        context_at = next(
+            (i for i, part in enumerate(parts[:cache_at]) if part.startswith(("ctx ", "tokens "))),
+            cache_at,
+        )
+        agent_parts = parts[:context_at]
+        if agent_parts[:1] == ["agent"]:
+            agent_parts = agent_parts[1:]
+        groups = (
+            ("Agent", agent_parts),
+            ("Context", parts[context_at:cache_at]),
+            ("Cache", parts[cache_at:]),
+        )
+        rows = [
+            f"<b>{label}</b> · {html_escape(' · '.join(values), quote=False)}"
+            for label, values in groups
+            if values
+        ]
+        return rows or [html_escape(payload, quote=False)]
+
+    def identity_rows(payload: str) -> list[str]:
+        if payload.startswith("device · "):
+            device, separator, path = payload[len("device · "):].partition(" | path · ")
+            rows = [f"<b>Device</b> · {html_escape(device, quote=False)}"]
+            if separator:
+                rows.append(f"<b>Path</b> · <code>{html_escape(path, quote=False)}</code>")
+            return rows
+        if payload.startswith("path · "):
+            path = payload[len("path · "):]
+            return [f"<b>Path</b> · <code>{html_escape(path, quote=False)}</code>"]
+        return [html_escape(payload, quote=False)]
+
     metadata_started = False
     previous_metadata_section: str | None = None
     for line in text.splitlines():
@@ -215,7 +252,9 @@ def _telegram_task_card_html(text: str) -> str:
                 prefix, heading, section = metadata
                 if section == "identity" and previous_metadata_section == "session":
                     rendered.append("")
-                rendered.extend((heading, html_escape(line[len(prefix):], quote=False)))
+                payload = line[len(prefix):]
+                rows = session_rows(payload) if section == "session" else identity_rows(payload)
+                rendered.extend((heading, *rows))
                 previous_metadata_section = section
                 continue
         safe = html_escape(line, quote=False)
@@ -227,8 +266,6 @@ def _telegram_task_card_html(text: str) -> str:
             safe = html_escape(line[1:-1], quote=False)
         elif line.startswith(("Last Updated: ", "最后更新: ")):
             safe = f"🕒 {safe}"
-        elif line.startswith("↻ "):
-            safe = f"<code>{safe}</code>"
         rendered.append(safe)
     return "\n".join(rendered)
 
@@ -3467,8 +3504,7 @@ class TelegramManager:
         )
         session_prefixes = ("Session · ", "会话 · ")
         stable_lines: list[str] = []
-        lines = automatic.splitlines()
-        for index, line in enumerate(lines):
+        for line in automatic.splitlines():
             if line.startswith(time_prefixes):
                 continue
             if line.startswith(session_prefixes):
@@ -3478,10 +3514,10 @@ class TelegramManager:
                     line,
                     count=1,
                 )
-            elif index and lines[index - 1] == "📊 <b>SESSION</b>":
+            elif line.startswith("<b>Agent</b> · "):
                 line = re.sub(
-                    r"(^| · )active \(\d+s\)(?= · |$)",
-                    r"\1active",
+                    r"(?<=<b>Agent</b> · )active \(\d+s\)(?= · |$)",
+                    "active",
                     line,
                     count=1,
                 )
