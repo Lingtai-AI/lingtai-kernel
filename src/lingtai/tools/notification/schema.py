@@ -1,27 +1,10 @@
-"""Schema data — canonical per-action input schemas and prose for ``notification``.
+"""Canonical notification input schemas and model-facing English descriptions.
 
-The notification tool exposes ``check``, the three atomic dismiss verbs
-(``dismiss_channel``, ``dismiss_event``, ``dismiss_ref``), read-only settings
-discovery, and the strictly read-only progressive-disclosure action ``manual``.
-``summarize`` is *not* a notification verb; compaction is owned by
-``context(action='summarize')``. The root ``summarize`` boolean is the
-cross-cutting LTP v2 result-post-processing control, not an action.
-
-This module holds only data: each action's own canonical strict
-``input_schema`` (:data:`INPUT_SCHEMAS`) and the canonical English prose.
-``__init__.py`` composes these into the public model-facing schema via the
-generic ``ToolFamily`` infra (``lingtai.tools.tool_family``) — see
-``__init__.py::_schema_only_family``/``get_schema``. ``lang`` is accepted on
-:func:`get_description` and :func:`get_schema` for source compatibility and
-does not select localized aliases; schema prose is canonical English,
-language-independent.
-
-Optional dismiss fields are declared in the provider-compatible nullable
-representation (``"type": ["string", "null"]`` plus membership in
-``required``) per ``tools/CONTRACT.md`` "Envelope": strict OpenAI schemas
-have no other way to express an optional field. ``__init__.py`` strips those
-nulls back to *absent* before the pre-existing dismiss handlers run, so
-``args.get("channel", "system")``-style defaulting is preserved exactly.
+This module owns data only; ``__init__.py`` composes the public family and
+``ToolFamily`` validates the closed envelope. ``summarize`` remains a root
+post-processing control, not a notification action. Nullable optional fields are
+required by strict provider schemas and are stripped back to absent before the
+existing handlers apply their defaults.
 """
 from __future__ import annotations
 
@@ -30,9 +13,8 @@ from typing import Any
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 
 LARGE_RESULT_DISMISS_ACTION_NOTE = (
-    "Legacy large_tool_result reminders are an escape hatch only: prefer "
-    "context(action='summarize'); any dismiss clears the mirror, not the original "
-    "result. See notification-manual."
+    "Legacy large_tool_result is an escape hatch: prefer "
+    "context(action='summarize'); dismissal clears only its mirror."
 )
 
 LARGE_RESULT_FORCE_NOTE = ""
@@ -60,16 +42,16 @@ NOTIFICATION_DECLARED_ACTIONS = (
 ACTION_ORDER = (*NOTIFICATION_DECLARED_ACTIONS, "settings", "manual")
 
 _CHANNEL_DESCRIPTION = (
-    "Target channel; required for whole-channel clear; event/ref default to system. "
-    "Follow its producer verb first; generic clear is mirror-only."
+    "Channel; whole clear requires it, event/ref default to system. Follow the "
+    "producer verb first; generic clear is mirror-only."
 )
 
 _FORCE_DESCRIPTION = (
-    "Optional true only after rereading a confirmed stale mirror; never producer or "
-    "protected state. " + LARGE_RESULT_FORCE_NOTE
+    "Optional true only after rereading a confirmed stale mirror; never producer or protected "
+    "state. " + LARGE_RESULT_FORCE_NOTE
 )
 
-_REASON_DESCRIPTION = "Optional ack reason; post-molt: continue|defer|obsolete: ... ."
+_REASON_DESCRIPTION = "Optional reason; post-molt requires continue|defer|obsolete: ... ."
 
 _CHECK_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -78,23 +60,23 @@ _CHECK_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_HOOK_NAME_DESCRIPTION = "Hook name; matched in hooks.json."
+_HOOK_NAME_DESCRIPTION = "Hook name in hooks.json."
 
-_HOOK_CHANNEL_DESCRIPTION = "Published channel stem; registration allowlists it."
+_HOOK_CHANNEL_DESCRIPTION = "Published stem; registration allowlists it."
 
-_HOOK_STRING_FIELD_DESCRIPTION = "Hook manifest field."
+_HOOK_STRING_FIELD_DESCRIPTION = "Hook manifest field; null means unchanged."
 
 _ADD_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "name": {"type": "string", "description": _HOOK_NAME_DESCRIPTION},
         "channel": {"type": "string", "description": _HOOK_CHANNEL_DESCRIPTION},
-        "source": {"type": "string", "description": "Producer/source identifier."},
-        "description": {"type": "string", "description": "What the hook watches."},
-        "how_to_modify": {"type": "string", "description": "How to modify it."},
+        "source": {"type": "string", "description": "Producer identifier."},
+        "description": {"type": "string", "description": "Watched source."},
+        "how_to_modify": {"type": "string", "description": "How to modify."},
         "how_to_cancel": {"type": "string", "description": "How to stop it; drop never kills it."},
-        "version": {"type": ["string", "null"], "description": "Optional version; default 1.0.0."},
-        "instructions": {"type": ["string", "null"], "description": "Optional handling guidance."},
+        "version": {"type": ["string", "null"], "description": "Version; default 1.0.0."},
+        "instructions": {"type": ["string", "null"], "description": "Handling guidance."},
     },
     "required": [
         "name",
@@ -174,10 +156,7 @@ _DISMISS_EVENT_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "event_id": {
             "type": "string",
-            "description": (
-                "Remove only the matching system notification event_id from "
-                ".notification/system.json instead of the whole channel."
-            ),
+            "description": "Remove matching event_id; system by default, daemon also supported.",
         },
         "channel": {"type": ["string", "null"], "description": _CHANNEL_DESCRIPTION},
         "force": {"type": ["boolean", "null"], "description": _FORCE_DESCRIPTION},
@@ -192,11 +171,7 @@ _DISMISS_REF_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "ref_id": {
             "type": "string",
-            "description": (
-                "Remove system notification event(s) carrying this producer "
-                "ref_id from .notification/system.json instead of the whole "
-                "channel."
-            ),
+            "description": "Remove matching ref_id events; system by default, daemon also supported.",
         },
         "channel": {"type": ["string", "null"], "description": _CHANNEL_DESCRIPTION},
         "force": {"type": ["boolean", "null"], "description": _FORCE_DESCRIPTION},
@@ -234,38 +209,35 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 ACTION_ENUM_DESCRIPTION = (
-    "Strict action selector: each action takes its own object in input; nullable "
-    "optionals mean absent. "
-    "check: read current channels and return the live placeholder. "
-    "dismiss_channel: clear one named mirror. "
-    "dismiss_event: remove one system event by event_id; channel defaults to system. "
-    "dismiss_ref: remove matching system events by ref_id; channel defaults to system. "
-    "add: register a hook manifest and allowlist its channel. "
-    "drop: unregister a hook; it never stops the process. "
-    "edit: update a named hook and revalidate channel uniqueness. "
-    "list: show registered hook manifests. "
-    "delay: hide one allowed consumer channel (0 cancels; nonzero uses the live "
-    "cap); producer state is unchanged and expiry emits one non-delayable alarm. "
-    "settings: read-only effective setting rows. "
-    "manual: call notification(action='manual', input={}) to return the installed "
-    "notification manual; read-only."
+    "Choose one strict action; nullable optionals mean absent. "
+    "check: read current mirrors. "
+    "dismiss_channel: clear one mirror. "
+    "dismiss_event: remove an event by event_id; channel defaults to system, daemon also supported. "
+    "dismiss_ref: remove matching events by ref_id; channel defaults to system, daemon also supported. "
+    "add: register and allowlist a hook. "
+    "drop: unregister it; never stop its process. "
+    "edit: update a hook and revalidate its channel. "
+    "list: show hooks. "
+    "delay: hide one consumer channel (0 cancels; nonzero uses the live cap); "
+    "producer state is unchanged and expiry emits one non-delayable alarm. "
+    "settings: read-only setting rows. "
+    "manual: call notification(action='manual', input={}) for installed guidance; "
+    "read-only."
 ) + "\n\n" + LARGE_RESULT_DISMISS_ACTION_NOTE
 
 
 def get_description(lang: str = "en") -> str:
     return (
-        "Notification reads current channel mirrors, manages hook registrations, "
-        "and controls consumer delay. Calls use the strict action + input + "
-        "reasoning envelope; begin with notification(action='check', input={}, "
-        "reasoning='...') to inspect. Its live payload is stamped under "
-        "`_meta.agent_meta.notifications.attention` and "
-        "`_meta.agent_meta.guidance.transient`. Follow producer-specific handling "
-        "before generic dismissal: generic clear is mirror-only; reread after a "
-        "stale refusal, and use force=true only for a confirmed stale mirror, never "
-        "producer or protected state. Post-molt dismissal needs a non-empty "
-        "continue|defer|obsolete: ... reason; drop never stops its process; delay "
-        "hides consumer delivery only (0 cancels), and delay-alarm cannot be "
-        "targeted. notification(action='settings', input={}, reasoning='...') and "
+        "Notification reads channel mirrors, manages hook registrations, and applies "
+        "consumer delay. Use the strict action + input + reasoning envelope; start "
+        "with notification(action='check', input={}, reasoning='...'). Live payload: "
+        "_meta.agent_meta.notifications.attention (guidance.transient routes handling). Follow "
+        "producer instructions before generic dismissal: generic clear affects the "
+        "mirror only. Reread after a stale refusal; force=true is only for a "
+        "confirmed stale mirror, never producer or protected state. Post-molt needs "
+        "continue|defer|obsolete: ...; drop never stops its process; delay is "
+        "consumer-only (0 cancels), and delay-alarm cannot be targeted. "
+        "notification(action='settings', input={}, reasoning='...') and "
         "notification(action='manual', input={}, reasoning='...') are read-only; "
         "use context(action='summarize') for compaction."
     )

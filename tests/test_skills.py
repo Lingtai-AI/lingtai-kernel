@@ -394,8 +394,8 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "name: notification-manual" in notification_manual_body
         assert "# Notification Manual" in notification_manual_body
         assert "<agent>/.library/intrinsic/capabilities/notification/SKILL.md" in notification_manual_body
-        assert "location: reference/channel-model/SKILL.md" in notification_manual_body
-        assert "location: reference/dismissal-safety/SKILL.md" in notification_manual_body
+        assert "](reference/channel-model/SKILL.md)" in notification_manual_body
+        assert "](reference/dismissal-safety/SKILL.md)" in notification_manual_body
         assert (
             notification_manual_md.parent / "reference" / "channel-model" / "SKILL.md"
         ).is_file()

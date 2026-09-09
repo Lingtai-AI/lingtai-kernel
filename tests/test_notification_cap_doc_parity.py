@@ -23,10 +23,19 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+
+def _manual_text() -> str:
+    """Check the routed corpus without duplicating reference depth in the entry."""
+    entry = _text(MANUAL)
+    route = "reference/channel-model/SKILL.md"
+    assert f"]({route})" in entry
+    return entry + "\n" + _text(MANUAL.parent / route)
+
+
 def test_both_docs_mention_both_overflow_spill_namings() -> None:
     """Persistent (timestamp) and attention (content-addressed digest8) spill
     names are documented in both the manual and the LICC contract."""
-    manual = _text(MANUAL)
+    manual = _manual_text()
     contract = _text(CONTRACT)
     for label, text in (("manual", manual), ("contract", contract)):
         assert "notification-overflow-" in text, label
@@ -36,7 +45,7 @@ def test_both_docs_mention_both_overflow_spill_namings() -> None:
 def test_both_docs_mention_shared_env_bar_with_floor_and_ceiling() -> None:
     """Both documents name the shared env bar and its floor 2048 / ceiling
     10,000 clamp."""
-    manual = _text(MANUAL)
+    manual = _manual_text()
     contract = _text(CONTRACT)
     for label, text in (("manual", manual), ("contract", contract)):
         assert "LINGTAI_NOTIFICATION_MAX_CHARS" in text, label
@@ -61,7 +70,7 @@ def test_licc_describes_persistent_terminal_by_construction() -> None:
     """The LICC contract records the shared 2048 floor for BOTH lanes and the
     persistent terminal marker-only/spill_file degradation."""
     contract = _text(CONTRACT)
-    manual = _text(MANUAL)
+    manual = _manual_text()
     assert "[2048, 10,000]" in contract
     assert "spill_file" in contract
     assert "spill_file" in manual
@@ -71,8 +80,8 @@ def test_licc_describes_persistent_terminal_by_construction() -> None:
 def test_manual_describes_both_lanes_not_persistent_only() -> None:
     """The manual's cap section covers the attention lane too (marker-only
     degradation, path omission, content-addressed spill)."""
-    manual = _text(MANUAL)
-    assert "notification.attention" in manual
+    manual = _manual_text()
+    assert "_meta.agent_meta.notifications.attention" in manual
     assert "marker-only" in manual or "marker only" in manual
     assert "path_omitted" in manual
 
@@ -83,3 +92,10 @@ def test_contract_mentions_path_omitted_final_guard_and_digest8_spill() -> None:
     contract = _text(CONTRACT)
     assert "path_omitted" in contract
     assert "digest8" in contract
+
+
+def test_manual_uses_current_active_carrier_semantics() -> None:
+    manual = _manual_text()
+    assert "every eligible final ToolResultBlock" in manual
+    assert "only on first appearance" not in manual
+    assert "on first appearance, material change" not in manual

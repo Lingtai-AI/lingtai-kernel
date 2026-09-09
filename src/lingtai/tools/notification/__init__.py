@@ -1,17 +1,9 @@
-"""Notification's declared official host-plugin slice.
+"""Official host-plugin family for notification mirrors, hooks, and delay.
 
-``notification`` remains the sole model-facing surface for reading notification
-mirrors, atomically dismissing a mirror target, managing hook registrations,
-and applying consumer-only delay.  This module owns only the LTP family and its
-small input/result adaptations.  Notification Core continues to own real
-producer, dismissal, delay, and Store state; the declared plugin receives those
-operations through one narrow ``notification_state`` host port rather than a
-whole Agent.
-
-The public tool name, nine operational actions, strict operational input/result
-shapes, and Core authorization gates are unchanged. This slice adds the generic
-reserved read-only ``settings`` action immediately before ``manual``. The family
-is bound to the least-privilege host facade and mounted by the kernel registrar.
+This module adapts the strict LTP family only. Notification Core owns producer,
+dismissal, delay, and Store state behind the narrow ``notification_state`` port;
+the public actions and authorization gates remain unchanged, with read-only
+``settings`` before ``manual``.
 """
 from __future__ import annotations
 

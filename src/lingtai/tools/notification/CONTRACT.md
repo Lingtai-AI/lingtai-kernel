@@ -297,7 +297,7 @@ than dispatched, so it is not a second inbound adapter.
 - Dismissal affects notification mirrors only. Producer guards, non-force stale
   refusal, protected-channel refusal, post-molt reasons, and unrelated-event
   preservation remain in force.
-- `system` owns the `summarize` **action** and exposes no notification/dismiss
+- `context` owns the `summarize` **action**; `system` exposes no notification/dismiss
   alias. The root `summarize` boolean on this family is the unrelated
   cross-cutting result post-processing control, not an action. Because this
   family advertises it, `notification` MUST stay listed in
