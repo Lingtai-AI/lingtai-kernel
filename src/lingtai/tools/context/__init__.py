@@ -89,11 +89,11 @@ _MOLT_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "summary": {
             "type": "string",
-            "description": 'Your session retrospective (~10,000 tokens). Write as a record — what happened, what you learned, what remains. The four stores must be tended BEFORE molt. Saved to `system/summaries/molt_<count>_<ts>.md` and replayed to the next you. See context-manual for full writing guidance. This is domain input the molt itself consumes, not the root `summarize` post-processing control.',
+            "description": 'Your shortest sufficient successor briefing: active task/state, verified results, pending authority, next steps, live job/thread IDs, artifact or evidence paths, blockers, and essential lessons. Update only durable stores that changed and write the required session journal BEFORE molt. The briefing is saved to `system/summaries/molt_<count>_<ts>.md` and replayed to the next you. See context-manual for handoff guidance. This is domain input the molt itself consumes, not the root `summarize` result-presentation control.',
         },
         "session_journal_path": {
             "type": "string",
-            "description": 'REQUIRED. The path to the session-journal entry you wrote for the just-finished segment BEFORE molting: knowledge/session-journal/<entry>/KNOWLEDGE.md (a per-segment sub-entry, NOT the parent index). Must be inside your workdir, exist, be non-empty UTF-8, have valid YAML frontmatter with `name` and `description`, and identify itself as session knowledge via `type: session-journal` or `session_journal: true`. The molt is refused before any context is shed if this is missing or invalid. See context-manual §4.',
+            "description": 'REQUIRED. The path to the session-journal entry you wrote for the just-finished segment BEFORE molting: knowledge/session-journal/<entry>/KNOWLEDGE.md (a per-segment sub-entry, NOT the parent index). Must be inside your workdir, exist, be non-empty UTF-8, have valid YAML frontmatter with `name` and `description`, and identify itself as session knowledge via `type: session-journal` or `session_journal: true`. The molt is refused before any context is shed if this is missing or invalid. See context-manual: Shortest useful path.',
         },
         "keep_tool_calls": {
             "type": ["array", "null"],
@@ -159,7 +159,9 @@ _SUMMARIZE_ITEMS_DESCRIPTION = (
     "block) and 'summary' (your agent-authored text). Supports multiple items "
     "per call. The original is NOT deleted — it remains retrievable from "
     "events.jsonl by tool_call_id. Pick targets from "
-    "`_meta.agent_meta.agent_state.current_tool_result_chars.top_results`. "
+    "the newest `_meta.agent_meta.agent_state.current_tool_result_chars.top_results` IDs. "
+    "The item `tool_call_id` is the producer call ID, not the visible `_tool_call_id` "
+    "event reference; preserve any `raw_locator` or spill path for recovery. "
     "This action RECORDS ONLY: the active provider context may still carry "
     "the old raw results until context(action='rebuild') applies them."
 )
@@ -352,8 +354,8 @@ def _build_family(
 _ACTION_ENUM_DESCRIPTION = (
     'Required operation. '
     'molt: shed your conversation context, keep the durable stores. Requires '
-    '`summary` and a valid `session_journal_path` — tend the four stores '
-    'BEFORE molting. See context-manual.\n'
+    '`summary` and a valid `session_journal_path` — write the journal first and '
+    'update only durable stores that changed. See context-manual.\n'
     'summarize: record your own compact replacements for prior tool results in '
     'runtime history. RECORD ONLY — it does not rebuild, so the active '
     'provider context may still carry the old raw results.\n'

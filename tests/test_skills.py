@@ -289,6 +289,49 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         agent.stop(timeout=1.0)
 
 
+def test_context_manual_installed_artifact_preserves_owner_routes(tmp_path):
+    """Installed Context entry/assets retain the proportional recovery path."""
+    agent, workdir = _mk_agent(tmp_path)
+    try:
+        context_manual_md = (
+            workdir
+            / ".library"
+            / "intrinsic"
+            / "capabilities"
+            / "context-manual"
+            / "SKILL.md"
+        )
+        assert context_manual_md.is_file()
+        context_manual_body = context_manual_md.read_text(encoding="utf-8")
+        assert "name: context-manual" in context_manual_body
+        assert "assets/molt-template.md" in context_manual_body
+        assert "shortest sufficient handoff" in context_manual_body
+        assert "do not use this as routine cleanup" in context_manual_body
+        assert "not a command to run blindly" in context_manual_body
+        assert "do not fill absent fields with `None`" not in context_manual_body
+
+        summarize_reference = context_manual_md.parent / "reference" / "summarize-manual" / "SKILL.md"
+        assert summarize_reference.is_file()
+        summarize_body = summarize_reference.read_text(encoding="utf-8")
+        summarize_content = summarize_body.split("\n---\n", 1)[1]
+        assert "current_tool_result_chars.top_results" in summarize_content
+        assert "summary_effect.prev_chars" in summarize_content
+        assert 'system(action="manual", input={}, reasoning="load System routes")' in summarize_content
+        assert "intrinsic_skills/system-manual" not in summarize_content
+
+        molt_template_asset = context_manual_md.parent / "assets" / "molt-template.md"
+        assert molt_template_asset.is_file()
+        assert (context_manual_md.parent / "assets" / "session-journal-entry-template.md").is_file()
+        molt_template_body = molt_template_asset.read_text(encoding="utf-8")
+        assert "# Consequential Molt Handoff Template" in molt_template_body
+        assert "optional scaffold" in molt_template_body
+        assert "do not fill absent fields with `None`" in molt_template_body
+        assert "## Before calling molt" in molt_template_body
+        assert "session_journal_path" in molt_template_body
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
     # Standalone always-included skills live in lingtai.intrinsic_skills and are
     # copied next to capability manuals under .library/intrinsic/capabilities/.
@@ -400,22 +443,6 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "editable/source/dev" in runtime_update_body
         assert "receiving explicit confirmation" in runtime_update_body
 
-        context_manual_md = (
-            workdir
-            / ".library"
-            / "intrinsic"
-            / "capabilities"
-            / "context-manual"
-            / "SKILL.md"
-        )
-        assert context_manual_md.is_file()
-        context_manual_body = context_manual_md.read_text(encoding="utf-8")
-        assert "name: context-manual" in context_manual_body
-        assert "## Asset catalog" in context_manual_body
-        assert "assets/molt-template.md" in context_manual_body
-        assert "9-section summary scaffold" in context_manual_body
-        assert "9. **Context Status**" not in context_manual_body
-
         file_manual_md = (
             workdir
             / ".library"
@@ -438,25 +465,6 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
             / "capabilities"
             / "file"
         ).exists()
-
-        molt_template_asset = context_manual_md.parent / "assets" / "molt-template.md"
-        assert molt_template_asset.is_file()
-        molt_template_body = molt_template_asset.read_text(encoding="utf-8")
-        assert "# Consequential Molt Summary Template" in molt_template_body
-        assert "## Summary scaffold" in molt_template_body
-        for section in (
-            "1. **Who I Am**",
-            "2. **Accomplishments**",
-            "3. **Outstanding Tasks**",
-            "4. **Action Checklist**",
-            "5. **Collaborators**",
-            "6. **Durable Memory and Execution Notes**",
-            "7. **Key Paths and Artifacts**",
-            "8. **Lessons and Gotchas**",
-            "9. **Context Status**",
-        ):
-            assert section in molt_template_body
-        assert "## Pre-molt verification checklist" in molt_template_body
 
         sqlite_log_query_ref = system_manual_md.parent / "reference" / "sqlite-log-query" / "SKILL.md"
         assert sqlite_log_query_ref.is_file()
@@ -1187,13 +1195,15 @@ def test_skills_manual_documents_external_skill_intake_default():
         assert phrase in manual
 
 
-def test_context_manual_routes_skill_sharing_through_custom_by_default():
+def test_context_manual_routes_store_ownership_to_psyche():
     manual = (
         Path(__file__).resolve().parents[1]
         / "src/lingtai/tools/context/manual/SKILL.md"
     ).read_text(encoding="utf-8")
-    assert "peers install it into their own `.library/custom/<name>/`" in manual
-    assert "explicit opt-in local-network shared root" in manual
+    assert 'psyche(action="manual", input={}, reasoning="load durable-store routes")' in manual
+    assert "generic writes are through `file`" in manual
+    assert "intrinsic_skills/psyche-manual" not in manual
+    assert "peers install it into their own `.library/custom/<name>/`" not in manual
 
 
 def test_resident_layers_query_settings_instead_of_copying_adjustable_defaults():

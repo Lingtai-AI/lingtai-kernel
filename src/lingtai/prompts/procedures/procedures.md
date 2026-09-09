@@ -85,7 +85,7 @@ authority. Do not duplicate adjustable numbers here. Load only relevant detail;
 | Before doing this | Read |
 |---|---|
 | Runtime updates, preset/configuration changes, Nudge controls, or lifecycle recovery | `system-manual` and its matching reference |
-| Context summarize/rebuild/molt or a consequential handoff | `context-manual` |
+| Before molt, or for unfamiliar/consequential Context work or context-loss recovery | `context-manual` |
 | Delegation, long-running host work, or progress-watch management | The matching `daemon`, `avatar`, `shell`, or `task_card` manual |
 | Integration setup, debugging, or ownership changes | `mcp-manual` / `plugin-manual`, then that integration's docs |
 | Durable-store or skill authoring | The relevant `psyche` domain manual |

@@ -69,7 +69,7 @@ settings without another concrete tool owner. Follow `comment` to the owning
 manual before an authorized change; a SHOW result grants no mutation authority.
 Do not reproduce adjustable numeric defaults in general workflow guidance.
 
-`context-manual` → `reference/summarize-manual/SKILL.md` §3a owns reconstruction
+`context-manual` → `reference/summarize-manual/SKILL.md` (Apply and recover) owns reconstruction
 mechanics and boundaries. Follow the current runtime pressure guidance instead
 of duplicating thresholds here: pending summaries are normal, `refresh` is not
 an apply-summary shortcut, and rebuild/summarize must not become a loop.
