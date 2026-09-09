@@ -1,14 +1,12 @@
 ---
 name: runtime-update-checks
 description: >
-  Nested system-manual reference for tracing LingTai kernel update nudges:
-  runtime/version/source identity, packaged versus editable/source behavior,
-  heartbeat dispatch, nudge persistence and notification delivery, refresh
-  versus installation, human confirmation, and post-refresh verification. The
-  ordered pre-flight for a refresh is the sibling `refresh-precheck`.
-version: 0.3.0
-tags: [lingtai, runtime, kernel, nudge, updates, refresh, editable, source, diagnostics]
-last_changed_at: "2026-08-07T00:00:00Z"
+  Nested system-manual reference for update, source, install, nudge, and
+  runtime-mismatch diagnosis. Owns interpreter/provenance evidence and the
+  source/venv cutover handoff; routes refresh sequencing to refresh-precheck.
+version: 0.4.0
+tags: [lingtai, runtime, kernel, nudge, updates, install, editable, source, diagnostics]
+last_changed_at: "2026-09-09T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
@@ -32,248 +30,185 @@ related_files:
 - tests/test_source_drift.py
 - tests/test_runtime_identity.py
 maintenance: |
-  Keep this as the local detailed source for kernel update/nudge read-only
-  diagnosis and refresh mechanics, not release-migration routing. Update it
-  when the nudge producers, heartbeat dispatch, notification sync, runtime
-  identity, refresh boundary, or supported update ownership changes; keep
-  system-manual and notification-manual as routers.
+  Keep this as the detailed owner for kernel update/nudge facts, source and
+  install provenance, mismatch diagnosis, and the frozen cutover handoff.
+  Update it with the producers, heartbeat dispatch, notification sync, runtime
+  identity, or installer ownership; keep refresh transaction order only in the
+  sibling refresh-precheck reference.
 ---
 
 # Runtime Update Checks
 
-Kernel-local read-only diagnosis and refresh mechanics for update nudges. The
-install/update route itself is owned by the official installer — see step 9 and
-**Boundaries** below for the split. This is operational guidance, not permission
-to download, install, change configuration, or relaunch a runtime.
+Use this reference to determine **what is running, what is on disk, and who owns
+a change**. It is read-only guidance, not permission to download, install,
+modify configuration, switch a checkout, or relaunch. Once a target source/venv
+is proven and authorized, `refresh-precheck` owns the complete refresh
+transaction; do not copy its happy-path sequence here.
 
-## The lifecycle and its owners
+## Ownership map
 
-The end-to-end path is:
+| Question | Owner / answer |
+|---|---|
+| Is an official package update available? | `kernel_version.py` plus the release-manifest path described below. |
+| Did source already on disk change under this process? | `source_drift.py`; local source-integrity diagnosis only. |
+| Which interpreter/source/version is authoritative? | Runtime identity plus the exact probe in this reference. |
+| How is a normal user install/update performed? | The current `https://lingtai.ai/install.sh --help` output. |
+| May a download, migration, config write, or disruptive relaunch proceed? | Only explicit human/config-owner authority after the proposed action is shown. |
+| How is the one refresh performed and receipted? | `reference/refresh-precheck/SKILL.md`. |
+| How is a nudge dismissed? | `notification-manual`, after the matching fact is interpreted or resolved. |
 
-1. **Discover runtime facts — `kernel_version.py` and runtime identity.** The
-   kernel reads the already-loaded `lingtai` wrapper from `sys.modules` for the
-   running version, and `importlib.metadata` for the installed distribution
-   version. `runtime_identity.py` separately stamps durable event identity with
-   package/dev mode, source kind, and available git state. No package-index
-   request is needed for the local comparison.
-2. **Check `kernel_version` — `kernel_version.py`.** This is the
-   `release_version` nudge channel. In editable/source/dev runtimes it is
-   silent and clears only its own stale release-version entry. If running and installed
-   versions differ, it emits a local refresh nudge and preserves the existing
-   local-only path. For packaged, non-editable, non-dev runtimes whose versions
-   match, it fetches the exact `lingtai-kernel-release-manifest.json` asset from
-   the latest GitHub and Gitee releases through the bounded producer probe gate.
-   If both manifests are available, version, manifest content, and artifact
-   hashes must agree; a mirror mismatch is reported without choosing a higher
-   version. If one mirror is unavailable, the other may establish the result.
-   A newer manifest version produces a package-availability nudge; network or
-   response errors are recorded diagnostically and do not become an update.
-3. **Check `source_drift` — `source_drift.py`.** This is the
-   `source_integrity` nudge channel. It compares the startup runtime fingerprint
-   (git revision and curated source digest when available) with a fresh on-disk
-   fingerprint. Drift means the running process differs from code currently on
-   disk. Editable/source/dev runtimes still emit this diagnostic; the finding is
-   local read-only source diagnosis and refresh mechanics only, and does not
-   enter the release-migration route.
-4. **Dispatch — `nudge/__init__.py` and `lifecycle.py`.** The heartbeat loop
-   runs the nudge dispatcher once per one-second tick. `kernel_version` and
-   `source_drift` each have their own roughly 60-second in-memory probe gate;
-   `goal` runs on each dispatch while IDLE and applies its configured
-   idle-reminder delay. One failing producer is logged and does not block the
-   others.
-5. **Persist and publish — `nudge/__init__.py` and the Notification Store.**
-   Shared Nudge policy state lives in `.notification/.nudge_state.json` only for
-   dismissal mute expiries. The user-facing mirror is `.notification/nudge.json`;
-   it is not a package state or migration registry. Each entry has a unique
-   `kind`; `upsert` replaces that kind, `remove` deletes it, and clearing the
-   last entry clears the channel file. Updates use the store's atomic
-   compare/update operation.
-6. **Sync and wake — `BaseAgent._sync_notifications`.** The heartbeat polls
-   allowlisted `.notification` files by fingerprint. A changed nudge file is
-   injected as a synthesized `notification(action="check")` pair when IDLE;
-   ACTIVE work defers delivery until an IDLE boundary; ASLEEP is moved to IDLE,
-   then the pair and `MSG_TC_WAKE` are queued. STUCK/SUSPENDED cannot inject.
-   A failed injection leaves the fingerprint uncommitted for retry (with the
-   documented degraded recovery path after healing pending tool calls).
-7. **Interpret — the agent, using the stable installer plus this local reference.**
-   Treat the payload as kernel-synchronized facts, not a human command. Compare
-   `running`, `installed`, `latest`, and `source`; inspect the runtime when
-   ambiguous. For a real update, let Shell execute the installer's concise
-   `--help`, without reading or pasting the script source, and follow whatever
-   it currently instructs; the installer owns
-   release-interval migration navigation and the exact child command shape
-   while this reference owns local diagnosis and refresh mechanics.
-8. **Confirm — the human/config-owner.** After the installer has displayed the
-   applicable release-interval migrations, obtain explicit human/config-owner
-   authorization for every migration/config write and for refresh. Apply only
-   authorized writes, validate
-   the resulting configuration, and refresh last. A release-manifest availability
-   nudge also requires telling the human what was found and receiving explicit confirmation
-   before any download or package update. A nudge or this manual
-   never grants authority; a local refresh remains gated by work safety and the
-   human's intent when it could interrupt active work.
-9. **Install/update — the single official installer.** Normal user-facing
-   installation and updates, including `lingtai-tui`, `lingtai-portal`, the
-   managed kernel runtime, exact-tag migration guidance, mirror comparison, and
-   artifact verification, belong to `https://lingtai.ai/install.sh`. Bare
-   `pip install --upgrade lingtai` is not the normal user instruction; pip/venv
-   commands below are diagnostic or developer verification only.
-10. **Refresh and verify — kernel lifecycle plus the operator.**
-    After authorized writes are validated, `system(action="refresh")` requests a
-    deferred relaunch only when the runtime can build a valid launch command and
-    has a configured refresh watcher. Without a launch command it returns
-    without relaunching; without a refresh watcher it raises. Diagnose either
-    outcome before treating the refresh as successful. Refresh never pulls
-    commits, downloads a release asset, installs a package, or switches an
-    editable checkout. After a confirmed update or refresh, verify the new
-    process's interpreter, `lingtai.__file__`, `lingtai.kernel.__file__`,
-    version, and import path.
+## Nudge lifecycle and meanings
 
-## Packaged, editable, and source/dev runtimes
+1. **Local facts.** `kernel_version.py` reads the already-loaded `lingtai`
+   wrapper for the running version and distribution metadata for the installed
+   version. `runtime_identity.py` stamps package/dev mode, source kind, and
+   available Git identity into durable events.
+2. **Release-version producer.** Packaged, non-editable, non-dev runtimes compare
+   matching local versions with the exact release-manifest asset on GitHub and
+   Gitee through a bounded probe gate. Two available mirrors must agree on
+   version, content, and hashes; one available mirror may establish the result.
+   Network or mirror disagreement is diagnosis, not an update. Editable/source/
+   dev runtimes are release-version-silent and clear only their stale entry.
+3. **Source-integrity producer.** `source_drift.py` compares the startup runtime
+   fingerprint with a fresh on-disk fingerprint. `source_drift` means this
+   process differs from local disk; it never becomes release-migration or
+   package-install authority.
+4. **Dispatch.** Heartbeat runs the nudge dispatcher once per one-second tick.
+   `kernel_version` and `source_drift` each use a roughly 60-second in-memory
+   probe gate. One producer failure is logged and does not block the others.
+5. **Persistence and delivery.** The user-facing aggregate is
+   `.notification/nudge.json`; dismissal mute expiries live in
+   `.notification/.nudge_state.json`. Each producer owns one `kind`. Atomic
+   upsert replaces that kind and resolution removes it. Notification sync
+   injects changed allowlisted files at an IDLE boundary, wakes ASLEEP, defers
+   during ACTIVE, and cannot inject into STUCK/SUSPENDED.
+6. **Interpretation.** A nudge is synchronized kernel evidence, not a human
+   command. Compare its fields and diagnose ambiguity before proposing action.
 
-For a packaged/non-editable install, the distribution metadata and release
-manifest are meaningful. A local `running != installed` mismatch means a
-package landed on disk after this process started: it is a refresh opportunity,
-not a package upgrade. A `latest > installed` mismatch means an official release
-manifest advertises a possible package upgrade; it does not mean that package
-has been downloaded.
+Built-in nudge kinds are:
 
-The editable/source/dev modes are detected through `direct_url.json` with
-`dir_info.editable: true`; source checkouts are recognized from the module path
-and the checkout's `.git` plus `pyproject.toml`; dev-version markers also
-suppress only the `kernel_version` release-version check. Missing distribution
-metadata is treated as source/dev rather than as permission to install. In these
-modes, the checkout, branch, commit, dirty state, and import path are the useful
-truth. A `source_drift` finding can still appear as a source-integrity
-diagnostic, and an `init_config_shape` finding can still appear as
-configuration-staleness guidance; neither is package-update authority.
+- `kernel_version` on `release_version`: `running`, `installed`, `latest` (or
+  null for code already on disk), `source`, and a suggested action.
+- `source_drift` on `source_integrity`: startup and disk fingerprints.
+- `init_config_shape` on `configuration_staleness`: configuration-shape
+  guidance, not update authority.
 
-## Nudge mechanics and dismissal
+The controls `LINGTAI_NUDGE_ENABLED` and
+`LINGTAI_NUDGE_REPEAT_INTERVAL` govern publication and the post-dismiss mute
+window. Their values, invalid fallback, read point, and reload behavior live in
+`environment-variables`; producer probe gates are observation costs, not user
+cadence. Dismissal is mute, not resolution.
 
-When a Nudge is emitted, inspect its self-describing policy message before
-adjusting the process environment.
+## Packaged versus source/dev evidence
 
-`kernel_version`, `source_drift`, and `init_config_shape` are producers of the
-shared low-priority `.notification/nudge.json` envelope. The envelope carries
-`data.nudges`, a `published_at` timestamp, channel-level instructions, and a
-self-describing policy block. Those built-in producer kinds carry fixed
-`nudge_channel` metadata: `release_version` for `kernel_version`,
-`source_integrity` for `source_drift`, and `configuration_staleness` for
-`init_config_shape`. Unrelated legacy/unknown entries remain channel-less.
-`kind: kernel_version` has `running`, `installed`, `latest` (or `null` for a
-local refresh), `source`, and a suggested action. `source_drift` carries startup
-and disk fingerprints instead.
+For a packaged/non-editable runtime:
 
-The shared Nudge policy records finding identity and dismissal mute expiry in
-`.notification/.nudge_state.json`. The two global controls
-(`LINGTAI_NUDGE_ENABLED`, `LINGTAI_NUDGE_REPEAT_INTERVAL`) suppress publication
-and set the post-dismiss repeat window for an unresolved finding; their defaults,
-accepted values, reload behavior, and invalid-value fallback are registered in the
-repo-root `ENVIRONMENT_VARIABLES.md`, routed via
-`reference/environment-variables/SKILL.md`. Producer probe gates are only bounded
-observation costs, not product cadence. A producer removes an entry when its
-real fact resolves; `kernel_version` also removes its own entry when the runtime
-is intentionally release-version-silent. Dismissal is mute, not resolution;
-only a later real-reader check with zero findings resolves a problem.
+- `running != installed` normally means newer package code is already on disk
+  than this process loaded: investigate a reload, not another package install.
+- `latest > installed` means an official release manifest advertises an update;
+  it does not mean anything was downloaded.
+- Running newer than metadata indicates stale metadata or an import-path
+  mismatch; never blindly downgrade.
 
-After interpreting a nudge, use the narrowest safe action:
+Editable/source/dev detection uses `direct_url.json` with
+`dir_info.editable: true`, source checkout markers, module paths, and dev-version
+markers. Missing distribution metadata is source/dev evidence, not permission
+to install. For these runtimes, exact interpreter, both imported module paths,
+checkout, branch, commit, dirty state, and selector values are the useful facts.
+Read Git only at the source path identified by the import probe; generic Git
+status in the current agent directory proves nothing.
 
-```text
-notification(action="dismiss_channel",
-             input={"channel": "nudge", "force": null, "reason": null},
-             reasoning="acknowledge the nudges")
-```
+## Exact read-only probe
 
-Do not call `notification(action="check", input={})` merely to confirm
-dismissal. The
-generic notification protocol and guarded dismissal rules live in
-`notification-manual`; this reference owns the meaning of these two kinds.
-
-## Read-only diagnosis
-
-Inspect the current mirror and durable state without changing them:
+Use the interpreter exported by the launcher. If it is absent, stop and ask the
+launcher owner; do not substitute PATH Python or guess a venv.
 
 ```bash
-ls -l .notification/nudge.json .notification/.nudge_state.json 2>/dev/null
-sed -n '1,240p' .notification/nudge.json 2>/dev/null
-sed -n '1,240p' .notification/.nudge_state.json 2>/dev/null
-```
-
-Use the interpreter that launched the agent. The CLI exports
-`LINGTAI_RUNTIME_PYTHON`; if it is absent, use the platform-specific TUI
-runtime Python, not a convenient shell environment:
-
-```bash
-PYTHON=${LINGTAI_RUNTIME_PYTHON:-$HOME/.lingtai-tui/runtime/venv/bin/python}
+PYTHON="$LINGTAI_RUNTIME_PYTHON"
+[ -n "$PYTHON" ] || { echo "LINGTAI_RUNTIME_PYTHON is unset; stop" >&2; return 1 2>/dev/null || exit 1; }
 "$PYTHON" - <<'PY'
 import importlib.metadata as md
 import sys
 import lingtai, lingtai.kernel
 print("python=", sys.executable)
 print("lingtai_version=", getattr(lingtai, "__version__", "unknown"))
-print("lingtai_dist=", md.version("lingtai"))
-print("lingtai_file=", getattr(lingtai, "__file__", "unknown"))
-print("lingtai.kernel_file=", getattr(lingtai.kernel, "__file__", "unknown"))
 try:
+    print("lingtai_dist=", md.version("lingtai"))
     print("direct_url=", md.distribution("lingtai").read_text("direct_url.json"))
 except Exception as exc:
-    print("direct_url_error=", type(exc).__name__, str(exc)[:120])
+    print("distribution_metadata=", type(exc).__name__, str(exc)[:120])
+print("lingtai_file=", getattr(lingtai, "__file__", "unknown"))
+print("lingtai.kernel_file=", getattr(lingtai.kernel, "__file__", "unknown"))
 PY
 ```
 
-For source/dev disagreement, read-only git evidence is appropriate:
+When those paths identify a source checkout, the narrow follow-up is:
 
 ```bash
-git -C /path/to/checkout status --short --branch
-git -C /path/to/checkout log -1 --format='%H %cI %s'
-git -C /path/to/checkout remote -v
+git -C <identified-source-checkout> status --short --branch
+git -C <identified-source-checkout> log -1 --format='%H %cI %s'
 ```
 
-Replace the checkout path with the path containing the imported module; do not
-assume the current directory is that checkout. Do not print credentials or
-environment dumps.
+Do not print environment dumps, credentials, or unrelated remotes. Inspect
+`.pth`, `direct_url.json`, dist-info, or installer state only when this probe
+shows an install/import mismatch or a source/venv cutover requires it; none is a
+universal refresh check.
 
-## Troubleshooting
+## Update/install route and authority
 
-**Running and installed versions disagree.** Confirm the live interpreter and
-both module files first. If the installed distribution is newer, the safe
-meaning is “code already on disk can be loaded by a refresh.” If the running
-process is newer, inspect whether metadata or the import path is stale; do not
-blindly downgrade or install.
+For a real user-facing install or update, let Shell execute
+`https://lingtai.ai/install.sh --help` and follow its current output without
+reading or pasting the script source. That installer owns managed kernel/TUI/
+portal installation, exact-tag migration navigation, mirror comparison,
+artifact verification, and child command shapes. Bare
+`pip install --upgrade lingtai` is not the normal user instruction; pip/venv
+commands are limited to authorized diagnosis or developer verification.
 
-**Runtime and checkout disagree.** `sys.executable`, `lingtai.__file__`,
-`lingtai.kernel.__file__`, `direct_url.json`, and read-only git status identify
-which checkout/environment is actually active. A checkout's version alone does
-not prove what the running process imported.
+Tell the human what the nudge and probe established. After applicable migrations
+and writes are displayed, proceed only after receiving explicit confirmation
+and explicit human/config-owner authority for each download, install, migration,
+configuration write, and disruptive relaunch. A nudge and this manual grant none.
 
-**Release-manifest/network failure.** A failed remote request records bounded
-`last_error` state in `.nudge_state.json`; it is not evidence that an update
-exists. Check connectivity or release-mirror availability with the human. Do
-not turn a transient failure into a manual install recommendation.
+The update/build owner validates its own work before handoff and freezes one
+cutover receipt containing:
 
-**Nudge is missing or stale.** Check both files above. Missing `nudge.json` can
-mean no producer currently has an entry, a matching version cleared it, a dev
-runtime skipped it, or it was dismissed. A stale entry can be a mirror waiting
-for the next heartbeat sync; compare its kind and version pair with durable
-state. Unknown JSON files are not collected as notification channels.
+```text
+target: <exact agent/workdir>
+runtime_tuple:
+  sys_executable: <exact executable>
+  lingtai_file: <exact lingtai.__file__>
+  lingtai_kernel_file: <exact lingtai.kernel.__file__>
+  version_or_head: <exact expected version/commit>
+source_root: <optional diagnostic root>
+selectors: <intended launcher/init interpreter selector values>
+authority: <who authorized install/write/cutover>
+owner_validation: <targeted update/build/install result>
+```
 
-**Refresh did not activate new code.** A refresh only rebuilds/relaunches the
-runtime from code already visible on disk. Re-run the read-only interpreter and
-import-path probe in the new process, inspect the refresh/runtime logs, and
-check for a still-held old process or a different environment. It cannot pull a
-commit or repair an incomplete source checkout.
+Hand that receipt to `refresh-precheck` mode B. That reference owns selector
+comparison, exactly one refresh, the fresh runtime-tuple check, originating-
+channel round trip, and failure recovery. Do not duplicate them here.
 
-**Interpreter/import path is unknown.** Stop before any update action. Ask the
-human or launcher owner which process is authoritative, then compare
-`LINGTAI_RUNTIME_PYTHON`, `sys.executable`, the two module `__file__` values,
-distribution metadata, and `direct_url.json`. Do not use an unrelated shell
-Python as a substitute.
+## Mismatch diagnosis
+
+| Symptom | Read-only interpretation and next owner |
+|---|---|
+| Running and installed versions differ | Verify interpreter and both module paths. Installed newer is code-on-disk reload territory; running newer requires metadata/import diagnosis. |
+| Runtime and checkout disagree | Compare executable, module paths, `direct_url.json`, then exact Git evidence at the identified source. Resolve source/venv ownership before refresh. |
+| Release-manifest/network failure | Read bounded producer error state. It is not evidence of an update; ask about connectivity/mirror availability. |
+| Nudge is missing or stale | Compare `.notification/nudge.json` with `.notification/.nudge_state.json`; consider dev-mode silence, dismissal mute, producer resolution, and the next heartbeat sync. |
+| New code did not activate | Refresh cannot pull or repair code. Compare the expected cutover receipt to the new process and route the transaction failure to `refresh-precheck` mode C. |
+| Interpreter/import source is unknown | Stop all update/cutover action and ask the launcher owner which process and selectors are authoritative. |
+
+To acknowledge interpreted nudges, follow `notification-manual`; its narrow form
+is `notification(action="dismiss_channel", input={"channel":"nudge","force":null,"reason":null}, reasoning="acknowledge interpreted nudges")`.
+Do not call notification check merely to confirm dismissal.
 
 ## Boundaries
 
-`https://lingtai.ai/install.sh` owns install/update execution and release
-migration navigation (step 9). The Notification package manual owns channel allowlisting,
-sync concepts, and dismissal safety. `reference/refresh-precheck/SKILL.md` owns
-the ordered pre-flight and post-refresh verification pass. This reference owns
-only kernel-local read-only diagnosis and refresh mechanics; `source_drift` stays
-local and does not enter release-migration routing.
+This reference owns update/source/install/nudge/mismatch diagnosis and the
+cutover handoff. It does not own refresh ordering, preset activation, retries,
+or post-refresh receipts. It performs no download, write, install, checkout
+switch, migration, relaunch, or notification mutation by itself. `source_drift`
+stays local and outside release-migration routing; `refresh-precheck` is the
+single owner of every happy-path or recovery refresh transaction.

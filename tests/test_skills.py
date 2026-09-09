@@ -495,9 +495,6 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         refresh_precheck_body = refresh_precheck_ref.read_text(encoding="utf-8")
         assert "name: refresh-precheck" in refresh_precheck_body
         assert "Nested system-manual reference" in refresh_precheck_body
-        assert 'system(action="refresh")' in refresh_precheck_body
-        assert 'system(action="presets")' in refresh_precheck_body
-        assert ".pth" in refresh_precheck_body
 
         # event_summary.py script exists, is referenced, and can summarize
         # a minimal SQLite sidecar using the actual events schema columns.
@@ -1145,6 +1142,54 @@ def test_skills_does_not_create_git_repo(tmp_path):
         assert not (workdir / ".library" / ".git").exists()
     finally:
         agent.stop(timeout=1.0)
+
+
+def test_refresh_guidance_owns_three_targeted_modes():
+    root = Path(__file__).resolve().parents[1]
+    manual_root = root / "src/lingtai/intrinsic_skills/system-manual"
+    reference_root = manual_root / "reference"
+    router = (manual_root / "SKILL.md").read_text(encoding="utf-8")
+    refresh = (reference_root / "refresh-precheck/SKILL.md").read_text(encoding="utf-8")
+    update = (reference_root / "runtime-update-checks/SKILL.md").read_text(encoding="utf-8")
+    router_flat = " ".join(router.split())
+    refresh_flat = " ".join(refresh.split())
+    update_flat = " ".join(update.split())
+
+    assert "Any refresh transaction: same-runtime reload" in router_flat
+    assert "Update/source/install/nudge/mismatch diagnosis and cutover handoff" in router_flat
+    assert "select one mode -> one targeted preflight -> exactly one refresh -> one targeted receipt" in refresh_flat
+    for mode in (
+        "A. Same-runtime reload",
+        "B. Source/venv cutover",
+        "C. Failure recovery",
+    ):
+        assert mode in refresh
+    assert "two before and two after" in refresh_flat
+    assert "three before and two after" in refresh_flat
+    assert "first after-check includes changed-MCP health only on that trigger" in refresh_flat
+    assert "Never inspect an unchanged subsystem" in refresh_flat
+    assert "refresh_calls: 1" in refresh
+    assert "originating_channel_round_trip" in refresh
+    for frozen_field in (
+        "runtime_tuple:",
+        "sys_executable:",
+        "lingtai_file:",
+        "lingtai_kernel_file:",
+        "version_or_head:",
+        "selectors:",
+    ):
+        assert frozen_field in update
+    assert "logs/refresh_failed_permanent.json" in refresh
+    assert refresh.count('system(action="presets"') == 1
+    for removed_universal_probe in (
+        'mcp(action="info"',
+        "git -C",
+        ".notification/nudge.json",
+    ):
+        assert removed_universal_probe not in refresh
+    assert "checks are never unconditional refresh ceremony" in refresh_flat
+    assert 'system(action="refresh"' not in update
+    assert "`refresh-precheck` is the single owner" in update_flat
 
 
 def test_resident_prompts_route_to_system_manual_nested_references():
