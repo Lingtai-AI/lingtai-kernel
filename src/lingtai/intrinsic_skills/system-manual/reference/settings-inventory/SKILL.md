@@ -5,8 +5,8 @@ description: >
   sources, defaults, accepted values, invalid behavior, redaction, timing,
   authorized change procedures, and explicit non-settings.
 tags: [lingtai, system, settings, init, llm, environment, read-only]
-version: 1.2.0
-last_changed_at: "2026-09-04T00:00:00Z"
+version: 1.2.1
+last_changed_at: "2026-09-08T00:00:00Z"
 related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/adapters/posix/mail.py
@@ -77,7 +77,8 @@ Derived `system/manifest.resolved.json` is never authority.
 
 The seven ordinary runtime-policy rows are not init/preset rows. They resolve
 from valid `LINGTAI_<FIELD>` environment values, then a valid closed-v2
-`settings/system.json` field, then the fixed runtime default:
+`settings/system.json` field, then the fixed runtime default. Each row's
+`comment` points here directly; the System entry keeps only legacy aliases:
 
 | Key | Fixed default | Accepted environment / v2 value | Application timing |
 |---|---|---|---|
@@ -89,13 +90,16 @@ from valid `LINGTAI_<FIELD>` environment values, then a valid closed-v2
 | `streaming` | `false` | canonical boolean words in the environment / JSON boolean in v2 | boot and System refresh, including the live SessionManager flag |
 | `activeness` | `balanced` | non-blank environment string / non-blank string or `null` in v2 | boot and System refresh; compatibility posture only |
 
+The corresponding environment names are `LINGTAI_CONTEXT_LIMIT`,
+`LINGTAI_SNAPSHOT_INTERVAL`, `LINGTAI_MAX_RPM`, `LINGTAI_MAX_AED_ATTEMPTS`,
+`LINGTAI_AED_TIMEOUT`, `LINGTAI_STREAMING`, and `LINGTAI_ACTIVENESS`.
+
 Legacy `manifest.context_limit`, `snapshot_interval`, `max_rpm`,
 `max_aed_attempts`, `aed_timeout`, `streaming`, and `activeness` are
 recognized-and-ignored compatibility data. SHOW never reports them as current
 truth and an active preset cannot override these runtime-policy rows. The row
-comment routes through the stable `system-manual#runtime-policy-v2` anchor
-to the document grammar and authorized procedure below; that router does not
-own another copy of this policy.
+comment points directly to this document shape and authorized procedure; the
+System router does not own another copy of this policy.
 
 ### Runtime-policy v2 document shape
 
@@ -136,7 +140,7 @@ resolution is separate and described below.
 Default-only row illustration (query SHOW for the actual current value):
 
 ```json
-{"key":"cache_miss_budget","current":2000000,"default":2000000,"configurable":true,"comment":"system-manual#cache-miss-budget"}
+{"key":"cache_miss_budget","current":2000000,"default":2000000,"configurable":true,"comment":"system-manual/reference/settings-inventory#cache-miss-budget"}
 ```
 
 `current` resolves from a valid live `LINGTAI_CACHE_MISS_BUDGET`, then a live

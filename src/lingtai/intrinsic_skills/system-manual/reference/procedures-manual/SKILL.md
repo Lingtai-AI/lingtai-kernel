@@ -6,9 +6,9 @@ description: >
   the daemon workflow methodology, depositing work, idle/lifecycle, skill
   routing, deliverables, artifact sharing, and issue reporting. Route via
   `system-manual` when it is unclear whether this is the right node.
-version: 1.4.1
+version: 1.5.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
-last_changed_at: "2026-09-05T05:30:00Z"
+last_changed_at: "2026-09-08T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -21,8 +21,11 @@ maintenance: |
 
 This is the expanded form of the resident `procedures` action checklist — a
 nested skill-reference owned by `system-manual`, not a top-level catalog skill.
-Read it when the short procedure tells you *what* to do but you need the routing
-logic, edge-case discipline, or deliverable checklist behind it.
+The resident section's common operator rule is the always-loaded anchor for
+scope, authority, origin-channel replies, result verification, untrusted input,
+schema/manual choice, and parent-owned synthesis. Read this reference when the
+short procedure tells you *what* to do but you need routing logic, edge-case
+discipline, or a deliverable checklist behind it.
 
 ## 1. Progressive disclosure
 

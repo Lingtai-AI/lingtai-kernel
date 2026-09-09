@@ -43,11 +43,15 @@ CACHE_MISS_BUDGET_ENV = "LINGTAI_CACHE_MISS_BUDGET"
 DEFAULT_CACHE_MISS_BUDGET = 2_000_000
 SYSTEM_SETTINGS_RELATIVE_PATH = Path("settings") / "system.json"
 _SYSTEM_SETTINGS_SCHEMA_VERSION = 1
-_CACHE_MISS_BUDGET_COMMENT = "system-manual#cache-miss-budget"
+_CACHE_MISS_BUDGET_COMMENT = (
+    "system-manual/reference/settings-inventory#cache-miss-budget"
+)
 _INIT_COMMENT = "system-manual/reference/settings-inventory#root-and-manifest-inputs"
 _LLM_COMMENT = "system-manual/reference/settings-inventory#llm-and-provider-inputs"
 _ENV_COMMENT = "system-manual/reference/settings-inventory#kernel-environment-controls"
-_RUNTIME_POLICY_COMMENT = "system-manual#runtime-policy-v2"
+_RUNTIME_POLICY_COMMENT = (
+    "system-manual/reference/settings-inventory#runtime-policy-v2-document-shape"
+)
 _MISSING = object()
 
 

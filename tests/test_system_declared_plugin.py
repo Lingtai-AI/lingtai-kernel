@@ -374,8 +374,8 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
         "llm.codex_session_anchor",
     }
     assert {row["comment"] for row in rows} == {
-        "system-manual#cache-miss-budget",
-        "system-manual#runtime-policy-v2",
+        "system-manual/reference/settings-inventory#cache-miss-budget",
+        "system-manual/reference/settings-inventory#runtime-policy-v2-document-shape",
         "system-manual/reference/settings-inventory#root-and-manifest-inputs",
         "system-manual/reference/settings-inventory#llm-and-provider-inputs",
         "system-manual/reference/settings-inventory#kernel-environment-controls",
@@ -415,7 +415,7 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
         "current": 2_000_000,
         "default": 2_000_000,
         "configurable": True,
-        "comment": "system-manual#cache-miss-budget",
+        "comment": "system-manual/reference/settings-inventory#cache-miss-budget",
     }
     assert by_key["language"]["current"] == by_key["language"]["default"] == "en"
     assert by_key["context_limit"]["current"] == 272_000
@@ -452,7 +452,7 @@ def test_system_budget_uses_env_then_file_then_default(monkeypatch, tmp_path):
         "current": 250_000,
         "default": 2_000_000,
         "configurable": True,
-        "comment": "system-manual#cache-miss-budget",
+        "comment": "system-manual/reference/settings-inventory#cache-miss-budget",
     }
 
     original_read_text = Path.read_text
@@ -632,7 +632,9 @@ def test_system_settings_runtime_policy_rows_use_env_v2_default_precedence(
         row = rows[key]
         assert (row["current"], row["default"]) == values
         assert row["configurable"] is True
-        assert row["comment"] == "system-manual#runtime-policy-v2"
+        assert row["comment"] == (
+            "system-manual/reference/settings-inventory#runtime-policy-v2-document-shape"
+        )
 
 
 _NULLABLE_LLM_KEYS = (
@@ -1650,7 +1652,9 @@ def test_system_settings_ignores_retired_non_finite_init_runtime_policy(
     _write_init(tmp_path, manifest={field: value})
     rows = {row["key"]: row for row in _settings_call(tmp_path, {})["settings"]}
     assert rows[field]["current"] == rows[field]["default"] == default
-    assert rows[field]["comment"] == "system-manual#runtime-policy-v2"
+    assert rows[field]["comment"] == (
+        "system-manual/reference/settings-inventory#runtime-policy-v2-document-shape"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1977,18 +1981,43 @@ def test_system_manual_routes_declared_ltp_and_settings_owners():
     body = manual_path.read_text(encoding="utf-8")
     assert DECLARATION.manual == "system-manual"
     for required in (
-        '"action": "<one action from the installed schema>"',
-        '"input": {"<fields for that action only>": "..."}',
-        "presets` can return a large allowed-only catalog",
-        "action itself must always use `summarize=false`",
+        "`action` with only that action's `input` fields",
+        'system(action="manual", input={})',
+        "`presets` is allowed-only",
+        "keep it unsummarized",
         "### Cache-miss budget",
         "system-manual#cache-miss-budget",
-        "reference/settings-inventory/SKILL.md",
-        "SHOW is read-only",
+        "reference/settings-inventory/SKILL.md#cache-miss-budget",
+        "read-only and its `comment`",
+        "### Runtime policy (v2)",
     ):
         assert required in body
     assert '"set":"cache_miss_budget"' not in body
     assert '"reset":"cache_miss_budget"' not in body
+
+    route_references = (
+        "reference/substrate-manual/SKILL.md",
+        "reference/procedures-manual/SKILL.md",
+        "reference/refresh-precheck/SKILL.md",
+        "reference/runtime-update-checks/SKILL.md",
+        "reference/settings-inventory/SKILL.md",
+        "reference/environment-variables/SKILL.md",
+        "reference/llm-adapters/SKILL.md",
+        "reference/sqlite-log-query/SKILL.md",
+        "reference/trajectory-mining/SKILL.md",
+        "reference/goal-manual/SKILL.md",
+        "reference/how-to-change-name/SKILL.md",
+        "reference/external-attach-diagnostic/SKILL.md",
+        "reference/tool-plugin-settings/SKILL.md",
+    )
+    route_rows = [
+        line for line in body.splitlines() if line.startswith("|") and "reference/" in line
+    ]
+    assert len(route_rows) == len(route_references)
+    for reference in route_references:
+        assert sum(f"]({reference})" in line for line in route_rows) == 1
+    assert body.count("| Task | Read |") == 1
+    assert "```yaml" not in body
 
     inventory_reference = (
         manual_path.parent / "reference" / "settings-inventory" / "SKILL.md"
@@ -2003,14 +2032,14 @@ def test_system_manual_routes_declared_ltp_and_settings_owners():
     assert "Unregistered concrete-owner baseline" not in inventory_reference
 
     comments = {
-        "system-manual#cache-miss-budget",
-        "system-manual#runtime-policy-v2",
+        "system-manual/reference/settings-inventory#cache-miss-budget",
+        "system-manual/reference/settings-inventory#runtime-policy-v2-document-shape",
         *(spec.comment for spec in system_settings.SYSTEM_INIT_SETTING_SPECS),
         "system-manual/reference/settings-inventory#kernel-environment-controls",
     }
     assert comments == {
-        "system-manual#cache-miss-budget",
-        "system-manual#runtime-policy-v2",
+        "system-manual/reference/settings-inventory#cache-miss-budget",
+        "system-manual/reference/settings-inventory#runtime-policy-v2-document-shape",
         "system-manual/reference/settings-inventory#root-and-manifest-inputs",
         "system-manual/reference/settings-inventory#llm-and-provider-inputs",
         "system-manual/reference/settings-inventory#kernel-environment-controls",

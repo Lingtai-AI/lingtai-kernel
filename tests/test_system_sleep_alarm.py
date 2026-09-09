@@ -61,7 +61,8 @@ def test_sleep_delay_schema_is_required_nullable_positive_and_has_no_maximum() -
     assert delay["exclusiveMinimum"] == 0
     assert "maximum" not in delay
     assert "last-resort" in delay["description"]
-    assert "reliable completion notifications and IDLE" in ACTION_ENUM_DESCRIPTION
+    assert "normal waiting is IDLE" in ACTION_ENUM_DESCRIPTION
+    assert "no reliable completion notification" in ACTION_ENUM_DESCRIPTION
 
 
 @pytest.mark.parametrize("delay", [True, False, 0, -1, float("nan"), float("inf"), -float("inf"), "1"])

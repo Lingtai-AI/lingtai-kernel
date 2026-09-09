@@ -535,17 +535,30 @@ def test_duplicate_child_registration_fails_loud() -> None:
 
 def test_description_states_the_three_privilege_classes() -> None:
     description = system_tool.get_description()
-    assert "sleep" in description and "refresh" in description
+    assert "Self actions need no karma" in description
     assert "admin.karma=True" in description
     assert "admin.nirvana=True" in description
+    # Per-action meanings belong to the action enum, not a duplicated root catalog.
+    assert "lull:" not in description
+    assert "interrupt:" not in description
     # Notification verbs are still explicitly disclaimed.
     assert "notification" in description.lower()
 
 
 def test_action_enum_description_marks_destructive_and_readonly_actions() -> None:
     enum_description = _schema()["properties"]["action"]["description"]
+    assert "Self actions need no karma; peer controls name another agent" in enum_description
+    for action in ("lull", "interrupt", "suspend", "cpr", "clear"):
+        assert f"{action}:" in enum_description
+        assert "requires admin.karma=True" in enum_description
+    assert "normal waiting is IDLE" in enum_description
+    assert "last-resort alarm" in enum_description
+    assert "pending notifications may require force" in enum_description
     # nirvana is the irreversible one and must say so.
     assert "destroy" in enum_description
+    assert "read the peer-recovery procedure in system-manual" in enum_description
+    assert "name_set: set the immutable true name once" in enum_description
+    assert "name_nickname: set or clear the mutable nickname" in enum_description
     # manual is the read-only progressive-disclosure action.
     assert "without changing runtime state" in enum_description
 
