@@ -1,6 +1,6 @@
 ---
 name: psyche-network-rules-reference
-last_changed_at: 2026-09-06T00:00:00Z
+last_changed_at: 2026-09-09T00:00:00Z
 description: >
   Deep reference for the separate `.rules` heartbeat signal: authorized atomic
   writes, consumption, replacement, persistence, verification, and boundaries.
@@ -11,100 +11,51 @@ related_files:
 - src/lingtai/tools/avatar/manual/SKILL.md
 - tests/test_avatar_rules.py
 maintenance: |
-  Keep this reference synchronized with `_check_rules_file` and the Avatar
-  manual's signpost. `.rules` is not a Psyche action; preserve that boundary and
-  do not turn this reference into a generic instruction or mutation API.
+  Keep this reference synchronized with `_check_rules_file` and Avatar's
+  signpost. `.rules` is not a Psyche action; preserve its distinct mechanism,
+  consumption, and authorization boundary.
 ---
 
 # Psyche network-rules reference
 
-This page is the detailed procedure behind the short `.rules` signpost in
-[`psyche-manual`](../../SKILL.md). It documents a separate heartbeat signal, not
-an action exposed by Psyche.
+`.rules` is a heartbeat signal, not a Psyche action or generic instruction API.
+The agent heartbeat (`_check_rules_file`) consumes it, unlike ordinary durable
+edits, which require file→`context.rebuild`.
 
-## Network rules protocol (`.rules`)
+## Write and consume
 
-`.rules` is a real mechanism, but it is **not** owned by `psyche`, `avatar`, or
-any other action tool — there is no `psyche(action='rules')` and no generic
-instruction API for it. It is a plain signal file consumed by an agent's own
-heartbeat loop (`_check_rules_file` in
-`src/lingtai/kernel/base_agent/lifecycle.py`), documented here because it is
-easy to confuse with the ordinary Psyche edit-then-`context.rebuild` model
-above — the two are deliberately different mechanisms:
-
-- **Ordinary Psyche edit:** write a durable source file (`system/pad.md`,
-  `system/lingtai.md`, a `KNOWLEDGE.md`/`SKILL.md`, or the Psyche owner
-  document), then call `context(action="rebuild", ...)` (or wait for
-  refresh/molt) to recompose **all** enabled sections at once.
-- **`.rules`:** use Shell to write a `.rules` file to the explicitly authorized
-  target agent's working-directory root. Its next runnable heartbeat reads and
-  unlinks the signal before deciding whether to apply it; no explicit rebuild
-  or refresh is needed. A read or unlink failure leaves the signal unconsumed
-  and stops processing, so file disappearance alone is not proof of success.
-
-### Write through Shell
-
-First prepare the complete approved UTF-8 rule body and confirm the exact target
-path. For example, in a POSIX shell (use the active shell's equivalent elsewhere):
+Write the complete approved UTF-8 body atomically to the explicitly authorized
+agent workdir root (POSIX example; use the active shell’s equivalent elsewhere):
 
 ```sh
 target='/absolute/path/to/authorized-agent'
 body='/absolute/path/to/approved-rules.txt'
 tmp=$(mktemp "$target/.rules.XXXXXX") &&
-  cat "$body" > "$tmp" &&
-  mv "$tmp" "$target/.rules"
+  cat "$body" > "$tmp" && mv "$tmp" "$target/.rules"
 ```
 
-The temporary file is in the target directory so the final rename exposes the
-complete signal, not a partly written body. If a command fails, stop and inspect
-that exact temporary file; do not announce success or blindly replay the batch.
-For multiple agents, confirm an explicit target list and perform/report the write
-for each target. There is no automatic descendant broadcast or post-spawn fan-out.
-Do not write `system/rules.md` as a substitute for this live signal workflow.
+A failed command requires inspection of that exact temporary file; do not blindly
+replay or announce success. Confirm each target separately—there is no descendant
+broadcast. Do not substitute `system/rules.md` for this live signal.
 
-Consumption semantics, exactly as implemented:
+The next runnable heartbeat reads and unlinks `.rules` before deciding whether to
+apply it. Read/unlink failure leaves it unconsumed and stops processing, so disappearance
+alone is not proof of success. A nonempty body completely replaces
+`system/rules.md` and the protected `rules` section; whitespace-only content is a
+consumed no-op. Identical content is consumed without rewrite or flush. Changed
+content persists and flushes, logging `rules_loaded`; a canonical-file write failure
+aborts before prompt mutation and logs `rules_write_error`.
 
-- **Complete replacement, not a merge.** A non-empty `.rules` body entirely
-  replaces the canonical `system/rules.md` content and the protected `rules`
-  prompt section — it is never appended to or merged with prior rules.
-- **Empty is a no-op.** Whitespace-only or empty `.rules` content is consumed
-  (the signal file is deleted either way) but writes nothing and triggers no
-  prompt refresh.
-- **Identical content is a no-flush no-op.** If the `.rules` body (stripped)
-  equals the existing `system/rules.md` (stripped), the signal is consumed
-  but `system/rules.md` is not rewritten and the system prompt is not
-  reflushed.
-- **Changed content persists and flushes.** A genuinely different body
-  overwrites `system/rules.md`, rewrites the protected `rules` prompt
-  section, and flushes the live system prompt — logged as `rules_loaded`.
-  A write failure while persisting the canonical file is logged as
-  `rules_write_error` and aborts before any prompt mutation.
-- **Boot/rebuild injection.** `system/rules.md` is also re-read directly into
-  the protected `rules` prompt section on ordinary agent construction and on
-  every full reconstruction (`context.rebuild`, refresh, molt) — independent
-  of any pending `.rules` signal. This is what makes existing rules survive a
-  molt, refresh, or resume even without a fresh `.rules` write; an empty or
-  missing `system/rules.md` at reconstruction time removes the section.
+Boot and every full rebuild/refresh/molt reread `system/rules.md` independently;
+a missing or empty canonical file removes the section. Identical comparison
+ignores leading/trailing whitespace. A pending `.rules` file is not yet applied,
+and an empty signal cannot clear existing rules.
+Verify the canonical file on disk and the effective protected section only after
+that agent's heartbeat processed the signal (or after later reconstruction).
 
-**Verification.** The canonical value is `system/rules.md` on disk — read it
-directly. The effective (currently composed) value is what the protected
-`rules` prompt section holds; a `.rules` write is only reflected there after
-that *same agent's own* next heartbeat tick actually processed it (or after
-any subsequent boot/rebuild/refresh/molt, which re-reads the same canonical
-file). A `.rules` file that has not yet ticked is real on disk as a pending
-signal, not yet visible in the prompt — the same "written but not applied"
-distinction as an unbuilt Psyche source edit, but on the heartbeat's cadence
-instead of an explicit `context.rebuild` call.
+## Boundary
 
-**Cross-agent writes are scoped by what you can reach, not by a privilege
-check.** `avatar` used to own an admin/karma-gated `rules` action that wrote
-`.rules` to a caller's own directory and to every descendant in its avatar
-tree; that action and its authorization check were both **removed**, not
-replaced by a new guard anywhere else. Today, writing a `.rules` file to
-another agent's directory (e.g. a sibling avatar) is an ordinary filesystem
-write — typically via `shell` naming that agent's explicit path — subject
-only to whatever access the same-OS-user trust model already gives you, not
-to any dedicated authorization mechanism. This paragraph is documentation,
-not enforcement: do not treat it, or any other prose, as proof that a write
-outside your own directory is authorized — only the human's actual scope and
-the target's real accessibility decide that.
+Writing another reachable agent's `.rules` file is an ordinary filesystem write,
+not a dedicated avatar authorization path. Reachability is not permission: only
+actual human scope and the target's real accessibility authorize the write. Keep
+this distinction visible when operating across agents.

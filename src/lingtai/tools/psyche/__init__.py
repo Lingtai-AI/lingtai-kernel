@@ -49,14 +49,15 @@ _DECLARED_INPUT_SCHEMAS = {
 }
 
 _ACTION_ENUM_DESCRIPTION = (
-    "Choose one Psyche operation. Every action takes strict input={} and is "
-    "read-only; load the returned manual before acting on an unfamiliar domain.\n"
-    "pad: return pad-manual for system/pad.md and pinned Pad references.\n"
-    "lingtai: return lingtai-manual for system/lingtai.md (灵台 / character).\n"
-    "knowledge: return the knowledge manual for durable KNOWLEDGE.md entries.\n"
-    "skills: return the skills manual for the configured .library catalog.\n"
-    "settings: show Psyche's fully redacted settings view.\n"
-    "manual: return the psyche routing table."
+    "Choose one read-only Psyche route; every child takes strict input={}. "
+    "Routine inspection needs no manual reload; read the matching domain manual first "
+    "for unfamiliar or consequential work.\n"
+    "pad: Pad manual for system/pad.md and pinned references.\n"
+    "lingtai: identity manual for system/lingtai.md (灵台 / character).\n"
+    "knowledge: private KNOWLEDGE.md memory manual.\n"
+    "skills: .library catalog and configured-roots manual.\n"
+    "settings: fully redacted applied-settings SHOW.\n"
+    "manual: Psyche routing table and shared mutation/rebuild model."
 )
 
 
@@ -91,15 +92,14 @@ _FAMILY = _build_family(None)
 
 def get_description(lang: str = "en") -> str:
     return (
-        "SIGNPOST ONLY: psyche routes four durable domains — pad, lingtai "
-        "(灵台), knowledge, and skills. Every action takes strict input={} and is "
-        "read-only; it never authors, edits, pins, installs, rescans, or loads "
-        "anything. Call manual first for an unfamiliar domain. Durable changes "
-        "use file.write for a full rewrite or file.edit for an exact replacement, "
-        "then one explicit context.rebuild (or passive refresh/molt); file "
-        "mutation never hot-loads the prompt. Psyche owns no lifecycle action: "
-        "context owns rebuild/molt and system owns identity. Results are exact; "
-        "leave root summarize false."
+        "SIGNPOST ONLY: routes pad, lingtai (灵台), knowledge, and skills, with redacted settings "
+        "and manual guidance. Every action is read-only with strict input={}; it "
+        "never authors, edits, pins, installs, rescans, or loads anything. "
+        "routine schema-sufficient calls need no manual reload, while unfamiliar "
+        "or consequential domain work should call the matching manual first. "
+        "Change durable sources with file.write/file.edit, then one "
+        "context.rebuild (or refresh/molt); edits never hot-load. context owns "
+        "rebuild/molt and system owns lifecycle/names; leave root summarize false."
     )
 
 
