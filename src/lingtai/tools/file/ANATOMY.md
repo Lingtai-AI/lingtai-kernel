@@ -55,9 +55,9 @@ that established runtime path.
   settings and manual schemas, the one
   declaration-derived family builder, established installed-manual loader, pure
   bind step, and official-registrar `setup()` wiring
-  (`src/lingtai/tools/file/__init__.py:174-234`, `:282-317`, `:320-368`).
+  (`src/lingtai/tools/file/__init__.py:177-237`, `:277-304`, `:315-363`).
 - `_load_file_manual()` / `_build_manual_child()` — load the established
-  `file-manual` installation (`src/lingtai/tools/file/__init__.py:140-167`).
+  `file-manual` installation (`src/lingtai/tools/file/__init__.py:143-170`).
 - `_read.py` — the read operation plus paging/truncation math, per-call cap
   resolution, and spill-aware missing-file hint (`_apply_cap` and
   `_resolve_call_cap` at `src/lingtai/tools/file/_read.py:39-75`).
@@ -66,7 +66,7 @@ that established runtime path.
   discipline, sorted glob list, and grep match/traversal cap.
 - `_strip_nulls()` — the one boundary translating strict-schema `null` back to
   “absent” so each operation applies its historical defaults
-  (`src/lingtai/tools/file/__init__.py:277-279`).
+  (`src/lingtai/tools/file/__init__.py:272-274`).
 - `settings.py` — the exact ordered 13-row File projection. It reads the live
   runtime cap from `FileIOPort`, combines it with source constants, and consumes
   only the immutable bounded backend construction snapshot; the sidecar value

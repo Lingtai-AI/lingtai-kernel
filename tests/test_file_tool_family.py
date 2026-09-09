@@ -386,9 +386,9 @@ def test_file_disclosure_router_keeps_first_call_guard_and_exact_read_route():
         assert required in description
 
     manual = Path("src/lingtai/tools/file/manual/SKILL.md").read_text(encoding="utf-8")
-    assert "[read-manual](../../../intrinsic_skills/read-manual/SKILL.md)" in manual
+    assert "<workdir>/.library/intrinsic/capabilities/read-manual/SKILL.md" in manual
     assert "A JSON `null` optional value means" in manual
-    assert "Neither action reloads or changes the current system" in manual
+    assert "Neither action changes the current" in manual
 
 
 # ---------------------------------------------------------------------------

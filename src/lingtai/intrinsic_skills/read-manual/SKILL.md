@@ -1,9 +1,9 @@
 ---
 name: read-manual
 description: "File pagination, truncation and long-line recovery: `next_offset` continuation, `line_truncated`, default/hard-cap limits, and when to switch to bash/grep/sed instead. Use when ordinary `file.read` cannot expose complete content."
-version: 0.2.0
+version: 0.3.0
 tags: [read, files, continuation, truncation, cap, pagination]
-last_changed_at: "2026-07-19T00:00:00Z"
+last_changed_at: "2026-09-08T00:00:00Z"
 related_files:
 - src/lingtai/tools/file/_read.py
 - src/lingtai/tools/file/__init__.py
@@ -12,129 +12,71 @@ maintenance: |
   Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---
 
-# Read Manual
+# Read depth
 
-Complete workflow for reading files with the `file` tool's `read` action. Load
-it for large files, complete-content workflows, truncation, or `line_truncated`
-results.
+This is `file-manual`'s nested reference for read depth, not a separate action. Load it
+for a large/complete read, a capped or spilled result, or
+`line_truncated`; routine small reads can use the schema directly. After the
+one-time manual lookup, resume the ordinary read; repeating the same manual
+call is an error loop.
 
-This is a nested reference under `file-manual`, not a separate manual action:
-`file(action="manual")` returns `file-manual`, which points here for read depth.
-`file-manual` owns basic action choice, the UTF-8 policy, the `summarize`
-guidance, and the manual-versus-ordinary-call rule (including that repeating an
-identical manual call is an error loop, not progress).
+## Caps and bounded windows
 
-## Two caps
+The ordinary per-call `max_chars` budget is **100 000** characters. The runtime
+hard ceiling is **200 000**; a smaller positive Host cap lowers the effective
+ceiling. Larger requests are clamped; File exposes no setting to raise it. A read-level cap returns `truncated=true`; the runtime ceiling may
+instead spill a result before it reaches the model. The effective cap appears as
+`cap_chars` when read pagination truncates.
 
-| Cap | Value | Configurable |
-|---|---|---|
-| `read` per-call page budget | **100 000 chars** (default) | yes, via per-call `max_chars` |
-| Runtime tool-result hard ceiling | **200 000 chars** | no — not by agents or prompts |
-
-`max_chars` requests a smaller or larger chunk for one call. Values above the
-hard ceiling are clamped to 200 000; the effective value appears as `cap_chars`
-when the result is truncated.
-
-These two caps act at different layers:
-
-1. **Read-level pagination** — exceeding the effective per-call budget returns
-   `truncated=true` plus continuation metadata. You page on with `next_offset`.
-2. **Runtime preventive ceiling** — `ToolExecutor` applies the non-configurable
-   200k cap to every tool result just before it reaches the LLM wire. A result
-   still over the ceiling is written to `<workdir>/tmp/tool-results/<…>` and
-   replaced on the wire by a compact manifest containing `status="spilled"`,
-   `spill_path`, `artifact`, `preview`, and `original_char_count`.
-
-A well-formed `read` result normally stays under the outer ceiling because
-`max_chars` is clamped to 200k. If you still see a spill manifest from `read`,
-inspect the `spill_path` artifact, then re-call `read` with a smaller
-`limit`/`max_chars` or process the artifact via `bash`/`grep`/Python.
-
-## Metadata/stats preflight
-
-For unknown or large files, inspect cheap metadata before reading big chunks.
-This replaces a dedicated `read(dry_run=true)` mode.
+For an unknown or large file, start with a narrow `limit` (for example 100–200)
+and an explicit `offset`/`max_chars`. To inspect cheap metadata first (not a
+`read(dry_run=true)` mode):
 
 ```bash
 python - <<'PY'
 from pathlib import Path
 p = Path('/path/to/file')
-count = max_len = max_line = 0
-with p.open('r', encoding='utf-8', errors='replace') as f:
-    for i, line in enumerate(f, 1):
-        count = i
-        if len(line) > max_len:
-            max_len, max_line = len(line), i
-print({'bytes': p.stat().st_size, 'lines': count,
-       'longest_line': max_line, 'longest_chars': max_len})
+count = longest = 0
+with p.open('r', encoding='utf-8') as f:
+    for count, line in enumerate(f, 1):
+        longest = max(longest, len(line))
+print({'bytes': p.stat().st_size, 'lines': count, 'longest_chars': longest})
 PY
 ```
 
-Use the result to choose the window: `offset` (1-based start/resume), `limit`
-(lines requested), `max_chars` (per-call budget).
+## Complete reads
 
-## Complete-content workflow
-
-For any file that may exceed the cap, page with `offset=next_offset` and the
-same `limit` until `truncated` is absent or false:
+`truncated` means the character cap cut the requested window, not that the file
+has more lines. For complete stable-file reads, stop only past `total_lines`;
+handle errors, spills and partial physical lines before consuming content:
 
 ```python
 offset = 1
 while True:
-    r = file(action="read", input={"file_path": path, "offset": offset, "limit": 200},
-             reasoning="page through the file")
-    process(r["content"])
-    if not r.get("truncated"):
+    result = file(action="read", input={"file_path": path, "offset": offset,
+        "limit": 200, "max_chars": None}, reasoning="page through the file")
+    if result.get("status") in ("error", "spilled") or result.get("line_truncated"):
+        raise RuntimeError("Use targeted processing; this is not a complete page")
+    process(result["content"])
+    offset = result.get("next_offset", offset + result["lines_shown"])
+    if offset > result["total_lines"]:
         break
-    offset = r["next_offset"]
 ```
 
-## Continuation metadata fields
+Truncated results also report `cap_chars`, `returned_chars`,
+`requested_offset`, `requested_limit`, `last_returned_line`, and
+`remaining_lines_estimate`; use them to detect gaps or an unexpectedly narrow
+window. `next_offset` is the next physical line, so this loop has no overlap.
 
-When `truncated=true` the result includes:
+`line_truncated=true` is different: one physical line exceeded the cap, so the
+result contains only its bounded prefix and `next_offset` skips to the next
+line. The hidden tail cannot be recovered by another `read`; inspect that line
+with targeted `sed`, `awk`, or `grep` instead.
 
-| Field | Meaning |
-|---|---|
-| `truncated` | `true` — content was cut |
-| `cap_chars` | effective character cap used for this call |
-| `returned_chars` | characters actually returned |
-| `requested_offset` | 1-based start line you passed |
-| `requested_limit` | line limit you passed |
-| `last_returned_line` | 1-based line number of the last line shown |
-| `next_offset` | pass this as `offset` on the next call to continue |
-| `remaining_lines_estimate` | approximate lines still unread |
-| `line_truncated` | `true` only when a single physical line exceeded the cap |
+## Spill recovery
 
-## Handling line_truncated=true
-
-`line_truncated=true` appears when a single physical line is longer than the cap.
-Then:
-
-- The result contains only a **prefix** of that line (bounded by the cap).
-- `next_offset` points to the **next line**, not to a mid-line continuation.
-- The hidden tail of the long line is **not recoverable** through further `read`
-  calls.
-
-To inspect a long line fully, use targeted local processing instead of `read`:
-
-```bash
-sed -n '42p' /path/to/file                        # print one specific line
-awk '{print NR, length($0)}' /path/to/file | head -20   # characters per line
-grep -n "pattern" /path/to/file                   # search within a long line
-```
-
-## Quick checklist
-
-Before calling `read`:
-
-- Large file? Probe with `limit=100`–`200`, or run the preflight above.
-- Need the whole file? Use the continuation loop.
-- Escape hatches: `line_truncated=true` → `bash`/`grep`/`sed`; `status=spilled`
-  → read the `spill_path` artifact or reduce `limit`.
-- Need a specific region? Pass `offset` and a tight `limit`.
-
-## Manual versus ordinary reads
-
-`file-manual` owns this rule: `file(action="manual")` is a one-time entry.
-After it returns, continue the original task with an ordinary read; repeating the
-same manual call is an error loop, not progress.
+If the runtime returns `status="spilled"`, inspect its `spill_path` artifact and
+its `original_char_count`; a `preview` is not complete content. If the artifact
+is unavailable or the result is still too large, repeat with a smaller
+`limit`/`max_chars` or process the artifact with `bash`/`grep`/Python. Do not
+interpret a spill or a capped page as the whole file.

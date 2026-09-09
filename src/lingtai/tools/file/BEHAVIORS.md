@@ -78,7 +78,8 @@ PASS when pagination is gap-free and overlap-free, caps hold, and the long-line 
 ### Steps
 
 1. Call `file(action="settings", input={})` and record all rows.
-2. Confirm every comment points to the matching stable section of `file-manual`.
+2. Confirm every comment points to `file-manual#settings-show-only`, the single
+   stable File settings section.
 3. In disposable construction fixtures only, resolve an explicit backend mode,
    canonical-plus-legacy executable overrides, and the legacy-only case; then
    mutate the ambient environment after binding.
@@ -97,8 +98,8 @@ PASS when pagination is gap-free and overlap-free, caps hold, and the long-line 
 - [ ] **Construction truth**: explicit backend selection and canonical-then-
   legacy sidecar alias precedence are captured at service construction; later
   environment changes do not alter SHOW.
-- [ ] **Manual routing**: every comment names the exact `file-manual` heading
-  containing meaning, source/precedence, timing, sensitivity, and procedure.
+- [ ] **Manual routing**: every comment names the exact stable `file-manual`
+  SHOW heading; row values and construction truth remain source/snapshot-backed.
 - [ ] **Redaction**: the one sidecar row renders both current/default as
   `<redacted>`, the private flag is absent, and no executable or local path
   occurs anywhere in the result.

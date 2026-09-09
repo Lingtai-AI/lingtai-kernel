@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from collections.abc import Callable
 from inspect import signature
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from lingtai.adapters.tool_plugin_host import (
     AgentFileIOAdapter,
@@ -261,7 +264,7 @@ def test_exact_order_five_fields_values_defaults_and_configurability(
     )
 
 
-def test_comments_target_exact_stable_file_manual_headings(tmp_path, monkeypatch):
+def test_comments_target_single_stable_file_manual_heading(tmp_path, monkeypatch):
     _clear_file_environment(monkeypatch)
     handler, _service = _bound_handler(tmp_path, backend="python")
     result = _show(handler, {})
@@ -269,9 +272,8 @@ def test_comments_target_exact_stable_file_manual_headings(tmp_path, monkeypatch
         encoding="utf-8"
     )
     for row in result["settings"]:
-        fragment = row["key"].replace(".", "-").replace("_", "-")
-        assert row["comment"] == f"file-manual#{fragment}"
-        assert f"### {fragment.replace('-', ' ')}\n" in manual
+        assert row["comment"] == "file-manual#settings-show-only"
+    assert "## Settings SHOW only\n" in manual
 
 
 def test_runtime_cap_current_is_fresh_on_each_show(tmp_path, monkeypatch):
@@ -412,6 +414,13 @@ def test_basic_read_and_complete_agent_prompt_build_are_unchanged(
         handler = agent._tool_handlers["file"]
         settings = _show(handler, {})
         assert tuple(_rows(settings)) == EXPECTED_KEYS
+        manual = handler({"action": "manual", "input": {}, "reasoning": "installed File guide"})
+        installed = Path(manual["structuredContent"]["manual_path"])
+        assert manual["content"][0]["text"] == Path("src/lingtai/tools/file/manual/SKILL.md").read_text()
+        depth = installed.parent.parent / "read-manual" / "SKILL.md"
+        assert depth.read_bytes() == Path("src/lingtai/intrinsic_skills/read-manual/SKILL.md").read_bytes()
+        assert "<workdir>/.library/intrinsic/capabilities/read-manual/SKILL.md" in installed.read_text()
+        assert "../../../intrinsic_skills/" not in installed.read_text()
 
         target = agent.working_dir / "ordinary.txt"
         target.write_text("alpha\n", encoding="utf-8")
@@ -434,3 +443,28 @@ def test_basic_read_and_complete_agent_prompt_build_are_unchanged(
         }
     finally:
         agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize("cap", [100_000, 100])
+def test_manual_complete_read_example_covers_line_and_character_windows(tmp_path, cap):
+    handler, _ = _bound_handler(tmp_path, backend="python", runtime_cap=cap)
+    path = tmp_path / "pages.txt"
+    path.write_text("row\n" * 450, encoding="utf-8")
+    manual = Path("src/lingtai/intrinsic_skills/read-manual/SKILL.md").read_text()
+    example = re.search(r"```python\n(.*?)```", manual, re.S).group(1)
+    pages = []
+    exec(example, {"file": lambda **kw: handler(kw), "path": str(path), "process": pages.append})
+    numbers = [int(line.split("\t", 1)[0]) for page in pages for line in page.splitlines()]
+    assert numbers == list(range(1, 451))
+
+
+def test_manual_complete_read_example_refuses_a_partial_long_line(tmp_path):
+    handler, _ = _bound_handler(tmp_path, backend="python", runtime_cap=100)
+    path = tmp_path / "long-line.txt"
+    path.write_text("x" * 500 + "\n", encoding="utf-8")
+    manual = Path("src/lingtai/intrinsic_skills/read-manual/SKILL.md").read_text()
+    example = re.search(r"```python\n(.*?)```", manual, re.S).group(1)
+    pages = []
+    with pytest.raises(RuntimeError, match="targeted"):
+        exec(example, {"file": lambda **kw: handler(kw), "path": str(path), "process": pages.append})
+    assert pages == []

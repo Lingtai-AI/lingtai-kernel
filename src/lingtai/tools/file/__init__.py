@@ -37,19 +37,19 @@ _READ_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "file_path": {
             "type": "string",
-            "description": "Absolute or workdir-relative path.",
+            "description": "UTF-8 text file; absolute or workdir-relative path.",
         },
         "offset": {
             "type": ["integer", "null"],
-            "description": "1-based line; null=1.",
+            "description": "1-based start line; null=1.",
         },
         "limit": {
             "type": ["integer", "null"],
-            "description": "Lines; null=2000.",
+            "description": "Max lines; null=2000.",
         },
         "max_chars": {
             "type": ["integer", "null"],
-            "description": "Chars/call; null=100 000; max=200 000.",
+            "description": "Chars/call; null=100 000; hard ceiling=200 000; effective cap may be lower.",
         },
     },
     "required": ["file_path", "offset", "limit", "max_chars"],
@@ -61,9 +61,9 @@ _WRITE_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "file_path": {
             "type": "string",
-            "description": "Absolute or workdir-relative path.",
+            "description": "UTF-8 text file to create or overwrite.",
         },
-        "content": {"type": "string", "description": "Full UTF-8 text."},
+        "content": {"type": "string", "description": "Full UTF-8 text; inspect before overwrite."},
     },
     "required": ["file_path", "content"],
     "additionalProperties": False,
@@ -72,12 +72,12 @@ _WRITE_INPUT_SCHEMA: dict[str, Any] = {
 _EDIT_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "file_path": {"type": "string", "description": "Absolute or workdir-relative path."},
-        "old_string": {"type": "string", "description": "Exact UTF-8 text."},
-        "new_string": {"type": "string", "description": "Replacement UTF-8 text."},
+        "file_path": {"type": "string", "description": "UTF-8 text file to edit."},
+        "old_string": {"type": "string", "description": "Exact UTF-8 text; identify one match."},
+        "new_string": {"type": "string", "description": "UTF-8 replacement text."},
         "replace_all": {
             "type": ["boolean", "null"],
-            "description": "All matches; null=false.",
+            "description": "Replace every match; null=false; use only when intended.",
         },
     },
     "required": ["file_path", "old_string", "new_string", "replace_all"],
@@ -87,18 +87,18 @@ _EDIT_INPUT_SCHEMA: dict[str, Any] = {
 _GREP_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "pattern": {"type": "string", "description": "Regex."},
+        "pattern": {"type": "string", "description": "Regex over UTF-8 text; keep it narrow."},
         "path": {
             "type": ["string", "null"],
-            "description": "File/dir; null=workdir.",
+            "description": "File/dir; null=workdir; narrow large searches.",
         },
         "glob": {
             "type": ["string", "null"],
-            "description": "Filter; null/*=none.",
+            "description": "Filename filter; null/*=none; narrow large searches.",
         },
         "max_matches": {
             "type": ["integer", "null"],
-            "description": "Matches; null=200.",
+            "description": "Max matches; null=200.",
         },
     },
     "required": ["pattern", "path", "glob", "max_matches"],
@@ -110,11 +110,11 @@ _GLOB_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "pattern": {
             "type": "string",
-            "description": "Glob pattern (for example '**/*.py'); use '**/' recursively.",
+            "description": "Filename glob (for example '**/*.py'); use '**/' recursively.",
         },
         "path": {
             "type": ["string", "null"],
-            "description": "Directory; null=workdir.",
+            "description": "Directory; null=workdir; narrow large searches.",
         },
     },
     "required": ["pattern", "path"],
@@ -239,26 +239,26 @@ def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
 
 def get_description(lang: str = "en") -> str:
     return (
-        "One text-only file capability over the agent working directory. "
-        "Choose file(action='read', input={'file_path': '/abs/path', "
-        "'offset': null, 'limit': null, 'max_chars': null}) for numbered UTF-8 "
-        "lines; null uses defaults (offset 1, limit 2000, max_chars 100 000), "
-        "and a capped result has truncated/next_offset/remaining_lines_estimate "
-        "metadata (a single long line may set line_truncated). Continue from "
-        "next_offset; see "
-        "read-manual for depth. Choose file(action='write', ...) to create or "
-        "overwrite text, or file(action='edit', ...) for exact replacement; "
-        "both mutate the durable tree and return receipts, but never reload or "
-        "hot-load the current system prompt (use context(action='rebuild', input={}, ...) only "
-        "when an explicit prompt activation is needed). Choose "
-        "file(action='glob', ...) for names and file(action='grep', ...) for "
-        "regex content. Choose file(action='settings', input={}) for the "
-        "read-only policy inventory, or file(action='manual', input={}) once "
-        "for file-manual, which routes non-UTF-8/search-edit workflows and "
-        "the exact read-manual pagination guidance. After the manual result, "
-        "continue the original operation; repeating the same manual call is an "
-        "error loop. Relative paths stay under the agent working directory; "
-        "binary, image, and audio content is out of scope."
+        "One text-only file family over the granted workdir. Use the action schema "
+        "directly for routine calls: file(action='read', input={'file_path': "
+        "'/abs/path', 'offset': null, 'limit': null, 'max_chars': null}) returns "
+        "numbered UTF-8 lines; null uses offset 1, limit 2000, max_chars 100 000. "
+        "For capped pages use next_offset; absent truncation is not EOF: compare "
+        "offset + lines_shown with total_lines. Inspect remaining_lines_estimate "
+        "and line_truncated (the hidden tail needs targeted processing). See "
+        "read-manual for depth. Use file(action='write', ...) to create/overwrite "
+        "text, file(action='edit', ...) for exact replacement, file(action='glob', "
+        "...) for names, and file(action='grep', ...) for narrow regex search. "
+        "Write/edit mutate durable text and return receipts; neither action reloads "
+        "or changes the current system prompt (use context(action='rebuild', ...) "
+        "only for explicit activation). Use file(action='settings', input={}) for "
+        "the read-only inventory or file(action='manual', input={}) once for "
+        "file-manual. After the manual result, continue the ordinary requested "
+        "action; repeating the same manual call is an error loop. Routine "
+        "schema-sufficient calls need no manual read; load it "
+        "for unfamiliar/high-consequence encoding, pagination, or prompt-source "
+        "work. Relative paths stay under the workdir; binary, image, and audio "
+        "content is out of scope."
     )
 
 
