@@ -1,9 +1,9 @@
 ---
 name: soul-manual
 description: |
-  Read before calling `flow`, changing Soul configuration, or troubleshooting a disabled result; routes the seven-action call shape, settings anchors, and focused flow, configuration, and consultation references.
-version: 1.5.0
-last_changed_at: "2026-09-06T00:00:00Z"
+  Read before calling `flow`, making consequential or unfamiliar Soul config/voice changes, or recovering a disabled/ongoing flow; routine inquiry, dismiss, and settings calls are schema-sufficient.
+version: 1.6.0
+last_changed_at: "2026-09-09T05:08:00Z"
 related_files:
 - src/lingtai/tools/soul/__init__.py
 - src/lingtai/tools/soul/CONTRACT.md
@@ -17,69 +17,43 @@ related_files:
 - src/lingtai/tools/soul/manual/reference/consultation.md
 - tests/test_soul_settings.py
 maintenance: |
-  Tracks the tool/capability behavior it teaches; keep this short router and its focused references aligned with Soul's call, gate, settings, and consultation behavior.
+  Keep this router and its focused references aligned with Soul's seven-action envelope, live settings anchors, opt-in gate, and consultation behavior.
 ---
 
 # Soul Manual
 
-`soul` is the agent's inner voice. `manual` is directly callable with
-`input={}` and performs no Soul operation. Use the action table below as the
-first-call router; the linked references own the detailed procedures and
-rationale.
+Use the public schema for routine calls; keep root `summarize=false`. Read the matching procedure before `flow`, consequential/unfamiliar config or voice changes, or recovery. `manual` only returns this installed guide.
 
 ## Actions and routes
 
-Use one closed envelope with `action`, that action's own `input`, and required
-`reasoning`:
-
-```json
-{"action":"inquiry","input":{"inquiry":"What am I avoiding?"},"reasoning":"check my blind spot"}
-```
-
-| Action | First call and route |
+| Need | Read |
 |---|---|
-| `inquiry` | `{"inquiry":"<non-empty question>"}`; synchronous, on-demand reflection answered in the result. See [consultation mechanics](reference/consultation.md). |
-| `flow` | `{}`; asynchronous periodic consultation. It is operator opt-in; a disabled result is expected state, not a retry signal. See [flow and the opt-in gate](reference/flow.md). |
-| `config` | `{"delay_seconds": <number or null>, "consultation_past_count": <integer or null>}`; send both keys and at least one non-null. It tunes cadence/count only. See [configuration and voices](reference/configuration.md). |
-| `voice` | `{"set": <profile or null>, "prompt": <text or null>}`; send both keys; null/null reads. See [configuration and voices](reference/configuration.md). |
-| `dismiss` | `{}`; clear only Soul's notification. |
-| `settings` | `{}`; fresh, read-only five-row owner inventory. The stable comment anchors are below. See [configuration and voices](reference/configuration.md). |
-| `manual` | `{}`; return this installed guide without Soul work. |
+| Opt into flow, understand disabled/ongoing results, or stop recurring fires | [Flow and opt-in](reference/flow.md) |
+| Change cadence/count or voice; verify live and saved values | [Configuration and voices](reference/configuration.md) |
+| Understand inquiry, past-self fan-out, advisory output, or storage | [Consultation mechanics](reference/consultation.md) |
 
-`input` is strict and action-local; a field from another action is rejected
-before handler I/O. `summarize` is a root-level boolean, not child input; Soul
-results are small, so leave it `false`, especially for `manual`. Flow may read
-current and past-self context and run `1 + K` LLM calls, so its opt-in protects
-cost and privacy. For notification, history, and consultation-pair details,
-use [consultation mechanics](reference/consultation.md).
+`inquiry` is synchronous reflection, independent of flow opt-in. `flow` is asynchronous and may read current/past-self context and run `1 + K` LLM calls. Its default-off operator gate protects cost and privacy: `status="disabled"` is expected, not a reason to retry. `dismiss` clears only Soul's notification; `settings` is read-only.
 
 ## Settings inventory anchors
 
-Each heading is the stable target of the corresponding `settings` row comment.
-The configuration reference owns accepted values, bounds, persistence, source
-owners, and change procedures.
+SHOW comments link to these headings. SHOW grants no mutation authority; verify a change through its owner, then SHOW again.
 
 ### Flow enabled
 
-Live process gate; change it only in the launch environment, then refresh or
-restart. `settings` cannot enable it. See [flow and the opt-in gate](reference/flow.md).
+Live `LINGTAI_SOUL_FLOW_ENABLED` gate; only the authorized environment owner changes it. Follow [flow](reference/flow.md), not `config`.
 
 ### Delay seconds
 
-Enabled-flow cadence owned by `config`; it is not the gate. See [configuration
-and voices](reference/configuration.md).
+Enabled-flow interval, never an on/off switch. Change with `config`; see [configuration](reference/configuration.md).
 
 ### Consultation past count
 
-`K`, the past-self fan-out count, owned by `config`. See [configuration and
-voices](reference/configuration.md) and [consultation mechanics](reference/consultation.md).
+Past-self count `K`, owned by `config`; see [configuration](reference/configuration.md).
 
 ### Voice
 
-Flow-voice profile state owned by the `voice` action. See [configuration and
-voices](reference/configuration.md).
+Flow profile, owned by `voice`; see [configuration](reference/configuration.md).
 
 ### Voice prompt
 
-Sensitive custom flow-voice text; `settings` redacts it. See [configuration and
-voices](reference/configuration.md).
+Sensitive custom prompt, redacted by SHOW; see [configuration](reference/configuration.md) before an authorized unredacted `voice` read.

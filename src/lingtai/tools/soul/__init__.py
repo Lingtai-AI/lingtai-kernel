@@ -71,7 +71,7 @@ _INQUIRY_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "inquiry": {
             "type": "string",
-            "description": "Required non-empty question for on-demand self-reflection; the answer returns in the result, not as periodic flow.",
+            "description": "Non-empty question; returns one on-demand reflection voice.",
         },
     },
     "required": ["inquiry"],
@@ -99,13 +99,13 @@ _CONFIG_INPUT_SCHEMA: dict[str, Any] = {
         "delay_seconds": {
             "type": ["number", "null"],
             "minimum": SOUL_DELAY_MIN_SECONDS,
-            "description": "Seconds between enabled flow fires; null leaves it unchanged. Cadence only: it cannot enable or disable flow. Minimum 30 seconds. See soul-manual/reference/configuration.md.",
+            "description": "Finite seconds between enabled fires (minimum 30); null leaves it unchanged. Cadence only: it cannot enable or disable flow.",
         },
         "consultation_past_count": {
             "type": ["integer", "null"],
             "minimum": CONSULTATION_PAST_COUNT_MIN,
             "maximum": CONSULTATION_PAST_COUNT_MAX,
-            "description": "Past-self voices per fire (K); null leaves it unchanged. Each fire runs 1+K calls; range 0–5. At least one config value must be non-null. See soul-manual/reference/consultation.md.",
+            "description": "Past-self voices per fire (K), integer 0–5; null leaves it unchanged. Each fire runs 1+K calls; at least one config value must be non-null.",
         },
     },
     "required": ["delay_seconds", "consultation_past_count"],
@@ -117,12 +117,12 @@ _VOICE_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "set": {
             "type": ["string", "null"],
-            "description": "Profile to read or set: inner, observer, or custom. Null reads the current resolved voice; custom requires prompt. See soul-manual/reference/configuration.md.",
+            "description": "Profile inner, observer, or custom; null reads. custom requires prompt.",
         },
         "prompt": {
             "type": ["string", "null"],
             "maxLength": SOUL_VOICE_PROMPT_MAX,
-            "description": "Custom flow-voice prompt; required with set='custom', ignored otherwise, and capped at 4000 characters. Null when not setting. See soul-manual/reference/configuration.md.",
+            "description": "Custom flow-voice prompt; required for custom, ignored otherwise, and capped at 4000 characters. Null when not setting.",
         },
     },
     "required": ["set", "prompt"],
@@ -292,19 +292,17 @@ _DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 _DESCRIPTION = (
-    "Soul is the agent's inner voice. Use one closed envelope: "
-    "soul(action=..., input={...}, reasoning='why'). Actions are inquiry, flow, "
-    "config, voice, dismiss, settings, and manual; each has strict action-local "
-    "input. inquiry is on-demand self-reflection; flow is mechanical, "
-    "asynchronous periodic consultation and is opt-in, disabled by default until "
-    "an operator sets LINGTAI_SOUL_FLOW_ENABLED=1 and refreshes. Disabled flow "
-    "returns status='disabled' before work; it is expected state, so do not retry "
-    "until the environment changes. config tunes cadence/count only and cannot "
-    "enable or disable flow; voice reads or sets the flow-voice profile; dismiss "
-    "clears its notification; settings is read-only; manual returns the installed "
-    "guide without Soul work. Flow reads current and past-self context and may "
-    "run 1+K LLM calls, so the opt-in protects cost and privacy. Keep root "
-    "summarize=false; see soul-manual for routed detail."
+    "Soul is the agent's inner voice. Use the closed envelope "
+    "soul(action=..., input={...}, reasoning='why'); each action has strict "
+    "action-local input. inquiry is on-demand self-reflection; flow is "
+    "mechanical, asynchronous periodic consultation and is opt-in, disabled by "
+    "default. The operator must apply LINGTAI_SOUL_FLOW_ENABLED=1 in the live environment; a "
+    "disabled result is expected: do not retry until the environment changes. config tunes cadence/count "
+    "only and cannot enable or disable flow; voice reads or sets the flow-voice "
+    "profile; dismiss clears its notification; settings is read-only; manual "
+    "returns guidance without Soul work. Flow reads current/past-self context and may run 1+K LLM calls; opt-in "
+    "protects cost and privacy. Leave root summarize=false; use soul-manual for "
+    "flow and consequential/unfamiliar config/voice procedures."
 )
 
 

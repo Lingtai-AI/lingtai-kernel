@@ -164,6 +164,29 @@ def test_manual_router_discloses_packaged_soul_references():
         assert heading in reference
 
 
+
+def test_manual_json_examples_are_complete_and_run_without_opt_in(agent):
+    """Installed-reference examples are real envelopes, not partial inputs."""
+    import re
+    from jsonschema import Draft7Validator
+
+    manual_dir = Path(soul.__file__).with_name("manual")
+    examples = [
+        json.loads(block)
+        for path in (manual_dir / "reference").glob("*.md")
+        for block in re.findall(r"```json\n(.*?)```", path.read_text(), re.S)
+    ]
+    assert {item["action"] for item in examples} == {"config", "voice", "flow"}
+    validator = Draft7Validator(soul.get_schema())
+    for envelope in examples:
+        validator.validate(envelope)
+        result = handle(agent, envelope)
+        assert result["status"] == ("disabled" if envelope["action"] == "flow" else "ok")
+    assert agent.soul_block() == {"delay": 300.0}
+    assert agent._config.soul_voice == "inner"
+    assert agent.timer_restart_count == 0
+
+
 def test_every_action_has_its_own_strict_closed_input_branch():
     schema = soul.get_schema("en")
     branches = schema["properties"]["input"]["anyOf"]
