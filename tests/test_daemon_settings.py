@@ -279,7 +279,9 @@ def test_every_comment_resolves_to_an_exact_daemon_manual_heading() -> None:
         "daemon-manual#timeout",
     ):
         assert manual.count(anchor) == 1
-    assert manual.count("`daemon.settings`") == 4
-    assert "precedence and setup details belong to the Contract" in manual
+    for source in ("LINGTAI_DAEMON_MAX_TURNS", "LINGTAI_DAEMON_MANAGER_POOL_SIZE",
+                   "LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS", "daemon/daemon.json"):
+        assert source in manual
+    assert "verify SHOW again" in manual
     assert "SETTINGS_UNAVAILABLE" in manual
-    assert "SHOW does not mutate it" in manual
+    assert "SHOW never mutates settings" in manual

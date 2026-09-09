@@ -674,8 +674,9 @@ LingTai's final daemon system prompt is composed by the package-owned
 `system_prompt.py` from one concise operating contract, the available host-tool
 names, parent-provided one-run context, and the complete `task`. The provider's
 tool schemas remain authoritative and full tool descriptions are not duplicated
-inside the prompt. The operating contract requires progressive disclosure: read
-the relevant manual before first using a tool or workflow that has one; use a
+inside the prompt. The operating contract requires progressive disclosure: use
+visible schemas for routine calls, obey explicit schema manual gates, and read
+the relevant manual for unfamiliar or high-consequence workflows; use a
 visible result tool's `summary=true` only for predictably bulky output whose
 exact raw text is unnecessary; and use daemon `compact`, never the unavailable
 parent `system.summarize`, for same-run context reset. The complete rendered

@@ -731,14 +731,14 @@ def test_daemon_schema_context_token_limit_description_matches_contract():
     ]["description"].lower()
 
     assert "does not set daemon context" in desc
-    assert "daemon session's own resolved context window" in desc
     assert "separate provider-compaction threshold" in desc
-    assert "explicit preset" in desc
-    assert "canonical manifest.llm.context_limit" in desc
-    assert "implicit/no-preset" in desc
-    assert "inherited parent effective window" in desc
-    assert "272,000 fallback" in desc
-    assert "parent service's resolved context window" not in desc
+    assert "session's resolved window" in desc
+    assert "built-in lingtai reference" in desc
+    child = Path(__file__).parents[1] / "src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/lingtai/SKILL.md"
+    body = " ".join(child.read_text(encoding="utf-8").split())
+    for phrase in ("manifest.llm.context_limit", "inherited parent effective window",
+                   "non-fatal", "hard failure", "mimocode"):
+        assert phrase in body
 
 
 def test_cli_backend_serializes_task_mcp_context(tmp_path, monkeypatch):
@@ -2677,7 +2677,8 @@ def test_build_emanation_prompt_teaches_bounded_tool_use(tmp_path):
     prompt = mgr._build_emanation_prompt("Inspect one file", schemas)
 
     assert len(prompt) <= DAEMON_SYSTEM_PROMPT_BUDGET_CHARS == 20_000
-    assert "Before first using a tool or workflow that has a manual" in prompt
+    assert "Use visible schemas for routine actions" in prompt
+    assert "For unfamiliar or high-consequence tools/workflows" in prompt
     assert "summary=true" in prompt
     assert "You do not have the parent agent's `system.summarize`" in prompt
     assert 'compact(action="run", _reason="...")' in prompt

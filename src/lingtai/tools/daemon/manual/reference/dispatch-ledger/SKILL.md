@@ -1,7 +1,8 @@
 ---
 name: daemon-dispatch-ledger
-version: 0.1.0
-last_changed_at: 2026-08-25T06:09:40Z
+description: Nested daemon-manual reference for append-order ledger warnings and non-repair diagnostics.
+version: 0.2.0
+last_changed_at: 2026-09-08T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/CONTRACT.md
@@ -9,47 +10,39 @@ related_files:
 - src/lingtai/tools/daemon/dispatch_ledger.py
 - src/lingtai/kernel/daemon_dispatch.py
 maintenance: |
-  Update this operational reference with the dispatch ledger contract and keep
-  it discoverable from the daemon manual router.
+  Keep this reference aligned with the append-only dispatch ledger and its
+  warning codes; route changes from the daemon manual.
 ---
+
 # Dispatch Ledger Diagnostics
 
-The agent-local `daemons/.dispatch-ledger.jsonl` is append-only membership and
-acceptance order for new daemon runs. It records only `schema`, monotonic
-`sequence`, `run_id`, and informational `created_at`. It is not daemon status:
-read the ledger-selected run's `daemon.json` for lifecycle, result, and usage.
-Small `.dispatch-recovery/` markers contain only unresolved running and pending
-terminal-notification work for startup recovery.
+`daemons/.dispatch-ledger.jsonl` records accepted run membership and append
+order: `schema`, monotonic `sequence`, `run_id`, and informational
+`created_at`. It is not lifecycle truth; read each ledger-selected
+`daemon.json` for state, result, and usage. `.dispatch-recovery/` contains only
+unresolved running or pending-notification markers.
 
 ## Normal operation
 
-- A new agent or a cutover agent may have no ledger. This is normal; legacy run
-  directories are not automatically backfilled.
-- Default `daemon(action="list", input={})` tails the newest 1000 records in
-  append order. It does not sort timestamps, enumerate historical folders, or
-  make a materialized index.
-- Exact `daemon(check)` and explicit/manual filesystem inspection remain the
-  way to inspect a known legacy run id. Do not infer an omitted list item means
-  it was deleted or failed.
-- The owning Agent Record refreshes a recent ledger-selected daemon summary in
-  one coalescing background snapshot. It is intentionally eventual so heartbeat
-  liveness is independent of storage latency.
+- A new or cutover agent may have no ledger; legacy folders are not backfilled.
+- `daemon(action="list", input={})` reads the newest 1000 ledger records in
+  append order. It does not sort timestamps, scan lifetime folders, or repair an
+  index.
+- Use exact `daemon(action="check", input={"id": "<run_id>"})` or manual
+  filesystem inspection for a known legacy run. An omitted list item is not
+  proof of deletion or failure.
+- The owning Agent Record refreshes a bounded ledger-selected summary
+  asynchronously; heartbeat/liveness does not depend on that snapshot.
 
-## Warnings
+## Warnings and write failures
 
-`daemon(list)` warnings are advisory and include a checked range/scope, count,
-bounded examples where relevant, and this manual path. They never repair files.
+List warnings are advisory and bounded: `dispatch_ledger_empty`,
+`dispatch_ledger_invalid_record`,
+`dispatch_ledger_sequence_non_monotonic`,
+`dispatch_ledger_duplicate_run_id`, and
+`dispatch_ledger_daemon_state_unreadable`. They include the checked scope and
+never repair files.
 
-| Code | What the observation means |
-|---|---|
-| `dispatch_ledger_empty` | No records exist in the checked tail. This is expected for a new/cutover agent, but it can also mean that the ledger is absent. |
-| `dispatch_ledger_invalid_record` | JSON or the four-field ledger schema is invalid in the checked range. |
-| `dispatch_ledger_sequence_non_monotonic` | File order in the checked range contains a sequence gap, reversal, or non-contiguous value. Timestamps are informational and do not define order. |
-| `dispatch_ledger_duplicate_run_id` | One accepted run id appears more than once in the checked range. |
-| `dispatch_ledger_daemon_state_unreadable` | A ledger-selected run's authoritative `daemon.json` is missing, corrupt, or unreadable. |
-
-A malformed final ledger record is stricter than a read warning: future
-acceptance refuses before launch because the next sequence cannot be proven. No
-runtime path truncates, repairs, sorts, migrates, or rebuilds the ledger. The
-manual describes these mechanics and observations only; the agent/human reasons
-separately about whether any intervention is appropriate.
+A malformed final record is stricter than a read warning: a later acceptance
+refuses before launch because the next sequence is unprovable. No runtime path
+truncates, repairs, sorts, migrates, or rebuilds this ledger.

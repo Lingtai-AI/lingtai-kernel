@@ -62,7 +62,6 @@ def test_top_manual_has_one_owner_routing_table():
     assert rows.count(CHILD_LOCATION) == 1
     assert rows.count("reference/cli-backends/SKILL.md") == 1
     for location in (
-        "reference/inspection/SKILL.md",
         "reference/forensics/SKILL.md",
         "reference/dispatch-ledger/SKILL.md",
         "reference/cleanup/SKILL.md",
@@ -145,3 +144,24 @@ def test_lingtai_child_has_exactly_one_example_with_explicit_surface():
     for field in ('"preset"', '"tools"', '"skills"', '"mcp"'):
         assert field in example, field
     assert '"backend_options"' not in example
+
+
+def test_native_example_is_a_current_closed_family_envelope():
+    import json
+    from jsonschema import validate
+    from lingtai.tools.daemon import get_schema
+
+    example = re.search(r"```jsonc?\n(.*?)```", _body(CHILD), re.DOTALL)
+    validate(json.loads(example.group(1)), get_schema())
+
+
+def test_reduced_manuals_keep_operational_hazards():
+    body = _body(TOP_MANUAL)
+    for phrase in ("all running work", "not one id", "result_path` is null",
+                   "live runs only", "LINGTAI_DAEMON_MAX_TURNS",
+                   "LINGTAI_DAEMON_MANAGER_POOL_SIZE", "daemon/daemon.json"):
+        assert phrase in body, phrase
+    forensic = _body(TOP_MANUAL.parent / "reference/forensics/SKILL.md")
+    for phrase in ("Suspected stall", "not cancellation", "evidence-backed cause",
+                   "JSONL line by line"):
+        assert phrase in forensic, phrase

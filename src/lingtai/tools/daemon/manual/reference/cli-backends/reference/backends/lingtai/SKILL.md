@@ -7,8 +7,8 @@ description: >
   `backend_options` flag surface; this page routes you to the live
   authorities for preset selection/inspection, lingtai/tools/skills/MCP inheritance,
   and the daemon completion contract. It is not a rules catalog.
-version: 0.1.0
-last_changed_at: 2026-07-19T00:00:00Z
+version: 0.2.0
+last_changed_at: 2026-09-09T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/daemon/manual/SKILL.md
@@ -31,8 +31,7 @@ and source — route to the current authority instead of memorizing snapshots.
 1. **Task shape and behavior contract** — the `daemon-manual` router
    ([`manual/SKILL.md`](../../../../../SKILL.md)): `task` vs `prompt` vs
    `tools` vs `skills` vs `mcp` semantics, and the shared parent
-   [`reference/cli-backends/SKILL.md`](../../../SKILL.md) ("LingTai backend
-   tool surface") for how this backend curates tools.
+   [`reference/cli-backends/SKILL.md`](../../../SKILL.md) for backend support.
 2. **Preset selection and inspection** — run `system(action="presets")` for
    the live tier/connectivity/capability listing (guidance:
    `system-manual` → `reference/substrate-manual/SKILL.md`). A per-task
@@ -43,8 +42,9 @@ and source — route to the current authority instead of memorizing snapshots.
 3. **Tools/skills/MCP inheritance** — parent MCP tools are **not**
    auto-inherited: pass full one-run `mcp` registrations per task. `skills`
    entries become a compact prompt catalog (paths, not pasted bodies).
-   `email` is daemon-eligible but opt-in via `tools`. Details live in the
-   parent router's "LingTai backend tool surface" section.
+   `email` is daemon-eligible but opt-in via `tools`. Preset-supplied capabilities
+   are resolved first; only requested File/Shell host tools can be filled from
+   the parent. Provider-bound tools do not silently borrow parent services.
 4. **Completion contract** — the built-in `daemon_common` MCP is added
    automatically and `finish(status="done")` is the only terminal-success
    signal. The maintainer-facing architecture invariants are
@@ -69,15 +69,15 @@ is unrelated.
 ```jsonc
 {
   "action": "emanate",
-  "backend": "lingtai",
-  "tasks": [{
-    "task": "Summarize reports/audit.md into reports/audit-summary.md.",
-    "tools": ["file"],
-    "preset": "~/.lingtai-tui/presets/saved/cheap.json",
-    "skills": ["src/lingtai/tools/daemon/manual"],
-    "mcp": [{"name": "local-docs", "transport": "stdio",
-             "command": "python", "args": ["-m", "local_docs_mcp"]}]
-  }]
+  "input": {"backend": "lingtai", "max_turns": null, "timeout": null,
+    "tasks": [{
+      "task": "Summarize reports/audit.md into reports/audit-summary.md. Do not alter other files.",
+      "tools": ["file"], "preset": "/approved/preset.json",
+      "skills": [".library/custom/audit"],
+      "mcp": [{"name": "local-docs", "transport": "stdio",
+               "command": "python", "args": ["-m", "local_docs_mcp"]}]
+    }]},
+  "reasoning": "bounded evidence task"
 }
 ```
 

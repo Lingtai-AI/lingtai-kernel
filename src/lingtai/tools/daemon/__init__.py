@@ -1461,14 +1461,14 @@ class _ToolCollector:
 
 
 _DESCRIPTION = (
-    "Daemon — dispatch disposable subagents for isolated parallel work. "
-    "Read the daemon manual before first use. Put the complete objective, "
-    "authority, safety boundary, collaboration rules, and deliverable in each "
-    "task; tools grant capability only. Terminal outcomes are push-notified, "
-    "so do not poll for completion. After notification, use check and the "
-    "durable result/error paths for full output. LingTai runs may use the "
-    "sole-call compact(action='run', _reason='...') reset; "
-    "compact(action='manual') is read-only."
+    "Daemon — dispatch disposable subagents for bounded parallel work. Use "
+    "the schema for routine calls; read the daemon manual for unfamiliar or "
+    "high-consequence workflows. Put the complete objective, authority, safety "
+    "boundary, collaboration rules, and deliverable in each task; tools grant "
+    "capability only. Terminal outcomes are push-notified; do not poll for completion. "
+    "After notification use check and durable result/error paths. "
+    "Reclaim cancels all running work, not one id. LingTai runs support sole-call "
+    "compact(action='run', _reason='...'); compact(action='manual') is read-only."
 )
 
 

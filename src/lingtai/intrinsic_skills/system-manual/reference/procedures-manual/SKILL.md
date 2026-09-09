@@ -8,7 +8,7 @@ description: >
   `system-manual` when it is unclear whether this is the right node.
 version: 1.5.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
-last_changed_at: "2026-09-08T00:00:00Z"
+last_changed_at: "2026-09-09T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -185,9 +185,9 @@ notifications is the normal wait, not a fallback — do not layer a default
 self-wake on top of every async child. A backgrounded `shell(async=true)` job's
 own completion notification and reminder backstop are owned by `shell-manual`.
 A daemon emanation's terminal notification already covers every finish state;
-`daemon-manual` → `reference/inspection/SKILL.md` owns the narrower
+`daemon-manual` → `reference/forensics/SKILL.md` owns the narrower
 defense-in-depth exception (arm one self-wake only when work is pending and
-genuinely unverified-healthy, sized to the task's expected duration) — read it
+completion delivery itself is unverified, sized to the task's expected duration) — read it
 before inventing a parallel policy here. On any such wake, health-check before
 assuming progress: log growing, PID/child/daemon events alive, output
 file/worktree advancing, not stuck on an interactive prompt or a provider/model

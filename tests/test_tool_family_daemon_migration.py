@@ -186,11 +186,12 @@ def test_registered_description_is_a_concise_first_use_contract():
     description = get_description()
 
     assert len(description) < 943
-    assert "Read the daemon manual before first use" in description
+    assert "Use the schema for routine calls" in description
+    assert "unfamiliar or high-consequence workflows" in description
     assert "complete objective" in description
     assert "tools grant capability only" in description
     assert "Terminal outcomes are push-notified" in description
-    assert "do not poll for completion" in description
+    assert "do not poll" in description
     assert "check" in description and "durable result/error" in description
     assert "compact(action='run'" in description
     assert "daemon(action='" not in description
