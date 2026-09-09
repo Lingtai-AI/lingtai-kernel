@@ -84,7 +84,7 @@ def test_shared_result_projection_updates_only_matching_safe_rows() -> None:
     assert "PRIVATE_RESULT" not in str(groups)
 
 
-def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
+def test_shared_render_stays_unchanged_while_telegram_relayouts_metadata() -> None:
     groups = [
         {
             "api_call_id": "api-1",
@@ -101,7 +101,13 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         }
     ]
     now = datetime(2026, 8, 3, 2, 30, tzinfo=timezone(timedelta(hours=8)))
-    metadata = {"agent_lifecycle": "active", "api_calls": 2}
+    metadata = {
+        "agent_lifecycle": "active",
+        "api_calls": 2,
+        "model": "gpt<5>&",
+        "device_short_name": "dev-1",
+        "working_dir": "/tmp/taskcard",
+    }
 
     shared = TaskCardEventProjection.render_event_groups(
         groups,
@@ -122,6 +128,21 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         now=now,
     )
 
+    assert shared == (
+        "_Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+        "/taskcard N sets normal rows (1-10, current: 1)._\n"
+        "*ACTIVITIES*\n"
+        f"{TaskCardEventProjection.API_CALL_DIVIDER}\n"
+        "• public response\n"
+        "• bash.run: build (0ms, running)\n"
+        "\n"
+        "────────\n"
+        "Session · active · gpt<5>& · calls 2\n"
+        "────────\n"
+        "Identity · device · dev-1 | path · /tmp/taskcard\n"
+        "Last Updated: 02:30:00 U+8\n"
+        "_Ask agent for \"Task Card\"_"
+    )
     assert _telegram_task_card_html(shared) == telegram
     assert telegram == (
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
@@ -131,8 +152,11 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         "• public response\n"
         "• bash.run: build (0ms, running)\n"
         "\n"
-        "────────\n"
-        "Session · active · calls 2\n"
+        "📊 <b>SESSION</b>\n"
+        "active · gpt&lt;5&gt;&amp; · calls 2\n"
+        "\n"
+        "🪪 <b>IDENTITY</b>\n"
+        "device · dev-1 | path · /tmp/taskcard\n"
         "🕒 Last Updated: 02:30:00 U+8\n"
         "💬 <i>Ask agent for \"Task Card\"</i>"
     )

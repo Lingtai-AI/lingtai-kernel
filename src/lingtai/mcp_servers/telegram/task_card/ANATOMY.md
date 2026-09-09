@@ -54,8 +54,8 @@ onto its one tracked resident Task Card target per account+chat.
   no daemon/Shell fallback scan. It also implements compound-ID binding,
   high-water supersession, Telegram API classification, real transport, resident
   persistence, and programmable file projection callbacks
-  (`src/lingtai/mcp_servers/telegram/manager.py:2716-2726`,
-  `src/lingtai/mcp_servers/telegram/manager.py:2848-2901`).
+  (`src/lingtai/mcp_servers/telegram/manager.py:2745-2755`,
+  `src/lingtai/mcp_servers/telegram/manager.py:2877-2930`).
   `_taskcard_display_expression()` reads the durable declarative display
   expression from `TelegramService` at each automatic projection tick
   (`_broadcast_task_card_event_window`, `_ensure_task_card_resident`) and

@@ -190,7 +190,34 @@ def _telegram_task_card_html(text: str) -> str:
         '_Ask agent for "Task Card"_': 'Ask agent for "Task Card"',
         '_向 agent 询问 "Task Card"_': '向 agent 询问 "Task Card"',
     }
+    metadata_prefixes = (
+        ("Session · ", "📊 <b>SESSION</b>", "session"),
+        ("会话 · ", "📊 <b>SESSION</b>", "session"),
+        ("Identity · ", "🪪 <b>IDENTITY</b>", "identity"),
+        ("身份 · ", "🪪 <b>IDENTITY</b>", "identity"),
+    )
+    metadata_started = False
+    previous_metadata_section: str | None = None
     for line in text.splitlines():
+        if line == TaskCardEventProjection.METADATA_DIVIDER:
+            metadata_started = True
+            continue
+        if metadata_started:
+            metadata = next(
+                (
+                    (prefix, heading, section)
+                    for prefix, heading, section in metadata_prefixes
+                    if line.startswith(prefix)
+                ),
+                None,
+            )
+            if metadata is not None:
+                prefix, heading, section = metadata
+                if section == "identity" and previous_metadata_section == "session":
+                    rendered.append("")
+                rendered.extend((heading, html_escape(line[len(prefix):], quote=False)))
+                previous_metadata_section = section
+                continue
         safe = html_escape(line, quote=False)
         if line in headers:
             safe = f"📋 <b>{headers[line]}</b>"
@@ -3440,13 +3467,21 @@ class TelegramManager:
         )
         session_prefixes = ("Session · ", "会话 · ")
         stable_lines: list[str] = []
-        for line in automatic.splitlines():
+        lines = automatic.splitlines()
+        for index, line in enumerate(lines):
             if line.startswith(time_prefixes):
                 continue
             if line.startswith(session_prefixes):
                 line = re.sub(
                     r"(?<= · )active \(\d+s\)(?= · |$)",
                     "active",
+                    line,
+                    count=1,
+                )
+            elif index and lines[index - 1] == "📊 <b>SESSION</b>":
+                line = re.sub(
+                    r"(^| · )active \(\d+s\)(?= · |$)",
+                    r"\1active",
                     line,
                     count=1,
                 )
