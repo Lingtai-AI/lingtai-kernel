@@ -95,9 +95,9 @@ def test_default_expression_uses_footer_first_layout_with_rows() -> None:
         "ask_agent",
     )
     assert explicit == implicit
-    assert implicit.startswith("Don't reply to this Task Card.")
-    assert implicit.index("Don't reply to this Task Card") < implicit.index("\U0001f4cb ACTIVITIES")
-    assert "Ask agent for \"Task Card\"" in implicit
+    assert implicit.startswith("_Don't reply to this Task Card.")
+    assert implicit.index("Don't reply to this Task Card") < implicit.index("*ACTIVITIES*")
+    assert "_Ask agent for \"Task Card\"_" in implicit
 
 
 def test_default_expression_uses_footer_first_layout_with_empty_rows() -> None:
@@ -107,8 +107,8 @@ def test_default_expression_uses_footer_first_layout_with_empty_rows() -> None:
         display_expression=TaskCardEventProjection.DEFAULT_DISPLAY_EXPRESSION,
     )
     assert explicit == implicit
-    assert implicit.startswith("Don't reply to this Task Card.")
-    assert implicit.index("Don't reply to this Task Card") < implicit.index("\U0001f4cb ACTIVITIES")
+    assert implicit.startswith("_Don't reply to this Task Card.")
+    assert implicit.index("Don't reply to this Task Card") < implicit.index("*ACTIVITIES*")
 
 
 def test_service_display_expression_defaults_to_none(tmp_path: Path) -> None:
@@ -224,7 +224,7 @@ def test_hot_reload_reaches_the_live_manager_projection(
     manager._ensure_task_card_resident("main", 123)
     assert calls[-1][0] == "send"
     default_text = calls[-1][2]
-    assert default_text.startswith("Don't reply to this Task Card.")
+    assert default_text.startswith("_Don't reply to this Task Card.")
     assert default_text.splitlines()[1] == TaskCardEventProjection.header("en")
 
     state_path = tmp_path / "telegram" / "taskcard.json"
