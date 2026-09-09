@@ -195,7 +195,7 @@ inside another action's result.
 | Action | Required `input` | Nullable-optional `input` | Success output | Error shapes |
 |---|---|---|---|---|
 | `run` (sync) | `command` | `working_dir`, `timeout` (default 30; hard ceiling `LINGTAI_TOOL_TIMEOUT_MAX_SECONDS`, default 120, floored at 30), `async`, `reminder` | `{status: "ok", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — empty command, policy-denied, cwd outside sandbox, invalid/non-finite timeout, timeout above the hard ceiling (steered to `async=true`), timeout (with broad-scan hint and async steering), or spawn failure |
-| `run` (async) | `command`, `async: true` | `working_dir`, `timeout`, `reminder` | `{status: "ok", job_id, pid, message, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `shell-manual` and `notification-manual` for details | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
+| `run` (async) | `command`, `async: true` | `working_dir`, `timeout`, `reminder` | `{status: "ok", job_id, pid, message, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally directs useful progress tracking to the intrinsic, channel-neutral Task Card manual; read `shell-manual` and `notification-manual` for details | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
 | `poll` | `job_id` | — | running: `{status: "running", job_id, pid?}` while the recorded supervisor may still commit; known finished: `{status: "done", exit_status_known: true, exit_code, stdout, stderr, ok, command_status, warning?}`; unrecoverable/legacy terminal: `{status: "done", exit_status_known: false, exit_code: null, stdout, stderr}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or an already terminal-consumed job |
 | `cancel` | `job_id` | — | `{status: "cancelled", job_id}` only after the supervisor has committed the held child's exact terminal status and cancellation atomically consumes/suppresses the job | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, terminal job, legacy job, or a durable cancellation request still awaiting a terminal commit (which remains pollable/remindable) |
 | `settings` | — (strict empty `{}`) | — | `{settings: [{key, current, default, configurable, comment}, ...]}` with command-policy values redacted | Fixed generic whole-action failure; never partial rows |
@@ -235,10 +235,10 @@ carry it on the wire at all; a `run` call that passes `null` (or a direct
 runtime call that omits it) still gets 1800 seconds.
 
 Agents following an async success `handoff` MUST treat Task Card guidance as
-conditional: use the Task Card only when Telegram is connected and a Task Card
-is available for the current turn, and read `telegram(action='manual')` for the
-`Programmable Task Card` details. Shell does not create or require a watcher and
-does not import or call Telegram/Task Card runtime code.
+conditional: use the intrinsic Task Card only when it is available and useful
+for the current turn, and read its channel-neutral manual for lifecycle details.
+Shell does not create or require a watcher and does not import or call Telegram/
+Task Card runtime code.
 
 ## State & storage
 

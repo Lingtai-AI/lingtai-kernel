@@ -2,40 +2,32 @@
 name: bash-notification-reminders
 description: >
   Nested shell-manual reference for one-shot wakeup reminders using
-  `.notification/cron.json`: payload shape, atomic writer, shell example, and the
-  rest checklist for agents leaving work pending.
-version: 1.0.2
-last_changed_at: 2026-07-27T00:00:00Z
+  `.notification/cron.json`: payload, atomic writer, shell example, and the
+  rest checklist for pending work.
+version: 1.1.0
+last_changed_at: 2026-09-09T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/notification/__init__.py
 - src/lingtai/tools/notification/schema.py
+- src/lingtai/tools/bash/manual/reference/scheduled-work/SKILL.md
 maintenance: |
-  Tracks the one-shot notification-reminder topic it documents; update when that integration changes.
+  Tracks one-shot notification reminders; update when that integration changes.
 ---
 
-# Notification Reminder Reference
+# One-shot notification reminders
 
-Nested shell-manual reference. Open this when you need a one-shot reminder or a
-lightweight wakeup nudge rather than a full recurring host scheduler.
+For native Shell/Daemon jobs, rely on their completion notification; do not add
+a competing timer. Only for async work without a reliable completion wake, use
+`system(action="sleep", input={"reason": "check pending work", "force": false,
+"delay": 240}, reasoning="last-resort wake")` as a last-resort one-shot alarm; `system-manual` owns its detail.
 
-## One-shot wakeup reminders via `.notification/cron.json`
-
-Sometimes you do **not** want a recurring cron job and you do **not** want to self-send mail. You only need a lightweight alarm for your future self: "something is still pending; wake later and check it." Use a cron notification reminder for that.
-
-Typical example:
-
-```text
-⏺ Codex active. Plot regenerated (362KB, 23:38) — visibly more polished than my crude version. Waiting for caption + commit. Polling at 23:42.
-```
-
-That sentence has the right shape: current state, what changed, what remains, and the next check time. The mechanism is a scheduled script that writes one file:
-
-```text
-<agent-workdir>/.notification/cron.json
-```
-
-The kernel's notification sync reads `.notification/*.json`, injects the `cron` channel into the agent's wire context, and wakes the agent to act. After handling it, clear it with:
+For an already-authorized external workflow requiring the cron channel, schedule
+the writer below for the chosen future time. Running it now publishes now;
+it does not create a timer. A reminder writes one complete
+notification envelope to `<agent-workdir>/.notification/cron.json`; it is not a
+recurring scheduler, human notification, or guarantee across process death and
+sleep. After acting, dismiss the `cron` channel:
 
 ```text
 notification(action="dismiss_channel",
@@ -43,121 +35,59 @@ notification(action="dismiss_channel",
              reasoning="the cron reminder is handled")
 ```
 
-Use this pattern when:
+Use a custom writer only when the built-in wake is unsuitable. Do not use it
+for a human-facing message, a delay that must survive reboot (use
+launchd/systemd/crontab), or frequent polling. Set one sane wake and rest.
 
-- you are going to sleep/rest but a daemon, CLI coding agent, CI job, PR, render, download, or external process may need a follow-up;
-- the reminder is for **you**, not for the human;
-- a single check is enough, or the repeated cadence is purely mechanical;
-- self-email would add mailbox latency/state and does not buy anything.
+## Envelope
 
-Do **not** use it when:
-
-- the human needs to be notified — use the channel the human used, or an external addon if appropriate;
-- the reminder must survive process death and machine reboot but you only used a detached `sleep`; use launchd/systemd/crontab for persistence;
-- you are tempted to poll every few seconds. Set one sane reminder, then rest.
-
-### Payload shape
-
-A producer that cannot import the kernel helper should still write the full notification envelope, not a bare message. Minimal valid shape:
+A producer that cannot import the helper must still write the full shape:
 
 ```json
 {
-  "header": "Cron reminder: check Codex plot run",
+  "header": "Cron reminder: check pending work",
   "icon": "⏰",
   "priority": "normal",
   "published_at": "2026-05-18T06:42:00Z",
   "data": {
     "source": "cron-reminder",
-    "message": "Codex active. Plot regenerated (362KB, 23:38) — waiting for caption + commit.",
-    "todo": "Check Codex status, inspect caption, commit if ready.",
-    "reminder_id": "plot-caption-2026-05-17T23-42"
+    "message": "Background work is still pending.",
+    "todo": "Check the named job and inspect its output.",
+    "reminder_id": "task-followup-2026-05-18T06-42"
   }
 }
 ```
 
-Fields the agent will care about:
+Keep `published_at` as a UTC ISO timestamp and make `reminder_id` stable enough
+to recognize duplicates. `message` says what changed; `todo` says the concrete
+next action. Write through a temporary sibling and rename atomically:
 
-- `header` — short visible summary.
-- `priority` — usually `normal`; use `high` only when the check is time-sensitive.
-- `published_at` — UTC ISO timestamp; useful when the agent wakes late.
-- `data.message` — what changed since the agent rested.
-- `data.todo` — the concrete next action.
-- `data.reminder_id` — stable enough to recognize duplicate fires.
-
-### Atomic writer
-
-External scripts should write via `tmp + rename` so the kernel never sees truncated JSON:
-
-```bash
-export AGENT_DIR="/Users/<you>/work/<project>/.lingtai/<agent>"
-export REMINDER_ID="task-followup-$(date +%Y%m%d-%H%M%S)"
-
-/usr/bin/python3 - <<'PY'
-import json, os, pathlib, time
+```python
+import json, os, pathlib
 from datetime import datetime, timezone
 
 agent = pathlib.Path(os.environ["AGENT_DIR"])
-notif = agent / ".notification"
-notif.mkdir(exist_ok=True)
-now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+notification = agent / ".notification"
+notification.mkdir(exist_ok=True)
 payload = {
-    "header": "Cron reminder: check pending task",
-    "icon": "⏰",
+    "header": "Cron reminder: check pending work", "icon": "⏰",
     "priority": "normal",
-    "published_at": now,
-    "data": {
-        "source": "cron-reminder",
-        "message": "Background job still running — waiting for output + commit.",
-        "todo": "Check job status, inspect output, commit if ready.",
-        "reminder_id": os.environ.get("REMINDER_ID", "cron-reminder"),
-        "epoch": int(time.time()),
-    },
+    "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "data": {"source": "cron-reminder", "message": "Work is pending.",
+             "todo": "Check job status and output.",
+             "reminder_id": os.environ.get("REMINDER_ID", "cron-reminder")},
 }
-target = notif / "cron.json"
+target = notification / "cron.json"
 tmp = target.with_suffix(".json.tmp")
-tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+tmp.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
 tmp.replace(target)
-PY
 ```
 
-### One-shot reminder from the shell
+## Rest and wake
 
-For a short local reminder where the machine is expected to stay awake, a detached sleeper is enough:
-
-```bash
-DELAY_SECONDS=240
-nohup /bin/bash -lc 'sleep '"$DELAY_SECONDS"'; export AGENT_DIR="/Users/<you>/work/<project>/.lingtai/<agent>"; /usr/bin/python3 - <<"PY"
-import json, os, pathlib, time
-from datetime import datetime, timezone
-notif = pathlib.Path(os.environ["AGENT_DIR"]) / ".notification"
-notif.mkdir(exist_ok=True)
-payload = {
-  "header": "Cron reminder: check pending daemon",
-  "icon": "⏰",
-  "priority": "normal",
-  "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-  "data": {
-    "source": "cron-reminder",
-    "message": "I rested while a daemon/CLI job was still active.",
-    "todo": "Read pad, then run daemon(list) or inspect the named job/PR.",
-    "reminder_id": "daemon-check-" + str(int(time.time())),
-  },
-}
-target = notif / "cron.json"
-tmp = target.with_suffix(".json.tmp")
-tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-tmp.replace(target)
-PY' >/tmp/lingtai-cron-reminder.log 2>&1 &
-```
-
-This is not a replacement for OS scheduling: a detached sleeper can be lost if the shell/process tree is killed or the machine sleeps through the interval. For long delays or repeated checks, put the same writer into launchd/systemd/crontab following `../scheduled-work/SKILL.md`.
-
-### Rest checklist
-
-Before resting with pending work:
-
-1. Update pad with the current state and what the reminder should inspect.
-2. Set one `cron` notification reminder at a sensible check time.
-3. Include a concise state sentence and a concrete `todo`.
-4. Rest (`system(action="sleep")`) or end the turn.
-5. On wake: handle the `cron` reminder, then `notification(action="dismiss_channel", input={"channel": "cron", "force": null, "reason": null}, reasoning="...")`.
+Before resting: record the state/check target in pad. For a custom cron wake,
+save the writer as an authorized task script and schedule it once at the chosen
+time using [scheduled work](../scheduled-work/SKILL.md); do not execute it
+immediately and expect a delay. Then end the turn and rely on the event. On wake, handle the reminder, inspect the named job, and dismiss `cron`.
+A detached `sleep` writer can be lost if the process or machine stops; use the
+scheduled-work reference for longer or recurring delays.

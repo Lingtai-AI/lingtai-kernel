@@ -73,50 +73,50 @@ def test_exact_rows_values_flags_redaction_and_manual_targets(tmp_path, monkeypa
             "posix",
             None,
             True,
-            "shell-manual#shell-kind",
-            "Shell kind",
+            "shell-manual#settings-inventory",
+            "Settings inventory",
         ),
         "sync_timeout_default_seconds": (
             30,
             30,
             False,
-            "shell-manual#sync-timeout-default",
-            "Sync timeout default",
+            "shell-manual#settings-inventory",
+            "Settings inventory",
         ),
         "sync_timeout_max_seconds": (
             120.0,
             120.0,
             True,
-            "shell-manual#sync-timeout-ceiling",
-            "Sync timeout ceiling",
+            "shell-manual#settings-inventory",
+            "Settings inventory",
         ),
         "result_max_chars": (
             1_234,
             50_000,
             True,
-            "shell-manual#result-size-limit",
-            "Result size limit",
+            "shell-manual#settings-inventory",
+            "Settings inventory",
         ),
         "async_default": (
             False,
             False,
             False,
-            "shell-manual#async-default",
-            "Async default",
+            "shell-manual#settings-inventory",
+            "Settings inventory",
         ),
         "async_reminder_default_seconds": (
             1_800.0,
             1_800.0,
             False,
-            "shell-manual#async-reminder-default",
-            "Async reminder default",
+            "shell-manual#settings-inventory",
+            "Settings inventory",
         ),
         "command_policy": (
             "<redacted>",
             "<redacted>",
             True,
-            "shell-manual#command-policy",
-            "Command policy",
+            "shell-manual#settings-inventory",
+            "Settings inventory",
         ),
     }
     rows = result["settings"]
@@ -146,8 +146,8 @@ def test_exact_rows_values_flags_redaction_and_manual_targets(tmp_path, monkeypa
         / "SKILL.md"
     ).read_text(encoding="utf-8")
     for _current, _default, _configurable, comment, heading in expected.values():
-        assert comment == f"shell-manual#{heading.lower().replace(' ', '-')}"
-        assert f"### {heading}" in manual
+        assert comment == "shell-manual#settings-inventory"
+        assert f"## {heading}" in manual
 
 
 def test_fresh_effective_values_are_re_read(tmp_path, monkeypatch):

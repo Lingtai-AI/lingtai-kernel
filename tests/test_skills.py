@@ -206,7 +206,7 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert bash_md.is_file()
         bash_body = bash_md.read_text(encoding="utf-8")
         assert "name: shell-manual" in bash_body
-        assert "Nested reference catalog" in bash_body
+        assert "## Route by task" in bash_body
         assert "reference/scheduled-work/SKILL.md" in bash_body
         assert "reference/notification-reminders/SKILL.md" in bash_body
         assert "reference/debugging-cleanup/SKILL.md" in bash_body

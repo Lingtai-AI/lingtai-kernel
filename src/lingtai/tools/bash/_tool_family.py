@@ -91,49 +91,49 @@ def _shell_setting_rows(manager: Any) -> tuple[SettingRow, ...]:
             shell_kind.value,
             None,
             True,
-            "shell-manual#shell-kind",
+            "shell-manual#settings-inventory",
         ),
         SettingRow(
             "sync_timeout_default_seconds",
             _DEFAULT_TIMEOUT_SECONDS,
             _DEFAULT_TIMEOUT_SECONDS,
             False,
-            "shell-manual#sync-timeout-default",
+            "shell-manual#settings-inventory",
         ),
         SettingRow(
             "sync_timeout_max_seconds",
             resolve_timeout_max_seconds(),
             _DEFAULT_TIMEOUT_MAX_SECONDS,
             True,
-            "shell-manual#sync-timeout-ceiling",
+            "shell-manual#settings-inventory",
         ),
         SettingRow(
             "result_max_chars",
             max_output,
             50_000,
             True,
-            "shell-manual#result-size-limit",
+            "shell-manual#settings-inventory",
         ),
         SettingRow(
             "async_default",
             False,
             False,
             False,
-            "shell-manual#async-default",
+            "shell-manual#settings-inventory",
         ),
         SettingRow(
             "async_reminder_default_seconds",
             _DEFAULT_ASYNC_REMINDER_SECONDS,
             _DEFAULT_ASYNC_REMINDER_SECONDS,
             False,
-            "shell-manual#async-reminder-default",
+            "shell-manual#settings-inventory",
         ),
         SettingRow(
             "command_policy",
             "configured",
             "platform-packaged",
             True,
-            "shell-manual#command-policy",
+            "shell-manual#settings-inventory",
             _sensitive=True,
         ),
     )
@@ -148,44 +148,30 @@ RUN_INPUT_SCHEMA: dict[str, Any] = {
         "timeout": {
             "type": ["number", "null"],
             "description": (
-                "Timeout in seconds, or null for the default 30. Only for sync "
-                "execution. Hard ceiling: "
-                f"{TIMEOUT_MAX_ENV} (default {_DEFAULT_TIMEOUT_MAX_SECONDS:g}; "
-                "the effective ceiling is read from the environment at call "
-                "time, floored at 30); a value above the ceiling is refused \u2014 "
-                "use async=true instead for work that may need longer."
+                "Timeout in seconds for sync execution; null/default is 30. The "
+                f"{TIMEOUT_MAX_ENV} ceiling defaults to {_DEFAULT_TIMEOUT_MAX_SECONDS:g}, "
+                "is read per call, and is floored at 30; above it use async=true."
             ),
             "default": _DEFAULT_TIMEOUT_SECONDS,
         },
         "working_dir": {
             "type": ["string", "null"],
             "description": (
-                "Working directory for the command; use null (or an empty "
-                "string) to use the agent working directory. Must be inside "
-                "the agent working directory sandbox; paths outside it are "
-                "rejected. For external repos/paths, keep working_dir at the "
-                "agent dir and put an explicit cd in command, e.g. "
-                "cd /absolute/path && ..."
+                "Working directory; null/empty uses the agent working directory "
+                "sandbox and outside paths are rejected. For external repos, keep "
+                "the agent dir and use `cd /absolute/path && ...` in command."
             ),
         },
         "async": {
             "type": ["boolean", "null"],
-            "description": (
-                "Run command in background and return immediately with a "
-                "job_id, or null for the default false."
-            ),
+            "description": "Background execution returning a job_id; null/default is false. Use for minutes-long work.",
             "default": False,
         },
         "reminder": {
             "type": ["number", "null"],
             "description": (
-                "Last-resort async wake delay in seconds, or null for the "
-                "default 1800. Only "
-                "meaningful when async is true: if the job is still non-terminal "
-                "when the durable deadline expires, publish a system "
-                "notification reminding you to poll it; exact completion "
-                "suppresses this stale watchdog and publishes the shell "
-                "completion wake instead."
+                "Async last-resort wake delay; null uses default 1800. It reminds "
+                "you to poll a non-terminal job; completion suppresses this fallback."
             ),
             "default": _DEFAULT_ASYNC_REMINDER_SECONDS,
         },
@@ -258,16 +244,19 @@ def get_description(
     )
     return (
         f"Execute a shell command and return stdout/stderr. Active shell dialect: {dialect}.{shell_prose}{host} "
-        "The dialect and host OS are detected at setup time; calls cannot choose them. Any system program — scripts, git, curl, pip, or data pipelines. "
-        "Before ordinary shell work, read the manual: shell(action='manual', input={}, reasoning='...'). "
-        "For a first call use shell(action='run', input={'command': '...'}, reasoning='...'); "
-        "async runs return a job_id for shell(action='poll', input={'job_id': '...'}, reasoning='...') or "
-        "shell(action='cancel', input={'job_id': '...'}, reasoning='...'). "
-        "For read-only current settings use shell(action='settings', input={}, reasoning='...'). "
-        "Completed results include exit_code, ok, command_status ('success'/'failed'), and possibly warning. "
-        "The top-level status only says the shell spawned the command, even when it fails; always check exit_code/ok and warning. "
-        "Sync runs honor the timeout ceiling; on Windows a kill-on-close Job Object terminates surviving descendants, so use input.async=true for work that must outlive the command. "
-        "Prefer `rg --files` over broad recursive scans and parse JSONL line-by-line. See the manual references for async lifecycle, wakeups, and scheduling."
+        "Dialect and host OS are fixed at setup; calls cannot choose them. For short deterministic work use "
+        "shell(action='run', input={'command': '...'}, reasoning='...'). Keep working_dir inside the agent "
+        "sandbox; for an external checkout use an explicit cd in command. For minutes-long work set "
+        "input.async=true; completion/reminder events return a job_id for "
+        "shell(action='poll', input={'job_id': '...'}, reasoning='...') or "
+        "shell(action='cancel', input={'job_id': '...'}, reasoning='...') within task authority. "
+        "For deeper guidance use shell(action='manual', input={}, reasoning='...'); for read-only settings use "
+        "shell(action='settings', input={}, reasoning='...'). Completed results "
+        "include exit_code, ok, command_status ('success'/'failed'), and possibly a warning field: top-level status "
+        "only says the shell spawned/completed the command, not inner success; check exit_code/ok and fidelity fields. Sync runs honor the timeout "
+        "ceiling; on Windows a kill-on-close Job Object terminates surviving descendants, so use async for "
+        "work that must outlive the command. Read shell-manual before coding-CLI, scheduled, unfamiliar, or "
+        "recovery work; its focused references own the detail."
     )
 
 
