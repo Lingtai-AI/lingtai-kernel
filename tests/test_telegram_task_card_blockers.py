@@ -184,7 +184,7 @@ def test_timestamped_moderate_rows_stay_under_text_limit():
     # The bottom line is the single render-time stamp, distinct from row stamps.
     assert text.splitlines()[-2:] == [
         "Last Updated: 17:18:36 U-7",
-        '_Ask agent for "Task Card"_',
+        'Ask agent for "Task Card"',
     ]
 
 
@@ -218,7 +218,7 @@ def test_extreme_row_count_exceeds_budget_but_keeps_every_row():
     assert _TASK_CARD_FOOTER in text
     assert text.splitlines()[-2:] == [
         "Last Updated: 17:18:36 U-7",
-        '_Ask agent for "Task Card"_',
+        'Ask agent for "Task Card"',
     ]
 
 

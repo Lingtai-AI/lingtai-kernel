@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from lingtai.mcp_servers.telegram.manager import TelegramManager
 from tests._notification_store_helpers import notification_store_for
 
@@ -21,12 +19,12 @@ class FakeAccount:
     def send_message(self, chat_id, text, reply_to_message_id=None, **kwargs):
         msg_id = len(self.calls) + 100
         self.sent[msg_id] = text
-        self.calls.append(("send", chat_id, text, kwargs))
+        self.calls.append(("send", chat_id, text))
         return {"message_id": msg_id}
 
     def edit_message(self, chat_id, message_id, text, **kwargs):
         self.sent[message_id] = text
-        self.calls.append(("edit", chat_id, message_id, text, kwargs))
+        self.calls.append(("edit", chat_id, message_id, text))
         return {"ok": True}
 
     def delete_message(self, chat_id, message_id, **kwargs):
@@ -116,181 +114,6 @@ def _controlled_gate(manager):
     return drain
 
 
-@pytest.mark.parametrize(
-    "channels, expected_fragments",
-    [
-        (("automatic",), ("*ACTIVITIES*",)),
-        (("programmable",), ("*Authored watch*",)),
-        (("automatic", "programmable"), ("*ACTIVITIES*", "*Authored watch*")),
-    ],
-)
-def test_whole_resident_uses_legacy_markdown_for_every_slot_composition(
-    tmp_path, channels, expected_fragments,
-):
-    manager, acct, _service = _manager(tmp_path)
-    for channel in channels:
-        frame = (
-            manager._format_rows_task_card_text(
-                [{"tool": "bash", "tool_action": "run", "reasoning": "build"}],
-                normal_rows=1,
-            )
-            if channel == "automatic"
-            else "*Authored watch*\n`trusted code`"
-        )
-        result = manager._deliver_channel_frame(
-            "mybot", 55, channel, frame, error="projection failed",
-        )
-        assert result["status"] == "ok"
-
-    text = _current(acct)
-    for fragment in expected_fragments:
-        assert fragment in text
-    assert acct.calls[-1][-1] == {"parse_mode": "Markdown"}
-    if len(channels) == 2:
-        assert acct.calls[0][0] == "send"
-        assert acct.calls[-1][0] == "edit"
-        assert all(call[-1] == {"parse_mode": "Markdown"} for call in acct.calls)
-
-
-@pytest.mark.parametrize(
-    ("source", "expected"),
-    [
-        ("\\_", "\\\\_"),
-        ("\\*", "\\\\*"),
-        ("\\`", "\\\\`"),
-        ("\\[", "\\\\["),
-        ("\\\\repeated\\", "\\\\repeated\\"),
-    ],
-)
-def test_source_backslashes_are_preserved_before_legacy_specials_and_at_tail(
-    tmp_path, source, expected,
-):
-    manager, _acct, _service = _manager(tmp_path)
-    automatic = manager._format_rows_task_card_text(
-        [{"kind": "text", "text": source}], normal_rows=1,
-    )
-    row = next(line for line in automatic.splitlines() if line.startswith("• "))
-    assert row == f"• {expected}"
-
-
-def test_automatic_fragments_are_escaped_but_programmable_markdown_is_trusted(
-    tmp_path,
-):
-    manager, acct, _service = _manager(tmp_path)
-    hostile = r"name_*`[label]\\ [link](https://example.com/a_b)"
-    metadata_hostile = r"meta_*`[label]\\"
-    automatic = manager._format_rows_task_card_text(
-        [
-            {
-                "tool": hostile,
-                "tool_action": hostile,
-                "reasoning": hostile,
-                "status": "success",
-            },
-            {"kind": "text", "text": hostile},
-        ],
-        metadata={
-            "model": metadata_hostile,
-            "thinking": metadata_hostile,
-            "service_tier": metadata_hostile,
-            "endpoint": metadata_hostile,
-            "working_dir": r"C:\work_dir",
-            "async_work": {
-                "daemon": {
-                    "backend_counts": {"bad_backend": 1},
-                    "model_counts": {"bad_model": 1},
-                },
-            },
-        },
-        normal_rows=1,
-    )
-    created = manager._deliver_channel_frame(
-        "mybot", 55, "automatic", automatic, error="projection failed",
-    )
-    assert created["status"] == "ok"
-    assert acct.calls[-1][-1] == {"parse_mode": "Markdown"}
-    assert r"name\_\*\`\[label]\\" in automatic
-    assert r"\[link](https://example.com/a\_b)" in automatic
-    assert r"meta\_\*\`\[label]\\" in automatic
-    assert r"C:\work\_dir" in automatic
-    assert r"bad\_backend" in automatic
-    assert r"bad\_model" in automatic
-    assert "[link](https://example.com/a_b)" not in automatic
-
-    authored = "*Phase one*\n_Operator-authored_ [runbook](https://example.com) `code`"
-    projected = manager._deliver_channel_frame(
-        "mybot", 55, "programmable", authored, error="projection failed",
-    )
-    assert projected["status"] == "ok"
-    combined = _current(acct)
-    assert automatic in combined
-    assert authored in combined
-    assert combined.count(authored) == 1
-    assert r"\*Phase one\*" not in combined
-    assert r"\[runbook\]" not in combined
-    assert acct.calls[-1][-1] == {"parse_mode": "Markdown"}
-
-
-@pytest.mark.parametrize(
-    ("filler_units", "expected_units", "accepted"),
-    [
-        (2772, 3499, True),
-        (2773, 3500, True),
-        (3273, 3501, False),
-    ],
-)
-def test_both_slot_utf16_budget_rerenders_automatic_and_refuses_only_overflow(
-    tmp_path, filler_units, expected_units, accepted,
-):
-    manager, acct, _service = _manager(tmp_path)
-    manager._task_card_event_metadata_snapshot = lambda: None
-    event = {
-        "type": "diary",
-        "api_call_id": "call-escape-heavy",
-        "text": "_😀[" * 300,
-    }
-    projected = manager._project_task_card_event(event)
-    assert projected is not None
-    assert projected["text"].endswith("…")
-    manager._task_card_event_groups = [
-        {"api_call_id": "call-escape-heavy", "events": [projected]}
-    ]
-    assert manager._ensure_task_card_resident("mybot", 55)["status"] == "ok"
-    initial = _current(acct)
-    initial_automatic = manager._task_card_channels["mybot:55"]["automatic"]
-    assert "\\_" in initial_automatic and "\\[" in initial_automatic
-    assert "😀" in initial_automatic
-    assert initial_automatic.count("• ") == 1
-
-    authored = "*Authored 😀_*\n" + ("x" * filler_units)
-    calls_before = len(acct.calls)
-    result = manager._deliver_channel_frame(
-        "mybot", 55, "programmable", authored, error="projection failed",
-    )
-
-    if accepted:
-        assert result["status"] == "ok"
-        final = _current(acct)
-        assert manager._task_card_wire_units(final) == expected_units
-        assert final.count(authored) == 1
-        assert final.endswith(authored)
-        assert final.count("• ") == 1
-        assert len(acct.calls) == calls_before + 1
-        assert manager._task_card_channels["mybot:55"]["programmable"] == authored
-    else:
-        assert result["status"] == "error"
-        assert result["delivery_error"]["class"] == "wire_budget_exceeded"
-        assert expected_units > manager._TASK_CARD_TEXT_LIMIT
-        assert len(acct.calls) == calls_before
-        assert _current(acct) == initial
-        assert manager._task_card_channels["mybot:55"] == {
-            "automatic": initial_automatic,
-        }
-        assert manager._task_card_desired_channels["mybot:55"] == {
-            "automatic": initial_automatic,
-        }
-
-
 def test_active_intrinsic_body_projects_onto_existing_resident(tmp_path):
     manager, acct, _service = _manager(tmp_path)
     _auto(manager, reasoning="compiling")
@@ -300,7 +123,7 @@ def test_active_intrinsic_body_projects_onto_existing_resident(tmp_path):
 
     text = _current(acct)
     assert "compiling" in text
-    assert "*TASK CARD*" in text
+    assert "— TASK CARD —" in text
     assert "# Task Card" in text
     assert "- first" in text
 
@@ -379,7 +202,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
 
     Telegram owns the resident message and its automatic content: inactive
     must update the same resident (never delete/send-new), drop the
-    programmable ``*TASK CARD*`` section while keeping the automatic content
+    programmable ``— TASK CARD —`` section while keeping the automatic content
     intact, and never touch automatic updates going forward. Repeated
     inactive handling must be idempotent, and it must never delete the local
     body file either.
@@ -393,7 +216,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
     resident_before = acct.get_task_card(55)
     assert resident_before is not None
     assert "v1" in _current(acct)
-    assert "*TASK CARD*" in _current(acct)
+    assert "— TASK CARD —" in _current(acct)
     assert (tmp_path / "taskcard" / "taskcard.md").exists()
 
     # `stop` writes inactive but leaves the last body on disk (possibly stale).
@@ -411,7 +234,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
     text = _current(acct)
     assert "stay put" in text  # Telegram-owned automatic content preserved
     assert "v1" not in text and "v2" not in text  # programmable frame excluded
-    assert "*TASK CARD*" not in text
+    assert "— TASK CARD —" not in text
     assert manager._task_card_channels["mybot:55"].get("programmable") is None
 
     # Repeated inactive handling (e.g. every 1s poll tick) is idempotent: no

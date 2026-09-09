@@ -25,11 +25,11 @@ class FakeAccount:
         message_id = self.next_id
         self.next_id += 1
         self.messages[message_id] = text
-        self.calls.append(("send", chat_id, message_id, text, kwargs))
+        self.calls.append(("send", chat_id, message_id, text))
         return {"message_id": message_id}
 
     def edit_message(self, chat_id, message_id, text, **kwargs):
-        self.calls.append(("edit", chat_id, message_id, text, kwargs))
+        self.calls.append(("edit", chat_id, message_id, text))
         if self.edit_error is not None:
             raise self.edit_error
         self.messages[message_id] = text
@@ -215,120 +215,6 @@ def test_transient_edit_failure_fails_loud_without_replacement_or_state_commit(t
     assert account.get_task_card(55) == resident_id
     assert manager._task_card_channels["mybot:55"]["automatic"] == committed
     assert "UNSENT" not in committed
-
-
-def test_initial_markdown_rejection_creates_no_false_resident(tmp_path):
-    manager, account = _manager(tmp_path)
-    attempts: list[tuple[str, dict]] = []
-
-    def reject(_chat_id, text, **kwargs):
-        attempts.append((text, kwargs))
-        raise RuntimeError(
-            "Telegram API error: Bad Request: can't parse entities: provider detail"
-        )
-
-    account.send_message = reject
-    failed = _automatic(manager, "create", reasoning="first")
-
-    assert failed["status"] == "error"
-    assert failed["delivery_error"]["class"] == "markdown_parse_rejected"
-    assert attempts and attempts[0][1]["parse_mode"] == "Markdown"
-    assert account.get_task_card(55) is None
-    assert "mybot:55" not in manager._task_card_channels
-    assert "mybot:55" not in manager._task_card_desired_channels
-
-
-def test_markdown_parse_rejection_preserves_prior_commit_without_false_success(
-    tmp_path,
-):
-    manager, account = _manager(tmp_path)
-    created = _automatic(manager, "create", reasoning="delivered")
-    resident_id = created["message_id"]
-    committed = manager._task_card_channels["mybot:55"]["automatic"]
-    delivered_text = account.messages[100]
-
-    account.edit_error = RuntimeError(
-        "Telegram API error: Bad Request: can't parse entities: "
-        "Can't find end of the entity starting at byte offset 17"
-    )
-    failed = _automatic(
-        manager, "update", card_message_id=resident_id, reasoning="UNSENT"
-    )
-
-    assert failed["status"] == "error"
-    assert "can't parse entities" in failed["error"]
-    assert failed["delivery_error"] == {
-        "class": "markdown_parse_rejected",
-        "message": "Telegram rejected Task Card Markdown",
-        "deferred": False,
-        "retry_pending": False,
-    }
-    assert account.calls[-1][0] == "edit"
-    assert account.calls[-1][-1] == {"parse_mode": "Markdown"}
-    assert account.messages[100] == delivered_text
-    assert manager._task_card_channels["mybot:55"]["automatic"] == committed
-    assert "UNSENT" not in committed
-    assert len(_calls(account, "send")) == 1
-    assert not _calls(account, "delete")
-
-
-def test_deferred_markdown_rejection_is_safe_observable_and_retries_once(
-    tmp_path, caplog,
-):
-    manager, account = _manager(tmp_path)
-    now = [100.0]
-    manager._task_card_edit_clock = lambda: now[0]
-    resident_id = _automatic(manager, "create", reasoning="created")["message_id"]
-    _automatic(
-        manager, "update", card_message_id=resident_id, reasoning="confirmed edit",
-    )
-    queued = _automatic(
-        manager, "update", card_message_id=resident_id, reasoning="latest intent",
-    )
-    assert queued == {"status": "ok", "message_id": resident_id}
-    confirmed = manager._task_card_channels["mybot:55"]["automatic"]
-    assert "confirmed edit" in confirmed
-    assert "latest intent" in manager._task_card_desired_channels["mybot:55"]["automatic"]
-
-    account.edit_error = RuntimeError(
-        "Telegram API error: Bad Request: can't parse entities: PRIVATE_PROVIDER_BODY"
-    )
-    now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
-    with caplog.at_level("WARNING", logger="lingtai.mcp_servers.telegram.manager"):
-        rejected = manager._flush_pending_task_card_edit(("mybot", 55))
-
-    safe_error = {
-        "class": "markdown_parse_rejected",
-        "message": "Telegram rejected Task Card Markdown",
-        "deferred": True,
-        "retry_pending": True,
-    }
-    assert rejected["status"] == "error"
-    assert rejected["error"] == safe_error["message"]
-    assert rejected["deferred_delivery_error"] == safe_error
-    assert "PRIVATE_PROVIDER_BODY" not in repr(rejected)
-    assert "error_class=markdown_parse_rejected" in caplog.text
-    assert manager._task_card_channels["mybot:55"]["automatic"] == confirmed
-    assert manager._task_card_edit_is_pending("mybot", 55)
-    assert manager._task_card_pending_errors[("mybot", 55)] == safe_error
-
-    observed = _automatic(
-        manager, "update", card_message_id=resident_id, reasoning="latest intent",
-    )
-    assert observed["status"] == "ok"
-    assert observed["deferred_delivery_error"] == safe_error
-
-    account.edit_error = None
-    now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
-    edits_before_retry = len(_calls(account, "edit"))
-    retried = manager._flush_pending_task_card_edit(("mybot", 55))
-
-    assert retried["status"] == "ok"
-    assert retried["retry_pending"] is False
-    assert len(_calls(account, "edit")) == edits_before_retry + 1
-    assert not manager._task_card_edit_is_pending("mybot", 55)
-    assert ("mybot", 55) not in manager._task_card_pending_errors
-    assert "latest intent" in manager._task_card_channels["mybot:55"]["automatic"]
 
 
 def test_edit_impossible_replaces_only_after_failed_edit_attempt(tmp_path):

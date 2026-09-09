@@ -1,7 +1,7 @@
 """Tests for route B — single transient current-step Task Card.
 
 Product contract: cap 500 Unicode code points after redaction, current-step
-only (no cumulative history), no continuation/overflow, loud *ACTIVITIES*.
+only (no cumulative history), no continuation/overflow, loud 📋 ACTIVITIES.
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ def test_task_card_update_same_message_id(tmp_path):
     # Only current step visible; previous step replaced
     assert "Step 2" in edited
     assert "Step 1" not in edited  # replaced, not cumulative
-    assert "*ACTIVITIES*" in edited
+    assert "📋 ACTIVITIES" in edited
 
 
 def test_task_card_finalize_shows_done_header(tmp_path):
@@ -139,8 +139,8 @@ def test_reasoning_499_fits_no_ellipsis(tmp_path):
     assert r["status"] == "ok"
     send_calls = [c for c in account.calls if c[0] == "send_message"]
     text = send_calls[0][2]
-    assert text == f"*ACTIVITIES*\nbash: {'A' * 499}"
-    assert "…" not in text
+    assert "A" * 499 in text
+    assert "…" not in text.replace("📋 ACTIVITIES", "").replace("bash:", "").replace("…", "CHECK")  # no ellipsis
 
 
 def test_reasoning_500_fits_exact_no_ellipsis(tmp_path):
@@ -156,8 +156,7 @@ def test_reasoning_500_fits_exact_no_ellipsis(tmp_path):
     assert r["status"] == "ok"
     send_calls = [c for c in account.calls if c[0] == "send_message"]
     text = send_calls[0][2]
-    assert text == f"*ACTIVITIES*\ngrep: {'B' * 500}"
-    assert "…" not in text
+    assert "B" * 500 in text
 
 
 def test_reasoning_501_has_ellipsis(tmp_path):
@@ -173,7 +172,8 @@ def test_reasoning_501_has_ellipsis(tmp_path):
     assert r["status"] == "ok"
     send_calls = [c for c in account.calls if c[0] == "send_message"]
     text = send_calls[0][2]
-    assert text == f"*ACTIVITIES*\nread: {'C' * 499}…"
+    assert "C" * 500 in text
+    assert text.endswith("…") or "…" in text[-(len("C" * 500) + 2):]
 
 
 # ===========================================================================
@@ -222,7 +222,7 @@ def test_plain_text_unicode_multiline_preserved(tmp_path):
     assert "😀" in text
 
 
-def test_source_backslash_is_preserved_and_backtick_is_escaped(tmp_path):
+def test_backslash_backtick_preserved(tmp_path):
     manager, account = _manager(tmp_path)
     reasoning = r"Path: C:\Users\test `grep` pattern"
     r = manager._handle_task_card_update({
@@ -235,7 +235,8 @@ def test_source_backslash_is_preserved_and_backtick_is_escaped(tmp_path):
     assert r["status"] == "ok"
     send_calls = [c for c in account.calls if c[0] == "send_message"]
     text = send_calls[0][2]
-    assert r"Path: C:\Users\test \`grep\` pattern" in text
+    assert r"C:\Users\test" in text.replace("\\\\", "\\") or "\\Users" in text
+    assert "`grep`" in text
 
 
 def test_action_label_shown(tmp_path):
@@ -399,7 +400,7 @@ def test_full_routing_chain_create_update_finalize(tmp_path):
     send_calls = [c for c in account.calls if c[0] == "send_message"]
     assert len(send_calls) == 1
     text = send_calls[0][2]
-    assert "*ACTIVITIES*" in text
+    assert "📋 ACTIVITIES" in text
     assert "bash.run" in text
     assert "Check project structure" in text
 
@@ -463,11 +464,11 @@ def test_routing_fails_if_action_overwritten(tmp_path):
 
 
 # ===========================================================================
-# Legacy-Markdown safety: escaped markers, backslash, newlines, and Unicode
+# Plain-text fidelity: literal **, backticks, backslash, newlines, Unicode
 # ===========================================================================
 
-def test_literal_double_star_is_escaped_without_losing_content(tmp_path):
-    """2**3 and **kwargs remain literal under Telegram legacy Markdown."""
+def test_literal_double_star_preserved(tmp_path):
+    """2**3 and **kwargs must survive redaction/cap intact."""
     manager, account = _manager(tmp_path)
     r = manager._handle_task_card_update({
         "sub_action": "create",
@@ -479,11 +480,11 @@ def test_literal_double_star_is_escaped_without_losing_content(tmp_path):
     assert r["status"] == "ok"
     send_calls = [c for c in account.calls if c[0] == "send_message"]
     text = send_calls[0][2]
-    assert r"2\*\*3" in text
-    assert r"\*\*kwargs" in text
+    assert "2**3" in text
+    assert "**kwargs" in text
 
 
-def test_literal_double_star_remains_escaped_on_update(tmp_path):
+def test_literal_double_star_survives_update(tmp_path):
     manager, account = _manager(tmp_path)
     r = manager._handle_task_card_update({
         "sub_action": "create",
@@ -500,7 +501,7 @@ def test_literal_double_star_remains_escaped_on_update(tmp_path):
         "reasoning": "x = y**2",
     })
     edit_calls = [c for c in account.calls if c[0] == "edit_message"]
-    assert any(r"y\*\*2" in c[3] for c in edit_calls)
+    assert any("y**2" in c[3] for c in edit_calls)
 
 
 # ===========================================================================

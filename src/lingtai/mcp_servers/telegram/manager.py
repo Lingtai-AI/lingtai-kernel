@@ -144,66 +144,7 @@ _TASK_CARD_DELETE_NONDELETABLE_DESCRIPTIONS = frozenset({
     "bad request: message can't be deleted for everyone",
     "bad request: message can not be deleted for everyone",
 })
-
 _TELEGRAM_TASK_CARD_PARSE_MODE = "Markdown"
-_TELEGRAM_LEGACY_MARKDOWN_SPECIALS = frozenset("_*`[")
-_TASK_CARD_WIRE_BUDGET_ERROR = (
-    "Task Card exceeds Telegram's 3500 UTF-16-unit delivery budget"
-)
-_TASK_CARD_ERROR_MARKDOWN_PARSE = "markdown_parse_rejected"
-_TASK_CARD_ERROR_EDIT_ROTATION = "edit_impossible_rotation_failed"
-_TASK_CARD_ERROR_WIRE_BUDGET = "wire_budget_exceeded"
-_TASK_CARD_ERROR_DELIVERY = "delivery_failed"
-
-
-class _TelegramTaskCardMarkdownProjection(TaskCardEventProjection):
-    """Telegram-only legacy-Markdown presentation of the shared safe projection.
-
-    Static template markers are trusted and may establish hierarchy. Every
-    automatic dynamic fragment passes through the one narrow escaper below;
-    the independently authored programmable body never enters this renderer.
-    """
-
-    @classmethod
-    def measure_text(cls, text: str) -> int:
-        """Measure Telegram's message limit in UTF-16 code units."""
-        return len(text.encode("utf-16-le")) // 2
-
-    @classmethod
-    def render_dynamic_fragment(cls, text: str, *, limit: int | None = None) -> str:
-        rendered: list[str] = []
-        rendered_length = 0
-        for character in text:
-            fragment = (
-                f"\\{character}"
-                if character in _TELEGRAM_LEGACY_MARKDOWN_SPECIALS
-                else character
-            )
-            fragment_length = cls.measure_text(fragment)
-            if limit is not None and rendered_length + fragment_length > limit:
-                break
-            rendered.append(fragment)
-            rendered_length += fragment_length
-        return "".join(rendered)
-
-    @classmethod
-    def header(cls, locale: str = "en") -> str:
-        title = "活动" if cls.normalize_locale(locale) == "zh" else "ACTIVITIES"
-        return f"*{title}*"
-
-    @classmethod
-    def footer(cls, normal_rows: int, locale: str = "en") -> str:
-        return f"_{super().footer(normal_rows, locale)}_"
-
-    @classmethod
-    def ask_agent(cls, locale: str = "en") -> str:
-        return f"_{super().ask_agent(locale)}_"
-
-    @classmethod
-    def programmable_heading(cls, locale: str = "en") -> str:
-        title = "任务卡" if cls.normalize_locale(locale) == "zh" else "TASK CARD"
-        return f"*{title}*"
-
 
 # Fixed human warning shown on every Task Card render (running and frozen
 # last-behavior). Jason: never reply to the card; point directly to the local
@@ -211,7 +152,7 @@ class _TelegramTaskCardMarkdownProjection(TaskCardEventProjection):
 # Telegram message-size bound even under multi-row length pressure. The
 # "current: X" suffix is appended per-render from the manager's live
 # normal-row setting; see ``_task_card_footer``.
-_TASK_CARD_FOOTER = _TelegramTaskCardMarkdownProjection.FOOTER
+_TASK_CARD_FOOTER = TaskCardEventProjection.FOOTER
 _TASK_CARD_DEFAULT_NORMAL_ROWS = TaskCardEventProjection.DEFAULT_NORMAL_ROWS
 _TASK_CARD_METADATA_MAX_CHARS = TaskCardEventProjection.METADATA_MAX_CHARS
 
@@ -227,7 +168,7 @@ _TASK_CARD_AGENT_STATES = TaskCardEventProjection.AGENT_STATES
 # unrelated programmable-channel edits) as ``Last Updated: HH:MM:SS UTC±HH``,
 # always present — unlike the retired started_at-derived line, it never
 # depends on any row carrying a stamp.
-_TASK_CARD_TIME_PREFIX = _TelegramTaskCardMarkdownProjection.time_prefix("en")
+_TASK_CARD_TIME_PREFIX = TaskCardEventProjection.TIME_PREFIX
 
 
 def _task_card_footer(normal_rows: int, locale: str = "en") -> str:
@@ -237,7 +178,7 @@ def _task_card_footer(normal_rows: int, locale: str = "en") -> str:
     caller (``TelegramManager._taskcard_normal_rows``); this only formats it.
     ``locale`` selects the projection language (en default, zh opt-in).
     """
-    return _TelegramTaskCardMarkdownProjection.footer(normal_rows, locale)
+    return TaskCardEventProjection.footer(normal_rows, locale)
 
 
 def _format_task_card_current_time(now: datetime) -> str:
@@ -702,21 +643,19 @@ SCHEMA = {
 }
 
 DESCRIPTION = (
-    "Telegram Bot API client. Use the strict `telegram` family envelope: put the "
-    "selected action's fields inside `input` and provide `reasoning`; call the "
-    "packaged `manual` action for detailed operation guidance. For inbound work, "
-    "start read-only with `check`, `read`, or `search`. Use `send` only for an "
-    "authorized new outbound message to a known numeric chat_id, or `reply` to a "
-    "compound message_id from `read`/`search`. Content-bearing send/reply/edit defaults to Markdown; use "
-    "media.type='document' for generated files the user should open intact and "
-    "'photo' only for an inline preview. `placeholder` is progress-only: edit "
-    "meaningful phases, then send the final answer separately. `read` marks "
-    "returned messages read; `check` shows incoming unread counts; `search` uses "
-    "a regex. `delete` and `edit` are external message side effects. Contacts "
-    "are local aliases, not inbound permission. `settings` is read-only. "
-    "Automatic Task Card projection is a separate channel-neutral intrinsic "
-    "producer and Telegram read-only projector. MCP setup/configuration is "
-    "orchestrator-owned; avatars must not reconfigure it."
+    "Telegram Bot API client. Use the strict `telegram` envelope: put the selected "
+    "action's fields in `input` and provide `reasoning`. For inbound work, start "
+    "with `check`, `read`, or `search`; use `send` only for an authorized new "
+    "message to a real numeric chat_id, or `reply` with a copied compound "
+    "message_id from `read`/`search`. Content-bearing send/reply/edit defaults to "
+    "Markdown; use `media.type='document'` for generated files and `photo` only "
+    "for an inline preview. `placeholder` is progress-only: edit phases, then "
+    "send the final answer separately. `read` marks returned records read; "
+    "`check` counts incoming unread; `search` uses a regex. `edit` and `delete` "
+    "are external side effects; contacts are local aliases, not permission; "
+    "`settings` is read-only. The intrinsic Task Card producer is separate; "
+    "Telegram is its read-only projector. MCP setup/configuration is "
+    "orchestrator-owned; avatars must not reconfigure it. Use `manual` for depth."
 )
 
 # Public callers receive the strict LTP-v2 family schema. Manager dispatch
@@ -772,18 +711,6 @@ class TelegramManager:
         # Without this separate deadline, such a retained pending intent would
         # spin the worker because ``last_edit_at`` correctly remains unchanged.
         self._task_card_pending_retry_at: dict[tuple[str, int], float] = {}
-        # Bounded, non-provider-body failure class for an accepted deferred
-        # intent. It is exposed on the next owning manager result and cleared
-        # only by provider confirmation; confirmed frames remain separate.
-        self._task_card_pending_errors: dict[
-            tuple[str, int], dict[str, object]
-        ] = {}
-        # Latest semantic automatic renderer per accepted route. It lets a
-        # programmable update re-budget eligible automatic excerpts against the
-        # new authored body without slicing either completed wire text or body.
-        self._task_card_automatic_renderers: dict[
-            tuple[str, int], Callable[[int], str]
-        ] = {}
         self._task_card_pending_force: set[tuple[str, int]] = set()
         self._task_card_pending_edit_thread: threading.Thread | None = None
         self._task_card_pending_edit_stop = threading.Event()
@@ -819,11 +746,6 @@ class TelegramManager:
                     route.chat_id,
                     resident_id,
                 ),
-            ),
-            programmable_heading=lambda: (
-                _TelegramTaskCardMarkdownProjection.programmable_heading(
-                    self._taskcard_locale()
-                )
             ),
         )
         listener = getattr(self._service, "set_taskcard_listener", None)
@@ -866,10 +788,6 @@ class TelegramManager:
     @_task_card_channels.setter
     def _task_card_channels(self, value: dict[str, dict[str, str]]) -> None:
         self._resident.frames = value
-
-    @property
-    def _task_card_desired_channels(self) -> dict[str, dict[str, str]]:
-        return self._resident.desired_frames
 
     @property
     def _task_card_delivery_locks(self) -> dict[str, threading.RLock]:
@@ -2217,27 +2135,16 @@ class TelegramManager:
 
         Best-effort — never blocks or fails the main task.
         """
-        if self._task_card_wire_units(text) > self._TASK_CARD_TEXT_LIMIT:
-            log.warning("Task card send refused before transport (error_class=%s)",
-                        _TASK_CARD_ERROR_WIRE_BUDGET)
-            return {
-                "status": TaskCardResident.SEND_FAILED,
-                "error": _TASK_CARD_WIRE_BUDGET_ERROR,
-            }
         try:
             acct = self._service.get_account(account_alias)
             result = acct.send_message(
-                chat_id,
-                text,
+                chat_id, text,
                 reply_to_message_id=reply_to_message_id,
                 parse_mode=_TELEGRAM_TASK_CARD_PARSE_MODE,
             )
         except Exception as e:
             log.debug("Failed to send progress message: %s", e)
-            return {
-                "status": TaskCardResident.SEND_FAILED,
-                "error": _safe_task_card_backend_reason(e),
-            }
+            return None
         tg_message_id = self._sent_message_id_or_none(result)
         if tg_message_id is None:
             # Top-level ``ok`` may be true while the result carries no usable id.
@@ -2307,10 +2214,6 @@ class TelegramManager:
         calling Telegram: failed/unchanged edit requests still consume provider
         edit capacity and therefore count toward the hard interval.
         """
-        if self._task_card_wire_units(text) > self._TASK_CARD_TEXT_LIMIT:
-            log.warning("Task card edit refused before transport (error_class=%s)",
-                        _TASK_CARD_ERROR_WIRE_BUDGET)
-            return _TASK_CARD_EDIT_FAILED, _TASK_CARD_WIRE_BUDGET_ERROR
         try:
             account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
             # Resident projections are route-serialized already. The narrow gate
@@ -2328,9 +2231,7 @@ class TelegramManager:
                 self._task_card_last_edit_at[key] = now
             acct = self._service.get_account(account)
             acct.edit_message(
-                chat_id,
-                tg_msg_id,
-                text,
+                chat_id, tg_msg_id, text,
                 parse_mode=_TELEGRAM_TASK_CARD_PARSE_MODE,
             )
             return _TASK_CARD_EDIT_OK, None
@@ -2371,7 +2272,7 @@ class TelegramManager:
     # Overall render ceiling, safely below Telegram's 4096-char message limit.
     _TASK_CARD_TEXT_LIMIT = TaskCardEventProjection.TEXT_LIMIT
     # Header shown at the top of every card.
-    _TASK_CARD_HEADER = _TelegramTaskCardMarkdownProjection.header("en")
+    _TASK_CARD_HEADER = TaskCardEventProjection.HEADER
     # The two composed channels of the single resident card (Jason #7258/#7259).
     _TASK_CARD_CHANNELS = ("automatic", "programmable")
     _TASK_CARD_DEFAULT_CHANNEL = "automatic"
@@ -2404,77 +2305,6 @@ class TelegramManager:
             account, chat_id, channel=channel, frame=frame,
         )
 
-    @staticmethod
-    def _task_card_wire_units(text: str) -> int:
-        return _TelegramTaskCardMarkdownProjection.measure_text(text)
-
-    def _task_card_programmable_wire(self, frame: str | None) -> str:
-        """Serialize only the generated heading plus authored body."""
-        if not frame:
-            return ""
-        heading = _TelegramTaskCardMarkdownProjection.programmable_heading(
-            self._taskcard_locale()
-        )
-        return f"{heading}\n{frame}"
-
-    def _task_card_available_automatic_units_for_programmable(
-        self, frame: str | None,
-    ) -> int:
-        """Reserve authored wire plus the generated two-slot separator."""
-        programmed = self._task_card_programmable_wire(frame)
-        reserved = self._task_card_wire_units(programmed)
-        if programmed:
-            reserved += self._task_card_wire_units("\n\n")
-        return max(0, self._TASK_CARD_TEXT_LIMIT - reserved)
-
-    def _task_card_available_automatic_units(
-        self, account: str, chat_id: int,
-    ) -> int:
-        """Return units left beside the complete desired programmable frame."""
-        frame = self._task_card_desired_channels.get(
-            self._channel_key(account, chat_id), {}
-        ).get("programmable")
-        return self._task_card_available_automatic_units_for_programmable(frame)
-
-    @staticmethod
-    def _task_card_delivery_error_class(result: dict) -> str:
-        """Classify one bounded manager result without retaining provider bodies."""
-        failure = result.get("error")
-        normalized = failure.casefold() if isinstance(failure, str) else ""
-        if failure == _TASK_CARD_WIRE_BUDGET_ERROR:
-            return _TASK_CARD_ERROR_WIRE_BUDGET
-        if "parse entities" in normalized or "end of the entity" in normalized:
-            return _TASK_CARD_ERROR_MARKDOWN_PARSE
-        if result.get("stale_delete_failed") or result.get("old_resident_deleted"):
-            return _TASK_CARD_ERROR_EDIT_ROTATION
-        return _TASK_CARD_ERROR_DELIVERY
-
-    @classmethod
-    def _task_card_safe_delivery_error(
-        cls,
-        result: dict,
-        *,
-        deferred: bool,
-        retry_pending: bool,
-    ) -> dict[str, object]:
-        error_class = cls._task_card_delivery_error_class(result)
-        message = {
-            _TASK_CARD_ERROR_MARKDOWN_PARSE: "Telegram rejected Task Card Markdown",
-            _TASK_CARD_ERROR_EDIT_ROTATION: (
-                "Telegram could not complete Task Card resident rotation"
-            ),
-            _TASK_CARD_ERROR_WIRE_BUDGET: (
-                "Task Card exceeds Telegram's UTF-16 delivery budget"
-            ),
-            _TASK_CARD_ERROR_DELIVERY: "Telegram Task Card delivery failed",
-        }[error_class]
-        return {
-            "class": error_class,
-            "message": message,
-            "deferred": deferred,
-            "retry_pending": retry_pending,
-        }
-
     def _task_card_delivery_lock(self, account: str, chat_id: int) -> threading.RLock:
         """Return the resident owner's stable route lock."""
         return self._resident.delivery_lock(account, chat_id)
@@ -2483,81 +2313,32 @@ class TelegramManager:
         self, account: str, chat_id: int, channel: str, frame: str | None,
         *, error: str, resident_id: str | None = None,
         empty_fallback: str | None = None,
-        automatic_renderer: Callable[[int], str] | None = None,
     ) -> dict:
         """Project once and retain a throttled projection as pending-latest.
 
-        The route lock intentionally spans semantic composition, the shared
-        resident transaction, and pending bookkeeping. A programmable change
-        may therefore re-render accepted automatic semantics to its new exact
-        capacity without slicing either final wire text or authored Markdown.
+        The route lock intentionally spans both the shared resident transaction
+        and pending bookkeeping.  Without that outer acquisition, an older
+        caller could return from ``project`` after a newer caller and overwrite
+        the newer pending record.
         """
         key = (account, chat_id)
         with self._task_card_delivery_lock(account, chat_id):
-            if channel == "automatic" and automatic_renderer is not None:
-                frame = automatic_renderer(
-                    self._task_card_available_automatic_units(account, chat_id)
-                )
-
-            proposed_slots = dict(
-                self._task_card_desired_channels.get(
-                    self._channel_key(account, chat_id), {}
-                )
-            )
-            if frame is None:
-                proposed_slots.pop(channel, None)
-            else:
-                proposed_slots[channel] = frame
-
-            if channel == "programmable" and proposed_slots.get("automatic"):
-                retained_renderer = self._task_card_automatic_renderers.get(key)
-                if retained_renderer is not None:
-                    proposed_slots["automatic"] = retained_renderer(
-                        self._task_card_available_automatic_units_for_programmable(frame)
-                    )
-
-            proposed_text = self._resident.compose_slots(proposed_slots)
-            if not proposed_text and empty_fallback is not None:
-                proposed_text = empty_fallback
             with self._task_card_edit_gate_lock:
                 had_pending = key in self._task_card_pending_edits
-                prior_deferred_error = self._task_card_pending_errors.get(key)
-            if self._task_card_wire_units(proposed_text) > self._TASK_CARD_TEXT_LIMIT:
-                result = {
-                    "status": "error",
-                    "error": _TASK_CARD_WIRE_BUDGET_ERROR,
-                }
-                result["delivery_error"] = self._task_card_safe_delivery_error(
-                    result, deferred=False, retry_pending=False,
-                )
-                log.warning(
-                    "Task Card delivery refused (error_class=%s)",
-                    result["delivery_error"]["class"],
-                )
-                if prior_deferred_error is not None:
-                    result["deferred_delivery_error"] = dict(prior_deferred_error)
-                return result
-
             result = self._resident.project_locked(
                 account, chat_id, channel, frame, error=error,
                 resident_id=resident_id, empty_fallback=empty_fallback,
-                proposed_slots=proposed_slots,
             )
             result = dict(result)
             pending = bool(result.pop("pending", False))
             # A hidden programmable finalize is the one suppressed transition
-            # that still commits logical state. It supersedes any older queued
-            # body so re-enable cannot resurrect a stopped watch.
+            # that still commits logical state.  It must supersede any older
+            # queued body, otherwise re-enable could resurrect a stopped watch.
             accepted_pending = pending or (
                 had_pending
                 and result.get("suppressed")
                 and channel == "programmable"
                 and frame is None
-            )
-            confirmed_success = (
-                result.get("status") == "ok"
-                and not result.get("suppressed")
-                and not accepted_pending
             )
             with self._task_card_edit_gate_condition:
                 if accepted_pending:
@@ -2570,40 +2351,23 @@ class TelegramManager:
                     )
                     # A newer accepted intent gets the earliest legal gate slot;
                     # any prior non-provider failure backoff belonged to the old
-                    # transaction. Failure truth remains until confirmation.
+                    # transaction.
                     self._task_card_pending_retry_at.pop(key, None)
-                elif confirmed_success:
-                    # Provider confirmation of the current composition is the
-                    # only transition that clears pending intent and its error.
+                elif result.get("status") == "ok" and not result.get("suppressed"):
+                    # Any successful projection sends the current composition,
+                    # including all logically committed slots, so it supersedes
+                    # an older pending transaction for this target.
                     self._task_card_pending_edits.pop(key, None)
                     self._task_card_pending_retry_at.pop(key, None)
-                    self._task_card_pending_errors.pop(key, None)
                 self._task_card_edit_gate_condition.notify_all()
 
             if (
-                channel == "automatic"
+                had_pending
+                and not accepted_pending
                 and result.get("status") == "ok"
                 and not result.get("suppressed")
             ):
-                if automatic_renderer is None:
-                    self._task_card_automatic_renderers.pop(key, None)
-                else:
-                    self._task_card_automatic_renderers[key] = automatic_renderer
-
-            if had_pending and confirmed_success:
                 self._sync_task_card_fingerprint_after_delivery(account, chat_id)
-            if result.get("status") == "error":
-                result["delivery_error"] = self._task_card_safe_delivery_error(
-                    result, deferred=False, retry_pending=False,
-                )
-                log.warning(
-                    "Task Card delivery failed (error_class=%s)",
-                    result["delivery_error"]["class"],
-                )
-            with self._task_card_edit_gate_lock:
-                retained_deferred_error = self._task_card_pending_errors.get(key)
-            if retained_deferred_error is not None and not confirmed_success:
-                result["deferred_delivery_error"] = dict(retained_deferred_error)
             return result
 
     def _deliver_channel_frame_locked(
@@ -2659,23 +2423,16 @@ class TelegramManager:
             return True
         return now - last_edit_at >= self._TASK_CARD_EVENT_POLL_INTERVAL
 
-    def _flush_pending_task_card_edit(self, key: tuple[str, int]) -> dict:
-        """Retry one pending intent and return its observable manager status."""
+    def _flush_pending_task_card_edit(self, key: tuple[str, int]) -> bool:
+        """Retry one eligible pending-latest projection through full recovery."""
         account, chat_id = key
         with self._task_card_delivery_lock(account, chat_id):
             with self._task_card_edit_gate_lock:
                 if not self._pending_task_card_edit_is_eligible(key):
-                    retained = self._task_card_pending_errors.get(key)
-                    outcome: dict[str, object] = {
-                        "status": "pending",
-                        "retry_pending": key in self._task_card_pending_edits,
-                    }
-                    if retained is not None:
-                        outcome["deferred_delivery_error"] = dict(retained)
-                    return outcome
+                    return False
                 pending = self._task_card_pending_edits.get(key)
             if pending is None:
-                return {"status": "ok", "retry_pending": False}
+                return False
             channel, frame, error, resident_id, empty_fallback = pending
             result = self._deliver_channel_frame(
                 account,
@@ -2690,38 +2447,26 @@ class TelegramManager:
                 result.get("status") == "ok"
                 and not self._task_card_edit_is_pending(account, chat_id)
             )
-            result["retry_pending"] = not delivered
             if not delivered:
                 with self._task_card_edit_gate_condition:
                     if key in self._task_card_pending_edits:
-                        if result.get("status") == "error":
-                            safe_error = self._task_card_safe_delivery_error(
-                                result, deferred=True, retry_pending=True,
-                            )
-                            self._task_card_pending_errors[key] = safe_error
-                            # A deferred caller sees only the stable safe class;
-                            # raw provider descriptions never leave this worker.
-                            result["error"] = safe_error["message"]
-                            result["deferred_delivery_error"] = dict(safe_error)
-                            log.warning(
-                                "Deferred Task Card delivery failed; retry retained "
-                                "(error_class=%s)",
-                                safe_error["class"],
-                            )
                         self._task_card_pending_retry_at[key] = (
                             self._task_card_edit_clock()
                             + max(self._TASK_CARD_EVENT_POLL_INTERVAL, 0.1)
                         )
                         self._task_card_edit_gate_condition.notify_all()
-            return result
+            return delivered
 
-    def _flush_pending_task_card_edits(
-        self,
-    ) -> dict[tuple[str, int], dict]:
-        """Opportunistically drain and return every target's retry status."""
+    def _flush_pending_task_card_edits(self) -> None:
+        """Opportunistically drain every currently eligible target.
+
+        Blanket callers use this deterministic hook too, so fake-monotonic tests
+        and a manager that has not started its worker exercise the same retry path.
+        """
         with self._task_card_edit_gate_lock:
             keys = list(self._task_card_pending_edits)
-        return {key: self._flush_pending_task_card_edit(key) for key in keys}
+        for key in keys:
+            self._flush_pending_task_card_edit(key)
 
     def _start_pending_task_card_edit_worker(self) -> None:
         """Start the one manager-owned pending-latest retry worker."""
@@ -2807,19 +2552,22 @@ class TelegramManager:
         parts: list[str] = []
         title = str(card.get("title", "")).strip()
         if title:
-            parts.append(redact_text(title))
+            parts.append(redact_text(title)[:cls._TASK_CARD_REASONING_CAP])
         for line in card.get("lines", []) or []:
             if not isinstance(line, str):
                 continue
-            rendered = redact_text(line)
+            rendered = redact_text(line)[:cls._TASK_CARD_REASONING_CAP]
             parts.append(f"• {rendered}")
         footer = str(card.get("footer", "")).strip()
         if footer:
-            parts.append(redact_text(footer))
+            parts.append(redact_text(footer)[:cls._TASK_CARD_REASONING_CAP])
         if not parts:
             return ""
         parts.append(f"{_TASK_CARD_TIME_PREFIX}{cls._task_card_render_time(now)}")
-        return "\n".join(parts)
+        text = "\n".join(parts)
+        if len(text) > cls._TASK_CARD_TEXT_LIMIT:
+            text = text[:cls._TASK_CARD_TEXT_LIMIT]
+        return text
 
     # ------------------------------------------------------------------
     # Automatic Task Card event tail (agent-behavior broadcast)
@@ -3094,7 +2842,7 @@ class TelegramManager:
 
     @staticmethod
     def _project_agent_text_event(event: dict) -> dict | None:
-        return _TelegramTaskCardMarkdownProjection.project_agent_text_event(
+        return TaskCardEventProjection.project_agent_text_event(
             event,
             text_cap=TelegramManager._TASK_CARD_EVENT_TEXT_CAP,
         )
@@ -3121,7 +2869,7 @@ class TelegramManager:
 
     @staticmethod
     def _project_task_card_event(event: dict) -> dict | None:
-        row = _TelegramTaskCardMarkdownProjection.project_event(
+        row = TaskCardEventProjection.project_event(
             event,
             text_cap=TelegramManager._TASK_CARD_EVENT_TEXT_CAP,
             reasoning_cap=TelegramManager._TASK_CARD_EVENT_REASONING_CAP,
@@ -3572,6 +3320,8 @@ class TelegramManager:
             return None
         if not body.strip():
             return None
+        if len(body) > self._TASK_CARD_TEXT_LIMIT:
+            body = body[: self._TASK_CARD_TEXT_LIMIT]
         return body
 
     def _broadcast_programmable_task_card_file(self) -> None:
@@ -3599,9 +3349,9 @@ class TelegramManager:
             return
         for account, chat_id in self._resident_task_card_targets():
             try:
-                current = self._task_card_desired_channels.get(
-                    f"{account}:{chat_id}", {}
-                ).get("programmable")
+                current = self._task_card_channels.get(f"{account}:{chat_id}", {}).get(
+                    "programmable"
+                )
                 if current == body:
                     continue
                 self._deliver_channel_frame(
@@ -3630,9 +3380,9 @@ class TelegramManager:
         """
         for account, chat_id in self._resident_task_card_targets():
             try:
-                current = self._task_card_desired_channels.get(
-                    f"{account}:{chat_id}", {}
-                ).get("programmable")
+                current = self._task_card_channels.get(f"{account}:{chat_id}", {}).get(
+                    "programmable"
+                )
                 if current is None:
                     continue
                 self._deliver_channel_frame(
@@ -3700,23 +3450,14 @@ class TelegramManager:
         if not force:
             self._flush_pending_task_card_edits()
         normal_rows = self._taskcard_normal_rows()
-        groups = self._task_card_event_groups_snapshot()
-        metadata = self._task_card_event_metadata_snapshot()
-        locale = self._taskcard_locale()
-        display_expression = self._taskcard_display_expression()
-        rendered_at = datetime.now().astimezone()
-
-        def render_automatic(text_limit: int) -> str:
-            return _TelegramTaskCardMarkdownProjection.render_event_groups(
-                groups,
-                metadata=metadata,
-                normal_rows=normal_rows,
-                now=rendered_at,
-                locale=locale,
-                display_expression=display_expression,
-                text_limit=text_limit,
-            )
-
+        automatic = TaskCardEventProjection.render_event_groups(
+            self._task_card_event_groups_snapshot(),
+            metadata=self._task_card_event_metadata_snapshot(),
+            normal_rows=normal_rows,
+            locale=self._taskcard_locale(),
+            display_expression=self._taskcard_display_expression(),
+        )
+        fingerprint = self._task_card_automatic_fingerprint(automatic)
         for account, chat_id in self._resident_task_card_targets():
             key = (account, chat_id)
             # Check + deliver + store are atomic per route (RLock is reentrant,
@@ -3725,10 +3466,6 @@ class TelegramManager:
             # when the 5s blanket loop, the re-enable listener, and a rehydrate
             # race on the same route.
             with self._task_card_delivery_lock(account, chat_id):
-                automatic = render_automatic(
-                    self._task_card_available_automatic_units(account, chat_id)
-                )
-                fingerprint = self._task_card_automatic_fingerprint(automatic)
                 effective_force = force or key in self._task_card_pending_force
                 if (
                     not effective_force
@@ -3753,7 +3490,6 @@ class TelegramManager:
                     result = self._deliver_channel_frame(
                         account, chat_id, "automatic", automatic,
                         error="Failed to broadcast task card",
-                        automatic_renderer=render_automatic,
                     )
                     # Cache only when a frame was actually delivered. A suppressed
                     # or pending project has not touched Telegram, so caching its
@@ -3893,26 +3629,12 @@ class TelegramManager:
         the first card a human sees is already complete; the 5s blanket keeps
         it fresh from there.
         """
-        groups = self._task_card_event_groups_snapshot()
-        metadata = self._task_card_event_metadata_snapshot()
-        normal_rows = self._taskcard_normal_rows()
-        locale = self._taskcard_locale()
-        display_expression = self._taskcard_display_expression()
-        rendered_at = datetime.now().astimezone()
-
-        def render_automatic(text_limit: int) -> str:
-            return _TelegramTaskCardMarkdownProjection.render_event_groups(
-                groups,
-                metadata=metadata,
-                normal_rows=normal_rows,
-                now=rendered_at,
-                locale=locale,
-                display_expression=display_expression,
-                text_limit=text_limit,
-            )
-
-        automatic = render_automatic(
-            self._task_card_available_automatic_units(account, chat_id)
+        automatic = TaskCardEventProjection.render_event_groups(
+            self._task_card_event_groups_snapshot(),
+            metadata=self._task_card_event_metadata_snapshot(),
+            normal_rows=self._taskcard_normal_rows(),
+            locale=self._taskcard_locale(),
+            display_expression=self._taskcard_display_expression(),
         )
         return self._deliver_channel_frame(
             account,
@@ -3920,7 +3642,6 @@ class TelegramManager:
             "automatic",
             automatic,
             error="Failed to ensure task card resident",
-            automatic_renderer=render_automatic,
         )
 
     def _task_card_create(self, args: dict) -> dict:
@@ -3950,9 +3671,7 @@ class TelegramManager:
         automatic = self._format_task_card_text(
             args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
             rows=args.get("rows"), metadata=args.get("metadata"),
-            normal_rows=self._taskcard_normal_rows(),
-            text_limit=self._task_card_available_automatic_units(account, chat_id),
-        )
+            normal_rows=self._taskcard_normal_rows())
         # Compose with the proposed automatic frame + the live programmable slot,
         # deliver, and commit the automatic frame only once the edit/send/replace
         # succeeds (a failed edit must not poison the stored channel state).
@@ -4193,9 +3912,7 @@ class TelegramManager:
         automatic = self._format_task_card_text(
             args.get("tool", ""), args.get("tool_action", ""), args.get("reasoning", ""),
             rows=args.get("rows"), metadata=args.get("metadata"),
-            normal_rows=self._taskcard_normal_rows(),
-            text_limit=self._task_card_available_automatic_units(account, chat_id),
-        )
+            normal_rows=self._taskcard_normal_rows())
         # All automatic mutations share the same edit-first delivery discipline:
         # identical content is success, unknown transport failure fails loud, and
         # only a provider-confirmed edit-impossible condition may replace.
@@ -4219,6 +3936,20 @@ class TelegramManager:
         """
         card_message_id = args.get("card_message_id")
         if card_message_id:
+            rows = args.get("rows")
+            if rows is not None:
+                automatic = self._format_task_card_text(
+                    "", "", "", rows=rows, metadata=args.get("metadata"),
+                    normal_rows=self._taskcard_normal_rows(),
+                )
+            else:
+                tool = args.get("tool", "")
+                if tool:
+                    automatic = self._format_task_card_text(
+                        tool, args.get("tool_action", ""), args.get("reasoning", ""))
+                    automatic += "\n\n✅ TASK CARD · DONE"
+                else:
+                    automatic = "✅ TASK CARD · DONE"
             card_account, card_chat_id, _ = self._parse_compound_id(card_message_id)
             # Backward compatibility: older internal callers supplied only the
             # compound id. Current callers' explicit route, when present, must
@@ -4227,26 +3958,6 @@ class TelegramManager:
             chat_id = args.get("chat_id", card_chat_id)
             if card_account != account or card_chat_id != chat_id:
                 return {"status": "error", "error": "Failed to finalize task card"}
-            available = self._task_card_available_automatic_units(account, chat_id)
-            rows = args.get("rows")
-            if rows is not None:
-                automatic = self._format_task_card_text(
-                    "", "", "", rows=rows, metadata=args.get("metadata"),
-                    normal_rows=self._taskcard_normal_rows(), text_limit=available,
-                )
-            else:
-                tool = args.get("tool", "")
-                if tool:
-                    done = "\n\n✅ TASK CARD · DONE"
-                    automatic = self._format_task_card_text(
-                        tool,
-                        args.get("tool_action", ""),
-                        args.get("reasoning", ""),
-                        text_limit=max(0, available - self._task_card_wire_units(done)),
-                    )
-                    automatic += done
-                else:
-                    automatic = "✅ TASK CARD · DONE"
             return self._deliver_channel_frame(
                 account,
                 chat_id,
@@ -4309,7 +4020,6 @@ class TelegramManager:
         *, rows: list | None = None, metadata: dict | None = None,
         normal_rows: int = _TASK_CARD_DEFAULT_NORMAL_ROWS,
         now: datetime | None = None,
-        text_limit: int | None = None,
     ) -> str:
         """Render a Task Card: header, one line per tool row, fixed footer.
 
@@ -4340,7 +4050,7 @@ class TelegramManager:
         control bounds the latest API-call groups to 1-10; it does not truncate
         fixed row scaffolding.  See ``_format_rows_task_card_text``.
         """
-        return _TelegramTaskCardMarkdownProjection.format_task_card_text(
+        return TaskCardEventProjection.format_task_card_text(
             tool,
             action,
             reasoning,
@@ -4348,12 +4058,11 @@ class TelegramManager:
             metadata=metadata,
             normal_rows=normal_rows,
             now=now,
-            text_limit=text_limit,
         )
 
     @classmethod
     def _format_scalar_task_card_text(cls, tool: str, action: str, reasoning: str) -> str:
-        return _TelegramTaskCardMarkdownProjection.format_scalar_task_card_text(
+        return TaskCardEventProjection.format_scalar_task_card_text(
             tool, action, reasoning,
         )
 
@@ -4364,7 +4073,7 @@ class TelegramManager:
     @classmethod
     def _format_task_card_metadata(cls, metadata: object, locale: str = "en") -> list[str]:
         """Render bounded semantic resident-card sections."""
-        return _TelegramTaskCardMarkdownProjection.format_metadata(metadata, locale)
+        return TaskCardEventProjection.format_metadata(metadata, locale)
 
     @classmethod
     def _format_rows_task_card_text(
@@ -4373,7 +4082,7 @@ class TelegramManager:
         now: datetime | None = None,
         locale: str = "en",
     ) -> str:
-        return _TelegramTaskCardMarkdownProjection.format_rows_task_card_text(
+        return TaskCardEventProjection.format_rows_task_card_text(
             rows,
             metadata=metadata,
             normal_rows=normal_rows,
@@ -4388,7 +4097,7 @@ class TelegramManager:
 
     @staticmethod
     def _task_card_machine_identifier(value: object, *, limit: int) -> str | None:
-        return _TelegramTaskCardMarkdownProjection.machine_identifier(value, limit=limit)
+        return TaskCardEventProjection.machine_identifier(value, limit=limit)
 
     @classmethod
     def _format_api_error_line(cls, row: dict, locale: str = "en") -> str:
@@ -4399,7 +4108,7 @@ class TelegramManager:
         lifecycle state. Opaque external identifiers and raw exception text are
         deliberately absent, so there is no free-form field to leak.
         """
-        return _TelegramTaskCardMarkdownProjection.format_api_error_line(row, locale)
+        return TaskCardEventProjection.format_api_error_line(row, locale)
 
     @staticmethod
     def _format_elapsed(value: object) -> str:

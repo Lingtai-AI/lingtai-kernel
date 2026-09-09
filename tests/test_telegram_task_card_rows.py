@@ -49,7 +49,7 @@ def test_running_render_has_footer():
          "elapsed_s": 3, "done": False},
     ])
     assert _TASK_CARD_FOOTER in text
-    assert "*ACTIVITIES*" in text
+    assert "📋 ACTIVITIES" in text
 
 
 def test_frozen_render_has_footer():

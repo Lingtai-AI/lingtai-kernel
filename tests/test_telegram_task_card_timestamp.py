@@ -54,7 +54,7 @@ def test_manager_renders_current_time_line_from_render_instant_not_row_start():
     # The render-time stamp precedes the approved ask-agent final line.
     assert lines[-2:] == [
         "Last Updated: 17:18:36 U-7",
-        '_Ask agent for "Task Card"_',
+        'Ask agent for "Task Card"',
     ]
 
 
@@ -98,7 +98,7 @@ def test_current_time_line_present_even_when_no_row_has_a_stamp():
     # reflects the render instant.
     assert text.splitlines()[-2:] == [
         "Last Updated: 17:18:36 U-7",
-        '_Ask agent for "Task Card"_',
+        'Ask agent for "Task Card"',
     ]
     # Tool rows never render an inline stamp even when one is supplied.
     for ln in text.splitlines():
@@ -121,5 +121,5 @@ def test_api_error_row_never_carries_a_stamp_alongside_a_tool_row():
     assert "UTC" not in api_line
     assert text.splitlines()[-2:] == [
         "Last Updated: 17:18:36 U-7",
-        '_Ask agent for "Task Card"_',
+        'Ask agent for "Task Card"',
     ]

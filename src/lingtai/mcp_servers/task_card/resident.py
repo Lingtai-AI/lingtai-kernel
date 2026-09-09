@@ -55,7 +55,6 @@ class TaskCardResident:
     DELETE_FAILED = "failed"
 
     SEND_OK = "sent"
-    SEND_FAILED = "failed"
     SEND_INDETERMINATE = "indeterminate_send"
 
     def __init__(
@@ -64,7 +63,6 @@ class TaskCardResident:
         enabled: bool,
         transport: TaskCardResidentTransport | None = None,
         deliver: Callable[..., dict[str, Any]] | None = None,
-        programmable_heading: str | Callable[[], str] = "— TASK CARD —",
     ) -> None:
         if type(enabled) is not bool:
             raise TypeError("enabled must be a boolean")
@@ -74,11 +72,7 @@ class TaskCardResident:
         self._transport = transport
         # Compatibility hook for the original Telegram-owned resident wrapper.
         self._legacy_deliver = deliver
-        self._programmable_heading = programmable_heading
-        # ``_frames`` is provider-confirmed truth. ``_desired_frames`` may be
-        # newer while a provider adapter owns one accepted, throttled retry.
         self._frames: dict[str, dict[str, str]] = {}
-        self._desired_frames: dict[str, dict[str, str]] = {}
         self._locks: dict[str, threading.RLock] = {}
         self._guard = threading.Lock()
         self._state_lock = threading.Lock()
@@ -90,13 +84,6 @@ class TaskCardResident:
     @frames.setter
     def frames(self, value: dict[str, dict[str, str]]) -> None:
         self._frames = value if isinstance(value, dict) else {}
-        self._desired_frames = {
-            key: dict(slots) for key, slots in self._frames.items()
-        }
-
-    @property
-    def desired_frames(self) -> dict[str, dict[str, str]]:
-        return self._desired_frames
 
     @property
     def locks(self) -> dict[str, threading.RLock]:
@@ -145,87 +132,17 @@ class TaskCardResident:
         *,
         thread_id: str | int | None = None,
     ) -> None:
-        """Seed one provider-confirmed frame; ``None`` clears that channel."""
+        """Store one channel's last frame; ``None`` clears that channel only."""
         if channel not in self.CHANNELS:
             raise ValueError(f"unknown Task Card channel: {channel}")
         key = self.key(account, chat_id, thread_id)
-        self._set_slot(self._frames, key, channel, frame)
-        self._set_slot(self._desired_frames, key, channel, frame)
-
-    @staticmethod
-    def _set_slot(
-        store: dict[str, dict[str, str]],
-        key: str,
-        channel: str,
-        frame: str | None,
-    ) -> None:
-        slots = store.setdefault(key, {})
+        slots = self._frames.setdefault(key, {})
         if frame is None:
             slots.pop(channel, None)
             if not slots:
-                store.pop(key, None)
+                self._frames.pop(key, None)
         else:
             slots[channel] = frame
-
-    def _store_slots(
-        self,
-        account: str,
-        chat_id: str | int,
-        slots: dict[str, str],
-        *,
-        confirmed: bool,
-        thread_id: str | int | None = None,
-    ) -> None:
-        key = self.key(account, chat_id, thread_id)
-        if slots:
-            self._desired_frames[key] = dict(slots)
-            if confirmed:
-                self._frames[key] = dict(slots)
-        else:
-            self._desired_frames.pop(key, None)
-            if confirmed:
-                self._frames.pop(key, None)
-
-    def _proposed_slots(
-        self,
-        account: str,
-        chat_id: str | int,
-        *,
-        thread_id: str | int | None,
-        channel: str | None,
-        frame: str | None,
-        confirmed: bool,
-    ) -> dict[str, str]:
-        source = self._frames if confirmed else self._desired_frames
-        slots = dict(source.get(self.key(account, chat_id, thread_id), {}))
-        if channel is not None:
-            if channel not in self.CHANNELS:
-                raise ValueError(f"unknown Task Card channel: {channel}")
-            if frame is None:
-                slots.pop(channel, None)
-            else:
-                slots[channel] = frame
-        return slots
-
-    def _compose_slots(self, slots: dict[str, str]) -> str:
-        automatic = slots.get("automatic", "")
-        programmable = slots.get("programmable", "")
-        if not programmable:
-            return automatic
-        heading = (
-            self._programmable_heading()
-            if callable(self._programmable_heading)
-            else self._programmable_heading
-        )
-        watch = f"{heading}\n{programmable}"
-        return watch if not automatic else f"{automatic}\n\n{watch}"
-
-    def compose_slots(self, slots: dict[str, str]) -> str:
-        """Compose one already-proposed two-slot transaction."""
-        unknown = set(slots) - set(self.CHANNELS)
-        if unknown:
-            raise ValueError(f"unknown Task Card channel: {sorted(unknown)[0]}")
-        return self._compose_slots(dict(slots))
 
     def compose(
         self,
@@ -235,18 +152,22 @@ class TaskCardResident:
         thread_id: str | int | None = None,
         channel: str | None = None,
         frame: str | None = None,
-        confirmed: bool = False,
     ) -> str:
-        """Compose desired slots, or confirmed slots for an existence probe."""
-        slots = self._proposed_slots(
-            account,
-            chat_id,
-            thread_id=thread_id,
-            channel=channel,
-            frame=frame,
-            confirmed=confirmed,
-        )
-        return self._compose_slots(slots)
+        """Compose stored slots or a proposed, not-yet-committed slot change."""
+        slots = dict(self._frames.get(self.key(account, chat_id, thread_id), {}))
+        if channel is not None:
+            if channel not in self.CHANNELS:
+                raise ValueError(f"unknown Task Card channel: {channel}")
+            if frame is None:
+                slots.pop(channel, None)
+            else:
+                slots[channel] = frame
+        automatic = slots.get("automatic", "")
+        programmable = slots.get("programmable", "")
+        if not programmable:
+            return automatic
+        watch = f"*TASK CARD*\n{programmable}"
+        return watch if not automatic else f"{automatic}\n\n{watch}"
 
     def delivery_lock(
         self,
@@ -293,31 +214,17 @@ class TaskCardResident:
         resident_id: str | None = None,
         empty_fallback: str | None = None,
         thread_id: str | int | None = None,
-        proposed_slots: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Project while the caller already owns this route's delivery lock."""
         if channel not in self.CHANNELS:
             return {"status": "error", "error": f"Unknown channel: {channel}"}
         if not self.enabled():
             if channel == "programmable" and frame is None:
-                # A hidden finalize retires the watch without transport. Clear
-                # both accepted intent and the resident's retained comparison
-                # frame so neither can resurrect after re-enable; the adapter
-                # keeps one pending clear to reconcile provider bytes later.
-                desired = self._proposed_slots(
-                    account, chat_id, thread_id=thread_id,
-                    channel=channel, frame=None, confirmed=False,
-                )
-                self._store_slots(
-                    account, chat_id, desired, confirmed=False,
-                    thread_id=thread_id,
-                )
-                confirmed = self._proposed_slots(
-                    account, chat_id, thread_id=thread_id,
-                    channel=channel, frame=None, confirmed=True,
-                )
-                self._store_slots(
-                    account, chat_id, confirmed, confirmed=True,
+                self.set_frame(
+                    account,
+                    chat_id,
+                    channel,
+                    None,
                     thread_id=thread_id,
                 )
             return {"status": "ok", "suppressed": True, "taskcard": False}
@@ -341,7 +248,6 @@ class TaskCardResident:
             resident_id=resident_id,
             empty_fallback=empty_fallback,
             thread_id=thread_id,
-            proposed_slots=proposed_slots,
         )
 
     def deliver_locked(
@@ -355,27 +261,19 @@ class TaskCardResident:
         resident_id: str | None = None,
         empty_fallback: str | None = None,
         thread_id: str | int | None = None,
-        proposed_slots: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Run one already-serialized resident delivery transaction."""
         if channel not in self.CHANNELS:
             return {"status": "error", "error": f"Unknown channel: {channel}"}
         transport = self._require_transport()
         route = self.route(account, chat_id, thread_id)
-        if proposed_slots is None:
-            proposed_slots = self._proposed_slots(
-                account, chat_id, thread_id=thread_id,
-                channel=channel, frame=frame, confirmed=False,
-            )
-        else:
-            proposed_slots = dict(proposed_slots)
-            unknown = set(proposed_slots) - set(self.CHANNELS)
-            if unknown:
-                return {
-                    "status": "error",
-                    "error": f"Unknown channel: {sorted(unknown)[0]}",
-                }
-        text = self._compose_slots(proposed_slots)
+        text = self.compose(
+            account,
+            chat_id,
+            thread_id=thread_id,
+            channel=channel,
+            frame=frame,
+        )
         if not text and empty_fallback is not None:
             text = empty_fallback
 
@@ -392,18 +290,22 @@ class TaskCardResident:
                     error=error,
                 )
                 if outcome.get("status") == "ok":
-                    self._store_slots(
-                        account, chat_id, proposed_slots,
-                        confirmed=not outcome.get("pending", False),
+                    self.set_frame(
+                        account,
+                        chat_id,
+                        channel,
+                        frame,
                         thread_id=thread_id,
                     )
                 return outcome
 
             edit_outcome, edit_error = transport.edit(resident_id, text)
             if edit_outcome in (self.EDIT_OK, self.EDIT_THROTTLED):
-                self._store_slots(
-                    account, chat_id, proposed_slots,
-                    confirmed=edit_outcome == self.EDIT_OK,
+                self.set_frame(
+                    account,
+                    chat_id,
+                    channel,
+                    frame,
                     thread_id=thread_id,
                 )
                 outcome: dict[str, Any] = {
@@ -423,27 +325,28 @@ class TaskCardResident:
                 error=error,
             )
             if outcome.get("status") == "ok":
-                self._store_slots(
-                    account, chat_id, proposed_slots,
-                    confirmed=not outcome.get("pending", False),
+                self.set_frame(
+                    account,
+                    chat_id,
+                    channel,
+                    frame,
                     thread_id=thread_id,
                 )
             return outcome
 
         result = transport.send(route, text)
         if result is None or result.get("status") != self.SEND_OK:
-            reported = result.get("error") if result is not None else None
-            outcome: dict[str, Any] = {
-                "status": "error",
-                "error": reported if isinstance(reported, str) and reported else error,
-            }
+            outcome: dict[str, Any] = {"status": "error", "error": error}
             if result is not None and result.get("status") == self.SEND_INDETERMINATE:
                 outcome["indeterminate_send"] = True
             return outcome
 
         new_id = result["message_id"]
-        self._store_slots(
-            account, chat_id, proposed_slots, confirmed=True,
+        self.set_frame(
+            account,
+            chat_id,
+            channel,
+            frame,
             thread_id=thread_id,
         )
         persisted = transport.persist(route, new_id)
@@ -466,7 +369,6 @@ class TaskCardResident:
             route.account,
             route.chat_id,
             thread_id=route.thread_id,
-            confirmed=True,
         )
         if committed_text:
             probe_outcome, probe_error = transport.edit(stale_id, committed_text)
@@ -517,11 +419,7 @@ class TaskCardResident:
 
         result = transport.send(route, text)
         if result is None or result.get("status") != self.SEND_OK:
-            reported = result.get("error") if result is not None else None
-            outcome: dict[str, Any] = {
-                "status": "error",
-                "error": reported if isinstance(reported, str) and reported else error,
-            }
+            outcome: dict[str, Any] = {"status": "error", "error": error}
             if delete_outcome == self.DELETE_OK:
                 outcome["old_resident_deleted"] = True
             if result is not None and result.get("status") == self.SEND_INDETERMINATE:
