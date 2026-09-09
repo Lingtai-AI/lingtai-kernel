@@ -1289,3 +1289,32 @@ def test_undecodable_intrinsic_config_falls_back_without_consulting_legacy(agent
     assert result["status"] == "ok"
     assert result["max_refreshes"] == 2000
     manager.handle({"action": "stop", "input": {"watch_id": result["watch_id"]}, "reasoning": "cleanup"})
+
+
+def test_manual_first_call_runs_through_public_family(manager, agent, monkeypatch):
+    import ast
+    import re
+
+    manual = Path(__file__).resolve().parents[1] / "src/lingtai/tools/task_card/manual/SKILL.md"
+    code = re.search(r"```python\n(.*?)\n```", manual.read_text(), re.S).group(1)
+    call = ast.parse(code).body[0].value
+    kwargs = {k.arg: ast.literal_eval(k.value) for k in call.keywords}
+    _write_renderer(agent._working_dir, "print('truthful sample')", "renderer.py")
+    monkeypatch.setattr(manager, "_spawn", lambda watch: None)
+    try:
+        result = manager.handle(kwargs)
+        assert result["status"] == "ok"
+        root = agent._working_dir / "taskcard"
+        assert (root / "taskcard.md").read_text().strip() == "truthful sample"
+        assert (root / "status").read_text() == "active"
+    finally:
+        manager.handle({"action": "remove", "input": {}, "reasoning": "finish isolated sample"})
+
+
+def test_manual_distinguishes_resident_cap_and_producer_policy():
+    from lingtai.kernel.meta_block import TASKCARD_MAX_CHARS
+
+    root = Path(__file__).resolve().parents[1] / "src/lingtai/tools/task_card/manual"
+    projection = (root / "reference/notifications.md").read_text()
+    assert f"TASKCARD_MAX_CHARS={TASKCARD_MAX_CHARS}" in projection
+    assert "Raising the producer" in projection

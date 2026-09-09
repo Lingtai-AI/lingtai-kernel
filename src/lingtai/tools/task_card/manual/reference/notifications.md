@@ -4,7 +4,7 @@ description: >
   Focused Task Card reference for typed producer notifications, reminders,
   change-gated resident projection, and limits on consumer guarantees.
 version: 0.1.0
-last_changed_at: "2026-09-06T00:00:00Z"
+last_changed_at: "2026-09-09T00:00:00Z"
 tags: [lingtai, task-card, notifications, projection, reminders]
 related_files:
 - src/lingtai/tools/task_card/manual/SKILL.md
@@ -21,55 +21,41 @@ maintenance: |
 
 ## Typed producer boundary
 
-The producer emits only `TaskCardErrorNotification`,
-`TaskCardRecoveredNotification`, and `TaskCardLimitNotification` through its
-family adapter. The granted native port exposes only
+Only `TaskCardErrorNotification`, `TaskCardRecoveredNotification`, and
+`TaskCardLimitNotification` cross the family adapter. Its native port exposes
 `publish_error`, `publish_recovered`, `publish_limit`, `submit_reminder(turns)`,
-and `clear_reminder()`. A generic publisher, arbitrary keyword fields, foreign
-source/channel, or caller-supplied priority/extra metadata is refused.
+and `clear_reminder()`. Generic publishers, arbitrary keyword fields, foreign
+source/channel, and caller-supplied priority/extra metadata are refused.
 
-The host adapter pins the established wire policy: error and recovered states
-use `task_card.error`, refresh exhaustion uses `task_card.limit`, and events go
-to the system channel with bounded extras, idempotency, and priority. The
-producer owns event content and deduplication identity; it does not select a
-transport or another channel.
+The host pins the established wire policy: error and recovered use
+`task_card.error`, refresh exhaustion uses `task_card.limit`; events use the
+system channel, bounded extras, idempotency, and priority. The producer chooses
+event content and deduplication identity, never a transport.
 
-A non-exhausting renderer failure after a valid watch preserves the last body
-and emits a deduped error state; a later successful publication emits recovery.
-An exhausted final failure suppresses that error and, like a successful final
-refresh, emits one limit event whose guidance says to start a new watch if work
-remains. Notification failure must not turn a truthful producer state into a
-false one.
+A non-exhausting renderer failure keeps the last body and emits a deduped error;
+a later success emits recovery. An exhausted final failure suppresses that error
+and emits one limit event telling the agent to start a new watch if work remains.
+Notification failure does not turn producer state into false success.
 
-## Absent/stale reminders
+## Reminders and resident projection
 
 After the configured `reminder_turns` completed text turns (default `10`), the
-producer asks the agent to check whether the card is absent or stale and update
-or retire it only if useful. The counter resets after a successful publication
-(`start`, refresh, or resume), so a watch that keeps publishing does not reach
-the absent/stale reminder threshold. The reminder resurfaces the decision; it
-does not re-inject an unchanged body.
+producer asks whether the card is absent or stale and whether an update or
+retirement is useful. Successful publication resets the counter; a reminder does
+not re-inject an unchanged body.
 
-## Resident projection
+The agent's resident `_meta.agent_meta.taskcard` view is change-gated: unchanged
+body/status bytes are not repeatedly injected, while first appearance or material
+change may attach a fresh payload. A missing card gets a generic route to this
+manual. The resident projection has a separate fixed `TASKCARD_MAX_CHARS=2000` cap: a
+larger active body is reported as refused without its text. Raising the producer
+`max_body_chars` does not raise this resident cap. The producer also refuses
+over-limit output rather than truncating it. Keep goal, status and next step
+within the resident budget; link complex evidence elsewhere.
 
-The card is resident in `_meta.agent_meta.taskcard` for the agent's own view and
-may be read by human-facing consumers. Projection is change-gated: unchanged
-body/status bytes are not repeatedly re-injected, while a first appearance or
-material change can attach a fresh payload. If no card is present, the resident
-hint is generic and routes the agent to the `task_card` manual.
+## Consumer boundary
 
-The body cap is a producer guard: oversized renderer output is refused rather
-than truncated. Keep the card focused on the current goal, status, and next
-step; put complex progress in reports, logs, or checklists referenced by the
-card. A consumer may compare bytes and apply its own edit/send rate limits, but
-those are not promises made by this capability. A real changed body remains a
-real producer update even when a consumer chooses when or how to display it.
-
-## No hidden external projection promise
-
-Task Card owns the producer artifact and the typed events, not Telegram, Feishu,
-portal, chat IDs, message edits, retries, or delivery guarantees. Consumers
-independently read `taskcard/status` and `taskcard/taskcard.md` and interpret
-missing, invalid, or inactive state. Do not report a consumer-side projection
-as producer progress; the renderer must report only evidence from the underlying
-work.
+Task Card owns producer artifacts and typed events, not Telegram/Feishu/portal
+IDs, message edits, retries, or delivery guarantees. Consumers independently read
+`taskcard/status` and `taskcard/taskcard.md` and interpret missing, invalid, or
+inactive state. Consumer display is never producer progress.
