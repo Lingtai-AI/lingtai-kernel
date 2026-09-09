@@ -1487,3 +1487,34 @@ def test_mcp_field_is_resident_when_no_standalone_servers(tmp_path):
     agent, _workdir = _mk_agent(tmp_path, plugins=[])
     body = _prompt_section_named(agent, "mcp")
     assert "No standalone MCP servers" in body
+
+
+def test_installed_plugin_manual_retains_settings_anchor(tmp_path):
+    import re
+
+    agent, _ = _mk_agent(tmp_path)
+    try:
+        handler = agent._tool_handlers["plugin"]
+        manual = handler({"action": "manual", "input": {}, "reasoning": "verify route"})
+        row = handler({"action": "settings", "input": {}, "reasoning": "verify SHOW"})["settings"][0]
+        headings = re.findall(r"^## (.+)$", manual["plugin_manual"], re.M)
+        anchors = [re.sub(r"[^a-z0-9 -]", "", x.lower()).replace(" ", "-") for x in headings]
+        assert row["comment"].split("#", 1)[1] in anchors
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_plugin_manual_mcp_example_validates_without_launch(tmp_path):
+    import re
+
+    reference = Path(__file__).resolve().parents[1] / "src/lingtai/tools/plugin/manual/reference/format-and-containment.md"
+    examples = [json.loads(x) for x in re.findall(r"```json\n(.*?)\n```", reference.read_text(), re.S)]
+    manifest = next(x for x in examples if x.get("$schema") == PLUGIN_SCHEMA_URL)
+    mcp = next(x for x in examples if x.get("$schema") == MCP_SCHEMA_URL)
+    root = tmp_path / "example"
+    root.mkdir()
+    (root / "plugin.json").write_text(json.dumps(manifest))
+    (root / "mcp.json").write_text(json.dumps(mcp))
+    record, problems = read_plugin(root)
+    assert not problems
+    assert record is not None and len(record["mcp_servers"]) == len(mcp["mcpServers"]) > 0

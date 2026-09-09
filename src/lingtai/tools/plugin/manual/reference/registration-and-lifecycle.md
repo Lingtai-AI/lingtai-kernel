@@ -8,143 +8,66 @@ related_files:
 - src/lingtai/adapters/tool_plugin_host.py
 - docs/examples/agent-plugins/hello-lingtai/plugin.json
 maintenance: |
-  Keep the two-tier registration contract and authorized refresh workflow in
-  lockstep with plugin_registry and the plugin tool. Preserve the distinction
-  between configured declarations, the automatic root, inherited discovery,
-  and the protected Plugin prompt field.
+  Keep this reference aligned with plugin_registry and the plugin tool. Preserve
+  configured declarations, the automatic root, inherited discovery, and the
+  protected Plugin prompt field as distinct concepts.
 ---
 
 # Plugin registration and lifecycle
 
-This reference explains how a validated plugin becomes visible to an agent. It
-is reached from `plugin-manual` after the read-only and trust prerequisites.
-Registration is a boot/refresh operation, not a model-facing action.
+Read `plugin-manual` first. Registration is a boot/refresh operation, never a
+model-facing action.
 
-## The public-path and identity gates
+## Identity and tiers
 
-`manifest.plugins` in `init.json` is the canonical declaration key.
-`manifest.capabilities.plugin.paths` is a retained compatibility alias with the
-same registration meaning. The canonical list is considered first; duplicate
-entries across the key and alias are scanned once. Prefer `manifest.plugins` in
-new edits. A declaration is the public identity gate for registration.
+`manifest.plugins` in `init.json` is canonical;
+`manifest.capabilities.plugin.paths` is a retained alias with the same meaning.
+Canonical entries are considered first and de-duplicated. An entry can name one
+directory containing `plugin.json` or a collection of plugin directories; it may
+be absolute, `~`-prefixed, or relative to the agent workdir. The derived
+`<workdir>/plugin` root is also registered but is not part of the configurable
+settings row. When not already present as that exact path string, the current
+service prepends it to the operational roots; inspect `info.declared` for actual
+scan order rather than assuming configured roots always win collisions.
 
-`manifest.capabilities.skills.paths` is different: it is inherited for
-**discovery only**. A plugin found there is visible in the protected Plugin
-field but cannot register its skills or servers. This prevents a directory
-merely placed in an existing Skills search path from silently gaining trust.
+`manifest.capabilities.skills.paths` is inherited for **discovery only**. It can
+make a plugin visible in the protected Plugin field, but it never grants
+registration. The distinction is the authorization boundary:
 
-Each configured entry may be an absolute path, a tilde-prefixed path, or a path
-relative to the agent working directory. It may name a single directory carrying
-`plugin.json` or a collection whose immediate children are plugin roots. The
-automatic `<workdir>/plugin` root is scanned as a registration root as well,
-but is derived and is not included in the configured setting row. The successful
-snapshot keeps exact configured declarations separate from operational roots.
+| Tier | Protected Plugin field | Registry |
+|---|---|---|
+| `registered` | validated skills and registration facts | valid MCP records stamped `source="plugin:<name>"` |
+| `discovered` | metadata and counts only | no records and no mounted components |
 
-The identity gate is therefore two-dimensional: the plugin's canonical manifest
-`name` identifies the catalog entry, and its path must come from an explicit
-registration root to receive the `registered` tier. Inherited discovery never
-substitutes for either gate.
+Plugin skills remain a closed namespace even when registered: no `.library/`
+copy and no vanilla Skills entry. A registry record is **not running**; only an
+explicit operator-written top-level `mcp` entry and refresh activate a server.
 
-## What each tier does
+## Boot, refresh, and ownership
 
-| Tier | Source | Protected Plugin field | Registry |
-|---|---|---|---|
-| `registered` | Canonical `manifest.plugins`, retained alias, or automatic root | Validated skill names/count and registration facts | Validated `mcp.json` servers are recorded with `source="plugin:<name>"` |
-| `discovered` | Inherited `manifest.capabilities.skills.paths` only | Metadata and counts for visibility | No server or component is registered |
-
-Plugin skills are a closed namespace. Even in the registered tier, validated
-skill paths remain in the plugin and their names/counts are rendered only in
-the protected Plugin field; they are not copied into `.library/` and are not
-injected into the vanilla `skills` catalog. A discovered plugin is even more
-limited: its metadata is informational and none of its components are mounted.
-
-Registration is registry-level only. A server record means registered, **not
-running**; no subprocess is spawned. To activate a registered server, an
-operator must provide a matching top-level `mcp` entry in `init.json` and
-refresh. Consult `mcp-manual` for activation rather than treating registration
-as execution.
-
-## Boot and refresh
-
-At boot or refresh, the existing registration service reads declarations,
-validates manifests/components, records the registered snapshot, writes only
+Boot/refresh validates declarations, records the snapshot, writes only current
 plugin-owned registry records, and supplies validated per-skill paths to the
-protected prompt-section writer. The `plugin` actions cannot invoke this path:
+protected prompt writer. The actions cannot invoke this path: `info` re-scans
+without registering, `settings` reads a detached snapshot, and `manual` reads
+the installed manual.
 
-- `info` re-scans and reports the snapshot; it never registers newly found data.
-- `settings` reads a detached snapshot; it never scans or changes declarations.
-- `manual` reads the installed manual; it never scans or changes declarations.
+An authorized configuration owner changes `manifest.plugins` with the existing
+file/shell procedure, then calls `system(action="refresh")`:
 
-This separation is why the default-on, read-only capability cannot be used as an
-installation mechanism. After an authorized declaration edit, `system(action="refresh")`
-is the operation that applies it; call `info` afterward to audit the result.
+1. Install: add the plugin root.
+2. Verify: call unsummarized `plugin(action="info", input={}, reasoning="confirm plugin registration")` and inspect `registered`, `skipped`, `mcp_registered`, and `problems`.
+3. Uninstall: remove the authorized declaration, refresh, and verify. A plugin
+   still reachable through the alias, another collection, or automatic root
+   remains registered; an inherited Skills path may still show it as discovered.
+   Removing one list entry does not guarantee disappearance. If an automatic-root
+   move is required, ask its owner for that separate filesystem change; do not
+   delete plugin files or alter other declarations as an implicit uninstall step.
 
-## Authorized install and uninstall
-
-There is deliberately no install or uninstall action. Only an authorized
-configuration owner should use the existing `file` or `shell` procedure to edit
-`init.json`:
-
-1. **Install:** read the plugin and this manual, add its directory to canonical
-   `manifest.plugins`, then call `system(action="refresh")`. For example:
-
-   ```json
-   {
-     "manifest": {
-       "plugins": ["./plugins/hello-lingtai"]
-     }
-   }
-   ```
-
-2. **Verify:** call
-   `plugin(action="info", input={}, reasoning="confirm plugin registration")`;
-   inspect `registered`, `registered[].skipped`, `mcp_registered`, and
-   `problems`.
-3. **Uninstall:** remove the declaration from `manifest.plugins`, then call
-   `system(action="refresh")` and verify that the entry is gone.
-
-Use the alias only when maintaining an older configuration. Never hand-edit
-`mcp_registry.jsonl` as part of this workflow and never delete the plugin
-directory: the declaration is the installation state, while the directory
-belongs to the person or package that provided it.
-
-## Convergence and ownership
-
-Registration first prunes plugin-owned records that the current declarations
-no longer imply, then appends valid current records. Consequently:
-
-- removing a plugin declaration removes its `source="plugin:<name>"` records;
-- removing one server from a still-declared `mcp.json` removes only that record;
-- changing a server specification replaces its stale record rather than
-  accumulating duplicates;
-- running the same refresh twice is idempotent;
-- hand-written, addon-owned, foreign-source, blank, and unparseable lines are
-  preserved because the service removes only records it owns.
-
-A collision with an existing registry name skips the plugin server and leaves
-the existing record untouched. Between two plugin declarations, the first
-wins. A skipped component is absent from the corresponding protected field or
-registry, not merely labeled while still being used.
-
-## Protected prompt representation
-
-The `<registered_plugin>` section is protected and contains each visible
-plugin's identity, summary, source, mount tier, skill facts, and MCP facts. For
-registered entries, `<mount>registered</mount>` distinguishes the explicit
-trust tier; discovered entries carry `<mount>discovered</mount>`. A registered
-entry's `skills_mounted` says only whether validated plugin skill paths were
-accepted while the Skills capability was enabled. It never means that those
-skills entered the vanilla catalog.
-
-`info` can reconcile this protected section from live discovery while retaining
-the boot registration distinction. If a component was skipped during boot or
-scan, the reason is exposed through the diagnostic fields described in the
-companion reference.
-
-## Further reading
-
-- [`format-and-containment.md`](format-and-containment.md) -- manifest,
-  component, and path-gate rules.
-- [`diagnostics-and-settings.md`](diagnostics-and-settings.md) -- exact info
-  and settings fields and failure diagnosis.
-- `src/lingtai/tools/plugin/CONTRACT.md` -- source-of-truth public contract.
+Do not hand-edit `mcp_registry.jsonl` or delete the plugin directory. The
+registry service prunes only `source="plugin:*"` records it owns; foreign,
+blank, and unparseable lines survive. A removed server is pruned, a changed
+specification replaces its old record, repeated refresh is idempotent, and
+between plugin collisions the first declared name wins. An existing hand-written
+or addon record is untouched. Duplicate plugin names are first-wins and appear
+in `problems`; a skipped component is absent from the field/registry, not merely
+labeled.

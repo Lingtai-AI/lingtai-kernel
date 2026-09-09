@@ -158,32 +158,30 @@ def _flatten_manual_result(plugin_result: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 _DESCRIPTION = (
-    "READ-ONLY: Agent Plugins v1.0.0 catalog (agent-plugins.org); protected "
-    "<registered_plugin> field. `info` re-scans and reports the boot snapshot, "
-    "`settings` shows redacted roots, and `manual` returns guidance. `registered` "
-    "is declared by canonical init.json `manifest.plugins` (or retained alias "
-    "`manifest.capabilities.plugin.paths`) and boot-registered; `discovered` is "
-    "found on inherited `manifest.capabilities.skills.paths` only. Registered "
-    "skills stay in the protected Plugin field, not vanilla Skills; `mcp.json` "
-    "records carry source=\"plugin:<name>\" and are registered but NOT running. "
-    "Call `manual`, then `info`, before third-party inspection or authoring. "
-    "Plugin-relative command/cwd/args require ./ or ${PLUGIN_ROOT}/ containment "
-    "after symlinks. Install/uninstall are authorized `manifest.plugins` edits "
-    "followed by system(action=\"refresh\"); actions write, mount, launch, or "
-    "delete nothing."
+    "READ-ONLY: Agent Plugins v1.0.0 catalog (agent-plugins.org) in the "
+    "protected <registered_plugin> field. `info` reports registered, discovered, "
+    "skipped, and problem facts; `settings` shows redacted roots; `manual` "
+    "returns guidance. Canonical init.json `manifest.plugins` (or retained alias "
+    "`manifest.capabilities.plugin.paths`) is registered; inherited "
+    "`manifest.capabilities.skills.paths` is discovered only. Skills stay in the "
+    "protected field, and `mcp.json` records carry source=\"plugin:<name>\" and "
+    "are registered but NOT running. For unfamiliar or consequential work read `manual`, then "
+    "call `info`. Plugin-relative command/cwd/args require ./ or "
+    "${PLUGIN_ROOT}/ containment after symlinks. Install/uninstall are authorized "
+    "`manifest.plugins` edits followed by system(action=\"refresh\"); actions "
+    "write, mount, launch, or delete nothing."
 )
 
 _EMPTY_INPUT: dict[str, Any] = MANUAL_INPUT_SCHEMA
 
 _ACTION_DESCRIPTION = (
-    "info: read-only action; re-scans and reports registered, "
-    "discovered, skipped, per-path, and problem facts. settings: redacted "
-    "manifest.plugins registration-root inventory without scanning or mutation. "
-    "manual: return the plugin-manual body without scanning. No action registers "
-    "or unregisters anything. All actions require input={} and are read-only; "
-    "registration occurs only at boot or "
-    "system(action=\"refresh\") after an authorized init.json "
-    "manifest.plugins edit."
+    "info: read-only action; re-scans and reports registered, discovered, "
+    "skipped, per-path, and problem facts. settings: redacted "
+    "manifest.plugins root inventory without scanning or mutation. manual: "
+    "return the plugin-manual body without scanning. No action registers or "
+    "unregisters anything. All actions require input={} and are read-only; "
+    "registration occurs only at boot or system(action=\"refresh\") after an "
+    "authorized init.json manifest.plugins edit."
 )
 
 
