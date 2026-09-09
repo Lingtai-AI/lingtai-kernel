@@ -3,8 +3,9 @@
 Every LingTai Agent (including avatars, which are ordinary ``Agent`` instances
 bound to their own working directory) owns and publishes exactly one live
 record describing itself: identity, model/provider, verified consumer-facing
-handles, visible MCP integration labels, session/liveness, usage/context, and
-a bounded aggregate of its own daemons' self-records.
+handles, visible MCP integration labels, session/liveness, usage/context, a
+bounded aggregate of its own daemons' self-records, and one versioned recent
+daemon+Shell async-work presentation snapshot.
 
 This module is the sole writer/reader of that shape. Consumer surfaces (TUI,
 ``/kanban``, ``/details``, Telegram, Portal) read and curate this record; they
@@ -21,10 +22,11 @@ Ownership split, mirroring the existing ``_build_manifest`` override pattern:
   etc.), so it never imports them.
 
 The owning agent aggregates only daemon states selected by its append-only
-dispatch ledger, newest ``LINGTAI_SESSION_STATS_DAEMON_LIMIT`` first.  The
-ledger determines membership and append order; each selected ``daemon.json``
-remains lifecycle and usage truth.  A small single-flight refresher performs
-that bounded read outside the heartbeat thread.
+dispatch ledger, newest ``LINGTAI_SESSION_STATS_DAEMON_LIMIT`` first. The ledger
+determines membership and append order; each selected ``daemon.json`` remains
+lifecycle and usage truth. Shell state comes only from the existing atomic job
+records. One small single-flight refresher performs bounded daemon selection and
+background Shell lifetime-directory enumeration outside the heartbeat thread.
 
 Never serialize: API keys/tokens/passwords, environment or config values, raw
 prompts/messages/tool payloads, working-directory/host/user paths, shell
@@ -38,7 +40,9 @@ import copy
 import json
 import math
 import os
+import stat
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -68,6 +72,14 @@ DEFAULT_REFRESH_SECONDS = 5.0
 
 DAEMON_LIMIT_ENV = "LINGTAI_SESSION_STATS_DAEMON_LIMIT"
 DEFAULT_DAEMON_LIMIT = 1000
+
+# Provider-neutral recent asynchronous-work projection.  This is deliberately
+# fixed policy, not another runtime/config surface: Telegram's established
+# terminal window becomes the shared Agent Record contract.
+ASYNC_WORK_SCHEMA = "lingtai.async_work/v1"
+ASYNC_WORK_VERSION = 1
+ASYNC_WORK_WINDOW_SECONDS = 600
+ASYNC_WORK_STATUS_KEYS = ("running", "queued", "done", "failed")
 
 
 def session_stats_refresh_seconds() -> float:
@@ -148,7 +160,13 @@ def agent_record_path(working_dir: Path | str) -> Path:
     return Path(working_dir) / AGENT_RECORD_RELATIVE_PATH
 
 
-def build_agent_record(agent, *, sequence: int = 0, daemon_summary: dict | None = None) -> dict:
+def build_agent_record(
+    agent,
+    *,
+    sequence: int = 0,
+    daemon_summary: dict | None = None,
+    async_work_snapshot: dict | None = None,
+) -> dict:
     """Build the redacted, versioned Agent record for *agent*.
 
     Reads only fields Core already owns (mirrors the allowlisted subset of
@@ -255,6 +273,10 @@ def build_agent_record(agent, *, sequence: int = 0, daemon_summary: dict | None 
         # explicit callers/tests without making that fallback a heartbeat path.
         "daemons": daemon_summary if isinstance(daemon_summary, dict) else aggregate_daemon_records(getattr(agent, "_working_dir", None)),
     }
+    # Missing on the first publication while the background owner obtains its
+    # first complete view.  Never invent zero counts merely to fill the field.
+    if isinstance(async_work_snapshot, dict):
+        record["async_work"] = copy.deepcopy(async_work_snapshot)
 
     extra_provider = getattr(agent, "_build_agent_record_extra", None)
     if callable(extra_provider):
@@ -363,7 +385,383 @@ def query_published_agent_liveness(
 
 
 # ---------------------------------------------------------------------------
-# Ledger-selected daemon aggregation and asynchronous snapshot owner
+# Recent async-work projection and asynchronous Agent Record snapshot owner
+# ---------------------------------------------------------------------------
+
+
+def _empty_async_lane() -> dict[str, int]:
+    return {key: 0 for key in ASYNC_WORK_STATUS_KEYS}
+
+
+def _nonnegative_count(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if not math.isfinite(number) or number < 0:
+        return 0
+    return int(number)
+
+
+def _safe_machine_identifier(value: object, *, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > limit:
+        return None
+    safe_punctuation = frozenset("._:/\\\\-")
+    if not all(
+        char.isascii() and (char.isalnum() or char in safe_punctuation)
+        for char in text
+    ):
+        return None
+    return text
+
+
+def _iso_timestamp_epoch(value: object) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        text = value.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        stamp = datetime.fromisoformat(text)
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return stamp.astimezone(timezone.utc).timestamp()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _terminal_in_window(finished_at: float | None, now_epoch: float) -> bool:
+    if finished_at is None or not math.isfinite(finished_at):
+        return False
+    age = now_epoch - finished_at
+    return math.isfinite(age) and 0 <= age <= ASYNC_WORK_WINDOW_SECONDS
+
+
+def _daemon_async_category(state: object) -> str | None:
+    if not isinstance(state, dict):
+        return None
+    raw = state.get("state")
+    if not isinstance(raw, str):
+        return None
+    if raw in {"running", "active"}:
+        return "running"
+    if raw in {"queued", "pending"}:
+        return "queued"
+    if raw == "done":
+        return "done"
+    if raw in {"failed", "cancelled", "timeout"}:
+        return "failed"
+    return None
+
+
+def _shell_async_category(state: object) -> str | None:
+    """Classify only durable Shell truth; never probe or mutate a process."""
+    if not isinstance(state, dict):
+        return None
+    raw = state.get("status")
+    if raw == "launching":
+        return "queued"
+    if raw == "running":
+        return "running"
+    if raw == "unrecoverable":
+        return "failed"
+    if raw != "completed":
+        return None
+    if state.get("cancellation_outcome") == "group_cancelled":
+        return "failed"
+    if state.get("exit_status_known") is not True:
+        return None
+    exit_code = state.get("exit_code")
+    if type(exit_code) is not int:
+        return None
+    return "done" if exit_code == 0 else "failed"
+
+
+def _selected_daemon_usage(state: dict[str, Any]) -> dict[str, Any] | None:
+    tokens = state.get("tokens")
+    cli_tokens = state.get("cli_tokens")
+    tokens = tokens if isinstance(tokens, dict) else None
+    cli_tokens = cli_tokens if isinstance(cli_tokens, dict) else None
+    backend = state.get("backend")
+    if backend == "lingtai":
+        return tokens
+    if isinstance(backend, str) and backend.strip():
+        return cli_tokens or tokens
+    # Legacy records had no backend marker. Prefer a non-zero external CLI
+    # ledger, then fall back to kernel tokens, matching Telegram's prior view.
+    if cli_tokens is not None and any(
+        _nonnegative_count(cli_tokens.get(key)) > 0
+        for key in ("input", "output", "thinking", "cached", "calls")
+    ):
+        return cli_tokens
+    return tokens or cli_tokens
+
+
+def _recent_daemon_lane(
+    working_dir: Path,
+    *,
+    now_epoch: float,
+    limit: int,
+) -> dict[str, Any] | None:
+    from ..daemon_dispatch import read_recent_daemon_states
+
+    _, rows, warnings = read_recent_daemon_states(working_dir, limit=limit)
+    if any(
+        not isinstance(warning, dict)
+        or warning.get("code") != "dispatch_ledger_empty"
+        for warning in warnings
+    ):
+        return None
+    lane: dict[str, Any] = _empty_async_lane()
+    backend_counts: dict[str, int] = {}
+    model_counts: dict[str, int] = {}
+    usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "thinking_tokens": 0,
+        "cached_tokens": 0,
+        "api_calls": 0,
+    }
+    for _, _, state in rows:
+        category = _daemon_async_category(state)
+        if category is None:
+            continue
+        if category in {"done", "failed"} and not _terminal_in_window(
+            _iso_timestamp_epoch(state.get("finished_at")), now_epoch
+        ):
+            continue
+        lane[category] += 1
+
+        raw_backend = state.get("backend")
+        backend = _safe_machine_identifier(raw_backend, limit=48) or "unknown"
+        backend_counts[backend] = backend_counts.get(backend, 0) + 1
+        if raw_backend == "lingtai":
+            model = _safe_machine_identifier(state.get("model"), limit=128)
+            if model is not None and model != "unknown":
+                model_counts[model] = model_counts.get(model, 0) + 1
+
+        selected = _selected_daemon_usage(state)
+        if selected is not None:
+            usage["input_tokens"] += _nonnegative_count(selected.get("input"))
+            usage["output_tokens"] += _nonnegative_count(selected.get("output"))
+            usage["thinking_tokens"] += _nonnegative_count(selected.get("thinking"))
+            usage["cached_tokens"] += _nonnegative_count(selected.get("cached"))
+            usage["api_calls"] += _nonnegative_count(selected.get("calls"))
+
+    lane["backend_counts"] = backend_counts
+    if model_counts:
+        lane["model_counts"] = model_counts
+    lane["usage"] = usage
+    return lane
+
+
+def _recent_shell_lane(working_dir: Path, *, now_epoch: float) -> dict[str, int] | None:
+    jobs_dir = working_dir / "system" / "jobs"
+    try:
+        jobs_mode = jobs_dir.lstat().st_mode
+    except FileNotFoundError:
+        return _empty_async_lane()
+    except OSError:
+        return None
+    if stat.S_ISLNK(jobs_mode) or not stat.S_ISDIR(jobs_mode):
+        return None
+    try:
+        children = list(jobs_dir.iterdir())
+    except OSError:
+        return None
+
+    lane = _empty_async_lane()
+    for job_dir in children:
+        try:
+            job_mode = job_dir.lstat().st_mode
+        except OSError:
+            return None
+        if stat.S_ISLNK(job_mode) or not stat.S_ISDIR(job_mode):
+            continue
+        try:
+            raw_state = (job_dir / "state.json").read_text(encoding="utf-8")
+        except FileNotFoundError:
+            # A legacy directory or the pre-publication edge of an atomic state
+            # write has no durable lifecycle truth yet, so it is expected absent.
+            continue
+        except UnicodeDecodeError:
+            continue
+        except OSError:
+            return None
+        try:
+            state = json.loads(raw_state)
+            if not isinstance(state, dict):
+                continue
+            category = _shell_async_category(state)
+            if category is None:
+                continue
+            if category in {"done", "failed"}:
+                finished = state.get("finished_at")
+                if (
+                    isinstance(finished, bool)
+                    or not isinstance(finished, (int, float))
+                    or not _terminal_in_window(float(finished), now_epoch)
+                ):
+                    continue
+            lane[category] += 1
+        except (json.JSONDecodeError, TypeError, ValueError, OverflowError):
+            continue
+    return lane
+
+
+def build_async_work_snapshot(
+    working_dir: Path | str | None,
+    *,
+    now_epoch: float | None = None,
+    daemon_limit: int | None = None,
+) -> dict[str, Any] | None:
+    """Build one provider-neutral daemon+Shell recent-work snapshot.
+
+    Collection is read-only. Callers place this function behind
+    :class:`RecentAsyncWorkSnapshot`; it is intentionally synchronous as a pure
+    worker operation and must not run on the foreground heartbeat thread.
+    """
+    if not working_dir:
+        return None
+    now = time.time() if now_epoch is None else now_epoch
+    if isinstance(now, bool) or not isinstance(now, (int, float)):
+        return None
+    now = float(now)
+    if not math.isfinite(now):
+        return None
+    limit = daemon_limit if daemon_limit is not None else session_stats_daemon_limit()
+    try:
+        daemon = _recent_daemon_lane(Path(working_dir), now_epoch=now, limit=limit)
+        shell = _recent_shell_lane(Path(working_dir), now_epoch=now)
+    except Exception:
+        return None
+    if daemon is None or shell is None:
+        return None
+
+    aggregate = {
+        key: daemon[key] + shell[key]
+        for key in ASYNC_WORK_STATUS_KEYS
+    }
+    return {
+        "schema": ASYNC_WORK_SCHEMA,
+        "schema_version": ASYNC_WORK_VERSION,
+        "generated_at": datetime.fromtimestamp(now, timezone.utc).isoformat().replace(
+            "+00:00", "Z"
+        ),
+        "window_seconds": ASYNC_WORK_WINDOW_SECONDS,
+        **aggregate,
+        "daemon": daemon,
+        "shell": shell,
+    }
+
+
+def query_published_async_work(
+    record: object,
+    *,
+    wall_now: float,
+) -> dict[str, Any] | None:
+    """Return a strict safe async-work view, or ``None`` when unavailable.
+
+    The exact 600-second window is also the maximum snapshot age. Consumers do
+    not reuse a stopped producer's terminal counts forever, and malformed/old
+    Agent Records never become fabricated zero rows.
+    """
+    if not isinstance(record, dict):
+        return None
+    if (
+        record.get("schema") != AGENT_RECORD_SCHEMA
+        or type(record.get("schema_version")) is not int
+        or record.get("schema_version") != AGENT_RECORD_VERSION
+    ):
+        return None
+    snapshot = record.get("async_work")
+    if not isinstance(snapshot, dict):
+        return None
+    if (
+        snapshot.get("schema") != ASYNC_WORK_SCHEMA
+        or type(snapshot.get("schema_version")) is not int
+        or snapshot.get("schema_version") != ASYNC_WORK_VERSION
+        or type(snapshot.get("window_seconds")) is not int
+        or snapshot.get("window_seconds") != ASYNC_WORK_WINDOW_SECONDS
+    ):
+        return None
+    if isinstance(wall_now, bool) or not isinstance(wall_now, (int, float)):
+        return None
+    wall_now = float(wall_now)
+    generated_at = _iso_timestamp_epoch(snapshot.get("generated_at"))
+    if not math.isfinite(wall_now) or not _terminal_in_window(generated_at, wall_now):
+        return None
+
+    lanes: dict[str, dict[str, Any]] = {}
+    for lane_name in ("daemon", "shell"):
+        source = snapshot.get(lane_name)
+        if not isinstance(source, dict):
+            return None
+        lane: dict[str, Any] = {}
+        for key in ASYNC_WORK_STATUS_KEYS:
+            value = source.get(key)
+            if type(value) is not int or value < 0:
+                return None
+            lane[key] = value
+        lanes[lane_name] = lane
+
+    daemon_source = snapshot["daemon"]
+    for detail_key, limit in (("backend_counts", 48), ("model_counts", 128)):
+        details = daemon_source.get(detail_key)
+        if details is None:
+            continue
+        if not isinstance(details, dict):
+            return None
+        safe_details: dict[str, int] = {}
+        for raw_name, raw_count in details.items():
+            name = _safe_machine_identifier(raw_name, limit=limit)
+            if name is None or type(raw_count) is not int or raw_count <= 0:
+                return None
+            safe_details[name] = raw_count
+        lanes["daemon"][detail_key] = safe_details
+
+    raw_usage = daemon_source.get("usage")
+    if not isinstance(raw_usage, dict):
+        return None
+    safe_usage: dict[str, int] = {}
+    for key in (
+        "input_tokens",
+        "output_tokens",
+        "thinking_tokens",
+        "cached_tokens",
+        "api_calls",
+    ):
+        value = raw_usage.get(key)
+        if type(value) is not int or value < 0:
+            return None
+        safe_usage[key] = value
+    lanes["daemon"]["usage"] = safe_usage
+
+    aggregate: dict[str, int] = {}
+    for key in ASYNC_WORK_STATUS_KEYS:
+        value = snapshot.get(key)
+        expected = lanes["daemon"][key] + lanes["shell"][key]
+        if type(value) is not int or value < 0 or value != expected:
+            return None
+        aggregate[key] = value
+
+    return {
+        "schema": ASYNC_WORK_SCHEMA,
+        "schema_version": ASYNC_WORK_VERSION,
+        "generated_at": snapshot["generated_at"],
+        "window_seconds": ASYNC_WORK_WINDOW_SECONDS,
+        **aggregate,
+        **lanes,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Ledger-selected daemon aggregation
 # ---------------------------------------------------------------------------
 
 
@@ -433,20 +831,26 @@ def aggregate_daemon_records(working_dir: Path | str | None, *, limit: int | Non
     return summary
 
 
-class RecentDaemonSnapshot:
-    """One named, per-agent single-flight owner for daemon summary I/O.
+class RecentAsyncWorkSnapshot:
+    """One per-agent single-flight owner for Agent Record background I/O.
 
-    Scheduling is nonblocking and coalesces while a read is in flight.  The
-    heartbeat reads only the last completed compact snapshot; no executor,
-    queue, or generic task framework is introduced for this one boundary.
+    Scheduling is nonblocking and coalesces while a read is in flight. The
+    heartbeat receives one detached pair containing the latest complete
+    daemon-history summary and common recent daemon+Shell snapshot. Either value
+    advances only after its own complete read. No executor, queue, scheduler, or
+    generic task framework is introduced for this boundary.
     """
 
     def __init__(self, working_dir: Path | str, *, limit: int | None = None) -> None:
         self._working_dir = Path(working_dir)
         self._limit = limit
         resolved_limit = limit if limit is not None else session_stats_daemon_limit()
-        self._snapshot = _empty_daemon_summary(resolved_limit)
-        self._snapshot["refreshing"] = False
+        daemon_summary = _empty_daemon_summary(resolved_limit)
+        daemon_summary["refreshing"] = False
+        self._snapshot: dict[str, Any] = {
+            "daemons": daemon_summary,
+            "async_work": None,
+        }
         self._lock = threading.Lock()
         self._refreshing = False
 
@@ -456,39 +860,50 @@ class RecentDaemonSnapshot:
             if self._refreshing:
                 return False
             self._refreshing = True
-            self._snapshot["refreshing"] = True
+            self._snapshot["daemons"]["refreshing"] = True
         try:
             thread = threading.Thread(
                 target=self._refresh,
-                name="lingtai-daemon-stats",
+                name="lingtai-async-work-snapshot",
                 daemon=True,
             )
             thread.start()
         except Exception:
             with self._lock:
                 self._refreshing = False
-                self._snapshot["refreshing"] = False
+                self._snapshot["daemons"]["refreshing"] = False
             return False
         return True
 
-    def snapshot(self) -> dict:
-        """Return a detached copy of the last completed/current compact view."""
+    def snapshot(self) -> dict[str, Any]:
+        """Return a detached copy of the last completed/current compact pair."""
         with self._lock:
             return copy.deepcopy(self._snapshot)
 
     def _refresh(self) -> None:
         try:
-            fresh = aggregate_daemon_records(self._working_dir, limit=self._limit)
+            daemon_summary = aggregate_daemon_records(
+                self._working_dir, limit=self._limit
+            )
         except Exception:
-            # The writer remains best-effort.  Keep the last known snapshot
-            # rather than publishing invented zeros after an unexpected error.
-            fresh = None
+            daemon_summary = None
+        try:
+            async_work = build_async_work_snapshot(
+                self._working_dir, daemon_limit=self._limit
+            )
+        except Exception:
+            async_work = None
         with self._lock:
-            if isinstance(fresh, dict):
-                fresh["refreshing"] = False
-                self._snapshot = fresh
+            # Each result advances only when its own complete read succeeded.
+            # In particular, a malformed Shell store must not freeze the
+            # pre-existing daemon-history publication path.
+            if isinstance(daemon_summary, dict):
+                daemon_summary["refreshing"] = False
+                self._snapshot["daemons"] = daemon_summary
             else:
-                self._snapshot["refreshing"] = False
+                self._snapshot["daemons"]["refreshing"] = False
+            if isinstance(async_work, dict):
+                self._snapshot["async_work"] = async_work
             self._refreshing = False
 
 def _empty_daemon_usage_totals() -> dict:
@@ -500,11 +915,14 @@ def _empty_daemon_usage_totals() -> dict:
 
 __all__ = [
     "AGENT_RECORD_SCHEMA", "AGENT_RECORD_VERSION", "AGENT_RECORD_RELATIVE_PATH",
+    "ASYNC_WORK_SCHEMA", "ASYNC_WORK_VERSION", "ASYNC_WORK_WINDOW_SECONDS",
+    "ASYNC_WORK_STATUS_KEYS",
     "REFRESH_SECONDS_ENV", "DEFAULT_REFRESH_SECONDS",
     "DAEMON_LIMIT_ENV", "DEFAULT_DAEMON_LIMIT",
     "session_stats_refresh_seconds", "session_stats_daemon_limit",
     "should_refresh_agent_record",
     "agent_record_path", "build_agent_record", "write_agent_record", "read_agent_record",
     "classify_published_agent_record", "query_published_agent_liveness",
-    "aggregate_daemon_records", "RecentDaemonSnapshot",
+    "build_async_work_snapshot", "query_published_async_work",
+    "aggregate_daemon_records", "RecentAsyncWorkSnapshot",
 ]

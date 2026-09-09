@@ -138,6 +138,30 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
     )
 
 
+def test_shared_render_rejects_malformed_pending_activity_labels() -> None:
+    for marker in ([], {"arbitrary": "PRIVATE_LABEL"}, "PRIVATE_LABEL"):
+        text = TaskCardEventProjection.render_event_groups(
+            [{
+                "api_call_id": "api-1",
+                "events": [{
+                    "kind": "tool",
+                    "tool": "bash",
+                    "tool_action": "run",
+                    "reasoning": "build",
+                    "status": "???",
+                    "_pending_activity": marker,
+                }],
+            }],
+            normal_rows=1,
+            metadata=None,
+            now=datetime(2026, 8, 3, 2, 30, tzinfo=timezone.utc),
+        )
+        assert "• bash.run: build (0ms, running)" in text
+        assert "PRIVATE_LABEL" not in text
+        assert "foreground" not in text
+        assert "dispatching async job" not in text
+
+
 def test_api_call_embeds_single_timestamp_in_symmetric_divider() -> None:
     """Each API-call group embeds exactly one wall-clock stamp centered in its
     divider line (Jason 2026-08-09, follow-up): per-tool-row stamps are gone,

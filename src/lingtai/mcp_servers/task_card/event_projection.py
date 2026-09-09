@@ -7,11 +7,12 @@ import math
 from datetime import datetime
 from typing import Any
 
+from lingtai.kernel.session_stats import ASYNC_WORK_STATUS_KEYS
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.trace_redaction import redact_text
 
 
-_ASYNC_STATUS_KEYS = ("running", "done", "failed", "cancelled", "timeout", "unknown")
+_ASYNC_STATUS_KEYS = ASYNC_WORK_STATUS_KEYS
 
 
 class TaskCardEventProjection:
@@ -1062,10 +1063,18 @@ class TaskCardEventProjection:
 
             stats_parts: list[str] = []
             if isinstance(daemon, dict):
-                input_tokens = count(daemon.get("input_tokens"))
-                output_tokens = count(daemon.get("output_tokens"))
-                cached_tokens = count(daemon.get("cached_tokens"))
-                cli_calls = count(daemon.get("cli_calls"))
+                # v1 scopes all usage explicitly beneath the daemon lane. The
+                # direct-key fallback keeps formatting of already-built legacy
+                # metadata safe while Telegram itself accepts only validated v1.
+                usage_source = daemon.get("usage")
+                if not isinstance(usage_source, dict):
+                    usage_source = daemon
+                input_tokens = count(usage_source.get("input_tokens"))
+                output_tokens = count(usage_source.get("output_tokens"))
+                cached_tokens = count(usage_source.get("cached_tokens"))
+                api_calls = count(usage_source.get("api_calls"))
+                if api_calls is None:
+                    api_calls = count(usage_source.get("cli_calls"))
                 if input_tokens is not None and input_tokens > 0:
                     stats_parts.append(f"in {cls.format_count(input_tokens)}")
                 if output_tokens is not None and output_tokens > 0:
@@ -1079,8 +1088,8 @@ class TaskCardEventProjection:
                     stats_parts.append(
                         f"cache {min(cached_tokens / input_tokens, 1.0):.1%}"
                     )
-                if cli_calls is not None and cli_calls > 0:
-                    stats_parts.append(f"api {cli_calls}")
+                if api_calls is not None and api_calls > 0:
+                    stats_parts.append(f"api {api_calls}")
 
             # All rows belong to one Async Work section. The priority value is
             # used only by the whole-line 500-character budget below.
@@ -1261,10 +1270,17 @@ class TaskCardEventProjection:
             # progress is rendered on the group divider, not here.
             elapsed = cls.format_elapsed_ms(cls.row_elapsed_ms(row))
             if status == "???":
-                # A tool call with no result yet is genuinely running; showing
-                # ``???`` wasted the slot without saying anything real.
+                # A tool call with no result yet is foreground activity. Shell
+                # run rows use their safe pre-projected mode so an async launch
+                # is not mistaken for the detached job's lifecycle.
                 status_suffix = ""
-                suffix = f" ({elapsed}, running)" if elapsed else " (running)"
+                pending = row.get("_pending_activity")
+                if not isinstance(pending, str) or pending not in {
+                    "foreground",
+                    "dispatching async job",
+                }:
+                    pending = "running"
+                suffix = f" ({elapsed}, {pending})" if elapsed else f" ({pending})"
             else:
                 status_suffix = f", {status}" if status else ""
                 suffix = f" ({elapsed}{status_suffix})"

@@ -6,6 +6,8 @@ related_files:
   - src/lingtai/mcp_servers/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/mcp_servers/task_card/event_projection.py
+  - src/lingtai/kernel/session_stats/ANATOMY.md
+  - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/service.py
   - src/lingtai/mcp_servers/ANATOMY.md
@@ -14,6 +16,7 @@ related_files:
   - tests/test_telegram_task_card_programmable.py
   - tests/test_telegram_task_card_toggle.py
   - tests/test_telegram_task_card_event_tail.py
+  - tests/test_telegram_task_card_rows.py
   - tests/test_telegram_task_card_display_expression.py
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
   - src/lingtai/mcp_servers/telegram/task_card/_family.py
@@ -46,10 +49,13 @@ onto its one tracked resident Task Card target per account+chat.
   machine, and explicit partial/indeterminate outcomes.
 - `manager.py` — the Telegram adapter that tails `events.jsonl`, reads only a bounded
   recent tail of the existing main `token_ledger.jsonl` when a generated-summary
-  event needs token correlation, and supplies safe facts to the shared projection
-  core. It also implements compound-ID binding, high-water supersession, Telegram
-  API classification, real transport, resident persistence, and programmable
-  file projection callbacks.
+  event needs token correlation, and consumes the kernel-validated
+  `agent_record.async_work` snapshot for daemon+Shell presentation. It performs
+  no daemon/Shell fallback scan. It also implements compound-ID binding,
+  high-water supersession, Telegram API classification, real transport, resident
+  persistence, and programmable file projection callbacks
+  (`src/lingtai/mcp_servers/telegram/manager.py:2716-2726`,
+  `src/lingtai/mcp_servers/telegram/manager.py:2848-2901`).
   `_taskcard_display_expression()` reads the durable declarative display
   expression from `TelegramService` at each automatic projection tick
   (`_broadcast_task_card_event_window`, `_ensure_task_card_resident`) and
@@ -78,7 +84,10 @@ onto its one tracked resident Task Card target per account+chat.
   grammar: an ordered, allowlisted selection of the fragments
   (`header`/`rows`/`blank`/`footer`/`divider`/`metadata`/`time`/`ask_agent`)
   `format_rows_task_card_text` already renders, never arbitrary interpolated
-  data.
+  data. It renders only a pre-projected allowlisted pending-activity label;
+  `TelegramManager` derives that label for canonical `shell.run` from literal
+  `input.async`, so no command/path/environment argument enters the row
+  (`src/lingtai/mcp_servers/task_card/event_projection.py:1221-1301`).
 - `SKILL.md` — packaged Telegram-facing manual/procedure material for this
   component.
 - Retained legacy files in this package (`controller.py`, `_family.py`,
@@ -93,9 +102,12 @@ onto its one tracked resident Task Card target per account+chat.
 - `TelegramManager` alone tails `<workdir>/logs/events.jsonl`; when an existing
   `apriori_summary_generated` event appears, it additionally reads at most 64 KiB
   from the end of `<workdir>/logs/token_ledger.jsonl` to find the existing
-  correlated summary accounting row. It delegates only pure safe-field
-  correlation/projection/grouping/rendering to `TaskCardEventProjection` and
-  keeps the existing private helpers as compatibility wrappers.
+  correlated summary accounting row. It reads Async Work only through
+  `kernel.session_stats.query_published_async_work`; stale/malformed/missing
+  snapshots disappear rather than triggering a private store scan. It delegates
+  only pure safe-field correlation/projection/grouping/rendering to
+  `TaskCardEventProjection` and keeps unrelated private helpers as compatibility
+  wrappers.
 - `TelegramManager` constructs `TaskCardResidentTransport` with dynamic provider
   callbacks. The shared core never imports Telegram, reads its state file, or
   classifies Bot API errors.
@@ -128,8 +140,9 @@ onto its one tracked resident Task Card target per account+chat.
   automatic projection tick. This file is distinct from the bootstrap
   `.secrets/telegram.json` account/token config, which never carries
   presentation settings.
-- No programmable renderer state of its own; producer state lives under
-  `<workdir>/taskcard/`
+- No programmable renderer or Async Work collector state of its own; producer
+  state lives under `<workdir>/taskcard/`; the kernel-owned common snapshot is
+  the `async_work` child inside `<workdir>/system/agent_record.json`
 
 ## Notes
 

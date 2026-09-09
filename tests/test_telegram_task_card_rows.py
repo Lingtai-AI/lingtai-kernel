@@ -13,12 +13,7 @@ import json
 import os
 import time
 
-from lingtai.mcp_servers.telegram.manager import (
-    TelegramManager,
-    _TASK_CARD_FOOTER,
-    _task_card_shell_status,
-    _task_card_shell_in_window,
-)
+from lingtai.mcp_servers.telegram.manager import TelegramManager, _TASK_CARD_FOOTER
 from tests._notification_store_helpers import FakeNotificationStore
 
 
@@ -840,156 +835,92 @@ def test_metadata_displays_lingtai_daemon_models_compactly_and_deterministically
     ]
 
 
-def test_daemon_snapshot_uses_ledger_tail_and_windows(tmp_path):
-    import json as _json
-    from datetime import datetime, timedelta, timezone
+def test_telegram_reads_kernel_owned_async_work_snapshot(tmp_path):
+    from lingtai.kernel import session_stats
 
-    daemons = tmp_path / "daemons"
-    (daemons / "em-1").mkdir(parents=True)
-    (daemons / "em-2").mkdir()
-    (daemons / "em-3").mkdir()
-    (daemons / "em-4").mkdir()
-    now = datetime.now(timezone.utc)
-    recent = (now - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    old = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for name, state in [
-        ("em-1", {"state": "running", "backend": "lingtai", "model": "gpt-5.6", "tokens": {"input": 1000, "output": 500, "cached": 800, "calls": 3}}),
-        ("em-2", {"state": "done", "backend": "claude-p", "model": "claude-external", "finished_at": recent, "tokens": {"input": 2000, "output": 700, "cached": 1500, "calls": 4}}),
-        ("em-3", {"state": "failed", "finished_at": recent, "model": "external-unknown", "cli_tokens": {"input": 3000, "output": 100, "cached": 0, "calls": 1}}),
-        ("em-4", {"state": "done", "backend": "codex", "finished_at": old, "tokens": {"input": 9999, "output": 9999, "cached": 9999, "calls": 99}}),
-    ]:
-        (daemons / name / "daemon.json").write_text(_json.dumps(state), encoding="utf-8")
-        from lingtai.kernel.daemon_dispatch import append_dispatch
-        append_dispatch(tmp_path, run_id=name, created_at="2026-08-20T00:00:00Z")
-
-    mgr, _ = _integration_manager(tmp_path)
-    snap = mgr._task_card_daemon_snapshot()
-    assert snap["running"] == 1
-    assert snap["done"] == 1
-    assert snap["failed"] == 1
-    # em-4 outside the 10-minute window is excluded entirely.
-    assert snap["input_tokens"] == 1000 + 2000 + 3000
-    assert snap["output_tokens"] == 500 + 700 + 100
-    assert snap["cached_tokens"] == 800 + 1500 + 0
-    # In-window selected ledgers: LingTai tokens 3 + external fallback tokens 4 + CLI ledger 1.
-    # em-4 is outside the window and its 99 calls remain excluded.
-    assert snap["cli_calls"] == 8
-    # Only actual LingTai backend model values are eligible; external and
-    # backend-less records remain visible in their existing lanes but are not
-    # misrepresented as LingTai model statistics.
-    assert snap["model_counts"] == {"gpt-5.6": 1}
-    # Backend distribution counts only in-window runs; em-3 without a backend
-    # falls back to "unknown".
-    assert snap["backend_counts"] == {"lingtai": 1, "claude-p": 1, "unknown": 1}
-
-
-def test_daemon_snapshot_returns_none_when_no_daemons(tmp_path):
-    mgr, _ = _integration_manager(tmp_path)
-    assert mgr._task_card_daemon_snapshot() is None
-
-
-# ---------------------------------------------------------------------------
-# Unified async-work lanes: shell classification, mixed arithmetic, and RO scan
-# ---------------------------------------------------------------------------
-
-
-def test_shell_status_classification_matrix() -> None:
-    now = time.time()
-    cases = [
-        ({"status": "launching"}, "running"),
-        ({"status": "running", "cancel_requested_at": now}, "running"),
-        ({"status": "completed", "cancellation_outcome": "group_cancelled"}, "cancelled"),
-        ({"status": "completed", "exit_status_known": True, "exit_code": 0}, "done"),
-        ({"status": "completed", "exit_status_known": True, "exit_code": 7}, "failed"),
-        ({"status": "completed", "exit_status_known": True, "exit_code": False}, "unknown"),
-        ({"status": "completed", "exit_status_known": False}, "unknown"),
-        ({"status": "unrecoverable"}, "failed"),
-    ]
-    for state, expected in cases:
-        assert _task_card_shell_status(state) == expected
-    assert _task_card_shell_in_window({"status": "running"}, now) is True
-    assert _task_card_shell_in_window(
-        {"status": "completed", "finished_at": now - 600}, now
-    ) is True
-    assert _task_card_shell_in_window(
-        {"status": "completed", "finished_at": now - 601}, now
-    ) is False
-    assert _task_card_shell_in_window(
-        {"status": "completed", "finished_at": float("nan")}, now
-    ) is False
-
-
-def test_shell_snapshot_is_read_only_and_skips_legacy_jobs(tmp_path):
-    jobs = tmp_path / "system" / "jobs"
-    jobs.mkdir(parents=True)
-    state_dir = jobs / "job-1"
-    state_dir.mkdir()
-    state_path = state_dir / "state.json"
-    state_path.write_text(json.dumps({
-        "status": "completed", "finished_at": time.time(),
-        "exit_status_known": True, "exit_code": 0,
-    }), encoding="utf-8")
-    legacy = jobs / "legacy"
-    legacy.mkdir()
-    before = state_path.read_bytes()
-    before_mtime = state_path.stat().st_mtime_ns
-    mgr, _ = _integration_manager(tmp_path)
-    assert mgr._task_card_async_shell_snapshot() == {
-        "running": 0, "done": 1, "failed": 0,
-        "cancelled": 0, "timeout": 0, "unknown": 0,
-    }
-    assert state_path.read_bytes() == before
-    assert state_path.stat().st_mtime_ns == before_mtime
-
-
-def test_async_work_snapshot_mixes_daemon_and_shell_lanes(tmp_path, monkeypatch):
-    mgr, _ = _integration_manager(tmp_path)
-    monkeypatch.setattr(mgr, "_task_card_daemon_snapshot", lambda: {
-        "running": 2, "done": 1, "failed": 0, "cancelled": 0,
-        "timeout": 0, "unknown": 1, "backend_counts": {"lingtai": 2},
-        "input_tokens": 4, "output_tokens": 5, "cached_tokens": 3,
-        "cli_calls": 2,
+    snapshot = session_stats.build_async_work_snapshot(
+        tmp_path, now_epoch=time.time()
+    )
+    assert snapshot is not None
+    _write_agent_record(tmp_path, raw={
+        "schema": session_stats.AGENT_RECORD_SCHEMA,
+        "schema_version": session_stats.AGENT_RECORD_VERSION,
+        "async_work": snapshot,
     })
-    monkeypatch.setattr(mgr, "_task_card_async_shell_snapshot", lambda: {
-        "running": 1, "done": 0, "failed": 1, "cancelled": 1,
-        "timeout": 0, "unknown": 0,
-    })
-    snapshot = mgr._task_card_async_work_snapshot()
-    assert snapshot["running"] == 3
-    assert snapshot["done"] == 1
-    assert snapshot["failed"] == 1
-    assert snapshot["cancelled"] == 1
-    assert snapshot["unknown"] == 1
-    assert "daemon" in snapshot and "shell" in snapshot
-
-
-def test_daemon_real_schema_cli_ledger_not_shadowed_and_kernel_api_calls_use_tokens(tmp_path):
-    import datetime as _datetime
-    daemons = tmp_path / "daemons"
-    daemons.mkdir()
-    recent = (_datetime.datetime.now(_datetime.timezone.utc) - _datetime.timedelta(seconds=2)).isoformat()
-    cli = daemons / "cli"
-    cli.mkdir()
-    (cli / "daemon.json").write_text(json.dumps({
-        "state": "done", "backend": "codex", "finished_at": recent,
-        "tokens": {"input": 0, "output": 0, "cached": 0},
-        "cli_tokens": {"input": 100, "output": 40, "cached": 20, "calls": 3},
-        "tool_call_count": 99,
-    }), encoding="utf-8")
-    kernel = daemons / "kernel"
-    kernel.mkdir()
-    (kernel / "daemon.json").write_text(json.dumps({
-        "state": "running", "backend": "lingtai",
-        "tokens": {"input": 9, "output": 4, "cached": 2, "calls": 4},
-        "tool_call_count": 17,
-    }), encoding="utf-8")
-    from lingtai.kernel.daemon_dispatch import append_dispatch
-    append_dispatch(tmp_path, run_id="cli", created_at="2026-08-20T00:00:00Z")
-    append_dispatch(tmp_path, run_id="kernel", created_at="2026-08-20T00:00:01Z")
     mgr, _ = _integration_manager(tmp_path)
-    snapshot = mgr._task_card_daemon_snapshot()
-    assert snapshot["input_tokens"] == 109
-    assert snapshot["output_tokens"] == 44
-    assert snapshot["cached_tokens"] == 22
-    # 3 external CLI calls + 4 LingTai API calls; tool_call_count 17 is not an API ledger.
-    assert snapshot["cli_calls"] == 7
+
+    assert mgr._task_card_async_work_snapshot() == snapshot
+
+
+def test_telegram_async_work_missing_malformed_and_stale_render_nothing(tmp_path):
+    from lingtai.kernel import session_stats
+
+    mgr, _ = _integration_manager(tmp_path)
+    assert mgr._task_card_async_work_snapshot() is None
+
+    valid = session_stats.build_async_work_snapshot(tmp_path, now_epoch=time.time())
+    assert valid is not None
+    malformed = json.loads(json.dumps(valid))
+    malformed["running"] = 99
+    _write_agent_record(tmp_path, raw={
+        "schema": session_stats.AGENT_RECORD_SCHEMA,
+        "schema_version": session_stats.AGENT_RECORD_VERSION,
+        "async_work": malformed,
+    })
+    assert mgr._task_card_async_work_snapshot() is None
+
+    stale = session_stats.build_async_work_snapshot(
+        tmp_path, now_epoch=time.time() - 601
+    )
+    _write_agent_record(tmp_path, raw={
+        "schema": session_stats.AGENT_RECORD_SCHEMA,
+        "schema_version": session_stats.AGENT_RECORD_VERSION,
+        "async_work": stale,
+    })
+    assert mgr._task_card_async_work_snapshot() is None
+
+
+def test_pending_shell_rows_distinguish_foreground_and_async_dispatch_without_args():
+    secret_command = "curl https://user:password@example.invalid/private"
+    secret_path = "/private/credential/path"
+    secret_env = "TOKEN=super-secret"
+
+    def project(async_value):
+        action_input = {
+            "command": secret_command,
+            "working_dir": secret_path,
+            "env": secret_env,
+        }
+        if async_value is not None:
+            action_input["async"] = async_value
+        event = {
+            "type": "tool_call",
+            "tool_call_id": f"shell-{async_value}",
+            "tool_name": "shell",
+            "tool_args": {
+                "action": "run",
+                "_reasoning": "safe reason",
+                "input": action_input,
+            },
+        }
+        row = TelegramManager._project_tool_call_row(event)
+        assert row is not None
+        return row, TelegramManager._format_task_card_text("", "", "", rows=[row])
+
+    default_row, default_render = project(None)
+    sync_row, sync_render = project(False)
+    async_row, async_render = project(True)
+
+    assert default_row["_pending_activity"] == "foreground"
+    assert sync_row["_pending_activity"] == "foreground"
+    assert async_row["_pending_activity"] == "dispatching async job"
+    assert "shell.run: safe reason (0ms, foreground)" in default_render
+    assert "shell.run: safe reason (0ms, foreground)" in sync_render
+    assert "shell.run: safe reason (0ms, dispatching async job)" in async_render
+    for private in (secret_command, secret_path, secret_env, "password", "super-secret"):
+        assert private not in str(default_row)
+        assert private not in str(sync_row)
+        assert private not in str(async_row)
+        assert private not in default_render
+        assert private not in sync_render
+        assert private not in async_render

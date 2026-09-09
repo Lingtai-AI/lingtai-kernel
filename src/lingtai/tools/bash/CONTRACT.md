@@ -6,6 +6,7 @@ root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/bash/__init__.py
   - src/lingtai/kernel/execution_workspace.py
+  - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
@@ -285,7 +286,12 @@ terminal response. Job directories and logs remain durable records.
 `stdout`/`stderr` are truncated to `max_output` (default 50,000 chars) only when
 returned, with a trailing `... (truncated, N chars total)` marker.
 Retention/compaction limits for these records and logs are an explicit future
-policy; this feature does not delete them.
+policy; this feature does not delete them. The kernel Agent Record producer may
+parse each raw atomic `state.json` internally in a background, read-only pass.
+Its published `async_work.shell` view contains only aggregate allowlisted
+lifecycle counts and carries no command, cwd/path, environment, process
+identity, output, raw arguments, or raw state. The producer never probes, locks,
+polls, cancels, rewrites, or deletes a Shell job.
 
 `reminder.deadline_at`, its publication state, and `return_handoff` are durable.
 Initial state records a crash-safe reminder deadline before supervisor launch and

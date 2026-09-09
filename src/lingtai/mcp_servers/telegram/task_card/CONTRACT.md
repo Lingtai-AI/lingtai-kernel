@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 8
+contract_version: 9
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/mcp_servers/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/mcp_servers/task_card/event_projection.py
+  - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/service.py
   - src/lingtai/mcp_servers/telegram/server.py
@@ -17,6 +18,7 @@ related_files:
   - tests/test_telegram_task_card_programmable.py
   - tests/test_telegram_task_card_toggle.py
   - tests/test_telegram_task_card_event_tail.py
+  - tests/test_telegram_task_card_rows.py
   - tests/test_telegram_task_card_display_expression.py
   - tests/test_mcp_skill_manuals.py
 maintenance: |
@@ -103,15 +105,30 @@ semantics live here. The public producer contract lives in
     counts come from a bounded recent read of `logs/token_ledger.jsonl`. Missing,
     malformed, unsuccessful, unmatched, or out-of-bound data preserves the old
     output. Generated summary text and provider metadata are never projected.
+11. Async Work metadata comes only from the strict kernel-owned
+    `agent_record.async_work` v1 consumer. Telegram performs no daemon ledger or
+    Shell job scan and has no legacy fallback. Missing, malformed, future-dated,
+    or stale snapshots render no Async Work rows. Valid snapshots retain the
+    aggregate and separate daemon/Shell lanes; usage/backend/model detail stays
+    daemon-scoped.
+12. A pending canonical `shell.run` automatic row reads only the literal safe
+    `input.async` boolean. Sync/default mode renders `foreground`; literal
+    `async=true` renders `dispatching async job`. The row retains redacted
+    reasoning but never projects command, working directory, environment,
+    credentials, or any other raw argument. Completed rows keep normal result
+    wording.
 
 ## Port
 
 Internal `TaskCardResidentTransport` boundary implemented by `TelegramManager`.
-There is no public MCP `task_card` family in this component.
+The automatic metadata path consumes `kernel.session_stats.query_published_async_work`
+as a read-only safe projection. There is no public MCP `task_card` family in
+this component.
 
 ## Adapters
 
 - Filesystem reader for `<workdir>/taskcard/status` and `taskcard/taskcard.md`
+- Strict read-only consumer of `<workdir>/system/agent_record.json.async_work`
 - Telegram transport adapter in `TelegramManager`
 - Durable Telegram account state for tracked resident message ids
 - Shared in-memory route locks and automatic/programmable slot frames
@@ -157,6 +174,12 @@ There is no public MCP `task_card` family in this component.
     require a new kernel event/accounting path, may read at most
     `_TASK_CARD_TOKEN_LEDGER_TAIL_BYTES` recent ledger bytes per correlation
     attempt, and must expose only validated elapsed/input/output integers.
+12. Async Work rendering must use only the kernel's validated versioned Agent
+    Record child and must not read daemon or Shell stores directly or invent a
+    fallback count.
+13. Pending Shell wording may branch only on canonical tool/action names and the
+    literal nested `input.async` boolean. No other Shell input field enters the
+    projected row.
 
 ## Tests
 
@@ -171,6 +194,9 @@ There is no public MCP `task_card` family in this component.
   rendering from current-call carriers and `llm_response` fallbacks, plus
   correlated a-priori summary time/input/output rendering from existing events
   and a bounded ledger tail with fail-closed legacy/malformed cases.
+- `tests/test_telegram_task_card_rows.py` proves strict common `async_work`
+  consumption, missing/malformed/stale omission, mixed-lane rendering, and
+  pending sync-versus-async Shell wording without raw-argument leakage.
 - `tests/test_task_card_event_projection_shared.py` pins shared-core safety and
   byte compatibility with Telegram's established render surface.
 - `tests/test_task_card_resident_shared.py` pins provider-neutral route/slot,
