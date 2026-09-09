@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from lingtai.mcp_servers.telegram._family import TELEGRAM_SCHEMA
 from lingtai.mcp_servers.telegram.account import TelegramAccount
 from lingtai.mcp_servers.telegram.manager import SCHEMA, TelegramManager
 from tests._notification_store_helpers import FakeNotificationStore
@@ -100,11 +101,19 @@ def _manager(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _send_schema():
-    return next(
-        branch for branch in SCHEMA["properties"]["input"].get("oneOf", SCHEMA["properties"]["input"]["anyOf"])
-        if branch.get("title") == "send input"
+def _branches(schema):
+    choices = schema["properties"]["input"].get(
+        "oneOf", schema["properties"]["input"].get("anyOf", [])
     )
+    return {
+        branch["title"].removesuffix(" input"): branch
+        for branch in choices
+        if isinstance(branch.get("title"), str)
+    }
+
+
+def _send_schema():
+    return _branches(SCHEMA)["send"]
 
 
 def _schema_enum(schema):
@@ -120,12 +129,18 @@ def _schema_description(schema):
 
 
 def test_schema_exposes_explicit_rendering_fields():
-    props = _send_schema()["properties"]
+    branches = _branches(TELEGRAM_SCHEMA)
+    props = branches["send"]["properties"]
     for field in ("rendering_mode", "entities", "caption_entities", "link_preview_options", "disable_web_page_preview"):
         assert field in props
     assert _schema_enum(props["rendering_mode"]) == ["plain_text", "HTML", "MarkdownV2", "Markdown", "entities", "rich"]
-    assert props["rendering_mode"]["default"] == "Markdown"
-    assert "default is markdown" in _schema_description(props["rendering_mode"]).lower()
+    for action in ("send", "reply", "edit"):
+        rendering = branches[action]["properties"]["rendering_mode"]
+        description = _schema_description(rendering).lower()
+        assert rendering["default"] == "Markdown"
+        assert "omit rendering_mode" in description
+        assert "do not choose plain_text as a safe default" in description
+        assert "displays markdown markers literally" in description
     assert "parse_mode" not in props
 
 
@@ -226,6 +241,9 @@ def test_manual_action_returns_usage_guidance(tmp_path):
     assert "reply" in lowered
     assert "rendering_mode" in manual
     assert "parse_mode" in manual  # Bot API mapping remains documented.
+    assert "omit `rendering_mode`" in manual
+    assert "do not choose `plain_text` as a safe default" in lowered
+    assert "markdown markers literally" in lowered
     assert "chat_action" in manual
     assert "error" in lowered
 

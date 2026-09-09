@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 9
+contract_version: 10
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -20,6 +20,9 @@ related_files:
   - tests/test_telegram_task_card_event_tail.py
   - tests/test_telegram_task_card_rows.py
   - tests/test_telegram_task_card_display_expression.py
+  - tests/test_telegram_task_card_in_place.py
+  - tests/test_task_card_event_projection_shared.py
+  - tests/test_task_card_locale.py
   - tests/test_mcp_skill_manuals.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md. Keep related
@@ -30,7 +33,7 @@ maintenance: |
 # Telegram Task Card Projection
 
 ## Purpose
-Guarded by: [TT001](BEHAVIORS.md#behavior-tt001), [TT002](BEHAVIORS.md#behavior-tt002), [TT003](BEHAVIORS.md#behavior-tt003)
+Guarded by: [TT001](BEHAVIORS.md#behavior-tt001), [TT002](BEHAVIORS.md#behavior-tt002), [TT003](BEHAVIORS.md#behavior-tt003), [TT004](BEHAVIORS.md#behavior-tt004)
 
 
 Own Telegram's provider adapter and read-only projection of the intrinsic
@@ -117,6 +120,16 @@ semantics live here. The public producer contract lives in
     reasoning but never projects command, working directory, environment,
     credentials, or any other raw argument. Completed rows keep normal result
     wording.
+13. Telegram sends and edits the complete composed resident with the exact
+    legacy `Markdown` parse mode. Trusted fixed title/section markers establish
+    the compact visual hierarchy. Every automatic dynamic fragment is escaped
+    at the Telegram rendering specialization after its established redaction or
+    validation and within the existing character budgets, so event values cannot
+    create formatting, links, code spans, or parse failures. The programmable
+    body is intentionally authored Markdown and passes through once without
+    escaping or normalization. Bot API parse rejection is an ordinary fail-loud
+    send/edit failure: the prior resident and committed slots remain truthful,
+    and Telegram never retries as plain text.
 
 ## Port
 
@@ -180,13 +193,20 @@ this component.
 13. Pending Shell wording may branch only on canonical tool/action names and the
     literal nested `input.async` boolean. No other Shell input field enters the
     projected row.
+14. Every Telegram resident transport send and edit passes
+    `parse_mode="Markdown"`. Automatic-value escaping and trusted authored
+    programmable Markdown are composed before that one transport call. Parse
+    failure must follow the resident core's existing send/edit failure result and
+    commit timing; no adapter path may report success or flatten to plain text.
 
 ## Tests
 
 - `tests/test_telegram_task_card_programmable.py` covers active projection,
   diff-only updates, exact-`inactive` frame exclusion (idempotent, resident/
-  automatic/body preserved), reactivation, and last-good preservation for
-  missing/blank producer state.
+  automatic/body preserved), reactivation, last-good preservation for
+  missing/blank producer state, whole-card legacy Markdown on automatic-only,
+  programmable-only, and combined send/edit composition, hostile automatic
+  fragments, and authored programmable Markdown passing through once.
 - `tests/test_telegram_task_card_toggle.py` covers toggle suppression and the
   hidden-finalize clear semantics.
 - `tests/test_telegram_task_card_event_tail.py` continues to cover the automatic
@@ -198,7 +218,11 @@ this component.
   consumption, missing/malformed/stale omission, mixed-lane rendering, and
   pending sync-versus-async Shell wording without raw-argument leakage.
 - `tests/test_task_card_event_projection_shared.py` pins shared-core safety and
-  byte compatibility with Telegram's established render surface.
+  unchanged plain bytes while Telegram alone adds trusted Markdown formatting.
+- `tests/test_task_card_locale.py` pins deterministic English and Chinese shared
+  text plus Telegram's localized Markdown hierarchy.
+- `tests/test_telegram_task_card_in_place.py` pins fail-loud parse rejection,
+  prior committed state, and no false-success/replacement behavior.
 - `tests/test_task_card_resident_shared.py` pins provider-neutral route/slot,
   old-first rotation, peer adoption, and partial-failure state transitions.
 - `tests/test_telegram_task_card_display_expression.py` covers the

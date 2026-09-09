@@ -5,7 +5,7 @@ description: |
   public `task_card` tool is intrinsic and documented at
   src/lingtai/tools/task_card/manual/SKILL.md; Telegram only projects the
   intrinsic taskcard/status + taskcard/taskcard.md artifact read-only.
-last_changed_at: 2026-09-04T00:00:00Z
+last_changed_at: 2026-09-09T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/telegram/SKILL.md
 - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -41,6 +41,12 @@ Telegram's own projection contract:
   programmable slot from the resident (the message, automatic content, and
   local body are never touched); missing/unreadable status, or active with a
   missing/blank body, or an unchanged body, remain a no-op.
+- The complete Telegram resident is sent and edited with legacy `Markdown`.
+  Trusted fixed headings supply the compact hierarchy. Automatic dynamic values
+  are redacted, bounded, and escaped; the programmable body is intentionally
+  authored Markdown and is passed through once, not escaped or normalized. A
+  parse rejection is a normal fail-loud transport error: committed slot state
+  remains unchanged and there is no plain-text fallback.
 
 Do not use this retained Telegram package as an active schema, endpoint,
 controller lifecycle, JSON-card renderer contract, private reverse-MCP route, or

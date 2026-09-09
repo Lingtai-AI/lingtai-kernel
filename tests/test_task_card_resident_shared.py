@@ -149,7 +149,8 @@ def test_throttled_edit_commits_logical_frame_for_provider_retry() -> None:
         "message_id": "main:chat#1",
         "pending": True,
     }
-    assert resident.frames["main:chat"] == {
+    assert resident.frames["main:chat"] == {"automatic": "automatic-v1"}
+    assert resident.desired_frames["main:chat"] == {
         "automatic": "automatic-v1",
         "programmable": "watch-v2",
     }
@@ -310,4 +311,5 @@ def test_suppressed_programmable_clear_commits_without_transport() -> None:
 
     assert outcome == {"status": "ok", "suppressed": True, "taskcard": False}
     assert resident.frames["main:chat"] == {"automatic": "automatic-v1"}
+    assert resident.desired_frames["main:chat"] == {"automatic": "automatic-v1"}
     assert harness.calls == []

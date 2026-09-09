@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-behavior-tests
-behavior_version: 2
+behavior_version: 3
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -9,6 +9,12 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
+  - src/lingtai/mcp_servers/telegram/manager.py
+  - src/lingtai/mcp_servers/task_card/event_projection.py
+  - tests/test_task_card_event_projection_shared.py
+  - tests/test_task_card_locale.py
+  - tests/test_telegram_task_card_programmable.py
+  - tests/test_telegram_task_card_in_place.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
@@ -20,7 +26,9 @@ maintenance: |
 Self-contained agent behavior tasks guarding the observable behavior clauses of
 `src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md` (programmable body
 only when status is exactly active and nonempty; diff-only projection;
-no-op preservation; automatic per-call token metrics). Pinned pytest commands
+no-op preservation; automatic per-call token metrics; whole-resident legacy
+Markdown with escaped automatic values and trusted authored programmable
+Markdown). Pinned pytest commands
 must run from the repo root with
 the project's Python.
 
@@ -89,3 +97,25 @@ Pass when both normalized usage paths render the same parenthesized reasoning co
 
 ### Pass / Fail
 Pass when only fully correlated existing data produces the second line in the required order and all unsafe/malformed cases omit it. Fail if a new producer event is required, more than the bounded ledger tail is read, an unsuccessful tool receives a summary line, or private payload fields render.
+
+## Behavior TT004 — the complete Telegram resident uses legacy Markdown with an explicit two-sided trust boundary
+
+- **id**: TT004
+- **title**: the complete Telegram resident uses legacy Markdown with an explicit two-sided trust boundary
+- **guards**: `telegram-task-card-projection` § Behavior rule 13 and Contract rule 14
+- **runner**: any LingTai agent with `shell` access to this repository
+- **prerequisites**: a clean checkout of `<repo>`
+- **estimate**: ≈ 2 minutes
+
+### Steps
+1. From `<repo>`, run `python -m pytest -q tests/test_task_card_event_projection_shared.py tests/test_task_card_locale.py tests/test_telegram_task_card_programmable.py tests/test_telegram_task_card_in_place.py`.
+2. Inspect the automatic-only, programmable-only, and combined resident calls, including automatic values containing underscore, asterisk, backtick, square brackets, backslash, and link-like text plus intentionally authored programmable Markdown.
+3. Exercise an in-place edit whose Telegram provider response rejects Markdown parsing.
+
+### Expected evidence
+- [ ] Step 1: the focused suites pass; shared/Feishu plain bytes remain unchanged while English and Chinese Telegram headings are deterministic.
+- [ ] Step 2: every resident send/edit has exact `parse_mode="Markdown"`; automatic metacharacters are escaped, and authored programmable Markdown appears byte-for-byte once.
+- [ ] Step 3: parse rejection returns an error, preserves the prior committed frame/resident, sends no replacement, and never falls back to plain text.
+
+### Pass / Fail
+Pass when the exact parse mode, escaped-automatic/authored-programmable split, and fail-loud commit timing all hold. Fail on any missing parse mode, raw hostile automatic marker, double-escaped programmable body, false success, replacement, or plain-text retry.

@@ -18,6 +18,9 @@ related_files:
   - tests/test_telegram_task_card_event_tail.py
   - tests/test_telegram_task_card_rows.py
   - tests/test_telegram_task_card_display_expression.py
+  - tests/test_telegram_task_card_in_place.py
+  - tests/test_task_card_event_projection_shared.py
+  - tests/test_task_card_locale.py
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
   - src/lingtai/mcp_servers/telegram/task_card/_family.py
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
@@ -54,12 +57,19 @@ onto its one tracked resident Task Card target per account+chat.
   no daemon/Shell fallback scan. It also implements compound-ID binding,
   high-water supersession, Telegram API classification, real transport, resident
   persistence, and programmable file projection callbacks
-  (`src/lingtai/mcp_servers/telegram/manager.py:2716-2726`,
-  `src/lingtai/mcp_servers/telegram/manager.py:2848-2901`).
+  (`src/lingtai/mcp_servers/telegram/manager.py:2774-2784`,
+  `src/lingtai/mcp_servers/telegram/manager.py:2926-2959`).
+  `_TelegramTaskCardMarkdownProjection` specializes only the shared renderer's
+  dynamic-fragment seam: one bounded legacy-Markdown escaper protects automatic
+  values while trusted fixed markers style the title/sections
+  (`src/lingtai/mcp_servers/telegram/manager.py:152-192`). Both resident send and
+  edit callbacks pass exact `parse_mode="Markdown"`; programmable body bytes do
+  not enter the automatic renderer (`src/lingtai/mcp_servers/telegram/manager.py:2168-2209`,
+  `src/lingtai/mcp_servers/telegram/manager.py:2258-2310`).
   `_taskcard_display_expression()` reads the durable declarative display
   expression from `TelegramService` at each automatic projection tick
   (`_broadcast_task_card_event_window`, `_ensure_task_card_resident`) and
-  passes it into `TaskCardEventProjection.render_event_groups`.
+  passes it into the Telegram projection specialization.
 - `service.py` — besides the enabled/normal_rows/max_refreshes/locale
   presentation preferences, owns the durable `display_expression` field of
   `<agent-workdir>/telegram/taskcard.json`: `taskcard_display_expression()` /
@@ -79,6 +89,10 @@ onto its one tracked resident Task Card target per account+chat.
   normalized current-call carrier or `llm_response` fallback and the safe
   `(summary, time, input in, output out)` line correlated from already-recorded
   event/ledger facts. It owns no journal I/O, route, resident, or transport state.
+  Its identity `render_dynamic_fragment` seam keeps the shared/Feishu plain-byte
+  surface unchanged while an outer provider renderer may safely specialize
+  dynamic text (`src/lingtai/mcp_servers/task_card/event_projection.py:108-119`,
+  `src/lingtai/mcp_servers/task_card/event_projection.py:1245-1408`).
   `DISPLAY_SLOTS`/`DEFAULT_DISPLAY_EXPRESSION`/`validate_display_expression`/
   `compose_display` define and enforce the small declarative display-expression
   grammar: an ordered, allowlisted selection of the fragments
@@ -109,8 +123,9 @@ onto its one tracked resident Task Card target per account+chat.
   `TaskCardEventProjection` and keeps unrelated private helpers as compatibility
   wrappers.
 - `TelegramManager` constructs `TaskCardResidentTransport` with dynamic provider
-  callbacks. The shared core never imports Telegram, reads its state file, or
-  classifies Bot API errors.
+  callbacks. Those outer callbacks alone select Telegram legacy Markdown for
+  whole-message send/edit; the shared core never imports Telegram, reads its
+  state file, classifies Bot API errors, or chooses a parse mode.
 - `TelegramManager._broadcast_programmable_task_card_file()` reads
   `taskcard/status` first: exact `active` reads the body and projects it
   (diff-only against the last committed programmable frame); exact `inactive`

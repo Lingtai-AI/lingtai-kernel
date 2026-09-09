@@ -27,6 +27,14 @@ _DECLARED_ACTIONS = TELEGRAM_DECLARED_ACTIONS
 _ACTIONS = TELEGRAM_ACTIONS
 
 _RENDERING_MODES = ("plain_text", "HTML", "MarkdownV2", "Markdown", "entities", "rich")
+_RENDERING_MODE_DESCRIPTION = (
+    "Default is Markdown. For ordinary content, omit rendering_mode instead of "
+    "passing the default explicitly. Do not choose plain_text as a safe default: "
+    "it disables Telegram formatting and displays Markdown markers literally. Use "
+    "plain_text only when literal, unformatted text is intentional; use HTML or "
+    "MarkdownV2 for another parse mode, entities with MessageEntity data, or rich "
+    "with structured_message. Do not combine modes."
+)
 
 
 def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
@@ -140,12 +148,7 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
         "compress, thumbnail, or display text-heavy charts poorly. Do not paste local "
         "file paths in message text as a substitute for attaching the file."
     )
-    send["properties"]["rendering_mode"]["description"] = (
-        "Default is Markdown for the agent's messages. Choose plain_text for "
-        "unformatted text/chat actions, HTML/MarkdownV2 for other parse modes, "
-        "entities when supplying MessageEntity data, or rich for a native structured "
-        "message; you may omit it to use Markdown; do not combine modes."
-    )
+    send["properties"]["rendering_mode"]["description"] = _RENDERING_MODE_DESCRIPTION
     send["properties"]["entities"]["anyOf"][0]["description"] = (
         "Telegram MessageEntity[] for rendering_mode='entities' on message text."
     )
@@ -175,7 +178,7 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
                 "rendering_mode": {
                     "type": "string", "enum": list(_RENDERING_MODES),
                     "default": "Markdown",
-                    "description": "Default is Markdown; you may omit rendering_mode.",
+                    "description": _RENDERING_MODE_DESCRIPTION,
                 },
                 "entities": _nullable({"type": "array"}),
                 "structured_message": _nullable(structured_message),
@@ -200,7 +203,7 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
                 "rendering_mode": {
                     "type": "string", "enum": list(_RENDERING_MODES),
                     "default": "Markdown",
-                    "description": "Default is Markdown; you may omit rendering_mode.",
+                    "description": _RENDERING_MODE_DESCRIPTION,
                 },
                 "entities": _nullable({"type": "array"}),
                 "structured_message": _nullable(structured_message),
@@ -326,10 +329,7 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
         for field, description in descriptions.items():
             schemas[action]["properties"][field]["description"] = description
 
-    rich_mode_description = (
-        "Default is Markdown; use plain_text, HTML, MarkdownV2, or entities for "
-        "text formatting, or rich with structured_message for native Telegram blocks."
-    )
+    rich_mode_description = _RENDERING_MODE_DESCRIPTION
     rich_content_description = (
         "Native rich content: require rendering_mode='rich' and title; optional "
         "summary, facts, bullets, steps, code, next, and footer are rendered as "
@@ -371,8 +371,10 @@ def telegram_schema() -> dict[str, Any]:
         "Choose one Telegram action. For inbound work, begin read-only with check, "
         "read, or search. Use send only for an authorized new outbound message to a "
         "known numeric chat_id; use reply with a compound message_id from read/search. "
-        "Content-bearing send/reply/edit defaults to Markdown; use plain_text, "
-        "HTML, MarkdownV2, entities, or rich only when needed. For charts, "
+        "Content-bearing send/reply/edit defaults to Markdown: ordinarily omit "
+        "rendering_mode, and use plain_text only for intentionally literal, "
+        "unformatted content. Use HTML, MarkdownV2, entities, or rich only when "
+        "needed. For charts, "
         "reports, generated artifacts, and other files the user should open intact, "
         "use media.type='document' (use 'photo' only for an inline preview). "
         "Read this package's detailed guidance with "

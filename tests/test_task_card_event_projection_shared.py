@@ -84,7 +84,7 @@ def test_shared_result_projection_updates_only_matching_safe_rows() -> None:
     assert "PRIVATE_RESULT" not in str(groups)
 
 
-def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
+def test_shared_render_stays_plain_while_telegram_adds_trusted_markdown() -> None:
     groups = [
         {
             "api_call_id": "api-1",
@@ -122,7 +122,6 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         now=now,
     )
 
-    assert shared == telegram
     assert shared == (
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
         "/taskcard N sets normal rows (1-10, current: 1).\n"
@@ -135,6 +134,19 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         "Session · active · calls 2\n"
         "Last Updated: 02:30:00 U+8\n"
         "Ask agent for \"Task Card\""
+    )
+    assert telegram == (
+        "_Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+        "/taskcard N sets normal rows (1-10, current: 1)._\n"
+        "*ACTIVITIES*\n"
+        f"{TaskCardEventProjection.API_CALL_DIVIDER}\n"
+        "• public response\n"
+        "• bash.run: build (0ms, running)\n"
+        "\n"
+        "────────\n"
+        "Session · active · calls 2\n"
+        "Last Updated: 02:30:00 U+8\n"
+        "_Ask agent for \"Task Card\"_"
     )
 
 

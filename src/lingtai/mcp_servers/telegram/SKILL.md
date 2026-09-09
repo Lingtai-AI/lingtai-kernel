@@ -5,8 +5,8 @@ description: |
   schema carries safe first-use guidance; call `manual` for the action map,
   channel/reply/media/rendering rules, placeholder and chat-action boundaries,
   inbound envelopes, settings, Task Card projection, and error handling.
-version: 1.8.0
-last_changed_at: 2026-09-07T00:00:00Z
+version: 1.9.0
+last_changed_at: 2026-09-09T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/task_card/event_projection.py
@@ -63,8 +63,12 @@ A safe first-use route is:
    cooldown) instead of assuming delivery from a successful tool invocation.
 
 Content-bearing `send`, `reply`, and `edit` default to `rendering_mode='Markdown'`.
-Use `plain_text`, `HTML`, `MarkdownV2`, `entities`, or `rich` deliberately; do
-not mix rendering modes. Detailed field guidance is in the sections below.
+For ordinary content, omit `rendering_mode` instead of passing the default.
+Do not choose `plain_text` as a safe default: it intentionally disables Telegram
+formatting and displays Markdown markers literally. Use it only when literal,
+unformatted text is the desired output, such as showing raw Markdown syntax.
+Use `HTML`, `MarkdownV2`, `entities`, or `rich` deliberately; do not mix
+rendering modes. Detailed field guidance is in the sections below.
 
 ## Action map
 
@@ -113,9 +117,10 @@ not reconstructed from a guess.
 ## Rendering and native rich messages
 
 The supported modes are exactly `plain_text`, `HTML`, `Markdown`, `MarkdownV2`,
-`entities`, and `rich`. `plain_text` omits Telegram `parse_mode`; the named
-parse modes pass through to Telegram; `entities` supplies explicit
-`MessageEntity[]` data.
+`entities`, and `rich`. Omit the field for the ordinary Markdown path.
+`plain_text` omits Telegram `parse_mode`, so Markdown markers remain visible;
+reserve it for intentionally literal, unformatted text. The named parse modes
+pass through to Telegram; `entities` supplies explicit `MessageEntity[]` data.
 
 For `rich`, omit `text` and `media`, set `rendering_mode='rich'`, and provide
 `structured_message`. Its allowed semantic fields are:
@@ -297,7 +302,15 @@ is not a turn-local heartbeat or completion lifecycle. It omits hidden thinking,
 raw arguments/results, prompts, credentials, paths, and other private
 diagnostics. The rolling `normal_rows` window counts API-call groups. Delivery
 of both automatic and programmable slots is governed by `taskcard: True|False`;
-turning it off suppresses presentation while mechanics continue.
+turning it off suppresses presentation while mechanics continue. Telegram sends
+and edits the complete resident with legacy `Markdown` parse mode. Trusted fixed
+headings establish the compact hierarchy; every automatic event-derived value
+is escaped after redaction so it cannot create formatting, links, code spans, or
+parse failures. The programmable slot is the opposite trust side: its body is
+intentionally authored Markdown and passes through once, without escaping or
+normalization. A Bot API parse rejection fails loudly and leaves the previously
+committed slots/resident intact; Telegram never retries by silently flattening
+the card to plain text.
 
 The public programmable `task_card` tool is intrinsic and channel-neutral. Read
 [`../../tools/task_card/manual/SKILL.md`](../../tools/task_card/manual/SKILL.md)

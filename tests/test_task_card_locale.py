@@ -10,6 +10,7 @@ Chinese, Jason 2026-08-10).
 from __future__ import annotations
 
 from lingtai.mcp_servers.task_card.event_projection import TaskCardEventProjection
+from lingtai.mcp_servers.telegram.manager import TelegramManager
 
 
 def _render(rows, *, locale="en"):
@@ -116,6 +117,34 @@ def test_render_event_groups_locale():
     )
     assert text.startswith("\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247")
     assert "\U0001f4cb \u6d3b\u52a8\n" in text
+
+
+def test_telegram_markdown_hierarchy_is_deterministic_in_english_and_chinese():
+    cases = {
+        "en": (
+            "_Don't reply to this Task Card",
+            "*ACTIVITIES*",
+            "Session · safe\\_model",
+            "Last Updated: ",
+            '_Ask agent for "Task Card"_',
+        ),
+        "zh": (
+            "_请勿回复此任务卡片",
+            "*活动*",
+            "会话 · safe\\_model",
+            "最后更新: ",
+            '_向 agent 询问 "Task Card"_',
+        ),
+    }
+    for locale, expected in cases.items():
+        text = TelegramManager._format_rows_task_card_text(
+            [{"tool": "bash", "tool_action": "run", "reasoning": "build"}],
+            metadata={"model": "safe_model"},
+            normal_rows=1,
+            locale=locale,
+        )
+        for fragment in expected:
+            assert fragment in text
 
 
 # ---------------------------------------------------------------------------

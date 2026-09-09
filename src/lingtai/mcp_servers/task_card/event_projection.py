@@ -104,6 +104,57 @@ class TaskCardEventProjection:
     def _locale_text(cls, key: str, locale: str = "en") -> str:
         return cls._LOCALE_TEXTS[cls.normalize_locale(locale)][key]
 
+    @classmethod
+    def measure_text(cls, text: str) -> int:
+        """Measure provider text units; the shared/plain surface uses code points."""
+        return len(text)
+
+    @classmethod
+    def render_dynamic_fragment(cls, text: str, *, limit: int | None = None) -> str:
+        """Render one untrusted value without changing the shared plain surface.
+
+        Provider adapters may specialize this narrow rendering seam when their
+        transport interprets otherwise-plain characters. ``limit`` applies to
+        provider text units in the rendered fragment, so specialization cannot
+        silently defeat the existing per-fragment budgets.
+        """
+        return text if limit is None else text[:limit]
+
+    @classmethod
+    def truncate_dynamic_source(
+        cls,
+        text: str,
+        *,
+        limit: int,
+        ellipsis: bool,
+    ) -> str:
+        """Bound raw dynamic data by its rendered units without storing escapes."""
+        limit = max(0, limit)
+        if cls.measure_text(cls.render_dynamic_fragment(text)) <= limit:
+            return text
+        suffix = "…" if ellipsis else ""
+        suffix_units = cls.measure_text(suffix)
+        if suffix_units > limit:
+            return ""
+        source_limit = limit - suffix_units
+        retained: list[str] = []
+        retained_units = 0
+        for character in text:
+            character_units = cls.measure_text(cls.render_dynamic_fragment(character))
+            if retained_units + character_units > source_limit:
+                break
+            retained.append(character)
+            retained_units += character_units
+        return "".join(retained) + suffix
+
+    @classmethod
+    def ask_agent(cls, locale: str = "en") -> str:
+        return cls._locale_text("ask_agent", locale)
+
+    @classmethod
+    def metadata_label(cls, key: str, locale: str = "en") -> str:
+        return cls._locale_text(key, locale)
+
     EVENT_WINDOW = 10
     EVENT_REASONING_CAP = 300
     EVENT_TEXT_CAP = 500
@@ -255,8 +306,7 @@ class TaskCardEventProjection:
             return None
         text = redact_text(text).strip()
         cap = cls.EVENT_TEXT_CAP if text_cap is None else text_cap
-        if len(text) > cap:
-            text = text[: cap - 1] + "…"
+        text = cls.truncate_dynamic_source(text, limit=cap, ellipsis=True)
         row: dict[str, Any] = {"kind": "text", "text": text}
         raw_ts = event.get("ts")
         if type(raw_ts) in (int, float) and not isinstance(raw_ts, bool):
@@ -292,8 +342,7 @@ class TaskCardEventProjection:
             reasoning = ""
         reasoning = redact_text(reasoning)
         cap = cls.EVENT_REASONING_CAP if reasoning_cap is None else reasoning_cap
-        if len(reasoning) > cap:
-            reasoning = reasoning[: cap - 1] + "…"
+        reasoning = cls.truncate_dynamic_source(reasoning, limit=cap, ellipsis=True)
         row: dict[str, Any] = {"tool": tool_name, "reasoning": reasoning}
         call_id = event.get("tool_call_id")
         if isinstance(call_id, str) and call_id:
@@ -707,6 +756,7 @@ class TaskCardEventProjection:
         now: datetime | None = None,
         locale: str = "en",
         display_expression: tuple[str, ...] | None = None,
+        text_limit: int | None = None,
     ) -> str:
         rows: list[dict[str, Any]] = []
         for group in groups[-normal_rows:]:
@@ -758,8 +808,9 @@ class TaskCardEventProjection:
             now=now,
             locale=locale,
             display_expression=display_expression,
+            text_limit=text_limit,
         )
-        return text[: cls.TEXT_LIMIT] if len(text) > cls.TEXT_LIMIT else text
+        return text
 
     @classmethod
     def format_divider_info(
@@ -822,9 +873,12 @@ class TaskCardEventProjection:
         now: datetime | None = None,
         locale: str = "en",
         display_expression: tuple[str, ...] | None = None,
+        text_limit: int | None = None,
     ) -> str:
         if rows is None:
-            return cls.format_scalar_task_card_text(tool, action, reasoning, locale=locale)
+            return cls.format_scalar_task_card_text(
+                tool, action, reasoning, locale=locale, text_limit=text_limit,
+            )
         return cls.format_rows_task_card_text(
             rows,
             metadata=metadata,
@@ -832,6 +886,7 @@ class TaskCardEventProjection:
             now=now,
             locale=locale,
             display_expression=display_expression,
+            text_limit=text_limit,
         )
 
     @classmethod
@@ -842,13 +897,25 @@ class TaskCardEventProjection:
         reasoning: str,
         *,
         locale: str = "en",
+        text_limit: int | None = None,
     ) -> str:
         redacted = redact_text(reasoning)
-        if len(redacted) > cls.REASONING_CAP:
-            excerpt = redacted[: cls.REASONING_CAP] + "…"
+        cap = cls.REASONING_CAP
+        if text_limit is not None:
+            cap = min(cap, max(0, text_limit))
+        rendered_length = cls.measure_text(cls.render_dynamic_fragment(redacted))
+        ellipsis_units = cls.measure_text("…")
+        if rendered_length > cap:
+            excerpt = cls.render_dynamic_fragment(
+                redacted, limit=max(0, cap - ellipsis_units),
+            )
+            if cap >= ellipsis_units:
+                excerpt += "…"
         else:
-            excerpt = redacted
-        label = f"{tool}.{action}" if action else tool
+            excerpt = cls.render_dynamic_fragment(redacted)
+        safe_tool = cls.render_dynamic_fragment(str(tool))
+        safe_action = cls.render_dynamic_fragment(str(action))
+        label = f"{safe_tool}.{safe_action}" if safe_action else safe_tool
         header = cls.header(locale)
         if label:
             return f"{header}\n{label}: {excerpt}"
@@ -883,25 +950,27 @@ class TaskCardEventProjection:
             return []
 
         def label(key: str) -> str:
-            return cls._locale_text(key, locale)
+            return cls.metadata_label(key, locale)
 
         session_parts: list[str] = []
         model = metadata.get("model")
         if isinstance(model, str) and model.strip() and len(model.strip()) <= 128:
-            session_parts.append(model.strip())
+            session_parts.append(cls.render_dynamic_fragment(model.strip()))
         thinking = metadata.get("thinking")
         if isinstance(thinking, str) and thinking.strip() and len(thinking.strip()) <= 48:
-            session_parts.append(thinking.strip())
+            session_parts.append(cls.render_dynamic_fragment(thinking.strip()))
         service_tier = metadata.get("service_tier")
         if (
             isinstance(service_tier, str)
             and service_tier.strip()
             and len(service_tier.strip()) <= 48
         ):
-            session_parts.append(f"tier {service_tier.strip()}")
+            session_parts.append(
+                f"tier {cls.render_dynamic_fragment(service_tier.strip())}"
+            )
         endpoint = metadata.get("endpoint")
         if isinstance(endpoint, str) and endpoint.strip() and len(endpoint.strip()) <= 96:
-            session_parts.append(f"@{endpoint.strip()}")
+            session_parts.append(f"@{cls.render_dynamic_fragment(endpoint.strip())}")
         context = cls.format_count(metadata.get("context_tokens"))
         window = cls.format_count(metadata.get("context_window"))
         usage = metadata.get("context_usage")
@@ -974,8 +1043,12 @@ class TaskCardEventProjection:
 
         # Keep all identity values behind the strict machine_identifier allowlist.
         # In particular, working_dir is never rendered from an arbitrary string.
-        device = cls.machine_identifier(metadata.get("device_short_name"), limit=64)
-        shell_name = cls.machine_identifier(metadata.get("shell_name"), limit=48)
+        device = cls._machine_identifier_value(
+            metadata.get("device_short_name"), limit=64,
+        )
+        shell_name = cls._machine_identifier_value(
+            metadata.get("shell_name"), limit=48,
+        )
         identity_parts: list[str] = []
         if device is not None or shell_name is not None:
             parts: list[str] = []
@@ -984,13 +1057,16 @@ class TaskCardEventProjection:
             if shell_name is not None:
                 parts.append(f"shell {shell_name}")
             identity_parts.append("device · " + " · ".join(parts))
-        working_dir = cls.machine_identifier(metadata.get("working_dir"), limit=220)
+        working_dir = cls._machine_identifier_value(
+            metadata.get("working_dir"), limit=220,
+        )
         if working_dir is not None:
             identity_parts.append(f"path · {working_dir}")
-        identity_payload = " | ".join(identity_parts) if identity_parts else None
+        identity_payload_raw = " | ".join(identity_parts) if identity_parts else None
+        identity_prefix = f"{label('identity')} · "
         identity_line = (
-            f"{label('identity')} · {identity_payload}"
-            if identity_payload
+            identity_prefix + cls.render_dynamic_fragment(identity_payload_raw)
+            if identity_payload_raw
             else None
         )
 
@@ -1133,7 +1209,7 @@ class TaskCardEventProjection:
             return result
 
         def total_length(lines: list[str]) -> int:
-            return len("\n".join(lines))
+            return cls.measure_text("\n".join(lines))
 
         selected: list[list[tuple[str, int]]] = [
             [(line, priority) for line, priority in zip(lines, section_priorities)]
@@ -1162,20 +1238,29 @@ class TaskCardEventProjection:
                     break
             if identity_location is not None:
                 section_index, item_index = identity_location
-                original, priority = selected[section_index][item_index]
-                marker = " · "
-                marker_index = original.find(marker)
-                if marker_index >= 0:
-                    prefix = original[: marker_index + len(marker)]
-                    payload = original[marker_index + len(marker) :]
-                    low, high = 0, len(payload)
+                _original, priority = selected[section_index][item_index]
+                if identity_payload_raw is not None:
+                    rendered_payload = cls.render_dynamic_fragment(identity_payload_raw)
+                    rendered_units = cls.measure_text(rendered_payload)
+                    ellipsis_units = cls.measure_text("…")
+                    low, high = 0, rendered_units
                     best: str | None = None
                     while low <= high:
                         mid = (low + high) // 2
-                        candidate_payload = payload if mid == len(payload) else (
-                            payload[: max(0, mid - 1)] + "…"
+                        if rendered_units <= mid:
+                            candidate_payload = rendered_payload
+                        elif mid >= ellipsis_units:
+                            candidate_payload = cls.render_dynamic_fragment(
+                                identity_payload_raw,
+                                limit=mid - ellipsis_units,
+                            ) + "…"
+                        else:
+                            candidate_payload = ""
+                        candidate = (
+                            identity_prefix + candidate_payload
+                            if candidate_payload
+                            else ""
                         )
-                        candidate = prefix + candidate_payload
                         trial = [list(section) for section in selected]
                         trial[section_index][item_index] = (candidate, priority)
                         if total_length(render_selected(trial)) <= cls.METADATA_MAX_CHARS:
@@ -1227,6 +1312,7 @@ class TaskCardEventProjection:
         now: datetime | None = None,
         locale: str = "en",
         display_expression: tuple[str, ...] | None = None,
+        text_limit: int | None = None,
     ) -> str:
         footer = cls.footer(normal_rows, locale)
         tool_prepared: list[tuple[int, str, str, str, bool, str | None, str | None]] = []
@@ -1238,28 +1324,46 @@ class TaskCardEventProjection:
             kind = row.get("kind")
             if kind == "divider":
                 divider = redact_text(str(row.get("text", cls.API_CALL_DIVIDER))).strip()
-                api_prepared.append((idx, divider[: cls.EVENT_TEXT_CAP]))
+                api_prepared.append((
+                    idx,
+                    cls.render_dynamic_fragment(divider, limit=cls.EVENT_TEXT_CAP),
+                ))
                 continue
             if kind == "api_info":
                 info = redact_text(str(row.get("text", ""))).strip()
                 if info:
-                    api_prepared.append((idx, info[: cls.EVENT_TEXT_CAP]))
+                    api_prepared.append((
+                        idx,
+                        cls.render_dynamic_fragment(info, limit=cls.EVENT_TEXT_CAP),
+                    ))
                 continue
             if kind == "api_ts":
                 stamp = redact_text(str(row.get("text", ""))).strip()
                 if stamp:
-                    api_prepared.append((idx, stamp[: cls.EVENT_TEXT_CAP]))
+                    api_prepared.append((
+                        idx,
+                        cls.render_dynamic_fragment(stamp, limit=cls.EVENT_TEXT_CAP),
+                    ))
                 continue
             if kind == "text":
                 text = redact_text(str(row.get("text", ""))).strip()
                 if text:
-                    text_prepared.append((idx, text[: cls.EVENT_TEXT_CAP]))
+                    text_prepared.append((
+                        idx,
+                        cls.truncate_dynamic_source(
+                            text, limit=cls.EVENT_TEXT_CAP, ellipsis=False,
+                        ),
+                    ))
                 continue
             if kind == "api_error":
                 api_prepared.append((idx, cls.format_api_error_line(row, locale)))
                 continue
-            tool = str(row.get("tool", ""))
-            action = str(row.get("tool_action", ""))
+            tool = cls.render_dynamic_fragment(
+                redact_text(str(row.get("tool", "")))
+            )
+            action = cls.render_dynamic_fragment(
+                redact_text(str(row.get("tool_action", "")))
+            )
             label = f"{tool}.{action}" if action else tool
             redacted = redact_text(str(row.get("reasoning", "")))
             done = bool(row.get("done", False))
@@ -1295,7 +1399,7 @@ class TaskCardEventProjection:
 
         metadata_lines = cls.format_metadata(metadata, locale)
         time_line = f"{cls.time_prefix(locale)}{cls.render_time(now)}"
-        ask_agent_line = cls._locale_text("ask_agent", locale)
+        ask_agent_line = cls.ask_agent(locale)
         if not tool_prepared and not text_prepared and not api_prepared:
             slots = {
                 "header": [cls.header(locale)],
@@ -1309,8 +1413,8 @@ class TaskCardEventProjection:
             }
             return cls.compose_display(slots, display_expression)
 
-        api_scaffold = sum(len(line) + 1 for _, line in api_prepared)
-        text_scaffold = sum(len(text) + 4 for _, text in text_prepared)
+        api_scaffold = sum(cls.measure_text(line) + 1 for _, line in api_prepared)
+        text_scaffold = sum(cls.measure_text("• ") + 1 for _ in text_prepared)
         tool_scaffold = 0
         for (
             _,
@@ -1323,36 +1427,41 @@ class TaskCardEventProjection:
         ) in tool_prepared:
             marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
-            tool_scaffold += len(prefix) + len(suffix) + 2
+            tool_scaffold += cls.measure_text(prefix) + cls.measure_text(suffix) + 2
             if summary_metrics:
-                tool_scaffold += len(summary_metrics) + 2
+                tool_scaffold += cls.measure_text(summary_metrics) + 2
         fixed = (
-            len(cls.header(locale))
+            cls.measure_text(cls.header(locale))
             + 1
             + 1
-            + len(footer)
-            + len(cls.METADATA_DIVIDER)
+            + cls.measure_text(footer)
+            + cls.measure_text(cls.METADATA_DIVIDER)
             + 1
-            + sum(len(line) + 1 for line in metadata_lines)
-            + len(time_line)
+            + sum(cls.measure_text(line) + 1 for line in metadata_lines)
+            + cls.measure_text(time_line)
             + 1
-            + len(ask_agent_line)
+            + cls.measure_text(ask_agent_line)
             + 1
             + api_scaffold
             + text_scaffold
             + tool_scaffold
         )
-        budget = cls.TEXT_LIMIT - fixed
+        render_limit = cls.TEXT_LIMIT if text_limit is None else max(0, text_limit)
+        budget = render_limit - fixed
         divisor = max(1, len(tool_prepared) + len(text_prepared))
         per_row_cap = max(0, min(cls.REASONING_CAP, budget // divisor))
+        ellipsis_units = cls.measure_text("…")
 
         by_idx: dict[int, str] = {}
         for idx, label, redacted, suffix, done, status, summary_metrics in tool_prepared:
-            excerpt = (
-                redacted[:per_row_cap] + "…"
-                if len(redacted) > per_row_cap
-                else redacted
+            rendered_length = cls.measure_text(cls.render_dynamic_fragment(redacted))
+            shortened = rendered_length > per_row_cap
+            excerpt = cls.render_dynamic_fragment(
+                redacted,
+                limit=max(0, per_row_cap - ellipsis_units) if shortened else per_row_cap,
             )
+            if shortened and per_row_cap >= ellipsis_units:
+                excerpt += "…"
             marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
             line = f"{prefix}{excerpt}{suffix}"
@@ -1360,7 +1469,14 @@ class TaskCardEventProjection:
                 line += f"\n {summary_metrics}"
             by_idx[idx] = line
         for idx, text in text_prepared:
-            excerpt = text[:per_row_cap] + "…" if len(text) > per_row_cap else text
+            rendered_length = cls.measure_text(cls.render_dynamic_fragment(text))
+            shortened = rendered_length > per_row_cap
+            excerpt = cls.render_dynamic_fragment(
+                text,
+                limit=max(0, per_row_cap - ellipsis_units) if shortened else per_row_cap,
+            )
+            if shortened and per_row_cap >= ellipsis_units:
+                excerpt += "…"
             by_idx[idx] = f"• {excerpt}"
         for idx, line in api_prepared:
             by_idx[idx] = line
@@ -1383,8 +1499,8 @@ class TaskCardEventProjection:
             now = datetime.now().astimezone()
         return cls.format_current_time(now)
 
-    @staticmethod
-    def machine_identifier(value: object, *, limit: int) -> str | None:
+    @classmethod
+    def _machine_identifier_value(cls, value: object, *, limit: int) -> str | None:
         if not isinstance(value, str):
             return None
         value = value.strip()
@@ -1396,6 +1512,11 @@ class TaskCardEventProjection:
         ):
             return None
         return value
+
+    @classmethod
+    def machine_identifier(cls, value: object, *, limit: int) -> str | None:
+        raw = cls._machine_identifier_value(value, limit=limit)
+        return None if raw is None else cls.render_dynamic_fragment(raw)
 
     @classmethod
     def format_api_error_line(cls, row: dict[str, Any], locale: str = "en") -> str:
@@ -1415,7 +1536,7 @@ class TaskCardEventProjection:
             parts.append(f"HTTP {status}")
         code = row.get("code")
         if isinstance(code, str) and code:
-            parts.append(code)
+            parts.append(cls.render_dynamic_fragment(code))
         summary = " · ".join(parts)
 
         if state == "recovered":
