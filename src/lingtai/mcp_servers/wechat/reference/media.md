@@ -1,11 +1,11 @@
 ---
 name: wechat-media-reference
 description: |
-  Focused WeChat media reference: contained outbound paths, extension-based
-  message types, text-plus-media ordering and partial outcomes, inbound file
-  validation, and safe recovery from cache or upload failures.
-version: 1.0.0
-last_changed_at: "2026-09-07T00:00:00Z"
+  WeChat attachment details: allowed outbound paths, extension types, text-plus-
+  media partial outcomes, inbound file validation, official CDN stages, and safe
+  recovery. Load from the main manual before an attachment operation.
+version: 1.1.0
+last_changed_at: "2026-09-09T03:15:00Z"
 related_files:
 - src/lingtai/mcp_servers/wechat/SKILL.md
 - src/lingtai/mcp_servers/wechat/manager.py
@@ -18,58 +18,53 @@ related_files:
 - tests/test_wechat_media_upload_diagnostics.py
 maintenance: |
   Tracks WeChat media type detection, validation warnings, upload stages, and
-  partial-delivery guidance; update when provider media fields, containment, or
+  partial-delivery guidance; update when provider fields, containment, or
   diagnostics change.
 ---
 
 # WeChat media
 
-Use this reference for attachments and inbound files. `send` remains an external
-side effect; confirm `user_id` and content before starting an upload.
+`send` remains an external effect: confirm the exact `user_id` and content before
+starting an upload.
 
-## OUTBOUND `media_path`
+## Outbound `media_path`
 
-- The public schema advertises `media_path` as a file path. The outbound-file
-  resolver requires a readable file within the agent's allowed working area and
-  rejects paths outside that boundary before any message is sent.
-- The suffix selects the WeChat item type: common image suffixes (`.jpg`,
-  `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`) are images; video suffixes (`.mp4`,
-  `.avi`, `.mov`, `.mkv`) are video; voice suffixes (`.wav`, `.mp3`, `.ogg`,
-  `.silk`, `.amr`) are voice; other suffixes are sent as files. This is an
-  extension mapping, not content inspection for outbound files.
-- `text` and `media_path` may be supplied together. The manager sends them as two
-  recipient-visible messages, text first and media second. It validates the path
-  before sending text, preventing a missing or disallowed file from causing an
-  avoidable text-only send.
-- A later upload or media-reference failure can still leave the text delivered.
-  The result reports a partial outcome and disables automatic replay; do not
-  resend the entire text-plus-media request without reconciling what happened.
+Use a readable file. Relative paths resolve against the agent workdir; absolute
+paths must also remain inside it after symlink and `..` resolution. Containment
+and `is_file()` are checked before text, but reading the bytes happens later.
+The suffix selects the item type:
 
-## INBOUND MEDIA AND FILES
+- image: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`
+- video: `.mp4`, `.avi`, `.mov`, `.mkv`
+- voice: `.wav`, `.mp3`, `.ogg`, `.silk`, `.amr`
+- any other suffix: file
 
-Inbound items are saved as local artifacts and represented in message text with
-bounded tags such as `[Image: path]`, `[Voice: "transcript" (audio: path)]`,
-`[File: name (path)]`, and `[Video: path]`. Verify the path exists and is readable
-before analysis; a path in a message is not a request to paste that path back to
-the user.
+This is extension mapping, not outbound content inspection. With both `text` and
+`media_path`, text is sent first and media second as separate user-visible
+messages (long text may span several chunks). A handled upload/reference failure
+after text returns a partial result with no automatic replay. Other errors, such
+as a later file-read failure, may not carry partial fields; see
+[uncertain outcomes](operations.md#results-and-replay) before retrying.
 
-Some WeChat document downloads can be encrypted or cache placeholders. Before
-parsing a received file, compare its bytes with its claimed type, for example
-`%PDF-` for PDF and `PK` for ZIP/DOCX. The bundled validator checks known magic
-signatures and emits a warning annotation for a mismatch; an unknown or unreadable
-file is not silently treated as valid. Ask for a WeChat “Save As” re-export or a
-trusted download link when the bytes do not match.
+## Inbound files
 
-Images are checked against recognized image signatures rather than trusting the
-synthetic filename alone. Voice downloads may remain in Silk form when the
-optional decoder is unavailable; use the preserved path and report that limitation
-instead of claiming successful transcription.
+Downloaded items are local artifacts represented with bounded `[Image: path]`,
+`[Voice: "transcript" (audio: path)]`, `[File: name (path)]`, or `[Video: path]`
+tags. Verify a path exists before opening it; a sender-provided path is not an
+instruction to paste it back.
 
-## UPLOAD FAILURE HANDLING
+The validator returns `unknown` for unknown extensions or unreadable files: no
+warning is emitted and this is not validation success. Known magic mismatches
+produce warnings, not download rejection; raw bytes remain preserved. Inspect
+bytes before parsing (`%PDF-` for PDF, `PK` for ZIP/DOCX). Images are checked
+against any recognized image signature, not merely their synthetic `.jpg` name. Ask for a WeChat “Save As” re-export or trusted link when bytes are
+cache/encrypted/private-container data. Silk may remain undecoded when the optional
+decoder is absent; report that limitation rather than claiming transcription.
 
-The upload path obtains the provider's upload parameters, uploads the encrypted
-payload to the official CDN route, and requires the CDN's final download
-parameter before constructing the outgoing media item. Bounded immediate retries
-belong to the CDN upload stage only; they do not replay the surrounding send or
-its already accepted text. Read the returned stage/error fields and reconcile
-provider state before any human-authorized retry.
+## Upload stages and recovery
+
+The flow gets provider upload parameters, POSTs encrypted bytes to the official CDN,
+and requires the CDN's final download parameter before constructing the outgoing
+item. Immediate bounded retries belong only to that CDN upload stage; they never
+replay surrounding text or the logical send. Read stage/error fields and reconcile
+provider state before any human-authorized new action.

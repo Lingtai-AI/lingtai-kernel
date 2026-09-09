@@ -3,53 +3,61 @@ related_files:
 - src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
 - src/lingtai/tools/mcp/skills/mcp-manual/reference/curated-addons.md
 maintenance: |
-  MCP troubleshooting reference routed to from mcp/skills/mcp-manual/SKILL.md and cross-linking curated-addons.md; update it as new boot-error patterns or update/deregister flows are discovered.
+  Owns MCP update, deregistration, diagnostics, and recovery routing; update when boot failures or lifecycle semantics change.
 ---
 
 # MCP troubleshooting
 
-## Updating, deregistering
+Before an update, deregistration, or diagnosis, read the applicable setup README,
+obtain explicit human authorization for edits, and call `mcp(action="info", input={}, reasoning="inspect registry and problems")`.
+The snapshot includes registry contents, invalid-line/config problems, path,
+counts, and status. `info` reads afresh without changing registry/config.
+Problems may include raw invalid lines or quoted input: disclose only line
+numbers and sanitized reasons, never the whole list, raw logs or credentials.
 
-- **Update**: edit the matching line in `mcp_registry.jsonl` in place. Same schema. Then `system(action="refresh")`.
-- **Deregister**: remove the matching line. Note: this does NOT stop a running MCP — to deactivate, also remove the entry from `init.json`'s `mcp` section.
+## Update and deregister
 
-## Diagnosing problems
+- **Update:** edit the matching `mcp_registry.jsonl` record in place, preserving
+  its schema; apply one authorized System refresh using the
+  [setup envelope](curated-addons.md#the-four-step-setup); call `info` again.
+  For non-curated launcher changes, edit the activation owner too; a registry
+  command alone is not the active launch spec.
+- **Deregister:** remove the matching registry line. This does **not** stop a
+  running child. For a curated addon remove its `addons` name as well, or boot
+  can register it again. Remove the matching activation from its actual owner
+  (`init.json` `mcp` or legacy `mcp/servers.json`), then request one authorized
+  refresh and verify the child is gone. The retry hook alone does not stop it.
+  Do not delete credentials or recovery state as a substitute.
 
-Call `mcp(action="info", input={}, reasoning="diagnose MCP registry problems")` to see:
-- The current registry contents
-- The `problems` list (invalid registry lines, missing config, etc.)
-- A runtime health snapshot (registry path, count, status per server)
+Invalid registry lines may be skipped with a refresh warning, so always verify
+with a fresh `info`. Never treat registry membership as active proof.
 
-Invalid registry lines are skipped silently with a warning at refresh time, so always verify with `mcp(action="info", input={}, reasoning="verify the registry after editing")` after editing.
+## Common failures
 
-## Common boot failures
+- **Cryptic `KeyError`:** a required config field is missing. Re-read
+  `curated-addons.md` for curated servers or the exact third-party README; copy
+  exact names (`email_password`, not `password`; `bot_token`, not `token`).
+- **Start failure / command not found:** for non-curated entries, check the
+  configured executable/venv or `npx`/`uvx` on `PATH`. Curated entries never read
+  `init.json` `command`/`args`/`type`; probe the running kernel catalog/runtime
+  instead—editing those legacy fields cannot fix it. HTTP has no local command.
+- **Tools absent:** after authorized config edit, make one controlled refresh (or
+  one relaunch), then call `info` and verify the live mount. Do not start a
+  duplicate parent.
+- **HTTP 401/403:** check the README's exact `headers` key and auth format; do
+  not paste a key into a report.
+- **Boots but calls say manager not initialized:** inspect the agent's stderr or
+  `logs/agent.log` for the underlying config/path error, fix through the owning
+  route, and refresh.
+- **Curated module/closed-resource symptom:** first run the effective provenance
+  probe in [runtime-and-identity](runtime-and-identity.md). Do not diagnose a
+  token failure until the live interpreter and module are confirmed.
 
-**Boot failure with cryptic `KeyError`**
-The MCP subprocess hit a missing config field. The error message *is* the missing field name. For kernel-curated addons, first re-read `curated-addons.md`, then use the catalog homepage for deep provider docs if needed. For third-party Python MCPs, fetch the server README (see §When in doubt, step 1).
+## When uncertain
 
-Check the exact field name spelling — `email_password` not `password`, `bot_token` not `token`, etc. This is the single most common failure mode and the docs always have the correct field name.
-
-**`MCP server failed to start` / "command not found"**
-For a **non-curated** third-party entry, the `command` path in your `init.json` `mcp.<name>` entry doesn't have the executable — for Python servers, confirm the venv path is correct; for `npx`/`uvx` servers, confirm those tools are on `PATH`. A **kernel-curated** addon (`source == "lingtai-curated"`) never reads `command`/`args`/`type` from `init.json` at all — the running kernel's own `mcp_catalog.json` derives the whole launcher, so editing or "fixing" that field in `init.json` has no effect; see `curated-addons.md` "MCP child processes run in their own runtime". A curated addon that still fails to start is a kernel/environment problem (e.g. the registered name is missing from the current `mcp_catalog.json` — check the agent log for a "no stdio entry for it" warning), not an `init.json` field to edit.
-
-**Tools not appearing in your tool surface**
-You forgot to `system(action="refresh")` after editing config. Refresh and re-check `mcp(action="info", input={}, reasoning="confirm the refreshed registry")`.
-
-**HTTP 401 / 403 from an http-type server**
-API key missing or malformed in the `headers` field. Format is usually `"Authorization": "Bearer <key>"`. Check the MCP's README for the exact header name and value format.
-
-**Server boots but tool calls fail with "MCP manager not initialized" or similar**
-Eager-start failed silently. Check the agent's stderr / `logs/agent.log` for the underlying exception. Usually a config field missing or wrong path. Fix and refresh.
-
-## When in doubt
-
-1. Read the relevant docs — `curated-addons.md` for kernel-curated addons, or a
-   third-party README via the bundled script (`<pkg-name>` is the installed
-   distribution name; use the runtime venv's Python):
-   ```bash
-   ~/.lingtai-tui/runtime/venv/bin/python3 \
-     .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>
-   ```
-2. `mcp(action="info", input={}, reasoning="inspect registry and problems")` to see registry + problems.
-3. Tail `logs/agent.log` for the actual error message.
-4. Re-read the setup/troubleshooting section — most MCP docs document common errors with exact symptom strings.
+1. Read the curated route or third-party README (local `find_readme.py`, then
+   public `<homepage>` with Web `browse`).
+2. Call `mcp(action="info", input={}, reasoning="verify MCP registry health")`.
+3. Inspect the actual error in `logs/agent.log` without exposing secrets.
+4. If the remedy changes registry/config, stop until explicit authorization is
+   present; then perform one edit, one refresh, and one verification.

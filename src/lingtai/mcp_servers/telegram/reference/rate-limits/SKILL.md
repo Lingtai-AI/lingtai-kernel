@@ -5,8 +5,8 @@ description: |
   `retry_after` semantics, documented unknowns, and safe client policy. Read
   before changing Telegram send cadence, programmable Task Card cadence, or 429
   recovery behavior.
-version: 1.0.0
-last_changed_at: 2026-07-29T00:00:00Z
+version: 1.1.0
+last_changed_at: 2026-09-09T00:00:00Z
 related_files:
   - src/lingtai/mcp_servers/telegram/SKILL.md
   - src/lingtai/mcp_servers/telegram/account.py
@@ -20,75 +20,51 @@ maintenance: |
 
 # Telegram Bot API rate limits
 
-This reference records Telegram's current published guidance. It is not a
-second tool contract and it does not make undocumented provider behavior into a
-LingTai guarantee. Re-check the official links before changing cadence or
-recovery policy.
-
-## Official sources
+This reference owns provider facts and safe one-request policy; it is not a
+second Telegram contract. Re-check the official pages before changing cadence or
+recovery:
 
 - [`ResponseParameters`](https://core.telegram.org/bots/api#responseparameters)
 - [`Bots FAQ — Broadcasting to Users`](https://core.telegram.org/bots/faq#broadcasting-to-users)
 
 Last verified against both pages: **2026-07-29 UTC**.
 
-## Currently documented quotas
+## Published guidance
 
-Telegram's FAQ says:
+- In one chat, avoid more than **one message per second**; continued excess can
+  produce HTTP 429.
+- A group permits no more than **20 messages per minute**.
+- Bulk broadcasts are **about 30 messages per second** without paid broadcasts;
+  Telegram recommends spreading large batches over 8–12 hours.
+- Eligible paid broadcasts publish a 1000-message-per-second ceiling at the
+  documented Stars cost. This is opt-in billing, never an automatic fallback.
 
-- In one chat, avoid sending more than **one message per second**. Short bursts
-  may pass, but continued excess eventually produces HTTP 429 errors.
-- In a group, bots cannot send more than **20 messages per minute**.
-- For bulk notifications, bots cannot broadcast more than **about 30 messages
-  per second** unless paid broadcasts are enabled.
-- Paid broadcasts can raise the published bulk ceiling to 1000 messages per
-  second for eligible bots at the documented Stars cost. This is opt-in billing,
-  never an automatic LingTai fallback.
-- Without paid broadcasts, Telegram recommends spreading large notification
-  batches over longer intervals such as 8–12 hours.
+These are provider guidelines, not permission to run every source at its limit.
+Normal messages and automatic/programmable Task Card edits share the chat and
+bot account, so coalesce presentation traffic and leave human communication
+headroom.
 
-These are provider guidelines, not permission to run every source of traffic at
-its individual maximum. Normal messages, automatic card updates, and
-programmable card updates can share a chat and bot account, so presentation
-traffic should coalesce and leave headroom for human communication.
+## `retry_after` and the unknown scope
 
-## What `retry_after` means
+Telegram defines `ResponseParameters.retry_after` as optional integer seconds
+remaining before a flood-controlled request may be repeated. LingTai reports
+`retryable=true` only for a valid nonnegative integer and never sleeps, holds the
+MCP worker, or schedules a hidden second side effect (`auto_retry=false`). A
+missing or malformed value omits both `retry_after` and `retryable`.
 
-Telegram defines `ResponseParameters.retry_after` as an optional Integer: in
-case of flood control, it is the number of seconds left to wait before the
-request can be repeated.
-
-LingTai therefore distinguishes two facts:
-
-- `retryable: true` means Telegram supplied a valid nonnegative integer
-  `retry_after`, so a caller may start a **new** action after waiting at least
-  that long.
-- `auto_retry: false` means the addon never sleeps inside the current tool call,
-  never holds the MCP worker for the cooldown, and never schedules a hidden
-  second side effect.
-
-If Telegram omits or malforms `retry_after`, LingTai omits both `retry_after`
-and `retryable` rather than turning an unknown wait into a false promise or an
-invented default.
-
-## What Telegram does not document
-
-`ResponseParameters` does not identify whether a particular cooldown is scoped
-to a chat, group, method, bot account, or another provider bucket. It also does
-not publish the penalty formula or promise whether requests during a cooldown
-reset or extend it. A result must therefore not invent `retry_scope`, infer a
-global ban from one method, or claim a long penalty's cause from its duration.
+Telegram does not document whether a cooldown is scoped to a chat, group,
+method, account, or another bucket, nor its penalty formula or whether requests
+extend it. Do not invent `retry_scope`, infer a global ban, or claim a cause from
+the duration.
 
 ## Safe client policy
 
-- A definite 429 is a definite failed request: do not persist it as delivered.
-- Return the provider's valid cooldown immediately and release the worker.
-- Do not send a second Telegram message saying that Telegram is rate limited;
-  that notice itself consumes the rate-limited route. Surface the countdown in
-  the tool result, local UI, or another healthy channel.
-- Any durable wait, cancellation, coalescing, Task Card pause, or later retry is
-  an orchestrator/controller policy outside the one-request adapter. It needs
-  explicit authorization and must remain distinguishable from automatic retry.
-- Because the provider does not disclose `retry_scope`, throttle presentation
-  traffic conservatively and prefer normal human communication over automatic
-  or programmable updates.
+- A 429 is a failed request; do not persist it as delivered.
+- Return the valid cooldown immediately and release the worker. A later new
+  action after waiting is caller/orchestrator policy, not automatic retry.
+- Do not send a second Telegram notice through the rate-limited route; surface
+  the countdown in the result, local UI, or another healthy channel.
+- Durable waits, cancellation, coalescing, Task Card pauses, and later retries
+  require explicit orchestrator authorization.
+- A changed Task Card frame is a real edit/send and consumes quota; unchanged-byte
+  diff skipping does not make a churning renderer safe.

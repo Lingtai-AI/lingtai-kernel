@@ -1006,3 +1006,40 @@ def test_substrate_prompt_section_is_untouched_by_the_rename(tmp_path):
         assert agent._prompt_manager.read_section("substrate") == body
     finally:
         agent.stop(timeout=1.0)
+
+
+def test_manual_docs_keep_pad_seed_owner_explicit():
+    root = Path(__file__).parents[1] / "src/lingtai/intrinsic_skills/psyche-manual"
+    text = (root / "reference/settings/SKILL.md").read_text()
+    assert "top-level `init.json` `pad`/`pad_file`" in text
+    assert "not fields in `settings/psyche.json`" in text
+    assert "[Anchor details](SKILL.md#" not in text
+
+
+def test_manual_docs_preserve_external_skill_timestamp_option():
+    root = Path(__file__).parents[1] / "src/lingtai/tools/skills/manual"
+    text = (root / "SKILL.md").read_text()
+    assert "optional for custom/external" in text
+    assert "validate.py --require-last-changed-at .library/custom/<skill-name>/" not in text
+    assert "metadata-only" in text
+
+
+def test_manual_docs_installed_relative_links_resolve(tmp_path):
+    import re
+
+    agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
+    try:
+        for action in MANUAL_ACTIONS:
+            result = _call(agent, action)
+            path = Path(result["manual_path"])
+            paths = [path]
+            if action == "manual":
+                paths += [path.parent / "reference/settings/SKILL.md",
+                          path.parent / "reference/network-rules/SKILL.md"]
+            for source in paths:
+                for link in re.findall(r"\]\(([^)]+)\)", source.read_text()):
+                    if "://" in link:
+                        continue
+                    assert (source.parent / link.split("#")[0]).exists(), (source, link)
+    finally:
+        agent.stop(timeout=1.0)

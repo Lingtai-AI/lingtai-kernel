@@ -60,21 +60,14 @@ def _email_id_list() -> dict[str, Any]:
             {"type": "string"},
             {"type": "array", "items": {"type": "string"}},
         ],
-        "description": (
-            "Email ID(s) returned by check/search/read; compound key "
-            "account:folder:uid. Reply uses the first ID."
-        ),
+        "description": "Returned compound account:folder:uid ID(s); reply uses the first.",
     }
 
 
 def _account_field() -> dict[str, Any]:
     return _nullable({
         "type": "string",
-        "description": (
-            "Which account to use (email address). Optional — an empty or "
-            "whitespace-only string is treated as omitted and defaults to "
-            "the primary account."
-        ),
+        "description": "Optional account email; blank/whitespace selects the default account.",
     })
 
 
@@ -90,38 +83,22 @@ def _imap_input_schemas() -> dict[str, dict[str, Any]]:
             "attachments": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": (
-                    "Attachment paths for send/reply; relative paths use the working "
-                    "dir and absolute paths must stay inside it."
-                ),
+                "description": "Attachment paths; relative to workdir, absolute paths stay inside it.",
             },
         },
         required=["address"],
     )
-    send["properties"]["address"]["description"] = (
-        "Target recipient address(es) for a real outbound send; verify them "
-        "before delivery."
-    )
-    send["properties"]["subject"]["description"] = "Subject to review before real delivery"
-    send["properties"]["message"]["description"] = (
-        "Body to review before real delivery; the schema accepts an omitted body."
-    )
-    send["properties"]["cc"]["description"] = (
-        "Visible CC recipient(s); verify before real delivery"
-    )
-    send["properties"]["bcc"]["description"] = (
-        "Hidden BCC recipient(s); verify before real delivery"
-    )
+    send["properties"]["address"]["description"] = "Real recipient(s); verify before delivery."
+    send["properties"]["subject"]["description"] = "Subject to verify before delivery"
+    send["properties"]["message"]["description"] = "Body to verify; schema permits omission"
+    send["properties"]["cc"]["description"] = "CC recipient(s); verify before delivery"
+    send["properties"]["bcc"]["description"] = "BCC recipient(s); verify before delivery"
 
     check = _object({
         "account": _account_field(),
         "folder": _nullable({
             "type": "string",
-            "description": (
-                "IMAP folder name (e.g. INBOX, [Gmail]/Sent Mail). An empty "
-                "or whitespace-only string is treated as omitted and "
-                "defaults to INBOX."
-            ),
+            "description": "Folder name; blank/whitespace defaults to INBOX.",
         }),
         "n": _nullable({
             "type": "integer",
@@ -147,44 +124,26 @@ def _imap_input_schemas() -> dict[str, dict[str, Any]]:
             "attachments": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": (
-                    "Attachment paths for send/reply; relative paths use the working "
-                    "dir and absolute paths must stay inside it."
-                ),
+                "description": "Attachment paths; relative to workdir, absolute paths stay inside it.",
             },
         },
         required=["email_id", "message"],
     )
-    reply["properties"]["email_id"]["description"] = (
-        "Target email ID from check/search/read; compound account:folder:uid. "
-        "Reply uses the first ID and requires reading it before delivery."
-    )
-    reply["properties"]["subject"]["description"] = (
-        "Optional subject override; otherwise reply threading derives it from the target"
-    )
-    reply["properties"]["message"]["description"] = (
-        "Reply body to review before real delivery"
-    )
-    reply["properties"]["cc"]["description"] = (
-        "Visible CC recipient(s); verify before real delivery"
-    )
+    reply["properties"]["email_id"]["description"] = "Returned compound ID; read target first; reply uses first."
+    reply["properties"]["subject"]["description"] = "Optional override; otherwise derives from target"
+    reply["properties"]["message"]["description"] = "Reply body to verify before delivery"
+    reply["properties"]["cc"]["description"] = "CC recipient(s); verify before delivery"
 
     search = _object(
         {
             "account": _account_field(),
             "query": {
                 "type": "string",
-                "description": (
-                    "Server-side IMAP search DSL (for example from:addr "
-                    "subject:text unseen since:YYYY-MM-DD); see manual for detail."
-                ),
+                "description": "Server-side DSL, e.g. from:addr subject:text unseen since:YYYY-MM-DD.",
             },
             "folder": _nullable({
                 "type": "string",
-                "description": (
-                    "IMAP folder name. An empty or whitespace-only string is "
-                    "treated as omitted and defaults to INBOX."
-                ),
+                "description": "Folder name; blank/whitespace defaults to INBOX.",
             }),
         },
         required=["query"],
@@ -197,10 +156,7 @@ def _imap_input_schemas() -> dict[str, dict[str, Any]]:
         },
         required=["email_id"],
     )
-    delete["properties"]["email_id"]["description"] = (
-        "Email ID(s) to delete; verify compound IDs because this changes "
-        "server-side mailbox state."
-    )
+    delete["properties"]["email_id"]["description"] = "Compound ID(s); verify before changing mailbox state."
 
     move = _object(
         {
@@ -208,18 +164,12 @@ def _imap_input_schemas() -> dict[str, dict[str, Any]]:
             "email_id": _email_id_list(),
             "folder": {
                 "type": "string",
-                "description": (
-                    "Non-empty destination folder; this changes mailbox state and "
-                    "is never defaulted to INBOX."
-                ),
+                "description": "Non-empty destination; never defaults to INBOX.",
             },
         },
         required=["email_id", "folder"],
     )
-    move["properties"]["email_id"]["description"] = (
-        "Email ID(s) to move; verify source IDs and destination before changing "
-        "server-side mailbox state."
-    )
+    move["properties"]["email_id"]["description"] = "Compound ID(s); verify before changing mailbox state."
 
     flag = _object(
         {
@@ -227,17 +177,12 @@ def _imap_input_schemas() -> dict[str, dict[str, Any]]:
             "email_id": _email_id_list(),
             "flags": {
                 "type": "object",
-                "description": (
-                    "Non-empty flag-name-to-bool map; e.g. {\"seen\": true, "
-                    "\"flagged\": false}. This changes mailbox state."
-                ),
+                "description": "Non-empty flag-name-to-bool map; changes mailbox state.",
             },
         },
         required=["email_id", "flags"],
     )
-    flag["properties"]["email_id"]["description"] = (
-        "Email ID(s) to flag; verify them before changing server-side mailbox state."
-    )
+    flag["properties"]["email_id"]["description"] = "Compound ID(s); verify before changing mailbox state."
 
     folders = _object({"account": _account_field()})
     contacts = _object({"account": _account_field()})
@@ -320,17 +265,14 @@ def imap_schema() -> dict[str, Any]:
     if "oneOf" in input_schema:
         input_schema["anyOf"] = input_schema.pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "Strict action-owned input branches for real IMAP/SMTP email. "
-        "Safe first route: use check/search, then read the returned compound "
-        "email_id before deciding whether to reply. send and reply deliver real "
-        "external mail; verify to/cc/bcc recipients and the body first. For an "
-        "external reply, follow the standing policy or confirm the sender is the "
-        "same human who contacted you internally. account defaults when omitted; "
-        "blank check/search folders mean INBOX; move requires a non-empty "
-        "destination. Use returned IDs in account:folder:uid form. delete, move, "
-        "and flag mutate mailbox state; inspect errors and delivery status. "
-        "Call the manual for attachment, search, contacts, accounts, settings, "
-        "configuration, and deeper safety detail. "
+        "Strict branches for real IMAP/SMTP. First read: check/search, then read "
+        "the returned compound email_id. send/reply deliver real mail: verify "
+        "to/cc/bcc and body; external replies need standing policy or confirmation "
+        "the sender is the same human who contacted you internally. Blank "
+        "check/search folders mean INBOX; move needs a "
+        "destination. delete/move/flag mutate state; inspect status/errors. "
+        "Configuration is orchestrator-owned; avatars must not configure it. "
+        "Read the manual for attachments, settings, and deeper detail. "
         + IMAP_PLUGIN.manual_action_description()
     )
     return schema

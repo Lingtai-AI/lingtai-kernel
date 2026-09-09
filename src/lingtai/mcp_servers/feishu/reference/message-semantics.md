@@ -17,402 +17,245 @@ related_files:
 - src/lingtai/mcp_servers/feishu/reference/diagnostics.md
 - src/lingtai/mcp_servers/feishu/reference/capability-matrix.md
 maintenance: |
-  Keep the Feishu model-facing action and message semantics aligned with the
-  parent SKILL.md router, the strict family schema, provider adapters, and
-  focused behavior tests. This sidecar owns operational depth; do not copy its
-  detailed rules back into the resident tool description.
+  This is the deep model-facing Feishu semantics owner. Keep exact schemas,
+  IDs, reply/chunk/card/retry behavior, notification routing, and settings
+  pointers aligned with the implementation and focused tests. Setup and symptom
+  procedures belong to their sidecars; do not copy them here or back to SKILL.md.
 ---
-# Feishu MCP message semantics
+# Feishu message semantics
 
-This is the deep, model-facing companion to [`../SKILL.md`](../SKILL.md). The
-parent manual is the concise entry point returned by `action='manual'`; load this
-sidecar when a call needs message, card, notification, Task Card, settings, or
-failure details. Setup and rollout belong to [`setup.md`](setup.md), symptom-led
-investigation to [`diagnostics.md`](diagnostics.md), and the capability/non-goal
-inventory to [`capability-matrix.md`](capability-matrix.md).
+Load this sidecar only for exact content, reply, card, media, notification,
+Task Card, settings, or failure behavior. The parent [`../SKILL.md`](../SKILL.md)
+is the first-call router; [`setup.md`](setup.md) owns deployment and
+[`diagnostics.md`](diagnostics.md) owns symptom investigation.
 
-## SETTINGS SHOW
+## IDs, accounts, and recipients
 
-Call `action='settings', input={}, reasoning='inspect Feishu settings'` to read
-the current Feishu-owned inventory. Every row contains only `key`, `current`,
-`default`, `configurable`, and the exact section pointer in `comment`. SHOW has
-no set or reset form and performs no configuration write. Make changes only
-through the existing owner procedures below, then call SHOW again after the
-stated live/relaunch boundary. If any current value is unavailable or not
-JSON-safe, the whole bounded inventory fails without partial rows or raw
-exception text.
+- `send` uses `receive_id` and `receive_id_type`; `open_id` is the default for a
+  user, `chat_id` targets a group, and `email`, `user_id`, and `union_id` are
+  also accepted user identifiers. An omitted `account` means the first account.
+- Every returned message ID is `{account_alias}:{chat_id}:{feishu_message_id}`.
+  Pass an inbound ID to `reply` verbatim. For `edit`/`delete`, use only an ID
+  from this Bot's sent history; the adapter resolves the local record but does
+  not prove provider-side authorship.
+- Verify account, recipient, content, and operation before any external
+  `send`, `reply`, `edit`, `delete`, or `react`. Saving a contact is not
+  permission to contact the sender.
+
+## Text, posts, cards, and replies
+
+`send`, `reply`, and `edit` require exactly one legacy `text` shortcut or tagged
+`content`; both or neither is invalid. The strict content union is:
+
+```text
+text="..."                              # shortcut inside input
+content={type: text, text: "..."}
+content={type: markdown, markdown: "..."}
+content={type: post, post: {...}}
+content={type: card, card: {schema: "2.0", ...}}
+```
+
+The action-input `text` shortcut and tagged `content.type="text"` are equivalent.
+Unknown/mixed fields fail before Feishu I/O. `send` starts a fresh message. `reply` answers the exact incoming target
+and defaults `reply_in_thread=true` when that target has a persisted
+`thread_id`; an explicit boolean overrides it. Every chunk of a topic reply
+stays in that topic. `reply_target_gone="fail"` is the contract: a gone target
+fails and never becomes a fresh `send`.
+
+Markdown is converted to a Feishu post and split at safe boundaries. Successful
+results include the primary `message_id`, ordered `message_ids`, `chunk_count`,
+and `chunks` (each has its one-based `index` and compound `message_id`).
+
+`edit` supports text, Markdown/post, and complete schema-2.0 card replacement;
+media is not editable. It resolves any primary or secondary compound ID to the
+whole persisted logical chunk group and replaces its logical content only after
+all physical edits succeed; mixed outcomes retain lifecycle evidence below. `delete` resolves the same group and deletes every
+physical member once, in order. Successful lifecycle results carry the same
+ordered chunk projection.
+
+## Chunk partials and lifecycle recovery
+
+Each materialized wire chunk is attempted exactly once, in order. If a later
+chunk fails, preserve the already delivered IDs and return the provider error
+classification plus `partial_delivery=true`, `failed_chunk_index`,
+`chunk_count`, `delivered_chunk_count`, and `automatic_retry_allowed=false`.
+The sent record has `status="partial"`; a partial reply does not add the done
+reaction. Do not replay the whole action, even when the failed chunk says
+`retryable=true`, because delivered chunks would duplicate.
+
+For a mixed `edit`/`delete`, return `partial_failure=true`, exact
+`succeeded_message_ids` and `failed_message_ids`, per-member `failures`, and
+`automatic_retry_allowed=false`. Persist a restart-visible `lifecycle` with
+operation, attempted IDs, successes, failures, and time; preserve prior logical
+content on a partial edit. Reconcile provider state before a new lifecycle
+operation. A failure with no success does not replace the prior sent record.
+
+## Schema-2.0 cards and callbacks
+
+- A complete `content.type="card"` is business outbound content for `send` or
+  `reply`; `edit` replaces it through the native card-update API and persists
+  the exact JSON. Visible-text previews do not traverse button callback values.
+- A business click is accepted only with a Feishu actor passing the account's
+  `allowed_users` gate. It is serialized per account/chat, deduplicated by the
+  stable Feishu event ID, persisted in the source conversation as
+  `message_type="card_action"`, and wakes the Agent. Distinct event IDs remain
+  distinct even for the same button/value.
+- `read` exposes `card_action`, `feishu_event_id`, `source_message_ref`, and raw
+  `feishu`. A callback record is not a reply target: update its source card by
+  `source_message_ref`, or `send` a fresh response to its chat. Card callback
+  delivery must be separately configured on the app's long connection; a
+  message-event subscription alone is insufficient.
+
+Local command cards are not business cards. After normal actor/admission checks,
+`/help`, `/status`, `/kanban`, `/system`, `/refresh`, `/sleep`, `/clear`, and
+`/taskcard` are handled locally, update their source control card, and neither
+create `card_action` records nor wake the Agent. Unknown slash commands remain
+ordinary Agent input. Group/topic commands require a Bot mention; namespaced
+control callbacks are bounded-hash claimed in
+`feishu/control_callbacks.json` and use localized `zh`/`en`/`wen` rendering
+(unknown language falls back to English). `/taskcard on|off` and `/taskcard N`
+(1--10) change the Agent-wide projection preference; exact resident routes are
+still account + chat + optional thread.
+
+## Media, shares, stickers
+
+`send` and `reply` also accept:
+
+```text
+{type: image|file|audio|video, source: SOURCE, ...}
+{type: share_chat, chat_id: "oc_..."}
+{type: share_user, user_id: "ou_..."}
+{type: sticker, file_key: "..."}
+```
+
+`SOURCE` is exactly `{type: path, path: "/absolute/file"}` or
+`{type: key, key: "provider-key"}`. Relative paths and URLs are rejected. A
+provider key must be owned by this Bot; an inbound user's downloadable key may
+not be reusable outbound. Image/video may have a Markdown `caption`; file/audio
+captions are unsupported. Sent records retain the exact source descriptor;
+outgoing notification previews omit path and provider key. Files also accept
+optional non-empty `file_name`; an image/video caption produces a Feishu post.
+Each media chunk is still one attempt; rejected format/caption is a failure,
+not a silent plaintext downgrade.
+
+## Read, inbound content, and passive events
+
+`check` lists conversations/unread counts; `read` takes `chat_id` and optional
+`limit` (default `10`) / `account`; `search` takes a regex `query` and optional
+account/chat. `remove_contact` by alias removes all matching saved contacts;
+use exact `open_id` to target one.
+`read` merges inbox and Bot-sent records and marks inbound records read. Its
+normalized content identifies the original text, post, task/todo, share, card,
+image, file, audio, video, or sticker family. Downloaded attachments include
+safe absolute `path`, filename, size, and status; failed downloads retain the
+original descriptor and bounded error. Audio transcription is local; a failed
+transcription does not discard the audio.
+
+Reaction/read/Bot membership events live in read-only `chat_id="events"`; they
+carry an `event` projection and complete raw `feishu`, do not wake the Agent,
+and must not be a `send` recipient. Ordinary admitted messages and authorized
+business callbacks wake. DMs need no mention; group/topic messages need an
+explicit Bot mention (`@all` alone is ignored), and `allowed_users` gates all
+actors.
+
+## Notifications and progress
+
+The transient `_meta.agent_meta.notifications.attention.mcp.feishu` lane carries
+only bounded IDs/dismiss guidance. Persistent
+`_meta.agent_meta.notifications.persistent.mcp.feishu` carries bounded recent
+conversation, routing/reply refs, and truncation comments. Neither lane marks
+messages read: use `read`/`check` for truth, reply in Feishu, then dismiss the
+transient hook with `notification(action="dismiss_channel", input={"channel":
+"mcp.feishu", "force":null, "reason":null}, reasoning="handled in Feishu")`.
+
+The current incoming event can include bounded local paths, attachment status,
+and download/transcription errors. Provider keys and complete raw envelopes
+stay behind `read`; truncated paths must be recovered there before use. Inspect
+image content with Vision and other media with the appropriate local tool rather
+than replying from its placeholder. Do not export paths or raw content as evidence.
+
+For work taking more than a few seconds, `send` with `placeholder=true` accepts
+only text/Markdown/post and creates a native schema-2.0 progress card. Edit that
+same card only at meaningful phase changes using text/Markdown/post; those edits
+remain progress cards. Media and custom card replacement are rejected for a
+placeholder, even though a business card supports complete card replacement.
+The final answer is a separate durable `send` or `reply`, never a progress-card
+edit. Native `Typing` is transient presence; `OK` seen and `THUMBSUP` after a
+complete reply are separate reactions.
+
+Automatic and programmable resident Task Cards are mechanical channel
+projections, not public `feishu` messages. One resident belongs to each admitted
+account + chat + optional thread route. The exact persisted ID is the only
+mutation target. It updates in place while still last; after a newer observed
+route message, replacement is old-first. After restart ordering is unknown, so
+update the exact resident conservatively and never scan/delete guessed orphans.
+The programmable `WATCH` slot is independent: exact `active` plus non-empty
+`taskcard/taskcard.md` projects it below the automatic frame under
+`— TASK CARD —`; exact `inactive` clears only that slot, and
+missing/invalid/blank state preserves its last delivered frame. Turning the
+projection off suppresses it without deleting unknown cards.
+
+## Failure shape and settings
+
+Feishu manager and action-validation failures expose `status="failed"`, `error`, identical `message`,
+`error_code`, `retryable`, and `retry_after_seconds`. `max_attempts=1` means
+retryable is caller guidance, not an automatic retry. For rate limits honor a
+returned delay; for timeout/indeterminate outcomes inspect persisted/provider
+state before another send. A revoked target is `TARGET_REVOKED`: stop rather
+than turn the operation into a new message/reaction.
+
+`settings` is strict-empty, read-only SHOW. It returns seven rows with only
+`key`, `current`, `default`, `configurable`, and a manual pointer in `comment`;
+missing applied truth fails the whole bounded inventory. Plugin-owned SHOW
+failures are separate: `SETTINGS_UNAVAILABLE` returns status/code/message with
+no rows; `SETTINGS_RESPONSE_TOO_LARGE` also includes `max_bytes` (65536), not
+manager retry fields. Do not assume every family failure has `retryable`.
+All seven rows are configurable through their existing owner, never through SHOW.
+For `config.path`, `accounts.app_secrets`, and `accounts.allowed_users`, both
+`current` and `default` are always `<redacted>`; aliases/app IDs are public with
+`default=null` (no universal default). Account rows are startup snapshots from
+the protected account config; Task Card getters read current in-memory state.
 
 ### Setting config path
 
-`config.path` is the `LINGTAI_FEISHU_CONFIG` reference captured by the running
-service at startup. The launcher environment is its only source, so there is no
-meaningful default or lower-precedence value. The startup resolver requires a
-non-empty reference, expands `~`, resolves a relative path against
-`LINGTAI_AGENT_DIR` or the MCP working directory, and then reads strict JSON;
-failure prevents manager construction. The reference is sensitive machine
-metadata, so SHOW redacts both `current` and `default`. An authorized owner
-changes the Feishu MCP environment through the existing Agent configuration
-procedure, refreshes or relaunches the MCP, and verifies with another SHOW.
+`config.path` is the sensitive `LINGTAI_FEISHU_CONFIG` startup reference, relative
+to `LINGTAI_AGENT_DIR` when not absolute. After owner authorization, change the
+launcher reference and relaunch the MCP, then SHOW again. No built-in path exists.
 
 ### Setting account aliases
 
-`accounts.aliases` is the service's ordered startup snapshot of
-`accounts[].alias`; the first entry is the default outbound account. The owner
-JSON selected by `LINGTAI_FEISHU_CONFIG` is the only source, there is no
-meaningful default, and a change requires MCP refresh or relaunch. The loader
-directly indexes the field but does not validate string type, non-emptiness, or
-uniqueness: duplicate aliases remain in order while later entries replace the
-lookup-map value. Use stable, non-empty, unique strings as operator guidance,
-not as a claimed runtime schema check. Edit the protected owner JSON and verify
-the rebuilt service with SHOW.
+`accounts.aliases` is the ordered startup snapshot; the first is default and a
+later duplicate replaces lookup while remaining in order.
 
 ### Setting account app ids
 
-`accounts.app_ids` is the ordered startup snapshot of the required
-`accounts[].app_id` fields paired with the aliases above. App IDs are public
-identifiers. The loader does not enforce string type or the conventional
-`cli_...` shape before account construction, so those are setup guidance and
-provider failures remain visible rather than being presented as schema
-validation. The owner JSON is the only source, there is no meaningful default,
-and changes require MCP refresh or relaunch before SHOW reflects them.
+`accounts.app_ids` is the ordered startup snapshot of app IDs paired with aliases.
 
 ### Setting account app secrets
 
-`accounts.app_secrets` represents the required `accounts[].app_secret` startup
-values paired with the configured accounts. The loader requires the key but does
-not add a stronger type/format validator. The owner JSON is the only source and
-there is no meaningful default. SHOW always renders both values as `<redacted>`.
-Rotate a secret in the Feishu Developer Console, update the protected JSON
-through the existing owner procedure, refresh or relaunch the MCP, and use SHOW
-only to verify that the complete inventory is available.
+`accounts.app_secrets` comes from each required `app_secret` in protected config.
+Only with owner authorization, rotate privately in the Developer Console, update
+the secret file and relaunch the MCP. Never put a credential in SHOW or evidence.
 
 ### Setting account allowed users
 
-`accounts.allowed_users` represents each running account's sender-admission set.
-The optional owner-JSON field is the only source; omission, `null`, or any other
-falsy value means unrestricted compatibility behavior. A truthy value is passed
-to Python `set()` without a separate list/string/open-ID schema check, so use a
-non-empty list of sender `open_id` strings as operator guidance and allow
-construction failures to remain visible. Authorization data and the absence
-default are both redacted by SHOW. Edit the protected owner JSON, refresh or
-relaunch the MCP, and verify inventory availability; saved contacts never
-change this policy.
+`accounts.allowed_users` is the sender set; omitted, null, or empty remains
+unrestricted compatibility behavior and SHOW redacts it.
 
 ### Setting task card enabled
 
-`taskcard.enabled` is the live service value for Feishu's Agent-wide resident
-card projection. At service construction, an exact boolean `taskcard` in
-`<workdir>/feishu/taskcard.json` wins; every other value falls back to `true`.
-There is no environment peer. An admitted Feishu user may use the existing
-`/taskcard on` or `/taskcard off` command, whose validated setter persists and
-applies the change live; a direct owner-file edit requires MCP relaunch. SHOW
-is read-only and reads the live getter again on every call.
+`taskcard.enabled` is live Agent-wide state initialized from the `taskcard` key in
+`<agent>/feishu/taskcard.json`; an exact boolean wins, other/missing/unreadable
+values default to `true`. `/taskcard on|off` persists and applies it immediately.
+A direct authorized file edit requires an MCP relaunch; it is not hot-read.
 
 ### Setting task card normal rows
 
-`taskcard.normal_rows` is the live number of normal automatic rows. At service
-construction, only a Python integer from `1` through `10` in
-`<workdir>/feishu/taskcard.json` is accepted; booleans and every out-of-range or
-other value fall back to `1`. There is no environment peer. The existing
-`/taskcard N` command validates `1..10`, persists the value, and applies it live;
-a direct owner-file edit requires MCP relaunch. SHOW reads the live getter again
-and never writes the file.
+`taskcard.normal_rows` reads the `normal_rows` key in the same construction-time
+file: an exact integer `1`--`10` wins; booleans are not row counts. Other/missing
+values use `TaskCardEventProjection.DEFAULT_NORMAL_ROWS=1`. `/taskcard N`
+persists and applies it immediately; direct file edits need an MCP relaunch.
+Neither Task Card preference has an environment override.
 
-## RECIPIENTS: receive_id / receive_id_type
-
-- `send` targets a recipient by `receive_id` plus `receive_id_type`. Use
-  `receive_id_type='open_id'` for an individual user (`ou_xxx`) and
-  `receive_id_type='chat_id'` for a group chat (`oc_xxx`). `receive_id_type`
-  defaults to `open_id` when omitted.
-- `email`, `user_id`, and `union_id` are also accepted as `receive_id_type`
-  values when you only have that identifier for a user.
-
-## SEND vs REPLY
-
-- `send`, `reply`, and `edit` require exactly one of legacy `text` or structured
-  `content`; passing both is rejected before Feishu I/O. `text='...'` remains
-  the plain-text shortcut.
-- Structured content is a strict tagged union in this slice:
-  `{'type':'text','text':'...'}`,
-  `{'type':'markdown','markdown':'...'}`, or
-  `{'type':'post','post':{...}}`,
-  `{'type':'card','card':{'schema':'2.0',...}}`, plus the
-  media/share/sticker forms below. Unknown keys or mixed variants are rejected.
-- `reply` (`message_id` from `read` results or an inbound event, plus `text` or
-  `content`) replies to a specific incoming message; prefer it when answering
-  that message. It defaults `reply_in_thread=true` when the persisted target has a `thread_id`,
-  otherwise false. An explicit boolean overrides that default. If the reply
-  target is gone, the call fails and never silently starts a fresh message.
-- `send` (`receive_id`, `receive_id_type`, `text` or `content`) starts a fresh
-  message; use it for unsolicited or standalone messages.
-- Markdown is converted by the channel SDK to a Feishu post and split at safe
-  boundaries when long. Successful send/reply results include the primary
-  compound `message_id`, ordered `message_ids`, `chunk_count`, and `chunks`;
-  every chunk of a topic reply stays in that topic.
-- If a later chunk fails, the action returns the normal `status='failed'` error
-  fields plus `partial_delivery=true`, the exact delivered `message_ids`,
-  `failed_chunk_index`, total `chunk_count`, `delivered_chunk_count`, and
-  `automatic_retry_allowed=false`. One `status='partial'` sent record preserves
-  those exact side effects. Never replay the whole action: even when the failed
-  chunk's provider classification says `retryable=true`, doing so can duplicate
-  the already delivered chunks. Partial replies do not add the done reaction.
-- `edit` accepts text, markdown, post, or a complete schema-2.0 card and updates
-  every physical chunk in the logical sent record, even when called with a
-  secondary compound ID, and updates the persisted record only after Feishu
-  confirms every edit. `delete` resolves the same logical chunk group and
-  deletes every physical member. For either action, supply only a bot-authored
-  outgoing message ID from this adapter's sent history; the adapter resolves
-  the local record but does not independently prove provider-side authorship.
-  Successful lifecycle results expose the ordered `message_ids`, `chunk_count`,
-  and `chunks`. A partial edit/delete persists exact successes and failures,
-  disables whole-operation automatic replay, and requires provider-state
-  reconciliation before another attempt. Card edits replace the existing card
-  in place through Feishu's native card update API. Feishu does not expose media
-  messages through the same edit path.
-
-## INTERACTIVE CARDS AND BUSINESS CALLBACKS
-
-- `send` and `reply` accept a complete schema-2.0 interactive card through
-  `content.type='card'`; `edit` replaces a previously sent card with another
-  complete schema-2.0 card. The sent record keeps the exact card JSON, while
-  its text preview extracts visible card text and never traverses button callback
-  values.
-- A business button click is admitted only when Feishu supplies an actor and
-  that actor passes the account's `allowed_users` gate. Authorized callbacks
-  are serialized per account/chat, durably deduplicated by Feishu's stable event
-  id, persisted in the original conversation with `message_type='card_action'`,
-  and wake the agent. Distinct later clicks on the same button remain distinct
-  events even when actor, source card, and callback value are identical.
-- `read` exposes the normalized callback under `card_action`, its exact
-  `feishu_event_id`, the source card's `source_message_ref`, and the complete
-  raw envelope under `feishu`. A callback record is not itself a Feishu message
-  that can be replied to: use its `source_message_ref` to update the source card
-  when appropriate, or `send` a fresh response to the callback's chat.
-- The Feishu application must enable card callback delivery over the same
-  long-connection mode and publish that configuration. If clicking a button
-  produces only client-side success feedback but no `card_action` record or
-  agent wake, verify that application callback setting; ordinary event
-  subscriptions and messaging permissions do not prove card callbacks are
-  being delivered.
-
-## LOCAL COMMANDS AND CONTROL CARDS
-
-- `/help`, `/status`, `/kanban`, `/system`, `/refresh`, `/sleep`, `/clear`, and
-  `/taskcard` execute inside the Feishu MCP without an LLM call. Direct-message
-  commands are handled immediately. Group and topic commands still pass the
-  normal account `allowed_users` gate and require an explicit `@Bot`; unknown
-  slash commands remain ordinary Agent input.
-- Responses are updateable Feishu schema-2.0 control cards. `/kanban` exposes
-  seven drill-down layers, `/system` provides document navigation, and buttons
-  update their source control card in place. Internal control callbacks never
-  become `card_action` inbox records and never wake the Agent. Ordinary
-  business-card values keep the business callback behavior described above.
-- Control-card clicks reuse the account actor/allowlist gate and the manager's
-  per-account/chat serialization. Their stable Feishu event ids are stored
-  only as bounded SHA-256 hashes in `feishu/control_callbacks.json`, so a
-  callback replay after refresh cannot repeat a local signal.
-- User-facing card titles, navigation, command descriptions, and feedback use
-  `agent.language`: `zh` is Chinese, `en` is English, and `wen` is literary
-  Chinese. Unknown or missing languages use English.
-- `/taskcard on|off` and `/taskcard N` (1–10) configure Feishu's Agent-wide
-  resident-card presentation. The durable owner is
-  `<workdir>/feishu/taskcard.json`; exact resident targets remain independently
-  routed and persisted by `account + chat + optional thread`. Turning cards off
-  suppresses projection without guessing or deleting unknown cards; turning
-  them on reprojects known routes conservatively.
-- `/refresh`, `/sleep`, and `/clear` write the same established Agent signals
-  as the shared command core. Their control-card feedback stays local and does
-  not create a second Agent conversation turn.
-
-## OUTBOUND MEDIA, SHARES, AND STICKERS
-
-- `send` and `reply` additionally accept `image`, `file`, `audio`, `video`,
-  `share_chat`, `share_user`, and `sticker` content.
-- Media uses one strict source: `{'type':'path','path':'/absolute/file'}` uploads
-  a readable local file, while `{'type':'key','key':'<provider key>'}` reuses an
-  already uploaded Feishu key. Relative paths and URL downloads are rejected;
-  use a downloaded attachment path from `read`, or an explicit provider key.
-  Provider keys must be owned by this Bot; a key copied from an inbound user
-  message may be readable yet still be rejected for outbound reuse by Feishu.
-- Shapes:
-  `{'type':'image','source':SOURCE,'caption':'optional markdown'}`,
-  `{'type':'file','source':SOURCE,'file_name':'optional name'}`,
-  `{'type':'audio','source':SOURCE}`, and
-  `{'type':'video','source':SOURCE,'caption':'optional markdown'}`.
-  Image/video captions are rendered as Feishu post messages. File/audio
-  captions are not supported by Feishu and are intentionally absent.
-- Sharing/sticker shapes are
-  `{'type':'share_chat','chat_id':'oc_...'}`,
-  `{'type':'share_user','user_id':'ou_...'}`, and
-  `{'type':'sticker','file_key':'...'}`.
-- Sent records preserve the exact source descriptor for `read`, while bounded
-  notification previews expose only safe media summaries such as type, filename,
-  and size — never provider keys or the local source path.
-- Each materialized wire chunk is attempted exactly once. A rejected post or
-  caption is returned as a failure; it is never silently resent as plain text.
-
-## READING: check / read / search
-
-- `check`: list recent conversations with unread counts (optional `account`).
-- `read`: read messages from one chat (`chat_id`; optional `limit`, `account`).
-- `search`: regex search over inbox messages (`query`; optional `account`,
-  `chat_id`).
-- Reactions, read receipts, and Bot join/leave events are retained in the
-  reserved `chat_id='events'` conversation. They do not enter the LICC
-  notification mirror and never wake the agent; use `read` or `search` when the
-  event history is relevant. Each record carries a concise `event` projection
-  plus the complete raw envelope under `feishu`.
-- Channel-event actors pass through the same account `allowed_users` gate. The
-  reserved events conversation is read-only: do not use it as a `send` recipient.
-
-## PLACEHOLDER / PROGRESS
-
-- For responses that take more than ~5s, send `action='send'` with
-  `placeholder=true` and interim text, Markdown, or post content. Feishu sends
-  it as a native schema-2.0 progress card and returns a compound `message_id`.
-- Update that same card with `action='edit'` only when the work enters a
-  meaningful new phase. A progress-card edit remains a progress card even when
-  the edit input uses text/Markdown/post; custom-card and media replacement are
-  rejected on this path.
-- Send the final answer as a separate durable `send` or `reply` message. Never
-  edit the progress card into the final answer, and do not update it for every
-  token or trivial internal step.
-- Incoming messages receive the native `Typing` reaction while work is pending;
-  it is removed when the first response/progress card is sent. Existing `OK`
-  (seen) and `THUMBSUP` (done after reply) reactions continue independently.
-
-## AUTOMATIC RESIDENT TASK CARD
-
-- The Bot automatically maintains one schema-2.0 resident Task Card for every
-  admitted `account + chat + optional thread` route. This is a mechanical,
-  bounded projection of the agent's safe public event rows; the model
-  should not send, edit, answer, or otherwise manage it through the public
-  `feishu` actions.
-- Direct chats and ordinary group conversations receive a card in the chat.
-  Topic messages receive their own resident card inside that exact topic. The
-  automatic route never guesses a topic from another conversation.
-- A card that is still last is updated in place. After this process observes a
-  newer message below it, rotation is old-first: the exact persisted card is
-  deleted (or confirmed gone) before one replacement is sent. A refresh has no
-  trusted ordering high-water mark, so it conservatively updates the persisted
-  card in place until a later message is actually observed; it never guesses
-  and sends a duplicate.
-- Automatic Task Cards and `placeholder=true` progress cards are independent.
-  The automatic card summarizes agent behavior; a placeholder communicates a
-  user-meaningful phase. Final answers remain separate durable messages.
-- The same resident also carries the channel-neutral intrinsic Task Card body
-  from `<workdir>/taskcard/taskcard.md` when `<workdir>/taskcard/status` is
-  exact `active`. It is composed below the automatic frame under
-  `— TASK CARD —`; the model manages that artifact only through the public
-  intrinsic `task_card` tool, never through Feishu message actions.
-- Exact `inactive` clears only the programmable `WATCH` slot and preserves the
-  automatic frame. Missing, unreadable, invalid, or blank producer state is a
-  no-op that preserves the last successfully delivered programmable frame. One
-  route's delivery failure does not stop projection to other chats/topics.
-
-## REACTIONS
-
-- `react` adds or removes one Feishu reaction on a compound `message_id`.
-  Adding requires `operation='add'` plus Feishu's symbolic `emoji_type` (for
-  example `SMILE`) and returns the provider `reaction_id`. Removing requires
-  `operation='remove'` plus that exact `reaction_id`; do not substitute an
-  emoji glyph or `emoji_type` for removal.
-- Add and remove are each attempted exactly once. A missing or revoked target
-  returns `error_code='TARGET_REVOKED'` and is never converted into a new
-  message or another reaction.
-
-## CONTACTS / ACCOUNTS
-
-- `contacts`: list saved contacts (optional `account`).
-- `add_contact`: save a contact alias (`open_id`, `alias`; optional `name`,
-  `chat_id`). Saving an alias does not grant inbound permission on its own.
-- `remove_contact`: remove a contact (`alias` or `open_id`).
-- `accounts`: list configured app accounts.
-
-## MESSAGE IDS
-
-- `message_id` is the compound id returned by `read` or supplied by an inbound
-  event (`{alias}:{chat_id}:{feishu_message_id}`); pass it back verbatim to
-  `reply`, or use a bot-authored outgoing ID from sent history for `edit` and
-  `delete`.
-
-## INBOUND CONVERSATIONS
-
-- Direct messages are admitted without an `@Bot` mention. Group and topic
-  messages are admitted only when they explicitly mention this bot; `@all`
-  alone does not wake it.
-- `allowed_users`, when configured for an account, still filters the sender's
-  `open_id` in both direct and group chats. Saving a contact does not change
-  this admission rule.
-- `read` preserves the legacy fields and adds `thread_id`, `root_id`,
-  `reply_to`, resolved `mentions`, the SDK-normalized `content` union,
-  normalized sender identity fields, downloaded `attachments`, and the complete
-  raw event under `feishu`.
-- Image, file, audio, video, sticker, video-cover, and rich-post resources are
-  stored under the message's `attachments/` directory. Each attachment keeps
-  its Feishu `type` and `file_key`; `status='downloaded'` adds the safe local
-  `filename`, absolute `path`, and byte `size`, while `status='failed'` keeps
-  the original descriptor plus a bounded `error` instead of discarding it.
-- The current message's persistent notification context includes at most eight
-  secret-safe attachment projections (`type`, download/transcription status,
-  local `path`, filename, and size). Provider file keys and the raw envelope
-  remain on `read` only. When the user's intent depends on an image, inspect the
-  listed path with `vision`; use the appropriate local tool/skill for documents,
-  audio, or video instead of replying from the media placeholder.
-- Audio messages continue through local Whisper transcription after download. A
-  successful transcript remains in `voice_transcript` and becomes the message
-  text. Download or transcription failure stays attached to the resource record,
-  while the normalized content/raw envelope remain available for diagnosis;
-  failure is not collapsed into a text-only message.
-- For group commands, the normalized `text` removes this bot's own mention;
-  other resolved mentions remain visible. `content.kind` identifies the original
-  Feishu content family.
-- Topic/thread routing metadata drives `reply`: an omitted `reply_in_thread`
-  follows the persisted target's `thread_id`, so topic messages stay in their
-  topic while ordinary messages remain flat.
-
-## NOTIFICATIONS: TRANSIENT HOOK vs PERSISTENT CONTEXT
-
-Inbound Feishu messages surface to the agent in two `_meta` lanes:
-
-- `_meta.agent_meta.notifications.attention.mcp.feishu` — a compact high-
-  attention hook only: `data.message_ids` and dismiss guidance, never message
-  text or routing context.
-- `_meta.agent_meta.notifications.persistent.mcp.feishu` — durable context:
-  recent conversation messages (bounded text, both directions), sender/chat
-  routing hooks, reply refs when present, and per-message comments for the
-  agent's own outgoing messages or truncated text.
-
-The feishu tool remains the source of truth: neither lane marks anything read,
-so use `read`/`check` for exact producer state — especially when a persistent
-message is truncated. Reply in Feishu when the message arrived through Feishu
-(`reply` with the compound message id, or `send` to the chat/open_id). After
-handling, dismiss the transient hook with
-`notification.dismiss_channel("mcp.feishu")`; the persistent block is context
-history, not unread state. Generic mirror-vs-canonical-state and dismiss-safety
-rules live in
-[`notification-manual`](../../../tools/notification/manual/SKILL.md).
-
-## SIDE EFFECTS & ERROR SURFACING
-
-- `send`, `reply`, `edit`, `delete`, and `react` affect real Feishu state — they
-  are external side effects, so confirm recipient and content before sending
-  unsolicited messages.
-- Every action failure has the stable fields `status='failed'`, compatible
-  `error` text, identical `message`, `error_code`, `retryable`, and
-  `retry_after_seconds` (number or null). Permission, format, target-revoked,
-  and rate-limit failures retain their channel classification. Start a new
-  attempt only when `retryable=true`, and honor a non-null
-  `retry_after_seconds`; the Bot never hides an automatic outbound retry.
-
-## PUBLIC TOOL FAMILY: strict LTP-v2
-
-Raw MCP discovery exposes exactly one public tool, `feishu`. It is an
-independent strict LTP-v2 family with the closed root
-`{action, input, reasoning, summarize?}` (`action`, `input`, and `reasoning`
-required) and a closed action-owned input branch. `feishu` actions are exactly
-`send`, `check`, `read`, `reply`, `react`, `search`, `delete`, `edit`,
-`contacts`, `add_contact`, `remove_contact`, `accounts`, `settings`, and
-`manual`. `settings` is read-only SHOW; `manual` is the discovery path for this
-packaged documentation. Do not use the retired flat/legacy shape, `_reasoning`,
-aliases, or a generic dispatcher.
+The protected owner config is the only account source. SHOW never writes and
+never grants configuration authority.

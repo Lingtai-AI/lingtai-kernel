@@ -1,12 +1,11 @@
 ---
 name: wechat-operations-reference
 description: |
-  Focused WeChat operation reference: recipient selection, send versus reply,
-  bounded reads and search, contacts/accounts, result errors, and replay-safe
-  handling of provider acceptance. Read from wechat-mcp-manual when operating the
-  tool beyond its first-call safety rules.
-version: 1.0.0
-last_changed_at: "2026-09-07T00:00:00Z"
+  WeChat operation details for exact recipient/message IDs, bounded reads, result
+  meanings, and replay-safe handling of provider acceptance. Load from the main
+  WeChat manual for external operations or recovery.
+version: 1.1.0
+last_changed_at: "2026-09-09T03:15:00Z"
 related_files:
 - src/lingtai/mcp_servers/wechat/SKILL.md
 - src/lingtai/mcp_servers/wechat/manager.py
@@ -17,76 +16,63 @@ related_files:
 - tests/test_wechat_reply_read_state.py
 - tests/test_wechat_inbound_replay.py
 maintenance: |
-  Tracks the WeChat manager's action/result semantics and replay-safe operating
-  guidance; update when action dispatch, history views, acknowledgement handling,
-  or local side effects change.
+  Tracks WeChat action/result semantics and replay-safe operation guidance; update
+  when dispatch, history views, acknowledgement, or local side effects change.
 ---
 
 # WeChat operations
 
-This is a focused reference for the `wechat` action family. The public envelope
-and safety boundaries remain in the parent [`SKILL.md`](../SKILL.md); this file
-only adds operational detail.
+The parent [`SKILL.md`](../SKILL.md) owns the closed envelope and first-action route.
+This reference adds the operation semantics that matter after discovery.
 
-## SEND versus REPLY
+## Send and reply
 
-- `send` starts a new message for the supplied `user_id`. It requires `text`,
-  `media_path`, or both; the recipient ID is routing data, not a contact alias.
-- `reply` takes an inbound `message_id` from `read`, resolves its original
-  sender, and sends the supplied `text`. It fails when the message cannot be
-  found or its sender cannot be determined; it does not silently become a new
-  recipient-less send.
-- A successful reply marks its target inbound message read. A failed send does
-  not mark it read.
-- Both actions deliver to real WeChat users. A successful result records
-  provider acceptance, but `delivery_confirmed` remains false because the
-  provider does not prove recipient delivery.
+- `send` starts a new message for the supplied exact `user_id`; it requires `text`,
+  `media_path`, or both.
+- `reply` takes an inbound `message_id` from `read`, resolves its original sender,
+  and sends `text`. Missing message or sender is an error, never a fresh send.
+- A successful reply marks its target inbound message read. A failed send does not.
+- Provider acceptance is not delivery confirmation: successful results keep
+  `delivery_confirmed: false`. Do not replay an accepted request automatically.
 
-## CHECK, READ, AND SEARCH
+## Check, read, and search
 
-- `check` returns recent conversation aggregates with `user_id`, optional saved
-  alias, total count, unread count, latest preview metadata, and date. Unread
-  counts concern inbound messages; outgoing records are included for context but
-  are not unread messages.
-- `read` requires `user_id` and accepts an optional `limit` (default 10). It
-  returns the newest bounded view merged from inbox and sent records, labels
-  outgoing records, and marks returned inbound records read.
-- `search` requires a regular-expression `query`, optionally filtered by
-  `user_id`. It searches inbox message bodies and returns at most 20 matches; an
-  invalid regular expression is an action error.
-- After a worker refresh, molt, or recovery, use `read` to reconcile the merged
-  view before replying. Do not infer that an unread preview is a new message or
-  that the absence of a search match proves no outgoing reply exists.
+- `check` returns conversation aggregates with `user_id`, optional alias, total and
+  inbound-unread counts, latest preview, and date. Outgoing records add context but
+  are not unread.
+- `read` requires `user_id`; optional `limit` defaults to 10. It returns the newest
+  bounded view merged from inbox and sent records, labels outgoing records, and
+  marks returned inbound records read.
+- `search` requires a regular-expression `query`, optionally filtered by `user_id`;
+  it searches inbox bodies and returns at most 20 matches. Invalid regex is an error.
+- After refresh, worker failure, or recovery, read the merged history before
+  replying. A preview or absent search match does not prove that a reply is new or
+  absent.
 
-## CONTACTS AND ACCOUNTS
+## Contacts and account view
 
-- `contacts` lists locally saved aliases. `add_contact` persists an alias for a
-  `user_id`; `remove_contact` accepts either an existing alias or a user ID.
-  These are local state changes, not proof that WeChat accepted a contact
-  relationship remotely.
-- `accounts` reports the configured account view. Treat account IDs and paths as
-  potentially sensitive metadata; it never authorizes changing credentials.
-  Login and credential replacement belong to the owner procedure in
-  [`setup.md`](setup.md).
+`contacts` lists local aliases. `add_contact` persists an alias for a `user_id` and
+`remove_contact` accepts an alias or user ID; neither changes or proves a remote
+contact relationship. `accounts` reports configured account metadata and does not
+authorize credential changes. Treat IDs and paths as sensitive metadata.
 
-## RESULTS AND ERROR SURFACING
+## Results and replay
 
-- Successful business actions return a result object. Failures use an `error`
-  field (for example, missing identifiers, an unknown message, invalid regex, or
-  an unreadable outbound file); surface that error instead of assuming success.
-- Send acknowledgement accepts the provider's missing/null `ret` or integer
-  zero only when `errcode` is absent or integer zero. Nonzero or invalid values
-  remain failures. This is provider acceptance, not delivery confirmation.
-- A text-plus-media send can return `status: partial` when text was accepted but
-  the media stage failed. Its result carries `partial_delivery` for compatibility,
-  precise provider-acceptance fields, and `automatic_retry_allowed: false`.
-  Reconcile state before deciding what to do next; never replay the whole request
-  automatically.
+Failures return an `error` (for example, missing IDs, unknown message, invalid regex,
+or unreadable file); surface it. Send acknowledgement accepts missing/null `ret` or
+non-boolean integer zero only when `errcode` is absent or non-boolean integer
+zero. Strings, floats, booleans and an explicit null `errcode` fail. An empty,
+malformed or non-object response also fails.
 
-## INBOUND REPLAY AND POLLER STATE
+Text-plus-media can return `status: partial` with `partial_delivery`, precise
+provider-acceptance fields, and `automatic_retry_allowed: false`: text may already
+be accepted while media failed. Reconcile before a human-authorized new action.
 
-The manager persists cursor progress and bounded stable inbound signatures so a
-stale cursor after a worker failure does not normally create a second local
-message. This is a replay guard, not permission to send twice. Reply at most once
-per inbound `message_id`, and reread the merged history after a refresh before
-performing another external side effect.
+Not every uncertain outcome has these fields. If a later text chunk fails, file
+reading fails after text, or persistence fails after acceptance, the error may
+lack partial fields and a sent record. A missing sent record is not evidence of
+zero acceptance. Stop and reconcile with the recipient/provider before a newly
+authorized attempt; do not automatically replay the whole request.
+
+The manager's cursor/signature guard suppresses normally repeated inbound landings;
+it is not permission to send twice. Reply at most once per inbound `message_id`.

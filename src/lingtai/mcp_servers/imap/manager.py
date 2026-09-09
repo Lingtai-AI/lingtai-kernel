@@ -215,19 +215,15 @@ SCHEMA = {
 }
 
 DESCRIPTION = (
-    "Real email via IMAP/SMTP with multi-account support. Safe first route: "
-    "use check/search, then read the returned email_id before deciding whether "
-    "to reply. send and reply deliver real external mail; verify recipients "
-    "including cc/bcc and the body immediately before calling. External replies "
-    "require the standing reply policy or confirmation that the sender is the "
-    "same human who contacted you through an internal channel. Email IDs use "
-    "account:folder:uid; account defaults when omitted, blank check/search "
-    "folders mean INBOX, and move requires a non-empty destination. delete, "
-    "move, and flag mutate mailbox state; inspect errors and delivery status. "
-    "MCP ownership: this addon is managed by the orchestrator; avatars must not "
-    "configure it. Call imap(action=\"manual\", input={}, reasoning=\"read "
-    "IMAP guidance\") for attachments, settings, configuration, contacts, and "
-    "deeper operation detail."
+    "Real IMAP/SMTP email. First read: check/search, then read the returned "
+    "compound email_id. send/reply deliver real mail; verify to/cc/bcc and body. "
+    "External replies require standing policy or confirmation the sender is the "
+    "same human who contacted you internally. "
+    "Blank check/search folders mean INBOX; account defaults when omitted; move "
+    "needs a destination; delete/move/flag mutate mailbox state. Inspect status/"
+    "errors. The orchestrator owns this addon; avatars must not configure it. "
+    "Read imap(action=\"manual\", input={}, reasoning=\"read IMAP guidance\") "
+    "for attachments, settings, contacts, configuration, and deeper detail."
 )
 
 # Public callers receive the strict LTP-v2 family schema. Manager dispatch

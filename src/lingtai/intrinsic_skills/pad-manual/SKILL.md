@@ -1,9 +1,10 @@
 ---
 name: pad-manual
 description: |
-  Read before editing the living Pad, pinning references, or preparing Pad state for rebuild/molt.
+  Read before editing the living Pad, pinning references, or preparing Pad state
+  for rebuild/molt.
 version: 2.0.0
-last_changed_at: 2026-07-28T00:00:00-07:00
+last_changed_at: 2026-09-09T00:00:00Z
 related_files:
 - src/lingtai/tools/pad/__init__.py
 - src/lingtai/tools/pad/_pad.py
@@ -12,58 +13,56 @@ related_files:
 - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
 - src/lingtai/tools/context/manual/SKILL.md
 maintenance: |
-  Keep the manual-only public route through psyche, generic file ownership of both durable sources, the no-hot-load rule, delayed activation, and the context-manual route synchronized with code. Pad exposes no mutating action.
+  Keep the manual-only Psyche route, generic file ownership, no-hot-load rule,
+  delayed activation, pinned-reference hazards, and context-manual route aligned
+  with Pad code and Contract.
 ---
 
 # Pad Manual
 
-Pad is your living index in `system/pad.md`, plus a durable list of pinned
-read-only references in `system/pad_append.json`.
+Pad is the living index in `system/pad.md` plus the pinned read-only paths in
+`system/pad_append.json`.
 
 ## Public call
 
 ```text
-psyche(action="pad", input={}, reasoning="load Pad guidance", summarize=false)
+psyche(action="pad", input={}, reasoning="load Pad guidance")
 ```
 
-That is the **only** public Pad call, and it just returns this manual. Pad has no
-mutating action: both of its durable sources are ordinary files you edit with
-`file`. There is no append, edit, load, or reload action and no compatibility
-alias.
+This is the only public Pad call and only returns this manual. It has no append,
+edit, load, or reload action and no compatibility alias.
 
-## Mutate durable Pad content with file
+## Edit Pad sources
 
-Pad's durable sources are ordinary files. Rewrite with
-`file(action="write", input={"file_path": "system/pad.md", ...})`; make an exact
-replacement with `file(action="edit", ...)` on the same path. Neither hot-loads
-the prompt — apply with one `context(action="rebuild", ...)`. The full model is
-`psyche-manual` → "The one mutation model".
+Use the generic `file` owner: rewrite with
+`file(action="write", input={"file_path": "system/pad.md", "content": "..."}, reasoning="rewrite Pad")`
+or make a bounded exact change with
+`file(action="edit", input={"file_path": "system/pad.md", "old_string": "...", "new_string": "...", "replace_all": null}, reasoning="edit Pad")`.
+Neither call hot-loads the prompt. Apply one
+`context(action="rebuild", input={}, reasoning="apply Pad change")` when immediate
+activation is needed.
 
-## Pin references
+Keep Pad to current goal, state, next action, blockers, collaborators, and useful
+pointers; archive completed narrative in knowledge.
 
-The pinned list lives in `system/pad_append.json`: a JSON array of paths, each
-workdir-relative or absolute. Edit it like any other durable file —
+## Pinned references
+
+`system/pad_append.json` is an ordinary JSON array of workdir-relative or
+absolute paths. Edit it with the same full `file` envelope, for example:
 
 ```text
 file(action="write", input={"file_path": "system/pad_append.json",
   "content": "[\"notes/design.md\", \"src/api.py\"]"}, reasoning="pin references")
 ```
 
-Write `[]` to clear the list. Reconstruction reads each listed file and appends
-its contents to the Pad section as read-only reference.
+Write `[]` to clear it. File writes do not validate the pinned list or its
+aggregate size; confirm the paths and UTF-8 contents yourself. Reconstruction
+rereads every listed file and appends its
+contents to Pad, so list edits and pinned-file edits appear only after rebuild,
+refresh, or molt. A missing path is reported as `append_not_found` at compose time,
+not rejected at write time; pinned text also consumes context budget, so keep the
+list short and text-only.
 
-Reconstruction re-reads each pinned file every time, so an edit to the list —
-or to a pinned file — appears only after the next rebuild.
-
-Two things to know, because nothing validates this list for you any more: a path
-that does not exist is reported as `append_not_found` at compose time rather than
-rejected at write time, and pinned content counts against your context budget —
-keep the list short and text-only.
-
-Keep Pad concise: current goal, state, next action, blockers, collaborators, and
-pointers to substantive knowledge/artifacts. Archive completed narrative in
-knowledge, not in an ever-growing Pad. Before molt, make durable Pad state
-accurate, rebuild only if needed in the current context, then follow
-`context-manual` for the journal/summary/molt procedure.
-
-Results are short; leave root `summarize` false.
+Before molt, make durable Pad state accurate, rebuild only if needed in the
+current context, then follow `context-manual` for journal/summary/molt procedure.
+Leave root `summarize` false for exact guidance.

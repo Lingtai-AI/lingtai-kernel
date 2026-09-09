@@ -85,16 +85,15 @@ _HISTORY_INDEX_VERSION = 1
 SCHEMA = _family.WECHAT_SCHEMA
 
 DESCRIPTION = (
-    "WeChat via the iLink Bot API for text and media messaging plus inbound "
-    "LICC delivery. Actions: send (user_id with text and/or media_path), check "
-    "(conversations and unread counts), read (merged inbox/sent history), "
-    "reply (message_id and text), search (regex), contacts, add_contact, "
-    "remove_contact, accounts, settings (read-only startup snapshot), and "
-    "manual (progressive-disclosure guide). send/reply reach real users: verify "
-    "the user_id and content, and do not replay a provider-accepted request. "
-    "Media can have a partial outcome. Login/configuration belongs to the "
-    "orchestrator's owner setup flow; only one poller may run per bot account. "
-    "Avatar sessions must not reconfigure this MCP."
+    "Standalone WeChat/iLink messaging. Use check/read/search first and exact "
+    "IDs from check/read/contacts. send/reply are real effects: verify recipient "
+    "and content; provider acceptance is not delivery and accepted requests are "
+    "never replayed. media_path must stay in the allowed workdir and text+media "
+    "may be partial. One poller per bot account; refresh/recovery requires read "
+    "reconciliation. Login/configuration belongs to owner setup; never share the "
+    "admin QR or credentials. Avatar sessions must not reconfigure this MCP. "
+    "Actions: send, check, read, reply, search, contacts, add_contact, remove_contact, "
+    "accounts, settings, manual."
 )
 
 

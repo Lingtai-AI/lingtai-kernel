@@ -8,69 +8,59 @@ related_files:
 - src/lingtai/mcp_servers/feishu/settings.py
 - tests/test_feishu_settings.py
 maintenance: |
-  Keep Feishu app setup, protected account configuration, launcher-owned
-  environment, and rollout guidance aligned with the server and settings owner.
+  Keep this operator route aligned with Feishu app permissions/events, the
+  protected account configuration, launcher environment, and rollout owner.
+  Model-facing behavior belongs in SKILL.md/message-semantics.md; symptoms
+  belong in diagnostics.md.
 ---
-# Feishu Bot setup, canary, and rollback
+# Feishu setup, canary, and rollback
 
-This guide is the operator-facing source for installing and rolling out the
-bundled LingTai Feishu channel. For model-facing message/action semantics, read
-[`../SKILL.md`](../SKILL.md). For symptom-based investigation, read
-[`diagnostics.md`](diagnostics.md).
+Use this sidecar for first installation, account/config changes, or a controlled
+rollout. It is the owner for app permissions and launcher configuration; start
+with the model-facing [`../SKILL.md`](../SKILL.md) for ordinary calls and use
+[`diagnostics.md`](diagnostics.md) for a symptom.
 
-## 1. Create and publish the Feishu app
+Configuration, credential changes, rollout, and rollback require explicit
+orchestrator/owner authorization. Avatars must not reconfigure this MCP.
+Before integration changes, read `mcp-manual`, inspect `mcp(info)`, then follow
+its curated Feishu activation route; do not start a competing listener.
 
-Create a custom app in the Feishu Developer Console, enable the Bot capability,
-and make the app available only to the intended test users during the canary.
-LingTai uses app credentials and a long WebSocket connection; it does not use a
-QR-login flow or require a public webhook endpoint.
+## App and event setup
 
-Grant the tenant/app permissions required by the enabled slice:
+Create a custom Feishu/Lark app, enable its Bot capability, restrict availability
+during canary, and choose **long connection**. This adapter uses app credentials
+and WebSocket; it has no QR login or public webhook.
 
-| Permission | Needed for |
+Grant only the scopes required by the enabled slice:
+
+| Scope | Use |
 |---|---|
-| `im:message` | Read and manage messages through the IM OpenAPI. |
-| `im:message:send_as_bot` | Send, reply, edit, and delete as the Bot. |
-| `im:message.p2p_msg:readonly` | Receive direct-message events. |
-| `im:message.group_at_msg:readonly` | Receive group messages that explicitly `@Bot`. |
-| `im:resource` | Download inbound message resources; this broad permission also satisfies outbound media upload. |
-| `im:resource:upload` | Upload outbound media without granting broad resource access. Prefer this narrower permission when only upload is missing. |
-| `im:message.reactions:read` | Receive and inspect reaction events. |
-| `im:message.reactions:write_only` | Add and remove seen, typing, done, and public reactions. |
+| `im:message` | message read/manage APIs |
+| `im:message:send_as_bot` | send, reply, edit, delete |
+| `im:message.p2p_msg:readonly` | DM events |
+| `im:message.group_at_msg:readonly` | explicitly mentioned group events |
+| `im:resource` | inbound download (also permits upload) |
+| `im:resource:upload` | narrower outbound upload permission |
+| `im:message.reactions:read` | reaction events |
+| `im:message.reactions:write_only` | seen, typing, done, public reactions |
 
-Feishu may present a broader aggregate permission instead of one of the narrow
-permissions above. Use the Developer Console's permission requested by the
-corresponding API when the tenant UI differs. In particular, an outbound upload
-permission error can name either `im:resource:upload` or the broad
-`im:resource`; grant the narrower upload permission when the console offers it.
-Do not infer an unlisted download-scope name. The current LingTai adapter does
-not need contact-directory access to admit a sender.
+Subscribe to `im.message.receive_v1` for admitted messages. Optional subscriptions
+populate the reserved `events` history without waking the Agent:
 
-Select **long connection** as the event delivery mode and subscribe to:
+- `im.message.reaction.created_v1` and `im.message.reaction.deleted_v1`;
+- `im.message.message_read_v1`;
+- `im.chat.member.bot.added_v1` and `im.chat.member.bot.deleted_v1`.
 
-| Event | Requirement | LingTai behavior |
-|---|---|---|
-| `im.message.receive_v1` | Required | Admitted messages can wake the Agent. |
-| `im.message.reaction.created_v1` | Optional | Recorded in the reserved `events` conversation. |
-| `im.message.reaction.deleted_v1` | Optional | Recorded in `events`; does not wake the Agent. |
-| `im.message.message_read_v1` | Optional | Recorded in `events`; does not wake the Agent. |
-| `im.chat.member.bot.added_v1` | Optional | Records the Bot joining a chat. |
-| `im.chat.member.bot.deleted_v1` | Optional | Records the Bot leaving a chat. |
+Interactive
+cards additionally require `card.action.trigger` callback delivery over the
+long connection. Publish/reinstall after changing permissions, subscriptions,
+app availability, or callbacks; draft console changes do not affect the Bot.
 
-Interactive cards need one additional console setting: configure card action
-callbacks to use the app's long connection and publish that configuration.
-The wire callback is `card.action.trigger`; an ordinary message subscription
-does not prove that card clicks are being delivered.
+## Protected config
 
-Publish or reinstall the app after changing permissions, subscriptions, app
-availability, or card callback settings. Console changes that remain in draft
-do not affect the running Bot.
-
-## 2. Configure LingTai
-
-Set `LINGTAI_FEISHU_CONFIG` on the Feishu MCP entry to a JSON file. A relative
-path is resolved against `LINGTAI_AGENT_DIR`; a conventional per-Agent location
-is `.secrets/feishu.json`.
+Set `LINGTAI_FEISHU_CONFIG` on the MCP entry. Relative paths resolve against
+`LINGTAI_AGENT_DIR`; `.secrets/feishu.json` is a conventional private location.
+Do not put credentials in `init.json`, command lines, repository files, or logs.
 
 ```json
 {
@@ -78,145 +68,81 @@ is `.secrets/feishu.json`.
     {
       "alias": "main",
       "app_id": "cli_xxxxxxxx",
-      "app_secret": "replace-in-the-secret-file",
+      "app_secret": "keep-in-secret-file",
       "allowed_users": ["ou_test_user"]
     }
   ]
 }
 ```
 
-The config fields are:
-
-| Field | Required | Meaning |
+| Field | Required | Runtime meaning |
 |---|---:|---|
-| `accounts` | yes | Non-empty array of app accounts. |
-| `accounts[].alias` | yes | Recommended stable, non-empty, unique local account name. It becomes the first segment of compound message IDs and selects account-local state. The current loader does not enforce type, non-emptiness, or uniqueness; later duplicates replace the lookup-map value while remaining in order. |
-| `accounts[].app_id` | yes | Recommended Feishu app ID string (`cli_...`). It is an identifier, not the app credential secret. The loader does not enforce the string type or prefix before account construction. |
-| `accounts[].app_secret` | yes | Feishu app secret. Store it only in the secret config file. The loader requires the key but adds no type/format validation. |
-| `accounts[].allowed_users` | no | Recommended list of sender `open_id` strings admitted for messages, passive events, and card actions. The loader applies truthiness plus `set()` rather than validating the element shape. |
+| `accounts` | yes | truthy list of account objects |
+| `accounts[].alias` | yes | stable local name and compound-ID segment |
+| `accounts[].app_id` | yes | Feishu app identifier (normally `cli_...`) |
+| `accounts[].app_secret` | yes | app credential; never expose it |
+| `accounts[].allowed_users` | no | sender `open_id` set; omission/null/empty is unrestricted compatibility behavior |
 
-`allowed_users` has compatibility semantics: omitting it, setting it to `null`,
-or supplying an empty list disables the sender gate. A canary must therefore use
-a **non-empty** list. Saving a contact alias does not grant admission and does
-not replace this list.
+The loader directly indexes the required account fields; it does not validate
+string formats, alias uniqueness, or allowlist element shape. Duplicate aliases
+remain in service order while the later entry replaces the lookup-map value.
+Use stable unique aliases and a non-empty allowlist as operator guidance. The
+first account is the default when an outbound action omits `account`. Each
+account has its own REST/WS listener and state; Task Card preferences are
+Agent-wide. Compound IDs remain `{alias}:{chat_id}:{feishu_message_id}` and
+must be passed back verbatim where required.
 
-For multiple accounts:
+A canary **must** use a non-empty `allowed_users` list and app availability/Bot
+membership restricted to designated test groups. An allowlist is sender-only,
+not a chat-ID allowlist; group/topic messages still need an explicit `@Bot`.
+Saving a contact does not alter admission. Restrict the config file to the Agent
+owner. If a secret reaches evidence/logs, disclose it and seek owner-authorized
+rotation promptly; preserve the evidence and never rotate or clean logs silently.
 
-- each account starts its own REST client and WebSocket listener;
-- aliases should be unique and stable across upgrades; this is operator
-  guidance, not a loader validation claim;
-- the first account is used when an outbound action omits `account`;
-- compound IDs remain
-  `{account_alias}:{chat_id}:{feishu_message_id}` and must be passed back
-  unchanged; and
-- account message/contact/state directories remain separate, while Feishu
-  Task Card preferences are Agent-wide.
+## Acceptance sequence
 
-Do not commit the config file. Restrict its filesystem permissions to the Agent
-owner, and rotate `app_secret` immediately if it reaches a log, chat, issue, PR,
-artifact, or generated setup page.
+After deploying or changing config, refresh/restart the Agent and verify in the
+same runtime:
 
-The MCP entry follows the normal curated-addon shape:
+1. `lingtai://status`: readable config, initialized manager, started service,
+   expected account count; inspect no secrets.
+2. Logs: `Feishu listener running` and WebSocket connected, with no event bodies.
+3. Allowed DM receives one durable reply; unmentioned group input is ignored and
+   an explicit Bot mention is answered.
+4. Topic reply stays in its topic; `read` confirms normalized rich/media types
+   and attachment status.
+5. One business-card click creates one authorized `card_action`; replay and
+   unauthorized clicks do not wake. A local command-card click stays local.
+6. Seen/typing/done, one public reaction add/remove, and a native progress card
+   work; final answer is a separate message.
+7. Automatic/programmable Task Cards remain conservative after refresh rather
+   than duplicating an exact resident.
 
-```json
-{
-  "mcp": {
-    "feishu": {
-      "type": "stdio",
-      "command": "/path/to/the/lingtai/runtime/python",
-      "args": ["-m", "lingtai.mcp_servers.feishu"],
-      "env": {
-        "LINGTAI_FEISHU_CONFIG": ".secrets/feishu.json"
-      }
-    }
-  }
-}
-```
+Record only synthetic scenario, normalized type/status, public error code,
+retryability, redacted timestamp, and pass/fail. Never record IDs, text, raw
+envelopes, attachment paths, provider keys, tokens, or credentials.
 
-The kernel supplies `LINGTAI_AGENT_DIR` and `LINGTAI_MCP_NAME`. Do not add
-credentials directly to `init.json` or the process command line.
+## Runtime defaults and rollback
 
-## 3. Canary deployment
+Before replacing an installed candidate, record its version and keep a backup
+of the adapter/config outside the repository; never copy secrets into evidence.
 
-Use a reversible deployment of the candidate package or worktree in the same
-runtime that launches the Agent. Before replacing it, record the current
-package version and back up the current installed Feishu adapter plus Agent
-config. Keep the backup outside the repository and never copy the secret into
-PR evidence.
-
-Constrain the canary in both places:
-
-1. configure a non-empty `allowed_users` list containing only test actors; and
-2. make the app available to, and add the Bot to, only the designated test
-   group(s).
-
-The adapter has a sender allowlist, not a separate chat-ID allowlist. Limiting
-test groups is therefore an app-availability/group-membership operation.
-Ordinary group and topic messages still require an explicit mention of this
-Bot; `@all` alone is not admission.
-
-Refresh or restart the Agent after deploying or changing configuration. Then
-validate with real Feishu events in this order:
-
-1. Read `lingtai://status`: config is readable, the manager is initialized,
-   the service is started, and the expected account count is present.
-2. Confirm the process log reaches `Feishu listener running` and the SDK
-   reports a WebSocket connection without printing event bodies.
-3. Send a DM from the allowed test actor and receive a durable reply.
-4. In the test group, confirm an unmentioned message is ignored and an
-   explicit `@Bot` message is answered.
-5. Send a topic message and confirm the reply remains in that topic.
-6. Send image, file, audio, video, sticker, rich post, and task/todo samples;
-   use `read` to verify normalized type and attachment status without copying
-   the raw envelope into evidence.
-7. Send/update a schema-2.0 business card, click it once, and verify one
-   authorized `card_action`; replay and unauthorized clicks must not wake the
-   Agent.
-8. Exercise a localized local command and one navigation button. Internal
-   control clicks should update the card locally, not create business inbox
-   records.
-9. Verify native typing/seen/done reactions, one public `react` add/remove, and
-   a progress card whose final answer is a separate message.
-10. Confirm automatic and programmable Task Card slots, then refresh and
-    verify the persisted card is conservatively updated rather than duplicated.
-
-Record only the scenario, normalized type/status, and pass/fail result. Do not
-record real actor/chat/message IDs, provider keys, attachment paths, message
-text, raw envelopes, tokens, or credentials.
-
-## 4. Runtime and safety defaults
-
-- The adapter currently pins `lark-channel-sdk>=1.2,<2` and constructs
-  `SecurityConfig(mode="compat")`. Moving to `audit` or `strict` is a separate
-  audited rollout, not a configuration field in this JSON.
-- Every outbound wire chunk uses `max_attempts=1`. LingTai never hides an
-  automatic provider retry. A caller may make a new attempt only from the
-  returned `retryable` and `retry_after_seconds` guidance.
-- URL media sources and relative local paths are rejected. Outbound media uses
-  an absolute readable local path or an explicit Bot-owned provider key.
-- Complete inbound Feishu envelopes are deliberately retained behind `read`
-  for diagnosis. They are sensitive operational data, not PR/log material.
-- Runtime files under `<agent>/feishu/` include inbox/sent records, downloaded
-  attachments, contacts, callback claims, Task Card preferences, and exact
-  resident bindings. Back them up and handle them as private Agent state.
-
-## 5. Rollback
+The pinned SDK is `lark-channel-sdk>=1.2,<2`; security mode is fixed `compat`,
+not a JSON setting. Each outbound chunk uses `max_attempts=1`; `retryable` and
+`retry_after_seconds` are caller guidance, not hidden retries. Media accepts only
+an absolute readable path or explicit Bot-owned key, never URL/relative sources.
 
 Rollback is package-first and state-preserving:
 
-1. Stop or refresh the Agent so the candidate MCP no longer owns the WebSocket.
-2. Restore the previously recorded package/install overlay. Restore config only
-   if the deployment changed it; never replace a current rotated secret with an
-   older exposed value.
-3. Leave `<agent>/feishu/` in place. Deleting it loses inbox history, exact card
-   bindings, contacts, and callback claims and may cause duplicate visible
-   state after restart.
-4. Start or refresh the Agent and repeat the status, WebSocket, DM, and group
-   mention checks against the restored version.
-5. If the candidate changed Developer Console permissions or subscriptions,
-   restore the last published console configuration and reinstall/publish it.
+1. Stop/refresh so the candidate releases its WebSocket.
+2. Restore the recorded package overlay; restore config only when deployment
+   changed it, and never restore an older exposed secret.
+3. Keep `<agent>/feishu/` intact: it contains inbox/sent history, attachments,
+   contacts, callback claims, Task Card preferences, and resident bindings.
+4. Start/refresh and repeat status, WebSocket, DM, group-mention, and topic checks.
+5. If console permissions/subscriptions changed, restore and publish the prior
+   console configuration.
 
-When the rollback reason is a provider failure, retain only a redacted error
-code, retry classification, timestamp, candidate commit/version, and scenario.
-Use [`diagnostics.md`](diagnostics.md) to distinguish config, transport,
-admission, content, and callback failures before retrying the rollout.
+Keep rollback evidence to a redacted code, retry classification, timestamp,
+scenario, and candidate version. Use [`diagnostics.md`](diagnostics.md) before
+retrying a provider side effect.

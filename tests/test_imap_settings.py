@@ -331,3 +331,24 @@ def test_accounts_basic_action_result_is_unchanged():
             {"address": "second@example.test", "listening": False},
         ]
     }
+
+
+def test_manual_has_one_action_table_and_complete_private_settings_guidance():
+    root = Path(__file__).parents[1] / "src/lingtai/mcp_servers/imap"
+    entry = (root / "SKILL.md").read_text()
+    detail = (root / "reference/operation-contract.md").read_text()
+    assert "before the first outbound" not in entry
+    assert "orchestrator" in entry and "avatars" in entry
+    assert "| `send` |" in entry and "| `send` |" not in detail
+    assert "SMTP still uses password login" in detail
+    assert "client ID itself is not displayed" in entry
+    assert "allowed_senders" in detail and "not enforced" in detail
+
+
+def test_manual_distinguishes_delivery_flags_guard_and_expunge_risk():
+    root = Path(__file__).parents[1] / "src/lingtai/mcp_servers/imap"
+    detail = (root / "reference/operation-contract.md").read_text()
+    assert "Answered" in detail and "SMTP error" in detail
+    assert "refusal map" in detail and "blocked" in detail
+    assert "other already-deleted messages" in detail
+    assert "booleans" in detail and "truthiness" in detail

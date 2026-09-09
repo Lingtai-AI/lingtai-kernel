@@ -51,18 +51,17 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
         {
             "user_id": {
                 "type": "string",
-                "description": "WeChat user ID (e.g. wxid_abc123@im.wechat)",
+                "description": "Exact user_id from check, read, or contacts.",
             },
             "text": {
                 "type": "string",
-                "description": "Message text content",
+                "description": "Text to send to the verified recipient.",
             },
             "media_path": {
                 "type": "string",
                 "description": (
-                    "Absolute path to a file to send as media. "
-                    "Type detected from extension: "
-                    ".jpg/.png=image, .mp4=video, .wav/.mp3=voice, other=file."
+                    "Readable file inside the allowed working area; type follows its "
+                    "extension. Text plus media may have a partial outcome."
                 ),
             },
         },
@@ -76,11 +75,11 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "user_id": {
                     "type": "string",
-                    "description": "WeChat user ID (e.g. wxid_abc123@im.wechat)",
+                    "description": "Exact user_id from check, read, or contacts.",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max messages to return (default 10)",
+                    "description": "Maximum messages to return (default 10).",
                 },
             },
             required=["user_id"],
@@ -89,11 +88,11 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "message_id": {
                     "type": "string",
-                    "description": "Message ID from read results (for reply action)",
+                    "description": "Exact inbound message_id returned by read.",
                 },
                 "text": {
                     "type": "string",
-                    "description": "Message text content",
+                    "description": "Reply text for that inbound message.",
                 },
             },
             required=["message_id", "text"],
@@ -102,11 +101,11 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "query": {
                     "type": "string",
-                    "description": "Search query (regex pattern)",
+                    "description": "Regular-expression query for inbox bodies.",
                 },
                 "user_id": {
                     "type": "string",
-                    "description": "WeChat user ID (e.g. wxid_abc123@im.wechat)",
+                    "description": "Optional exact user_id from check or contacts.",
                 },
             },
             required=["query"],
@@ -116,7 +115,7 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "user_id": {
                     "type": "string",
-                    "description": "WeChat user ID (e.g. wxid_abc123@im.wechat)",
+                    "description": "Exact user_id from check, read, or contacts.",
                 },
                 "alias": {
                     "type": "string",
@@ -129,7 +128,7 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "user_id": {
                     "type": "string",
-                    "description": "WeChat user ID (e.g. wxid_abc123@im.wechat)",
+                    "description": "Saved user_id to remove.",
                 },
                 "alias": {
                     "type": "string",
@@ -166,16 +165,13 @@ def wechat_schema() -> dict[str, Any]:
     if "oneOf" in inputs:
         inputs["anyOf"] = inputs.pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "send: deliver text and/or media_path to user_id. "
-        "check: list conversations and unread counts. "
-        "read: read merged inbox/sent history (user_id; optional limit). "
-        "reply: send text for a read message_id. "
-        "search: regex-search inbox messages (query; optional user_id). "
-        "contacts: list saved contacts. "
-        "add_contact: save a contact (user_id, alias). "
-        "remove_contact: remove by alias or user_id. "
-        "accounts: list configured account details. "
-        "settings: show the read-only startup configuration inventory. "
+        "check/read first; use exact user_id/message_id returned by the tool. "
+        "send/reply are external effects: verify content, treat acceptance as not "
+        "delivery, and never replay accepted requests. Actions: send (user_id + "
+        "text/media_path), check, read (user_id; optional limit), reply "
+        "(message_id + text), search (regex query; optional user_id), contacts, "
+        "add_contact (user_id + alias), remove_contact (alias or user_id), accounts, "
+        "settings (SHOW-only), and "
         + WECHAT_PLUGIN.manual_action_description()
     )
     return schema

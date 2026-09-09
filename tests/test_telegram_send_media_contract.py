@@ -93,3 +93,49 @@ def test_unadvertised_media_types_remain_rejected(tmp_path: Path, media_type: st
 
     assert result == {"error": f"Unknown media type: {media_type}"}
     assert account.calls == []
+
+
+def test_manual_allows_media_caption_and_explains_duplicate_key():
+    from lingtai.mcp_servers.telegram.plugin import TELEGRAM_PLUGIN
+
+    manual = TELEGRAM_PLUGIN.skill_body
+    assert "optional `text` caption" in manual
+    assert "account/chat/text" in manual
+    assert "does not compare attachment bytes" in manual
+    assert "### Reply vs send" in manual
+
+
+def test_resident_description_preserves_configuration_owner():
+    from lingtai.mcp_servers.telegram.manager import DESCRIPTION
+
+    assert "orchestrator-owned" in DESCRIPTION
+    assert "avatars must not reconfigure" in DESCRIPTION
+    assert "read-only projector" in DESCRIPTION
+
+
+def test_public_family_sends_media_caption_and_blocks_same_text_key(tmp_path: Path):
+    from lingtai.mcp_servers.telegram._family import handle_telegram
+
+    manager, account = _manager(tmp_path)
+    calls = []
+
+    def record_document(chat_id, path, **kwargs):
+        calls.append((chat_id, path, kwargs.get("caption")))
+        return {"message_id": len(calls)}
+
+    account.send_document = record_document
+    results = []
+    for index in range(3):
+        path = tmp_path / f"different-{index}.txt"
+        path.write_text(f"different content {index}")
+        results.append(handle_telegram(manager, {
+            "action": "send",
+            "input": {
+                "account": "bot", "chat_id": 123, "text": "caption",
+                "media": {"type": "document", "path": str(path)},
+            },
+            "reasoning": "recording transport only",
+        }))
+    assert [result["status"] for result in results] == ["sent", "sent", "blocked"]
+    assert len(calls) == 2
+    assert all(call[2] == "caption" for call in calls)
