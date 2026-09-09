@@ -256,3 +256,47 @@ def test_unchanged_accounts_action_still_dispatches_to_manager(tmp_path: Path) -
 
     assert result == {"status": "ok", "action": "accounts"}
     assert manager.calls == [{"action": "accounts"}]
+
+
+def test_manual_preserves_taskcard_owner_timing_and_redaction():
+    package = Path(__file__).parents[1] / "src/lingtai/mcp_servers/feishu"
+    root = (package / "SKILL.md").read_text()
+    detail = (package / "reference/message-semantics.md").read_text()
+    assert "orchestrator" in root and "avatar" in root
+    assert "feishu/taskcard.json" in detail
+    assert "MCP relaunch" in detail
+    assert "booleans are not row counts" in detail
+    assert "current` and `default" in detail and "<redacted>" in detail
+    assert "SETTINGS_UNAVAILABLE" in detail and "SETTINGS_RESPONSE_TOO_LARGE" in detail
+
+
+def test_manual_preserves_attachment_and_progress_boundaries():
+    package = Path(__file__).parents[1] / "src/lingtai/mcp_servers/feishu"
+    detail = (package / "reference/message-semantics.md").read_text()
+    diagnostic = (package / "reference/diagnostics.md").read_text()
+    assert "current incoming" in detail and "local paths" in detail
+    assert "custom card replacement" in detail
+    assert "file_name" in detail
+    assert "publish credentials" not in diagnostic
+    assert "owner authorization" in diagnostic
+
+
+def test_taskcard_file_changes_require_new_service_but_commands_are_live(tmp_path):
+    service = _service(tmp_path)
+    state = tmp_path / "feishu/taskcard.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps({"taskcard": False, "normal_rows": 4}))
+    assert service.taskcard_enabled() is True
+    assert service.taskcard_normal_rows() == 1
+    restarted = _service(tmp_path)
+    assert restarted.taskcard_enabled() is False
+    assert restarted.taskcard_normal_rows() == 4
+    restarted.set_taskcard_enabled(True)
+    restarted.set_taskcard_normal_rows(2)
+    rows = _rows(_show(_Manager(restarted)))
+    assert rows[TASKCARD_ENABLED]["current"] is True
+    assert rows[TASKCARD_NORMAL_ROWS]["current"] == 2
+    state.write_text(json.dumps({"taskcard": "false", "normal_rows": True}))
+    invalid = _service(tmp_path)
+    assert invalid.taskcard_enabled() is True
+    assert invalid.taskcard_normal_rows() == 1

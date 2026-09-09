@@ -1,13 +1,13 @@
 ---
 name: feishu-mcp-manual
 description: |
-  Concise progressive-disclosure entry point for the Feishu (Lark) MCP tool.
-  It covers the strict action envelope, action inventory, recipient/reply and
-  card safety boundaries, read-only settings, and the relative route to the
-  deep message-semantics reference. Pull the full usage guidance with
-  action='manual'; you do not need to call it before every send.
-version: 1.17.0
-last_changed_at: 2026-09-07T00:00:00Z
+  Concise progressive-disclosure usage manual for the Feishu (Lark) MCP.
+  Ordinary schema-sufficient calls can start here; unfamiliar setup, cards,
+  callbacks, compound replies, partial delivery, and recovery route to one
+  focused reference. It covers the strict action envelope, recipient/account
+  checks, and the no-fallback/no-blind-retry safety boundary.
+version: 1.18.0
+last_changed_at: 2026-09-09T03:15:00Z
 related_files:
 - ENVIRONMENT_VARIABLES.md
 - src/lingtai/mcp_servers/ANATOMY.md
@@ -29,94 +29,81 @@ related_files:
 - src/lingtai/mcp_servers/feishu/reference/message-semantics.md
 - tests/test_feishu_settings.py
 maintenance: |
-  Tracks the Feishu MCP's concise model-facing router, strict action surface,
-  and relative manual references; keep deep message semantics in the linked
-  sidecar and update both when the server or settings contract changes.
+  Tracks the Feishu MCP's model-facing entry, strict action surface, and
+  focused manual routes. Keep the deep references aligned with their owning
+  setup, diagnostic, capability, and message contracts; keep this file small
+  enough for first-call discovery.
 ---
+# Feishu (Lark) MCP
 
-# Feishu (Lark) MCP — usage manual (progressive disclosure)
+This is the packaged `action='manual'` entry point and the progressive disclosure
+router. A normal schema-sufficient call does **not** need to load it first. Load
+one route only when the call is unfamiliar, consequential, or recovery-sensitive.
 
-This is the concise model-facing entry point returned by `action='manual'`.
-Use it for the first-call contract and follow the relative references below
-only when the question needs operational depth. The deep companion is
-[`reference/message-semantics.md`](reference/message-semantics.md); setup,
-rollout, and symptom-led diagnosis remain separate operator references.
+## PUBLIC TOOL FAMILY: strict LTP-v2
 
-## OPERATOR REFERENCES
+Every call is `{action, input, reasoning, summarize?}`. `action`, `input`, and
+string `reasoning` are required; `summarize`, if present, is boolean. The root
+and each action input are closed: unknown fields, cross-action fields, the old
+flat/`_reasoning` form, and missing required fields fail before provider I/O.
 
-| Need | Read |
+| Goal | Action and required input |
 |---|---|
-| App permissions, event/card callback setup, complete config fields, multi-account behavior, canary, acceptance, rollback | [`reference/setup.md`](reference/setup.md) |
-| Safe status interpretation and symptom-based startup, WebSocket, admission, media, card, reaction, Task Card, refresh, and error diagnosis | [`reference/diagnostics.md`](reference/diagnostics.md) |
-| Feishu v1 vs Telegram coverage, action/content inventory, and explicit non-goals | [`reference/capability-matrix.md`](reference/capability-matrix.md) |
-| Detailed Agent-facing message, card, notification, Task Card, settings, and failure semantics | [`reference/message-semantics.md`](reference/message-semantics.md) |
+| New message | `send`: `receive_id` + exactly one `text` or `content` |
+| Inspect | `check`: `{}`; `read`: `chat_id`; `search`: `query` |
+| Answer a message | `reply`: exact compound `message_id` + exactly one `text` or `content` |
+| Change Bot output | `edit`: sent `message_id` + exactly one `text` or `content` |
+| Delete Bot output | `delete`: sent `message_id` |
+| Reaction | `react`: `message_id` + `operation="add"` + `emoji_type`, or `operation="remove"` + exact `reaction_id` |
+| Contacts/accounts | `contacts`/`accounts`: `{}`; `add_contact`: `open_id` + `alias`; `remove_contact`: exactly one `open_id` or `alias` |
+| Read settings/manual | `settings`/`manual`: `{}`; settings is SHOW-only |
 
-The sidecars are packaged with LingTai but are not embedded into the
-`action='manual'` result. Follow only the reference that answers the current
-question; do not load all of them for an ordinary message send.
+`send`/`reply` content can be tagged `text`, `markdown`, `post`, complete
+schema-2.0 `card`, media, shares, or sticker. `edit` accepts text/markdown/post
+or complete card replacement, not media. See the message reference for exact
+unions and media source shapes.
 
-## FIRST-CALL CONTRACT
+A safe inbound start is `feishu(action="check", input={}, reasoning="inspect incoming chats")`,
+then `read` the affected chat; obtain its exact ID before replying.
 
-Every call uses the strict root shape
-`{action, input, reasoning, summarize?}`. `action`, `input`, and `reasoning`
-are required; `input` is a closed object owned by the selected action;
-`summarize`, when present, is boolean. Unknown root fields, cross-action input
-fields, and the retired flat/`_reasoning` shape are rejected before provider
-I/O. The complete action inventory is:
+## BEFORE A SIDE EFFECT
 
-| Action | First-call shape and purpose |
-|---|---|
-| `send` | Fresh message: `receive_id` and exactly one of `text`/`content`; `receive_id_type` (default `open_id`), `account`, and `placeholder` are optional. |
-| `check` | Recent conversations and unread counts; optional `account`. |
-| `read` | Messages from one chat: `chat_id`; optional `account` and `limit`. |
-| `reply` | Reply to an exact compound `message_id` with exactly one of `text`/`content`; optional `reply_in_thread`. |
-| `react` | Add with `operation='add'` + `emoji_type`, or remove with `operation='remove'` + the exact `reaction_id`. |
-| `search` | Regex search: `query`; optional `account` and `chat_id`. |
-| `delete` | Delete the logical provider message identified by a returned compound `message_id`; use only an ID for a bot-authored sent message. |
-| `edit` | Edit that logical provider message with exactly one of `text`/`content`; use only a bot-authored sent ID, and do not edit media messages. |
-| `contacts` | List saved contacts; optional `account`. |
-| `add_contact` | Save `open_id` + `alias`; optional `account`, `name`, and `chat_id`. |
-| `remove_contact` | Remove saved contacts by `alias` or `open_id`; duplicate aliases can remove multiple entries. Optional `account`. |
-| `accounts` | List configured app accounts and non-secret identity details. |
-| `settings` | Read-only Feishu settings inventory; `input` must be `{}` and no write form exists. |
-| `manual` | Strict-empty route to this packaged usage manual; follow its relative references for depth. |
+Configuration belongs to the orchestrator/admin; an avatar must not configure
+or reconfigure this MCP. Setup, credential changes and rollout require explicit
+owner authorization; routine message schemas do not grant it.
 
-`send` and `reply` content supports tagged text, Markdown, raw post, complete
-schema-2.0 cards, media, shares, and stickers. `edit` supports text, Markdown,
-post, or card replacement but not media. The adapter does not independently
-prove edit/delete authorship, so the caller must supply a bot-authored sent ID. See the deep companion for exact tagged shapes,
-chunking, callbacks, and inbound projections.
+- `receive_id_type` defaults to `open_id`; use `chat_id` for a group. An omitted
+  `account` selects the first configured account. Verify the account and
+  recipient before `send`; verify the target before `reply`, `edit`, `delete`,
+  or `react`.
+- IDs are `{account_alias}:{chat_id}:{feishu_message_id}`. Pass an inbound
+  compound ID back to `reply` verbatim. A reply target that is gone **fails**;
+  it never becomes a fresh `send`. Group/topic inbound messages require an
+  explicit Bot mention (`@all` alone is ignored); `allowed_users` gates senders,
+  and saving a contact does not grant admission.
+- Each physical outbound chunk is attempted once. A partial result lists exact
+  delivered IDs and the failed chunk; do not replay the whole action or silently
+  downgrade it. Reconcile provider state before another lifecycle operation.
 
-## RECIPIENTS AND SAFETY BOUNDARIES
+## CARDS ARE THREE DIFFERENT THINGS
 
-- `receive_id_type` defaults to `open_id`; use `chat_id` for a group. The
-  omitted `account` uses the first configured account. Compound IDs are
-  `{account_alias}:{chat_id}:{feishu_message_id}` and must be passed back
-  verbatim.
-- `reply` follows the target's topic/thread by default and a gone target fails;
-  it never silently becomes a fresh `send`. Group/topic inbound messages need
-  an explicit Bot mention; `allowed_users`, when configured, still gates the
-  sender. Saving a contact does not grant admission.
-- Complete schema-2.0 business cards may generate authorized `card_action`
-  records. Local control-card callbacks are separate: they update the control
-  card, do not become business inbox records, and do not wake the Agent.
-- Automatic and programmable resident Task Cards are mechanical channel
-  projections, not messages to manage with the public `feishu` actions.
-  `placeholder=true` progress cards are separate from those residents and from
-  the final durable answer.
-- `send`, `reply`, `edit`, `delete`, and `react` are real external side effects;
-  confirm the recipient, target, content, and operation before acting. Feishu
-  makes one outbound attempt per chunk and never hides an automatic retry.
-  Failures retain classified `error_code`, `retryable`, and
-  `retry_after_seconds` guidance; do not replay delivered chunks blindly.
+1. A complete schema-2.0 business `card` is outbound content. An authorized
+   click becomes one deduplicated `card_action` inbox record and wakes the
+   Agent; update its `source_message_ref` or `send` a fresh response. A callback
+   record is not a reply target.
+2. Local command cards (`/help`, `/status`, `/kanban`, `/system`, `/refresh`,
+   `/sleep`, `/clear`, `/taskcard`) update themselves. Their callbacks stay
+   local: no business inbox record and no Agent wake. Group commands still need
+   admission and a Bot mention.
+3. Automatic/programmable resident Task Cards are mechanical projections, not
+   messages to manage with these actions. `placeholder=true` is separate native
+   progress feedback; edit it only at meaningful phase changes and send the
+   final durable answer separately.
 
 ## SETTINGS SHOW
 
-Call `action='settings', input={}, reasoning='inspect Feishu settings'` for the
-read-only inventory. Each row contains only `key`, `current`, `default`,
-`configurable`, and a manual pointer in `comment`. SHOW never writes and fails
-as one bounded no-row result when applied truth is unavailable. The detailed
-owner semantics remain in the deep companion:
+`settings` accepts `{}` only and returns a read-only inventory. Its seven row
+owners are linked below; SHOW never writes or grants configuration authority.
 
 ### Setting config path
 
@@ -146,14 +133,16 @@ See [`reference/message-semantics.md#setting-task-card-enabled`](reference/messa
 
 See [`reference/message-semantics.md#setting-task-card-normal-rows`](reference/message-semantics.md#setting-task-card-normal-rows).
 
-## WHERE TO GO NEXT
+## ONE OWNER FOR DEPTH
 
-- For exact send/reply/edit content unions, media source ownership, message
-  reads, notifications, reactions, cards, and Task Cards, load
-  [`reference/message-semantics.md`](reference/message-semantics.md).
-- For app permissions, account fields, event delivery, canary, or rollback,
-  load [`reference/setup.md`](reference/setup.md).
-- For a failure symptom, load [`reference/diagnostics.md`](reference/diagnostics.md)
-  before retrying a provider side effect.
-- For Feishu-vs-Telegram scope or deliberate non-goals, load
-  [`reference/capability-matrix.md`](reference/capability-matrix.md).
+| Situation | Read |
+|---|---|
+| Exact content, reply/thread, card callback, media, notification, reaction, chunk/lifecycle, or Task Card semantics | [`reference/message-semantics.md`](reference/message-semantics.md) |
+| App permissions, event/callback setup, config fields, accounts, canary, or rollback | [`reference/setup.md`](reference/setup.md) |
+| A startup, admission, WebSocket, media, card, reaction, Task Card, or error symptom | [`reference/diagnostics.md`](reference/diagnostics.md) |
+| Feishu-vs-Telegram scope and deliberate limits | [`reference/capability-matrix.md`](reference/capability-matrix.md) |
+
+For failures, preserve `error_code`, `retryable`, and `retry_after_seconds`.
+`max_attempts=1` makes retryable guidance a new caller decision, not an
+adapter retry. Never expose secrets, raw envelopes, provider keys, or local
+paths in external evidence.

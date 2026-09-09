@@ -192,15 +192,12 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
         one_of=[{"required": ["text"]}, {"required": ["content"]}],
     )
     send["properties"]["receive_id_type"]["anyOf"][0]["description"] = (
-        "Type of receive_id. Use 'open_id' for individual users "
-        "(format: ou_xxx), 'chat_id' for group chats (format: oc_xxx). "
-        "Defaults to 'open_id'."
+        "Recipient type: 'open_id' for a user, 'chat_id' for a group; "
+        "defaults to 'open_id'."
     )
     send["properties"]["placeholder"]["anyOf"][0]["description"] = (
-        "send only — wrap text, markdown, or post content in a native "
-        "schema-2.0 progress card and return its compound message_id. "
-        "Edit that card only at meaningful phase changes; send the final "
-        "answer separately with send or reply."
+        "send only: wrap text/markdown/post in a native schema-2.0 progress card; edit at "
+        "meaningful phase changes and send the final answer separately."
     )
     empty = _object({})
     return FEISHU_PLUGIN.action_input_schemas({
@@ -263,8 +260,8 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
             "message_id": {
                 "type": "string",
                 "description": (
-                    "Any compound ID returned for a logical bot message; "
-                    "all persisted physical chunks are deleted."
+                    "Compound ID of a Bot logical message; delete all its "
+                    "persisted physical chunks."
                 ),
             },
         }, required=["message_id"]),
@@ -273,8 +270,8 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
                 "message_id": {
                     "type": "string",
                     "description": (
-                        "Any compound ID returned for a logical bot message; "
-                        "all persisted physical chunks are edited."
+                        "Compound ID of a Bot logical message; edit all its "
+                        "persisted physical chunks."
                     ),
                 },
                 "text": {"type": "string"},
@@ -332,24 +329,20 @@ def feishu_schema() -> dict[str, Any]:
     if "oneOf" in input_schema:
         input_schema["anyOf"] = input_schema.pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "Feishu/Lark messaging: send, receive, reply, edit, and inspect messages "
-        "plus reactions, contacts, and account status. Strict call shape is "
-        "{action, input, reasoning, summarize?}; action, input, and reasoning "
-        "are required, input is a closed action-local object, and summarize is "
-        "optional boolean. Actions: send (receive_id, receive_id_type, exactly "
-        "one of text/content; optional account, placeholder); check (recent "
-        "conversations); read (chat_id); reply (exact message_id, exactly one "
-        "of text/content, optional reply_in_thread); react (add + emoji_type or "
-        "remove + reaction_id); search (query); delete (logical message_id); "
-        "edit (logical message_id, text/content; no media); contacts; "
-        "add_contact; remove_contact; accounts; settings (read-only empty "
-        "input); manual (full guidance). Send/reply content includes text, "
-        "markdown, post, schema-2.0 card, media, share, or sticker; edit "
-        "supports text/markdown/post/card. Compound reply targets never fall back to a "
-        "fresh send, and card callbacks and resident Task Cards have separate "
-        "semantics. send, reply, edit, delete, and react are external side "
-        "effects; confirm targets/content. Failures expose classified retry "
-        "guidance and the client never hides an automatic retry. "
+        "Feishu/Lark messaging. Strict {action,input,reasoning,summarize?} "
+        "envelope: action, input, and string reasoning are required; input is a "
+        "closed action branch and summarize is optional boolean. Actions: send "
+        "(receive_id + exactly one text/content), check, read(chat_id), reply "
+        "(exact compound message_id + text/content), react, search, edit/delete "
+        "(Bot-sent logical message), contacts, add/remove_contact, accounts, "
+        "settings (read-only empty input), and manual. send/reply accept text, "
+        "markdown, post, schema-2.0 card, media, share, or sticker; edit accepts "
+        "text/markdown/post/card only. Verify recipient and target; replies follow "
+        "topics and never fall back to fresh send. One attempt per chunk; preserve "
+        "partial IDs and do not replay. Business callbacks, local control cards, "
+        "progress cards, and resident Task Cards are distinct. Failures expose "
+        "classified retry guidance. Configuration is orchestrator-owned; avatars "
+        "must not reconfigure this MCP. "
         + FEISHU_PLUGIN.manual_action_description()
     )
     return schema
