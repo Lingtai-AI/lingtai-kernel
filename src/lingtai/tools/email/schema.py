@@ -17,14 +17,12 @@ from .primitives import mode_field
 
 
 def get_description(lang: str = "en") -> str:
-    return ("Internal .lingtai mailbox only — not internet email (use the imap tool for Gmail/Outlook). "
-            "Use bare agent/path addresses; the closed envelope is action + input + reasoning, "
-            "with only the selected action's fields in input. Cross-action fields are rejected "
-            "before mailbox I/O. Reply on the channel the message arrived on (prefer reply or "
-            "reply_all); never reply in text output. Address senders by sender_nickname, else "
-            "sender_name. Unread bodies are injected in full into persistent Email notifications; "
-            "prefer dismiss after handling and use read for source records or attachments. Call "
-            "email(action='manual', input={}) for the email-manual router.")
+    return ("Internal .lingtai mailbox only, not internet email (use imap for external mail). "
+            "Use the closed action/input/reasoning envelope and only selected-action fields. "
+            "Reply on the arrival channel with reply/reply_all, never in text output; use sender_nickname, else "
+            "sender_name. Unread bodies are injected in full into persistent Email notifications; prefer "
+            "dismiss after handling; use read "
+            "for source records or attachments. email(action='manual', input={}) loads the router.")
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -39,23 +37,20 @@ def get_schema(lang: str = "en") -> dict:
                     "contacts", "add_contact", "remove_contact", "edit_contact",
                     "manual",
                 ],
-                "description": ("Choose one action; put only its fields in input. send: new internal "
-                                "message (address/message required; body max 50,000 characters). "
-                                "check: list/filter mail. read: fetch IDs and mark read; dismiss: "
-                                "mark handled IDs read without returning bodies. Unread bodies are "
-                                "injected in full into persistent Email notifications: prefer dismiss "
-                                "after handling; use read for source records or attachments. "
-                                "reply/reply_all: answer existing mail. search: regex lookup. "
-                                "archive/delete: move or remove inbox/archive mail. contacts actions "
-                                "manage the address book. settings is read-only. manual returns this "
-                                "manual without mailbox I/O."),
+                "description": ("Choose one action and put only its fields in input. send: new "
+                                "internal message (address/message required; body max 50,000). "
+                                "check: list/filter; read: fetch IDs and mark read; dismiss: mark "
+                                "handled IDs read without bodies; reply/reply_all: answer on the "
+                                "arrival channel. search: regex; archive/delete: move/remove mail; "
+                                "contacts manage the private book; settings is read-only; manual "
+                                "returns this procedure without mailbox I/O."),
             },
             "address": {
                 "oneOf": [
                     {"type": "string"},
                     {"type": "array", "items": {"type": "string"}},
                 ],
-                "description": 'Bare name/path for send; string or list.',
+                "description": 'Peer name/path for send; abs needs explicit authorization.',
             },
             "cc": {
                 "type": "array",
@@ -70,14 +65,14 @@ def get_schema(lang: str = "en") -> dict:
             "attachments": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": 'Attachment paths for send.',
+                "description": 'Authorized source paths to attach.',
             },
             "subject": {"type": "string", "description": 'Subject.'},
-            "message": {"type": "string", "description": 'Body; max 50,000 characters.'},
+            "message": {"type": "string", "description": 'Body; max 50,000 Unicode characters.'},
             "email_id": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": 'Own mailbox ID list; replies use one ID.',
+                "description": 'ID from this mailbox; replies use one ID.',
             },
             "n": {
                 "type": "integer",
@@ -91,7 +86,7 @@ def get_schema(lang: str = "en") -> dict:
             "folder": {
                 "type": "string",
                 "enum": ["inbox", "sent", "archive"],
-                "description": "Folder; check inbox/search both; sent is read-only.",
+                "description": "Folder; check defaults inbox, search inbox+sent, read all; sent is read-only.",
             },
             "delay": {
                 "type": "integer",

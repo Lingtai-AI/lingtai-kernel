@@ -2,12 +2,11 @@
 name: email-manual
 description: >
   Internal LingTai mail: send/read/dismiss/reply, bare-path addressing,
-  delayed self-send time capsules, and the full-body persistent notification
-  contract. Not internet email (see `mcp-manual`) or recurring schedules
-  (see `shell-manual`).
+  delayed self-send time capsules, and full-body persistent notifications.
+  Not internet email (see `mcp-manual`) or recurring schedules (see `shell-manual`).
 version: 1.3.0
 tags: [capabilities, email, communication]
-last_changed_at: "2026-09-06T00:00:00Z"
+last_changed_at: "2026-09-09T10:17:00Z"
 related_files:
 - src/lingtai/tools/email/__init__.py
 - src/lingtai/tools/email/_family_schema.py
@@ -25,154 +24,88 @@ maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
-# Email Manual — the internal `email` tool
+# Email Manual — internal mail
 
-> Internal LingTai mail only. It moves JSON files inside a shared `.lingtai/`
-> network; it is not Gmail, Outlook, IMAP, SMTP, DNS, or any other internet mail.
+**Internal `.lingtai/` mail, not internet email.** Use the schema for routine
+calls; this manual owns the exceptions. `action`, action-local `input`, and root
+`reasoning` are required. Unknown/cross-action fields fail before mailbox I/O;
+optional `null` means omitted. Root `summarize` is not an input field.
 
-## 0. Call envelope
+## First action
 
-Every call has `action`, `input`, and `reasoning`; `input` contains only the
-fields for the selected action. `reasoning` is required and `summarize` is an
-optional root result control, never an input field.
+- **Arrival already visible:** reply on Email with `reply`/`reply_all`, then
+  `dismiss` the handled ID. Current replies do not clear unread state; see the
+  [documented Contract discrepancy](reference/addressing-and-replies/SKILL.md#same-channel-reply).
+  Use `read` for source records or attachments rather than rereading visible text.
+- **Browse:** `email(action="check", input={}, reasoning="inspect inbox")`.
+  Use returned own-mailbox IDs; `search` is regex search. Never send raw local IDs
+  as references in mail/public prose.
+- **New message:** verify the recipient directory, then `send` with `address`
+  and `message`. Ordinary `peer` addressing is bare/path-based, with no `@`;
+  `abs` requires an explicitly authorized cross-network target, not guessed routing.
+- Address a sender by non-empty `sender_nickname`, else `sender_name`. Reply on
+  the arrival channel, not private text output. Read the routing reference before
+  an exceptional channel pivot.
 
-```python
-email(action="check", input={}, reasoning="check for new mail")
-email(action="read", input={"email_id": ["<id>"]}, reasoning="read the request")
-email(action="send", input={"address": "peer", "message": "done"},
-      reasoning="report completion")
-```
+A `sent` receipt is scheduling evidence, not recipient acceptance. Do not blindly
+retry a bounce or failed call: earlier deliveries may exist. Delayed mail depends
+on this process staying alive. Non-self POSIX delivery snapshots attachments;
+self-send does not. There is no attachment source-root/size limit: share only
+explicitly authorized files. Details below; none of these limits authorizes
+configuration changes, lifecycle intervention, or cleanup.
 
-The family rejects unknown root fields and cross-action input keys before
-mailbox I/O, delivery, or read-state mutation. Call
-`email(action="manual", input={}, reasoning="learn Email")` to return this
-installed router and its host-local path.
+## Routing table
 
-`check`, `read`, and `search` can return bulky listings or bodies: use
-`summarize=true` only when exact IDs, addresses, or body text are not needed.
-Leave it false for receipts, contacts, settings, and `manual`.
+| Need | Read |
+|---|---|
+| Recipient discovery, `peer`/`abs`, return routes, identity, replies | [Addressing and replies](reference/addressing-and-replies/SKILL.md) |
+| Filters/folders, self-send, attachments, storage and retention | [Actions and storage](reference/actions-and-storage/SKILL.md) |
+| Liveness, delivery ordering, bounces, unread/overflow handling | [Notifications and delivery](reference/notifications-and-delivery/SKILL.md) |
+| SHOW sources, changes, timing and redaction | [Settings reference](reference/settings-reference/SKILL.md) |
 
-## 1. Choose an action
+## Settings anchors
 
-| Action | Use | Required input / critical note |
-|---|---|---|
-| `send` | Start new internal mail | `address`, `message`; body max 50,000 characters |
-| `check` | List mail | Optional `folder`, `n`, and structured `filter` |
-| `read` | Fetch source-of-truth mail | `email_id` list; marks inbox IDs read |
-| `dismiss` | Clear handled mail without fetching bodies | `email_id` list; marks inbox IDs read |
-| `reply` / `reply_all` | Answer existing mail | `email_id` list (one ID) and `message`; use the arrival channel |
-| `search` | Regex search | `query`; optional `folder` |
-| `archive` | Move inbox mail out of the inbox | `email_id` list |
-| `delete` | Permanently remove mail | `email_id` list; inbox/archive only, never `sent` |
-| `contacts` | List the private address book | no input |
-| `add_contact` | Add or update a contact | `address`, `name`; optional `note` |
-| `remove_contact` | Remove a contact | `address` |
-| `edit_contact` | Update contact fields | `address`; optional `name`/`note` |
-| `settings` | Show Email policy/source truth | input must be `{}`; read-only |
-| `manual` | Load this procedure | input must be `{}`; no mailbox I/O |
-
-For action-specific fields, defaults, filters, persistence, and examples, read
-[Actions and storage](reference/actions-and-storage/SKILL.md). For address modes,
-reply routing, sender names, and local-ID privacy, read
-[Addressing and replies](reference/addressing-and-replies/SKILL.md).
-
-## 2. Non-negotiable routing and privacy
-
-- **Reply on the channel where the message arrived.** For Email, use `reply` or
-  `reply_all`, not a new `send`; never answer through text output (that is a
-  private diary). If a dead sender forces a channel change, explain the pivot in
-  the message first.
-- Use the sender's `sender_nickname` when non-empty, otherwise `sender_name`.
-- Addresses are bare names/paths inside `.lingtai/`, not `@` addresses. For
-  internet mail, use the separately owned `imap` MCP addon. `mode="peer"` is
-  normally enough; `mode="abs"` is restricted to explicitly authorized
-  cross-network paths and does not bypass delivery checks.
-- Mailbox IDs are local to this working directory. Pass IDs read from your own
-  notification or listing to Email actions, but never put raw IDs in mail or
-  public prose. See [Addressing and replies](reference/addressing-and-replies/SKILL.md).
-
-Sending writes sender-side state before starting one daemon delivery thread per
-recipient. Even with no delay, `status="sent"` can precede delivery; a target
-must have valid agent metadata and a fresh heartbeat. Delivery failures are
-reported as `email.bounce` system events, not queued for later. Full delivery,
-refresh-window, and recovery semantics are in
-[Notifications and delivery](reference/notifications-and-delivery/SKILL.md).
-
-## 3. Read state and notifications
-
-Unread bodies are injected in full into
-`_meta.agent_meta.notifications.persistent.email`. After handling content already
-shown there, prefer `dismiss`; use `read` for a source-of-truth refresh,
-attachments, or deliberate audit. `read`, `dismiss`, `archive`, and `delete`
-refresh the producer-owned `.notification/email.json` mirror. A handled message
-stays visible until one of those producer verbs changes its read state.
-
-The mirror's attention hook carries IDs while the persistent lane carries full
-entries. If the model-visible block overflows, follow its `overflow` marker to the
-local spill file or use the producer action; do not infer missing content.
-Detailed payload shape, caps, refresh behavior, and the distinction from generic
-notification dismissal are in
-[Notifications and delivery](reference/notifications-and-delivery/SKILL.md).
-
-## 4. Settings anchors
-
-`settings` is SHOW-only: every row has exactly `key`, `current`, `default`,
-`configurable`, and `comment`. It performs no mailbox I/O and never exposes
-paths, identities, addresses, contacts, content, attachments, or read state.
-Comments below are stable anchors used by the settings provider; each short stub
-routes to the full source/precedence/procedure reference.
+`settings` takes `{}` and performs no mailbox I/O. Rows contain exactly `key`,
+`current`, `default`, `configurable`, `comment`; missing applied truth fails the
+whole inventory as `SETTINGS_UNAVAILABLE`, with no partial rows/private detail.
+`manual` also takes `{}` and returns the installed body/path without mailbox I/O.
+Keep exact IDs/bodies when needed; reserve result summarization for bulky reads,
+not short receipts or procedures being followed.
 
 ### Send body character limit
-
-`send.body_char_limit` is the installed 50,000-character send/reply cap; see
-[the settings reference](reference/settings-reference/SKILL.md#send-body-character-limit).
+`send.body_char_limit`: [body cap](reference/settings-reference/SKILL.md#send-body-character-limit).
 
 ### Duplicate send loop guard
-
-`send.duplicate_free_passes` is the installed consecutive-duplicate guard; see
-[the settings reference](reference/settings-reference/SKILL.md#duplicate-send-loop-guard).
+`send.duplicate_free_passes`: [recipient/body guard](reference/settings-reference/SKILL.md#duplicate-send-loop-guard).
 
 ### Check result token limit
-
-`check.result_token_limit` is the installed `check` result budget; see
-[the settings reference](reference/settings-reference/SKILL.md#check-result-token-limit).
+`check.result_token_limit`: [check budget](reference/settings-reference/SKILL.md#check-result-token-limit).
 
 ### Unread notification entry limit
-
-`unread.max_entries` limits projected unread entries while preserving total count;
-see [the settings reference](reference/settings-reference/SKILL.md#unread-notification-entry-limit).
+`unread.max_entries`: [entry projection](reference/settings-reference/SKILL.md#unread-notification-entry-limit).
 
 ### Pseudo-agent subscriptions
+`manifest.pseudo_agent_subscriptions`: [redacted applied snapshot](reference/settings-reference/SKILL.md#pseudo-agent-subscriptions).
 
-`manifest.pseudo_agent_subscriptions` is the configurable, fully redacted
-construction snapshot; see [the settings reference](reference/settings-reference/SKILL.md#pseudo-agent-subscriptions).
+## Cleanup / Footprint
 
-## 5. Self-send and delay
+Email owns `mailbox/` and `.notification/email.json`; keep decision/handoff evidence.
+Use the [retention and inspection procedure](reference/actions-and-storage/SKILL.md#cleanup--footprint),
+not ad-hoc deletion. Bug filing goes through `lingtai-issue-report` with permission.
 
-Mail to your own address is a durable inbox note that survives molt and remains
-in the unread lane until handled. `delay` is seconds before one delivery attempt:
-the outbox record is written immediately and a daemon thread waits. Delayed
-self-send is a one-shot future nudge, not delayed tool execution or recurring
-scheduling. For recurring work, use the host scheduler routed by `shell-manual`.
-See [Actions and storage](reference/actions-and-storage/SKILL.md#self-send-and-time-capsules).
+## Nested reference catalog
 
-## 6. Cleanup and footprint
-
-Email persists inbox/archive/sent messages, attachments, contacts, and read state.
-Do not blindly delete mail that is the only copy of a decision, handoff, or
-attachment. Prefer the Email `archive`/`delete` actions over filesystem removal.
-For a dry-run footprint inspection and explicit-consent cleanup procedure, load
-the shared [cleanup-footprint contract](../../skills/manual/reference/cleanup-footprint-contract.md#shared-footprint-check-recipe).
-
-## Reference map
-
-- [Addressing and replies](reference/addressing-and-replies/SKILL.md) — bare-path
-  addresses, `peer`/`abs`, same-channel replies, identity, and ID privacy.
-- [Actions and storage](reference/actions-and-storage/SKILL.md) — action details,
-  filters, folders, self-send, time capsules, and durable layout.
-- [Notifications and delivery](reference/notifications-and-delivery/SKILL.md) —
-  liveness, bounce/recovery, unread payloads, overflow, and read-state refresh.
-- [Settings reference](reference/settings-reference/SKILL.md) — five rows,
-  effective sources, redaction, timing, and SHOW-only behavior.
-
-> Found a bug? Load the `lingtai-issue-report` skill and follow its procedure.
+```yaml
+- name: email-manual-addressing-and-replies
+  location: reference/addressing-and-replies/SKILL.md
+  description: Nested Email reference for recipient discovery and replies.
+- name: email-manual-actions-and-storage
+  location: reference/actions-and-storage/SKILL.md
+  description: Nested Email reference for fields, attachments and retention.
+- name: email-manual-notifications-and-delivery
+  location: reference/notifications-and-delivery/SKILL.md
+  description: Nested Email reference for delivery, bounces and unread state.
+- name: email-manual-settings-reference
+  location: reference/settings-reference/SKILL.md
+  description: Nested Email reference for SHOW sources and authorized changes.
+```

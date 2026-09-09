@@ -27,7 +27,7 @@ def mode_field(lang: str = "en") -> dict:
     return {
         "type": "string",
         "enum": ["peer", "abs"],
-        "description": "Address mode for send; usually omit it. peer (default) resolves a bare name in your own .lingtai/ network. abs accepts a literal absolute workdir only for an explicitly authorized cross-network recipient. Both require valid .agent.json and a fresh heartbeat; abs does not bypass delivery checks. See email-manual.",
+        "description": "Send routing: peer (default) uses this network; abs requires an explicitly authorized absolute cross-network path. Non-self POSIX delivery checks manifest presence and Core liveness (human exception); abs does not bypass checks. See email-manual.",
     }
 
 

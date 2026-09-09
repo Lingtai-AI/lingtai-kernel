@@ -1,35 +1,16 @@
-"""Schema data — canonical per-action ``input`` schemas for the ``email`` family.
+"""Canonical closed per-action input schemas and first-call action guidance.
 
-This module holds only data: one strict, closed ``input_schema`` per
-operational/manual ``email`` action (:data:`INPUT_SCHEMAS`), the canonical
-pre-settings action order
-(:data:`ACTION_ORDER`), and the canonical English action prose
-(:data:`ACTION_ENUM_DESCRIPTION`).  ``__init__.py`` composes these into the
-public model-facing schema via the generic ``ToolFamily`` infra
-(``lingtai.tools.tool_family``) — see ``__init__.py::get_schema``.
+The generic ``ToolFamily`` composes this data into the public LTP v2 envelope;
+the legacy flat schema remains the internal ``EmailManager`` interface. See
+email-manual for depth.
 
-Why a new module rather than reshaping ``schema.py``: ``schema.py``'s flat
-``get_schema()`` is still the *internal* ``EmailManager.handle`` argument
-shape (the same seam ``shell`` kept when its ``ShellManager`` stayed flat —
-``tools/CONTRACT.md`` "Relationship to current runtime"), and
-``tests/test_layers_email.py`` pins several of its facts.  Keeping the
-per-action data here means the model-facing composition and the legacy flat
-shape have one owner each, and the ledger in the migration report can name
-exactly what each file is for.
+``ACTION_ORDER`` owns registration order; the generic declaration inserts
+``settings`` before ``manual``. Field depth lives in email-manual rather than
+being repeated in the schema module.
 
-Field descriptions retain the first-call semantics of ``schema.py``'s flat
-properties while moving rationale, catalogs, and examples to ``email-manual``
-references. ``ACTION_ORDER`` owns the operational/manual order and child
-registration order in ``__init__.py``. The generic declaration opt-in inserts
-``settings`` immediately before ``manual`` and consequently composes the public
-``input.anyOf``/``allOf`` order without adding a hand-authored schema here.
-
-Optional fields are declared in the provider-compatible nullable
-representation (``"type": [..., "null"]`` plus membership in ``required``) per
-``tools/CONTRACT.md`` "Envelope": a strict OpenAI schema has no other way to
-express an optional field.  ``__init__.py`` strips those nulls back to
-*absent* before the pre-existing ``EmailManager`` handlers run, so their
-``args.get("folder", "inbox")``-style defaulting — and the difference between
+Optional fields use provider-compatible nullable schemas; ``__init__.py``
+strips nulls to absent before pre-existing handlers run, so their
+existing defaulting — and the difference between
 "folder omitted" and "folder null" that ``_read``/``_search`` genuinely
 depend on — is preserved exactly.
 """
@@ -50,31 +31,27 @@ ACTION_ORDER: tuple[str, ...] = (
     "manual",
 )
 
-# --- Shared field descriptions, verbatim from the pre-migration flat schema ---
-
-_ADDRESS_DESCRIPTION = "Bare name/path for send; string or list."
+# Short schema guidance routes depth to the installed email-manual.
+_ADDRESS_DESCRIPTION = "Peer name/path for send; string or list; abs needs explicit authorization."
 _CC_DESCRIPTION = "Visible CC addresses."
 _BCC_DESCRIPTION = "Hidden BCC addresses."
-_ATTACHMENTS_DESCRIPTION = "Attachment paths for send."
+_ATTACHMENTS_DESCRIPTION = "Authorized source paths to attach."
 _SUBJECT_DESCRIPTION = "Subject."
-_MESSAGE_DESCRIPTION = "Body; max 50,000 characters."
-_EMAIL_ID_DESCRIPTION = "Own mailbox ID list; replies use one ID."
-_N_DESCRIPTION = "Max messages for check; default 10."
-_QUERY_DESCRIPTION = "Regex query over sender, subject, and body."
-_FOLDER_DESCRIPTION = "Folder; check inbox/search both; sent is read-only."
-_DELAY_DESCRIPTION = "Delivery delay in seconds; default 0."
+_MESSAGE_DESCRIPTION = "Body; max 50,000 Unicode characters."
+_EMAIL_ID_DESCRIPTION = "ID from this mailbox; replies use one ID."
+_N_DESCRIPTION = "Max check messages; default 10."
+_QUERY_DESCRIPTION = "Regex over sender, subject, and body."
+_FOLDER_DESCRIPTION = "Folder; check defaults inbox, search inbox+sent, read all; sent is read-only."
+_DELAY_DESCRIPTION = "Seconds before one delivery attempt; default 0."
 _TYPE_DESCRIPTION = "Send type; default normal."
 _NAME_DESCRIPTION = "Contact name."
 _NOTE_DESCRIPTION = "Contact note."
 
-# The ``filter`` object for ``check`` keeps the flat schema's property set,
-# defaults, and first-call matching semantics; its long catalog and examples
-# live in the Email manual. ``additionalProperties: False`` is added because a
-# migrated family's ``input`` branches are closed all the way down
-# (``tools/CONTRACT.md`` "Envelope": "Action branches are closed").
+# ``check.filter`` retains the flat property set/defaults; depth is in email-manual.
+# Branches stay closed so cross-action keys cannot reach a handler.
 _FILTER_SCHEMA: dict[str, Any] = {
     "type": ["object", "null"],
-    "description": "Optional check filters; see email-manual for fields and defaults.",
+    "description": "Optional check filters; fields/defaults are in email-manual.",
     "properties": {
         "sort": {
             "type": ["string", "null"],
@@ -123,13 +100,7 @@ _FILTER_SCHEMA: dict[str, Any] = {
 
 
 def _mode_property() -> dict[str, Any]:
-    """``send``'s optional address-mode field, nullable-wrapped.
-
-    Reuses ``primitives.mode_field`` — the one owned definition of this
-    field's enum and its long routing description — rather than restating it,
-    so the peer/abs guidance cannot drift between the legacy flat schema and
-    this one. Only the nullable representation is added on top.
-    """
+    """Return the shared nullable ``send.mode`` field without changing its enum."""
     field = dict(mode_field())
     field["type"] = ["string", "null"]
     field["enum"] = [*field["enum"], None]
@@ -380,13 +351,12 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 # choice and critical safety guidance; action procedures and examples live in
 # the Email manual references (``tools/CONTRACT.md`` "Dispatch and actions").
 ACTION_ENUM_DESCRIPTION = (
-    "Choose one action; put only that action's fields in input. send: new internal "
-    "message (address and message required; body max 50,000 characters). check: "
-    "list/filter mail. read: fetch mailbox IDs and mark them read; dismiss: mark "
-    "handled IDs read without returning bodies. Unread bodies are injected in full "
-    "into persistent Email notifications: prefer dismiss after handling; use read "
-    "for source records or attachments. reply/reply_all: answer existing mail on "
-    "the arrival channel. search: regex lookup. archive/delete: move or remove "
-    "inbox/archive mail. contacts actions manage the address book. settings is "
-    "read-only. manual returns this manual without mailbox I/O."
+    "Choose one action and put only its fields in input. send: internal mail "
+    "(address/message required; body max 50,000 Unicode characters). check: "
+    "list/filter. read: fetch IDs and mark read; dismiss: mark handled IDs read "
+    "without bodies. Unread bodies are injected in full into persistent Email "
+    "notifications: prefer dismiss after handling; use "
+    "read for source records or attachments. reply/reply_all: answer on the "
+    "arrival channel. search: regex; archive/delete: move/remove mail; contacts "
+    "manage the private book; settings is read-only; manual returns this procedure."
 )

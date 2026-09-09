@@ -2,12 +2,11 @@
 name: email-manual-notifications-and-delivery
 description: >
   Focused Email reference for daemon delivery, heartbeat/liveness, bounce
-  recovery, unread notification payloads, persistent bodies, overflow, and
-  read-state mirror refresh. Read after email-manual when delivery or notices
-  need diagnosis.
+  recovery, unread payloads, persistent bodies, overflow, and read-state refresh.
+  Read when delivery or notices need diagnosis.
 version: 1.0.0
 tags: [lingtai, email, notifications, delivery, recovery]
-last_changed_at: "2026-09-06T00:00:00Z"
+last_changed_at: "2026-09-09T10:17:00Z"
 related_files:
 - src/lingtai/tools/email/manual/SKILL.md
 - src/lingtai/tools/email/manual/reference/actions-and-storage/SKILL.md
@@ -21,88 +20,70 @@ maintenance: |
 
 # Email notifications and delivery
 
-## Delivery and liveness
+## Delivery, liveness, and recovery
 
-`send` writes the sender's outbox/sent record before creating one daemon
-`_mailman` thread per recipient. `delay=0` still permits a sent receipt before
-the delivery attempt finishes. A normal agent target must have valid
-`.agent.json` metadata and a fresh `.agent.heartbeat` (normally under two
-seconds); a human target (`admin: null`) does not need a heartbeat. A refreshing
-or relaunching target can therefore bounce as `not running`; Email does not
-queue the attempt for later. The sender receives the eventual failure as an
-`email.bounce` event in `.notification/system.json`.
+`send` writes each recipient's outbox entry, then starts that recipient's daemon
+`_mailman` thread before that call's unified sent record is written. Even `delay=0`
+can return `sent` before delivery finishes. A later thread-start or persistence
+failure can leave earlier deliveries; neither a failed call nor a missing sent
+record proves zero effect. Delay waits in a daemon thread: this is not a restart-resilient queue.
+A process exit can strand outbox files; no automatic replay is promised.
 
-A process can appear in `ps` before publishing a fresh heartbeat. If a CPR
-(child-process restart) attempt also exits because the duplicate-process guard
-finds the existing same-workdir process, these observations are compatible:
-do not stack CPR attempts. Wait for a fresh heartbeat and retry Email once. Use
-CPR only if the existing startup exits or never becomes live.
+Non-self POSIX targets need `.agent.json` presence and a Core-fresh
+`.agent.heartbeat`; use current kernel liveness policy, not a fixed Email timeout.
+Core currently counts even malformed manifests as present; a valid manifest with
+missing/null `admin` identifies a human and bypasses heartbeat checks. This is
+implementation truth, not permission to deliver to an unverified owner. Self-send
+bypasses this transport handshake. Refresh/relaunch windows can produce
+`not running`; refused attempts are not queued for a later retry. Failures publish
+`email.bounce` in `.notification/system.json`.
 
-For an explicitly authorized `abs` target, the same metadata/heartbeat handshake
-applies. An absolute address is not a liveness or authorization bypass.
+A process may appear in `ps` before a fresh heartbeat. If a CPR attempt exits
+because the duplicate-process guard sees the existing same-workdir process, do not
+stack CPR attempts: wait for a heartbeat. Any lifecycle intervention needs its
+own authorization and diagnosis, not just a bounce. An authorized non-self `abs`
+target has the same handshake.
+
+For a known POSIX pre-publication refusal (unknown/dead recipient or rejected
+attachment), no entry was published for that target. A generic bounce is not a
+universal zero-effect receipt: custom adapters or post-publication exceptions can
+fail after an effect, and other fan-out targets may already have received mail.
+Inspect the exact failure and recipient state; retry once only when a safe
+pre-delivery refusal is established and the cause is corrected. Never guess a
+replacement address or replay the whole fan-out blindly.
 
 ## Unread producer mirror
 
-Mail arrival and every read-state mutation render the current unread set to
-`.notification/email.json`. The kernel's next heartbeat sync exposes that data
-through `notification(action="check")`. A typical producer envelope is:
+Arrival and every read-state mutation render the current unread set to
+`.notification/email.json`; the next heartbeat exposes it through
+`notification(action="check")`. Its relevant shape is:
 
 ```json
-{
-  "header": "3 unread emails",
-  "icon": "📧",
-  "priority": "normal",
-  "published_at": "<timestamp>",
-  "instructions": "Handle the mail, then prefer email.dismiss or use email.read/reply.",
-  "data": {
-    "count": 3,
-    "newest_received_at": "<timestamp>",
-    "email_ids": ["<local-id>"],
-    "emails": [{
-      "id": "<local-id>", "from": "peer", "subject": "...",
-      "message": "full body", "message_chars": 10,
-      "message_truncated": false
-    }]
-  }
-}
+{"instructions":"handle, then prefer email.dismiss or email.read/reply",
+ "data":{"count":3,"newest_received_at":"<time>",
+         "email_ids":["<local-id>"],
+         "emails":[{"id":"<local-id>","from":"peer",
+                    "subject":"...","message":"full body",
+                    "message_chars":10,"message_truncated":false}]}}
 ```
 
-`instructions` is producer-owned guidance: Email knows whether a message is a
-full-body context entry and which producer verb clears its source state. The
-attention lane is a high-attention hook carrying IDs; full structured entries
-live in `_meta.agent_meta.notifications.persistent.email`. There is no separate
-per-mail notification pair.
+The attention lane carries IDs; full structured entries live in
+`_meta.agent_meta.notifications.persistent.email`. New bodies are not truncated.
+The send layer rejects bodies over 50,000 characters; only legacy records may be
+marked `message_truncated=true`. The projection limits newest entries (see
+`unread.max_entries`) but preserves total unread count.
 
-Ordinary new messages are rendered without truncating their bodies. The send
-layer rejects bodies over 50,000 characters; only legacy over-limit records may
-carry `message_truncated=true` defensively. The unread projection limits the
-number of newest entries but keeps total unread count exact.
+## Handling and overflow
 
-## Handling persistent mail and overflow
+Persistent context can make `read` unnecessary for ordinary text. After handling a
+visible entry, call `dismiss` to mark it read without returning another body. Use
+`read` for source metadata, attachments, or deliberate refresh. `read`, `dismiss`,
+`archive`, and `delete` rerender the Email mirror, which disappears when no unread
+mail remains. Replies currently leave the source unread; see the
+[Contract discrepancy and explicit-dismiss workaround](../addressing-and-replies/SKILL.md#same-channel-reply).
 
-The persistent lane can make `read` unnecessary merely to see ordinary text.
-After handling a visible entry, call `email(action="dismiss", input={"email_id":
-[...]}, ...)` to mark it read without returning another body. Use `read` when
-source-of-truth metadata, attachments, or a deliberate refresh is required.
-`reply` and `reply_all` both mark the source inbox ID read as part of handling.
-`archive` and `delete` also update read state. All four mutation paths rerender
-the Email mirror, which disappears when no unread mail remains.
-
-If the full persistent notification exceeds its model-visible block cap, the
-kernel spills it to a local `logs/notification-overflow-<timestamp>.json` and
-adds an `overflow` marker. Follow that marker or call the producer action for
-full content; do not assume a truncated body is complete. The exact block cap
-and environment ownership belong to `notification-manual`.
-
-A generic
-`notification(action="dismiss_channel", input={"channel": "email", ...}, ...)`
-only clears the mirror. It does not mark source messages read and is not a
-substitute for Email's `dismiss`, `read`, `reply`, `archive`, or `delete`.
-
-## Bounce and retry interpretation
-
-A bounce means no recipient inbox record was queued for that attempt. Inspect the
-bounce event and target metadata/heartbeat. For a target in a refresh window,
-wait for its heartbeat and retry once; do not assume that a successful `sent`
-receipt proves delivery. For an unknown or invalid address, correct the address
-from local metadata rather than guessing.
+If persistent context has an `overflow` marker, follow its local spill file or use
+the Email producer action; do not assume the body is complete. Generic
+`notification(action="dismiss_channel", input={"channel":"email", ...})` only
+clears the mirror: it does not mark source messages read and cannot replace Email
+`dismiss`, `read`, `archive`, or `delete`.
