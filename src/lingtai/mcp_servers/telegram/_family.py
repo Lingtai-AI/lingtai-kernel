@@ -368,14 +368,12 @@ def telegram_schema() -> dict[str, Any]:
     if "oneOf" in input_schema:
         input_schema["anyOf"] = input_schema.pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "Choose one Telegram action. For inbound work, begin read-only with check, "
-        "read, or search. Use send only for an authorized new outbound message to a "
-        "known numeric chat_id; use reply with a compound message_id from read/search. "
-        "Content-bearing send/reply/edit defaults to Markdown; use plain_text, "
-        "HTML, MarkdownV2, entities, or rich only when needed. For charts, "
-        "reports, generated artifacts, and other files the user should open intact, "
-        "use media.type='document' (use 'photo' only for an inline preview). "
-        "Read this package's detailed guidance with "
+        "Choose an action. For inbound work, start with check, read, or search; "
+        "send only an authorized new message to a real numeric chat_id; reply with "
+        "a copied compound message_id from read/search. Content-bearing "
+        "send/reply/edit defaults to Markdown. For charts and generated artifacts, "
+        "use media.type='document'; use 'photo' only for an inline preview. "
+        "See the progressive-disclosure manual: "
         + TELEGRAM_PLUGIN.manual_action_description()
     )
     return schema

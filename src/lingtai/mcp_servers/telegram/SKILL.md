@@ -3,10 +3,10 @@ name: telegram-mcp-manual
 description: |
   Progressive-disclosure usage manual for the Telegram MCP tool. The resident
   schema carries safe first-use guidance; call `manual` for the action map,
-  channel/reply/media/rendering rules, placeholder and chat-action boundaries,
-  inbound envelopes, settings, Task Card projection, and error handling.
-version: 1.8.0
-last_changed_at: 2026-09-07T00:00:00Z
+  inbound-first/reply routing, channel/media/rendering rules, settings, Task Card
+  projection, and error handling.
+version: 1.9.0
+last_changed_at: 2026-09-09T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/task_card/event_projection.py
@@ -20,6 +20,7 @@ related_files:
 - src/lingtai/mcp_servers/telegram/_family.py
 - src/lingtai/mcp_servers/telegram/settings.py
 - src/lingtai/mcp_servers/telegram/service.py
+- src/lingtai/mcp_servers/telegram/notification_header.md
 - src/lingtai/mcp_servers/telegram/task_card/_family.py
 - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
@@ -38,295 +39,241 @@ maintenance: |
 
 # Telegram MCP — usage manual
 
-This page is the on-demand manual for the `telegram` MCP family. The resident
-schema is intentionally short; call `telegram` with `action='manual'` and an
-empty `input` when you need this page. Registration, `init.json` activation,
-private config placement/permissions, and setup readiness belong to
-`mcp-manual` → `reference/curated-addons.md`, not this package manual.
+This progressive disclosure manual complements the routine schema. Use the schema for routine calls;
+`telegram(action='manual', input={}, reasoning='...')` loads deeper guidance.
+Registration, activation, private config, and setup belong
+to `mcp-manual` → `reference/curated-addons.md`.
 
-## Read first: strict envelope and safe first use
+## First successful action: inbound first
 
-Every call uses the closed root `{action, input, reasoning, summarize?}`:
-`action`, `input`, and `reasoning` are required; `summarize` is optional and is
-not action input. Put only the selected action's fields inside `input`. The
-`manual` and `settings` actions take `{}`. `reasoning` is audit metadata, not a
-Telegram message or a substitute for `input`.
+The closed root is `{action, input, reasoning, summarize?}`: the first three
+are required, `summarize` is optional and not action input, and only the selected
+action's fields belong in `input`. `reasoning` is audit metadata, not a message;
+`manual` and `settings` take `{}`.
 
-A safe first-use route is:
+1. Begin read-only with `check`, `read`, or `search`. `check` shows recent chats
+   and incoming unread counts without marking read; `read` is the one-chat view
+   and marks returned records read.
+2. Answer on Telegram, not private output. For one incoming message, `reply`
+   with its copied compound `message_id` from `read`/`search`; never guess an ID.
+3. For a standalone message, `send` to a real numeric `chat_id` with text, media (optionally captioned),
+   rich content, or an indicator as described below. Contacts are local aliases, not inbound permission; account
+   setup/configuration is not a tool call.
+4. Inspect `status`, action fields, and `error` before assuming an effect.
+   `send`, `reply`, `edit`, and `delete` are external message changes: verify
+   the exact target first. `status='blocked'` is a duplicate-guard decision,
+   not proof that the requested attachment was delivered; do not replay blindly.
 
-1. Use `read` or `check` to establish the conversation. Prefer `reply` with the
-   compound `message_id` from `read`/`search` when answering a specific message.
-2. Use `send` for a standalone message and a real numeric `chat_id`. A call that
-   changes Telegram messages (`send`, `reply`, `edit`, or `delete`) is an
-   external side effect; inspect the target and check the result.
-3. Inspect the returned object for `error` (and for 429 results, the provider
-   cooldown) instead of assuming delivery from a successful tool invocation.
-
-Content-bearing `send`, `reply`, and `edit` default to `rendering_mode='Markdown'`.
-Use `plain_text`, `HTML`, `MarkdownV2`, `entities`, or `rich` deliberately; do
-not mix rendering modes. Detailed field guidance is in the sections below.
+Account aliases are optional where accepted; omission selects the service
+default. With multiple accounts, pass one explicitly for stateful work. IDs are
+`account_alias:chat_id:message_id`; synthetic `updates` IDs are read/search-only.
 
 ## Action map
 
-| Action | Use and side effect |
+| Action | Use and effect |
 |---|---|
-| `send` | New message to a numeric `chat_id`; provide `text`, `media`, `structured_message`, or an ephemeral `chat_action`. |
-| `check` | Recent conversation summaries and incoming unread counts; does not mark messages read. |
-| `read` | Recent messages for one `chat_id`; marks returned records read and clears the matching wake-notification mirror. |
-| `reply` | New message threaded to a compound target ID from `read`/`search`; marks the target handled and adds the replied reaction. |
-| `search` | Case-insensitive regex over stored inbound text, sender fields, and update type; no send side effect. |
-| `edit` | Edit a bot message by compound ID; text/rich messages and media captions have different limits. |
-| `delete` | Delete a bot message by compound ID; external side effect, so verify the exact ID. |
-| `contacts` / `add_contact` / `remove_contact` | Read or change local aliases only. A contact never grants inbound permission. |
-| `accounts` | List configured account aliases and safe details; credentials are not returned. |
-| `settings` | Read-only five-field settings inventory; it has no set/reset form. |
-| `manual` | Return this packaged page and metadata; it performs no Telegram operation. |
+| `send` | New numeric-chat message: `text`, `media`, `structured_message`, or ephemeral `chat_action`. |
+| `check` | Recent conversation summaries and incoming unread counts; no read effect. |
+| `read` | Combined incoming/outgoing records for one chat; marks returned records read and clears its wake mirror. |
+| `reply` | New durable message to a copied compound target; marks it handled and adds the replied reaction; does not edit it. |
+| `search` | Case-insensitive regex over stored inbound text, sender fields, and update type; no read/send effect. |
+| `edit` / `delete` | Edit/delete one bot message by compound ID; verify the exact target. |
+| `contacts` / `add_contact` / `remove_contact` | Read/change local aliases only; no inbound authorization. |
+| `accounts` | List safe account details; credentials are not returned. |
+| `settings` | Read-only settings inventory; no writer. |
+| `manual` | Return this packaged page and metadata; no Telegram operation. |
 
-Account aliases are optional on actions that accept them; omission uses the
-service default. When multiple accounts exist, use the alias explicitly for
-stateful operations. Compound message IDs have the form
-`account_alias:chat_id:message_id` and should be copied from a returned record,
-not reconstructed from a guess.
+## Send, reply, media, and rendering
 
-## Send and reply: channel, media, and side effects
+`send` requires a real numeric `chat_id` and text, media with an optional `text` caption,
+native rich content, or an ephemeral indicator. These are not an exclusive
+text/media choice. Content-bearing `send`, `reply`, and `edit` default to
+`rendering_mode='Markdown'`. Modes are exactly `plain_text`, `HTML`, `Markdown`,
+`MarkdownV2`, `entities`, and `rich`: named modes map to Telegram `parse_mode`,
+`entities` supplies `MessageEntity[]`, and `plain_text` omits `parse_mode`. Do
+not mix entity data with a parse-mode choice.
 
-- `send` needs a real numeric `chat_id` and one content alternative: `text`,
-  `media`, `structured_message`, or `chat_action`. `reply` needs a compound
-  `message_id` plus `text` or `structured_message`; it is the preferred response
-  to one incoming message. `reply` itself sends a new durable message; it does
-  not edit the target.
-- `media` is `{type: 'photo'|'document', path: '...'}`. Use
-  `type='document'` for charts, plots, reports, HTML/SVG/PNG/PDF exports, CSVs,
-  and other generated artifacts the user should open intact. Use `photo` only
-  for a native inline preview: Telegram may crop, compress, or thumbnail a
-  photo, which can make text-heavy graphics unreadable. Attach the file; do not
-  paste a local path into message text. Outbound paths must resolve inside the
-  agent working directory and point to a readable, non-empty file.
-- `reply_markup` is accepted only by `send` and `edit`. `entities` applies to
-  message text on `send`, `reply`, and `edit`; `caption_entities` is accepted
-  only by media-bearing `send` when `rendering_mode='entities'`. Do not combine
-  entity data with a parse-mode choice. `link_preview_options` and
-  `disable_web_page_preview` are `send`-only text options.
-- An identical send can return `status='blocked'`; treat that as already sent,
-  not as a transient failure to replay.
+### Reply vs send
 
-## Rendering and native rich messages
+`reply` requires a copied compound `message_id` plus `text` or
+`structured_message`. It sends a new response threaded to that target, marks
+it handled, and attempts the replied reaction; `send` is a standalone message.
+A successful reply is not a guarantee that the best-effort reaction succeeded.
 
-The supported modes are exactly `plain_text`, `HTML`, `Markdown`, `MarkdownV2`,
-`entities`, and `rich`. `plain_text` omits Telegram `parse_mode`; the named
-parse modes pass through to Telegram; `entities` supplies explicit
-`MessageEntity[]` data.
+`media` is `{type: 'photo'|'document', path: '...'}`. Use `document` for charts,
+plots, reports, HTML/SVG/PNG/PDF exports, CSVs, and other generated artifacts the
+user should open intact. Use `photo` only for an inline preview: Telegram may
+crop, compress, or thumbnail it, making text-heavy graphics unreadable. Attach
+the file, not a local path in message text; the outbound path must be inside the
+agent working directory and readable/non-empty. `reply_markup` is only for
+`send`/`edit`; `caption_entities` only for media `send` in `entities` mode;
+`link_preview_options` and `disable_web_page_preview` are send-only text options.
 
-For `rich`, omit `text` and `media`, set `rendering_mode='rich'`, and provide
-`structured_message`. Its allowed semantic fields are:
+For native rich content, omit `text` and `media`, set `rendering_mode='rich'`,
+and supply `structured_message` with required `title`. Optional fields are
+`summary`, `facts` (`{label, value}`), `bullets`, ordered `steps`, `code`
+(`text`, optional `language`), `next` (`label`, `text`), and `footer`. Native
+heading/paragraph/list/pre/divider/footer blocks preserve authored wording and
+meaningful emoji. Rich content can send/reply/edit text or rich messages, but
+cannot edit a media caption.
 
-- required `title`;
-- optional `summary`, `facts` (each `{label, value}`), `bullets`, and ordered
-  `steps`;
-- optional `code` (`text` plus `language`), `next` (`label` plus `text`), and
-  `footer`.
+For work likely to exceed five seconds, `placeholder=true` sends interim text
+and returns a compound ID; edit it at meaningful phases, then send the final
+answer as a separate durable `send` or `reply`. A placeholder is progress-only
+and separate from the Task Card. A `chat_action` (`typing`, `upload_photo`,
+`upload_document`, `upload_voice`) without text/media is only an ephemeral
+indicator, expires after about five seconds, and is not a message record; repeat
+it deliberately or pass `''`/omit it.
 
-The addon renders these as native heading, paragraph, list, preformatted,
-divider, and footer blocks while preserving authored wording and meaningful
-emoji. Rich content can be sent or used in a reply and can edit a text/rich
-message; it cannot edit a media caption. Ordinary conversation need not be
-forced into a rich card.
+## Read, search, and inbound records
 
-## Placeholder and chat actions
+`read` requires `chat_id` and accepts `limit` (default `10`); it combines
+inbound/outgoing records, marks returned records read, and clears the matching
+notification mirror. `chat_id='updates'` recovers synthetic non-chat updates
+read-only. `search` requires regex `query`, accepts optional `account`/`chat_id`,
+searches inbound text, sender names/usernames, and update type, does not mark
+read, and errors on invalid regex syntax.
 
-For work likely to take more than about five seconds, `send` may use
-`placeholder=true` with interim text. The result supplies a compound
-`message_id`; edit that same message at meaningful phase changes. The
-placeholder is progress-only: send the final answer as a separate durable
-`send` or `reply` message, rather than editing the placeholder into the final
-answer. This surface is separate from the Task Card.
+Each record has a concise view plus additive `telegram` with the complete raw Bot
+API Update, branch, actor policy result, and unknown nested fields. Edited
+messages retain append-only raw `edits`; `event_id` is root identity and
+`current_event_id` the latest edit. Reactions, polls, member/boost/business
+events, inline callbacks, and unknown branches are synthetic `updates` records
+(`synthetic=true`) and never outbound targets. Use the raw envelope when preview
+fields are insufficient.
 
-A `chat_action` (`typing`, `upload_photo`, `upload_document`, or `upload_voice`)
-with no text/media sends only Telegram's ephemeral indicator. It expires after
-about five seconds, so repeat it deliberately during long work. Pass `''` or
-omit it for no indicator. A chat action is not a message and is not persisted
-as a sent record.
+Inbound photo/document/voice/audio retains metadata and, when available, an
+absolute inbox `path`; voice may add `voice_transcript`. Use `vision` for
+image-like attachments, not filename guesses. `download_error` retains metadata
+without a path: read the text and ask for a resend/another transfer method. The
+hosted Bot API `getFile` limit is 20 MB; no local Bot API server is configured.
+Notification previews follow `notification_header.md`: handle the latest
+unresponded incoming message, and use `read` when truncated, ambiguous,
+media/callback-heavy, or exact anchoring is needed.
 
-## Read, check, and search
+## Slash commands and local preferences
 
-- `check` groups recent inbox and sent records by chat and counts **incoming**
-  unread messages only; outgoing replies never inflate `unread`.
-- `read` takes a required `chat_id` and optional `limit` (default 10). It
-  combines incoming and outgoing records, marks the returned records read, and
-  clears the handled notification mirror. The reserved string `chat_id='updates'`
-  is read-only and recovers synthetic non-chat updates.
-- `search` takes a regex `query`, with optional `account` and `chat_id`. It
-  searches stored inbound text, sender names/usernames, and update type. Invalid
-  regex syntax is an error; search does not mark records read.
-- Message records expose concise fields plus an additive `telegram` envelope
-  containing the complete raw Bot API Update, branch, actor policy result, and
-  unknown nested fields. Edited messages retain an append-only raw `edits`
-  history; `event_id` remains the root identity and `current_event_id` tracks the
-  latest applied edit.
-- Non-message updates (reactions, polls, member/boost/business events,
-  inline-only callbacks, and unknown branches) are stored in the synthetic
-  `updates` conversation with `synthetic=true`. They are never valid outbound
-  targets. Use the raw envelope when a concise preview omits a field.
-
-## Inbound media
-
-Inbound photos/documents/voice/audio include downloaded metadata and, when
-available, an absolute local `path` under the agent's Telegram inbox. Voice
-messages may also carry a local Whisper `voice_transcript`; treat that as
-additive to the original attachment. Use the `vision` capability to inspect
-image-like attachments; do not infer contents from a filename. If
-`download_error` is present, metadata is retained without a path: read the text
-and ask the user to resend or use another transfer method.
-The hosted Telegram Bot API limits `getFile` downloads to 20 MB; this addon does
-not configure a local Bot API server.
-
-## Slash-command menu
-
-Telegram's `/` picker and runtime command handling are separate. The optional
-per-account `commands` config list registers menu entries via `setMyCommands`;
-command names omit the leading slash and registration does not create a local
-handler. Built-in local handlers include `/help`, `/status`, `/kanban`,
-`/system`, `/refresh`, `/sleep`, `/clear`, and `/taskcard`; other slash commands
-pass through as ordinary inbound messages for the host agent.
-
-`/taskcard`, `/taskcard on|off`, `/taskcard N`, and `/taskcard lang en|zh` are
-local preference operations. `commands: []` clears the menu; omitted or `null`
-uses the built-in menu. Configuration edits and refresh/restart are setup
-operations, not MCP tool calls. Never print or place a bot token in this manual,
-chat, logs, or generated examples.
+The `/` picker and runtime handlers are separate. Optional per-account `commands`
+register menu names without `/` through `setMyCommands`; registration creates no
+handler. Built-ins include `/help`, `/status`, `/kanban`, `/system`, `/refresh`,
+`/sleep`, `/clear`, and `/taskcard`; unknown commands remain ordinary inbound
+messages. `/taskcard`, `/taskcard on|off`, `/taskcard N`, and
+`/taskcard lang en|zh` change local preferences. `commands: []` clears the menu;
+omitted/`null` uses the built-in menu. Config edits and refresh/restart are setup
+operations, not MCP calls. Never print/place a bot token in this manual, chat,
+logs, tests, or examples.
 
 ## SETTINGS SHOW
 
-Call `telegram(action='settings', input={}, reasoning='inspect Telegram settings')`
-for read-only progressive disclosure. Success is exactly `{"settings": [...]}`;
-each row has `key`, `current`, `default`, `configurable`, and a `comment`.
-There is no set/reset form. Make an authorized change through the existing
-launcher, private config, File/Shell, or `/taskcard` procedure named below, then
-call `settings` again. If any current fact is unavailable, the complete action
-returns one bounded `SETTINGS_UNAVAILABLE` failure with no partial rows. Account
-and config authority values are redacted; contacts, read markers, message
-records, update offsets, and resident routes are operational state, not settings.
+Call `telegram(action='settings', input={}, reasoning='inspect Telegram settings')`.
+Success is exactly `{"settings": [...]}`; rows have `key`, `current`, `default`,
+`configurable`, and `comment`. There is no writer. An unavailable fact returns
+one `SETTINGS_UNAVAILABLE` failure with no partial rows. Account/config authority
+is redacted; contacts, read markers, message records, offsets, and resident
+routes are operational state. All six account/config rows redact both current
+and default; all eleven rows are configurable. Account changes use the
+authorized private account JSON procedure, preserve siblings/credentials and
+policy, then restart/refresh and verify with SHOW plus the account/status path.
+Restore the preserved prior value through the same owner if rollback is needed;
+SHOW itself grants no change authority.
 
 ### Telegram config path
-
-`config.path` is the successfully resolved `LINGTAI_TELEGRAM_CONFIG` path captured
-at startup. Relative values resolve against `LINGTAI_AGENT_DIR` (or process cwd
-when absent). SHOW redacts the path. Change it only through the authorized
-launcher/config procedure and restart or refresh the curated MCP.
+`config.path` is the resolved `LINGTAI_TELEGRAM_CONFIG` captured at startup;
+relative values use `LINGTAI_AGENT_DIR` (or cwd). SHOW redacts it. Change through
+the authorized launcher/config procedure and restart or refresh the MCP.
 
 ### Account aliases
-
-`accounts.aliases` is the live service-order snapshot of `accounts[].alias`
-values. It is redacted because aliases bind account state and compound IDs.
-Change aliases only in the existing private account JSON, preserving credentials
-and policy, then restart/refresh and verify with SHOW plus `accounts`.
+`accounts.aliases` is the live service-order `accounts[].alias` snapshot and is
+redacted because aliases bind account state and compound IDs. Change only in the
+private account JSON, preserving credentials/policy, then restart/refresh and
+verify with SHOW plus `accounts`.
 
 ### Bot tokens
-
-`accounts.bot_tokens` is the aggregate of `accounts[].bot_token` credentials.
-Both values are redacted in SHOW. Rotate a token through BotFather and the
-private JSON, preserve file permissions, restart/refresh, and verify through the
-established account/status path. Never put a token in chat, logs, tests,
-examples, or a settings response.
+`accounts.bot_tokens` aggregates credentials; both values are redacted. Only with
+explicit owner authorization, rotate
+through BotFather and private JSON, preserve permissions, restart/refresh, and
+verify through the established account/status path. Never put a token in chat,
+logs, tests, examples, or a settings response.
 
 ### Allowed users
-
-`accounts.allowed_users` is the aggregate allow-list. Omitted, `null`, and `[]`
-all mean unrestricted admission; current and default remain redacted because the
-IDs identify authorized humans. A saved contact does not alter this list.
+`accounts.allowed_users`: omitted, `null`, and `[]` all mean unrestricted
+admission; current/default values are redacted because IDs identify humans. A
+saved contact does not alter this list.
 
 ### Account poll intervals
-
-`accounts.poll_intervals` snapshots each account's `poll_interval`, defaulting to
-`1.0` when omitted. The service preserves the configured value as-is; it adds no
-validation that runtime does not enforce. The value is account authority and is
-redacted in SHOW.
+`accounts.poll_intervals` snapshots each `poll_interval`, default `1.0`; values
+are preserved as-is without extra runtime validation and redacted in SHOW.
 
 ### Slash-command menu
-
-`accounts.commands` snapshots each account's optional command menu. Omitted or
-`null` means the built-in menu and `[]` means clear it. Other values contain
-Telegram-compatible `{command, description}` objects and are applied
-best-effort at startup. The aggregate is redacted; verify with SHOW, the `/`
-picker, or the safe status resource.
+`accounts.commands`: omitted/`null` means built-in, `[]` clears, and other
+Telegram-compatible `{command, description}` objects apply best-effort at
+startup. The aggregate is redacted; verify with SHOW, `/`, or safe status.
 
 ### Task Card poll interval
-
-`automatic.poll_interval_seconds` is the manager's import-time
-`LINGTAI_TASKCARD_POLL_INTERVAL` snapshot, default `5.0` seconds. It governs
-automatic journal tailing, programmable artifact polling, and resident edit
-throttling. The loader uses plain `float()`; non-finite values make the
-all-or-nothing settings response unavailable. Change the launcher environment
+`automatic.poll_interval_seconds` is the import-time
+`LINGTAI_TASKCARD_POLL_INTERVAL` snapshot (default `5.0`) for journal tailing,
+programmable polling, and resident throttling. `float()` is used; non-finite
+values make the all-or-nothing response unavailable. Change launcher environment
 and fully restart the MCP.
 
 ### Task Card delivery
-
-`automatic.enabled` is the agent-wide `taskcard` boolean in
-`<workdir>/telegram/taskcard.json`, defaulting to `true`. It gates presentation
-of both automatic and programmable slots without stopping their mechanics. Use
-`/taskcard on|off`, then verify with `/taskcard` and SHOW.
+`automatic.enabled` is agent-wide `taskcard` in
+`<workdir>/telegram/taskcard.json` (default `true`): it gates both slots without
+stopping mechanics. Use `/taskcard on|off`, then `/taskcard` and SHOW.
 
 ### Task Card normal rows
-
-`automatic.normal_rows` is the rolling API-call-group window, default `1`,
-accepted range `1..10`; it is not a count of tool rows. Use `/taskcard N` and
-verify with SHOW. The compatibility `max_refreshes` field is not an active
-Telegram runtime ceiling.
+`automatic.normal_rows` is the rolling API-call-group window (default `1`,
+accepted `1..10`), not a tool-row count. Use `/taskcard N` and SHOW;
+compatibility `max_refreshes` is not an active Telegram runtime ceiling.
 
 ### Task Card locale
-
-`automatic.locale` is the projection locale, `en` by default, with `en` and `zh`
-as the accepted values. Use `/taskcard lang en|zh` and verify with SHOW.
+`automatic.locale` is `en` by default and accepts `en` or `zh`; use
+`/taskcard lang en|zh` and SHOW.
 
 ### Task Card display expression
-
 `automatic.display_expression` is an allowlisted ordered list in
-`<workdir>/telegram/taskcard.json`. The default is
-`["footer","header","rows","blank","divider","metadata","time","ask_agent"]`;
-a custom nonempty list has at most 32 entries drawn from
-`header`, `rows`, `blank`, `footer`, `divider`, `metadata`, `time`, and
-`ask_agent`. Invalid values fall back wholesale to the default. There is no
-slash-command editor; use an authorized atomic File/Shell edit preserving
-sibling fields, then verify the effective list with SHOW.
+`<workdir>/telegram/taskcard.json`; default
+`["footer","header","rows","blank","divider","metadata","time","ask_agent"]`.
+A custom nonempty list has at most 32 entries from `header`, `rows`, `blank`,
+`footer`, `divider`, `metadata`, `time`, `ask_agent`; invalid values fall back
+wholesale. There is no slash editor: use an authorized atomic File/Shell edit,
+preserve siblings, and verify with SHOW.
 
-## Task Card: two distinct surfaces
+## Task Card: independent automatic and programmable projections
 
-Telegram's automatic Task Card is a bounded, mechanical projection of safe
-public `diary` and `tool_call` events from the agent's durable event history. It
-is not a turn-local heartbeat or completion lifecycle. It omits hidden thinking,
-raw arguments/results, prompts, credentials, paths, and other private
-diagnostics. The rolling `normal_rows` window counts API-call groups. Delivery
-of both automatic and programmable slots is governed by `taskcard: True|False`;
-turning it off suppresses presentation while mechanics continue.
+Automatic Task Card mechanically projects safe public `diary`/`tool_call`
+events from durable history; it is not a turn-local heartbeat or completion
+lifecycle. It omits hidden thinking, raw arguments/results, prompts, credentials,
+paths, and private diagnostics; `normal_rows` counts API-call groups. The
+`taskcard` boolean suppresses presentation of both slots while mechanics continue.
 
-The public programmable `task_card` tool is intrinsic and channel-neutral. Read
+The public `task_card` tool is intrinsic and channel-neutral. Read
 [`../../tools/task_card/manual/SKILL.md`](../../tools/task_card/manual/SKILL.md)
-before authoring or operating a watcher. Telegram does not own that tool, does
-not run its renderer, and does not accept Task Card JSON/controller instructions.
-Telegram only reads `taskcard/status` and `taskcard/taskcard.md`: exact `active`
-with a nonempty body projects a programmable frame; exact `inactive`
-idempotently excludes only that frame. Missing/unreadable status, active with a
-missing/blank body, other status text, or unchanged bytes is a no-op. Telegram
-never rewrites producer files. Projection details for this retained adapter are
-in [`task_card/SKILL.md`](task_card/SKILL.md) and
-[`task_card/CONTRACT.md`](task_card/CONTRACT.md).
+for `start | inspect | retry | stop | remove | settings | manual`, renderer,
+recovery, limits, and cleanup. Telegram neither owns that tool/renderer nor
+accepts its JSON/controller instructions. It only reads `taskcard/status` and
+`taskcard/taskcard.md`: exact `active` + nonempty body projects a programmable
+frame; exact `inactive` idempotently excludes only that frame. Missing/unreadable
+status, active with missing/blank body, other status, or unchanged bytes are
+no-ops. Telegram never rewrites producer files. Projection specifics are in
+[`task_card/SKILL.md`](task_card/SKILL.md) and [`task_card/CONTRACT.md`](task_card/CONTRACT.md).
 
-A changed programmable body still causes a real Telegram edit/send and therefore
-consumes provider quota. Diff-only skipping protects unchanged bytes, not a
-churning renderer. Read [`reference/rate-limits/SKILL.md`](reference/rate-limits/SKILL.md)
-before changing cadence or recovery; it owns published quotas and
-`retry_after` semantics.
+A changed programmable body causes a real Telegram edit/send and consumes quota;
+diff-only skipping protects unchanged bytes, not renderer churn. Read
+[`reference/rate-limits/SKILL.md`](reference/rate-limits/SKILL.md) before changing
+cadence or recovery; it owns published quotas and `retry_after` semantics.
 
-## Error and rate-limit handling
+## Errors and rate limits
 
-Treat every result as data: inspect `error`, `status`, and action-specific fields.
-The addon does not schedule hidden retries. HTTP 429 returns `status='error'`,
-`error_code=429`, and `auto_retry=false`; when Telegram supplies a valid
-nonnegative `retry_after`, the result adds `retryable=true` and the seconds to
-wait before a new action. Missing or malformed cooldown metadata is omitted,
-not guessed. Do not send a second Telegram notice through the rate-limited route.
-
-Read [`reference/rate-limits/SKILL.md`](reference/rate-limits/SKILL.md) for the
-official quota facts, undocumented scope, and safe client policy. A duplicate
-send is `status='blocked'`, not a reason to replay. A media download failure is
-reported on the inbound record and does not trigger an automatic reply.
+Inspect every result's `error`, `status`, and action fields; no hidden retries are
+scheduled. HTTP 429 returns `status='error'`, `error_code=429`, and
+`auto_retry=false`; valid nonnegative `retry_after` adds `retryable=true` and
+wait seconds for a new action. Missing/malformed cooldown metadata is omitted,
+never guessed; do not send a second notice through the rate-limited route. Read
+the rate-limit reference for official quotas, undocumented scope, and safe policy.
+A duplicate send is `status='blocked'`, not a replay reason; media download
+failure stays on the inbound record and triggers no automatic reply. The current
+in-process send guard counts prior successful sends by account/chat/text; it
+does not compare attachment bytes or paths. Reconcile the intended artifact
+with returned receipts before any new authorized send; never alter wording just
+to bypass the guard.

@@ -642,21 +642,19 @@ SCHEMA = {
 }
 
 DESCRIPTION = (
-    "Telegram Bot API client. Use the strict `telegram` family envelope: put the "
-    "selected action's fields inside `input` and provide `reasoning`; call the "
-    "packaged `manual` action for detailed operation guidance. For inbound work, "
-    "start read-only with `check`, `read`, or `search`. Use `send` only for an "
-    "authorized new outbound message to a known numeric chat_id, or `reply` to a "
-    "compound message_id from `read`/`search`. Content-bearing send/reply/edit defaults to Markdown; use "
-    "media.type='document' for generated files the user should open intact and "
-    "'photo' only for an inline preview. `placeholder` is progress-only: edit "
-    "meaningful phases, then send the final answer separately. `read` marks "
-    "returned messages read; `check` shows incoming unread counts; `search` uses "
-    "a regex. `delete` and `edit` are external message side effects. Contacts "
-    "are local aliases, not inbound permission. `settings` is read-only. "
-    "Automatic Task Card projection is a separate channel-neutral intrinsic "
-    "producer and Telegram read-only projector. MCP setup/configuration is "
-    "orchestrator-owned; avatars must not reconfigure it."
+    "Telegram Bot API client. Use the strict `telegram` envelope: put the selected "
+    "action's fields in `input` and provide `reasoning`. For inbound work, start "
+    "with `check`, `read`, or `search`; use `send` only for an authorized new "
+    "message to a real numeric chat_id, or `reply` with a copied compound "
+    "message_id from `read`/`search`. Content-bearing send/reply/edit defaults to "
+    "Markdown; use `media.type='document'` for generated files and `photo` only "
+    "for an inline preview. `placeholder` is progress-only: edit phases, then "
+    "send the final answer separately. `read` marks returned records read; "
+    "`check` counts incoming unread; `search` uses a regex. `edit` and `delete` "
+    "are external side effects; contacts are local aliases, not permission; "
+    "`settings` is read-only. The intrinsic Task Card producer is separate; "
+    "Telegram is its read-only projector. MCP setup/configuration is "
+    "orchestrator-owned; avatars must not reconfigure it. Use `manual` for depth."
 )
 
 # Public callers receive the strict LTP-v2 family schema. Manager dispatch

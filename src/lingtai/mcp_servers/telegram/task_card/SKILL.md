@@ -5,7 +5,7 @@ description: |
   public `task_card` tool is intrinsic and documented at
   src/lingtai/tools/task_card/manual/SKILL.md; Telegram only projects the
   intrinsic taskcard/status + taskcard/taskcard.md artifact read-only.
-last_changed_at: 2026-09-04T00:00:00Z
+last_changed_at: 2026-09-09T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/telegram/SKILL.md
 - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -19,31 +19,20 @@ maintenance: |
 
 # Telegram Task Card Projection Notice
 
-This shipped file is retained so the historical Telegram `task_card` subpackage
-still has packaged guidance beside its governed Anatomy/Contract documents. It
-is **not** the active public Task Card manual.
+This shipped file is retained beside the governed projection docs; it is **not**
+the active public Task Card manual. The public, channel-neutral owner is the intrinsic Task Card, with packaged
+procedures at [`task_card/manual/SKILL.md`](../../../tools/task_card/manual/SKILL.md).
+Source-checkout architecture lives at `src/lingtai/tools/task_card/ANATOMY.md`
+(not a packaged manual link).
+Use that owner for `start | inspect | retry | stop | remove | settings | manual`,
+renderer authoring, limits, recovery, and cleanup.
 
-The authoritative public capability owner is
-[`src/lingtai/tools/task_card`](../../../tools/task_card/ANATOMY.md), and its
-model-facing instructions live at
-[`src/lingtai/tools/task_card/manual/SKILL.md`](../../../tools/task_card/manual/SKILL.md).
-Use that intrinsic manual for renderer authoring, the
-`start | inspect | retry | stop | remove | settings | manual` actions, refresh
-limits, failure handling, and terminal cleanup — this notice does not restate
-that producer/lifecycle contract.
+Telegram only projects the producer's `taskcard/status` and
+`taskcard/taskcard.md` read-only. Exact `active` plus a nonempty body projects
+the programmable slot; exact `inactive` idempotently excludes only that slot.
+Missing/unreadable status, active with a missing/blank body, other status text,
+and unchanged bytes are no-ops. The resident message, automatic event-journal
+slot, and producer files are not deleted or rewritten.
 
-Telegram's own projection contract:
-
-- Telegram is a read-only projector for the intrinsic artifact. It polls
-  `taskcard/status` and `taskcard/taskcard.md`, projects exact active +
-  nonempty bodies into the resident programmable slot, and preserves the
-  automatic event-journal slot. Exact `inactive` idempotently excludes only the
-  programmable slot from the resident (the message, automatic content, and
-  local body are never touched); missing/unreadable status, or active with a
-  missing/blank body, or an unchanged body, remain a no-op.
-
-Do not use this retained Telegram package as an active schema, endpoint,
-controller lifecycle, JSON-card renderer contract, private reverse-MCP route, or
-refresh-ceiling source. Those were the retired ownership path and are kept only
-as historical compatibility code while the current product surface lives in the
-intrinsic tools layer.
+Do not use this retained package as the old Telegram-owned schema, endpoint,
+JSON-card renderer, reverse-MCP route, or refresh-ceiling source.
