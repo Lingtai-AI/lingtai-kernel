@@ -2,89 +2,83 @@
 related_files:
 - src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
 maintenance: |
-  Third-party/legacy MCP wiring reference routed to from mcp/skills/mcp-manual/SKILL.md; update it whenever the npx/uvx/HTTP server wiring path or the legacy mcp/servers.json mechanism changes.
+  Owns third-party and legacy MCP wiring; update when registry, mcp/servers.json, transport fields, or secret handling changes.
 ---
 
 # Third-party and legacy MCP routes
 
-Two routes for non-curated MCPs: the **registry route** (recommended, gated by `mcp_registry.jsonl`) and the **legacy `mcp/servers.json` route** (ungated, kept for quick experiments).
+Non-curated servers have two routes: the **registry route** (recommended,
+gated by `mcp_registry.jsonl`) and legacy `<working_dir>/mcp/servers.json`
+(ungated, useful for a short experiment). Neither route grants permission to
+install, configure, or disclose credentials.
 
 ## Registry route (recommended)
 
-For any non-curated MCP — typically `npx`/`uvx`-launched servers from the broader MCP ecosystem.
+1. Read the server README first. Use the top-level [README gate](../SKILL.md#readme-gate):
+   `find_readme.py` for an installed Python package, otherwise Web `browse` on the
+   public server homepage. Obtain the exact install command, env vars, and schema.
+2. With explicit human authorization, append one valid JSON record atomically to
+   `mcp_registry.jsonl`, preserving existing lines. Registry records use
+   **`transport`**, not the activation field `type` shown below.
+3. Add its `init.json` `mcp.<name>` activation entry.
+4. Run one authorized System refresh (the complete envelope is in
+   [curated setup](curated-addons.md#the-four-step-setup)), then MCP `info` and
+   verify the relaunched child/tool separately. A registry record is not active proof.
 
-1. **Fetch the MCP's setup doc.** If it's pip-installed, use the bundled
-   `find_readme.py` script; otherwise (npx/uvx servers) `web_read` the homepage
-   URL. Both routes use the top-level [README gate](../SKILL.md#readme-gate). Either way, get
-   the install command, env vars, and config schema before writing any config.
-2. Append a single JSON record to `mcp_registry.jsonl` (one line, atomic write). For the schema, see `lingtai-kernel-anatomy reference/file-formats.md` §6.5.
-3. Add an `init.json` `mcp.<name>` activation entry.
-4. Run `system(action="refresh")`.
+A minimal **registry line** (replace the placeholders from the README):
 
-Benefits: gives you the `<homepage>` field used by the top-level [README gate](../SKILL.md#readme-gate) as its fallback URL, allow-listing, and registry health diagnostics via `mcp(action="info", input={}, reasoning="check registry health")`.
+```json
+{"name":"example","summary":"Example MCP server","transport":"stdio","command":"npx","args":["-y","<server-package>"],"source":"third-party","homepage":"https://example.invalid"}
+```
 
-## Legacy `mcp/servers.json` route
+Required fields: `name` matches `^[a-z][a-z0-9_-]{0,30}$`; `summary` is nonempty
+and at most 200 characters; `source` is nonempty; `transport` is `stdio` or
+`http`. Stdio requires string `command`, with optional string-list `args`;
+HTTP requires string `url`. Optional `homepage` is a nonempty string.
+Do not use `source: "lingtai-curated"` for a third-party launcher.
 
-A second route still exists: `<working_dir>/mcp/servers.json`. The kernel loads it on startup with no registry validation — useful for quick experiments or for personal MCPs you don't want to register globally. Same JSON shape as the registry route, but mounted directly without the catalog → registry → active promotion.
+The separate `init.json` `mcp.example` value uses the **activation** shape in
+the next section (`type`, command/args/env or URL/headers). Registry contents do
+not supply that third-party launch configuration. The registry gates membership
+and supplies homepage/diagnostics; manual/info remain read-only.
+
+## Legacy `mcp/servers.json`
+
+This file is loaded directly at startup without registry validation or the
+catalog → registry → active promotion. Use it only when intentionally wiring a
+single short-lived server; use the registry route for anything to keep. Copy the
+server's documented shape, never invent fields:
 
 ```json
 {
   "vision": {
     "type": "stdio",
     "command": "npx",
-    "args": ["-y", "@z_ai/mcp-server"],
-    "env": {
-      "Z_AI_API_KEY": "your-key",
-      "Z_AI_MODE": "ZAI"
-    }
+    "args": ["-y", "<server-package>"],
+    "env": {"<KEY>": "<secret-from-approved-source>"}
   },
-  "web-search": {
+  "remote": {
     "type": "http",
-    "url": "https://api.z.ai/api/mcp/web_search_prime/mcp",
-    "headers": {
-      "Authorization": "Bearer your-key"
-    }
+    "url": "https://example.invalid/mcp",
+    "headers": {"Authorization": "Bearer <approved-key>"}
   }
 }
 ```
 
-MiniMax's own `web_search` tool wires the same way, as a stdio server:
+## Common fields
 
-```json
-{
-  "minimax-web-search": {
-    "type": "stdio",
-    "command": "npx",
-    "args": ["-y", "minimax-coding-plan-mcp"],
-    "env": {
-      "MINIMAX_API_KEY": "your-key"
-    }
-  }
-}
-```
+| Field | stdio | http |
+|---|---|---|
+| `type` | `"stdio"` (default) | `"http"` (required) |
+| `command`, `args` | executable and arguments | not applicable |
+| `env` | subprocess environment | not applicable |
+| `url`, `headers` | not applicable | endpoint and HTTP headers, often auth |
 
-Use the registry route for anything you want to keep. Use `mcp/servers.json` when you just want to wire up a single server quickly.
+## Credentials
 
-MiniMax and Zhipu's own search results are no longer available through the
-built-in `web` capability's `search` action; wire either MCP server through
-one of the two routes above and call its `web_search`/`web_search_prime` tool
-directly.
-
-## Server config fields (both routes)
-
-| Field      | stdio                       | http                              |
-|------------|-----------------------------|-----------------------------------|
-| `type`     | `"stdio"` (default)         | `"http"` (required)               |
-| `command`  | executable (e.g. `npx`)     | —                                 |
-| `args`     | command-line arguments      | —                                 |
-| `env`      | env vars for the subprocess | —                                 |
-| `url`      | —                           | streamable-http endpoint          |
-| `headers`  | —                           | HTTP headers (typically auth)     |
-
-## API keys and secrets
-
-Plaintext credentials in `mcp_registry.jsonl` or `mcp/servers.json` are the simplest path. For sensitive keys:
-
-- **stdio servers**: env vars in the `env` field referencing values from `.env` (the agent's `env_file`). Some servers, including curated integrations such as `imap`, require literal credentials in a separate config file pointed at by an env var — see the relevant setup docs before writing secrets.
-- **http servers**: keys go in the `headers` field (typically `Authorization: Bearer ...`).
-- Never commit `mcp/servers.json` or addon config files to version control if they contain secrets.
+Prefer the agent's approved env-file mechanism for stdio values when the server
+supports it; some addons require literal credentials in a separate config file
+pointed to by an env var. HTTP credentials belong in the documented `headers`
+shape, usually `Authorization: Bearer <key>`. Read the server README for its
+actual contract. Never commit `mcp/servers.json`, addon configs, or plaintext
+credentials.

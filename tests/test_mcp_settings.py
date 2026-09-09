@@ -162,3 +162,37 @@ def test_real_agent_starts_mounts_settings_and_builds_complete_prompt(tmp_path):
         assert "prompt-private-marker" not in complete_prompt
     finally:
         agent.stop(timeout=1.0)
+
+
+def test_manual_registry_example_is_a_valid_record_not_an_activation_spec():
+    import re
+    from lingtai.services.mcp_registry import validate_record
+
+    root = Path(__file__).parents[1] / "src/lingtai/tools/mcp/skills/mcp-manual"
+    text = (root / "reference/third-party-and-legacy.md").read_text()
+    blocks = re.findall(r"```json\n(.*?)\n```", text, re.S)
+    records = [json.loads(block) for block in blocks if '"transport"' in block]
+    assert records, "Registry setup needs an actual transport-based record"
+    for record in records:
+        assert validate_record(record) == (True, None)
+    assert '"type"' in text, "Keep the separate activation format"
+
+
+def test_manual_distinguishes_retry_hook_from_public_refresh_relaunch():
+    root = Path(__file__).parents[1] / "src/lingtai/tools/mcp/skills/mcp-manual"
+    text = (root / "reference/runtime-and-identity.md").read_text()
+    assert "_retry_failed_mcps" in text
+    assert "public System refresh" in text
+    assert "relaunch" in text
+    assert "does not restart healthy ones" not in text
+
+
+def test_manual_problem_reporting_does_not_recommend_raw_registry_disclosure():
+    root = Path(__file__).parents[1] / "src/lingtai/tools/mcp/skills/mcp-manual"
+    runtime = (root / "reference/runtime-and-identity.md").read_text()
+    entry = (root / "SKILL.md").read_text()
+    assert "sanitized reason" in runtime
+    assert "`raw`" in runtime and "never print" in runtime
+    assert "print the problems" not in runtime
+    assert "web_read" not in entry
+    assert "skills-manual" in entry

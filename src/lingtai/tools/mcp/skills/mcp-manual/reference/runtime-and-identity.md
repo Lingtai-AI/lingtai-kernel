@@ -7,177 +7,103 @@ related_files:
 - tests/test_mcp_identity_discovery.py
 - tests/test_tool_family_mcp_migration_parity.py
 maintenance: |
-  Owns the detailed identity, installed-manual path, and runtime/venv provenance gates routed from mcp-manual; update it when identity projection, curated launcher ownership, or manual-path behavior changes.
+  Owns identity projection, installed-manual paths, launcher ownership, and venv/source provenance; update when those contracts change.
 ---
 
 # MCP identity and runtime provenance
 
-This reference owns details intentionally kept out of the model-facing schema
-and the short `mcp-manual` router. It is diagnostic guidance, not an MCP
-registration or server-management API.
+This is diagnostic guidance, not a registration or server-management API.
 
 ## Identity projection
 
 `mcp(action="info", input={}, reasoning="inspect MCP identity")` reads the
-addon-published, non-secret document
-`system/mcp_identities/<name>.json`. The document uses schema
-`lingtai.mcp.identity.v1`; it is a cached filesystem record and does not make a
-network request.
+addon-published cache `system/mcp_identities/<name>.json` (schema
+`lingtai.mcp.identity.v1`); it makes no network request. It attaches an
+`identity` block only to a matching registry record whose `accounts` list is
+non-empty. The projection allowlists account alias, provider username/ID or
+display name, bot marker, and non-secret routing counts. It drops tokens,
+passwords, app/refresh/access secrets, headers, and unknown fields. Prompt
+`<registered_mcp>` narrows it again and removes volatile `last_verified_at`.
+Missing, unrelated, or empty identity files produce no identity. Use the addon's
+`accounts` action for richer detail—never private config.
 
-An `identity` block is attached only to a matching `mcp_registry.jsonl` record
-when the identity has a non-empty `accounts` list. The `info` projection
-allowlists the account alias, provider username/ID/display name, bot marker,
-and non-secret routing counts. It drops tokens, passwords, app secrets,
-refresh/access tokens, headers, and unknown fields. The prompt's
-`<registered_mcp>` XML narrows the projection again and excludes volatile
-`last_verified_at` so prompt content remains cache-stable. A missing, unrelated,
-or empty identity record produces no `identity` member. For richer account
-information, use the addon's own `accounts` action; never read private config as
-a shortcut.
-
-## Manual and public-path gate
+## Installed manual and public paths
 
 The reserved `manual` action reads exactly the installed
-`.library/intrinsic/capabilities/mcp/SKILL.md` below the granted agent workdir.
-It performs no registry scan, identity read, rescan, or mutation. Its public
-result is the existing flat shape:
+`.library/intrinsic/capabilities/mcp/SKILL.md` below the agent workdir and does
+no registry/identity I/O or mutation. Its flat public result is:
 
 ```json
 {"status":"ok","mcp_manual":"<full body>","manual_path":"<host-local path>"}
 ```
 
-A missing skill returns `status: "degraded"`, an empty `mcp_manual`, the
-truthful host-local `manual_path`, and an error; it never falls back to another
-manual. `manual_path` and `registry_path` are diagnostic host-local values, not
-configuration inputs or proof of an active child. Do not copy private absolute
-paths into public docs, and do not infer a server's activation from either path.
+When missing, it returns `status: "degraded"`, an empty body, the truthful path,
+and an error; it never falls back to another manual. `manual_path` and
+`registry_path` are diagnostic host-local values, never config inputs or proof
+that a child is active. Do not publish private absolute paths.
 
-## Curated versus non-curated child ownership
+## Who owns a child's launch
 
-A curated addon activated through `init.json`'s `mcp.<name>` entry is owned by
-the running kernel's own `mcp_catalog.json`. That catalog derives the stdio
-type, the running Agent's `sys.executable`, the module args, and the child's
-entire `PYTHONPATH` from the Agent's current imported source root. The curated
-entry's non-launch `env` (for example `LINGTAI_IMAP_CONFIG`) passes through;
-legacy `type`/`command`/`args`/`env.PYTHONPATH` fields are accepted for
-read-compatibility but ignored for launch with one bounded warning. If the
-catalog has no safe stdio launcher, do not fall back to those legacy fields.
+| Route | Effective owner |
+|---|---|
+| Curated addon in main-agent `init.json` (`source == "lingtai-curated"`) | Running kernel `mcp_catalog.json`: Agent `sys.executable`, catalog module args, and Agent source-root `PYTHONPATH`; only non-launch account `env` passes through. |
+| Non-curated `init.json` entry | That entry's effective `type`/`command`/`args`/`env`. |
+| Legacy `mcp/servers.json` | Its direct activation spec. |
+| Daemon task/plugin MCP | That task/plugin's config, never the main registry. |
+| HTTP | No local subprocess or interpreter. |
 
-A non-curated third-party `init.json` entry and the legacy
-`mcp/servers.json` route own their own `type`/`command`/`args`/`env` activation
-spec. Daemon task/plugin MCPs are a separate route owned by that task or
-plugin's configuration; they never spawn from `mcp_registry.jsonl` or the
-main-agent `init.json` entry. HTTP entries have no local interpreter. Never
-assume that a child shares the main Agent's interpreter, site-packages, source
-root, or environment unless the effective provenance is checked.
+For curated entries, legacy `type`/`command`/`args`/`env.PYTHONPATH` are accepted
+for compatibility, ignored for launch with one bounded warning, and never used as
+a fallback if the catalog lacks a safe stdio launcher. Never assume a
+third-party, legacy, daemon, or plugin child shares the Agent's interpreter,
+site-packages, source root, or environment.
 
 ## Authorized venv swap and registry truth
 
-A venv swap never rewrites the registry automatically. After an authorized
-swap, reconcile canonical curated records explicitly with the **new** runtime
-interpreter. There is no kernel helper: use an authorized `shell` call (or an
-equivalent reviewed `file.write`/`file.edit` operation). This self-contained
-recipe is fail-closed, atomic, order-preserving, and never appends records:
+A venv swap does not reconcile `mcp_registry.jsonl` automatically. Rewriting its
+curated command is optional metadata reconciliation, not required for curated
+main-agent spawning (the running kernel owns that launcher). Only after
+inspecting MCP `info` and obtaining explicit registry-write
+authorization, run the operation under the **new** absolute interpreter with an
+absolute agent directory. Use this fail-closed, atomic, order-preserving,
+non-appending procedure:
 
-```bash
-NEW_PYTHON=/absolute/path/to/new/venv/bin/python
-AGENT_DIR=/absolute/path/to/agent/dir
+1. Confirm the registry exists and call the shared `read_registry(agent_dir)`.
+   If it reports any invalid or duplicate line, report only its line number
+   and a sanitized reason; never print the `raw` field or whole problems list.
+   Abort before writing. Error strings may also quote unsafe input.
+2. Preserve every line and its ending. For each first-seen record whose
+   `source` is exactly `lingtai-curated`, set only `command` to the new process's
+   `sys.executable`; do not append records or alter independent-interpreter
+   overrides. If nothing changed, write nothing.
+3. If changed, create a temporary file in the registry's directory, write the
+   preserved lines with `ensure_ascii=False`, flush and `fsync`, copy the old
+   mode, then `os.replace` it. On any error, remove only the temporary file and
+   re-raise. Before replacement the original remains unchanged; after replacement,
+   an error does not prove rollback. Preserve evidence and inspect the outcome
+   before retrying, rather than promising the old file is still authoritative.
 
-"$NEW_PYTHON" - "$AGENT_DIR" <<'PY'
-import json, os, sys, tempfile
-from pathlib import Path
-
-agent_dir = Path(sys.argv[1])
-if not agent_dir.is_absolute():
-    raise SystemExit("AGENT_DIR must be an absolute path")
-registry = agent_dir / "mcp_registry.jsonl"
-print(f"target registry: {registry}")
-print(f"interpreter: {sys.executable}")
-if not registry.is_file():
-    raise SystemExit(f"no registry at {registry}")
-
-from lingtai.services.mcp_registry import read_registry
-_valid, problems = read_registry(agent_dir)
-if problems:
-    for problem in problems:
-        print(f"problem line {problem['line']}: {problem['error']}")
-    raise SystemExit("registry has problems; aborting without writing")
-
-lines = registry.read_text(encoding="utf-8").splitlines(keepends=True)
-seen: set[str] = set()
-changed: list[str] = []
-for index, raw in enumerate(lines):
-    if not raw.strip():
-        continue
-    try:
-        record = json.loads(raw)
-    except json.JSONDecodeError:
-        continue  # defensive; the preflight already rejected invalid lines
-    name = record.get("name")
-    if not name or name in seen:
-        continue
-    seen.add(name)
-    if record.get("source") == "lingtai-curated" and record.get("command") != sys.executable:
-        record["command"] = sys.executable
-        ending = "\n" if raw.endswith("\n") else ""
-        lines[index] = json.dumps(record, ensure_ascii=False) + ending
-        changed.append(name)
-
-if changed:
-    fd, temporary = tempfile.mkstemp(
-        dir=str(registry.parent), prefix=".mcp_registry.jsonl.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write("".join(lines))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, registry.stat().st_mode & 0o777)
-        os.replace(temporary, registry)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        raise
-    print(
-        f"reconciled {len(changed)} curated command(s): "
-        f"{', '.join(changed)} -> {sys.executable}"
-    )
-else:
-    print("no curated command needed reconciling")
-PY
-```
-
-Run it only after inspecting `mcp(action="info")` and obtaining explicit
-registry-write authorization. It rewrites every canonical `lingtai-curated`
-record whose stored `command` differs, and aborts before writing if
-`read_registry()` reports any invalid or duplicate line. An intentional
-independent-interpreter override must be excluded or left unreconciled.
-
-This changes durable registry truth only. It is not activation and is never the
-spawn source for a non-curated, legacy, daemon-launched, or plugin-launched
-child. A curated main-agent child still derives `type`, `command`, `args`, and
-its entire `PYTHONPATH` from the running kernel's own catalog and runtime, not
-from stored registry or `init.json` launch fields. A healthy curated child picks
-up a new venv only after a full Agent relaunch: `refresh` retries failed children
-but does not restart healthy ones. Apply the provenance gate below before
-claiming the swap is live.
+This rewrites durable registry truth only. It is never the spawn source for
+non-curated, legacy, daemon, or plugin children, and has no effect on HTTP. A
+curated main-agent child still derives launcher, args, and `PYTHONPATH` from the
+running kernel catalog/runtime. A changed curated runtime must be verified after the Agent relaunch.
+The internal `_retry_failed_mcps` hook skips healthy clients and uses captured
+launch specs. The public System refresh invokes that hook **then requests a
+full Agent relaunch**; it does not promise healthy children survive unchanged.
+A refresh receipt is handoff intent, not proof the new process/child is ready.
 
 ## Fail-closed provenance check
 
-After a venv or source change, run one one-shot probe using the child's
-**effective** command and environment. It must print and compare:
+After a venv or source change, probe the child's **effective** command and
+environment and compare all three paths:
 
 - `sys.executable`;
 - `lingtai.__file__`; and
 - `lingtai.mcp_servers.<name>.__file__`.
 
-For a curated main-agent entry, effective means the Agent's own interpreter,
-its catalog-derived module args, and its own source root as the child's entire
-`PYTHONPATH`—never strings stored in `init.json` or the registry. For a
-non-curated/legacy child, use that entry's configured command and environment;
-for a daemon child, use its task/plugin configuration. If the probe still
-resolves the old venv or source, the gate fails: report **requires relaunch**
-and do not claim the change is live. Process inspection alone is corroboration,
-not proof of imported module provenance.
+For curated main-agent MCPs, effective means the Agent's own interpreter,
+catalog-derived module args, and current source root; never use launcher strings
+stored in `init.json` or the registry. For non-curated/legacy use that entry's
+command and env; for a daemon use its task/plugin config. If any path still
+resolves the old venv/source, report **requires relaunch** and do not claim the
+change is live. Process inspection such as `lsof` is only corroboration.
