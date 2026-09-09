@@ -188,7 +188,26 @@ argv, environment, or MCP command from the remote caller.
    emitted; Puffo then fail-closed denies an otherwise-legitimate result. This
    benign-prohibited outcome is acceptable but must not be silent: Core logs a
    bounded `puffo_admission_fact_not_delivered` event when a scanned fact has no
-   observer to receive it. The turn-start watermark is a monotonic
+   observer to receive it (and `puffo_admission_wire_namespacer_failed` when the
+   wire-id namespacer raises — a distinct per-turn defect, not the expected
+   teardown non-delivery). Both leave the fact un-emitted so a later settle point
+   retries; but a correlated turn that is settled after a worker hang is never
+   redone, so if the turn ends with such a fact still un-delivered no retry ever
+   comes, and the relaunched process — where the fact's entry sits below the new
+   watermark — cannot see the loss. To keep this cross-process case non-silent
+   too, Core tracks un-delivered receipt-bearing facts in a turn-scoped
+   outstanding map (delivered facts are removed) and, at
+   `end_admission_witness_scope` — which runs in the live process on both the
+   no-hang completion and the worker-hang path, reading only the in-memory map —
+   emits one bounded, countable `puffo_admission_fact_abandoned` event per still-
+   outstanding fact. This event exists to COUNT the loss rate, not to join to the
+   Puffo side: a lost fact never reached Puffo, and the two sides mint
+   mutually-invisible local turn ids, so no cross-side join key exists today (a
+   true join would require a correlation id carried on the ACP wire -- a protocol
+   change tracked as follow-up; session-level interval correlation belongs to the
+   ACP adapter's own logging, not this Core event). It fires only on genuine loss (never the retry or happy path);
+   the process-crash-before-first-scan window above is its one uncovered residual,
+   in the same fail-closed direction. The turn-start watermark is a monotonic
    `ChatInterface` entry id; `from_dict` reseeds `_next_id = max(id)+1`, so a
    narrow theoretical window exists where deleting a tail entry then serializing
    and reloading could reuse a retired id and let the watermark admit a stale
