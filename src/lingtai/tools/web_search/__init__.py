@@ -134,7 +134,7 @@ def _same_provider_identity(provider_identity: "ProviderIdentityPort", name: str
 _SEARCH_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "query": {"type": "string", "description": "Query for current web sources."},
+        "query": {"type": "string", "description": "Precise query for current web sources."},
     },
     "required": ["query"],
     "additionalProperties": False,
@@ -153,7 +153,7 @@ _BROWSE_INPUT_SCHEMA: dict[str, Any] = {
         },
         "cursor": {
             "type": ["string", "null"],
-            "description": "Continuation cursor for that URL/link_ref; null when unused.",
+            "description": "Cached-snapshot locator for the same URL/link_ref; null when unused.",
         },
         "extract": {
             "type": ["string", "null"],
@@ -164,7 +164,7 @@ _BROWSE_INPUT_SCHEMA: dict[str, Any] = {
             "type": ["integer", "null"],
             "minimum": 1,
             "maximum": 100000,
-            "description": "Per-call delivery threshold override (1–100000); null uses settings/web.json.",
+            "description": "One-call complete-output threshold override (1–100000); null uses Web settings.",
         },
     },
     "required": ["url", "link_ref", "cursor", "extract", "max_chars"],
@@ -209,11 +209,11 @@ def _schema_only_family() -> ToolFamily:
 
 def get_description(lang: str = "en") -> str:
     return (
-        "Search current sources with web(action='search', input={'query':'...'}), then browse a "
-        "returned link_ref or public HTTP(S) URL with web(action='browse', input={...}). Use "
-        "web(action='settings', input={}) for read-only config and web(action='manual', input={}) "
-        "for procedures; browse optionals are JSON null when unused and complete content is inline "
-        "or a full artifact."
+        "Search current sources with web(action='search', input={'query':'...'}), then browse one "
+        "returned same-Agent link_ref or public HTTP(S) URL with web(action='browse', input={...}); "
+        "use web(action='settings', input={}) for read-only config and web(action='manual', input={}) "
+        "for procedures. Browse is static; unused optionals are JSON null and complete output is "
+        "inline or a full artifact."
     )
 
 

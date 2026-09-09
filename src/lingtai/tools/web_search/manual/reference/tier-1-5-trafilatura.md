@@ -1,51 +1,26 @@
 ---
 related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
+  - src/lingtai/tools/web_search/manual/reference/tier-quick-refs/SKILL.md
 maintenance: |
-  Keep this bundled web-search reference synchronized with its parent manual and implementation when behavior or routing changes.
+  Keep this short static-page procedure aligned with the tier index and the
+  installed helper. Do not promise JavaScript, login, or paywall bypass.
 ---
-# Tier 1.5 — Trafilatura Fast Extraction
+# Tier 1.5 — static text extraction
 
-> Part of the [web-manual](../SKILL.md) skill.
-
-**When it applies:** Any static HTML page — articles, blogs, news, documentation.
-**Tools:** `trafilatura` (**already installed** — no setup needed).
-**Speed:** ~0.05s per page (10-50× faster than BeautifulSoup, 200× faster than browser).
+Use for an ordinary public article, blog, news, or documentation page when
+plain `web browse` is insufficient and no structured selectors are needed.
+Trafilatura does not execute JavaScript or authenticate.
 
 ```python
 import trafilatura
-
-def tier1_5(url):
-    """Fast article extraction — no browser, no JS, blazing speed."""
-    html = trafilatura.fetch_url(url)
-    if not html:
-        return None
-    text = trafilatura.extract(html)           # Main content as plain text
-    meta = trafilatura.bare_extraction(html)   # Returns Document, NOT dict
-
-    # bare_extraction() returns a Document object (has .title, .author etc.)
-    # Convert to dict for safe .get() access — do NOT call meta.get() directly!
-    if hasattr(meta, '__dict__'):
-        meta = {k: v for k, v in meta.__dict__.items() if not k.startswith('_')}
-    elif meta is None:
-        meta = {}
-
-    return {
-        "url": url,
-        "method": "tier1.5-trafilatura",
-        "title": meta.get("title"),
-        "author": meta.get("author"),
-        "date": meta.get("date"),
-        "description": meta.get("description"),
-        "categories": meta.get("categories"),
-        "tags": meta.get("tags"),
-        "text": text,
-        "text_len": len(text) if text else 0,
-    }
+html = trafilatura.fetch_url(url)
+text = trafilatura.extract(html) if html else None
+metadata = trafilatura.bare_extraction(html) if html else None
 ```
 
-**Also outputs:** Markdown (`output_format="markdown"`), JSON, XML.
-**Batch mode:** `trafilatura.spider` for sitemap-based crawling.
-**Feed support:** `trafilatura.feed` for RSS/Atom feed extraction.
-
-**Use when:** the page is a static article/blog/news page and you just need the text content. This is your **default first attempt** for any non-API, non-PDF URL.
+`bare_extraction()` may return a `Document`, not a dict; use its supported
+conversion/attributes before calling mapping methods. Keep complete text when
+needed rather than silently substituting a preview. For structured selectors
+use [Tier 2](tier-2-beautifulsoup.md); for JS interaction use the separate
+[agent-native browser](agent-native-browser.md).

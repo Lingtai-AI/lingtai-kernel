@@ -1,105 +1,101 @@
 ---
 name: web-manual-maintenance-bundles
 description: >
-  Nested web-manual reference for maintenance protocol, semantic sweeps,
-  dirty-first testing, bundled JSON asset files, deep-dive reference files, and the
-  explicit decision flowchart.
-version: 1.0.1
-last_changed_at: "2026-09-04T00:00:00Z"
+  Inventory and ownership map for the bundled Web external procedures, assets,
+  and retained helper scripts.
+version: 2.0.0
+last_changed_at: "2026-09-09T10:53:00Z"
 related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
-maintenance: "If you find stale or incorrect information here, use the lingtai-issue-report skill to assemble evidence and obtain per-issue human consent before filing an issue. Never include secrets, credentials, tokens, or private paths."
+  - src/lingtai/tools/web_search/manual/reference/tier-quick-refs/SKILL.md
+  - src/lingtai/tools/web_search/manual/scripts/cached_get.py
+  - src/lingtai/tools/web_search/manual/scripts/extract_page.py
+  - src/lingtai/tools/web_search/manual/assets/api-endpoints.json
+  - src/lingtai/tools/web_search/manual/assets/css-selectors.json
+  - src/lingtai/tools/web_search/manual/assets/extraction-pipeline.json
+  - src/lingtai/tools/web_search/manual/assets/regex-patterns.json
+  - src/lingtai/tools/web_search/manual/assets/search-providers.json
+  - src/lingtai/tools/web_search/manual/assets/site-templates.json
+maintenance: |
+  Keep the asset inventory and one-way ownership routes accurate. Scripts and
+  JSON are retained procedure support, not model-facing actions. Do not copy
+  script logic into references or turn the bundle into an automatic fallback.
 ---
+# Bundle maintenance
 
-# Web Browsing Maintenance and Assets Reference
+Open this when changing the manual bundle or checking whether a fact belongs in
+a script, asset, or reference. The parent manual owns first-call behavior;
+[operation-contract.md](../operation-contract.md) owns exact Web semantics; the
+[tier index](../tier-quick-refs/SKILL.md) owns recovery routing.
 
-Nested web-manual reference. Open this when changing the skill, validating
-propagation, or choosing which bundled asset/reference file to inspect.
+## Retained procedure support
 
-## Maintenance Protocol
+| Path | Owner | Use |
+|---|---|---|
+| `scripts/extract_page.py` | executable helper | Explicit `--tier`, `--search`, `--fallback`, and `auto_tier()` procedures. |
+| `scripts/cached_get.py` | executable helper | Legacy cache helper; currently broken on its normal successful-GET path (below). |
+| `assets/api-endpoints.json` | endpoint data | Academic, search, extraction, and real-time endpoint metadata. |
+| `assets/css-selectors.json` | selector data | Reusable extraction selectors. |
+| `assets/site-templates.json` | site data | Known-site selectors and endpoint hints. |
+| `assets/extraction-pipeline.json` | pipeline data | Legacy text: not valid JSON; not a runnable pipeline or Web policy. |
+| `assets/regex-patterns.json` | identifier data | DOI/arXiv/PMID/PMC/ISBN and URL patterns. |
+| `assets/search-providers.json` | external provider data | Explicit vendor recipes; verify availability and authorization. |
 
-When modifying any code or pattern in this skill, follow these three rules **without exception**:
+Scripts describe their own implementation only, not the public Web contract.
+Assets are historical hints, not current authority: fixed free/unlimited/quota
+claims, example contacts, package names and endpoints require upstream checking. Inspect current vendor documentation for endpoints, quotas,
+dependencies, and prices; this bundle grants no install, credential, paid-use,
+network, or access-control authority. Never put secrets or private paths in
+examples or diagnostics.
 
-### Rule 1: Grep Before You Ship — Semantic Sweep
+## Known legacy limitations
 
-Fixing a bug in one file is not enough. After every fix, search the entire codebase for **all occurrences of the same pattern** — not just the same text, but the same **semantic class**.
+- `cached_get.py` has no imported JSON module and its `json` argument shadows
+  that name. A normal successful GET reaches `json.dump` and raises
+  `AttributeError` after opening its cache file for writing; an existing file
+  may already have been truncated. Cache reads also fail. Do not recommend it
+  as a working cache or run it over shared/pre-existing data. Its cache key
+  includes URL/method but excludes params, headers and identity. No automatic
+  purge occurs: old claims about one-day/200-entry eviction were not implemented.
+- Cache defaults are `/tmp/web-browsing-cache`, overridden by
+  `WEB_BROWSING_CACHE_DIR`, and TTL `3600`, overridden by
+  `WEB_BROWSING_CACHE_TTL` at import. `clear_cache(url)` unlinks that GET entry;
+  `clear_cache()` unlinks every matching JSON file. Both require explicit
+  deletion authorization; neither is a diagnostic. The CLI prints a preview.
+- `assets/extraction-pipeline.json` is not valid JSON (`500/month` is an
+  unquoted expression). Read it only as legacy notes, not machine configuration.
+  The other parseable assets are not automatically consumed by public Web.
+- `extract_page.py` is a separate Requests/browser/vendor helper, not the vetted
+  public BrowserEngine. Its preview fields are truncated (including the JSON
+  saved by `--json`); exit 0 means no `error` key, not complete text or useful
+  content. CrossRef helper `is_oa` actually contains a citation count, not an OA
+  boolean; verify OA against the real source. `--save`/`--json` overwrite paths.
+- `--fallback` can advance through local tiers to **Jina**, sending the target
+  URL to an external service. `auto_tier` is a heuristic; explicit `--tier`
+  still may do several metadata requests. Authorize the whole selected route,
+  dependencies and data disclosure before execution; no implicit chain.
+  Helper diagnostics may include raw URLs/exceptions: never feed secrets or
+  private URLs. Tier 3 blocks images/styles/fonts/media and returns only a
+  preview, so it is not a visual-validation harness.
 
-```bash
-# Fix propagation sweep (run after every code change)
-# 1. Same text
-grep -rn 'bad_pattern' scripts/ reference/ SKILL.md --include='*.json' .
-# 2. Same semantics (e.g., "placeholder email", "outdated API", "hardcoded path")
-grep -rn 'example\.com' | grep -iE 'email|mailto|user-agent'
-grep -rn 'stealth_sync|bare_extraction.*\.get'
-```
+These are preserved implementation limitations, not runtime fixes in the manual
+reduction. For a proposed repair, use the `lingtai-issue-report` protocol and
+obtain filing/implementation authority; do not silently patch installed helpers.
 
-If a bad pattern appears in `scripts/`, it almost certainly also appears in `reference/`, `SKILL.md`, or bundled JSON asset files. Find them all or they will drift apart.
+## Cleanup / Footprint
 
-### Rule 2: Dirty-First Testing
+Public Web leaves complete `tmp/tool-results/web-*` artifacts; snapshots,
+cursors and references are bounded process-local state. Optional helpers leave
+explicit downloads/JSON outputs and the cache described above. None are
+implicitly disposable: preserve live referenced results, evidence, user data,
+configuration and secrets, and never blindly clear a shared cache.
 
-Smoke tests must include **dirty inputs** — real-world edge cases that expose runtime failures, not just clean decision-logic checks. Every tier's test must include at least one non-mock verification.
-
-Minimum dirty test coverage:
-- Non-standard URLs (e.g., `/pdf/ID` without `.pdf` suffix)
-- Non-dict return types (e.g., `bare_extraction()` returning Document)
-- API version incompatibilities (e.g., stealth v1 vs v2)
-- Rejected placeholder values (e.g., Unpaywall 422 on `test@example.com`)
-- Deprecated endpoints (e.g., Wikipedia `/page/related/`)
-
-### Rule 3: Single Source of Truth
-
-If the same logic appears in multiple places (e.g., `auto_tier()` in both `extract_page.py` and `SKILL.md`), **the script is the truth** and documentation should point to it, not duplicate it. Duplicated code drifts; references don't.
-
----
-
-## Bundled Assets
-
-| File | Contents |
-|------|----------|
-| `api-endpoints.json` in the bundled asset directory | Full API endpoints + parameters for every provider |
-| `site-templates.json` in the bundled asset directory | CSS-selector templates for known sites |
-| `css-selectors.json` in the bundled asset directory | Common-pattern CSS selector library |
-| `regex-patterns.json` in the bundled asset directory | Regex templates for DOI / arXiv / PMID / PMC / ISBN |
-| `search-providers.json` in the bundled asset directory | Search engine API configurations |
-| `extraction-pipeline.json` in the bundled asset directory | Full extraction pipeline configuration |
-| `scripts/extract_page.py` | Executable v3.0 script: `--tier 0-5 + auto`, `--search`, `--fallback` |
-| `scripts/cached_get.py` | File-based HTTP cache with TTL support |
-
----
-
-## Reference Files (Deep-Dives)
-
-For more than quick-reference snippets, load the appropriate reference file:
-
-| Reference | When to load |
-|-----------|-------------|
-| [tier-0-pdf.md](../tier-0-pdf.md) | PDF download + fitz extraction details |
-| [tier-1-apis.md](../tier-1-apis.md) | All academic/metadata APIs, ID resolution chains |
-| [tier-1-5-trafilatura.md](../tier-1-5-trafilatura.md) | Trafilatura configuration, batch mode, dedup |
-| [tier-2-beautifulsoup.md](../tier-2-beautifulsoup.md) | BS4 patterns, CSS selectors, site templates |
-| [tier-3-playwright.md](../tier-3-playwright.md) | Playwright stealth setup, resource blocking |
-| [tier-4-jina-firecrawl.md](../tier-4-jina-firecrawl.md) | Jina Reader + Firecrawl API details |
-| [tier-5-ai-search.md](../tier-5-ai-search.md) | DDG / Tavily / Exa search integration |
-| [academic-pipeline.md](../academic-pipeline.md) | Full academic search: find → enrich → get PDF |
-| [search-strategies.md](../search-strategies.md) | Engine selection, query optimization, pagination |
-| [news-and-rss.md](../news-and-rss.md) | Google News RSS, Reddit JSON, RSS parsing |
-| [social-media.md](../social-media.md) | Reddit, HN, Mastodon, X/Twitter, GitHub |
-| [realtime-data.md](../realtime-data.md) | Financial, weather, Stack Exchange, Wikipedia |
-| [stealth.md](../stealth.md) | Anti-detection, fingerprinting, proxy strategies |
-| [migration-from-v2.md](../migration-from-v2.md) | What changed from v2 → v3 |
-
----
-
-## Explicit Decision Order
-
-See `routing-and-sites/SKILL.md` → "Auto-Tier Decision Tree" for the rule
-table (URL feature → assigned tier). The evaluation **order** those rules are
-applied in — which is not obvious from a table alone — is: URL vs keyword →
-(if URL) PDF? → known academic API? → static HTML? → structured data needing
-BS4? → JS-rendered/protected? → Tier 3 (Playwright) or Tier 4 (Jina) →
-fallback Tier 1.5; (if keyword) Tier 5 AI search. Read
-`scripts/extract_page.py::auto_tier()` for the same logic in code (source of
-truth when this manual drifts).
-
----
-> **Found a bug or issue?** If you encounter any problems with this skill, load the `lingtai-issue-report` skill and follow its instructions to report it.
+After a large retrieval session or before retirement, follow `skills-manual` →
+`reference/cleanup-footprint-contract.md#shared-footprint-check-recipe`. Select
+only this Agent's `tmp/tool-results/web-*` plus the exact task-created output
+paths; inspect a configured helper cache separately only when authorized.
+The shared recipe reports count/bytes without changing inspected files; its
+optional `logs/cleanup.jsonl` append is a separate explicit write. Present a
+dry-run listing what stays/goes, obtain explicit human consent, then perform
+only the approved cleanup and record timestamp/tool/dry-run-or-apply/count/bytes/
+path summary/approval. If consent is absent, stop at inspection.

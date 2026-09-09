@@ -333,3 +333,31 @@ def test_unavailable_current_returns_one_fixed_failure_without_rows(
         "error_code": "SETTINGS_UNAVAILABLE",
         "message": "settings inventory is unavailable",
     }
+
+
+def test_web_manual_keeps_resolvable_operation_links():
+    import re
+    root = Path(__file__).parents[1] / "src/lingtai/tools/web_search/manual"
+    text = (root / "SKILL.md").read_text()
+    operation = (root / "reference/operation-contract.md").read_text()
+    headings = {re.sub(r"[^a-z0-9 -]", "", h.lower()).replace(" ", "-")
+                for h in re.findall(r"^#{1,6} (.+)$", operation, re.M)}
+    for anchor in re.findall(r"operation-contract.md#([a-z-]+)", text):
+        assert anchor in headings
+
+
+def test_web_guidance_distinguishes_hot_show_and_cached_services():
+    root = Path(__file__).parents[1] / "src/lingtai/tools/web_search/manual"
+    operation = (root / "reference/operation-contract.md").read_text()
+    for phrase in ("LINGTAI_WEB_PROVIDER", "LINGTAI_WEB_MODEL", "cached service",
+                   "does not change SHOW", "before applying", "SETTINGS_UNAVAILABLE"):
+        assert phrase in operation
+
+
+def test_web_legacy_helper_limitations_are_explicit():
+    root = Path(__file__).parents[1] / "src/lingtai/tools/web_search/manual"
+    maintenance = (root / "reference/maintenance-bundles/SKILL.md").read_text()
+    for phrase in ("AttributeError", "extraction-pipeline.json", "not valid JSON",
+                   "WEB_BROWSING_CACHE_DIR", "clear_cache", "no automatic purge",
+                   "--fallback", "Jina", "preview", "authorization"):
+        assert phrase.lower() in " ".join(maintenance.lower().split())
