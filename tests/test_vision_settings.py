@@ -402,3 +402,37 @@ def test_ordinary_analyze_action_is_unchanged(tmp_path):
     service.analyze_image.assert_called_once_with(
         str(image), prompt="Describe what you see in this image."
     )
+
+
+def test_local_manual_selects_provider_before_owner_file_example(tmp_path):
+    import re
+
+    manual = Path(__file__).resolve().parents[1] / "src/lingtai/tools/vision/manual"
+    body = (manual / "reference/backends.md").read_text(encoding="utf-8")
+    examples = [json.loads(value) for value in re.findall(r"```json\n(.*?)\n\s*```", body, re.S)]
+    capability = examples[0]["vision"]
+    assert capability["provider"] == "local"
+    document = examples[1]
+    _write_local_settings(tmp_path, **{k: v for k, v in document.items() if k != "schema_version"})
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as factory:
+        # File alone must not select a route or construct a client.
+        unselected = setup(_StubAgent(tmp_path))
+        assert "settings" not in _show(unselected)
+        factory.assert_not_called()
+        selected = setup(_StubAgent(tmp_path), **capability)
+        assert _by_key(_show(selected))["provider"]["current"] == "local"
+        assert factory.call_args.kwargs["model"] == document["model"]
+    assert "file alone does not select" in body
+
+
+def test_setting_anchor_routes_to_exact_detail_and_redaction_is_explicit():
+    manual = Path(__file__).resolve().parents[1] / "src/lingtai/tools/vision/manual"
+    root = (manual / "SKILL.md").read_text(encoding="utf-8")
+    reference = (manual / "reference/settings.md").read_text(encoding="utf-8")
+    for key in _KEYS:
+        slug = key.replace("_", "-")
+        section = root.split(f"## Setting: {slug}\n", 1)[1].split("\n## ", 1)[0]
+        assert f"reference/settings.md#setting-{slug}" in section
+        assert f"## Setting: {slug}" in reference
+    assert "both current and default" in reference
+    assert "even when unused" in reference

@@ -1,38 +1,17 @@
-"""Vision capability — image understanding via VisionService.
+"""Vision capability for one-image understanding via ``VisionService``.
 
-Adds the ability to analyze images. Requires a VisionService instance,
-created either explicitly or via the ``provider``/``api_key`` factory.
+The public action-separated ``vision`` root exposes ``analyze``, ``check``,
+``list``, ``settings``, and ``manual``. The operational action values are unchanged;
+generic composition adds the new
+reserved ``settings`` action before ``manual``. ``analyze`` uses one selected
+route, while a non-null ``preset`` explicitly borrows an authorized preset for
+one call. Relative image paths use the workdir and a null question selects the
+default prompt.
 
-Usage:
-    agent.add_capability("vision", vision_service=my_svc)
-    agent.add_capability("vision", provider="anthropic", api_key="sk-...")
-
-The native mlx pseudo-provider (Apple MLX, on-device) remains available
-through explicit ``add_capability(..., provider="mlx")`` opt-in, but it is
-intentionally not advertised in ``PROVIDERS`` or first-run/check-caps
-surfaces: it is macOS-only and requires an on-device model.
-
-``local`` is a first-class generic local OpenAI-compatible provider: it
-points at any OpenAI-compatible vision server on your machine (Ollama, LM
-Studio, vLLM, llama.cpp, …) via ``base_url`` (default
-``http://localhost:11434/v1``) and requires an explicit ``model``. The
-operator-owned endpoint configuration lives in ``settings/vision.json``
-(``base_url``, ``model``, optional ``api_key``/``max_tokens``); capability
-kwargs override the file. No API key is required — local servers ignore the
-value, so a placeholder is synthesized. Configure it with
-``add_capability("vision", provider="local", model="<pulled-model>")``, via
-``manifest.capabilities.vision``, or via ``settings/vision.json``.
-
-``vision`` is migrated to the LingTai Tool Protocol v2 action-separated shape
-(``src/lingtai/tools/CONTRACT.md``): one public ``vision`` tool whose canonical
-children are ``analyze``/``check``/``list`` plus the family-owned reserved
-``settings``/``manual`` actions, composed and dispatched by the generic
-``lingtai.tools.tool_family`` infrastructure. The public tool name and
-operational action values are unchanged; generic composition adds the new
-reserved ``settings`` action immediately before ``manual``. The call envelope
-moved from flat arguments to ``action``/``input``/``reasoning``/``summarize``.
-Provider routing, credential/identity resolution, and every action result
-shape are untouched by that migration.
+Routes never silently choose a provider, model, credential, preset, MCP, or CLI.
+Local and MLX routes are explicit; Claude vision points to an explicit
+``claude -p`` action. Unsupported setup and request failures return sanitized
+manual guidance.
 """
 from __future__ import annotations
 
@@ -542,18 +521,18 @@ _ANALYZE_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "image_path": {
             "type": "string",
-            "description": "Image file path; relative paths use the workdir",
+            "description": "Existing image file path; relative paths use the workdir",
         },
         "question": {
             # Strict OpenAI object branches express an optional field as a
             # required nullable property. Null means absent, and the analyze
             # handler then applies the same default prompt it always has.
             "type": ["string", "null"],
-            "description": "Image question; null uses `Describe what you see in this image.`",
+            "description": "Question about the image; null uses the default prompt",
         },
         "preset": {
             "type": ["string", "null"],
-            "description": "Optional manifest.preset.allowed route to borrow; null uses the default",
+            "description": "Authorized manifest.preset.allowed route to borrow once; null uses default",
         },
     },
     "required": ["image_path", "question"],
@@ -569,7 +548,7 @@ _CHECK_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "preset": {
             "type": ["string", "null"],
-            "description": "Optional manifest.preset.allowed route to check; null checks the default without an image",
+            "description": "Authorized preset to check; null checks default without an image",
         },
     },
     "required": ["preset"],
@@ -637,11 +616,11 @@ class VisionConfiguration:
 
 
 _DESCRIPTION = (
-    "Analyze an image on one explicit route. Use vision(action='analyze', "
-    "input={'image_path': '...', 'question': null}, reasoning='...'); null "
-    "question uses the default image prompt. Use check to verify a route, list "
-    "to enumerate allowed routes, settings for the read-only applied snapshot, "
-    "and manual for guidance. A non-null preset is an explicit "
+    "Analyze one image: vision(action='analyze', "
+    "input={'image_path': '...', 'question': null}, reasoning='...'). Paths use the "
+    "workdir and null uses the default image prompt. Use check, list, settings, "
+    "or manual for route identity, declarations, the read-only applied snapshot, "
+    "or guidance. A non-null preset must name an authorized "
     "manifest.preset.allowed borrow and uses that preset's own identity. "
     "Failures are sanitized; no provider, model, credential, preset, or MCP "
     "fallback is automatic."

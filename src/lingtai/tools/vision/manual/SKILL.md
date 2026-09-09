@@ -1,9 +1,9 @@
 ---
 name: vision-manual
 description: >
-  Choose a Vision action, route, setting, or backend reference without
-  automatic provider/credential fallback.
-last_changed_at: 2026-09-06T00:00:00Z
+  Use the Vision schema directly for ordinary image analysis; route setup,
+  borrowing, settings, and recovery to focused references.
+last_changed_at: 2026-09-09T00:00:00Z
 related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/ANATOMY.md
@@ -16,116 +16,93 @@ related_files:
   - src/lingtai/tools/vision/manual/reference/backends.md
 maintenance: |
   Keep this page a short provider-neutral router and the settings action
-  read-only. Keep every setting anchor stable and route depth to the focused
+  read-only. Keep every setting anchor stable and route depth to focused
   references. Do not add provider, credential, endpoint, CLI, or MCP fallback;
   never import, expose, or link a secret.
 ---
+
 # Vision manual
 
-This installed, provider-neutral manual is guidance only. The static declaration
-owns its `manual="vision"` destination; the reserved action reads this body and
-path, not a host-global or another family's skill. It does not discover, install,
-start, or invoke a backend.
+Routine calls use the schema directly; load only the reference needed for setup
+or recovery. This installed manual reads no configuration and invokes no provider.
 
-## Choose an action
+## First action
 
-`vision` has one strict action-separated root. Every call requires
-`action`, `input`, and `reasoning`; `input` must match the selected child. Use
-these first-call forms:
+```text
+vision(action="analyze", input={"image_path": "...", "question": null}, reasoning="...")
+```
 
-- **Analyze an image:**
-  `vision(action="analyze", input={"image_path": "...", "question": null}, reasoning="...")`.
-  `image_path` is required; a relative path is resolved from the workdir.
-  `question: null` means `Describe what you see in this image.`. Add
-  `preset: "<allowed reference>"` only to explicitly borrow a route listed in
-  `manifest.preset.allowed`.
-- **Check a route:**
-  `vision(action="check", input={"preset": null}, reasoning="...")`.
-  `null` checks the default route; a reference checks that explicitly borrowed
-  route without sending an image.
-- **List routes:** `vision(action="list", input={}, reasoning="...")`.
-  This mechanically lists the active route and vision-capable allowed presets;
-  it constructs no provider service or credential.
-- **Show applied settings:**
-  `vision(action="settings", input={}, reasoning="...")`. This is SHOW-only:
-  it does not read, validate, set, reset, or write configuration.
-- **Load guidance:** `vision(action="manual", input={}, reasoning="...")`.
+One existing image per call; relative paths use the workdir and null selects the
+default image prompt. PNG/JPEG/WebP/GIF have known MIME types, not a guarantee of
+provider support. Success is `{"status": "ok", "analysis": text}`; failures are
+structured errors. The schema owns all five actions and strict input fields.
 
-Unknown actions, root fields, or cross-action input fields fail before provider,
-credential, image, or manual-child work. `preset` is an explicit authorization
-boundary, not fallback: the allowed preset's own provider/model/credential
-identity is used for that request. A default failure remains a sanitized error;
-Vision never automatically switches provider/model/credential, preset, MCP, or
-CLI, and Vision never auto-invokes MCP. Alternatives are instructions for a
-later explicit operator action.
+## Choose depth
 
-For action details and result shapes, read
-[actions](reference/actions.md). For route identity, borrowing, Claude CLI,
-active-preset guidance, and safety, read [routing](reference/routing.md). For
-local servers, MLX, setup, and troubleshooting, read
-[backends](reference/backends.md).
+- [Actions and results](reference/actions.md): `check` resolves a route without
+  an image (not live model acceptance); `list` reads declarations without service
+  or credential construction; `settings` shows the applied bind snapshot.
+- [Routing](reference/routing.md): allowed-preset borrowing, Claude CLI, recovery.
+- [Backends](reference/backends.md): local server/model setup, MLX, troubleshooting.
+- [Settings](reference/settings.md): exact source/precedence and owner procedures.
 
-## Settings anchors
+## Route and authority boundary
 
-The settings action returns exactly `key`, `current`, `default`,
-`configurable`, and `comment` for the applied bind snapshot. Sensitive values
-and path-like models are redacted. SHOW never mutates or re-reads state. Each
-anchor below is stable; read the [settings reference](reference/settings.md)
-for source, precedence, redaction, and the existing owner procedure.
+Without `preset`, use the configured service or active provider's own compatible
+identity. A non-null `preset` must be in `manifest.preset.allowed`; it borrows the
+allowed preset's own provider/model/endpoint/wire/credential for one call, without
+switching the active preset. Missing or unsupported routes fail closed.
+
+No provider, model, credential, preset, MCP, or CLI fallback is automatic. Vision
+never auto-invokes MCP. Ask the
+human before changing authorization/configuration, installing a server, or
+pulling a model. Alternatives require an explicit later action. Never print keys,
+tokens, environment values, headers, or private URLs.
+
+## Setting anchors
+
+SHOW is read-only: fresh rows from the applied snapshot, no file/environment
+re-read or configuration validation/write. Rows contain only `key`, `current`,
+`default`, `configurable`, `comment`; sensitive fields and path-like models are
+redacted. Unavailable truth fails the entire inventory, never guessed rows.
+Follow the exact owner section below, make only authorized changes, then
+refresh/relaunch and SHOW again.
 
 ## Setting: provider
-
-The current direct-route provider; no provider default or automatic switch.
+See [provider](reference/settings.md#setting-provider).
 
 ## Setting: base-url
-
-The bound endpoint override or route-owned endpoint; sensitive values are redacted.
+See [base-url](reference/settings.md#setting-base-url).
 
 ## Setting: model
-
-The bound route model; path-like values are redacted and no hidden local model is assumed.
+See [model](reference/settings.md#setting-model).
 
 ## Setting: api-key
-
-Whether the bound route applied credential material; raw values are never shown.
+See [api-key](reference/settings.md#setting-api-key).
 
 ## Setting: api-key-env
-
-Whether an explicit credential-variable pointer was applied; SHOW never reads the environment.
+See [api-key-env](reference/settings.md#setting-api-key-env).
 
 ## Setting: max-tokens
-
-The route's response-token cap where supported; route defaults remain owner-defined.
+See [max-tokens](reference/settings.md#setting-max-tokens).
 
 ## Setting: api-compat
-
-The route compatibility family where applicable; it grants no provider access.
+See [api-compat](reference/settings.md#setting-api-compat).
 
 ## Setting: wire-api
-
-The configured compatible wire where applicable; route support still controls construction.
+See [wire-api](reference/settings.md#setting-wire-api).
 
 ## Setting: default-headers
-
-Whether provider-owned headers were applied; the mapping is always redacted.
+See [default-headers](reference/settings.md#setting-default-headers).
 
 ## Setting: token-path
-
-Whether a Codex OAuth identity path was applied; path and token material are redacted.
+See [token-path](reference/settings.md#setting-token-path).
 
 ## Setting: instructions
-
-Whether Codex Responses instructions were applied; instruction text is redacted.
+See [instructions](reference/settings.md#setting-instructions).
 
 ## Setting: max-output-tokens
-
-The optional Codex Responses output cap, distinct from `max_tokens`.
+See [max-output-tokens](reference/settings.md#setting-max-output-tokens).
 
 ## Setting: timeout
-
-The Codex request timeout where applicable; changing it grants no retry or network authority.
-
-If a route, local settings document, model, or credential is unavailable, the
-whole settings inventory fails closed rather than returning partial or guessed
-rows. To change a value, use its existing owner procedure, refresh or relaunch,
-and then SHOW again; this manual never performs that change.
+See [timeout](reference/settings.md#setting-timeout).
