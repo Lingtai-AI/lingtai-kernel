@@ -248,6 +248,7 @@ def handle_acp_command(args) -> None:
     from lingtai.adapters.acp.puffo_v0 import (
         PuffoV0RegistryError,
         RUNTIME_POLICY,
+        _registry_location,
         resolve_runtime,
     )
     from lingtai.adapters.acp.driver_authority import (
@@ -263,11 +264,15 @@ def handle_acp_command(args) -> None:
 
         session_mcp_validator = validate_puffo_v1_mcp_servers
 
-    # Operator-selected registry location (absolute path), or None to use the
-    # LINGTAI_PUFFO_V0_REGISTRY / HOME-relative default. The same value is carried
-    # into run_acp so the pre-serve re-resolve consults the identical registry.
-    registry_path = args.registry
+    # Snapshot the effective registry location ONCE (flag > LINGTAI_PUFFO_V0_REGISTRY
+    # > HOME-relative default), resolving and shape-validating it a single time, so
+    # the initial resolve and the pre-serve re-resolve inside run_acp consult the
+    # identical concrete path. Threading args.registry (possibly None) into both
+    # would re-read env/HOME twice; an env change between the two resolves could
+    # split one shared runtime entry across two registries whose revocation history
+    # differs, and PuffoV0Runtime carries no registry identity to catch it.
     try:
+        registry_path = _registry_location(args.registry)
         runtime = resolve_runtime(args.runtime_id, registry_path=registry_path)
     except PuffoV0RegistryError as exc:
         print(f"error: {exc}", file=sys.stderr)

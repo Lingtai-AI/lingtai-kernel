@@ -106,9 +106,11 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   exits on incomplete quiescence so no later Python state write can race teardown.
   For both Puffo profiles, it consumes the one launcher-injected Driver authority
   descriptor and composes either its root Port pair or a fail-closed pair. Its
-  `--registry` flag selects the registry location and is threaded into both the
-  initial resolve and the pre-serve re-resolve (the same value reaches `run_acp`),
-  so both consult the operator-selected registry.
+  `--registry` flag selects the registry location; the composition root resolves
+  the effective location once (flag > `LINGTAI_PUFFO_V0_REGISTRY` > HOME-relative
+  default) and threads that one concrete path into both the initial resolve and
+  the pre-serve re-resolve that reaches `run_acp`, so both consult the identical
+  registry even if the environment changes mid-launch.
   Shared poisoned-worker exit logging is lease-aware: retained ownership may log,
   while a successful `STOPPED` release skips every later workdir append and still
   reaches the unconditional process exit.

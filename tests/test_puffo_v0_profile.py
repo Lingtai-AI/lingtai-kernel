@@ -3045,8 +3045,9 @@ def test_acp_launch_threads_explicit_registry_to_initial_resolve_and_run_acp(
     assert observed["registry_path"] == explicit  # carried into run_acp (→ re-resolve)
 
 
-def test_acp_launch_without_registry_uses_the_default(monkeypatch, tmp_path):
+def test_acp_launch_without_registry_snapshots_the_default_once(monkeypatch, tmp_path):
     import lingtai.cli_acp as cli_acp
+    from lingtai.adapters.acp import puffo_v0
     from lingtai.adapters.acp.driver_authority import UnavailableDriverAuthorityAdapter
 
     runtime = _stub_runtime(tmp_path)
@@ -3072,9 +3073,53 @@ def test_acp_launch_without_registry_uses_the_default(monkeypatch, tmp_path):
 
     cli_acp.handle_acp_command(_launch_namespace(registry=None))
 
-    # None flows to resolve/run_acp, which then apply default_registry_path().
-    assert seen["initial"] is None
-    assert observed["registry_path"] is None
+    # The handler resolves the effective location ONCE and threads the same
+    # concrete default into both the initial resolve and run_acp -- not None to
+    # each, which would re-read HOME twice downstream.
+    default = puffo_v0.default_registry_path()
+    assert seen["initial"] == default
+    assert observed["registry_path"] == default
+
+
+def test_acp_launch_freezes_one_registry_across_both_resolves(monkeypatch, tmp_path):
+    # A mid-launch env mutation (embedded / same-process callback) must not split
+    # the two resolves onto different registries. The handler snapshots the
+    # effective path once, before resolve_runtime, and reuses that concrete path
+    # for run_acp's pre-serve re-resolve.
+    import os
+    import lingtai.cli_acp as cli_acp
+    from lingtai.adapters.acp.driver_authority import UnavailableDriverAuthorityAdapter
+
+    runtime = _stub_runtime(tmp_path)
+    reg_a = tmp_path / "reg-a" / "runtime-registry.json"
+    reg_b = tmp_path / "reg-b" / "runtime-registry.json"
+    seen = {}
+
+    def _record_and_mutate(_id, *, registry_path=None):
+        seen["initial"] = registry_path
+        # Change the environment between the initial and pre-serve resolves.
+        os.environ["LINGTAI_PUFFO_V0_REGISTRY"] = str(reg_b)
+        return runtime
+
+    monkeypatch.setenv("LINGTAI_PUFFO_V0_REGISTRY", str(reg_a))
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.puffo_v0.resolve_runtime", _record_and_mutate
+    )
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.driver_authority.authority_adapter_from_environment",
+        UnavailableDriverAuthorityAdapter,
+    )
+    observed = {}
+    monkeypatch.setattr(
+        cli_acp, "run_acp",
+        lambda directory, **kwargs: observed.update(directory=directory, **kwargs),
+    )
+
+    cli_acp.handle_acp_command(_launch_namespace(registry=None))
+
+    # Both resolves see reg-a; the post-snapshot mutation to reg-b is invisible.
+    assert seen["initial"] == reg_a
+    assert observed["registry_path"] == reg_a
 
 
 def test_explicit_registry_flag_overrides_env(monkeypatch, tmp_path):
