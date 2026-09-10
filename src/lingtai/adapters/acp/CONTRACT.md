@@ -499,15 +499,20 @@ argv, environment, or MCP command from the remote caller.
     configured**: when the resolved location *is* the built-in
     `~/.lingtai/<profile>` namespace it is created node by node with `O_NOFOLLOW`
     (`~/.lingtai` then `<profile>`, stopping at `$HOME`); any other location has
-    only its final component created under an already-existing parent, with
-    `O_NOFOLLOW` on both that final registry directory **and the node directly
-    above it**. An operator who explicitly names the built-in path therefore gets
+    only its final component created under an already-existing parent, verifying
+    both that final registry directory **and the node directly above it** are
+    non-symlink and owned by this user (`O_NOFOLLOW` + owner check). A *higher*
+    ancestor is followed (the operator's placement choice); consequently, because
+    the direct parent itself is checked, a registry placed one level under a
+    symlinked ancestor is rejected — on macOS this means a location directly under
+    `/tmp` fails, so place the registry at least two levels below any symlinked
+    ancestor. An operator who explicitly names the built-in path therefore gets
     namespace handling, and the branch is **not a security boundary**: in both
     branches the registry directory and the node directly above it are verified
-    non-symlink and the leaf is required to be `0700` — the branch only decides how
-    many nodes are created and whether the intermediate `~/.lingtai` mode is
-    checked (so the earlier "operator-supplied ⇒ strict" framing does not hold and
-    is withdrawn). An existing target that is a symlink, is foreign-owned, or is
+    non-symlink and owned by this user, and the leaf is required to be `0700` — the
+    branch only decides how many nodes are created (so the earlier
+    "operator-supplied ⇒ strict" framing does not hold and is withdrawn). An
+    existing target that is a symlink, is foreign-owned, or is
     not already `0700` is rejected rather than modified. Only the leaf registry directory (the built-in
     `<profile>` node or an operator location's final component) is required to be
     `0700`; the intermediate `~/.lingtai` node need only be a non-symlink

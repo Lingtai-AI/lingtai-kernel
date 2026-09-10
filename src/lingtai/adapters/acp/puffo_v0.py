@@ -539,17 +539,22 @@ def _secure_registry_directory(path: Path) -> None:
     * Any other location has only its final component created; its parent must
       already exist, so LingTai never materializes an ancestor chain and never
       follows an operator symlink into an arbitrary target. The final registry
-      directory **and the node directly above it** must not be symlinks
-      (``O_NOFOLLOW`` on both); higher ancestors (e.g. ``/tmp`` → ``/private/tmp``)
-      are the operator's placement choice and are followed.
+      directory **and the node directly above it** must not be symlinks and must
+      be owned by this user (``O_NOFOLLOW`` + ``fstat`` uid on both); a *higher*
+      ancestor (e.g. ``/tmp`` → ``/private/tmp``) is the operator's placement
+      choice and is followed — but when such an ancestor IS the direct parent (a
+      registry placed one level under macOS ``/tmp``), it is the checked node and
+      is rejected.
 
     The branch above is therefore not a security boundary: whichever branch a
     path takes, the registry directory and the node directly above it are both
-    verified non-symlink, and the leaf is required to be ``0700``. The branch only
-    decides how many nodes are created (two for the built-in namespace, one
-    otherwise) and whether the intermediate ``~/.lingtai`` mode is left unchecked;
-    it depends on ``Path.home()`` at call time, but a reclassification would only
-    change that creation depth, never a security property.
+    verified non-symlink and owned by this user, and the leaf is required to be
+    ``0700``. The branch only decides how many nodes are created (two for the
+    built-in namespace, one otherwise); it depends on ``Path.home()`` at call
+    time, but a reclassification would only change that creation depth, never a
+    security property. (The intermediate ``~/.lingtai`` and an operator's direct
+    parent are checked for symlink and owner but not mode; only the leaf registry
+    directory must be ``0700``.)
 
     In both cases an already-existing target that is a symlink, is foreign-owned,
     or is not an owner-only (``0o700``) directory is rejected loudly rather than
@@ -587,16 +592,24 @@ def _secure_registry_directory(path: Path) -> None:
     try:
         # O_NOFOLLOW here so the node directly above the registry directory is not
         # a symlink either — symmetric with the built-in branch's O_NOFOLLOW on
-        # `~/.lingtai`. This makes the branch choice above irrelevant to the
-        # symlink guarantee: whichever branch a path takes, the registry directory
-        # and the node directly above it are both verified non-symlink. Higher
-        # ancestors remain the operator's placement choice and are followed.
+        # `~/.lingtai`. This verifies the node directly above the registry
+        # directory; a *higher* ancestor is followed (it is the operator's
+        # placement choice), but note that when that ancestor IS the direct parent
+        # — e.g. a registry placed one level under macOS `/tmp` — it is this node
+        # and is rejected.
         parent_fd = os.open(path.parent, os.O_RDONLY | directory | nofollow)
     except OSError as exc:
         raise PuffoV0RegistryError(
             "puffo-v0 runtime registry parent directory is unavailable or a symlink"
         ) from exc
     try:
+        # Owner check on the direct parent, symmetric with the built-in branch's
+        # uid check on `~/.lingtai` (via _ensure_registry_dir_component), so the
+        # branch choice is not a security boundary on ownership either.
+        if os.fstat(parent_fd).st_uid != os.geteuid():
+            raise PuffoV0RegistryError(
+                "puffo-v0 runtime registry parent directory is owned by another user"
+            )
         os.close(
             _ensure_registry_dir_component(parent_fd, path.name, require_owner_only=True)
         )

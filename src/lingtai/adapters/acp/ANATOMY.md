@@ -91,12 +91,12 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   *dedicated owner-only directory*: it builds the built-in `~/.lingtai/<profile>`
   namespace node by node with per-node `O_NOFOLLOW` and creates only the final
   component of any other location under an already-existing parent with
-  `O_NOFOLLOW` on both the registry directory and the node directly above it,
-  never `chmod`-ing or creating through an operator-supplied or symlinked
-  directory and rejecting a non-conforming existing directory. The branch is
-  chosen by path value (is it the built-in namespace), not provenance, and is not
-  a security boundary — both branches verify those two levels non-symlink and
-  require the leaf `0700`. Every
+  `O_NOFOLLOW` and an owner check on both the registry directory and the node
+  directly above it, never `chmod`-ing or creating through an operator-supplied or
+  symlinked directory and rejecting a non-conforming existing directory. The branch
+  is chosen by path value (is it the built-in namespace), not provenance, and is not
+  a security boundary — both branches verify those two levels non-symlink and owned
+  by the user and require the leaf `0700`. Every
   call site shares one resolved, absolute location. It
   refuses missing, malformed, tampered, retargeted, or revoked entries before
   Agent construction. Its `entry_digest` authenticates registry data rather

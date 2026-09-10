@@ -3330,6 +3330,31 @@ def test_provision_rejects_a_symlinked_registry_directory_parent(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_rejects_a_foreign_owned_node(monkeypatch, tmp_path):
+    # Owner enforcement on the owned-node path: the registry directory AND the node
+    # directly above it must be owned by the current euid (symmetric checks -- the
+    # operator branch's parent fstat and _ensure_registry_dir_component's uid
+    # check). A single-uid CI cannot chown a directory to another user, so drive
+    # the check from the other side: geteuid() reports a uid that owns nothing
+    # here. (Family-level coverage: it proves uid enforcement is present on the
+    # path; it cannot isolate the parent check from the leaf check, since both
+    # compare against geteuid().)
+    import lingtai.adapters.acp.puffo_v0 as puffo_v0
+
+    dedicated = tmp_path / "dedicated"
+    dedicated.mkdir(mode=0o700)
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = dedicated / "runtime-registry.json"
+    monkeypatch.setattr(puffo_v0.os, "geteuid", lambda: os.getuid() + 1)
+    with pytest.raises(PuffoV0RegistryError):
+        provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
 def test_provision_rejects_an_existing_non_owner_only_registry_directory(tmp_path):
     shared = tmp_path / "shared"
     shared.mkdir(mode=0o755)

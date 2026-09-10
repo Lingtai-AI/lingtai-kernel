@@ -119,7 +119,10 @@ a dedicated owner-only (`0700`) directory you own; LingTai creates a missing one
 already-existing parent) but **rejects** an existing directory that is a symlink,
 is owned by another user, or is not already `0700` rather than changing its
 permissions — fix such a directory, or point elsewhere, instead of relying on
-LingTai to harden it.
+LingTai to harden it. The directory's **parent** must likewise be a non-symlink
+directory you own; on macOS in particular do not place the registry one level
+under `/tmp` (a symlink) — put it at least two levels below any symlinked
+ancestor, or it is rejected with "parent directory is unavailable or a symlink".
 Provisioning and launch must name the **same** registry — `acp` resolves the id
 against the location you give it (both at startup and in the pre-serve
 re-resolve), so a launch pointed at a different registry than its `provision` used
