@@ -171,7 +171,17 @@ the evidence trail in the task report.
   every discover `bound` output resolves and every `available` output provisions
   (with a healthy control exercising both branches), and every blocking subtype
   stays blocked and byte-unchanged across `revoke` — swept per subtype, not by a
-  single sample, and across registry insertion orders.
+  single sample, and across registry insertion orders. Confirm the registry
+  *location* is operator-selectable without mutating `HOME`: a non-empty
+  `LINGTAI_PUFFO_V0_REGISTRY` (or a `--registry` flag) redirects
+  `default_registry_path`, an explicit flag wins over the environment which wins
+  over the HOME-relative default, and the `provision`/`revoke`/`discover` control
+  plane and the `acp` launch (its initial resolve AND its pre-serve re-resolve)
+  all consult the same selected registry — so a launch pointed at a registry the
+  runtime was not provisioned into fails closed, and an isolated run never creates
+  the HOME-relative default. A non-absolute location is rejected (never created
+  under the process cwd). The selection changes only the location; bindings and
+  integrity still derive solely from the named registry's entry.
 3. Inspect the profile session and turn-origin cases: `puffo-v0` rejects every
    non-empty `mcpServers` input. `puffo-v1` accepts exactly one `puffo` service
    with `-m puffo_agent.mcp.puffo_core_server`, a deployment-local absolute

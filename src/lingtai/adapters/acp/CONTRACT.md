@@ -298,13 +298,25 @@ argv, environment, or MCP command from the remote caller.
    The existing risky-action gate remains first and may deny without a request.
 11. `acp-local-stdio.puffo-v0.v1` — `lingtai-agent acp --profile puffo-v0
     --runtime-id <id>` resolves `<id>` only through the local
-    operator-managed registry. The entry must be active, structurally exact,
+    operator-managed registry. The registry *location* is operator launch
+    configuration, not a protocol input: it defaults to the HOME-relative
+    profile path, and an operator MAY select an explicit location — an absolute
+    path; a relative one is rejected — with `--registry <path>` or the
+    `LINGTAI_PUFFO_V0_REGISTRY` environment variable (flag over environment over
+    default). The provision, revoke, and discover control-plane commands and both
+    launch resolves consult the same selected registry, so a launch must name the
+    registry its runtime was provisioned into. This selects only the location: it is supplied by the
+    local spawner (the same trust class as argv/environment), is never settable
+    by the remote caller (the data plane still receives only the id), and the
+    binding and integrity rules below still derive solely from the named registry
+    entry. The entry must be active, structurally exact,
     entry-digest-valid, and bind one initialized agent directory and canonical
     workspace to their provision-time canonical path plus POSIX device/inode/
     owner/group identity. Resolve rejects a symlink retarget, canonical-path
     drift, or replacement at the same path; active runtime bindings are unique
     for both agent directory and workspace. The composition root resolves the
-    runtime again immediately before Agent construction. This narrows ordinary
+    runtime again, against the same selected registry, immediately before Agent
+    construction. This narrows ordinary
     resolve-to-start drift; a same-OS principal that rewrites the filesystem
     after that check remains within the explicit host trust boundary below.
     `entry_digest` protects the exact registry entry only; it is not a digest

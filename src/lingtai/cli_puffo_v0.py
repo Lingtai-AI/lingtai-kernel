@@ -29,25 +29,38 @@ def add_puffo_v0_parser(
     provision.add_argument("--runtime-id", required=True)
     provision.add_argument("--agent-dir", type=Path, required=True)
     provision.add_argument("--workspace", type=Path, required=True)
+    # Operator override for the registry location (absolute path). Defaults to
+    # LINGTAI_PUFFO_V0_REGISTRY or the HOME-relative path when omitted. Launch
+    # must target this same registry (acp --registry / the env var).
+    provision.add_argument("--registry", type=Path, default=None)
     provision.add_argument("--json", action="store_true", dest="as_json")
     revoke = commands.add_parser(
         "revoke",
         help="Prevent future puffo-v0 ACP spawns for one runtime id",
     )
     revoke.add_argument("--runtime-id", required=True)
+    revoke.add_argument("--registry", type=Path, default=None)
     revoke.add_argument("--json", action="store_true", dest="as_json")
     discover = commands.add_parser(
         "discover",
         help="List initialized agents below one user-selected directory",
     )
     discover.add_argument("--root", type=Path, required=True)
+    # Same registry override as provision/revoke so attribution of walked
+    # directories matches the registry a flag-based provision actually wrote.
+    discover.add_argument("--registry", type=Path, default=None)
     discover.add_argument("--json", action="store_true", dest="as_json")
 
 
 def handle_puffo_v0_command(args: argparse.Namespace) -> None:
     try:
         if args.puffo_v0_command == "provision":
-            runtime = provision_runtime(args.runtime_id, args.agent_dir, args.workspace)
+            runtime = provision_runtime(
+                args.runtime_id,
+                args.agent_dir,
+                args.workspace,
+                registry_path=args.registry,
+            )
             payload = {
                 "status": "provisioned",
                 "runtime_id": runtime.runtime_id,
@@ -56,10 +69,10 @@ def handle_puffo_v0_command(args: argparse.Namespace) -> None:
                 "entry_digest": runtime.entry_digest,
             }
         elif args.puffo_v0_command == "revoke":
-            revoke_runtime(args.runtime_id)
+            revoke_runtime(args.runtime_id, registry_path=args.registry)
             payload = {"status": "revoked", "runtime_id": args.runtime_id}
         elif args.puffo_v0_command == "discover":
-            candidates = discover_runtimes(args.root)
+            candidates = discover_runtimes(args.root, registry_path=args.registry)
             payload = {
                 "runtimes": [
                     {

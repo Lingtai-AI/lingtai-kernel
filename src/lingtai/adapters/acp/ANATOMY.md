@@ -79,7 +79,14 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   identity, serializes provision/revoke read-modify-write operations with a
   POSIX lock, records terminal revocations in an append-only tombstone log, and
   performs read-only discovery of initialized identities below one caller-selected
-  root without following directory symlinks or creating registry artifacts. It
+  root without following directory symlinks or creating registry artifacts. Its
+  `default_registry_path` owns the single registry location: HOME-relative by
+  default, or the operator override `REGISTRY_PATH_ENV_VAR`
+  (`LINGTAI_PUFFO_V0_REGISTRY`) when set, so an explicit `registry_path=`
+  argument threaded from a CLI flag overrides the environment which overrides the
+  default. A single `_registry_location` helper resolves that choice for
+  provision/revoke/resolve/discover and rejects a non-absolute path, so every
+  call site shares one resolved, absolute location. It
   refuses missing, malformed, tampered, retargeted, or revoked entries before
   Agent construction. Its `entry_digest` authenticates registry data rather
   than claiming to authenticate the effective manifest, tool/action, or full
@@ -98,13 +105,18 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   composes the existing Agent, consumes the typed bounded stop proof, and hard-
   exits on incomplete quiescence so no later Python state write can race teardown.
   For both Puffo profiles, it consumes the one launcher-injected Driver authority
-  descriptor and composes either its root Port pair or a fail-closed pair.
+  descriptor and composes either its root Port pair or a fail-closed pair. Its
+  `--registry` flag selects the registry location and is threaded into both the
+  initial resolve and the pre-serve re-resolve (the same value reaches `run_acp`),
+  so both consult the operator-selected registry.
   Shared poisoned-worker exit logging is lease-aware: retained ownership may log,
   while a successful `STOPPED` release skips every later workdir append and still
   reaches the unconditional process exit.
 - `../../cli_puffo_v0.py` — local-only control plane that discovers initialized
   identities below an explicit root, provisions an existing persistent identity,
   or revokes it for future `puffo-v0` launches; it is not an ACP data-plane surface.
+  Provision and revoke accept a `--registry` location override (flag, else
+  `LINGTAI_PUFFO_V0_REGISTRY`, else the default).
 - `../../kernel/process_match.py` — exact duplicate-host grammar for module,
   console, legacy, and quoted Windows `.exe` ACP launch forms.
 - `../../kernel/turns.py`, `../../kernel/execution_workspace.py`, `../../kernel/turn_events.py`, `../../kernel/turn_permissions.py`, `../../kernel/provider_admission.py`, and `../../kernel/tool_executor.py` — inward Core boundary consumed by the Adapter:

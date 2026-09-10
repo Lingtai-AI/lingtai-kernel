@@ -26,6 +26,11 @@ from lingtai.kernel.provider_admission import (
 
 
 PROFILE_NAME = "puffo-v0"
+# Operator-supplied override for the registry location. Set in the environment
+# of the process that launches the CLI (the same trust class as argv/HOME), not
+# reachable by the remote ACP caller. An absolute path is expected; a missing or
+# empty value falls back to the HOME-relative default.
+REGISTRY_PATH_ENV_VAR = "LINGTAI_PUFFO_V0_REGISTRY"
 REGISTRY_VERSION = 4
 REVOCATION_LOG_REQUIRED = "required"
 _RUNTIME_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
@@ -204,9 +209,38 @@ class PuffoV0DiscoveryCandidate:
 
 
 def default_registry_path() -> Path:
-    """Return the one operator-managed registry location for this profile."""
+    """Return the one operator-managed registry location for this profile.
 
+    Honors the ``LINGTAI_PUFFO_V0_REGISTRY`` operator override when set to a
+    non-empty value, so an operator whose launch environment forbids mutating
+    ``HOME`` can still isolate the registry. Every un-overridden call site
+    (``provision``/``revoke``/``resolve``/``discover``) routes through here, so
+    the override threads through all of them uniformly. An explicit
+    ``registry_path=`` argument still wins over this environment default.
+    """
+
+    override = os.environ.get(REGISTRY_PATH_ENV_VAR)
+    if override:
+        return Path(override)
     return Path.home() / ".lingtai" / PROFILE_NAME / "runtime-registry.json"
+
+
+def _registry_location(registry_path: Path | None) -> Path:
+    """Resolve the effective registry path and require it to be absolute.
+
+    Both the explicit ``registry_path`` (a ``--registry`` flag) and the
+    ``LINGTAI_PUFFO_V0_REGISTRY`` default are operator-supplied. A relative value
+    would be created or read under the launching process's current directory,
+    which a driver-spawned child neither controls nor predicts — the same
+    "looks configured, lands elsewhere" class as an empty ``HOME``. Reject it at
+    the single point every registry operation resolves its location through, so
+    the failure is loud at the boundary instead of a silently wrong directory.
+    """
+
+    path = registry_path or default_registry_path()
+    if not path.is_absolute():
+        raise PuffoV0RegistryError("registry path must be absolute")
+    return path
 
 
 def _valid_runtime_id(runtime_id: object) -> str:
@@ -899,7 +933,7 @@ def provision_runtime(
     workspace_binding = _directory_binding(workspace, field="workspace")
     if not (agent_dir / "init.json").is_file():
         raise PuffoV0RegistryError("agent_dir must contain init.json")
-    path = registry_path or default_registry_path()
+    path = _registry_location(registry_path)
     with _registry_mutation_lock(path):
         if path.exists():
             revoked_runtime_ids = _read_revoked_runtime_ids(path)
@@ -978,7 +1012,7 @@ def revoke_runtime(runtime_id: str, *, registry_path: Path | None = None) -> Non
     """Mark a provisioned profile identity unavailable for future ACP spawns."""
 
     runtime_id = _valid_runtime_id(runtime_id)
-    path = registry_path or default_registry_path()
+    path = _registry_location(registry_path)
     with _registry_mutation_lock(path):
         registry = _read_registry(path)
         entry = registry["runtimes"].get(runtime_id)
@@ -1277,7 +1311,7 @@ def discover_runtimes(
 
     _require_posix_registry_security()
     canonical_root = _canonical_directory(root, field="root")
-    index = _discovery_records(registry_path or default_registry_path())
+    index = _discovery_records(_registry_location(registry_path))
     candidates: list[PuffoV0DiscoveryCandidate] = []
 
     def _ignore_walk_error(_error: OSError) -> None:
@@ -1385,7 +1419,7 @@ def resolve_runtime(
     """Resolve one active runtime id into an immutable local spawn specification."""
 
     runtime_id = _valid_runtime_id(runtime_id)
-    path = registry_path or default_registry_path()
+    path = _registry_location(registry_path)
     _secure_registry_directory(path.parent)
     revoked_runtime_ids = _read_revoked_runtime_ids(path)
     registry = _read_registry(path)
@@ -1424,6 +1458,7 @@ __all__ = [
     "PuffoV0Runtime",
     "PuffoV0RuntimePolicy",
     "PuffoV0RuntimeState",
+    "REGISTRY_PATH_ENV_VAR",
     "RUNTIME_POLICY",
     "default_registry_path",
     "discover_runtimes",

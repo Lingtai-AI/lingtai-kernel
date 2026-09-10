@@ -103,6 +103,21 @@ through the local operator registry (`~/.lingtai/puffo-v0/runtime-registry.json`
 to its bound persistent identity and workspace. The profile rejects an unknown,
 tampered, or revoked id before constructing the Agent. Revoke a future launch
 with `lingtai-agent puffo-v0 revoke --runtime-id puffo-agent-7`.
+
+To isolate the registry without mutating `HOME` (for example a staging run that
+must not touch a production registry), select its location explicitly. Pass
+`--registry /abs/path/runtime-registry.json` to `provision`, `revoke`,
+`discover`, and `acp`, or set
+`LINGTAI_PUFFO_V0_REGISTRY=/abs/path/runtime-registry.json` in the launch
+environment; an explicit flag wins over the environment, which wins over the
+HOME-relative default. The location must be an **absolute** path — a relative one
+is rejected rather than created under the process's current directory.
+Provisioning and launch must name the **same** registry — `acp` resolves the id
+against the location you give it (both at startup and in the pre-serve
+re-resolve), so a launch pointed at a different registry than its `provision` used
+fails closed with *runtime id is not provisioned*. The location selects only which
+registry is read, while every binding and integrity rule still derives solely from
+that registry's entry.
 Revocation does not terminate an already-running ACP host or invalidate its
 in-progress turn; stop that host separately when incident response must stop
 existing work.
