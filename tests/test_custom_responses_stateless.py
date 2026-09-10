@@ -42,6 +42,28 @@ def _text_raw(response_id: str, text: str = "ok"):
     )
 
 
+def _text_raw_assistant_list(response_id: str, text: str):
+    """A raw output message with the SDK's assistant role and list content."""
+    return SimpleNamespace(
+        id=response_id,
+        output=[
+            SimpleNamespace(
+                type="message",
+                role="assistant",
+                content=[SimpleNamespace(type="output_text", text=text)],
+            )
+        ],
+        usage=_usage(),
+    )
+
+
+def _tool_raw_with_assistant_message_role():
+    """Raw tool turn whose output message carries the SDK role field."""
+    raw = _tool_raw()
+    raw.output[1].role = "assistant"
+    return raw
+
+
 def _tool_raw():
     return SimpleNamespace(
         id="resp_tool",
@@ -103,6 +125,94 @@ def _stream_text(response_id: str, text: str = "ok"):
         SimpleNamespace(
             type="response.completed",
             response=SimpleNamespace(id=response_id, usage=_usage()),
+        ),
+    ]
+
+
+def _stream_raw_tool_turn(response_id: str):
+    """Stream a reasoning + function-call turn with a complete raw trailer."""
+    output = [
+        SimpleNamespace(
+            type="reasoning",
+            id="rs_raw_tool",
+            summary=[SimpleNamespace(type="summary_text", text="Need tool.")],
+        ),
+        SimpleNamespace(
+            type="message",
+            id="msg_raw_tool",
+            role="assistant",
+            content=[SimpleNamespace(type="output_text", text="Checking.")],
+        ),
+        SimpleNamespace(
+            type="function_call",
+            id="fc_raw_tool",
+            call_id="call_1",
+            name="lookup",
+            arguments='{"query":"x"}',
+        ),
+    ]
+    return [
+        SimpleNamespace(
+            type="response.output_item.added",
+            item=SimpleNamespace(type="reasoning", id="rs_raw_tool"),
+        ),
+        SimpleNamespace(
+            type="response.reasoning_summary_text.delta",
+            delta="Need tool.",
+            item_id="rs_raw_tool",
+        ),
+        SimpleNamespace(
+            type="response.reasoning_summary_text.done",
+            text="Need tool.",
+            item_id="rs_raw_tool",
+        ),
+        SimpleNamespace(type="response.output_text.delta", delta="Checking."),
+        SimpleNamespace(
+            type="response.output_item.added",
+            item=SimpleNamespace(
+                type="function_call",
+                call_id="call_1",
+                name="lookup",
+            ),
+        ),
+        SimpleNamespace(
+            type="response.function_call_arguments.delta",
+            delta='{"query":"x"}',
+            item_id="call_1",
+        ),
+        SimpleNamespace(
+            type="response.output_item.done",
+            item=output[-1],
+        ),
+        SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                id=response_id,
+                output=output,
+                usage=_usage(reasoning_tokens=2),
+            ),
+        ),
+    ]
+
+
+def _stream_raw_plain_list_turn(response_id: str, text: str = "final"):
+    output = [
+        SimpleNamespace(
+            type="message",
+            id="msg_raw_plain",
+            role="assistant",
+            content=[SimpleNamespace(type="output_text", text=text)],
+        )
+    ]
+    return [
+        SimpleNamespace(type="response.output_text.delta", delta=text),
+        SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                id=response_id,
+                output=output,
+                usage=_usage(),
+            ),
         ),
     ]
 
@@ -928,6 +1038,105 @@ def test_custom_stream_replays_completion_output_items_without_projection_or_dup
             "output": '{"ok": true}',
         },
     ]
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_raw_message_without_reasoning_stays_authoritative_across_three_calls(
+    monkeypatch,
+    streaming,
+):
+    """Raw output remains an exact prefix; fallback only repairs canonical text."""
+    # This exercises the shipped default rather than an explicit opt-out.
+    monkeypatch.delenv("LINGTAI_INJECT_REASONING_FALLBACK", raising=False)
+    adapter = create_custom_adapter(
+        api_key="fake",
+        api_compat="openai",
+        base_url="https://sub2api.example/v1",
+        wire_api="responses",
+    )
+    if streaming:
+        responses = _StreamResponses([
+            _stream_raw_tool_turn("resp_1"),
+            _stream_raw_plain_list_turn("resp_2"),
+            _stream_text("resp_3", "next"),
+        ])
+    else:
+        responses = _Responses([
+            _tool_raw_with_assistant_message_role(),
+            _text_raw_assistant_list("resp_2", "final"),
+            _text_raw_assistant_list("resp_3", "next"),
+        ])
+    adapter._client = _Client(responses)
+    session = adapter.create_chat("gpt-test", "system", tools=[_tool()])
+    send = session.send_stream if streaming else session.send
+
+    first = send("start")
+    assert first.tool_calls[0].id == "call_1"
+    second = send([
+        ToolResultBlock(id="call_1", name="lookup", content={"value": 1}),
+    ])
+    assert second.text == "final"
+    send("next")
+
+    requests = adapter._client.responses.kwargs
+    assert len(requests) == 3
+    tool_request = requests[1]["input"]
+    continuation_request = requests[2]["input"]
+    # The first assistant output is replayed exactly, including item order and
+    # list-valued message content, before the real tool result.
+    assert tool_request[0] == {"role": "user", "content": "start"}
+    assert [item.get("type") for item in tool_request[1:4]] == [
+        "reasoning", "message", "function_call",
+    ]
+    assert tool_request[2]["content"] == [
+        {"type": "output_text", "text": "Checking."},
+    ]
+    assert tool_request[4] == {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": '{"value": 1}',
+    }
+
+    expected_plain = (
+        {
+            "type": "message",
+            "id": "msg_raw_plain",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "final"}],
+        }
+        if streaming
+        else {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "final"}],
+        }
+    )
+    assert continuation_request == [*tool_request, expected_plain, {
+        "role": "user", "content": "next",
+    }]
+
+
+@pytest.mark.parametrize("content", ["legacy final", "", None])
+def test_reasoning_fallback_only_repairs_legacy_string_assistant_items(content):
+    raw_message = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "raw final"}],
+        "phase": "final_answer",
+    }
+    items = [
+        {"type": "function_call", "call_id": "c1", "name": "f1", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+        {"role": "assistant", "content": content},
+        raw_message,
+    ]
+
+    out = openai_adapter_module._inject_responses_reasoning_fallback(items)
+
+    assert out[2]["type"] == "reasoning"
+    assert out[3] == {"role": "assistant", "content": content}
+    assert out[4] is raw_message
+    assert out[4] == raw_message
 
 
 def test_send_none_replays_pre_staged_notification_style_pair():
