@@ -2278,12 +2278,12 @@ def _inject_responses_reasoning_fallback(items: list[dict]) -> list[dict]:
 
     Responses items are a flat list; a single assistant turn can span
     multiple items (reasoning, text, function_call). After the first
-    ``function_call`` item we must ensure every later assistant turn
-    carries a ``reasoning`` item — the Responses analogue of
-    ``_inject_chat_reasoning_fallback``. We walk the list, track
-    whether a ``function_call`` has been seen, and for each ``assistant``
-    text item that follows a call without an immediately-preceding
-    reasoning item, insert one before it.
+    ``function_call`` item, legacy canonical assistant text can receive a
+    ``reasoning`` fallback, as in ``_inject_chat_reasoning_fallback``.
+    Raw Responses messages and array-valued content are authoritative and
+    pass through unchanged. For eligible legacy text after a call with no
+    immediately preceding reasoning item, insert a per-turn fallback.
+    Missing legacy text retains the historical empty-text fallback.
     """
     seen_function_call = False
     turn_idx = 0
@@ -2293,11 +2293,11 @@ def _inject_responses_reasoning_fallback(items: list[dict]) -> list[dict]:
             seen_function_call = True
             out.append(item)
             continue
-        if seen_function_call and item.get("role") == "assistant":
+        if (seen_function_call and item.get("role") == "assistant"
+                and item.get("type") != "message"
+                and (item.get("content") is None or isinstance(item.get("content"), str))):
+            # Only legacy text is repaired; valid raw output is never synthesized.
             turn_idx += 1
-            # Insert a fallback reasoning item before this assistant text
-            # item unless the immediately preceding item already carries
-            # reasoning (real thinking was preserved).
             if not (out and out[-1].get("type") == "reasoning"):
                 out.append(
                     _fallback_responses_reasoning_item(

@@ -115,7 +115,7 @@ mechanism on `OpenAIAdapter` / `OpenAIChatSession` / `OpenAIResponsesSession`:
   that lack it (per-turn-unique stub via `_fallback_reasoning_for`; real captured
   `ThinkingBlock`s are never overwritten). On the Responses wire,
   `_inject_responses_reasoning_fallback` inserts per-turn-unique `reasoning`
-  input items after the first `function_call` for assistant turns that lack one.
+  input items after the first `function_call` for legacy canonical assistant text that lacks one; raw `type="message"` items and array-valued content pass through unchanged (`adapter.py:2276-2310`).
   On by default (env `LINGTAI_INJECT_REASONING_FALLBACK` to disable); an
   explicit constructor/provider-config value wins over the env.
 - `reasoning_effort_vocab` (`str`, default `openai`) — selects the retained
