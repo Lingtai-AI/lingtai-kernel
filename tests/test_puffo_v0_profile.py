@@ -3308,6 +3308,28 @@ def test_provision_rejects_a_symlinked_registry_directory(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_rejects_a_symlinked_registry_directory_parent(tmp_path):
+    # The node directly ABOVE the registry directory must not be a symlink either
+    # (O_NOFOLLOW on the operator branch's parent open), symmetric with the
+    # built-in branch's ~/.lingtai check, so the branch choice is not a security
+    # boundary.
+    real_parent = tmp_path / "real"
+    real_parent.mkdir(mode=0o700)
+    link_parent = tmp_path / "link"
+    link_parent.symlink_to(real_parent, target_is_directory=True)
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    # registry directory = link/regdir; its parent `link` is a symlink.
+    registry = link_parent / "regdir" / "runtime-registry.json"
+    with pytest.raises(PuffoV0RegistryError):
+        provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    assert not (real_parent / "regdir").exists()  # never created through the symlink
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
 def test_provision_rejects_an_existing_non_owner_only_registry_directory(tmp_path):
     shared = tmp_path / "shared"
     shared.mkdir(mode=0o755)

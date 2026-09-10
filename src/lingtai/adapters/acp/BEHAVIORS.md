@@ -184,9 +184,13 @@ the evidence trail in the task report.
   any filesystem access; and the registry directory must be a dedicated owner-only
   (`0700`) directory LingTai owns: LingTai builds its own `~/.lingtai/<profile>`
   namespace node by node with `O_NOFOLLOW` (never through a planted symlink, even
-  from a same-uid sibling), creates only the final component of an operator-selected
-  location under an already-existing parent, and rejects — never re-`chmod`s — an
-  existing directory that is a symlink, is foreign-owned, or is not already `0700`.
+  from a same-uid sibling), creates only the final component of any other location
+  under an already-existing parent with `O_NOFOLLOW` on both the registry directory
+  and the node directly above it, and rejects — never re-`chmod`s — an existing
+  directory that is a symlink, is foreign-owned, or is not already `0700`. The
+  branch (built-in namespace vs other) is chosen by path value, not by how the
+  location was configured, and is not a security boundary — both branches verify
+  those two levels non-symlink and require the leaf `0700`.
   The selection changes only the location; bindings and integrity still derive
   solely from the named registry's entry.
 3. Inspect the profile session and turn-origin cases: `puffo-v0` rejects every

@@ -529,18 +529,27 @@ def _secure_registry_directory(path: Path) -> None:
     creates or hardens a directory it owns; it never ``chmod``s or creates through
     an operator-supplied or symlinked directory:
 
-    * The built-in ``~/.lingtai/<profile>`` namespace — used when neither
-      ``--registry`` nor ``LINGTAI_PUFFO_V0_REGISTRY`` redirects the location — is
+    * The built-in ``~/.lingtai/<profile>`` namespace — selected whenever the
+      resolved location *is* that path, by path value and not by how it was
+      configured (an operator that names it gets the same handling) — is
       created/verified node by node (``~/.lingtai`` then ``<profile>``), each with
       ``O_NOFOLLOW``, so a sibling process sharing the uid cannot redirect the
       chain by planting a symlink one level up. ``$HOME`` and above are not
       LingTai's namespace and are left unmanaged (the boundary stops here).
-    * An operator-supplied location has only its final component created; its
-      parent must already exist, so LingTai never materializes an operator's
-      ancestor chain and never follows an operator symlink into an arbitrary
-      target. Ancestor symlinks (e.g. ``/tmp`` → ``/private/tmp``) are the
-      operator's placement choice and are not rejected; only the final registry
-      directory itself must not be a symlink.
+    * Any other location has only its final component created; its parent must
+      already exist, so LingTai never materializes an ancestor chain and never
+      follows an operator symlink into an arbitrary target. The final registry
+      directory **and the node directly above it** must not be symlinks
+      (``O_NOFOLLOW`` on both); higher ancestors (e.g. ``/tmp`` → ``/private/tmp``)
+      are the operator's placement choice and are followed.
+
+    The branch above is therefore not a security boundary: whichever branch a
+    path takes, the registry directory and the node directly above it are both
+    verified non-symlink, and the leaf is required to be ``0700``. The branch only
+    decides how many nodes are created (two for the built-in namespace, one
+    otherwise) and whether the intermediate ``~/.lingtai`` mode is left unchecked;
+    it depends on ``Path.home()`` at call time, but a reclassification would only
+    change that creation depth, never a security property.
 
     In both cases an already-existing target that is a symlink, is foreign-owned,
     or is not an owner-only (``0o700``) directory is rejected loudly rather than
@@ -551,6 +560,7 @@ def _secure_registry_directory(path: Path) -> None:
 
     _require_posix_registry_security()
     directory = getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
     home = Path.home()
     if path == home / ".lingtai" / PROFILE_NAME:
         try:
@@ -575,10 +585,16 @@ def _secure_registry_directory(path: Path) -> None:
         return
 
     try:
-        parent_fd = os.open(path.parent, os.O_RDONLY | directory)
+        # O_NOFOLLOW here so the node directly above the registry directory is not
+        # a symlink either — symmetric with the built-in branch's O_NOFOLLOW on
+        # `~/.lingtai`. This makes the branch choice above irrelevant to the
+        # symlink guarantee: whichever branch a path takes, the registry directory
+        # and the node directly above it are both verified non-symlink. Higher
+        # ancestors remain the operator's placement choice and are followed.
+        parent_fd = os.open(path.parent, os.O_RDONLY | directory | nofollow)
     except OSError as exc:
         raise PuffoV0RegistryError(
-            "puffo-v0 runtime registry parent directory is unavailable"
+            "puffo-v0 runtime registry parent directory is unavailable or a symlink"
         ) from exc
     try:
         os.close(

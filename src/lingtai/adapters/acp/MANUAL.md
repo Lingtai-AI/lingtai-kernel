@@ -308,7 +308,8 @@ The Phase A registry is POSIX-only: it serializes provision/revoke updates,
 records terminal revocations in an append-only local tombstone log, and creates
 its registry directory as `0700` and registry, tombstone, temporary, and lock
 files as `0600`, independent of umask. LingTai creates its own
-`~/.lingtai/<profile>` namespace node by node with `O_NOFOLLOW` and never
+`~/.lingtai/<profile>` namespace node by node with `O_NOFOLLOW`, verifies both
+the registry directory and the node directly above it are non-symlinks, and never
 `chmod`s or creates through an operator-supplied or symlinked directory; an
 existing registry directory that is not an owner-only (`0700`) directory it owns
 is rejected rather than re-hardened, while existing owner-only registry *files*
