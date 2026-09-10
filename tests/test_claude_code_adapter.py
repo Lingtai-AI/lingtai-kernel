@@ -265,6 +265,13 @@ def test_command_includes_print_json_model_and_disables_all_builtin_tools():
     assert "--tools" in cmd
     assert cmd[cmd.index("--tools") + 1] == ""
     assert "--disallowedTools" not in cmd
+    # Host-MCP isolation: the CLI must load zero ambient MCP. The neutral cwd
+    # only blocks *project*-level MCP; --strict-mcp-config plus an inline empty
+    # --mcp-config make the session's mcp_servers empty regardless of
+    # user/global config or account connectors.
+    assert "--strict-mcp-config" in cmd
+    assert "--mcp-config" in cmd
+    assert cmd[cmd.index("--mcp-config") + 1] == '{"mcpServers":{}}'
     # prompt is piped via stdin, not argv
     assert captured["kw"]["input"]
     # Stable context (protocol/system/tools) lives in the system-prompt file
@@ -303,6 +310,36 @@ def test_explicit_disallowed_tools_keeps_disallowed_tools_flag():
     assert "--disallowedTools" in cmd
     assert "Bash" in cmd and "Read" in cmd
     assert "--tools" not in cmd
+    # Host-MCP isolation is emitted UNCONDITIONALLY, so the --disallowedTools
+    # path is isolated from ambient MCP too — not only the --tools "" default.
+    assert "--strict-mcp-config" in cmd
+    assert cmd[cmd.index("--mcp-config") + 1] == '{"mcpServers":{}}'
+
+
+def test_command_isolates_host_mcp_regardless_of_tool_mode():
+    """--strict-mcp-config + inline empty --mcp-config appear in every mode.
+
+    This is the leak fix: without it the CLI loads user/global config and
+    account connectors (verified: claude.ai connectors present in the session
+    mcp_servers on 2.1.265; empty tools/mcp_servers with the flags on
+    2.1.260/2.1.265). The two flags are a fixed pair and independent of the
+    built-in-tool disabling mode.
+    """
+    for kwargs in ({}, {"disallowed_tools": ["Bash"]}):
+        ad = ClaudeCodeAdapter(model="opus", **kwargs)
+        sess = ad.create_chat("opus", "sys", None)
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            return _FakeProc(stdout=_envelope('{"action":"final","text":"ok"}'))
+
+        with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+            sess.send("hi")
+        cmd = captured["cmd"]
+        assert "--strict-mcp-config" in cmd, kwargs
+        mc = cmd.index("--mcp-config")
+        assert cmd[mc + 1] == '{"mcpServers":{}}', kwargs
 
 
 def test_append_system_prompt_mode_keeps_legacy_flag():
