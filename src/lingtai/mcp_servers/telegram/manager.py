@@ -768,7 +768,7 @@ DESCRIPTION = (
     "with `check`, `read`, or `search`; use `send` only for an authorized new "
     "message to a real numeric chat_id, or `reply` with a copied compound "
     "message_id from `read`/`search`. Content-bearing send/reply/edit defaults to "
-    "Markdown; use `media.type='document'` for generated files and `photo` only "
+    "Markdown; choose `rendering_mode` to fit the scenario; use `media.type='document'` for generated files and `photo` only "
     "for an inline preview. `placeholder` is progress-only: edit phases, then "
     "send the final answer separately. `read` marks returned records read; "
     "`check` counts incoming unread; `search` uses a regex. `edit` and `delete` "
