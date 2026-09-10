@@ -166,7 +166,10 @@ class MimoResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         items = (
             compacted_replay
             if compacted_replay is not None
-            else to_responses_input(self._interface)
+            else to_responses_input(
+                self._interface,
+                replay_raw_output_items=True,
+            )
         )
         self._pending_request_representation = items
         return items
@@ -216,7 +219,10 @@ class MimoResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             return []
         temp_interface = ChatInterface()
         temp_interface.entries.extend(entries)
-        return to_responses_input(temp_interface)
+        return to_responses_input(
+            temp_interface,
+            replay_raw_output_items=True,
+        )
 
     def _compact_now(self) -> None:
         """Call standalone MiMo compaction and store the opaque replay basis.

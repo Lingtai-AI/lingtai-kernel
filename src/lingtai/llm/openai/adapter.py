@@ -54,7 +54,12 @@ from lingtai.kernel.llm.reasoning_effort import (
 from lingtai.llm.base import LLMAdapter
 from .codex_effort import CodexEffortDescriptor, resolve_codex_effort_descriptor
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
-from ..interface_converters import to_openai, to_responses_input
+from ..interface_converters import (
+    _responses_replay_fingerprint,
+    _responses_snapshot_ids_are_unique,
+    to_openai,
+    to_responses_input,
+)
 from lingtai.kernel.llm.streaming import StreamingAccumulator
 from lingtai.llm.identity_headers import lingtai_user_agent, merge_lingtai_identity_headers
 from lingtai.kernel.token_counter import count_tokens
@@ -1530,6 +1535,491 @@ def _handle_responses_reasoning_event(
     return False
 
 
+_RESPONSES_OUTPUT_ITEMS_KEY = "openai_responses_output_items"
+_RESPONSES_REPLAY_FINGERPRINT_KEY = "openai_responses_replay_fingerprint"
+_RESPONSES_MISSING = object()
+
+
+_RESPONSES_INVALID = object()
+
+
+def _responses_json_value(value: Any) -> Any:
+    """Copy only JSON-shaped SDK/simple event values.
+
+    OpenAI response models are dumped in JSON mode and the local fixtures use
+    ``SimpleNamespace``.  Any other leaf is rejected rather than stringified;
+    the caller then declines the complete raw snapshot and uses canonical
+    blocks instead.
+    """
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else _RESPONSES_INVALID
+    if isinstance(value, dict):
+        converted: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                return _RESPONSES_INVALID
+            item = _responses_json_value(item)
+            if item is _RESPONSES_INVALID:
+                return _RESPONSES_INVALID
+            converted[key] = item
+        return converted
+    if isinstance(value, (list, tuple)):
+        converted_list = [_responses_json_value(item) for item in value]
+        return (
+            _RESPONSES_INVALID
+            if any(item is _RESPONSES_INVALID for item in converted_list)
+            else converted_list
+        )
+    if isinstance(value, SimpleNamespace):
+        return _responses_json_value(vars(value))
+    return _RESPONSES_INVALID
+
+
+def _responses_item_to_dict(item: Any) -> dict | None:
+    """Serialize one documented SDK/dict/fixture output item."""
+    try:
+        if isinstance(item, dict):
+            converted = _responses_json_value(item)
+            return converted if isinstance(converted, dict) else None
+        if isinstance(item, SimpleNamespace):
+            converted = _responses_json_value(vars(item))
+            return converted if isinstance(converted, dict) else None
+        model_dump = getattr(item, "model_dump", None)
+        if not callable(model_dump):
+            return None
+        converted = model_dump(mode="json", exclude_unset=True)
+        converted = _responses_json_value(converted)
+        return converted if isinstance(converted, dict) else None
+    except Exception:
+        # A cyclic fixture or SDK serialization failure is an invalid snapshot,
+        # not a reason to weaken the JSON boundary or stringify the object.
+        return None
+
+
+def _responses_output_items_from_response(raw: Any) -> list[dict] | None:
+    """Return a complete non-stream Responses output list, when supplied."""
+    if getattr(raw, "status", None) not in (None, "completed"):
+        return None
+    output = getattr(raw, "output", _RESPONSES_MISSING)
+    if output is _RESPONSES_MISSING or output is None:
+        return None
+    if isinstance(output, (str, bytes, dict)):
+        return None
+    try:
+        raw_items = list(output)
+    except TypeError:
+        return None
+    items = [_responses_item_to_dict(item) for item in raw_items]
+    if any(item is None for item in items):
+        return None
+    converted = [item for item in items if item is not None]
+    return converted if _responses_snapshot_ids_are_unique(converted) else None
+
+
+class _ResponsesStreamOutputRecorder:
+    """Collect complete Responses output items without trusting projections."""
+
+    def __init__(self) -> None:
+        self._order: list[str] = []
+        self._added: set[str] = set()
+        self._done: set[str] = set()
+        self._items: dict[str, dict] = {}
+        self._indices: dict[str, int | None] = {}
+        self._item_ids: dict[str, str] = {}
+        self._index_keys: dict[int, str] = {}
+        self._id_keys: dict[str, str] = {}
+        self._completed = False
+        self._terminal_invalid = False
+        self._completion_output: Any = _RESPONSES_MISSING
+        self._anonymous_index = 0
+        self._summary_item_ids: set[str] = set()
+        self._saw_output_text = False
+        self._saw_reasoning_summary = False
+        self._saw_function_arguments = False
+        self._incomplete_done_item = False
+        self._active_function_key: str | None = None
+        self._function_argument_deltas: dict[str, str] = {}
+        self._function_argument_done: dict[str, str] = {}
+
+    @staticmethod
+    def _output_index(event: Any, item: Any) -> int | None | object:
+        index = getattr(event, "output_index", _RESPONSES_MISSING)
+        if index is _RESPONSES_MISSING or index is None:
+            index = getattr(item, "output_index", _RESPONSES_MISSING)
+        if index is _RESPONSES_MISSING or index is None:
+            return None
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            return _RESPONSES_INVALID
+        return index
+
+    @staticmethod
+    def _item_id(item: Any, event: Any) -> str | None:
+        item_id = (
+            getattr(item, "id", None)
+            or getattr(item, "call_id", None)
+            or getattr(event, "item_id", None)
+        )
+        return item_id if isinstance(item_id, str) and item_id else None
+
+    def _key_for_item_id(self, item_id: str | None) -> str | None:
+        if item_id and item_id in self._id_keys:
+            return self._id_keys[item_id]
+        return self._active_function_key
+
+    def _record_key(self, item: Any, event: Any, *, done: bool) -> str | None:
+        item_type = getattr(item, "type", None) or "unknown"
+        item_id = self._item_id(item, event)
+        index = self._output_index(event, item)
+        if index is _RESPONSES_INVALID:
+            self._terminal_invalid = True
+            return None
+        existing_by_index = self._index_keys.get(index) if index is not None else None
+        existing_by_id = self._id_keys.get(item_id) if item_id else None
+        if (
+            existing_by_index is not None
+            and existing_by_id is not None
+            and existing_by_index != existing_by_id
+        ):
+            self._terminal_invalid = True
+            return None
+        key = existing_by_index or existing_by_id
+        if key is None and not item_id and index is None and done:
+            # A few gateways omit both identity axes on output_item.done. Pair
+            # that event with the first unmatched same-type added item; this is
+            # deterministic, but only the all-unindexed path may use it.
+            key = next(
+                (
+                    candidate
+                    for candidate in self._order
+                    if candidate not in self._done
+                    and self._indices.get(candidate) is None
+                    and self._item_ids.get(candidate) is None
+                    and candidate.startswith(f"{item_type}:")
+                ),
+                None,
+            )
+        if key is None:
+            if item_id:
+                key = f"{item_type}:{item_id}"
+            elif index is not None:
+                key = f"{item_type}:index:{index}"
+            else:
+                self._anonymous_index += 1
+                key = f"{item_type}:anonymous:{self._anonymous_index}"
+            if key in self._order:
+                self._terminal_invalid = True
+                return None
+            if index is not None and index in self._index_keys:
+                self._terminal_invalid = True
+                return None
+            if item_id and item_id in self._id_keys:
+                self._terminal_invalid = True
+                return None
+            self._order.append(key)
+            self._indices[key] = index
+            self._item_ids[key] = item_id
+            if index is not None:
+                self._index_keys[index] = key
+            if item_id:
+                self._id_keys[item_id] = key
+        else:
+            previous_index = self._indices.get(key)
+            previous_id = self._item_ids.get(key)
+            if (
+                previous_index is not None
+                and index is not None
+                and previous_index != index
+            ) or (previous_id and item_id and previous_id != item_id):
+                self._terminal_invalid = True
+                return None
+            if index is not None and previous_index is None:
+                if index in self._index_keys and self._index_keys[index] != key:
+                    self._terminal_invalid = True
+                    return None
+                self._indices[key] = index
+                self._index_keys[index] = key
+            if item_id and previous_id is None:
+                if item_id in self._id_keys and self._id_keys[item_id] != key:
+                    self._terminal_invalid = True
+                    return None
+                self._item_ids[key] = item_id
+                self._id_keys[item_id] = key
+            if (done and key in self._done) or (not done and key in self._added):
+                # Repeated identity/index events must not silently overwrite an
+                # earlier output item. A single added -> done pair is allowed.
+                self._terminal_invalid = True
+                return None
+        return key
+
+    def observe(self, event: Any) -> None:
+        event_type = getattr(event, "type", None)
+        if event_type in {"response.failed", "response.incomplete"}:
+            self._terminal_invalid = True
+            self._completed = False
+            return
+        if event_type == "response.output_text.delta":
+            self._saw_output_text = True
+        elif event_type in {
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+        }:
+            self._saw_reasoning_summary = True
+            item_id = getattr(event, "item_id", None)
+            if isinstance(item_id, str) and item_id:
+                self._summary_item_ids.add(item_id)
+        elif event_type in {
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+        }:
+            self._saw_function_arguments = True
+            key = self._key_for_item_id(getattr(event, "item_id", None))
+            if key:
+                if event_type.endswith("delta"):
+                    delta = getattr(event, "delta", None)
+                    if isinstance(delta, str):
+                        self._function_argument_deltas[key] = (
+                            self._function_argument_deltas.get(key, "") + delta
+                        )
+                else:
+                    arguments = getattr(event, "arguments", None)
+                    if isinstance(arguments, str):
+                        self._function_argument_done[key] = arguments
+        if event_type in {
+            "response.output_item.added",
+            "response.output_item.done",
+        }:
+            item = getattr(event, "item", None)
+            if item is None:
+                self._terminal_invalid = True
+                return
+            done = event_type.endswith("done")
+            key = self._record_key(item, event, done=done)
+            if key is None:
+                return
+            if not done:
+                self._added.add(key)
+                if getattr(item, "type", None) == "function_call":
+                    self._active_function_key = key
+                return
+            serialized = _responses_item_to_dict(item)
+            if serialized is None:
+                self._incomplete_done_item = True
+                return
+            item_type = serialized.get("type")
+            if item_type == "function_call" and "arguments" not in serialized:
+                arguments = (
+                    self._function_argument_done.get(key)
+                    or self._function_argument_deltas.get(key)
+                )
+                if arguments is not None:
+                    serialized["arguments"] = arguments
+            if item_type == "function_call" and "arguments" not in serialized:
+                self._incomplete_done_item = True
+            if item_type == "message" and "content" not in serialized:
+                self._incomplete_done_item = True
+            if (
+                item_type == "reasoning"
+                and self._item_ids.get(key) in self._summary_item_ids
+                and "summary" not in serialized
+            ):
+                self._incomplete_done_item = True
+            self._done.add(key)
+            self._items[key] = serialized
+            return
+        if event_type == "response.completed":
+            self._completed = True
+            response = getattr(event, "response", None)
+            status = getattr(response, "status", _RESPONSES_MISSING)
+            if status is not _RESPONSES_MISSING and status not in {None, "completed"}:
+                self._terminal_invalid = True
+            self._completion_output = getattr(
+                response, "output", _RESPONSES_MISSING,
+            )
+
+    @staticmethod
+    def _valid_item_list(raw_items: Any) -> list[dict] | None:
+        if isinstance(raw_items, (str, bytes, dict)):
+            return None
+        try:
+            raw_items = list(raw_items)
+        except TypeError:
+            return None
+        items = [_responses_item_to_dict(item) for item in raw_items]
+        if any(item is None for item in items):
+            return None
+        converted = [item for item in items if item is not None]
+        return converted if _responses_snapshot_ids_are_unique(converted) else None
+
+    def _finalized_done_items(self) -> list[dict] | None:
+        """Return a complete, safely ordered item-done snapshot, if provable."""
+        if not self._done or self._added - self._done or self._incomplete_done_item:
+            return None
+        done_items = [self._items[key] for key in self._order if key in self._done]
+        if self._summary_item_ids - {
+            self._item_ids.get(key) for key in self._done if self._item_ids.get(key)
+        }:
+            return None
+        if self._saw_output_text and not any(
+            item.get("type") == "message" for item in done_items
+        ):
+            return None
+        indices = [self._indices.get(key) for key in self._done]
+        if any(index is not None for index in indices):
+            if any(index is None for index in indices):
+                return None
+            ordered_indices = sorted(index for index in indices if index is not None)
+            if ordered_indices != list(range(len(done_items))):
+                return None
+            keys = sorted(
+                (key for key in self._done),
+                key=lambda key: self._indices[key],
+            )
+            return [self._items[key] for key in keys]
+        return done_items
+
+    def finalized_items(self) -> list[dict] | None:
+        if not self._completed or self._terminal_invalid:
+            return None
+        if self._completion_output is not _RESPONSES_MISSING and self._completion_output is not None:
+            items = self._valid_item_list(self._completion_output)
+            if items is None:
+                return None
+            # An empty trailer is not authoritative when deltas or item events
+            # already proved that output existed. Reconcile complete item-done
+            # evidence when possible; otherwise fall back to canonical blocks.
+            if not items and (
+                self._order
+                or self._summary_item_ids
+                or self._saw_output_text
+                or self._saw_reasoning_summary
+                or self._saw_function_arguments
+                or self._function_argument_deltas
+                or self._function_argument_done
+            ):
+                return self._finalized_done_items()
+            return items
+
+        # A compatible stream may omit response.output entirely. Item-done is
+        # sufficient only when every observed item has reached done; added-only
+        # or partial output is deliberately not committed as complete.
+        return self._finalized_done_items()
+
+
+def _responses_normalized_response(
+    items: list[dict],
+    usage: UsageMetadata,
+) -> LLMResponse | None:
+    """Normalize complete raw output items without using lossy projections.
+
+    This is intentionally limited to the documented output item forms that the
+    streaming accumulator already understands. Unknown or malformed shapes do
+    not become a falsely successful raw replay; callers fall back to the
+    accumulator and decline the raw sidecar.
+    """
+    text_parts: list[str] = []
+    thoughts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    for item in items:
+        item_type = item.get("type")
+        if item_type == "message":
+            content = item.get("content")
+            if not isinstance(content, list):
+                return None
+            for part in content:
+                if not isinstance(part, dict):
+                    return None
+                part_type = part.get("type")
+                if part_type != "output_text":
+                    return None
+                text = part.get("text")
+                if not isinstance(text, str):
+                    return None
+                text_parts.append(text)
+        elif item_type == "reasoning":
+            summary = item.get("summary")
+            if not isinstance(summary, list):
+                return None
+            for part in summary:
+                if not isinstance(part, dict) or part.get("type") != "summary_text":
+                    return None
+                text = part.get("text")
+                if not isinstance(text, str):
+                    return None
+                if text:
+                    thoughts.append(text)
+        elif item_type == "function_call":
+            name = item.get("name")
+            arguments = item.get("arguments")
+            if not isinstance(name, str) or not isinstance(arguments, str):
+                return None
+            try:
+                args = json.loads(arguments) if arguments else {}
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            if not isinstance(args, dict):
+                args = {}
+            call_id = item.get("call_id")
+            tool_calls.append(
+                ToolCall(
+                    name=name,
+                    args=args,
+                    id=call_id if isinstance(call_id, str) else None,
+                )
+            )
+        else:
+            return None
+    return LLMResponse(
+        # StreamingAccumulator concatenates text deltas across content parts
+        # and output messages without inserting separators. Match that same
+        # projection while retaining the original boundaries in the raw items.
+        text="".join(text_parts),
+        tool_calls=tool_calls,
+        usage=usage,
+        thoughts=thoughts,
+    )
+
+
+def _responses_responses_match(left: LLMResponse, right: LLMResponse) -> bool:
+    """Compare normalized stream output without hiding observed portions."""
+    if right.text and (not left.text or left.text != right.text):
+        return False
+    if right.thoughts:
+        if not left.thoughts:
+            return False
+        left_thoughts = iter(left.thoughts)
+        if not all(
+            any(candidate == thought for candidate in left_thoughts)
+            for thought in right.thoughts
+        ):
+            return False
+    if right.tool_calls:
+        for observed in right.tool_calls:
+            if not any(
+                candidate.id == observed.id
+                and candidate.name == observed.name
+                and candidate.args == observed.args
+                for candidate in left.tool_calls
+            ):
+                return False
+    return True
+
+
+def _responses_merge_normalized_response(
+    trailer: LLMResponse,
+    accumulated: LLMResponse,
+) -> LLMResponse:
+    """Fill only portions omitted by a complete trailer from observed deltas."""
+    return LLMResponse(
+        text=trailer.text or accumulated.text,
+        tool_calls=trailer.tool_calls or accumulated.tool_calls,
+        usage=trailer.usage,
+        thoughts=trailer.thoughts or accumulated.thoughts,
+        raw=trailer.raw,
+    )
+
+
 def _parse_responses_api_response(raw) -> LLMResponse:
     """Parse a raw OpenAI Responses API response into a provider-agnostic LLMResponse."""
     text_parts = []
@@ -1657,8 +2147,11 @@ def _consume_responses_stream(
     response_id = None
     usage = UsageMetadata()
     seen_reasoning_summary_items: set[str] = set()
+    output_recorder = _ResponsesStreamOutputRecorder()
+    saw_output_text_delta = False
 
     for event in stream:
+        output_recorder.observe(event)
         # Any lifecycle event may carry the response id (``response.created``,
         # ``response.in_progress``, ``response.incomplete``, ``response.failed``,
         # ``response.completed``).  Latch the newest one so a stream that ends
@@ -1670,6 +2163,7 @@ def _consume_responses_stream(
         if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
             continue
         if event.type == "response.output_text.delta":
+            saw_output_text_delta = saw_output_text_delta or bool(event.delta)
             acc.add_text(event.delta)
             if on_chunk:
                 on_chunk(event.delta)
@@ -1705,7 +2199,31 @@ def _consume_responses_stream(
                     cached_tokens=cached_tokens,
                 )
 
-    return acc.finalize(usage=usage), response_id
+    accumulated = acc.finalize(usage=usage)
+    output_items = output_recorder.finalized_items()
+    response = accumulated
+    if output_items is not None:
+        # A completion trailer is also the only complete output source for
+        # several forced-SSE gateways. Normalize it for the caller instead of
+        # leaving tool calls/text hidden in the private replay sidecar.
+        normalized = _responses_normalized_response(output_items, usage)
+        if normalized is not None and _responses_responses_match(normalized, accumulated):
+            response = _responses_merge_normalized_response(normalized, accumulated)
+            if on_chunk and not saw_output_text_delta and normalized.text:
+                on_chunk(normalized.text)
+        else:
+            # Contradictory or unsupported trailer shape cannot safely claim a
+            # raw/canonical round trip. Keep an already observed projection;
+            # with no projection at all, fail instead of claiming a successful
+            # tool turn whose only output is not normalized.
+            if not accumulated.text and not accumulated.thoughts and not accumulated.tool_calls:
+                raise ValueError("Responses stream trailer could not be normalized safely")
+            output_items = None
+    # Keep the raw replay candidate private to this transient response. The
+    # stateless session records it only after the whole stream has finalized;
+    # incomplete/error streams therefore cannot commit partial raw history.
+    setattr(response, "_openai_responses_output_items", output_items)
+    return response, response_id
 
 
 # ---------------------------------------------------------------------------
@@ -2530,7 +3048,11 @@ class OpenAIResponsesSession(ChatSession):
         self._interface._pending_system = restored._pending_system
         self._interface.tool_result_recovery_lookup = recovery_lookup
 
-    def _record_assistant_response(self, response: LLMResponse) -> None:
+    def _record_assistant_response(
+        self,
+        response: LLMResponse,
+        output_items: list[dict] | None = None,
+    ) -> None:
         blocks: list = []
         for thought in response.thoughts:
             if thought:
@@ -2541,8 +3063,20 @@ class OpenAIResponsesSession(ChatSession):
             blocks.append(ToolCallBlock(id=tc.id or "", name=tc.name, args=tc.args))
         if not blocks:
             blocks.append(TextBlock(text=""))
+
+        provider_data: dict[str, Any] = {}
+        if output_items is not None:
+            # This metadata is an immutable-by-convention snapshot of the
+            # completed provider output. Validity is tied to the visible
+            # canonical blocks so edits/summaries cannot resurrect stale raw
+            # fields; the converter deep-copies it on every replay.
+            provider_data = {
+                _RESPONSES_OUTPUT_ITEMS_KEY: copy.deepcopy(output_items),
+                _RESPONSES_REPLAY_FINGERPRINT_KEY: _responses_replay_fingerprint(blocks),
+            }
         self._interface.add_assistant_message(
             blocks,
+            provider_data=provider_data,
             model=self._model,
             provider="openai",
             usage={
@@ -2567,7 +3101,10 @@ class OpenAIResponsesSession(ChatSession):
         a per-turn-unique fallback item injected (generic version of the
         former DeepSeek behavior).
         """
-        items = to_responses_input(self._interface)
+        items = to_responses_input(
+            self._interface,
+            replay_raw_output_items=True,
+        )
         if self._inject_reasoning_fallback:
             return _inject_responses_reasoning_fallback(items)
         return items
@@ -2629,8 +3166,18 @@ class OpenAIResponsesSession(ChatSession):
             else:
                 response = _parse_responses_api_response(raw)
                 response_id = raw.id
+                setattr(
+                    response,
+                    "_openai_responses_output_items",
+                    _responses_output_items_from_response(raw),
+                )
             if self._stateless_replay:
-                self._record_assistant_response(response)
+                self._record_assistant_response(
+                    response,
+                    output_items=getattr(
+                        response, "_openai_responses_output_items", None
+                    ),
+                )
             else:
                 self._adopt_response_id(response_id)
             return response
@@ -2678,7 +3225,12 @@ class OpenAIResponsesSession(ChatSession):
             stream = self._client.responses.create(**kwargs)
             response, response_id = _consume_responses_stream(stream, on_chunk)
             if self._stateless_replay:
-                self._record_assistant_response(response)
+                self._record_assistant_response(
+                    response,
+                    output_items=getattr(
+                        response, "_openai_responses_output_items", None
+                    ),
+                )
             else:
                 self._adopt_response_id(response_id)
             return response
@@ -5152,7 +5704,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         ``notification_guidance`` copy, without mutating canonical history.
         """
         return _freeze_responses_outputs(
-            to_responses_input(iface),
+            to_responses_input(iface, replay_raw_output_items=False),
             self._ws_frozen_outputs,
         )
 

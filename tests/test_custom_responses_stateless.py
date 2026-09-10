@@ -158,6 +158,74 @@ def _stream_tool_events(response_id: str):
     ]
 
 
+def _stream_raw_mixed_events(response_id: str):
+    output = [
+        SimpleNamespace(
+            type="message",
+            id="msg_mixed",
+            phase="commentary",
+            content=[SimpleNamespace(type="output_text", text="visible")],
+        ),
+        SimpleNamespace(type="reasoning", id="rs_mixed", summary=[]),
+        SimpleNamespace(
+            type="function_call",
+            id="fc_mixed",
+            status="completed",
+            call_id="call_mixed",
+            name="lookup",
+            arguments='{"query":"x","n":1}',
+        ),
+    ]
+    return [
+        SimpleNamespace(
+            type="response.output_item.added",
+            item=SimpleNamespace(type="message", id="msg_mixed"),
+        ),
+        SimpleNamespace(type="response.output_text.delta", delta="visible"),
+        SimpleNamespace(
+            type="response.output_item.done",
+            item=output[0],
+        ),
+        SimpleNamespace(
+            type="response.output_item.added",
+            item=SimpleNamespace(type="reasoning", id="rs_mixed"),
+        ),
+        SimpleNamespace(
+            type="response.output_item.done",
+            item=output[1],
+        ),
+        SimpleNamespace(
+            type="response.output_item.added",
+            item=SimpleNamespace(
+                type="function_call",
+                id="fc_mixed",
+                call_id="call_mixed",
+                name="lookup",
+            ),
+        ),
+        SimpleNamespace(
+            type="response.function_call_arguments.delta",
+            delta='{"query"',
+        ),
+        SimpleNamespace(
+            type="response.function_call_arguments.delta",
+            delta=':"x","n":1}',
+        ),
+        SimpleNamespace(
+            type="response.output_item.done",
+            item=output[2],
+        ),
+        SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                id=response_id,
+                output=output,
+                usage=_usage(input_tokens=15, output_tokens=8, reasoning_tokens=2),
+            ),
+        ),
+    ]
+
+
 def _forced_sse_tool_response(response_id: str) -> str:
     """SSE body from a provider that ignored a non-streaming request."""
     events = [
@@ -312,12 +380,17 @@ def test_custom_responses_nonstreaming_replays_full_history_and_records_assistan
             "type": "reasoning",
             "summary": [{"type": "summary_text", "text": "Need tool."}],
         },
-        {"role": "assistant", "content": "Checking."},
+        {
+            "type": "message",
+            "content": [
+                {"type": "output_text", "text": "Checking."},
+            ],
+        },
         {
             "type": "function_call",
             "call_id": "call_1",
             "name": "lookup",
-            "arguments": '{"query": "x"}',
+            "arguments": '{"query":"x"}',
         },
         {
             "type": "function_call_output",
@@ -368,6 +441,50 @@ def test_custom_responses_nonstreaming_parses_provider_forced_sse_without_retry(
         "thinking_tokens": 3,
         "cached_tokens": 4,
     }
+
+
+@pytest.mark.parametrize("status", ["failed", "incomplete"])
+def test_nonstream_noncompleted_status_does_not_commit_raw_snapshot(status):
+    raw = _text_raw("resp_partial", "partial")
+    raw.status = status
+    adapter = create_custom_adapter(
+        api_key="fake", api_compat="openai",
+        base_url="https://sub2api.example/v1", wire_api="responses",
+    )
+    adapter._client = _Client(_Responses([raw]))
+    session = adapter.create_chat("gpt-test", "system")
+    session.send("first")
+    assert "openai_responses_output_items" not in (
+        session.interface.entries[2].provider_data or {}
+    )
+
+
+def test_forced_sse_partial_item_done_does_not_commit_partial_raw_replay():
+    adapter = create_custom_adapter(
+        api_key="fake",
+        api_compat="openai",
+        base_url="https://sub2api.example/v1",
+        wire_api="responses",
+    )
+    adapter._client = _Client(
+        _Responses([
+            _forced_sse_tool_response("resp_forced"),
+            _text_raw("resp_next", "done"),
+        ])
+    )
+    session = adapter.create_chat("gpt-test", "system", tools=[_tool()])
+
+    session.send("first")
+    session.send([
+        ToolResultBlock(id="call_forced", name="lookup", content={"ok": True}),
+    ])
+
+    replay = adapter._client.responses.kwargs[1]["input"]
+    assert {item["type"] for item in replay if "type" in item} >= {
+        "reasoning",
+        "function_call",
+    }
+    assert not any(item.get("type") == "message" for item in replay)
 
 
 def test_forced_sse_completed_without_usage_does_not_crash():
@@ -501,6 +618,316 @@ def test_custom_responses_streaming_replays_reasoning_tool_result_full_history()
         "thinking_tokens": 2,
         "cached_tokens": 1,
     }
+
+
+def _stream_empty_completion_after_visible_delta(response_id: str):
+    return [
+        SimpleNamespace(
+            type="response.output_item.done",
+            item=SimpleNamespace(
+                type="message",
+                id="msg_empty_trailer",
+                content=[SimpleNamespace(type="output_text", text="visible")],
+            ),
+        ),
+        SimpleNamespace(type="response.output_text.delta", delta="visible"),
+        SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                id=response_id,
+                output=[],
+                usage=_usage(),
+            ),
+        ),
+    ]
+
+
+def _stream_trailer_only_output(response_id: str):
+    return [
+        SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                id=response_id,
+                output=[
+                    SimpleNamespace(
+                        type="message",
+                        id="msg_trailer_only",
+                        content=[SimpleNamespace(type="output_text", text="trailer text")],
+                    ),
+                    SimpleNamespace(
+                        type="function_call",
+                        id="fc_trailer_only",
+                        call_id="call_trailer_only",
+                        name="lookup",
+                        arguments='{"query":"trailer"}',
+                    ),
+                ],
+                usage=_usage(),
+            ),
+        ),
+    ]
+
+
+def _stream_done_only_indexed(response_id: str, rows):
+    events = [
+        SimpleNamespace(
+            type="response.output_item.done",
+            output_index=index,
+            item=SimpleNamespace(
+                type="message",
+                id=item_id,
+                content=[SimpleNamespace(type="output_text", text=text)],
+            ),
+        )
+        for index, item_id, text in rows
+    ]
+    events.append(
+        SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(id=response_id, usage=_usage()),
+        )
+    )
+    return events
+
+
+def test_custom_stream_empty_completion_output_keeps_observed_projection():
+    adapter = create_custom_adapter(
+        api_key="fake",
+        api_compat="openai",
+        base_url="https://sub2api.example/v1",
+        wire_api="responses",
+    )
+    adapter._client = _Client(
+        _StreamResponses([
+            _stream_empty_completion_after_visible_delta("resp_empty"),
+            _stream_text("resp_next", "done"),
+        ])
+    )
+    session = adapter.create_chat("gpt-test", "system")
+
+    first = session.send_stream("first")
+    assert first.text == "visible"
+    session.send_stream("second")
+
+    assert adapter._client.responses.kwargs[1]["input"][1] == {
+        "type": "message",
+        "id": "msg_empty_trailer",
+        "content": [{"type": "output_text", "text": "visible"}],
+    }
+    assert session.interface.entries[2].provider_data["openai_responses_output_items"]
+
+
+def test_custom_stream_trailer_only_normalizes_visible_output_and_tool_call():
+    adapter = create_custom_adapter(
+        api_key="fake",
+        api_compat="openai",
+        base_url="https://sub2api.example/v1",
+        wire_api="responses",
+    )
+    adapter._client = _Client(
+        _StreamResponses([
+            _stream_trailer_only_output("resp_trailer_only"),
+            _stream_text("resp_next", "done"),
+        ])
+    )
+    session = adapter.create_chat("gpt-test", "system", tools=[_tool()])
+
+    chunks: list[str] = []
+    first = session.send_stream("first", on_chunk=chunks.append)
+    assert first.text == "trailer text"
+    assert chunks == ["trailer text"]
+    assert [(call.id, call.name, call.args) for call in first.tool_calls] == [
+        ("call_trailer_only", "lookup", {"query": "trailer"}),
+    ]
+    session.send_stream([
+        ToolResultBlock(id="call_trailer_only", name="lookup", content={"ok": True}),
+    ])
+
+    assert adapter._client.responses.kwargs[1]["input"][1:4] == [
+        {
+            "type": "message",
+            "id": "msg_trailer_only",
+            "content": [{"type": "output_text", "text": "trailer text"}],
+        },
+        {
+            "type": "function_call",
+            "id": "fc_trailer_only",
+            "call_id": "call_trailer_only",
+            "name": "lookup",
+            "arguments": '{"query":"trailer"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_trailer_only",
+            "output": '{"ok": true}',
+        },
+    ]
+    assert [type(block) for block in session.interface.entries[2].content] == [
+        TextBlock,
+        ToolCallBlock,
+    ]
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [(0, "msg_gap_0", "zero"), (2, "msg_gap_2", "two")],
+        [(0, "msg_duplicate", "first"), (1, "msg_duplicate", "second")],
+    ],
+    ids=["indexed_gap", "duplicate_id"],
+)
+def test_custom_stream_done_only_unsafe_identity_falls_back_to_canonical(rows):
+    adapter = create_custom_adapter(
+        api_key="fake",
+        api_compat="openai",
+        base_url="https://sub2api.example/v1",
+        wire_api="responses",
+    )
+    adapter._client = _Client(
+        _StreamResponses([
+            _stream_done_only_indexed("resp_unsafe", rows),
+            _stream_text("resp_next", "done"),
+        ])
+    )
+    session = adapter.create_chat("gpt-test", "system")
+
+    session.send_stream("first")
+    session.send_stream("second")
+
+    # Empty canonical assistant projections were already omitted by the
+    # converter. Unsafe raw item identities must not reappear in the request.
+    assert adapter._client.responses.kwargs[1]["input"] == [
+        {"role": "user", "content": "first"},
+        {"role": "user", "content": "second"},
+    ]
+    assert "openai_responses_output_items" not in (
+        session.interface.entries[2].provider_data or {}
+    )
+
+
+@pytest.mark.parametrize("separate_messages", [False, True])
+def test_custom_stream_multiple_text_parts_preserve_raw_boundaries(separate_messages):
+    parts = [
+        SimpleNamespace(type="output_text", text="first"),
+        SimpleNamespace(type="output_text", text="second"),
+    ]
+    output = [SimpleNamespace(type="message", id="msg_1", content=parts)]
+    expected = [{
+        "type": "message", "id": "msg_1",
+        "content": [{"type": "output_text", "text": part.text} for part in parts],
+    }]
+    if separate_messages:
+        output = [
+            SimpleNamespace(type="message", id=f"msg_{index}", phase=phase, content=[part])
+            for index, (phase, part) in enumerate(
+                zip(("commentary", "final_answer"), parts), 1,
+            )
+        ]
+        expected = [
+            {"type": "message", "id": item.id, "phase": item.phase,
+             "content": [{"type": "output_text", "text": item.content[0].text}]}
+            for item in output
+        ]
+    events = [
+        SimpleNamespace(type="response.output_text.delta", delta=part.text)
+        for part in parts
+    ]
+    events.append(SimpleNamespace(
+        type="response.completed",
+        response=SimpleNamespace(id="resp_parts", output=output, usage=_usage()),
+    ))
+    adapter = create_custom_adapter(
+        api_key="fake", api_compat="openai",
+        base_url="https://sub2api.example/v1", wire_api="responses",
+    )
+    adapter._client = _Client(_StreamResponses([events, _stream_text("resp_next", "done")]))
+    session = adapter.create_chat("gpt-test", "system")
+    chunks = []
+    response = session.send_stream("first", on_chunk=chunks.append)
+    assert response.text == "firstsecond"
+    assert chunks == ["first", "second"]
+    session.send_stream("next")
+    assert adapter._client.responses.kwargs[1]["input"][1:-1] == expected
+
+
+def test_custom_stream_done_only_uses_output_index_order():
+    adapter = create_custom_adapter(
+        api_key="fake",
+        api_compat="openai",
+        base_url="https://sub2api.example/v1",
+        wire_api="responses",
+    )
+    adapter._client = _Client(
+        _StreamResponses([
+            _stream_done_only_indexed(
+                "resp_indexed",
+                [(1, "msg_one", "one"), (0, "msg_zero", "zero")],
+            ),
+            _stream_text("resp_next", "done"),
+        ])
+    )
+    session = adapter.create_chat("gpt-test", "system")
+
+    session.send_stream("first")
+    session.send_stream("second")
+
+    assert adapter._client.responses.kwargs[1]["input"][1:3] == [
+        {
+            "type": "message",
+            "id": "msg_zero",
+            "content": [{"type": "output_text", "text": "zero"}],
+        },
+        {
+            "type": "message",
+            "id": "msg_one",
+            "content": [{"type": "output_text", "text": "one"}],
+        },
+    ]
+
+
+def test_custom_stream_replays_completion_output_items_without_projection_or_duplication():
+    adapter = create_custom_adapter(
+        api_key="fake",
+        api_compat="openai",
+        base_url="https://sub2api.example/v1",
+        wire_api="responses",
+    )
+    adapter._client = _Client(
+        _StreamResponses([
+            _stream_raw_mixed_events("resp_mixed"),
+            _stream_text("resp_next", "done"),
+        ])
+    )
+    session = adapter.create_chat("gpt-test", "system", tools=[_tool()])
+
+    session.send_stream("first")
+    session.send_stream([
+        ToolResultBlock(id="call_mixed", name="lookup", content={"ok": True}),
+    ])
+
+    assert adapter._client.responses.kwargs[1]["input"] == [
+        {"role": "user", "content": "first"},
+        {
+            "type": "message",
+            "id": "msg_mixed",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "visible"}],
+        },
+        {"type": "reasoning", "id": "rs_mixed", "summary": []},
+        {
+            "type": "function_call",
+            "id": "fc_mixed",
+            "status": "completed",
+            "call_id": "call_mixed",
+            "name": "lookup",
+            "arguments": '{"query":"x","n":1}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_mixed",
+            "output": '{"ok": true}',
+        },
+    ]
 
 
 def test_send_none_replays_pre_staged_notification_style_pair():
@@ -645,7 +1072,8 @@ def test_stateless_send_rolls_back_if_enforce_or_serialize_fails_after_staging(
 
         monkeypatch.setattr(session.interface, "enforce_tool_pairing", fail_enforce)
     else:
-        def fail_serialize(_iface):
+        def fail_serialize(_iface, *, replay_raw_output_items=False):
+            assert replay_raw_output_items is True
             raise RuntimeError("serialize")
 
         monkeypatch.setattr(openai_adapter_module, "to_responses_input", fail_serialize)
@@ -746,7 +1174,10 @@ def test_stateless_history_round_trips_for_recreated_session_restart():
 
     assert adapter._client.responses.kwargs[0]["input"] == [
         {"role": "user", "content": "first"},
-        {"role": "assistant", "content": "one"},
+        {
+            "type": "message",
+            "content": [{"type": "output_text", "text": "one"}],
+        },
         {"role": "user", "content": "second"},
     ]
 

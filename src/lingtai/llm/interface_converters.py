@@ -8,7 +8,9 @@ Naming convention:
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import math
 from typing import Any
 
 from lingtai.kernel.llm.interface import (
@@ -19,6 +21,129 @@ from lingtai.kernel.llm.interface import (
     ToolCallBlock,
     ToolResultBlock,
 )
+
+
+_RESPONSES_OUTPUT_ITEMS_KEY = "openai_responses_output_items"
+_RESPONSES_REPLAY_FINGERPRINT_KEY = "openai_responses_replay_fingerprint"
+
+
+def _responses_replay_fingerprint(content: list[ContentBlock]) -> str:
+    """Fingerprint visible canonical blocks that validate raw Responses replay.
+
+    Provider metadata is intentionally excluded: changing a summary, message,
+    or tool call in canonical history must invalidate the raw provider snapshot,
+    while an opaque provider field must not become part of the validity token.
+    """
+    blocks: list[dict[str, Any]] = []
+    for block in content:
+        if isinstance(block, TextBlock):
+            blocks.append({"type": "text", "text": block.text})
+        elif isinstance(block, ThinkingBlock):
+            blocks.append({"type": "thinking", "text": block.text})
+        elif isinstance(block, ToolCallBlock):
+            blocks.append({
+                "type": "tool_call",
+                "id": block.id,
+                "name": block.name,
+                "args": block.args,
+            })
+        elif isinstance(block, ToolResultBlock):
+            blocks.append({
+                "type": "tool_result",
+                "id": block.id,
+                "name": block.name,
+                "content": block.content,
+            })
+        else:  # pragma: no cover - ContentBlock is a closed union today.
+            blocks.append({"type": type(block).__name__, "value": repr(block)})
+    try:
+        encoded = json.dumps(
+            blocks,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        # Canonical blocks are normally JSON-shaped.  A malformed/manual block
+        # still needs a stable validity token, but it must never be serialized
+        # as a provider snapshot or invented with ``default=str``.
+        encoded = repr(blocks)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _responses_snapshot_is_json(value: Any) -> bool:
+    """Accept only values that can exist in a JSON Responses snapshot."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_responses_snapshot_is_json(item) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _responses_snapshot_is_json(item)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _responses_snapshot_ids_are_unique(items: list[dict]) -> bool:
+    """Reject duplicate stable IDs in a persisted output-item snapshot."""
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        for field_name in ("id", "call_id"):
+            value = item.get(field_name)
+            if not isinstance(value, str) or not value:
+                continue
+            identity = (field_name, value)
+            if identity in seen:
+                return False
+            seen.add(identity)
+    return True
+
+
+def _contains_redacted_value(value: Any) -> bool:
+    """Reject redacted opaque values from raw upstream replay."""
+    if isinstance(value, str):
+        return value.startswith("<REDACTED:") and value.endswith(">")
+    if isinstance(value, dict):
+        return any(_contains_redacted_value(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_redacted_value(v) for v in value)
+    return False
+
+
+def _responses_replay_items_for_entry(entry: Any) -> list[dict] | None:
+    """Return a valid immutable-copy raw output snapshot for one entry.
+
+    Missing metadata, a changed canonical entry, or redacted provider data all
+    deliberately fall back to the normal lossy projection for compatibility
+    with old/manual histories. The returned list is always a deep copy so a
+    provider SDK cannot mutate canonical history during conversion.
+    """
+    provider_data = getattr(entry, "provider_data", None)
+    if not isinstance(provider_data, dict):
+        return None
+    items = provider_data.get(_RESPONSES_OUTPUT_ITEMS_KEY)
+    fingerprint = provider_data.get(_RESPONSES_REPLAY_FINGERPRINT_KEY)
+    if not isinstance(items, list) or not isinstance(fingerprint, str):
+        return None
+    if fingerprint != _responses_replay_fingerprint(getattr(entry, "content", [])):
+        return None
+    try:
+        if _contains_redacted_value(items):
+            return None
+        if not _responses_snapshot_is_json(items):
+            return None
+        if not all(isinstance(item, dict) for item in items):
+            return None
+        if not _responses_snapshot_ids_are_unique(items):
+            return None
+        return copy.deepcopy(items)
+    except Exception:
+        # Malformed/cyclic manually-created metadata is an invalid snapshot.
+        return None
 
 
 _RUNTIME_ROOTS = frozenset({"tool_meta", "agent_meta"})
@@ -404,7 +529,11 @@ def _pair_responses_orphan_function_calls(items: list[dict]) -> list[dict]:
     return patched
 
 
-def to_responses_input(iface: ChatInterface) -> list[dict]:
+def to_responses_input(
+    iface: ChatInterface,
+    *,
+    replay_raw_output_items: bool = False,
+) -> list[dict]:
     """Convert canonical interface to OpenAI Responses API ``input`` items.
 
     System entries are excluded (the Responses API takes the system prompt
@@ -417,8 +546,17 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
       * assistant thought -> ``{"type": "reasoning", "summary": [{"type": "summary_text", "text": <str>}]}``
       * tool result     -> ``{"type": "function_call_output", "call_id", "output": <str>}``
 
-    Used by stateless Responses sessions (e.g. Codex) that must replay the
-    full conversation each turn instead of relying on ``previous_response_id``.
+    Used by stateless Responses sessions that must replay the full conversation
+    each turn instead of relying on ``previous_response_id``. Provider-specific
+    sessions choose whether to opt into the raw-output sidecar below.
+    Successful generic stateless turns may carry a provider-data snapshot;
+    when its canonical validity fingerprint still matches, this converter
+    deep-copies and emits those raw output items in their original order.
+    Changed, redacted, old, and manually-created entries use the projections
+    below instead. Raw output replay is opt-in at this converter seam via
+    ``replay_raw_output_items=True``; generic stateless Responses sessions and
+    MiMo/DeepSeek opt in, while native Codex deliberately keeps its existing
+    canonical projection.
 
     Before returning, the wire-layer guard
     :func:`_pair_responses_orphan_function_calls` synthesizes a
@@ -471,6 +609,18 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
                     "content": "\n".join(text_parts) if text_parts else "",
                 })
         elif entry.role == "assistant":
+            raw_items = (
+                _responses_replay_items_for_entry(entry)
+                if replay_raw_output_items
+                else None
+            )
+            if raw_items is not None:
+                # A successful stateless Responses turn is replayed as the
+                # provider returned it: item/content order, field presence,
+                # phases, and argument strings all remain intact.  The helper
+                # deep-copies and validates the snapshot before this point.
+                items.extend(raw_items)
+                continue
             text_parts: list[str] = []
             reasoning_items: list[dict] = []
             tool_calls: list[dict] = []
