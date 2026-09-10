@@ -958,6 +958,7 @@ class SessionManager:
         usage = self.get_token_usage()
         api_calls = max(0, int(usage.get("api_calls", 0) or 0))
         input_tokens = max(0, int(usage.get("input_tokens", 0) or 0))
+        output_tokens = max(0, int(usage.get("output_tokens", 0) or 0))
         cached_tokens = max(0, int(usage.get("cached_tokens", 0) or 0))
         session_cache_rate = (
             round(min(cached_tokens / input_tokens, 1.0), 5)
@@ -969,6 +970,7 @@ class SessionManager:
             "session_cache_rate": session_cache_rate,
             "api_calls": api_calls,
             "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "cached_tokens": cached_tokens,
             "cache_miss_tokens": max(input_tokens - cached_tokens, 0),
             "avg_input_tokens_per_api_call": avg_input,

@@ -120,6 +120,7 @@ def test_agent_session_token_usage_reads_since_molt_counters():
     usage = sm.agent_session_token_usage()
     assert usage["api_calls"] == 4
     assert usage["input_tokens"] == 2000
+    assert usage["output_tokens"] == 300
     assert usage["cached_tokens"] == 1500
     assert usage["cache_miss_tokens"] == 500
     assert usage["session_cache_rate"] == 0.75
@@ -155,6 +156,7 @@ def test_refresh_preserves_since_molt_not_lifetime(tmp_path):
     # Only the current generation is aggregated — NOT the 9M-token pre-molt event.
     assert rebuilt.api_calls == 2
     assert rebuilt.input_tokens == 2000
+    assert rebuilt.output_tokens == 400
     assert rebuilt.cached_tokens == 1400
 
     # Seed the session manager from the rebuilt since-molt totals (the wiring).
@@ -180,6 +182,7 @@ def test_refresh_preserves_since_molt_not_lifetime(tmp_path):
     session_half = _build_session_token_economy(agent)
     assert session_half["api_calls"] == 2
     assert session_half["input_tokens"] == 2000
+    assert session_half["output_tokens"] == 400
     assert session_half["cached_tokens"] == 1400
     assert session_half["cache_miss_tokens"] == 600
     # Sanity: it is emphatically NOT the 9M lifetime input.
@@ -210,12 +213,14 @@ def test_live_rounds_after_refresh_accrue_on_top_of_since_molt(tmp_path):
     )
     # Simulate one more live provider round after the refresh.
     sm._total_input_tokens += 500
+    sm._total_output_tokens += 125
     sm._total_cached_tokens += 300
     sm._api_calls += 1
 
     usage = sm.agent_session_token_usage()
     assert usage["api_calls"] == 2            # 1 rebuilt + 1 live
     assert usage["input_tokens"] == 1500      # 1000 rebuilt + 500 live
+    assert usage["output_tokens"] == 325      # 200 rebuilt + 125 live
     assert usage["cached_tokens"] == 1000     # 700 rebuilt + 300 live
 
 

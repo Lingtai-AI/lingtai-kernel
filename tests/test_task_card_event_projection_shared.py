@@ -104,9 +104,11 @@ def test_shared_render_stays_unchanged_while_telegram_relayouts_metadata() -> No
     metadata = {
         "agent_lifecycle": "active",
         "api_calls": 2,
+        "output_tokens": 12_345,
         "model": "gpt<5>&",
         "device_short_name": "dev-1",
         "working_dir": "/tmp/taskcard",
+        "async_work": {"running": 1},
     }
 
     shared = TaskCardEventProjection.render_event_groups(
@@ -129,19 +131,21 @@ def test_shared_render_stays_unchanged_while_telegram_relayouts_metadata() -> No
     )
 
     assert shared == (
-        "_Don't reply to this Task Card. Use /taskcard on|off to toggle; "
-        "/taskcard N sets normal rows (1-10, current: 1)._\n"
-        "*ACTIVITIES*\n"
+        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+        "/taskcard N sets normal rows (1-10, current: 1).\n"
+        "📋 ACTIVITIES\n"
         f"{TaskCardEventProjection.API_CALL_DIVIDER}\n"
         "• public response\n"
         "• bash.run: build (0ms, running)\n"
         "\n"
         "────────\n"
-        "Session · active · gpt<5>& · calls 2\n"
+        "Session · active · gpt<5>& · out 12.3k · calls 2\n"
         "────────\n"
         "Identity · device · dev-1 | path · /tmp/taskcard\n"
+        "────────\n"
+        "Async Work · running 1\n"
         "Last Updated: 02:30:00 U+8\n"
-        "_Ask agent for \"Task Card\"_"
+        "Ask agent for \"Task Card\""
     )
     assert _telegram_task_card_html(shared) == telegram
     assert telegram == (
@@ -154,11 +158,15 @@ def test_shared_render_stays_unchanged_while_telegram_relayouts_metadata() -> No
         "\n"
         "📊 <b>SESSION</b>\n"
         "<b>Agent</b> · active · gpt&lt;5&gt;&amp;\n"
+        "<b>Context</b> · out 12.3k\n"
         "<b>Cache</b> · calls 2\n"
         "\n"
         "🪪 <b>IDENTITY</b>\n"
         "<b>Device</b> · dev-1\n"
         "<b>Path</b> · <code>/tmp/taskcard</code>\n"
+        "\n"
+        "<b>ASYNC WORK</b>\n"
+        "<b>Status</b> · running 1\n"
         "🕒 Last Updated: 02:30:00 U+8\n"
         "💬 <i>Ask agent for \"Task Card\"</i>"
     )

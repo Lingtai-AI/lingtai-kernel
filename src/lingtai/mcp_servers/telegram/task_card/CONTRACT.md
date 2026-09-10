@@ -110,7 +110,8 @@ semantics live here. The public producer contract lives in
     Shell job scan and has no legacy fallback. Missing, malformed, future-dated,
     or stale snapshots render no Async Work rows. Valid snapshots retain the
     aggregate and separate daemon/Shell lanes; usage/backend/model detail stays
-    daemon-scoped.
+    daemon-scoped. Telegram's HTML adapter presents this block as its own
+    icon-free Async Work section rather than folding it into Session.
 12. A pending canonical `shell.run` automatic row reads only the literal safe
     `input.async` boolean. Sync/default mode renders `foreground`; literal
     `async=true` renders `dispatching async job`. The row retains redacted
@@ -122,7 +123,11 @@ semantics live here. The public producer contract lives in
     shared automatic frame before replacing only exact static lines with
     Telegram-supported bold, italic, and code markup; when the shared source
     frame is within its budget, only escaped dynamic content may be shortened
-    to account for that fixed presentation overhead. The programmable slot
+    to account for that fixed presentation overhead. The static Telegram
+    hierarchy keeps the existing Session and Identity section icons, renders the
+    since-molt `token_usage.session.output_tokens` count as compact `out <count>`
+    under Session's Context row, gives Async Work its own icon-free section, and
+    leaves the per-call `↻ … ↓ … ↑ …` metrics line plain. The programmable slot
     remains authored content: its Telegram-targeted
     producer must emit valid Telegram HTML or common plain text. Invalid provider
     markup is an ordinary failed edit/send and preserves the last committed card.

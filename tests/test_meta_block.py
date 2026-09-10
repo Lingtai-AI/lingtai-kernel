@@ -786,6 +786,7 @@ _SESSION_TOKEN_USAGE_KEYS = {
     "session_cache_rate",
     "api_calls",
     "input_tokens",
+    "output_tokens",
     "cached_tokens",
     "avg_input_tokens_per_api_call",
     "cache_miss_tokens",
@@ -883,6 +884,7 @@ def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
         get_token_usage=lambda: {
             "api_calls": 4,
             "input_tokens": 22_000,
+            "output_tokens": 1_234,
             "cached_tokens": 5_500,
         },
     )
@@ -906,6 +908,7 @@ def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
             "session_cache_rate": 0.25,
             "api_calls": 4,
             "input_tokens": 22_000,
+            "output_tokens": 1_234,
             "cached_tokens": 5_500,
             "avg_input_tokens_per_api_call": 5_500,
             # Always-on cache-miss telemetry uses the fixed default when neither
@@ -938,6 +941,7 @@ def test_build_tool_meta_token_usage_session_only_when_no_snapshot():
         get_token_usage=lambda: {
             "api_calls": 2,
             "input_tokens": 1_000,
+            "output_tokens": 250,
             "cached_tokens": 1_200,  # cached > input clamps to 1.0
         },
     )
@@ -951,6 +955,7 @@ def test_build_tool_meta_token_usage_session_only_when_no_snapshot():
     )
     assert compact[_TOKEN_USAGE_SESSION_KEY]["session_cache_rate"] == 1.0
     assert compact[_TOKEN_USAGE_SESSION_KEY]["avg_input_tokens_per_api_call"] == 500
+    assert compact[_TOKEN_USAGE_SESSION_KEY]["output_tokens"] == 250
 
 
 def test_build_tool_meta_token_usage_preserves_zero_and_sentinel_values():

@@ -63,7 +63,7 @@ class TaskCardResident:
         enabled: bool,
         transport: TaskCardResidentTransport | None = None,
         deliver: Callable[..., dict[str, Any]] | None = None,
-        programmable_header: str = "*TASK CARD*",
+        programmable_header: str = "— TASK CARD —",
     ) -> None:
         if type(enabled) is not bool:
             raise TypeError("enabled must be a boolean")

@@ -1685,7 +1685,8 @@ def _build_session_token_economy(
 
     Projects the aggregate counters agents act on now: ``session_cache_rate``
     (cached/input clamped to a 0-1 fraction), ``api_calls``,
-    ``input_tokens``/``cached_tokens``, and ``avg_input_tokens_per_api_call``,
+    ``input_tokens``/``output_tokens``/``cached_tokens``, and
+    ``avg_input_tokens_per_api_call``,
     deriving the rates from the raw counters.
 
     It also carries the current CONTEXT state (moved off ``current_call``, since
@@ -1738,6 +1739,7 @@ def _build_session_token_economy(
 
     api_calls = _non_negative_int(agg.get("api_calls"))
     input_tokens = _non_negative_int(agg.get("input_tokens"))
+    output_tokens = _non_negative_int(agg.get("output_tokens"))
     cached_tokens = _non_negative_int(agg.get("cached_tokens"))
     avg_input = int(round(input_tokens / api_calls)) if api_calls > 0 else 0
     session_cache_rate = (
@@ -1750,6 +1752,7 @@ def _build_session_token_economy(
         "session_cache_rate": session_cache_rate,
         "api_calls": api_calls,
         "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
         "cached_tokens": cached_tokens,
         "avg_input_tokens_per_api_call": avg_input,
         # Always-on: derivable from the cumulative counters alone.
@@ -1797,7 +1800,7 @@ def build_tool_meta_token_usage(
       ``thinking`` (see :func:`_build_provider_round_token_usage`).  Current
       context state is NOT here — it moved to the ``session`` half.
     * ``session`` — the SINCE-LAST-MOLT cumulative aggregate: ``session_cache_rate``,
-      ``api_calls``, ``input_tokens``, ``cached_tokens``,
+      ``api_calls``, ``input_tokens``, ``output_tokens``, ``cached_tokens``,
       ``avg_input_tokens_per_api_call``, the current context state
       ``context_tokens`` / ``context_window`` / ``context_usage`` (when
       resolvable), plus the always-on cache-miss/budget telemetry

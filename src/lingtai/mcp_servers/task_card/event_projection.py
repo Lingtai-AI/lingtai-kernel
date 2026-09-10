@@ -25,7 +25,7 @@ class TaskCardEventProjection:
     # behavior. The class attributes stay the English surface for backward
     # compatibility; render paths resolve text through the locale helpers below
     # (Jason 2026-08-10: revert #1209 hard-coded Chinese, make it configurable).
-    HEADER = "*ACTIVITIES*"
+    HEADER = "📋 ACTIVITIES"
     FOOTER = (
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
         "/taskcard N sets normal rows (1-10"
@@ -38,9 +38,9 @@ class TaskCardEventProjection:
     SUPPORTED_LOCALES = frozenset({"en", "zh"})
     _LOCALE_TEXTS: dict[str, dict[str, str]] = {
         "en": {
-            "header": "*ACTIVITIES*",
+            "header": "📋 ACTIVITIES",
             "time_prefix": "Last Updated: ",
-            "ask_agent": "_Ask agent for \"Task Card\"_",
+            "ask_agent": "Ask agent for \"Task Card\"",
             "footer_prefix": (
                 "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
                 "/taskcard N sets normal rows (1-10"
@@ -61,9 +61,9 @@ class TaskCardEventProjection:
             "daemon_stats": "Daemon stats",
         },
         "zh": {
-            "header": "*活动*",
+            "header": "📋 活动",
             "time_prefix": "最后更新: ",
-            "ask_agent": "_向 agent 询问 \"Task Card\"_",
+            "ask_agent": "向 agent 询问 \"Task Card\"",
             "footer_prefix": (
                 "请勿回复此任务卡片。使用 /taskcard on|off 切换；"
                 "/taskcard N 设置显示组数 (1-10"
@@ -204,10 +204,8 @@ class TaskCardEventProjection:
     @classmethod
     def footer(cls, normal_rows: int, locale: str = "en") -> str:
         if cls.normalize_locale(locale) == "zh":
-            text = f"{cls._locale_text('footer_prefix', locale)}，{cls._locale_text('footer_current', locale)}: {normal_rows})。"
-        else:
-            text = f"{cls.FOOTER}, current: {normal_rows})."
-        return f"_{text}_"
+            return f"{cls._locale_text('footer_prefix', locale)}，{cls._locale_text('footer_current', locale)}: {normal_rows})。"
+        return f"{cls.FOOTER}, current: {normal_rows})."
 
     @staticmethod
     def format_current_time(now: datetime) -> str:
@@ -438,6 +436,7 @@ class TaskCardEventProjection:
             return {}
         supported = (
             "input_tokens",
+            "output_tokens",
             "session_cache_rate",
             "cache_miss_tokens",
             "cache_miss_budget",
@@ -928,6 +927,9 @@ class TaskCardEventProjection:
         tokens = cls.format_count(metadata.get("input_tokens"))
         if tokens is not None:
             session_parts.append(f"tokens {tokens}")
+        output = cls.format_count(metadata.get("output_tokens"))
+        if output is not None:
+            session_parts.append(f"out {output}")
         cache_rate = metadata.get("session_cache_rate")
         if (
             type(cache_rate) in {int, float}

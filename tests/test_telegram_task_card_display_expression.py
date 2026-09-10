@@ -95,9 +95,9 @@ def test_default_expression_uses_footer_first_layout_with_rows() -> None:
         "ask_agent",
     )
     assert explicit == implicit
-    assert implicit.startswith("_Don't reply to this Task Card.")
-    assert implicit.index("Don't reply to this Task Card") < implicit.index("*ACTIVITIES*")
-    assert "_Ask agent for \"Task Card\"_" in implicit
+    assert implicit.startswith("Don't reply to this Task Card.")
+    assert implicit.index("Don't reply to this Task Card") < implicit.index("📋 ACTIVITIES")
+    assert "Ask agent for \"Task Card\"" in implicit
 
 
 def test_default_expression_uses_footer_first_layout_with_empty_rows() -> None:
@@ -107,8 +107,8 @@ def test_default_expression_uses_footer_first_layout_with_empty_rows() -> None:
         display_expression=TaskCardEventProjection.DEFAULT_DISPLAY_EXPRESSION,
     )
     assert explicit == implicit
-    assert implicit.startswith("_Don't reply to this Task Card.")
-    assert implicit.index("Don't reply to this Task Card") < implicit.index("*ACTIVITIES*")
+    assert implicit.startswith("Don't reply to this Task Card.")
+    assert implicit.index("Don't reply to this Task Card") < implicit.index("📋 ACTIVITIES")
 
 
 def test_service_display_expression_defaults_to_none(tmp_path: Path) -> None:

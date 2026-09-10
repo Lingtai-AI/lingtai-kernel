@@ -185,16 +185,27 @@ def _task_card_footer(normal_rows: int, locale: str = "en") -> str:
 def _telegram_task_card_html(text: str) -> str:
     """Escape one shared frame, then add Telegram's exact static HTML styling."""
     rendered: list[str] = []
-    headers = {"*ACTIVITIES*": "ACTIVITIES", "*活动*": "活动"}
+    headers = {"📋 ACTIVITIES": "ACTIVITIES", "📋 活动": "活动"}
     asks = {
-        '_Ask agent for "Task Card"_': 'Ask agent for "Task Card"',
-        '_向 agent 询问 "Task Card"_': '向 agent 询问 "Task Card"',
+        'Ask agent for "Task Card"': 'Ask agent for "Task Card"',
+        '向 agent 询问 "Task Card"': '向 agent 询问 "Task Card"',
     }
     metadata_prefixes = (
         ("Session · ", "📊 <b>SESSION</b>", "session"),
         ("会话 · ", "📊 <b>SESSION</b>", "session"),
         ("Identity · ", "🪪 <b>IDENTITY</b>", "identity"),
         ("身份 · ", "🪪 <b>IDENTITY</b>", "identity"),
+        ("Async Work · ", "<b>ASYNC WORK</b>", "async"),
+        ("异步工作 · ", "<b>异步工作</b>", "async"),
+    )
+    async_row_prefixes = (
+        ("Daemons · ", "Daemons"),
+        ("守护进程 · ", "守护进程"),
+        ("Backends · ", "Backends"),
+        ("后端 · ", "后端"),
+        ("Shell · ", "Shell"),
+        ("Daemon stats · ", "Daemon stats"),
+        ("守护进程统计 · ", "守护进程统计"),
     )
     def session_rows(payload: str) -> list[str]:
         parts = payload.split(" · ")
@@ -203,7 +214,11 @@ def _telegram_task_card_html(text: str) -> str:
             len(parts),
         )
         context_at = next(
-            (i for i, part in enumerate(parts[:cache_at]) if part.startswith(("ctx ", "tokens "))),
+            (
+                i
+                for i, part in enumerate(parts[:cache_at])
+                if part.startswith(("ctx ", "tokens ", "out "))
+            ),
             cache_at,
         )
         agent_parts = parts[:context_at]
@@ -250,20 +265,37 @@ def _telegram_task_card_html(text: str) -> str:
             )
             if metadata is not None:
                 prefix, heading, section = metadata
-                if section == "identity" and previous_metadata_section == "session":
+                if previous_metadata_section not in {None, section}:
                     rendered.append("")
                 payload = line[len(prefix):]
-                rows = session_rows(payload) if section == "session" else identity_rows(payload)
+                if section == "session":
+                    rows = session_rows(payload)
+                elif section == "identity":
+                    rows = identity_rows(payload)
+                else:
+                    rows = [f"<b>Status</b> · {html_escape(payload, quote=False)}"]
                 rendered.extend((heading, *rows))
                 previous_metadata_section = section
                 continue
+            if previous_metadata_section == "async":
+                async_row = next(
+                    (
+                        (prefix, label)
+                        for prefix, label in async_row_prefixes
+                        if line.startswith(prefix)
+                    ),
+                    None,
+                )
+                if async_row is not None:
+                    prefix, label = async_row
+                    payload = html_escape(line[len(prefix):], quote=False)
+                    rendered.append(f"<b>{label}</b> · {payload}")
+                    continue
         safe = html_escape(line, quote=False)
         if line in headers:
             safe = f"📋 <b>{headers[line]}</b>"
         elif line in asks:
             safe = f"💬 <i>{html_escape(asks[line], quote=False)}</i>"
-        elif line.startswith(("_Don't reply to this Task Card.", "_请勿回复此任务卡片。")) and line.endswith("_"):
-            safe = html_escape(line[1:-1], quote=False)
         elif line.startswith(("Last Updated: ", "最后更新: ")):
             safe = f"🕒 {safe}"
         rendered.append(safe)

@@ -29,8 +29,8 @@ def test_default_locale_is_english():
         {"tool": "bash", "tool_action": "run", "reasoning": "build",
          "elapsed_s": 3, "done": False},
     ])
-    assert text.startswith("_Don't reply to this Task Card")
-    assert "*ACTIVITIES*\n" in text
+    assert text.startswith("Don't reply to this Task Card")
+    assert "📋 ACTIVITIES\n" in text
     assert "Last Updated: " in text
     assert "Don't reply to this Task Card" in text
 
@@ -48,17 +48,17 @@ def test_normalize_locale_falls_back_to_english():
 # ---------------------------------------------------------------------------
 
 def test_zh_header_and_footer():
-    assert TaskCardEventProjection.header("zh") == "*\u6d3b\u52a8*"
-    assert TaskCardEventProjection.header("en") == "*ACTIVITIES*"
+    assert TaskCardEventProjection.header("zh") == "📋 \u6d3b\u52a8"
+    assert TaskCardEventProjection.header("en") == "📋 ACTIVITIES"
     assert TaskCardEventProjection.time_prefix("zh") == "\u6700\u540e\u66f4\u65b0: "
     assert TaskCardEventProjection.time_prefix("en") == "Last Updated: "
     assert TaskCardEventProjection.footer(3, "zh") == (
-        "_\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247\u3002\u4f7f\u7528 /taskcard on|off \u5207\u6362\uff1b"
-        "/taskcard N \u8bbe\u7f6e\u663e\u793a\u7ec4\u6570 (1-10\uff0c\u5f53\u524d: 3)\u3002_"
+        "\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247\u3002\u4f7f\u7528 /taskcard on|off \u5207\u6362\uff1b"
+        "/taskcard N \u8bbe\u7f6e\u663e\u793a\u7ec4\u6570 (1-10\uff0c\u5f53\u524d: 3)\u3002"
     )
     assert TaskCardEventProjection.footer(3, "en") == (
-        "_Don't reply to this Task Card. Use /taskcard on|off to toggle; "
-        "/taskcard N sets normal rows (1-10, current: 3)._"
+        "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
+        "/taskcard N sets normal rows (1-10, current: 3)."
     )
 
 
@@ -67,8 +67,8 @@ def test_zh_rows_render_localized_surface():
         {"tool": "bash", "tool_action": "run", "reasoning": "build",
          "elapsed_s": 3, "done": False},
     ], locale="zh")
-    assert text.startswith("_\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247")
-    assert "*\u6d3b\u52a8*\n" in text
+    assert text.startswith("\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247")
+    assert "📋 \u6d3b\u52a8\n" in text
     assert "\u6700\u540e\u66f4\u65b0: " in text
     assert "\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247" in text
     assert "ACTIVITIES" not in text
@@ -114,8 +114,8 @@ def test_render_event_groups_locale():
     text = TaskCardEventProjection.render_event_groups(
         groups, normal_rows=1, locale="zh"
     )
-    assert text.startswith("_\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247")
-    assert "*\u6d3b\u52a8*\n" in text
+    assert text.startswith("\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247")
+    assert "📋 \u6d3b\u52a8\n" in text
 
 
 # ---------------------------------------------------------------------------

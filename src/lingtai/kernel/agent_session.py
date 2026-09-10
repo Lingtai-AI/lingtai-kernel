@@ -140,6 +140,7 @@ class AgentSession:
             "session_cache_rate": self.cache_rate,
             "api_calls": self.api_calls,
             "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
             "cached_tokens": self.cached_tokens,
             "cache_miss_tokens": self.cache_miss_tokens,
             "avg_input_tokens_per_api_call": self.avg_input_tokens_per_api_call,
