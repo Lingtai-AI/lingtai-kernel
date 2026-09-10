@@ -85,7 +85,14 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   (`LINGTAI_PUFFO_V0_REGISTRY`) when set, so an explicit `registry_path=`
   argument threaded from a CLI flag overrides the environment which overrides the
   default. A single `_registry_location` helper resolves that choice for
-  provision/revoke/resolve/discover and rejects a non-absolute path, so every
+  provision/revoke/resolve/discover and enforces its *shape* (absolute, no `..`, parent
+  below the filesystem root) with no filesystem access, while
+  `_secure_registry_directory` (via `_ensure_registry_dir_component`) enforces the
+  *dedicated owner-only directory*: it builds the built-in `~/.lingtai/<profile>`
+  namespace node by node with per-node `O_NOFOLLOW` and creates only the final
+  component of an operator-selected location under an already-existing parent,
+  never `chmod`-ing or creating through an operator-supplied or symlinked
+  directory and rejecting a non-conforming existing directory, so every
   call site shares one resolved, absolute location. It
   refuses missing, malformed, tampered, retargeted, or revoked entries before
   Agent construction. Its `entry_digest` authenticates registry data rather

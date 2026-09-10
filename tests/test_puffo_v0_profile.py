@@ -1117,7 +1117,7 @@ def test_discover_cli_representations_are_pairwise_distinct_across_states(
 
     def _setup(name, mutate):
         base = tmp_path / name
-        base.mkdir()
+        base.mkdir(mode=0o700)  # dedicated owner-only registry directory
         agent_dir = base / "identity"
         agent_dir.mkdir()
         (agent_dir / "init.json").write_text("{}", encoding="utf-8")
@@ -1602,7 +1602,7 @@ def test_discover_promises_hold_across_a_damaged_entry_matrix(tmp_path):
     saw_available = 0
     for name, build, must_report in fixtures:
         base = tmp_path / name
-        base.mkdir()
+        base.mkdir(mode=0o700)  # dedicated owner-only registry directory
         root, registry = build(base)
         try:
             candidates = discover_runtimes(root, registry_path=registry)
@@ -1692,7 +1692,7 @@ _MATRIX_REVOCABLE = {
 
 
 def _seed_matrix_registry(base):
-    base.mkdir()
+    base.mkdir(mode=0o700)  # dedicated owner-only registry directory (contract B)
     registry = base / "registry.json"
     root = base / "root"
     root.mkdir()
@@ -2290,7 +2290,12 @@ def test_registry_directory_and_files_are_owner_only_even_with_a_permissive_umas
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
-def test_resolve_tightens_legacy_registry_file_and_directory_modes(tmp_path):
+def test_resolve_rejects_a_non_owner_only_registry_directory(tmp_path):
+    # A registry directory left at a non-0700 mode -- by an older LingTai that
+    # auto-chmod'd it, by external tampering, or by a wrong umask -- is now
+    # rejected loudly rather than silently re-hardened. The arbitrary-parent-chmod
+    # fix replaced "chmod to comply" with "reject and report", so a rejected call
+    # must also leave the directory unmodified.
     agent_dir = tmp_path / "identity"
     agent_dir.mkdir()
     (agent_dir / "init.json").write_text("{}", encoding="utf-8")
@@ -2299,11 +2304,10 @@ def test_resolve_tightens_legacy_registry_file_and_directory_modes(tmp_path):
     registry = tmp_path / "legacy" / "registry.json"
     provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
     registry.parent.chmod(0o755)
-    registry.chmod(0o644)
 
-    assert resolve_runtime("runtime-a", registry_path=registry).runtime_id == "runtime-a"
-    assert stat.S_IMODE(registry.parent.stat().st_mode) == 0o700
-    assert stat.S_IMODE(registry.stat().st_mode) == 0o600
+    with pytest.raises(PuffoV0RegistryError):
+        resolve_runtime("runtime-a", registry_path=registry)
+    assert stat.S_IMODE(registry.parent.stat().st_mode) == 0o755  # never chmod-to-comply
 
 
 def test_profile_session_rejects_remote_workspace_and_mcp_inputs(tmp_path):
@@ -3261,3 +3265,143 @@ def test_discover_cli_threads_explicit_registry_flag(monkeypatch, tmp_path):
         )
     )
     assert seen["registry_path"] == registry
+
+
+# --- Registry-path security contract (#1690 blocker 1) --------------------------
+# A: path shape, enforced in _registry_location before any filesystem access.
+# B: dedicated owner-only directory, enforced in _secure_registry_directory --
+#    LingTai creates only its own namespace, never chmods or creates through an
+#    operator-supplied or symlinked directory, and rejects a non-conforming
+#    existing directory rather than modifying it.
+
+
+def test_registry_location_rejects_dotdot_and_root_shapes():
+    from lingtai.adapters.acp.puffo_v0 import _registry_location
+
+    with pytest.raises(PuffoV0RegistryError, match="absolute"):
+        _registry_location(Path("relative/runtime-registry.json"))
+    with pytest.raises(PuffoV0RegistryError, match=r"\.\."):
+        _registry_location(Path("/srv/../etc/runtime-registry.json"))
+    with pytest.raises(PuffoV0RegistryError, match="dedicated directory"):
+        _registry_location(Path("/"))
+    with pytest.raises(PuffoV0RegistryError, match="dedicated directory"):
+        _registry_location(Path("/runtime-registry.json"))
+    # A well-shaped path passes shape and is returned unchanged (no filesystem I/O).
+    good = Path("/srv/lingtai/runtime-registry.json")
+    assert _registry_location(good) == good
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_rejects_a_symlinked_registry_directory(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = link / "runtime-registry.json"  # the registry's own directory is a symlink
+    with pytest.raises(PuffoV0RegistryError):
+        provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_rejects_an_existing_non_owner_only_registry_directory(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir(mode=0o755)
+    os.chmod(shared, 0o755)  # group/other-traversable: not owner-only
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = shared / "runtime-registry.json"
+    with pytest.raises(PuffoV0RegistryError):
+        provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    assert stat.S_IMODE(shared.stat().st_mode) == 0o755  # rejected, never chmod-to-comply
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_rejects_when_operator_parent_directory_is_absent(tmp_path):
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    # LingTai creates only the final component; it never materializes an operator's
+    # ancestor chain, so an absent parent is rejected rather than deep-created.
+    registry = tmp_path / "missing" / "deep" / "runtime-registry.json"
+    with pytest.raises(PuffoV0RegistryError):
+        provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    assert not (tmp_path / "missing").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_creates_an_absent_operator_directory_owner_only(tmp_path):
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = tmp_path / "fresh" / "runtime-registry.json"  # parent (tmp_path) exists
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    assert stat.S_IMODE(registry.parent.stat().st_mode) == 0o700
+    assert resolve_runtime("runtime-a", registry_path=registry).runtime_id == "runtime-a"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_accepts_a_preexisting_conforming_registry_directory(tmp_path):
+    dedicated = tmp_path / "dedicated"
+    dedicated.mkdir(mode=0o700)
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = dedicated / "runtime-registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    assert resolve_runtime("runtime-a", registry_path=registry).runtime_id == "runtime-a"
+    assert stat.S_IMODE(dedicated.stat().st_mode) == 0o700
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_builtin_default_namespace_is_created_owner_only(tmp_path, monkeypatch):
+    # With neither --registry nor LINGTAI_PUFFO_V0_REGISTRY, LingTai builds its own
+    # ~/.lingtai/<profile> namespace at 0700 (both owned nodes, symlink-safe).
+    from lingtai.adapters.acp.puffo_v0 import REGISTRY_PATH_ENV_VAR
+
+    monkeypatch.delenv(REGISTRY_PATH_ENV_VAR, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    provision_runtime("runtime-a", agent_dir, workspace)  # default (built-in) registry
+    profile_dir = tmp_path / ".lingtai" / "puffo-v0"
+    assert profile_dir.is_dir()
+    assert stat.S_IMODE(profile_dir.stat().st_mode) == 0o700
+    assert resolve_runtime("runtime-a").runtime_id == "runtime-a"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_builtin_namespace_rejects_a_symlinked_dotlingtai(tmp_path, monkeypatch):
+    # A co-resident agent sharing the uid cannot redirect the owned chain by
+    # planting a symlink at ~/.lingtai: the per-node O_NOFOLLOW step rejects it
+    # (the arbitrary-chmod bug shape, one level above the registry directory).
+    from lingtai.adapters.acp.puffo_v0 import REGISTRY_PATH_ENV_VAR
+
+    monkeypatch.delenv(REGISTRY_PATH_ENV_VAR, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir(mode=0o700)
+    (tmp_path / ".lingtai").symlink_to(elsewhere, target_is_directory=True)
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    with pytest.raises(PuffoV0RegistryError):
+        provision_runtime("runtime-a", agent_dir, workspace)  # default (built-in) registry

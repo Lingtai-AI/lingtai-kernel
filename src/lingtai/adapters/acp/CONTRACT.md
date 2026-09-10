@@ -301,7 +301,9 @@ argv, environment, or MCP command from the remote caller.
     operator-managed registry. The registry *location* is operator launch
     configuration, not a protocol input: it defaults to the HOME-relative
     profile path, and an operator MAY select an explicit location — an absolute
-    path; a relative one is rejected — with `--registry <path>` or the
+    path with no `..` component whose parent is below the filesystem root (a
+    relative path, a `..` component, `/` itself, or a root-level file is rejected
+    before any filesystem access) — with `--registry <path>` or the
     `LINGTAI_PUFFO_V0_REGISTRY` environment variable (flag over environment over
     default). The provision, revoke, and discover control-plane commands and both
     launch resolves consult the same selected registry, so a launch must name the
@@ -489,9 +491,24 @@ argv, environment, or MCP command from the remote caller.
     snapshot cannot reactivate an id. The versioned registry declares this log
     mandatory: a missing, unreadable, malformed, or mismatched log rejects
     resolve/provision rather than being treated as an empty history. Its POSIX
-    directory is owner-only (`0700`) and its lock, temporary, registry, and
-    tombstone files are owner-only (`0600`), independent of umask; existing
-    registry artifacts are tightened before use. This Phase A registry fails closed on Windows until an
+    directory is a dedicated owner-only (`0700`) directory and its lock,
+    temporary, registry, and tombstone files are owner-only (`0600`), independent
+    of umask. LingTai creates or hardens only a directory it owns and never
+    `chmod`s or creates through an operator-supplied or symlinked directory: the
+    built-in `~/.lingtai/<profile>` namespace is created node by node with
+    `O_NOFOLLOW` (stopping at `$HOME`), an operator-selected location has only its
+    final component created under an already-existing parent, and an existing
+    target that is a symlink, is foreign-owned, or is not already `0700` is
+    rejected rather than modified. Only the leaf registry directory (the built-in
+    `<profile>` node or an operator location's final component) is required to be
+    `0700`; the intermediate `~/.lingtai` node need only be a non-symlink
+    directory the user owns, so a pre-existing `~/.lingtai` at another mode
+    (shared with other LingTai data) is accepted while a freshly created one is
+    set to `0700`. Under a shared uid `0700` is not a boundary
+    between sibling agents; these checks defend against accident, external
+    tampering, and confused-deputy symlink redirection, not a co-resident same-uid
+    process. Existing owner-only registry *files* are still tightened to `0600`
+    before use. This Phase A registry fails closed on Windows until an
     equivalent owner-only ACL adapter exists. The local control plane is its
     only supported writer: manual or third-party mutation is unsupported and
     malformed/rollback state is rejected rather than treated as authority. A

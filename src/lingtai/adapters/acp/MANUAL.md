@@ -110,8 +110,16 @@ must not touch a production registry), select its location explicitly. Pass
 `discover`, and `acp`, or set
 `LINGTAI_PUFFO_V0_REGISTRY=/abs/path/runtime-registry.json` in the launch
 environment; an explicit flag wins over the environment, which wins over the
-HOME-relative default. The location must be an **absolute** path — a relative one
-is rejected rather than created under the process's current directory.
+HOME-relative default. The location must be an **absolute** path with no `..`
+segment whose parent is below the filesystem root — a relative path, a `..`
+segment, `/`, or a root-level file is rejected before any filesystem access
+rather than created under the process's current directory. Its directory must be
+a dedicated owner-only (`0700`) directory you own; LingTai creates a missing one
+(for an operator-selected location, only the final component, under an
+already-existing parent) but **rejects** an existing directory that is a symlink,
+is owned by another user, or is not already `0700` rather than changing its
+permissions — fix such a directory, or point elsewhere, instead of relying on
+LingTai to harden it.
 Provisioning and launch must name the **same** registry — `acp` resolves the id
 against the location you give it (both at startup and in the pre-serve
 re-resolve), so a launch pointed at a different registry than its `provision` used
@@ -299,8 +307,12 @@ separate cross-process contract; do not treat this registry hash as its proxy.
 The Phase A registry is POSIX-only: it serializes provision/revoke updates,
 records terminal revocations in an append-only local tombstone log, and creates
 its registry directory as `0700` and registry, tombstone, temporary, and lock
-files as `0600`, independent of umask. Loading an older registry tightens its
-directory and file modes before use. On Windows the command fails closed until
+files as `0600`, independent of umask. LingTai creates its own
+`~/.lingtai/<profile>` namespace node by node with `O_NOFOLLOW` and never
+`chmod`s or creates through an operator-supplied or symlinked directory; an
+existing registry directory that is not an owner-only (`0700`) directory it owns
+is rejected rather than re-hardened, while existing owner-only registry *files*
+are still tightened to `0600` before use. On Windows the command fails closed until
 an equivalent owner-only ACL implementation is available. The `puffo-v0`
 control-plane commands are the only supported writers; do not hand-edit the
 registry or use a third-party writer. The current versioned registry requires

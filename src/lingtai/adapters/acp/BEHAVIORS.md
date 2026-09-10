@@ -179,9 +179,16 @@ the evidence trail in the task report.
   plane and the `acp` launch (its initial resolve AND its pre-serve re-resolve)
   all consult the same selected registry — so a launch pointed at a registry the
   runtime was not provisioned into fails closed, and an isolated run never creates
-  the HOME-relative default. A non-absolute location is rejected (never created
-  under the process cwd). The selection changes only the location; bindings and
-  integrity still derive solely from the named registry's entry.
+  the HOME-relative default. A location that is not a well-shaped absolute path —
+  relative, containing `..`, `/` itself, or a root-level file — is rejected before
+  any filesystem access; and the registry directory must be a dedicated owner-only
+  (`0700`) directory LingTai owns: LingTai builds its own `~/.lingtai/<profile>`
+  namespace node by node with `O_NOFOLLOW` (never through a planted symlink, even
+  from a same-uid sibling), creates only the final component of an operator-selected
+  location under an already-existing parent, and rejects — never re-`chmod`s — an
+  existing directory that is a symlink, is foreign-owned, or is not already `0700`.
+  The selection changes only the location; bindings and integrity still derive
+  solely from the named registry's entry.
 3. Inspect the profile session and turn-origin cases: `puffo-v0` rejects every
    non-empty `mcpServers` input. `puffo-v1` accepts exactly one `puffo` service
    with `-m puffo_agent.mcp.puffo_core_server`, a deployment-local absolute

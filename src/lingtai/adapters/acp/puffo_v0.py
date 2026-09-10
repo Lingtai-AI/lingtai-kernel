@@ -226,20 +226,37 @@ def default_registry_path() -> Path:
 
 
 def _registry_location(registry_path: Path | None) -> Path:
-    """Resolve the effective registry path and require it to be absolute.
+    """Resolve the effective registry path and enforce its shape (A).
 
     Both the explicit ``registry_path`` (a ``--registry`` flag) and the
-    ``LINGTAI_PUFFO_V0_REGISTRY`` default are operator-supplied. A relative value
-    would be created or read under the launching process's current directory,
-    which a driver-spawned child neither controls nor predicts — the same
-    "looks configured, lands elsewhere" class as an empty ``HOME``. Reject it at
-    the single point every registry operation resolves its location through, so
-    the failure is loud at the boundary instead of a silently wrong directory.
+    ``LINGTAI_PUFFO_V0_REGISTRY`` default are operator-supplied. The location's
+    *shape* is checked here — the single point every registry operation resolves
+    through — so a malformed value fails loudly at the boundary before any
+    filesystem access, instead of becoming a silently wrong or dangerous target:
+
+    * it must be absolute — a relative value would be created or read under the
+      launching process's current directory, which a driver-spawned child neither
+      controls nor predicts (the same "looks configured, lands elsewhere" class as
+      an empty ``HOME``);
+    * it must contain no ``..`` component, so a stored or supplied path cannot
+      traverse out of the directory it names;
+    * its parent must not be the filesystem root, which also rejects ``/`` itself
+      and a root-level file such as ``/runtime-registry.json`` — the registry
+      always lives inside a dedicated directory, never directly under ``/``.
+
+    Directory ownership, type, and mode are enforced separately, and with no
+    filesystem access here, by ``_secure_registry_directory`` (contract B).
     """
 
     path = registry_path or default_registry_path()
     if not path.is_absolute():
         raise PuffoV0RegistryError("registry path must be absolute")
+    if ".." in path.parts:
+        raise PuffoV0RegistryError("registry path must not contain a '..' component")
+    if path.parent == path.parent.parent:
+        raise PuffoV0RegistryError(
+            "registry path must live in a dedicated directory, not at the filesystem root"
+        )
     return path
 
 
@@ -451,17 +468,125 @@ def _require_posix_registry_security() -> None:
         )
 
 
-def _secure_registry_directory(path: Path) -> None:
-    """Create and harden the registry parent independently of umask."""
+def _ensure_registry_dir_component(
+    parent_fd: int, name: str, *, require_owner_only: bool
+) -> int:
+    """Create ``name`` under ``parent_fd`` as our own directory, or verify it.
 
-    _require_posix_registry_security()
+    Uses ``mkdirat`` + an ``O_NOFOLLOW`` ``openat`` relative to a verified parent
+    descriptor, so the component is created/opened without following a symlink and
+    without a path-string TOCTOU window. A directory this call *creates* is
+    force-set to ``0o700`` on its own descriptor (umask-independent); a directory
+    that already exists is only ever *verified* — one that is a symlink, is
+    foreign-owned, or (when ``require_owner_only``) is not already ``0o700`` is
+    rejected rather than modified, so LingTai never ``chmod``s a directory it did
+    not just create. Returns an open ``O_NOFOLLOW`` descriptor; the caller closes it.
+    """
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    created = False
     try:
-        path.mkdir(parents=True, mode=0o700, exist_ok=True)
-        os.chmod(path, 0o700)
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+        created = True
+    except FileExistsError:
+        pass
     except OSError as exc:
         raise PuffoV0RegistryError(
-            "puffo-v0 runtime registry directory could not be secured"
+            "puffo-v0 runtime registry directory could not be created"
         ) from exc
+    try:
+        fd = os.open(name, os.O_RDONLY | directory | nofollow, dir_fd=parent_fd)
+    except OSError as exc:
+        # A symlinked component fails O_NOFOLLOW with ELOOP; a non-directory fails
+        # O_DIRECTORY with ENOTDIR. Either way it is not a dedicated directory.
+        raise PuffoV0RegistryError(
+            "puffo-v0 runtime registry directory is not a dedicated owner-only directory"
+        ) from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+            raise PuffoV0RegistryError(
+                "puffo-v0 runtime registry directory is not a dedicated owner-only directory"
+            )
+        if created:
+            os.fchmod(fd, 0o700)
+        elif require_owner_only and stat.S_IMODE(info.st_mode) != 0o700:
+            raise PuffoV0RegistryError(
+                "puffo-v0 runtime registry directory is not a dedicated owner-only directory"
+            )
+    except BaseException:
+        with suppress(OSError):
+            os.close(fd)
+        raise
+    return fd
+
+
+def _secure_registry_directory(path: Path) -> None:
+    """Create or verify the registry's dedicated parent directory (contract B).
+
+    ``path`` is the directory that will hold the registry file. LingTai only ever
+    creates or hardens a directory it owns; it never ``chmod``s or creates through
+    an operator-supplied or symlinked directory:
+
+    * The built-in ``~/.lingtai/<profile>`` namespace — used when neither
+      ``--registry`` nor ``LINGTAI_PUFFO_V0_REGISTRY`` redirects the location — is
+      created/verified node by node (``~/.lingtai`` then ``<profile>``), each with
+      ``O_NOFOLLOW``, so a sibling process sharing the uid cannot redirect the
+      chain by planting a symlink one level up. ``$HOME`` and above are not
+      LingTai's namespace and are left unmanaged (the boundary stops here).
+    * An operator-supplied location has only its final component created; its
+      parent must already exist, so LingTai never materializes an operator's
+      ancestor chain and never follows an operator symlink into an arbitrary
+      target. Ancestor symlinks (e.g. ``/tmp`` → ``/private/tmp``) are the
+      operator's placement choice and are not rejected; only the final registry
+      directory itself must not be a symlink.
+
+    In both cases an already-existing target that is a symlink, is foreign-owned,
+    or is not an owner-only (``0o700``) directory is rejected loudly rather than
+    modified. Under a shared uid ``0o700`` is not a boundary between sibling
+    agents; these checks defend against accident, external tampering, and
+    confused-deputy symlink redirection — not a co-resident same-uid process.
+    """
+
+    _require_posix_registry_security()
+    directory = getattr(os, "O_DIRECTORY", 0)
+    home = Path.home()
+    if path == home / ".lingtai" / PROFILE_NAME:
+        try:
+            base_fd = os.open(home, os.O_RDONLY | directory)
+        except OSError as exc:
+            raise PuffoV0RegistryError(
+                "puffo-v0 runtime registry home directory is unavailable"
+            ) from exc
+        open_fds = [base_fd]
+        try:
+            parent_fd = base_fd
+            for name, owner_only in ((".lingtai", False), (PROFILE_NAME, True)):
+                child_fd = _ensure_registry_dir_component(
+                    parent_fd, name, require_owner_only=owner_only
+                )
+                open_fds.append(child_fd)
+                parent_fd = child_fd
+        finally:
+            for fd in open_fds:
+                with suppress(OSError):
+                    os.close(fd)
+        return
+
+    try:
+        parent_fd = os.open(path.parent, os.O_RDONLY | directory)
+    except OSError as exc:
+        raise PuffoV0RegistryError(
+            "puffo-v0 runtime registry parent directory is unavailable"
+        ) from exc
+    try:
+        os.close(
+            _ensure_registry_dir_component(parent_fd, path.name, require_owner_only=True)
+        )
+    finally:
+        with suppress(OSError):
+            os.close(parent_fd)
 
 
 def _secure_registry_file(path: Path) -> bool:
