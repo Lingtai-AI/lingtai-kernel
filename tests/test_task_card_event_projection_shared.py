@@ -165,7 +165,7 @@ def test_shared_render_stays_unchanged_while_telegram_relayouts_metadata() -> No
         "<b>Device</b> · dev-1\n"
         "<b>Path</b> · <code>/tmp/taskcard</code>\n"
         "\n"
-        "<b>ASYNC WORK</b>\n"
+        "⚙️ <b>ASYNC WORK</b>\n"
         "<b>Status</b> · running 1\n"
         "🕒 Last Updated: 02:30:00 U+8\n"
         "💬 <i>Ask agent for \"Task Card\"</i>"

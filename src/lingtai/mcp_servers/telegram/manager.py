@@ -274,7 +274,7 @@ def _telegram_task_card_html(text: str) -> str:
                     rows = identity_rows(payload)
                 else:
                     rows = [f"<b>Status</b> · {html_escape(payload, quote=False)}"]
-                rendered.extend((heading, *rows))
+                rendered.extend((f"⚙️ {heading}" if section == "async" else heading, *rows))
                 previous_metadata_section = section
                 continue
             if previous_metadata_section == "async":
