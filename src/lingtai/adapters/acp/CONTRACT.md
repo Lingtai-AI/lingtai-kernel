@@ -506,7 +506,11 @@ argv, environment, or MCP command from the remote caller.
     the direct parent itself is checked, a registry placed one level under a
     symlinked ancestor is rejected — on macOS this means a location directly under
     `/tmp` fails, so place the registry at least two levels below any symlinked
-    ancestor. An operator who explicitly names the built-in path therefore gets
+    ancestor. Likewise, because the direct parent must be owned by the running
+    user, a registry directly under a root-owned system directory (`/var/lib/...`,
+    `/opt/...`, run as a normal user) is rejected ("owned by another user"); make
+    that directory user-owned or nest the registry under a subdirectory the user
+    creates and owns. An operator who explicitly names the built-in path therefore gets
     namespace handling, and the branch is **not a security boundary**: in both
     branches the registry directory and the node directly above it are verified
     non-symlink and owned by this user, and the leaf is required to be `0700` — the

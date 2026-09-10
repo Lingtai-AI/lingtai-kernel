@@ -3330,15 +3330,15 @@ def test_provision_rejects_a_symlinked_registry_directory_parent(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
-def test_provision_rejects_a_foreign_owned_node(monkeypatch, tmp_path):
-    # Owner enforcement on the owned-node path: the registry directory AND the node
-    # directly above it must be owned by the current euid (symmetric checks -- the
-    # operator branch's parent fstat and _ensure_registry_dir_component's uid
-    # check). A single-uid CI cannot chown a directory to another user, so drive
-    # the check from the other side: geteuid() reports a uid that owns nothing
-    # here. (Family-level coverage: it proves uid enforcement is present on the
-    # path; it cannot isolate the parent check from the leaf check, since both
-    # compare against geteuid().)
+def test_provision_rejects_a_foreign_owned_registry_parent(monkeypatch, tmp_path):
+    # The node directly above the registry directory must be owned by the current
+    # euid. A single-uid CI cannot chown a directory to another user, so drive the
+    # check from the other side: geteuid() reports a uid that owns nothing here.
+    # The assertion is pinned to the PARENT check's distinct reason so this is a
+    # red witness for exactly that check: the parent fstat runs before the leaf, so
+    # it raises first; remove it and the leaf raises a different message, failing
+    # the match. (Both nodes compare against geteuid(), so an unpinned raise would
+    # still pass via the leaf and give this commit zero marginal coverage.)
     import lingtai.adapters.acp.puffo_v0 as puffo_v0
 
     dedicated = tmp_path / "dedicated"
@@ -3348,9 +3348,11 @@ def test_provision_rejects_a_foreign_owned_node(monkeypatch, tmp_path):
     (agent_dir / "init.json").write_text("{}", encoding="utf-8")
     workspace = tmp_path / "ws"
     workspace.mkdir()
-    registry = dedicated / "runtime-registry.json"
+    registry = dedicated / "runtime-registry.json"  # parent = tmp_path, real-uid-owned
     monkeypatch.setattr(puffo_v0.os, "geteuid", lambda: os.getuid() + 1)
-    with pytest.raises(PuffoV0RegistryError):
+    with pytest.raises(
+        PuffoV0RegistryError, match="parent directory is owned by another user"
+    ):
         provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
 
 
