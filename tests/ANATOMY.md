@@ -364,6 +364,7 @@ related_files:
   - tests/test_telegram_inbound_media_download_failure.py
   - tests/test_telegram_lossless_envelope.py
   - tests/test_telegram_notification_read_state.py
+  - tests/test_telegram_notification_no_reread.py
   - tests/test_telegram_rate_limit.py
   - tests/test_telegram_reaction_states.py
   - tests/test_telegram_rich_formatting.py
