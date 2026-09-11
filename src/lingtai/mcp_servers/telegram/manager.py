@@ -3544,7 +3544,7 @@ class TelegramManager:
         session_prefixes = ("Session · ", "会话 · ")
         stable_lines: list[str] = []
         for line in automatic.splitlines():
-            if line.startswith(time_prefixes):
+            if line.removeprefix("🕒 ").startswith(time_prefixes):
                 continue
             if line.startswith(session_prefixes):
                 line = re.sub(
