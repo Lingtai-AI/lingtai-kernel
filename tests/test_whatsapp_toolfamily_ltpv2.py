@@ -661,10 +661,13 @@ def test_build_manager_fails_loud_on_malformed_config(tmp_path, monkeypatch):
         build_manager()
 
 
-def test_build_manager_uses_defaults_when_env_unset(monkeypatch):
-    """Personal mode still boots without a config file."""
+def test_build_manager_uses_defaults_when_env_unset(tmp_path, monkeypatch):
+    """Default construction is local: do not start Node or read host state."""
     from lingtai.mcp_servers.whatsapp.server import build_manager
+    from lingtai.mcp_servers.whatsapp.manager import bridge_client
 
+    monkeypatch.setenv("LINGTAI_AGENT_DIR", str(tmp_path))
+    monkeypatch.setattr(bridge_client.WhatsAppBridge, "start", lambda self: None)
     monkeypatch.delenv("LINGTAI_WHATSAPP_CONFIG", raising=False)
     manager = build_manager()
     assert manager is not None

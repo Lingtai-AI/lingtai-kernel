@@ -448,6 +448,7 @@ related_files:
   - tests/test_wechat_toolfamily_ltpv2.py
   - tests/test_whatsapp_inbound_replay.py
   - tests/test_whatsapp_notification_metadata.py
+  - tests/test_whatsapp_notification_no_reread.py
   - tests/test_whatsapp_personal_bridge.py
   - tests/test_whatsapp_settings.py
   - tests/test_whatsapp_toolfamily_ltpv2.py
