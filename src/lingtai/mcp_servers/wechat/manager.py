@@ -85,12 +85,16 @@ _HISTORY_INDEX_VERSION = 1
 SCHEMA = _family.WECHAT_SCHEMA
 
 DESCRIPTION = (
-    "Standalone WeChat/iLink messaging. Use check/read/search first and exact "
-    "IDs from check/read/contacts. send/reply are real effects: verify recipient "
-    "and content; provider acceptance is not delivery and accepted requests are "
-    "never replayed. media_path must stay in the allowed workdir and text+media "
-    "may be partial. One poller per bot account; refresh/recovery requires read "
-    "reconciliation. Login/configuration belongs to owner setup; never share the "
+    "Standalone WeChat/iLink messaging. When the CURRENT notification carries "
+    "complete required content and exact IDs, do not call check/read/search merely "
+    "to reread it or refetch an id already present there — use them only when "
+    "that id or content is actually missing, never to guess one. send/reply "
+    "are real effects: verify recipient and content; provider acceptance is "
+    "not delivery and accepted requests are never replayed. media_path must "
+    "stay in the allowed workdir and text+media may be partial. One poller "
+    "per bot account; a refresh/recovery event is not by itself a reason to "
+    "read — reconcile with read only when needed history is actually missing "
+    "or uncertain. Login/configuration belongs to owner setup; never share the "
     "admin QR or credentials. Avatar sessions must not reconfigure this MCP. "
     "Actions: send, check, read, reply, search, contacts, add_contact, remove_contact, "
     "accounts, settings, manual."

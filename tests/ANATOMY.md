@@ -91,6 +91,7 @@ related_files:
   - tests/test_cli_runtime_env.py
   - tests/test_cli_worker_poison_recovery.py
   - tests/test_cloud_mail_addon.py
+  - tests/test_cloud_mail_notification_no_reread.py
   - tests/test_cloud_mail_toolfamily_ltpv2.py
   - tests/test_codex_account_source.py
   - tests/test_codex_endpoint_override.py
@@ -170,6 +171,7 @@ related_files:
   - tests/test_feishu_interactive_cards.py
   - tests/test_feishu_native_progress.py
   - tests/test_feishu_notification_metadata.py
+  - tests/test_feishu_notification_no_reread.py
   - tests/test_feishu_programmable_task_cards.py
   - tests/test_feishu_reactions_errors.py
   - tests/test_feishu_rich_outbound.py
@@ -197,6 +199,7 @@ related_files:
   - tests/test_imap_read_attachment_sanitization.py
   - tests/test_imap_reply_attachments.py
   - tests/test_imap_toolfamily_ltpv2.py
+  - tests/test_imap_notification_no_reread.py
   - tests/test_inherit_fallback.py
   - tests/test_init_reader.py
   - tests/test_init_schema.py
@@ -363,6 +366,7 @@ related_files:
   - tests/test_telegram_inbound_media_download_failure.py
   - tests/test_telegram_lossless_envelope.py
   - tests/test_telegram_notification_read_state.py
+  - tests/test_telegram_notification_no_reread.py
   - tests/test_telegram_rate_limit.py
   - tests/test_telegram_reaction_states.py
   - tests/test_telegram_rich_formatting.py
@@ -440,11 +444,13 @@ related_files:
   - tests/test_wechat_media_validation.py
   - tests/test_wechat_media_warning_integration.py
   - tests/test_wechat_notification_metadata.py
+  - tests/test_wechat_notification_no_reread.py
   - tests/test_wechat_reply_read_state.py
   - tests/test_wechat_settings.py
   - tests/test_wechat_toolfamily_ltpv2.py
   - tests/test_whatsapp_inbound_replay.py
   - tests/test_whatsapp_notification_metadata.py
+  - tests/test_whatsapp_notification_no_reread.py
   - tests/test_whatsapp_personal_bridge.py
   - tests/test_whatsapp_settings.py
   - tests/test_whatsapp_toolfamily_ltpv2.py

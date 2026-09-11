@@ -51,7 +51,10 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
         {
             "user_id": {
                 "type": "string",
-                "description": "Exact user_id from check, read, or contacts.",
+                "description": (
+                    "Exact user_id from check, read, contacts, or a current "
+                    "notification; never guess."
+                ),
             },
             "text": {
                 "type": "string",
@@ -75,7 +78,10 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "user_id": {
                     "type": "string",
-                    "description": "Exact user_id from check, read, or contacts.",
+                    "description": (
+                        "Exact user_id from check, read, contacts, or a current "
+                        "notification; never guess."
+                    ),
                 },
                 "limit": {
                     "type": "integer",
@@ -88,7 +94,11 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "message_id": {
                     "type": "string",
-                    "description": "Exact inbound message_id returned by read.",
+                    "description": (
+                        "Exact inbound message_id from read, search, or a "
+                        "current notification's structured preview; never "
+                        "guess."
+                    ),
                 },
                 "text": {
                     "type": "string",
@@ -115,7 +125,10 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "user_id": {
                     "type": "string",
-                    "description": "Exact user_id from check, read, or contacts.",
+                    "description": (
+                        "Exact user_id from check, read, contacts, or a current "
+                        "notification; never guess."
+                    ),
                 },
                 "alias": {
                     "type": "string",
@@ -165,7 +178,10 @@ def wechat_schema() -> dict[str, Any]:
     if "oneOf" in inputs:
         inputs["anyOf"] = inputs.pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "check/read first; use exact user_id/message_id returned by the tool. "
+        "When a CURRENT notification carries complete required content and exact "
+        "user_id/message_id, do not call check/read merely to reread it or refetch an id "
+        "already present there. Use check/read/search when that id or content "
+        "is actually missing, never to guess one. "
         "send/reply are external effects: verify content, treat acceptance as not "
         "delivery, and never replay accepted requests. Actions: send (user_id + "
         "text/media_path), check, read (user_id; optional limit), reply "

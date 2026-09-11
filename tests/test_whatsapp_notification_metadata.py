@@ -17,7 +17,9 @@ from lingtai.mcp_servers.whatsapp.manager import (
 
 
 @pytest.fixture()
-def manager(tmp_path: Path) -> WhatsAppManager:
+def manager(tmp_path: Path, monkeypatch) -> WhatsAppManager:
+    import lingtai.mcp_servers.whatsapp.manager as manager_mod
+    monkeypatch.setattr(manager_mod, "push_inbox_event", lambda *args, **kwargs: True)
     return WhatsAppManager(
         # autostart=False keeps the test hermetic: no Node bridge subprocess.
         {"store_dir": str(tmp_path / "store"), "autostart": False},

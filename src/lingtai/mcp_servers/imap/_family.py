@@ -129,7 +129,7 @@ def _imap_input_schemas() -> dict[str, dict[str, Any]]:
         },
         required=["email_id", "message"],
     )
-    reply["properties"]["email_id"]["description"] = "Returned compound ID; read target first; reply uses first."
+    reply["properties"]["email_id"]["description"] = "Returned compound ID; read first unless the sender/body/cc/attachments are already known; reply uses first."
     reply["properties"]["subject"]["description"] = "Optional override; otherwise derives from target"
     reply["properties"]["message"]["description"] = "Reply body to verify before delivery"
     reply["properties"]["cc"]["description"] = "CC recipient(s); verify before delivery"
