@@ -5,8 +5,8 @@ description: |
   IDs, external send/reply, media partials, and standalone poller/setup hazards.
   Use the schema for routine calls; load this manual for media details,
   unfamiliar results, setup, or recovery.
-version: 2.1.0
-last_changed_at: "2026-09-09T03:15:00Z"
+version: 2.1.1
+last_changed_at: "2026-09-10T00:00:00Z"
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/wechat/manager.py
@@ -21,11 +21,14 @@ related_files:
 - src/lingtai/mcp_servers/wechat/reference/operations.md
 - src/lingtai/mcp_servers/wechat/reference/media.md
 - src/lingtai/mcp_servers/wechat/reference/setup.md
+- src/lingtai/mcp_servers/wechat/notification_header.md
 - tests/test_wechat_toolfamily_ltpv2.py
 - tests/test_wechat_media_validation.py
 - tests/test_wechat_login.py
 - tests/test_wechat_settings.py
 - tests/test_wechat_config_resolution.py
+- tests/test_wechat_notification_metadata.py
+- tests/test_wechat_notification_no_reread.py
 - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Tracks the WeChat MCP action catalog and its progressive-disclosure safety,
@@ -44,9 +47,15 @@ setup/recovery and unfamiliar result details, not a per-send reading ritual.
 {"action":"check","input":{},"reasoning":"find WeChat conversations"}
 ```
 
-Then `read` an exact `user_id` from `check`, `read`, or `contacts`. For `reply`, use
-an inbound `message_id` from `read`; do not invent recipients. `search` matches
-inbox bodies by regex; it cannot prove that an outgoing reply is absent.
+Without a complete current notification, recover the needed content using
+`read` with an exact `user_id` from `check`, `read`, `contacts`, or a current
+notification. For `reply`, use an inbound `message_id` from `read`, `search`, or
+a current notification's structured preview (`recent_messages`/
+`latest_incoming`); never guess or invent one. When a CURRENT notification
+carries the complete required message and exact `id`, do not call `check`/`read` merely
+to reread that identical content or to re-obtain an `id` already present there.
+`search` matches inbox bodies by regex; it cannot prove that an outgoing reply
+is absent.
 Calls require
 `action`, closed action-owned `input`, and `reasoning`; optional `summarize` is
 boolean. The advertised schema owns the action catalog and validation.
@@ -65,9 +74,12 @@ replay. A missing local sent record does not prove nothing was accepted. Read
 [media](reference/media.md) for paths, validation and upload stages.
 
 `getUpdates` has one consumer per bot account. The per-account lock refuses a
-second poller; do not delete its lockfile or start another. After refresh, worker
-failure or recovery, use `read` to reconcile merged inbox/sent history before
-replying. Local history is context, not a delivery receipt.
+second poller; do not delete its lockfile or start another. A refresh, worker
+failure, or recovery event is a lifecycle fact, not by itself a reason to reread
+a complete current notification; call `read` to reconcile only when the
+inbox/sent history you actually need is missing or uncertain after such an
+event, not as a routine step before every reply. Local history is context, not
+a delivery receipt.
 
 Login, configuration and credential replacement require the owner's setup
 authorization. Avatar sessions must not reconfigure this MCP. Never share the

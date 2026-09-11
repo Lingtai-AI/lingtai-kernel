@@ -588,7 +588,7 @@ def test_all_four_notification_managers_preserve_exact_runtime_body():
     expected = {
         m1.__name__: "515a2472ee8dbf47480f6dfe77f3ca7b55f1558a429b630282c109f3bf9828ff",
         m2.__name__: "17c7e5086686354379cc6bf22d8cedf7d97863a04702af9928d187180877fff5",
-        m3.__name__: "8065f55c16561adedf8b71d788efa29d80ff1b9a1196ffab38f239bf06302364",
+        m3.__name__: "cdfb2d6c420880eafbd69ae92cfbabb17b1cfe35c20320d039459f6475c95ae9",
         m4.__name__: "e671f269c783a6a68b9d2294f0de1eb8e397ce22e13cd73b6cd9426453b8cb9e",
     }
     for mod in (m1, m2, m3, m4):

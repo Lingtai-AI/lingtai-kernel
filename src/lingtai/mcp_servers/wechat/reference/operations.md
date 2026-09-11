@@ -4,8 +4,8 @@ description: |
   WeChat operation details for exact recipient/message IDs, bounded reads, result
   meanings, and replay-safe handling of provider acceptance. Load from the main
   WeChat manual for external operations or recovery.
-version: 1.1.0
-last_changed_at: "2026-09-09T03:15:00Z"
+version: 1.1.1
+last_changed_at: "2026-09-10T00:00:00Z"
 related_files:
 - src/lingtai/mcp_servers/wechat/SKILL.md
 - src/lingtai/mcp_servers/wechat/manager.py
@@ -29,8 +29,11 @@ This reference adds the operation semantics that matter after discovery.
 
 - `send` starts a new message for the supplied exact `user_id`; it requires `text`,
   `media_path`, or both.
-- `reply` takes an inbound `message_id` from `read`, resolves its original sender,
-  and sends `text`. Missing message or sender is an error, never a fresh send.
+- `reply` takes an inbound `message_id` from `read`, `search`, or a current
+  notification's structured preview (`recent_messages`/`latest_incoming`);
+  resolves its original sender, and sends `text`. A complete current message
+  does not need a prior `read` merely to fetch an `id` already present in the
+  notification. Missing message or sender is an error, never a fresh send.
 - A successful reply marks its target inbound message read. A failed send does not.
 - Provider acceptance is not delivery confirmation: successful results keep
   `delivery_confirmed: false`. Do not replay an accepted request automatically.
@@ -45,9 +48,12 @@ This reference adds the operation semantics that matter after discovery.
   marks returned inbound records read.
 - `search` requires a regular-expression `query`, optionally filtered by `user_id`;
   it searches inbox bodies and returns at most 20 matches. Invalid regex is an error.
-- After refresh, worker failure, or recovery, read the merged history before
-  replying. A preview or absent search match does not prove that a reply is new or
-  absent.
+- A complete current notification (not marked `text_truncated`) SHOULD NOT be
+  reread with `read` merely to reacquire identical content or an `id` already
+  present. Refresh, worker failure, or recovery is a lifecycle event, not by
+  itself grounds to read; call `read` only when the history you actually need
+  is missing or uncertain after such an event. A preview or absent search match
+  does not prove that a reply is new or absent.
 
 ## Contacts and account view
 
