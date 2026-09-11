@@ -73,6 +73,29 @@ Search terms use the compact server-side DSL, including `from:addr`, `to:addr`,
 `subject:text`, `unseen`, `since:YYYY-MM-DD`, and `before:YYYY-MM-DD`; translation
 and unsupported terms remain provider-specific.
 
+## Incoming-mail wake notifications
+
+New mail is detected by the per-account IDLE/reconcile listener
+(`account.py`'s `reconcile`/`fetch_headers_by_uids`), which fetches
+`FROM`/`TO`/`SUBJECT`/`DATE`/flags/`email_id` only — never a body. The
+manager forwards each arrival to the host over the shared LICC inbox with
+`from`/`subject` plus `metadata.account` and `metadata.email_id`, so
+`payload["message"]` is absent today and the pushed `body` is always empty;
+do not treat that as proof the message is short or already shown in full —
+it is missing content, not a complete or even partial preview. `read` is the
+only source of body, `cc`, and attachments.
+
+The compound `email_id` is real routing information already known at wake
+time, so it also travels as the shared LICC metadata keys `platform="imap"`,
+`conversation_ref=<account>`, and `message_ref=<email_id>` that the host
+copies into the agent-visible notification preview. Reuse that `email_id`
+for `read`/`reply`/`flag`/`move`/`delete` without a redundant `check`/`search`
+call whose only purpose would be to reacquire an ID the notification already
+carries. That reuse only skips the lookup step: the ID alone never authorizes
+a `flag`/`move`/`delete` mutation, which still needs the target and
+destination/flags map verified as in the
+[result-handling section](#side-effects-files-and-result-handling).
+
 ## Side effects, files, and result handling
 
 `send` and `reply` deliver real SMTP mail. Immediately before calling, confirm

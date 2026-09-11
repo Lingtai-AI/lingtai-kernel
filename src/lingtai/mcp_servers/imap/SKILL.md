@@ -6,8 +6,8 @@ description: |
   real-mail side effects, external-reply policy, account selection, compound
   email IDs, attachments, mailbox mutations, contacts, or settings. Pull the
   full body with action='manual'; do not guess provider or account details.
-version: 1.4.0
-last_changed_at: 2026-09-09T03:15:00Z
+version: 1.5.0
+last_changed_at: 2026-09-10T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/imap/manager.py
@@ -45,9 +45,26 @@ from a preview.
 imap(action="check", input={}, reasoning="inspect recent mail")
 ```
 
-Before `reply`, read the exact target and verify sender, message, subject, body,
-`cc`, and attachments. It sends to the original sender, preserves threading, and
-uses the first ID if a list is supplied. Follow the standing reply policy;
+A new-mail wake notification already carries the exact `account`/`email_id`
+for the arrived message (surfaced generically as `conversation_ref`/
+`message_ref`); reuse that `email_id` directly with `read` (or `reply`,
+`flag`, `move`, `delete`) instead of re-running `check`/`search` merely to
+rediscover an ID the notification already gave you. That reused ID only
+replaces the lookup step; it is not by itself authorization to mutate —
+`flag`/`move`/`delete` still need the target and destination/flags verified
+per the [result-handling section](reference/operation-contract.md#side-effects-files-and-result-handling)
+before you call them. The wake notification never carries the message body —
+the current listener fetches headers only — so it is not a content preview
+at all; `read` remains required before deciding whether to reply, same as
+the `check`/`search` path above.
+
+Before `reply`, make sure you already have the exact sender, message, subject,
+body, `cc`, and attachments for that `email_id`; `read` it first if you don't
+— the wake notification's body is always empty today, so a freshly arrived
+email almost always needs one `read`, but a message you already `read`
+earlier in this conversation does not need rereading. `reply` sends to the
+original sender, preserves threading, and uses the first ID if a list is
+supplied. Follow the standing reply policy;
 an unknown external sender needs explicit guidance or confirmation that the
 sender is the same human who contacted the agent through an internal channel.
 A subject or email alone is not consent.
