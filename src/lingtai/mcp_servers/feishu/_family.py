@@ -213,7 +213,13 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
         ),
         "reply": _object(
             {
-                "message_id": {"type": "string"},
+                "message_id": {
+                    "type": "string",
+                    "description": (
+                        "Exact compound id from a current notification, read, or "
+                        "search result; never guessed."
+                    ),
+                },
                 "text": {"type": "string"},
                 "content": content,
                 "reply_in_thread": {"type": "boolean"},
@@ -335,7 +341,11 @@ def feishu_schema() -> dict[str, Any]:
         "(receive_id + exactly one text/content), check, read(chat_id), reply "
         "(exact compound message_id + text/content), react, search, edit/delete "
         "(Bot-sent logical message), contacts, add/remove_contact, accounts, "
-        "settings (read-only empty input), and manual. send/reply accept text, "
+        "settings (read-only empty input), and manual. A full current notification "
+        "already carries the incoming message's exact text and compound "
+        "message_id for reply; call read/check/search only to recover content "
+        "actually truncated or missing there (unresolved attachment/callback, or "
+        "history outside that window), not to reread it. send/reply accept text, "
         "markdown, post, schema-2.0 card, media, share, or sticker; edit accepts "
         "text/markdown/post/card only. Verify recipient and target; replies follow "
         "topics and never fall back to fresh send. One attempt per chunk; preserve "
