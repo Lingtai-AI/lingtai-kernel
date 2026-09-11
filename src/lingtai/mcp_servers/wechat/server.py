@@ -62,11 +62,14 @@ log = logging.getLogger("lingtai.mcp_servers.wechat")
 
 
 _SERVER_INSTRUCTIONS = (
-    "Standalone WeChat/iLink client. Use check/read/search first and exact IDs "
-    "returned by the tool. send/reply are real external effects: verify content, "
-    "treat acceptance as not delivery, and never replay an accepted request. "
-    "Media may be partial; one poller consumes each bot account. Login/config "
-    "belongs to the owner setup procedure."
+    "Standalone WeChat/iLink client. When a CURRENT notification carries "
+    "exact IDs and complete required content, do not call check/read/search merely to "
+    "reread it or refetch an id already present there — use them only when "
+    "that id or content is actually missing, never to guess one. send/reply "
+    "are real external effects: verify content, treat acceptance as not "
+    "delivery, and never replay an accepted request. Media may be partial; "
+    "one poller consumes each bot account. Login/config belongs to the owner "
+    "setup procedure."
 )
 
 

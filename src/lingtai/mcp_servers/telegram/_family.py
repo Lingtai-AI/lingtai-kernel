@@ -243,8 +243,11 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             "the matching wake-notification mirror is cleared."
         ),
         "reply": (
-            "Reply to one message using its compound message_id from read/search; this "
-            "sends a new message, marks the target handled, and adds a replied reaction."
+            "Reply to one message using its compound message_id from the current "
+            "notification's own (non-synthetic) record, or from read/search; this "
+            "sends a new message, marks the target handled, and adds a replied "
+            "reaction. Do not call read/search first merely to reread a message "
+            "already given in full, or to obtain an id already given."
         ),
         "search": (
             "Regex-search stored inbound message text, sender fields, and update type; "
@@ -291,7 +294,12 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             "limit": "Optional maximum number of recent messages; default is 10.",
         },
         "reply": {
-            "message_id": "Compound target ID in account:chat_id:message_id form, from read/search results.",
+            "message_id": (
+                "Compound target ID in account:chat_id:message_id form: use the "
+                "current notification's own (non-synthetic) record id directly, "
+                "or an id from read/search results. Do not reread the same "
+                "message via read/search just to obtain an id already given."
+            ),
             "text": "Reply text; omit when supplying structured_message.",
             "entities": "Optional MessageEntity[] when rendering_mode='entities' for text.",
         },
@@ -370,12 +378,19 @@ def telegram_schema() -> dict[str, Any]:
     if "oneOf" in input_schema:
         input_schema["anyOf"] = input_schema.pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "Choose an action. For inbound work, start with check, read, or search; "
-        "send only an authorized new message to a real numeric chat_id; reply with "
-        "a copied compound message_id from read/search. Content-bearing "
-        "send/reply/edit defaults to Markdown. For charts and generated artifacts, "
-        "use media.type='document'; use 'photo' only for an inline preview. "
-        "See the progressive-disclosure manual: "
+        "Choose an action. A current notification's own (non-synthetic) compound "
+        "message id is a valid reply target directly; do not call check, read, or "
+        "search merely to reread that same text or to obtain an id already given. "
+        "Otherwise, for inbound work, start with check, read, or search; read is "
+        "also how to recover required content absent from all current copies, "
+        "not a text_truncated preview with complete raw content already present. "
+        "Needed media without a path or download_error can require read; "
+        "recorded download_error needs a resend. send only an authorized new "
+        "message to a real numeric chat_id; reply with a copied compound "
+        "message_id from the current notification or from read/search. "
+        "Content-bearing send/reply/edit defaults to Markdown. For charts and "
+        "generated artifacts, use media.type='document'; use 'photo' only for an "
+        "inline preview. See the progressive-disclosure manual: "
         + TELEGRAM_PLUGIN.manual_action_description()
     )
     return schema

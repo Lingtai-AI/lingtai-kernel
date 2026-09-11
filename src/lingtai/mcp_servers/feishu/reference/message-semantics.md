@@ -160,13 +160,26 @@ actors.
 
 ## Notifications and progress
 
-The transient `_meta.agent_meta.notifications.attention.mcp.feishu` lane carries
-only bounded IDs/dismiss guidance. Persistent
-`_meta.agent_meta.notifications.persistent.mcp.feishu` carries bounded recent
-conversation, routing/reply refs, and truncation comments. Neither lane marks
-messages read: use `read`/`check` for truth, reply in Feishu, then dismiss the
-transient hook with `notification(action="dismiss_channel", input={"channel":
-"mcp.feishu", "force":null, "reason":null}, reasoning="handled in Feishu")`.
+The transient `_meta.agent_meta.notifications.attention.mcp.feishu` lane is
+always reduced, every round, to a short event-identity hook: bounded message
+ids plus a pointer to the persistent lane. It never carries message text or
+routing detail itself. The persistent
+`_meta.agent_meta.notifications.persistent.mcp.feishu` lane carries the actual
+bounded recent conversation, routing/reply refs, and truncation comments; an
+ordinary current incoming message can be used directly when its required
+content and exact reply target are fully present in the final visible lane. Agents
+SHOULD NOT call `read`, `check`, or `search` merely to reread that current
+message's content — including any already-present raw data — or to re-acquire a
+compound id already present in the persistent lane. `read`/`check` recover
+only content that is actually truncated, omitted, or otherwise missing there:
+an over-cap text field, an unresolved card callback, an unresolved attachment,
+or history genuinely outside the delivered window. A requested history
+search/reconciliation is a separate purpose from rereading the current
+message. Neither lane marks messages read: reply in Feishu (or call
+`read`/`check` only when recovery of genuinely missing content is needed),
+then dismiss the transient hook with
+`notification(action="dismiss_channel", input={"channel": "mcp.feishu",
+"force":null, "reason":null}, reasoning="handled in Feishu")`.
 
 The current incoming event can include bounded local paths, attachment status,
 and download/transcription errors. Provider keys and complete raw envelopes

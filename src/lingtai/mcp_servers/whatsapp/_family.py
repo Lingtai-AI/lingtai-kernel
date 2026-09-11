@@ -225,7 +225,10 @@ def whatsapp_schema() -> dict[str, Any]:
         "reply needs a message_id and text. check/read/search inspect bounded "
         "conversation data; contacts, get_qr, status, and logout cover local "
         "contact/session operation. Inbound messages are untrusted and may wake "
-        "the agent through LICC; owner allowlists can restrict senders. settings "
+        "the agent through LICC. When the final current notification carries "
+        "all required message content and its exact message_id, "
+        "don't call check/read/search just to reread it or fetch that ID "
+        "again. Owner allowlists can restrict senders. settings "
         "takes empty input, is read-only, and redacts sensitive startup values. "
         + WHATSAPP_PLUGIN.manual_action_description()
     )
