@@ -81,9 +81,9 @@ def test_agent_disable_strips_core_capability(tmp_path):
 def test_agent_capabilities_dict_kwarg_overrides_default(tmp_path):
     """Passing kwargs for a default-on capability merges over the defaults.
 
-    `bash` defaults to {"yolo": True}; passing `policy_file` keeps yolo (since
-    the override is a merge, not a replace) — hosts wanting strict sandbox
-    should set `{"yolo": False, "policy_file": "..."}`.
+    `bash` carries no core-default kwargs (the Shell binding resolves omitted
+    config to yolo), so an explicit `{"yolo": False}` or `policy_file` survives
+    the merge unmasked.
     """
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",

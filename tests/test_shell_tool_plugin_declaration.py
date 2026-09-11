@@ -47,6 +47,141 @@ def _official_sleep_command(seconds: int = 30) -> str:
     return f"sleep {seconds}"
 
 
+def _allow_policy(tmp_path) -> str:
+    path = tmp_path / "allow-policy.json"
+    path.write_text('{"allow": ["echo"]}', encoding="utf-8")
+    return str(path)
+
+
+def _policy_mode(manager) -> str:
+    """Name the bound command policy's mode without executing anything."""
+    policy = manager._policy
+    summary = policy.describe()
+    if not summary:
+        # Parsed only; nothing is spawned.
+        assert policy.is_allowed("sudo -n true")
+        return "yolo"
+    return summary.split(" MODE", 1)[0].lower()
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        # Detached binding and preset ``shell: {}`` supply no keys at all.
+        ({}, "yolo"),
+        # ``setup()`` with nothing supplied forwards explicit Nones.
+        ({"yolo": None, "policy_file": None, "shell_kind": None}, "yolo"),
+        ({"yolo": True}, "yolo"),
+        ({"yolo": True, "policy_file": "ALLOW"}, "yolo"),
+        ({"yolo": False}, "denylist"),
+        ({"policy_file": "ALLOW"}, "allowlist"),
+        ({"yolo": False, "policy_file": "ALLOW"}, "allowlist"),
+    ],
+)
+def test_shell_binding_resolves_one_default_policy_rule(shell_agent, tmp_path, values, expected):
+    from lingtai.adapters.tool_plugin_host import (
+        StaticConfigurationAdapter,
+        agent_host_ports,
+    )
+    from lingtai.kernel.tool_plugin import ToolPluginHost
+    from lingtai.tools.bash._tool_family import DECLARATION
+
+    allow = _allow_policy(tmp_path)
+    values = {key: allow if value == "ALLOW" else value for key, value in values.items()}
+    host = ToolPluginHost.grant(
+        DECLARATION,
+        agent_host_ports(
+            shell_agent, "shell", {"configuration": StaticConfigurationAdapter(values)},
+        ),
+    )
+    bound = DECLARATION.bind(host)
+    assert _policy_mode(bound.handler.__self__.manager) == expected
+
+
+def test_canonical_init_sample_shell_default_adds_no_restriction(shell_agent):
+    from pathlib import Path
+
+    from lingtai.adapters.tool_plugin_host import (
+        StaticConfigurationAdapter,
+        agent_host_ports,
+    )
+    from lingtai.kernel.config_resolve import load_jsonc
+    from lingtai.kernel.tool_plugin import ToolPluginHost
+    from lingtai.tools.bash._tool_family import DECLARATION
+
+    sample = load_jsonc(Path(__file__).parents[1] / "src/lingtai/init.jsonc")
+    shell_config = sample["manifest"]["capabilities"]["shell"]
+    host = ToolPluginHost.grant(
+        DECLARATION,
+        agent_host_ports(
+            shell_agent, "shell",
+            {"configuration": StaticConfigurationAdapter(dict(shell_config))},
+        ),
+    )
+    assert _policy_mode(DECLARATION.bind(host).handler.__self__.manager) == "yolo"
+
+
+def test_default_shell_is_permissive_on_every_composition_route(tmp_path):
+    """Main, preset, direct setup, and detached Shell share the binding's rule."""
+    from lingtai.kernel.daemon_supervisor.agent_stub import DaemonSupervisorAgentStub
+    from lingtai.tools.bash import _setup_detached_daemon_shell, setup as setup_shell
+    from lingtai.tools.daemon import _ToolCollector
+    from tests._daemon_helpers import make_daemon_run_dir
+
+    allow = _allow_policy(tmp_path)
+
+    def _agent(name: str, capabilities: dict) -> Agent:
+        return Agent(
+            service=make_gemini_mock_service(), agent_name=name,
+            working_dir=tmp_path / name, capabilities=capabilities,
+        )
+
+    def _mode(handler) -> str:
+        return _policy_mode(handler.__self__.manager)
+
+    main = _agent("main", {})
+    try:
+        assert _mode(main._tool_handlers["shell"]) == "yolo"
+
+        daemon = main.get_capability("daemon")
+        llm = {"provider": "mock", "model": "mock"}
+        for caps, expected in (
+            ({"shell": {}}, "yolo"),
+            ({"shell": {"yolo": False}}, "denylist"),
+            ({"shell": {"policy_file": allow}}, "allowlist"),
+        ):
+            _schemas, handlers = daemon._instantiate_preset_capabilities(caps, llm)
+            assert _mode(handlers["shell"]) == expected, caps
+        # A preset that omits shell borrows the parent's default Shell.
+        _schemas, dispatch = daemon._build_tool_surface(
+            ["shell"], preset_surface=daemon._instantiate_preset_capabilities({}, llm),
+        )
+        assert _mode(dispatch["shell"]) == "yolo"
+
+        assert _policy_mode(setup_shell(main)) == "yolo"
+        assert _policy_mode(setup_shell(main, yolo=False)) == "denylist"
+    finally:
+        main.stop(timeout=1.0)
+
+    # Explicit manifest restrictions are not masked by a merged core default.
+    for name, shell_config, expected in (
+        ("restricted", {"yolo": False}, "denylist"),
+        ("policy", {"policy_file": allow}, "allowlist"),
+    ):
+        agent = _agent(name, {"shell": shell_config})
+        try:
+            assert _mode(agent._tool_handlers["shell"]) == expected, shell_config
+        finally:
+            agent.stop(timeout=1.0)
+
+    parent = tmp_path / "detached-parent"
+    run_dir = make_daemon_run_dir(parent_working_dir=parent, tools=["shell"])
+    manager, _adapter = _setup_detached_daemon_shell(
+        _ToolCollector(DaemonSupervisorAgentStub(parent)), run_dir=run_dir,
+    )
+    assert _policy_mode(manager) == "yolo"
+
+
 def test_shell_declaration_is_static_and_derives_its_shipped_surface():
     from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
     from lingtai.tools.bash._tool_family import DECLARATION, get_schema

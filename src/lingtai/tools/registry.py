@@ -141,8 +141,8 @@ BUILTIN_TOOLS: dict[str, str] = {
 # init.json's ``manifest.capabilities`` only needs to declare overrides (kwargs)
 # or opt-ins beyond this set; ``manifest.disable`` is the opt-out channel.
 #
-# ``shell`` defaults to {"yolo": True} (unsandboxed). Hosts that want a sandbox
-# pass {"policy_file": "..."} in init.json, which overrides the default kwargs.
+# ``shell`` has no default kwargs: its binding resolves omitted config to yolo
+# (unsandboxed). Sandboxing hosts pass {"policy_file": ...} or {"yolo": false}.
 # ``vision`` is always registered: its provider defaults to the active LLM
 # (the agent's own Responses API), and the analyze call may explicitly borrow
 # another preset's vision service via the ``preset`` option. ``web_search``
@@ -151,7 +151,7 @@ BUILTIN_TOOLS: dict[str, str] = {
 CORE_DEFAULTS: dict[str, dict] = {
     "knowledge": {},
     "skills": {},
-    "shell": {"yolo": True},
+    "shell": {},
     "avatar": {},
     "daemon": {},
     "mcp": {},
