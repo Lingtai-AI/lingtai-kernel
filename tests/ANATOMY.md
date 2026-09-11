@@ -197,6 +197,7 @@ related_files:
   - tests/test_imap_read_attachment_sanitization.py
   - tests/test_imap_reply_attachments.py
   - tests/test_imap_toolfamily_ltpv2.py
+  - tests/test_imap_notification_no_reread.py
   - tests/test_inherit_fallback.py
   - tests/test_init_reader.py
   - tests/test_init_schema.py
