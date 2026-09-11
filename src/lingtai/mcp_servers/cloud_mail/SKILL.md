@@ -5,8 +5,8 @@ description: |
   it when action filters/ids, setup/authentication, polling/settings, or
   side-effect detail is needed. Returned by action='manual'; nested references
   are packaged but not embedded. Calls use the strict LTP-v2 envelope.
-version: 1.3.0
-last_changed_at: "2026-09-07T00:00:00Z"
+version: 1.4.0
+last_changed_at: "2026-09-11T00:00:00Z"
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/cloud_mail/_family.py
@@ -31,8 +31,13 @@ maintenance: |
 Cloud Mail is a REST client for a self-hosted Cloud Mail deployment, not IMAP or
 SMTP. Inbound mail is polled automatically and delivered to the host agent's
 inbox via LICC; you normally do not poll `check` just to receive notifications.
-This file is the model-facing router. Load only the packaged reference that
-matches the question:
+Each notification already carries the current message (sender, subject, body
+preview, and an exact `message_ref` id) — do not call `check`, `search`, or
+`read` again merely to reread that same content or to recover an id already
+present in the notification; see [`reference/actions.md`](reference/actions.md)
+for exactly when a `read` recovery call is warranted. This file is the
+model-facing router. Load only the packaged reference that matches the
+question:
 
 | Need | Read |
 |---|---|

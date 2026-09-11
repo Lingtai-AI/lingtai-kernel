@@ -138,10 +138,15 @@ def cloud_mail_schema() -> dict[str, Any]:
                 "description": (
                     "Cloud Mail action; each action owns a strict input branch. "
                     "check lists inbound mail; search filters; read returns full "
-                    "content by '<account>:<emailId>'; send delivers real email "
-                    "with user credentials; accounts returns redacted status; "
-                    "add_user is an admin user mutation; settings is a read-only "
-                    "redacted startup inventory. Inbound mail is polled. Call "
+                    "content by '<account>:<emailId>' (accepts a check/search id "
+                    "or an exact notification message_ref); send delivers real "
+                    "email with user credentials; accounts returns redacted "
+                    "status; add_user is an admin user mutation; settings is a "
+                    "read-only redacted startup inventory. Inbound mail is "
+                    "polled and delivered with a body preview and exact message_ref. "
+                    "If the required current content is complete, do not call "
+                    "check, search, or read merely to reread it or recover its known id. "
+                    "Read only to recover required content actually truncated or missing. Call "
                     "manual "
                     + CLOUD_MAIL_PLUGIN.manual_action_description()
                 ),
