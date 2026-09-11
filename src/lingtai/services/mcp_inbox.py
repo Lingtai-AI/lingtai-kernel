@@ -361,7 +361,9 @@ def _dispatch_summary(
     and optional lightweight routing metadata. Body preview text is kept in
     structured ``data.previews[*].preview`` only; top-level ``instructions``
     contains read/check guidance plus sender/subject/metadata context, not a
-    second copy of the body preview.
+    second copy of the body preview. Guidance tells the agent NOT to
+    read/check merely to reread content or an id already fully present in the
+    preview — read/check is for content actually missing from the preview.
 
     Uses the kernel's canonical ``.notification/`` filesystem-as-protocol
     instead of the legacy inbox queue.  The notification file is written as
@@ -381,12 +383,22 @@ def _dispatch_summary(
     previews = previews or []
 
     instructions_lines = [
-        f"Call the MCP '{mcp_name}' read/check action to fetch "
-        f"the {count} new event{plural} when the structured preview is "
-        f"truncated, ambiguous, media/callback-heavy, or exact anchoring is "
-        f"needed. If data.previews clearly identifies the latest actionable "
-        f"incoming message and preview_truncated is false, the agent may reply "
-        f"directly from the preview without an extra read. Structured previews "
+        f"When data.previews already carries the full current message content "
+        f"and the exact routing id needed to act, do NOT call the MCP "
+        f"'{mcp_name}' read/check action merely to reread that same content or "
+        f"re-fetch an id already present — still honor sender/account, "
+        f"recipient/target, and any other producer/manual safeguards when "
+        f"acting. Call read/check only when required content for the "
+        f"{count} new event{plural} is actually missing, capped, or omitted "
+        f"from the preview (preview_truncated is true, a needed media/callback "
+        f"payload is not included, or exact anchoring requires data the "
+        f"preview does not carry) — then use the narrowest producer recovery "
+        f"for that specific event. Ambiguity about which message to act on, "
+        f"the presence of media/callback metadata, older-history overflow, or "
+        f"an id already present in the preview are not by themselves reasons "
+        f"to reread — only actually missing content is. A shortened preview "
+        f"does not require recovery when a full current alternate/raw copy is "
+        f"already available. Structured previews "
         f"are available in data.previews with sender, subject, "
         f"preview_truncated, optional routing metadata, optional IM context, "
         f"and up to {_PREVIEW_FIELD_CAP} chars of body text."

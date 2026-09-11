@@ -2667,6 +2667,26 @@ def test_sanitize_telegram_notification_after_persistent_uses_latest_incoming_id
     assert "previews" not in telegram["data"]
 
 
+def test_sanitize_telegram_notification_after_persistent_instructions_teach_no_reread():
+    """The sanitized attention hook overwrites any plugin-owned instructions,
+    so it must itself carry the no-reread-when-full-and-id-present rule
+    rather than leaving only a generic 'use notification_persistent' pointer."""
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "data": {"previews": [{"latest_incoming": _telegram_message(1)}]},
+                "instructions": "stale plugin-owned instructions",
+            }
+        }
+    }
+
+    meta_block.sanitize_telegram_notification_after_persistent(notification_payload)
+
+    instructions = notification_payload["notifications"]["mcp.telegram"]["instructions"]
+    assert "do not call Telegram's read/check merely to reread" in instructions
+    assert "full current message" in instructions
+
+
 def test_sanitize_telegram_notification_after_persistent_is_noop_without_telegram():
     # No telegram notification → safe no-op, does not raise.
     payload = {"notifications": {"email": {"data": {"previews": [{"preview": "x"}]}}}}
