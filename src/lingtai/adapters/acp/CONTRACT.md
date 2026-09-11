@@ -298,13 +298,27 @@ argv, environment, or MCP command from the remote caller.
    The existing risky-action gate remains first and may deny without a request.
 11. `acp-local-stdio.puffo-v0.v1` — `lingtai-agent acp --profile puffo-v0
     --runtime-id <id>` resolves `<id>` only through the local
-    operator-managed registry. The entry must be active, structurally exact,
+    operator-managed registry. The registry *location* is operator launch
+    configuration, not a protocol input: it defaults to the HOME-relative
+    profile path, and an operator MAY select an explicit location — an absolute
+    path with no `..` component whose parent is below the filesystem root (a
+    relative path, a `..` component, `/` itself, or a root-level file is rejected
+    before any filesystem access) — with `--registry <path>` or the
+    `LINGTAI_PUFFO_V0_REGISTRY` environment variable (flag over environment over
+    default). The provision, revoke, and discover control-plane commands and both
+    launch resolves consult the same selected registry, so a launch must name the
+    registry its runtime was provisioned into. This selects only the location: it is supplied by the
+    local spawner (the same trust class as argv/environment), is never settable
+    by the remote caller (the data plane still receives only the id), and the
+    binding and integrity rules below still derive solely from the named registry
+    entry. The entry must be active, structurally exact,
     entry-digest-valid, and bind one initialized agent directory and canonical
     workspace to their provision-time canonical path plus POSIX device/inode/
     owner/group identity. Resolve rejects a symlink retarget, canonical-path
     drift, or replacement at the same path; active runtime bindings are unique
     for both agent directory and workspace. The composition root resolves the
-    runtime again immediately before Agent construction. This narrows ordinary
+    runtime again, against the same selected registry, immediately before Agent
+    construction. This narrows ordinary
     resolve-to-start drift; a same-OS principal that rewrites the filesystem
     after that check remains within the explicit host trust boundary below.
     `entry_digest` protects the exact registry entry only; it is not a digest
@@ -477,9 +491,50 @@ argv, environment, or MCP command from the remote caller.
     snapshot cannot reactivate an id. The versioned registry declares this log
     mandatory: a missing, unreadable, malformed, or mismatched log rejects
     resolve/provision rather than being treated as an empty history. Its POSIX
-    directory is owner-only (`0700`) and its lock, temporary, registry, and
-    tombstone files are owner-only (`0600`), independent of umask; existing
-    registry artifacts are tightened before use. This Phase A registry fails closed on Windows until an
+    directory is a dedicated owner-only (`0700`) directory and its lock,
+    temporary, registry, and tombstone files are owner-only (`0600`), independent
+    of umask. LingTai creates or hardens only a directory it owns and never
+    `chmod`s or creates through an operator-supplied or symlinked directory. Which
+    handling a location gets is decided by **path value, not by how it was
+    configured**: when the resolved location *is* the built-in
+    `~/.lingtai/<profile>` namespace it is created node by node with `O_NOFOLLOW`
+    (`~/.lingtai` then `<profile>`, stopping at `$HOME`); any other location has
+    only its final component created under an already-existing parent, verifying
+    both that final registry directory **and the node directly above it** are
+    non-symlink and owned by this user (`O_NOFOLLOW` + owner check). A *higher*
+    ancestor is followed (the operator's placement choice); consequently, because
+    the direct parent itself is checked, a registry placed one level under a
+    symlinked ancestor is rejected — on macOS this means a location directly under
+    `/tmp` fails, so place the registry at least two levels below any symlinked
+    ancestor. Likewise, because the direct parent must be owned by the running
+    user, a registry directly under a root-owned system directory (`/var/lib/...`,
+    `/opt/...`, run as a normal user) is rejected ("owned by another user"); make
+    that directory user-owned or nest the registry under a subdirectory the user
+    creates and owns. An operator who explicitly names the built-in path therefore gets
+    namespace handling, and the branch is **not a security boundary**: in both
+    branches the registry directory and the node directly above it are verified
+    non-symlink and owned by this user, and the leaf is required to be `0700` — the
+    branch only decides how many nodes are created (so the earlier
+    "operator-supplied ⇒ strict" framing does not hold and is withdrawn). An
+    existing target that is a symlink, is foreign-owned, or is
+    not already `0700` is rejected rather than modified. Only the leaf registry directory (the built-in
+    `<profile>` node or an operator location's final component) is required to be
+    `0700`; the intermediate `~/.lingtai` node need only be a non-symlink
+    directory the user owns, so a pre-existing `~/.lingtai` at another mode
+    (shared with other LingTai data) is accepted while a freshly created one is
+    set to `0700`. Under a shared uid `0700` is not a boundary
+    between sibling agents; these checks defend against accident, external
+    tampering, and confused-deputy symlink redirection, not a co-resident same-uid
+    process. Existing owner-only registry *files* are still tightened to `0600`,
+    but only **after** the target is validated as a well-formed registry:
+    validation precedes every side effect. A control-plane operation whose
+    selected location resolves to an existing file that is not a structurally
+    valid registry (wrong file type, unparseable, or wrong shape/version) is
+    rejected with a typed error **before** any `chmod`, mutation lock
+    (`.<name>.lock`), or revocation-log (`.<name>.revocations.jsonl`) read or
+    creation — so a mis-pointed `--registry` / `LINGTAI_PUFFO_V0_REGISTRY` never
+    changes the mode of, nor creates a sibling beside, an operator file that is
+    not ours. A failed operation therefore has no mutation to roll back. This Phase A registry fails closed on Windows until an
     equivalent owner-only ACL adapter exists. The local control plane is its
     only supported writer: manual or third-party mutation is unsupported and
     malformed/rollback state is rejected rather than treated as authority. A

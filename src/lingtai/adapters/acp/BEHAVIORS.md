@@ -171,7 +171,30 @@ the evidence trail in the task report.
   every discover `bound` output resolves and every `available` output provisions
   (with a healthy control exercising both branches), and every blocking subtype
   stays blocked and byte-unchanged across `revoke` — swept per subtype, not by a
-  single sample, and across registry insertion orders.
+  single sample, and across registry insertion orders. Confirm the registry
+  *location* is operator-selectable without mutating `HOME`: a non-empty
+  `LINGTAI_PUFFO_V0_REGISTRY` (or a `--registry` flag) redirects
+  `default_registry_path`, an explicit flag wins over the environment which wins
+  over the HOME-relative default, and the `provision`/`revoke`/`discover` control
+  plane and the `acp` launch (its initial resolve AND its pre-serve re-resolve)
+  all consult the same selected registry — so a launch pointed at a registry the
+  runtime was not provisioned into fails closed, and an isolated run never creates
+  the HOME-relative default. A location that is not a well-shaped absolute path —
+  relative, containing `..`, `/` itself, or a root-level file — is rejected before
+  any filesystem access; and the registry directory must be a dedicated owner-only
+  (`0700`) directory LingTai owns: LingTai builds its own `~/.lingtai/<profile>`
+  namespace node by node with `O_NOFOLLOW` (never through a planted symlink, even
+  from a same-uid sibling), creates only the final component of any other location
+  under an already-existing parent with `O_NOFOLLOW` and an owner check on both the
+  registry directory and the node directly above it (a higher symlinked ancestor is
+  followed, but when it is the direct parent — e.g. one level under macOS `/tmp` —
+  it is rejected), and rejects — never re-`chmod`s — an existing directory that is a
+  symlink, is foreign-owned, or is not already `0700`. The branch (built-in
+  namespace vs other) is chosen by path value, not by how the location was
+  configured, and is not a security boundary — both branches verify those two levels
+  non-symlink and owned by the user and require the leaf `0700`.
+  The selection changes only the location; bindings and integrity still derive
+  solely from the named registry's entry.
 3. Inspect the profile session and turn-origin cases: `puffo-v0` rejects every
    non-empty `mcpServers` input. `puffo-v1` accepts exactly one `puffo` service
    with `-m puffo_agent.mcp.puffo_core_server`, a deployment-local absolute

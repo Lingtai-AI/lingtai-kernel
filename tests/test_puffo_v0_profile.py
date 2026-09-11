@@ -19,6 +19,7 @@ import pytest
 from lingtai.adapters.acp.puffo_v0 import (
     PuffoV0RegistryError,
     PuffoV0RuntimeState,
+    REGISTRY_PATH_ENV_VAR,
     RUNTIME_POLICY,
     _digest,
     discover_runtimes,
@@ -1117,7 +1118,7 @@ def test_discover_cli_representations_are_pairwise_distinct_across_states(
 
     def _setup(name, mutate):
         base = tmp_path / name
-        base.mkdir()
+        base.mkdir(mode=0o700)  # dedicated owner-only registry directory
         agent_dir = base / "identity"
         agent_dir.mkdir()
         (agent_dir / "init.json").write_text("{}", encoding="utf-8")
@@ -1602,7 +1603,7 @@ def test_discover_promises_hold_across_a_damaged_entry_matrix(tmp_path):
     saw_available = 0
     for name, build, must_report in fixtures:
         base = tmp_path / name
-        base.mkdir()
+        base.mkdir(mode=0o700)  # dedicated owner-only registry directory
         root, registry = build(base)
         try:
             candidates = discover_runtimes(root, registry_path=registry)
@@ -1692,7 +1693,7 @@ _MATRIX_REVOCABLE = {
 
 
 def _seed_matrix_registry(base):
-    base.mkdir()
+    base.mkdir(mode=0o700)  # dedicated owner-only registry directory (contract B)
     registry = base / "registry.json"
     root = base / "root"
     root.mkdir()
@@ -2290,7 +2291,12 @@ def test_registry_directory_and_files_are_owner_only_even_with_a_permissive_umas
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
-def test_resolve_tightens_legacy_registry_file_and_directory_modes(tmp_path):
+def test_resolve_rejects_a_non_owner_only_registry_directory(tmp_path):
+    # A registry directory left at a non-0700 mode -- by an older LingTai that
+    # auto-chmod'd it, by external tampering, or by a wrong umask -- is now
+    # rejected loudly rather than silently re-hardened. The arbitrary-parent-chmod
+    # fix replaced "chmod to comply" with "reject and report", so a rejected call
+    # must also leave the directory unmodified.
     agent_dir = tmp_path / "identity"
     agent_dir.mkdir()
     (agent_dir / "init.json").write_text("{}", encoding="utf-8")
@@ -2299,11 +2305,10 @@ def test_resolve_tightens_legacy_registry_file_and_directory_modes(tmp_path):
     registry = tmp_path / "legacy" / "registry.json"
     provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
     registry.parent.chmod(0o755)
-    registry.chmod(0o644)
 
-    assert resolve_runtime("runtime-a", registry_path=registry).runtime_id == "runtime-a"
-    assert stat.S_IMODE(registry.parent.stat().st_mode) == 0o700
-    assert stat.S_IMODE(registry.stat().st_mode) == 0o600
+    with pytest.raises(PuffoV0RegistryError):
+        resolve_runtime("runtime-a", registry_path=registry)
+    assert stat.S_IMODE(registry.parent.stat().st_mode) == 0o755  # never chmod-to-comply
 
 
 def test_profile_session_rejects_remote_workspace_and_mcp_inputs(tmp_path):
@@ -2420,16 +2425,16 @@ def test_profile_cli_resolves_an_opaque_id_before_composing_acp(monkeypatch, tmp
         RUNTIME_POLICY.policy_version,
     )
     observed = {}
-    monkeypatch.setattr(cli_acp, "resolve_runtime", lambda _id: runtime, raising=False)
+    monkeypatch.setattr(cli_acp, "resolve_runtime", lambda _id, **_kw: runtime, raising=False)
     # The handler imports from the profile module after parser validation.
-    monkeypatch.setattr("lingtai.adapters.acp.puffo_v0.resolve_runtime", lambda _id: runtime)
+    monkeypatch.setattr("lingtai.adapters.acp.puffo_v0.resolve_runtime", lambda _id, **_kw: runtime)
     monkeypatch.setattr(
         "lingtai.adapters.acp.driver_authority.authority_adapter_from_environment",
         UnavailableDriverAuthorityAdapter,
     )
     monkeypatch.setattr(cli_acp, "run_acp", lambda directory, **kwargs: observed.update(directory=directory, **kwargs))
 
-    cli_acp.handle_acp_command(SimpleNamespace(profile="puffo-v0", runtime_id="runtime-1", agent_dir=None))
+    cli_acp.handle_acp_command(SimpleNamespace(profile="puffo-v0", runtime_id="runtime-1", agent_dir=None, registry=None))
 
     assert observed["directory"] == agent_dir
     assert observed["fixed_execution_workspace"].root == workspace
@@ -2461,14 +2466,14 @@ def test_profile_cli_composes_a_root_driver_for_both_admission_boundaries(monkey
     )
     authority = object.__new__(DriverAuthorityClient)
     observed = {}
-    monkeypatch.setattr("lingtai.adapters.acp.puffo_v0.resolve_runtime", lambda _id: runtime)
+    monkeypatch.setattr("lingtai.adapters.acp.puffo_v0.resolve_runtime", lambda _id, **_kw: runtime)
     monkeypatch.setattr(
         "lingtai.adapters.acp.driver_authority.authority_adapter_from_environment",
         lambda: authority,
     )
     monkeypatch.setattr(cli_acp, "run_acp", lambda directory, **kwargs: observed.update(directory=directory, **kwargs))
 
-    cli_acp.handle_acp_command(SimpleNamespace(profile="puffo-v0", runtime_id="runtime-1", agent_dir=None))
+    cli_acp.handle_acp_command(SimpleNamespace(profile="puffo-v0", runtime_id="runtime-1", agent_dir=None, registry=None))
 
     assert observed["provider_call_admission_port"] is authority
     assert isinstance(observed["derived_launch_admission_port"], DriverDerivedLaunchAdmissionAdapter)
@@ -2491,7 +2496,7 @@ def test_puffo_v1_cli_reuses_the_bound_runtime_with_fixed_mcp_ingress(monkeypatc
         RUNTIME_POLICY.policy_version,
     )
     observed = {}
-    monkeypatch.setattr("lingtai.adapters.acp.puffo_v0.resolve_runtime", lambda _id: runtime)
+    monkeypatch.setattr("lingtai.adapters.acp.puffo_v0.resolve_runtime", lambda _id, **_kw: runtime)
     authority = object.__new__(DriverAuthorityClient)
     monkeypatch.setattr(
         "lingtai.adapters.acp.driver_authority.authority_adapter_from_environment",
@@ -2499,7 +2504,7 @@ def test_puffo_v1_cli_reuses_the_bound_runtime_with_fixed_mcp_ingress(monkeypatc
     )
     monkeypatch.setattr(cli_acp, "run_acp", lambda directory, **kwargs: observed.update(directory=directory, **kwargs))
 
-    cli_acp.handle_acp_command(SimpleNamespace(profile="puffo-v1", runtime_id="runtime-1", agent_dir=None))
+    cli_acp.handle_acp_command(SimpleNamespace(profile="puffo-v1", runtime_id="runtime-1", agent_dir=None, registry=None))
 
     assert observed["directory"] == agent_dir
     assert observed["fixed_execution_workspace"].root == workspace
@@ -2701,7 +2706,7 @@ def test_puffo_v1_cli_requires_an_authenticated_driver_authority(monkeypatch, tm
         "runtime-1", agent_dir, workspace, "digest", binding, binding,
         RUNTIME_POLICY.policy_version,
     )
-    monkeypatch.setattr("lingtai.adapters.acp.puffo_v0.resolve_runtime", lambda _id: runtime)
+    monkeypatch.setattr("lingtai.adapters.acp.puffo_v0.resolve_runtime", lambda _id, **_kw: runtime)
     monkeypatch.setattr(
         "lingtai.adapters.acp.driver_authority.authority_adapter_from_environment",
         UnavailableDriverAuthorityAdapter,
@@ -2709,7 +2714,7 @@ def test_puffo_v1_cli_requires_an_authenticated_driver_authority(monkeypatch, tm
 
     with pytest.raises(SystemExit) as exc_info:
         cli_acp.handle_acp_command(
-            SimpleNamespace(profile="puffo-v1", runtime_id="runtime-1", agent_dir=None)
+            SimpleNamespace(profile="puffo-v1", runtime_id="runtime-1", agent_dir=None, registry=None)
         )
 
     assert exc_info.value.code == 1
@@ -2899,3 +2904,651 @@ def test_constrained_profile_with_a_missing_origin_policy_fails_closed():
     with pytest.raises(TurnAdmissionError) as denied:
         submit_turn(MissingPolicyAgent(), "must not run")
     assert denied.value.decision.reason_code == "required_policy_missing"
+
+
+# --- Explicit registry-path selection: flag > env > HOME-default -------------
+#
+# Variation axis: WHERE the one operator-managed registry lives is selectable at
+# launch by the *operator who spawns the process* (a ``--registry`` flag or the
+# ``LINGTAI_PUFFO_V0_REGISTRY`` env var), threaded identically through CLI
+# provision and BOTH ACP resolves. Invariant held: with neither set the default
+# stays the HOME-relative path; the remote caller still supplies only the
+# runtime-id; bindings/integrity come only from the named registry.
+#
+# Each test discriminates per-site so "accepted but silently ignored → fall back
+# to the default registry" (the failure Boris flagged) cannot pass: the default
+# path is HOME-relative and a fallback would create/read it, so every test pins
+# that the *selected* path reached *that* site and the default was not touched.
+# Delete the plumbing at one site and exactly that test reddens.
+
+
+def test_registry_env_var_redirects_default_registry_path(monkeypatch, tmp_path):
+    from lingtai.adapters.acp.puffo_v0 import (
+        REGISTRY_PATH_ENV_VAR,
+        default_registry_path,
+    )
+
+    target = tmp_path / "isolated" / "runtime-registry.json"
+    monkeypatch.setenv(REGISTRY_PATH_ENV_VAR, str(target))
+    assert default_registry_path() == target
+    # An empty value is treated as unset (normal env semantics), never as "".
+    monkeypatch.setenv(REGISTRY_PATH_ENV_VAR, "")
+    fallback = default_registry_path()
+    assert fallback != target
+    assert fallback.name == "runtime-registry.json"
+    assert fallback.parent.name == "puffo-v0"
+
+
+def test_env_registry_threads_through_provision_and_resolve_sparing_home_default(
+    monkeypatch, tmp_path
+):
+    from lingtai.adapters.acp.puffo_v0 import REGISTRY_PATH_ENV_VAR
+
+    home = tmp_path / "home"
+    home.mkdir()
+    isolated = tmp_path / "iso" / "runtime-registry.json"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv(REGISTRY_PATH_ENV_VAR, str(isolated))
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    # No explicit registry_path: every call routes through default_registry_path.
+    provision_runtime("env-rt", agent_dir, workspace)
+    assert isolated.exists()
+    # Falsifiable: an ignored env would fall back to the HOME-default and create
+    # this tree instead.
+    assert not (home / ".lingtai").exists()
+    assert resolve_runtime("env-rt").runtime_id == "env-rt"
+
+
+def test_provision_cli_honors_explicit_registry_flag(monkeypatch, tmp_path):
+    from lingtai.cli_puffo_v0 import handle_puffo_v0_command
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    registry = tmp_path / "explicit" / "runtime-registry.json"
+
+    handle_puffo_v0_command(
+        SimpleNamespace(
+            puffo_v0_command="provision",
+            runtime_id="rt-x",
+            agent_dir=agent_dir,
+            workspace=workspace,
+            registry=registry,
+            as_json=True,
+        )
+    )
+
+    assert registry.exists()
+    assert not (home / ".lingtai").exists()
+
+
+def _launch_namespace(**overrides):
+    base = dict(
+        profile="puffo-v0",
+        runtime_id="runtime-1",
+        agent_dir=None,
+        registry=None,
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def _stub_runtime(tmp_path):
+    from lingtai.adapters.acp.puffo_v0 import DirectoryBinding, PuffoV0Runtime
+
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    binding = DirectoryBinding(device=1, inode=2, owner=3, group=4)
+    return PuffoV0Runtime(
+        "runtime-1", agent_dir, workspace, "digest", binding, binding,
+        RUNTIME_POLICY.policy_version,
+    )
+
+
+def test_acp_launch_threads_explicit_registry_to_initial_resolve_and_run_acp(
+    monkeypatch, tmp_path
+):
+    import lingtai.cli_acp as cli_acp
+    from lingtai.adapters.acp.driver_authority import UnavailableDriverAuthorityAdapter
+
+    runtime = _stub_runtime(tmp_path)
+    explicit = tmp_path / "explicit" / "runtime-registry.json"
+    seen = {}
+
+    def _record_resolve(_id, *, registry_path=None):
+        seen["initial"] = registry_path
+        return runtime
+
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.puffo_v0.resolve_runtime", _record_resolve
+    )
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.driver_authority.authority_adapter_from_environment",
+        UnavailableDriverAuthorityAdapter,
+    )
+    observed = {}
+    monkeypatch.setattr(
+        cli_acp, "run_acp",
+        lambda directory, **kwargs: observed.update(directory=directory, **kwargs),
+    )
+
+    cli_acp.handle_acp_command(_launch_namespace(registry=explicit))
+
+    assert seen["initial"] == explicit  # initial resolve (handle_acp_command)
+    assert observed["registry_path"] == explicit  # carried into run_acp (→ re-resolve)
+
+
+def test_acp_launch_without_registry_snapshots_the_default_once(monkeypatch, tmp_path):
+    import lingtai.cli_acp as cli_acp
+    from lingtai.adapters.acp import puffo_v0
+    from lingtai.adapters.acp.driver_authority import UnavailableDriverAuthorityAdapter
+
+    runtime = _stub_runtime(tmp_path)
+    seen = {}
+
+    def _record_resolve(_id, *, registry_path=None):
+        seen["initial"] = registry_path
+        return runtime
+
+    monkeypatch.delenv("LINGTAI_PUFFO_V0_REGISTRY", raising=False)
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.puffo_v0.resolve_runtime", _record_resolve
+    )
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.driver_authority.authority_adapter_from_environment",
+        UnavailableDriverAuthorityAdapter,
+    )
+    observed = {}
+    monkeypatch.setattr(
+        cli_acp, "run_acp",
+        lambda directory, **kwargs: observed.update(directory=directory, **kwargs),
+    )
+
+    cli_acp.handle_acp_command(_launch_namespace(registry=None))
+
+    # The handler resolves the effective location ONCE and threads the same
+    # concrete default into both the initial resolve and run_acp -- not None to
+    # each, which would re-read HOME twice downstream.
+    default = puffo_v0.default_registry_path()
+    assert seen["initial"] == default
+    assert observed["registry_path"] == default
+
+
+def test_acp_launch_freezes_one_registry_across_both_resolves(monkeypatch, tmp_path):
+    # A mid-launch env mutation (embedded / same-process callback) must not split
+    # the two resolves onto different registries. The handler snapshots the
+    # effective path once, before resolve_runtime, and reuses that concrete path
+    # for run_acp's pre-serve re-resolve.
+    import os
+    import lingtai.cli_acp as cli_acp
+    from lingtai.adapters.acp.driver_authority import UnavailableDriverAuthorityAdapter
+
+    runtime = _stub_runtime(tmp_path)
+    reg_a = tmp_path / "reg-a" / "runtime-registry.json"
+    reg_b = tmp_path / "reg-b" / "runtime-registry.json"
+    seen = {}
+
+    def _record_and_mutate(_id, *, registry_path=None):
+        seen["initial"] = registry_path
+        # Change the environment between the initial and pre-serve resolves.
+        os.environ["LINGTAI_PUFFO_V0_REGISTRY"] = str(reg_b)
+        return runtime
+
+    monkeypatch.setenv("LINGTAI_PUFFO_V0_REGISTRY", str(reg_a))
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.puffo_v0.resolve_runtime", _record_and_mutate
+    )
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.driver_authority.authority_adapter_from_environment",
+        UnavailableDriverAuthorityAdapter,
+    )
+    observed = {}
+    monkeypatch.setattr(
+        cli_acp, "run_acp",
+        lambda directory, **kwargs: observed.update(directory=directory, **kwargs),
+    )
+
+    cli_acp.handle_acp_command(_launch_namespace(registry=None))
+
+    # Both resolves see reg-a; the post-snapshot mutation to reg-b is invisible.
+    assert seen["initial"] == reg_a
+    assert observed["registry_path"] == reg_a
+
+
+def test_explicit_registry_flag_overrides_env(monkeypatch, tmp_path):
+    import lingtai.cli_acp as cli_acp
+    from lingtai.adapters.acp.driver_authority import UnavailableDriverAuthorityAdapter
+
+    runtime = _stub_runtime(tmp_path)
+    flag_path = tmp_path / "from-flag" / "runtime-registry.json"
+    seen = {}
+
+    def _record_resolve(_id, *, registry_path=None):
+        seen["initial"] = registry_path
+        return runtime
+
+    monkeypatch.setenv("LINGTAI_PUFFO_V0_REGISTRY", str(tmp_path / "from-env.json"))
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.puffo_v0.resolve_runtime", _record_resolve
+    )
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.driver_authority.authority_adapter_from_environment",
+        UnavailableDriverAuthorityAdapter,
+    )
+    monkeypatch.setattr(cli_acp, "run_acp", lambda directory, **kwargs: None)
+
+    cli_acp.handle_acp_command(_launch_namespace(registry=flag_path))
+
+    assert seen["initial"] == flag_path  # explicit flag wins over env
+
+
+def test_run_acp_reresolve_uses_the_explicit_registry_path(monkeypatch, tmp_path):
+    import lingtai.cli_acp as cli_acp
+
+    runtime = _stub_runtime(tmp_path)
+    explicit = tmp_path / "explicit" / "runtime-registry.json"
+    seen = {}
+
+    def _record_resolve(_id, *, registry_path=None):
+        seen["reresolve"] = registry_path
+        return runtime  # identical object → the binding-unchanged check passes
+
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.puffo_v0.resolve_runtime", _record_resolve
+    )
+
+    class _Stop(Exception):
+        pass
+
+    # Abort immediately after the re-resolve so nothing downstream (logging,
+    # agent build, serve) runs; the re-resolve is the only site under test.
+    monkeypatch.setattr("lingtai.cli._check_duplicate_process", lambda _p: (_ for _ in ()).throw(_Stop()))
+
+    with pytest.raises(_Stop):
+        cli_acp.run_acp(
+            runtime.agent_dir,
+            input_stream=io.StringIO(),
+            output_stream=io.StringIO(),
+            fixed_execution_workspace=ExecutionWorkspace(runtime.workspace),
+            puffo_runtime=runtime,
+            turn_origin_policy=RUNTIME_POLICY,
+            requires_turn_origin_policy=True,
+            provider_call_admission_port=object(),
+            derived_launch_admission_port=object(),
+            requires_derived_launch_admission_port=True,
+            registry_path=explicit,
+        )
+
+    assert seen["reresolve"] == explicit
+
+
+def test_acp_and_provision_parsers_accept_registry_flag():
+    from lingtai.cli_acp import add_acp_parser
+    from lingtai.cli_puffo_v0 import add_puffo_v0_parser
+
+    acp_parser = argparse.ArgumentParser()
+    add_acp_parser(acp_parser.add_subparsers(dest="command", required=True))
+    acp_args = acp_parser.parse_args(
+        ["acp", "--profile", "puffo-v0", "--runtime-id", "r",
+         "--registry", "/tmp/x/runtime-registry.json"]
+    )
+    assert acp_args.registry == Path("/tmp/x/runtime-registry.json")
+
+    prov_parser = argparse.ArgumentParser()
+    add_puffo_v0_parser(prov_parser.add_subparsers(dest="command", required=True))
+    prov_args = prov_parser.parse_args(
+        ["puffo-v0", "provision", "--runtime-id", "r",
+         "--agent-dir", "/tmp/a", "--workspace", "/tmp/w",
+         "--registry", "/tmp/x/runtime-registry.json"]
+    )
+    assert prov_args.registry == Path("/tmp/x/runtime-registry.json")
+
+    disc_args = prov_parser.parse_args(
+        ["puffo-v0", "discover", "--root", "/tmp/r",
+         "--registry", "/tmp/x/runtime-registry.json"]
+    )
+    assert disc_args.registry == Path("/tmp/x/runtime-registry.json")
+
+
+def test_relative_registry_flag_is_rejected_not_created_under_cwd(tmp_path):
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    # A relative location would be created under the process cwd by the registry
+    # directory hardening; reject it at the boundary instead.
+    with pytest.raises(PuffoV0RegistryError, match="absolute"):
+        provision_runtime(
+            "rt", agent_dir, workspace, registry_path=Path("relative/runtime-registry.json")
+        )
+
+
+def test_relative_env_registry_is_rejected(monkeypatch, tmp_path):
+    from lingtai.adapters.acp.puffo_v0 import REGISTRY_PATH_ENV_VAR
+
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv(REGISTRY_PATH_ENV_VAR, "relative/runtime-registry.json")
+    with pytest.raises(PuffoV0RegistryError, match="absolute"):
+        provision_runtime("rt", agent_dir, workspace)
+
+
+def test_discover_cli_threads_explicit_registry_flag(monkeypatch, tmp_path):
+    import lingtai.cli_puffo_v0 as cli_puffo_v0
+
+    seen = {}
+
+    def _record(root, *, registry_path=None):
+        seen["registry_path"] = registry_path
+        return []
+
+    monkeypatch.setattr(cli_puffo_v0, "discover_runtimes", _record)
+    registry = tmp_path / "explicit" / "runtime-registry.json"
+    cli_puffo_v0.handle_puffo_v0_command(
+        SimpleNamespace(
+            puffo_v0_command="discover", root=tmp_path, registry=registry, as_json=True
+        )
+    )
+    assert seen["registry_path"] == registry
+
+
+# --- Registry-path security contract (#1690 blocker 1) --------------------------
+# A: path shape, enforced in _registry_location before any filesystem access.
+# B: dedicated owner-only directory, enforced in _secure_registry_directory --
+#    LingTai creates only its own namespace, never chmods or creates through an
+#    operator-supplied or symlinked directory, and rejects a non-conforming
+#    existing directory rather than modifying it.
+
+
+def test_registry_location_rejects_dotdot_and_root_shapes():
+    from lingtai.adapters.acp.puffo_v0 import _registry_location
+
+    with pytest.raises(PuffoV0RegistryError, match="absolute"):
+        _registry_location(Path("relative/runtime-registry.json"))
+    with pytest.raises(PuffoV0RegistryError, match=r"\.\."):
+        _registry_location(Path("/srv/../etc/runtime-registry.json"))
+    with pytest.raises(PuffoV0RegistryError, match="dedicated directory"):
+        _registry_location(Path("/"))
+    with pytest.raises(PuffoV0RegistryError, match="dedicated directory"):
+        _registry_location(Path("/runtime-registry.json"))
+    # A well-shaped path passes shape and is returned unchanged (no filesystem I/O).
+    good = Path("/srv/lingtai/runtime-registry.json")
+    assert _registry_location(good) == good
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_rejects_a_symlinked_registry_directory(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = link / "runtime-registry.json"  # the registry's own directory is a symlink
+    with pytest.raises(PuffoV0RegistryError):
+        provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_rejects_a_symlinked_registry_directory_parent(tmp_path):
+    # The node directly ABOVE the registry directory must not be a symlink either
+    # (O_NOFOLLOW on the operator branch's parent open), symmetric with the
+    # built-in branch's ~/.lingtai check, so the branch choice is not a security
+    # boundary.
+    real_parent = tmp_path / "real"
+    real_parent.mkdir(mode=0o700)
+    link_parent = tmp_path / "link"
+    link_parent.symlink_to(real_parent, target_is_directory=True)
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    # registry directory = link/regdir; its parent `link` is a symlink.
+    registry = link_parent / "regdir" / "runtime-registry.json"
+    with pytest.raises(PuffoV0RegistryError):
+        provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    assert not (real_parent / "regdir").exists()  # never created through the symlink
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_rejects_a_foreign_owned_registry_parent(monkeypatch, tmp_path):
+    # The node directly above the registry directory must be owned by the current
+    # euid. A single-uid CI cannot chown a directory to another user, so drive the
+    # check from the other side: geteuid() reports a uid that owns nothing here.
+    # The assertion is pinned to the PARENT check's distinct reason so this is a
+    # red witness for exactly that check: the parent fstat runs before the leaf, so
+    # it raises first; remove it and the leaf raises a different message, failing
+    # the match. (Both nodes compare against geteuid(), so an unpinned raise would
+    # still pass via the leaf and give this commit zero marginal coverage.)
+    import lingtai.adapters.acp.puffo_v0 as puffo_v0
+
+    dedicated = tmp_path / "dedicated"
+    dedicated.mkdir(mode=0o700)
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = dedicated / "runtime-registry.json"  # parent = tmp_path, real-uid-owned
+    monkeypatch.setattr(puffo_v0.os, "geteuid", lambda: os.getuid() + 1)
+    with pytest.raises(
+        PuffoV0RegistryError, match="parent directory is owned by another user"
+    ):
+        provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_rejects_an_existing_non_owner_only_registry_directory(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir(mode=0o755)
+    os.chmod(shared, 0o755)  # group/other-traversable: not owner-only
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = shared / "runtime-registry.json"
+    with pytest.raises(PuffoV0RegistryError):
+        provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    assert stat.S_IMODE(shared.stat().st_mode) == 0o755  # rejected, never chmod-to-comply
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_rejects_when_operator_parent_directory_is_absent(tmp_path):
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    # LingTai creates only the final component; it never materializes an operator's
+    # ancestor chain, so an absent parent is rejected rather than deep-created.
+    registry = tmp_path / "missing" / "deep" / "runtime-registry.json"
+    with pytest.raises(PuffoV0RegistryError):
+        provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    assert not (tmp_path / "missing").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_creates_an_absent_operator_directory_owner_only(tmp_path):
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = tmp_path / "fresh" / "runtime-registry.json"  # parent (tmp_path) exists
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    assert stat.S_IMODE(registry.parent.stat().st_mode) == 0o700
+    assert resolve_runtime("runtime-a", registry_path=registry).runtime_id == "runtime-a"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_provision_accepts_a_preexisting_conforming_registry_directory(tmp_path):
+    dedicated = tmp_path / "dedicated"
+    dedicated.mkdir(mode=0o700)
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    registry = dedicated / "runtime-registry.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=registry)
+    assert resolve_runtime("runtime-a", registry_path=registry).runtime_id == "runtime-a"
+    assert stat.S_IMODE(dedicated.stat().st_mode) == 0o700
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_builtin_default_namespace_is_created_owner_only(tmp_path, monkeypatch):
+    # With neither --registry nor LINGTAI_PUFFO_V0_REGISTRY, LingTai builds its own
+    # ~/.lingtai/<profile> namespace at 0700 (both owned nodes, symlink-safe).
+    from lingtai.adapters.acp.puffo_v0 import REGISTRY_PATH_ENV_VAR
+
+    monkeypatch.delenv(REGISTRY_PATH_ENV_VAR, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    provision_runtime("runtime-a", agent_dir, workspace)  # default (built-in) registry
+    profile_dir = tmp_path / ".lingtai" / "puffo-v0"
+    assert profile_dir.is_dir()
+    assert stat.S_IMODE(profile_dir.stat().st_mode) == 0o700
+    assert resolve_runtime("runtime-a").runtime_id == "runtime-a"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not meaningful on Windows")
+def test_builtin_namespace_rejects_a_symlinked_dotlingtai(tmp_path, monkeypatch):
+    # A co-resident agent sharing the uid cannot redirect the owned chain by
+    # planting a symlink at ~/.lingtai: the per-node O_NOFOLLOW step rejects it
+    # (the arbitrary-chmod bug shape, one level above the registry directory).
+    from lingtai.adapters.acp.puffo_v0 import REGISTRY_PATH_ENV_VAR
+
+    monkeypatch.delenv(REGISTRY_PATH_ENV_VAR, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir(mode=0o700)
+    (tmp_path / ".lingtai").symlink_to(elsewhere, target_is_directory=True)
+    agent_dir = tmp_path / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    with pytest.raises(PuffoV0RegistryError):
+        provision_runtime("runtime-a", agent_dir, workspace)  # default (built-in) registry
+
+
+def _owner_only_dir(base: Path, name: str) -> Path:
+    directory = base / name
+    directory.mkdir()
+    os.chmod(directory, 0o700)
+    return directory
+
+
+def _agent_and_workspace(base: Path) -> tuple[Path, Path]:
+    agent_dir = base / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = base / "workspace"
+    workspace.mkdir()
+    return agent_dir, workspace
+
+
+@pytest.mark.parametrize("op", ["revoke", "provision", "resolve"])
+@pytest.mark.parametrize("via_env", [False, True])
+@pytest.mark.parametrize("file_mode", [0o755, 0o644])
+def test_registry_op_on_non_registry_file_makes_no_side_effects(
+    tmp_path, monkeypatch, op, via_env, file_mode
+):
+    """B2: a registry op whose target resolves to an existing regular file that is
+    not a well-formed registry must fail with a typed error BEFORE any chmod, lock,
+    or sibling artifact touches the operator-supplied file or its directory. Covers
+    both the ``--registry`` flag and the ``LINGTAI_PUFFO_V0_REGISTRY`` env paths and
+    both a 0755 and a 0644 target (Tianzhe observed both)."""
+
+    reg_dir = _owner_only_dir(tmp_path, "reg")
+    target = reg_dir / "tool.sh"
+    target.write_text("#!/bin/sh\necho hello\n", encoding="utf-8")
+    os.chmod(target, file_mode)
+    agent_dir, workspace = _agent_and_workspace(tmp_path)
+
+    before_mode = stat.S_IMODE(target.lstat().st_mode)
+    before_bytes = target.read_bytes()
+    before_listing = sorted(p.name for p in reg_dir.iterdir())
+
+    if via_env:
+        monkeypatch.setenv(REGISTRY_PATH_ENV_VAR, str(target))
+        location: dict = {}
+    else:
+        monkeypatch.delenv(REGISTRY_PATH_ENV_VAR, raising=False)
+        location = {"registry_path": target}
+
+    with pytest.raises(PuffoV0RegistryError):
+        if op == "revoke":
+            revoke_runtime("puffo-x", **location)
+        elif op == "provision":
+            provision_runtime("puffo-x", agent_dir, workspace, **location)
+        else:
+            resolve_runtime("puffo-x", **location)
+
+    assert stat.S_IMODE(target.lstat().st_mode) == before_mode
+    assert target.read_bytes() == before_bytes
+    # No lock file, no revocation tombstone, no other sibling was created.
+    assert sorted(p.name for p in reg_dir.iterdir()) == before_listing
+
+
+def test_valid_registry_is_still_hardened_to_0600_after_mutation(tmp_path, monkeypatch):
+    """The B2 reorder moves the hardening chmod AFTER validation; it must not drop
+    it. A valid registry loosened to 0644 must be re-hardened to 0600 by the next
+    mutating op."""
+
+    monkeypatch.delenv(REGISTRY_PATH_ENV_VAR, raising=False)
+    reg_dir = _owner_only_dir(tmp_path, "reg")
+    registry = reg_dir / "registry.json"
+    agent_dir, workspace = _agent_and_workspace(tmp_path)
+    provision_runtime("puffo-x", agent_dir, workspace, registry_path=registry)
+    os.chmod(registry, 0o644)
+    revoke_runtime("puffo-x", registry_path=registry)
+    assert stat.S_IMODE(registry.lstat().st_mode) == 0o600
+
+
+def test_resolve_on_invalid_target_does_not_touch_a_sibling_revocation_log(
+    tmp_path, monkeypatch
+):
+    """B2 tombstone-sibling ordering: resolve must validate the registry target
+    before it reads/hardens the revocation-log sibling, so an invalid target never
+    chmods a pre-existing ``.<name>.revocations.jsonl`` beside it."""
+
+    monkeypatch.delenv(REGISTRY_PATH_ENV_VAR, raising=False)
+    reg_dir = _owner_only_dir(tmp_path, "reg")
+    target = reg_dir / "tool.sh"
+    target.write_text("#!/bin/sh\n", encoding="utf-8")
+    os.chmod(target, 0o755)
+    sibling = reg_dir / ".tool.sh.revocations.jsonl"
+    sibling.write_text("not a tombstone\n", encoding="utf-8")
+    os.chmod(sibling, 0o644)
+
+    before = {p.name: stat.S_IMODE(p.lstat().st_mode) for p in reg_dir.iterdir()}
+    with pytest.raises(PuffoV0RegistryError):
+        resolve_runtime("puffo-x", registry_path=target)
+    after = {p.name: stat.S_IMODE(p.lstat().st_mode) for p in reg_dir.iterdir()}
+    assert after == before

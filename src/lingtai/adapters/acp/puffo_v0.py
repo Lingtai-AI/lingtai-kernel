@@ -26,6 +26,11 @@ from lingtai.kernel.provider_admission import (
 
 
 PROFILE_NAME = "puffo-v0"
+# Operator-supplied override for the registry location. Set in the environment
+# of the process that launches the CLI (the same trust class as argv/HOME), not
+# reachable by the remote ACP caller. An absolute path is expected; a missing or
+# empty value falls back to the HOME-relative default.
+REGISTRY_PATH_ENV_VAR = "LINGTAI_PUFFO_V0_REGISTRY"
 REGISTRY_VERSION = 4
 REVOCATION_LOG_REQUIRED = "required"
 _RUNTIME_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
@@ -204,9 +209,55 @@ class PuffoV0DiscoveryCandidate:
 
 
 def default_registry_path() -> Path:
-    """Return the one operator-managed registry location for this profile."""
+    """Return the one operator-managed registry location for this profile.
 
+    Honors the ``LINGTAI_PUFFO_V0_REGISTRY`` operator override when set to a
+    non-empty value, so an operator whose launch environment forbids mutating
+    ``HOME`` can still isolate the registry. Every un-overridden call site
+    (``provision``/``revoke``/``resolve``/``discover``) routes through here, so
+    the override threads through all of them uniformly. An explicit
+    ``registry_path=`` argument still wins over this environment default.
+    """
+
+    override = os.environ.get(REGISTRY_PATH_ENV_VAR)
+    if override:
+        return Path(override)
     return Path.home() / ".lingtai" / PROFILE_NAME / "runtime-registry.json"
+
+
+def _registry_location(registry_path: Path | None) -> Path:
+    """Resolve the effective registry path and enforce its shape (A).
+
+    Both the explicit ``registry_path`` (a ``--registry`` flag) and the
+    ``LINGTAI_PUFFO_V0_REGISTRY`` default are operator-supplied. The location's
+    *shape* is checked here — the single point every registry operation resolves
+    through — so a malformed value fails loudly at the boundary before any
+    filesystem access, instead of becoming a silently wrong or dangerous target:
+
+    * it must be absolute — a relative value would be created or read under the
+      launching process's current directory, which a driver-spawned child neither
+      controls nor predicts (the same "looks configured, lands elsewhere" class as
+      an empty ``HOME``);
+    * it must contain no ``..`` component, so a stored or supplied path cannot
+      traverse out of the directory it names;
+    * its parent must not be the filesystem root, which also rejects ``/`` itself
+      and a root-level file such as ``/runtime-registry.json`` — the registry
+      always lives inside a dedicated directory, never directly under ``/``.
+
+    Directory ownership, type, and mode are enforced separately, and with no
+    filesystem access here, by ``_secure_registry_directory`` (contract B).
+    """
+
+    path = registry_path or default_registry_path()
+    if not path.is_absolute():
+        raise PuffoV0RegistryError("registry path must be absolute")
+    if ".." in path.parts:
+        raise PuffoV0RegistryError("registry path must not contain a '..' component")
+    if path.parent == path.parent.parent:
+        raise PuffoV0RegistryError(
+            "registry path must live in a dedicated directory, not at the filesystem root"
+        )
+    return path
 
 
 def _valid_runtime_id(runtime_id: object) -> str:
@@ -417,17 +468,154 @@ def _require_posix_registry_security() -> None:
         )
 
 
-def _secure_registry_directory(path: Path) -> None:
-    """Create and harden the registry parent independently of umask."""
+def _ensure_registry_dir_component(
+    parent_fd: int, name: str, *, require_owner_only: bool
+) -> int:
+    """Create ``name`` under ``parent_fd`` as our own directory, or verify it.
 
-    _require_posix_registry_security()
+    Uses ``mkdirat`` + an ``O_NOFOLLOW`` ``openat`` relative to a verified parent
+    descriptor, so the component is created/opened without following a symlink and
+    without a path-string TOCTOU window. A directory this call *creates* is
+    force-set to ``0o700`` on its own descriptor (umask-independent); a directory
+    that already exists is only ever *verified* — one that is a symlink, is
+    foreign-owned, or (when ``require_owner_only``) is not already ``0o700`` is
+    rejected rather than modified, so LingTai never ``chmod``s a directory it did
+    not just create. Returns an open ``O_NOFOLLOW`` descriptor; the caller closes it.
+    """
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    created = False
     try:
-        path.mkdir(parents=True, mode=0o700, exist_ok=True)
-        os.chmod(path, 0o700)
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+        created = True
+    except FileExistsError:
+        pass
     except OSError as exc:
         raise PuffoV0RegistryError(
-            "puffo-v0 runtime registry directory could not be secured"
+            "puffo-v0 runtime registry directory could not be created"
         ) from exc
+    try:
+        fd = os.open(name, os.O_RDONLY | directory | nofollow, dir_fd=parent_fd)
+    except OSError as exc:
+        # A symlinked component fails O_NOFOLLOW with ELOOP; a non-directory fails
+        # O_DIRECTORY with ENOTDIR. Either way it is not a dedicated directory.
+        raise PuffoV0RegistryError(
+            "puffo-v0 runtime registry directory is not a dedicated owner-only directory"
+        ) from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+            raise PuffoV0RegistryError(
+                "puffo-v0 runtime registry directory is not a dedicated owner-only directory"
+            )
+        if created:
+            os.fchmod(fd, 0o700)
+        elif require_owner_only and stat.S_IMODE(info.st_mode) != 0o700:
+            raise PuffoV0RegistryError(
+                "puffo-v0 runtime registry directory is not a dedicated owner-only directory"
+            )
+    except BaseException:
+        with suppress(OSError):
+            os.close(fd)
+        raise
+    return fd
+
+
+def _secure_registry_directory(path: Path) -> None:
+    """Create or verify the registry's dedicated parent directory (contract B).
+
+    ``path`` is the directory that will hold the registry file. LingTai only ever
+    creates or hardens a directory it owns; it never ``chmod``s or creates through
+    an operator-supplied or symlinked directory:
+
+    * The built-in ``~/.lingtai/<profile>`` namespace — selected whenever the
+      resolved location *is* that path, by path value and not by how it was
+      configured (an operator that names it gets the same handling) — is
+      created/verified node by node (``~/.lingtai`` then ``<profile>``), each with
+      ``O_NOFOLLOW``, so a sibling process sharing the uid cannot redirect the
+      chain by planting a symlink one level up. ``$HOME`` and above are not
+      LingTai's namespace and are left unmanaged (the boundary stops here).
+    * Any other location has only its final component created; its parent must
+      already exist, so LingTai never materializes an ancestor chain and never
+      follows an operator symlink into an arbitrary target. The final registry
+      directory **and the node directly above it** must not be symlinks and must
+      be owned by this user (``O_NOFOLLOW`` + ``fstat`` uid on both); a *higher*
+      ancestor (e.g. ``/tmp`` → ``/private/tmp``) is the operator's placement
+      choice and is followed — but when such an ancestor IS the direct parent (a
+      registry placed one level under macOS ``/tmp``), it is the checked node and
+      is rejected.
+
+    The branch above is therefore not a security boundary: whichever branch a
+    path takes, the registry directory and the node directly above it are both
+    verified non-symlink and owned by this user, and the leaf is required to be
+    ``0700``. The branch only decides how many nodes are created (two for the
+    built-in namespace, one otherwise); it depends on ``Path.home()`` at call
+    time, but a reclassification would only change that creation depth, never a
+    security property. (The intermediate ``~/.lingtai`` and an operator's direct
+    parent are checked for symlink and owner but not mode; only the leaf registry
+    directory must be ``0700``.)
+
+    In both cases an already-existing target that is a symlink, is foreign-owned,
+    or is not an owner-only (``0o700``) directory is rejected loudly rather than
+    modified. Under a shared uid ``0o700`` is not a boundary between sibling
+    agents; these checks defend against accident, external tampering, and
+    confused-deputy symlink redirection — not a co-resident same-uid process.
+    """
+
+    _require_posix_registry_security()
+    directory = getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    home = Path.home()
+    if path == home / ".lingtai" / PROFILE_NAME:
+        try:
+            base_fd = os.open(home, os.O_RDONLY | directory)
+        except OSError as exc:
+            raise PuffoV0RegistryError(
+                "puffo-v0 runtime registry home directory is unavailable"
+            ) from exc
+        open_fds = [base_fd]
+        try:
+            parent_fd = base_fd
+            for name, owner_only in ((".lingtai", False), (PROFILE_NAME, True)):
+                child_fd = _ensure_registry_dir_component(
+                    parent_fd, name, require_owner_only=owner_only
+                )
+                open_fds.append(child_fd)
+                parent_fd = child_fd
+        finally:
+            for fd in open_fds:
+                with suppress(OSError):
+                    os.close(fd)
+        return
+
+    try:
+        # O_NOFOLLOW here so the node directly above the registry directory is not
+        # a symlink either — symmetric with the built-in branch's O_NOFOLLOW on
+        # `~/.lingtai`. This verifies the node directly above the registry
+        # directory; a *higher* ancestor is followed (it is the operator's
+        # placement choice), but note that when that ancestor IS the direct parent
+        # — e.g. a registry placed one level under macOS `/tmp` — it is this node
+        # and is rejected.
+        parent_fd = os.open(path.parent, os.O_RDONLY | directory | nofollow)
+    except OSError as exc:
+        raise PuffoV0RegistryError(
+            "puffo-v0 runtime registry parent directory is unavailable or a symlink"
+        ) from exc
+    try:
+        # Owner check on the direct parent, symmetric with the built-in branch's
+        # uid check on `~/.lingtai` (via _ensure_registry_dir_component), so the
+        # branch choice is not a security boundary on ownership either.
+        if os.fstat(parent_fd).st_uid != os.geteuid():
+            raise PuffoV0RegistryError(
+                "puffo-v0 runtime registry parent directory is owned by another user"
+            )
+        os.close(
+            _ensure_registry_dir_component(parent_fd, path.name, require_owner_only=True)
+        )
+    finally:
+        with suppress(OSError):
+            os.close(parent_fd)
 
 
 def _secure_registry_file(path: Path) -> bool:
@@ -581,21 +769,37 @@ def _registry_mutation_lock(path: Path) -> Iterator[None]:
 
 
 def _read_registry(path: Path) -> dict[str, Any]:
+    # Validate the target is a well-formed registry BEFORE the hardening chmod, so
+    # a mis-pointed ``--registry`` never mutates a file that is not ours (B2). The
+    # read-only validator performs no side effect; ``_secure_registry_file`` runs
+    # only after the shape and version are confirmed, and only re-hardens an
+    # already-validated registry to ``0o600``.
+    data = _read_registry_read_only(path)
     _secure_registry_file(path)
-    try:
-        raw = path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise PuffoV0RegistryError("puffo-v0 runtime registry is unavailable or invalid") from exc
-    if not isinstance(data, dict) or set(data) != {"revocation_log", "runtimes", "version"}:
-        raise PuffoV0RegistryError("puffo-v0 runtime registry has an invalid shape")
-    if (
-        data["version"] != REGISTRY_VERSION
-        or data["revocation_log"] != REVOCATION_LOG_REQUIRED
-        or not isinstance(data["runtimes"], dict)
-    ):
-        raise PuffoV0RegistryError("puffo-v0 runtime registry has an unsupported version")
     return data
+
+
+def _reject_non_registry_target(path: Path, *, allow_absent: bool) -> None:
+    """Reject a mis-pointed registry target before any lock, chmod, or sibling
+    artifact is created next to it (B2).
+
+    Validation is read-only: it performs no ``chmod`` and creates no lock or
+    revocation-log sibling, so pointing ``--registry`` (or its env var) at an
+    existing non-registry file fails with a typed error while leaving that file
+    and its directory untouched. ``allow_absent`` lets provision proceed to create
+    a fresh registry when nothing exists at the location yet.
+    """
+
+    if allow_absent:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise PuffoV0RegistryError(
+                "puffo-v0 runtime registry is unavailable or invalid"
+            ) from exc
+    _read_registry_read_only(path)
 
 
 def _read_registry_read_only(path: Path) -> dict[str, Any]:
@@ -899,7 +1103,10 @@ def provision_runtime(
     workspace_binding = _directory_binding(workspace, field="workspace")
     if not (agent_dir / "init.json").is_file():
         raise PuffoV0RegistryError("agent_dir must contain init.json")
-    path = registry_path or default_registry_path()
+    path = _registry_location(registry_path)
+    # Reject a mis-pointed target before the lock creates a `.lock` sibling; an
+    # absent location is allowed because provision creates a fresh registry (B2).
+    _reject_non_registry_target(path, allow_absent=True)
     with _registry_mutation_lock(path):
         if path.exists():
             revoked_runtime_ids = _read_revoked_runtime_ids(path)
@@ -978,7 +1185,10 @@ def revoke_runtime(runtime_id: str, *, registry_path: Path | None = None) -> Non
     """Mark a provisioned profile identity unavailable for future ACP spawns."""
 
     runtime_id = _valid_runtime_id(runtime_id)
-    path = registry_path or default_registry_path()
+    path = _registry_location(registry_path)
+    # Reject a mis-pointed target before the lock creates a `.lock` sibling or the
+    # read hardens it; revoke has nothing to act on when the registry is absent (B2).
+    _reject_non_registry_target(path, allow_absent=False)
     with _registry_mutation_lock(path):
         registry = _read_registry(path)
         entry = registry["runtimes"].get(runtime_id)
@@ -1277,7 +1487,7 @@ def discover_runtimes(
 
     _require_posix_registry_security()
     canonical_root = _canonical_directory(root, field="root")
-    index = _discovery_records(registry_path or default_registry_path())
+    index = _discovery_records(_registry_location(registry_path))
     candidates: list[PuffoV0DiscoveryCandidate] = []
 
     def _ignore_walk_error(_error: OSError) -> None:
@@ -1385,10 +1595,13 @@ def resolve_runtime(
     """Resolve one active runtime id into an immutable local spawn specification."""
 
     runtime_id = _valid_runtime_id(runtime_id)
-    path = registry_path or default_registry_path()
+    path = _registry_location(registry_path)
     _secure_registry_directory(path.parent)
-    revoked_runtime_ids = _read_revoked_runtime_ids(path)
+    # Validate + harden the registry target before touching the revocation-log
+    # sibling, so a mis-pointed target never chmods a `.<name>.revocations.jsonl`
+    # beside it (B2 tombstone-sibling ordering).
     registry = _read_registry(path)
+    revoked_runtime_ids = _read_revoked_runtime_ids(path)
     entry = registry["runtimes"].get(runtime_id)
     if not isinstance(entry, dict):
         raise PuffoV0RegistryError("runtime_id is not provisioned")
@@ -1424,6 +1637,7 @@ __all__ = [
     "PuffoV0Runtime",
     "PuffoV0RuntimePolicy",
     "PuffoV0RuntimeState",
+    "REGISTRY_PATH_ENV_VAR",
     "RUNTIME_POLICY",
     "default_registry_path",
     "discover_runtimes",

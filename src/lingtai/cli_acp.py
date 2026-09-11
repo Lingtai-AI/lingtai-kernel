@@ -33,6 +33,18 @@ def add_acp_parser(subparsers) -> None:
         choices=("puffo-v0", "puffo-v1"),
         help="Constrained locally provisioned ACP launch profile",
     )
+    # Operator override for the registry the runtime id is resolved against
+    # (absolute path). This is local launch configuration supplied by the
+    # spawning operator, not a value the remote ACP caller can set; it selects
+    # only the registry *location*, while bindings and integrity still come only
+    # from the named registry entry. Defaults to LINGTAI_PUFFO_V0_REGISTRY or the
+    # HOME-relative path. Must name the same registry provisioning used.
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        default=None,
+        help="Explicit puffo-v0 runtime registry path (defaults to the operator registry)",
+    )
 
 
 def _force_exit_after_incomplete_stop(agent, stop_result, stop_error) -> None:
@@ -78,6 +90,7 @@ def run_acp(
     requires_derived_launch_admission_port: bool = False,
     puffo_runtime=None,
     session_mcp_validator=None,
+    registry_path: Path | None = None,
 ) -> None:
     """Compose one Agent and the local ACP stdio driving adapter.
 
@@ -128,7 +141,9 @@ def run_acp(
             from lingtai.adapters.acp.puffo_v0 import resolve_runtime
             from lingtai.kernel.execution_workspace import ExecutionWorkspace
 
-            verified_runtime = resolve_runtime(puffo_runtime.runtime_id)
+            verified_runtime = resolve_runtime(
+                puffo_runtime.runtime_id, registry_path=registry_path
+            )
             if verified_runtime != puffo_runtime:
                 raise RuntimeError("puffo-v0 runtime binding changed before ACP startup")
             agent_dir = verified_runtime.agent_dir
@@ -233,6 +248,7 @@ def handle_acp_command(args) -> None:
     from lingtai.adapters.acp.puffo_v0 import (
         PuffoV0RegistryError,
         RUNTIME_POLICY,
+        _registry_location,
         resolve_runtime,
     )
     from lingtai.adapters.acp.driver_authority import (
@@ -248,8 +264,16 @@ def handle_acp_command(args) -> None:
 
         session_mcp_validator = validate_puffo_v1_mcp_servers
 
+    # Snapshot the effective registry location ONCE (flag > LINGTAI_PUFFO_V0_REGISTRY
+    # > HOME-relative default), resolving and shape-validating it a single time, so
+    # the initial resolve and the pre-serve re-resolve inside run_acp consult the
+    # identical concrete path. Threading args.registry (possibly None) into both
+    # would re-read env/HOME twice; an env change between the two resolves could
+    # split one shared runtime entry across two registries whose revocation history
+    # differs, and PuffoV0Runtime carries no registry identity to catch it.
     try:
-        runtime = resolve_runtime(args.runtime_id)
+        registry_path = _registry_location(args.registry)
+        runtime = resolve_runtime(args.runtime_id, registry_path=registry_path)
     except PuffoV0RegistryError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
@@ -275,6 +299,7 @@ def handle_acp_command(args) -> None:
         derived_launch_admission_port=derived_launch_port,
         requires_derived_launch_admission_port=True,
         session_mcp_validator=session_mcp_validator,
+        registry_path=registry_path,
     )
 
 

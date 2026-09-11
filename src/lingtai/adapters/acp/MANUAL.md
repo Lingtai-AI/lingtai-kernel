@@ -103,6 +103,36 @@ through the local operator registry (`~/.lingtai/puffo-v0/runtime-registry.json`
 to its bound persistent identity and workspace. The profile rejects an unknown,
 tampered, or revoked id before constructing the Agent. Revoke a future launch
 with `lingtai-agent puffo-v0 revoke --runtime-id puffo-agent-7`.
+
+To isolate the registry without mutating `HOME` (for example a staging run that
+must not touch a production registry), select its location explicitly. Pass
+`--registry /abs/path/runtime-registry.json` to `provision`, `revoke`,
+`discover`, and `acp`, or set
+`LINGTAI_PUFFO_V0_REGISTRY=/abs/path/runtime-registry.json` in the launch
+environment; an explicit flag wins over the environment, which wins over the
+HOME-relative default. The location must be an **absolute** path with no `..`
+segment whose parent is below the filesystem root — a relative path, a `..`
+segment, `/`, or a root-level file is rejected before any filesystem access
+rather than created under the process's current directory. Its directory must be
+a dedicated owner-only (`0700`) directory you own; LingTai creates a missing one
+(for an operator-selected location, only the final component, under an
+already-existing parent) but **rejects** an existing directory that is a symlink,
+is owned by another user, or is not already `0700` rather than changing its
+permissions — fix such a directory, or point elsewhere, instead of relying on
+LingTai to harden it. The directory's **parent** must likewise be a non-symlink
+directory you own. On macOS in particular do not place the registry one level
+under `/tmp` (a symlink) — put it at least two levels below any symlinked
+ancestor, or it is rejected with "parent directory is unavailable or a symlink".
+And a registry directly under a root-owned system directory (`/var/lib/...`,
+`/opt/...`) while running as a normal user is rejected with "owned by another
+user"; make that directory owned by the running user, or nest the registry under
+a subdirectory you create and own (that subdirectory becomes the checked parent).
+Provisioning and launch must name the **same** registry — `acp` resolves the id
+against the location you give it (both at startup and in the pre-serve
+re-resolve), so a launch pointed at a different registry than its `provision` used
+fails closed with *runtime id is not provisioned*. The location selects only which
+registry is read, while every binding and integrity rule still derives solely from
+that registry's entry.
 Revocation does not terminate an already-running ACP host or invalidate its
 in-progress turn; stop that host separately when incident response must stop
 existing work.
@@ -284,8 +314,13 @@ separate cross-process contract; do not treat this registry hash as its proxy.
 The Phase A registry is POSIX-only: it serializes provision/revoke updates,
 records terminal revocations in an append-only local tombstone log, and creates
 its registry directory as `0700` and registry, tombstone, temporary, and lock
-files as `0600`, independent of umask. Loading an older registry tightens its
-directory and file modes before use. On Windows the command fails closed until
+files as `0600`, independent of umask. LingTai creates its own
+`~/.lingtai/<profile>` namespace node by node with `O_NOFOLLOW`, verifies both
+the registry directory and the node directly above it are non-symlinks, and never
+`chmod`s or creates through an operator-supplied or symlinked directory; an
+existing registry directory that is not an owner-only (`0700`) directory it owns
+is rejected rather than re-hardened, while existing owner-only registry *files*
+are still tightened to `0600` before use. On Windows the command fails closed until
 an equivalent owner-only ACL implementation is available. The `puffo-v0`
 control-plane commands are the only supported writers; do not hand-edit the
 registry or use a third-party writer. The current versioned registry requires
