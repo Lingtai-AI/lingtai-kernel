@@ -91,6 +91,7 @@ related_files:
   - tests/test_cli_runtime_env.py
   - tests/test_cli_worker_poison_recovery.py
   - tests/test_cloud_mail_addon.py
+  - tests/test_cloud_mail_notification_no_reread.py
   - tests/test_cloud_mail_toolfamily_ltpv2.py
   - tests/test_codex_account_source.py
   - tests/test_codex_endpoint_override.py

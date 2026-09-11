@@ -48,11 +48,16 @@ _SKILL_PATH = CLOUD_MAIL_PLUGIN.skill_path
 DESCRIPTION = (
     "Cloud Mail REST email for a self-hosted deployment. Strict "
     "action/input/reasoning envelope; actions are check (recent inbound), "
-    "search (filters), read (full content by '<account>:<emailId>'), send "
+    "search (filters), read (full content by '<account>:<emailId>', accepting "
+    "a check/search id or an exact notification message_ref), send "
     "(requires user credentials; real external email), accounts (redacted "
     "status), add_user (admin user mutation), settings (read-only redacted "
     "startup inventory), and manual (packaged guidance). Inbound mail is "
-    "delivered automatically via polling. Use manual for detail."
+    "delivered automatically with a body preview and exact message_ref id. "
+    "When the current required content is complete, do not call check, search, "
+    "or read merely to reread it or recover its known id; use read only to "
+    "recover required content actually truncated or missing. "
+    "Use manual for detail."
 )
 
 SCHEMA: dict[str, Any] = {
@@ -510,6 +515,14 @@ class CloudMailManager:
                 "from_name": row.get("sendName"),
                 "to": row.get("toEmail"),
                 "created_at": row.get("createTime"),
+                # Generic LICC routing keys (mcp_inbox._PREVIEW_META_FIELDS):
+                # surfaced verbatim into the notification's data.previews[*] so
+                # the exact reply/read id is present in the current
+                # notification itself — the agent should not need an extra
+                # check/search just to recover an id already delivered here.
+                "platform": "cloud_mail",
+                "conversation_ref": acct.alias,
+                "message_ref": compound,
             },
         }
         try:
