@@ -769,21 +769,37 @@ def _registry_mutation_lock(path: Path) -> Iterator[None]:
 
 
 def _read_registry(path: Path) -> dict[str, Any]:
+    # Validate the target is a well-formed registry BEFORE the hardening chmod, so
+    # a mis-pointed ``--registry`` never mutates a file that is not ours (B2). The
+    # read-only validator performs no side effect; ``_secure_registry_file`` runs
+    # only after the shape and version are confirmed, and only re-hardens an
+    # already-validated registry to ``0o600``.
+    data = _read_registry_read_only(path)
     _secure_registry_file(path)
-    try:
-        raw = path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise PuffoV0RegistryError("puffo-v0 runtime registry is unavailable or invalid") from exc
-    if not isinstance(data, dict) or set(data) != {"revocation_log", "runtimes", "version"}:
-        raise PuffoV0RegistryError("puffo-v0 runtime registry has an invalid shape")
-    if (
-        data["version"] != REGISTRY_VERSION
-        or data["revocation_log"] != REVOCATION_LOG_REQUIRED
-        or not isinstance(data["runtimes"], dict)
-    ):
-        raise PuffoV0RegistryError("puffo-v0 runtime registry has an unsupported version")
     return data
+
+
+def _reject_non_registry_target(path: Path, *, allow_absent: bool) -> None:
+    """Reject a mis-pointed registry target before any lock, chmod, or sibling
+    artifact is created next to it (B2).
+
+    Validation is read-only: it performs no ``chmod`` and creates no lock or
+    revocation-log sibling, so pointing ``--registry`` (or its env var) at an
+    existing non-registry file fails with a typed error while leaving that file
+    and its directory untouched. ``allow_absent`` lets provision proceed to create
+    a fresh registry when nothing exists at the location yet.
+    """
+
+    if allow_absent:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise PuffoV0RegistryError(
+                "puffo-v0 runtime registry is unavailable or invalid"
+            ) from exc
+    _read_registry_read_only(path)
 
 
 def _read_registry_read_only(path: Path) -> dict[str, Any]:
@@ -1088,6 +1104,9 @@ def provision_runtime(
     if not (agent_dir / "init.json").is_file():
         raise PuffoV0RegistryError("agent_dir must contain init.json")
     path = _registry_location(registry_path)
+    # Reject a mis-pointed target before the lock creates a `.lock` sibling; an
+    # absent location is allowed because provision creates a fresh registry (B2).
+    _reject_non_registry_target(path, allow_absent=True)
     with _registry_mutation_lock(path):
         if path.exists():
             revoked_runtime_ids = _read_revoked_runtime_ids(path)
@@ -1167,6 +1186,9 @@ def revoke_runtime(runtime_id: str, *, registry_path: Path | None = None) -> Non
 
     runtime_id = _valid_runtime_id(runtime_id)
     path = _registry_location(registry_path)
+    # Reject a mis-pointed target before the lock creates a `.lock` sibling or the
+    # read hardens it; revoke has nothing to act on when the registry is absent (B2).
+    _reject_non_registry_target(path, allow_absent=False)
     with _registry_mutation_lock(path):
         registry = _read_registry(path)
         entry = registry["runtimes"].get(runtime_id)
@@ -1575,8 +1597,11 @@ def resolve_runtime(
     runtime_id = _valid_runtime_id(runtime_id)
     path = _registry_location(registry_path)
     _secure_registry_directory(path.parent)
-    revoked_runtime_ids = _read_revoked_runtime_ids(path)
+    # Validate + harden the registry target before touching the revocation-log
+    # sibling, so a mis-pointed target never chmods a `.<name>.revocations.jsonl`
+    # beside it (B2 tombstone-sibling ordering).
     registry = _read_registry(path)
+    revoked_runtime_ids = _read_revoked_runtime_ids(path)
     entry = registry["runtimes"].get(runtime_id)
     if not isinstance(entry, dict):
         raise PuffoV0RegistryError("runtime_id is not provisioned")

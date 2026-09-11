@@ -525,8 +525,16 @@ argv, environment, or MCP command from the remote caller.
     set to `0700`. Under a shared uid `0700` is not a boundary
     between sibling agents; these checks defend against accident, external
     tampering, and confused-deputy symlink redirection, not a co-resident same-uid
-    process. Existing owner-only registry *files* are still tightened to `0600`
-    before use. This Phase A registry fails closed on Windows until an
+    process. Existing owner-only registry *files* are still tightened to `0600`,
+    but only **after** the target is validated as a well-formed registry:
+    validation precedes every side effect. A control-plane operation whose
+    selected location resolves to an existing file that is not a structurally
+    valid registry (wrong file type, unparseable, or wrong shape/version) is
+    rejected with a typed error **before** any `chmod`, mutation lock
+    (`.<name>.lock`), or revocation-log (`.<name>.revocations.jsonl`) read or
+    creation — so a mis-pointed `--registry` / `LINGTAI_PUFFO_V0_REGISTRY` never
+    changes the mode of, nor creates a sibling beside, an operator file that is
+    not ours. A failed operation therefore has no mutation to roll back. This Phase A registry fails closed on Windows until an
     equivalent owner-only ACL adapter exists. The local control plane is its
     only supported writer: manual or third-party mutation is unsupported and
     malformed/rollback state is rejected rather than treated as authority. A

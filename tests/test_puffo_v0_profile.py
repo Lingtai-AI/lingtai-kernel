@@ -19,6 +19,7 @@ import pytest
 from lingtai.adapters.acp.puffo_v0 import (
     PuffoV0RegistryError,
     PuffoV0RuntimeState,
+    REGISTRY_PATH_ENV_VAR,
     RUNTIME_POLICY,
     _digest,
     discover_runtimes,
@@ -3454,3 +3455,100 @@ def test_builtin_namespace_rejects_a_symlinked_dotlingtai(tmp_path, monkeypatch)
     workspace.mkdir()
     with pytest.raises(PuffoV0RegistryError):
         provision_runtime("runtime-a", agent_dir, workspace)  # default (built-in) registry
+
+
+def _owner_only_dir(base: Path, name: str) -> Path:
+    directory = base / name
+    directory.mkdir()
+    os.chmod(directory, 0o700)
+    return directory
+
+
+def _agent_and_workspace(base: Path) -> tuple[Path, Path]:
+    agent_dir = base / "identity"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = base / "workspace"
+    workspace.mkdir()
+    return agent_dir, workspace
+
+
+@pytest.mark.parametrize("op", ["revoke", "provision", "resolve"])
+@pytest.mark.parametrize("via_env", [False, True])
+@pytest.mark.parametrize("file_mode", [0o755, 0o644])
+def test_registry_op_on_non_registry_file_makes_no_side_effects(
+    tmp_path, monkeypatch, op, via_env, file_mode
+):
+    """B2: a registry op whose target resolves to an existing regular file that is
+    not a well-formed registry must fail with a typed error BEFORE any chmod, lock,
+    or sibling artifact touches the operator-supplied file or its directory. Covers
+    both the ``--registry`` flag and the ``LINGTAI_PUFFO_V0_REGISTRY`` env paths and
+    both a 0755 and a 0644 target (Tianzhe observed both)."""
+
+    reg_dir = _owner_only_dir(tmp_path, "reg")
+    target = reg_dir / "tool.sh"
+    target.write_text("#!/bin/sh\necho hello\n", encoding="utf-8")
+    os.chmod(target, file_mode)
+    agent_dir, workspace = _agent_and_workspace(tmp_path)
+
+    before_mode = stat.S_IMODE(target.lstat().st_mode)
+    before_bytes = target.read_bytes()
+    before_listing = sorted(p.name for p in reg_dir.iterdir())
+
+    if via_env:
+        monkeypatch.setenv(REGISTRY_PATH_ENV_VAR, str(target))
+        location: dict = {}
+    else:
+        monkeypatch.delenv(REGISTRY_PATH_ENV_VAR, raising=False)
+        location = {"registry_path": target}
+
+    with pytest.raises(PuffoV0RegistryError):
+        if op == "revoke":
+            revoke_runtime("puffo-x", **location)
+        elif op == "provision":
+            provision_runtime("puffo-x", agent_dir, workspace, **location)
+        else:
+            resolve_runtime("puffo-x", **location)
+
+    assert stat.S_IMODE(target.lstat().st_mode) == before_mode
+    assert target.read_bytes() == before_bytes
+    # No lock file, no revocation tombstone, no other sibling was created.
+    assert sorted(p.name for p in reg_dir.iterdir()) == before_listing
+
+
+def test_valid_registry_is_still_hardened_to_0600_after_mutation(tmp_path, monkeypatch):
+    """The B2 reorder moves the hardening chmod AFTER validation; it must not drop
+    it. A valid registry loosened to 0644 must be re-hardened to 0600 by the next
+    mutating op."""
+
+    monkeypatch.delenv(REGISTRY_PATH_ENV_VAR, raising=False)
+    reg_dir = _owner_only_dir(tmp_path, "reg")
+    registry = reg_dir / "registry.json"
+    agent_dir, workspace = _agent_and_workspace(tmp_path)
+    provision_runtime("puffo-x", agent_dir, workspace, registry_path=registry)
+    os.chmod(registry, 0o644)
+    revoke_runtime("puffo-x", registry_path=registry)
+    assert stat.S_IMODE(registry.lstat().st_mode) == 0o600
+
+
+def test_resolve_on_invalid_target_does_not_touch_a_sibling_revocation_log(
+    tmp_path, monkeypatch
+):
+    """B2 tombstone-sibling ordering: resolve must validate the registry target
+    before it reads/hardens the revocation-log sibling, so an invalid target never
+    chmods a pre-existing ``.<name>.revocations.jsonl`` beside it."""
+
+    monkeypatch.delenv(REGISTRY_PATH_ENV_VAR, raising=False)
+    reg_dir = _owner_only_dir(tmp_path, "reg")
+    target = reg_dir / "tool.sh"
+    target.write_text("#!/bin/sh\n", encoding="utf-8")
+    os.chmod(target, 0o755)
+    sibling = reg_dir / ".tool.sh.revocations.jsonl"
+    sibling.write_text("not a tombstone\n", encoding="utf-8")
+    os.chmod(sibling, 0o644)
+
+    before = {p.name: stat.S_IMODE(p.lstat().st_mode) for p in reg_dir.iterdir()}
+    with pytest.raises(PuffoV0RegistryError):
+        resolve_runtime("puffo-x", registry_path=target)
+    after = {p.name: stat.S_IMODE(p.lstat().st_mode) for p in reg_dir.iterdir()}
+    assert after == before
