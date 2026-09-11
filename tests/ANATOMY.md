@@ -170,6 +170,7 @@ related_files:
   - tests/test_feishu_interactive_cards.py
   - tests/test_feishu_native_progress.py
   - tests/test_feishu_notification_metadata.py
+  - tests/test_feishu_notification_no_reread.py
   - tests/test_feishu_programmable_task_cards.py
   - tests/test_feishu_reactions_errors.py
   - tests/test_feishu_rich_outbound.py
@@ -363,6 +364,7 @@ related_files:
   - tests/test_telegram_inbound_media_download_failure.py
   - tests/test_telegram_lossless_envelope.py
   - tests/test_telegram_notification_read_state.py
+  - tests/test_telegram_notification_no_reread.py
   - tests/test_telegram_rate_limit.py
   - tests/test_telegram_reaction_states.py
   - tests/test_telegram_rich_formatting.py
@@ -440,6 +442,7 @@ related_files:
   - tests/test_wechat_media_validation.py
   - tests/test_wechat_media_warning_integration.py
   - tests/test_wechat_notification_metadata.py
+  - tests/test_wechat_notification_no_reread.py
   - tests/test_wechat_reply_read_state.py
   - tests/test_wechat_settings.py
   - tests/test_wechat_toolfamily_ltpv2.py

@@ -586,9 +586,9 @@ def test_all_four_notification_managers_preserve_exact_runtime_body():
     from lingtai.mcp_servers.whatsapp import manager as m4
 
     expected = {
-        m1.__name__: "515a2472ee8dbf47480f6dfe77f3ca7b55f1558a429b630282c109f3bf9828ff",
-        m2.__name__: "17c7e5086686354379cc6bf22d8cedf7d97863a04702af9928d187180877fff5",
-        m3.__name__: "8065f55c16561adedf8b71d788efa29d80ff1b9a1196ffab38f239bf06302364",
+        m1.__name__: "d94fd01db9c628b56f41e46e364c6c35ae7811d67fd6c31d670c449c0a942361",
+        m2.__name__: "f12c669c8b7f500f4aa9a596ed69560ed8fbfe2bcea475a1bbe92c94c9c25020",
+        m3.__name__: "cdfb2d6c420880eafbd69ae92cfbabb17b1cfe35c20320d039459f6475c95ae9",
         m4.__name__: "ae176cd42178fd1cd9cf743cc1960ade62b94c66cad48d8e9822c91110aad62f",
     }
     for mod in (m1, m2, m3, m4):
