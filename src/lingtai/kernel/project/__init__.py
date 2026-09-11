@@ -1,9 +1,10 @@
-"""Core policy for creating one fresh local Project seed."""
+"""Core policy for creating and mechanically inspecting local Projects."""
 from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +14,12 @@ class ProjectError:
 
 
 class ProjectCreationError(Exception):
+    def __init__(self, error: ProjectError) -> None:
+        self.error = error
+        super().__init__(error.message)
+
+
+class ProjectInspectionError(Exception):
     def __init__(self, error: ProjectError) -> None:
         self.error = error
         super().__init__(error.message)
@@ -50,6 +57,39 @@ class ProjectCreationResult:
         }
 
 
+class ProjectState(str, Enum):
+    ABSENT = "absent"
+    EMPTY = "empty"
+    POPULATED = "populated"
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectInspectionObservation:
+    lingtai_root_present: bool
+    agent_candidates: int
+    agents_with_init: int
+    agents_without_init: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectInspectionResult:
+    state: ProjectState
+    agent_candidates: int
+    agents_with_init: int
+    agents_without_init: int
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "status": "inspected",
+            "state": self.state.value,
+            "agent_candidates": {
+                "total": self.agent_candidates,
+                "with_init": self.agents_with_init,
+                "without_init": self.agents_without_init,
+            },
+        }
+
+
 class ProjectWorkspacePort(ABC):
     """The one filesystem boundary required by fresh Project creation."""
 
@@ -58,8 +98,20 @@ class ProjectWorkspacePort(ABC):
         """Publish one readable seed or raise a stable ProjectCreationError."""
 
 
+class ProjectInspectionPort(ABC):
+    """Read the one-level filesystem facts required by Project inspection."""
+
+    @abstractmethod
+    def inspect(self) -> ProjectInspectionObservation:
+        """Return one mutation-free observation or raise ProjectInspectionError."""
+
+
 def _error(code: str, message: str) -> ProjectCreationError:
     return ProjectCreationError(ProjectError(code, message))
+
+
+def _inspection_error(code: str, message: str) -> ProjectInspectionError:
+    return ProjectInspectionError(ProjectError(code, message))
 
 
 def _json(value: object) -> str:
@@ -112,6 +164,37 @@ def _seed(request: ProjectCreateRequest) -> ProjectSeed:
     )
 
 
+def _validate_observation(observation: ProjectInspectionObservation) -> None:
+    if not isinstance(observation.lingtai_root_present, bool):
+        raise _inspection_error(
+            "invalid_project_observation",
+            "project inspection returned an incoherent presence fact",
+        )
+    counts = (
+        observation.agent_candidates,
+        observation.agents_with_init,
+        observation.agents_without_init,
+    )
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts):
+        raise _inspection_error(
+            "invalid_project_observation",
+            "project inspection returned incoherent counts",
+        )
+    if (
+        observation.agents_with_init + observation.agents_without_init
+        != observation.agent_candidates
+    ):
+        raise _inspection_error(
+            "invalid_project_observation",
+            "project inspection returned incoherent counts",
+        )
+    if not observation.lingtai_root_present and observation.agent_candidates:
+        raise _inspection_error(
+            "invalid_project_observation",
+            "absent project inspection cannot contain agent candidates",
+        )
+
+
 class ProjectCreationUseCase:
     def __init__(self, workspace: ProjectWorkspacePort) -> None:
         self._workspace = workspace
@@ -123,12 +206,39 @@ class ProjectCreationUseCase:
         return ProjectCreationResult(seed.agent_name, seed.preset_ref)
 
 
+class ProjectInspectionUseCase:
+    def __init__(self, inspector: ProjectInspectionPort) -> None:
+        self._inspector = inspector
+
+    def inspect(self) -> ProjectInspectionResult:
+        observation = self._inspector.inspect()
+        _validate_observation(observation)
+        if not observation.lingtai_root_present:
+            state = ProjectState.ABSENT
+        elif observation.agent_candidates == 0:
+            state = ProjectState.EMPTY
+        else:
+            state = ProjectState.POPULATED
+        return ProjectInspectionResult(
+            state=state,
+            agent_candidates=observation.agent_candidates,
+            agents_with_init=observation.agents_with_init,
+            agents_without_init=observation.agents_without_init,
+        )
+
+
 __all__ = [
     "ProjectCreateRequest",
     "ProjectCreationError",
     "ProjectCreationResult",
     "ProjectCreationUseCase",
     "ProjectError",
+    "ProjectInspectionError",
+    "ProjectInspectionObservation",
+    "ProjectInspectionPort",
+    "ProjectInspectionResult",
+    "ProjectInspectionUseCase",
     "ProjectSeed",
+    "ProjectState",
     "ProjectWorkspacePort",
 ]
