@@ -170,6 +170,7 @@ related_files:
   - tests/test_feishu_interactive_cards.py
   - tests/test_feishu_native_progress.py
   - tests/test_feishu_notification_metadata.py
+  - tests/test_feishu_notification_no_reread.py
   - tests/test_feishu_programmable_task_cards.py
   - tests/test_feishu_reactions_errors.py
   - tests/test_feishu_rich_outbound.py
