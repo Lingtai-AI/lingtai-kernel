@@ -81,7 +81,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `_handle_responses_reasoning_event()` | `adapter.py:1492` | Responses stream reasoning-summary event handler; accumulates `summary_text` deltas/done fallback without raw reasoning text |
 | `_parse_responses_api_response()` | `adapter.py:2023` | Responses API output → `LLMResponse` (handles `message`, `function_call`, `reasoning` output items) |
 | `_decode_responses_sse_text()` | `adapter.py:2079` | Strictly decodes a completed SSE body when a compatible gateway ignores a non-streaming Responses request and the SDK exposes the body as `str`; malformed/non-SSE strings fail loud. |
-| `_consume_responses_stream()` | `adapter.py:2141` | Shared Responses event accumulator for normal SDK streams and locally decoded forced-SSE bodies; returns the finalized response plus response id without a second provider request. |
+| `_consume_responses_stream()` | `adapter.py:2141` | Shared Responses event accumulator for normal SDK streams and locally decoded forced-SSE bodies; returns the finalized response plus response id without a second provider request. The original `response.completed.response` object is retained transiently in `LLMResponse.raw`, matching non-streaming access to usage detail, field presence, and provider extensions; it is not copied into canonical replay or `UsageMetadata.extra`. |
 | `_ResponsesStreamOutputRecorder` | `adapter.py:1621` | Records complete ordered output items from a response trailer or all item-done events; incomplete streams do not commit raw replay metadata. |
 
 ## Connections

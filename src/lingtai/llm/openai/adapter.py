@@ -2145,6 +2145,7 @@ def _consume_responses_stream(
     """Consume typed SDK events or locally decoded Responses SSE events."""
     acc = StreamingAccumulator()
     response_id = None
+    raw_response = None
     usage = UsageMetadata()
     seen_reasoning_summary_items: set[str] = set()
     output_recorder = _ResponsesStreamOutputRecorder()
@@ -2181,6 +2182,7 @@ def _consume_responses_stream(
                 acc.set_tool_args_if_empty(getattr(event.item, "arguments", None))
                 acc.finish_tool()
         elif event.type == "response.completed":
+            raw_response = getattr(event, "response", None)
             # Locally decoded gateway SSE is raw JSON, not an SDK model: every
             # field here is optional and must be probed, never dotted.
             raw_usage = getattr(getattr(event, "response", None), "usage", None)
@@ -2222,6 +2224,9 @@ def _consume_responses_stream(
     # Keep the raw replay candidate private to this transient response. The
     # stateless session records it only after the whole stream has finalized;
     # incomplete/error streams therefore cannot commit partial raw history.
+    # Match non-streaming LLMResponse.raw without projecting provider metadata
+    # into canonical history or the safe token-ledger extension.
+    response.raw = raw_response
     setattr(response, "_openai_responses_output_items", output_items)
     return response, response_id
 

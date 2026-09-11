@@ -721,3 +721,71 @@ def test_openai_responses_stream_captures_summary_thoughts():
     result = session.send_stream("think")
 
     assert result.thoughts == ["I should call the report tool."]
+
+
+@pytest.mark.parametrize("cached", ["absent", None, 0, 8192])
+@pytest.mark.parametrize("wire", ["sdk", "forced_sse"])
+def test_responses_stream_preserves_original_completion_metadata(cached, wire):
+    from openai._models import construct_type
+    from openai.types.responses import Response
+    from lingtai.llm.openai.adapter import (
+        _consume_responses_stream, _decode_responses_sse_text,
+        _parse_responses_api_response,
+    )
+
+    details = {} if cached == "absent" else {"cached_tokens": cached}
+    body = {
+        "id": "resp_metadata", "status": "completed", "model": "returned-model",
+        "service_tier": "default", "metadata": {"probe": "not logged"},
+        "output": [{"type": "message", "role": "assistant", "content": [
+            {"type": "output_text", "text": "hello", "annotations": []},
+        ]}],
+        "usage": {
+            "input_tokens": 10000, "output_tokens": 32, "total_tokens": 10032,
+            "input_tokens_details": details,
+            "output_tokens_details": {"reasoning_tokens": 11},
+            "provider_extension": {"sentinel": 17},
+        },
+    }
+    if wire == "sdk":
+        raw = construct_type(type_=Response, value=body)
+        events = [Event("response.completed", response=raw)]
+    else:
+        events = _decode_responses_sse_text(
+            "event: response.completed\ndata: "
+            + json.dumps({"type": "response.completed", "response": body}) + "\n\n"
+        )
+        raw = events[0].response
+    response, response_id = _consume_responses_stream(events)
+    nonstream = _parse_responses_api_response(raw)
+    assert response.raw is raw
+    assert response.raw is nonstream.raw
+    assert response_id == raw.id
+    assert response.usage == nonstream.usage
+    assert response.usage.cached_tokens == (8192 if cached == 8192 else 0)
+    assert response.usage.thinking_tokens == 11
+    assert response.raw.usage.total_tokens == 10032
+    assert response.raw.model == "returned-model"
+    assert response.raw.service_tier == "default"
+    detail = response.raw.usage.input_tokens_details
+    if cached == "absent":
+        fields = getattr(detail, "model_fields_set", vars(detail))
+        assert "cached_tokens" not in fields
+    else:
+        assert detail.cached_tokens == cached
+    # Original metadata stays transient: never copy raw response/request data
+    # into the safe per-call token-ledger extension or canonical replay items.
+    assert response.usage.extra == {}
+    assert "usage" not in response._openai_responses_output_items[0]
+
+
+def test_responses_stream_without_completion_does_not_invent_raw_response():
+    from lingtai.llm.openai.adapter import _consume_responses_stream
+
+    response, response_id = _consume_responses_stream([
+        Event("response.created", response=SimpleNamespace(id="resp_partial")),
+        Event("response.output_text.delta", delta="partial"),
+    ])
+    assert response.text == "partial"
+    assert response_id == "resp_partial"
+    assert response.raw is None
