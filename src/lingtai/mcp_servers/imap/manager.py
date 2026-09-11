@@ -385,12 +385,15 @@ class IMAPMailManager:
     # ------------------------------------------------------------------
 
     def on_imap_received(self, payload: dict) -> None:
-        """Handle incoming email from an account. Forward to host via LICC.
+        """Forward an incoming email to the host over LICC.
 
-        Body sent to the host is a preview (~300 chars) — agents call
-        ``imap(action="read", email_id=...)`` to fetch the full message.
-        Routing keys travel in metadata so the agent can act on them
-        without parsing the notification text.
+        The listener (``account.py``) fetches headers only, so ``payload``
+        has no ``message`` key today and the pushed body/truncation fields
+        stay empty/``0``/``False`` — content is genuinely absent, not short.
+        ``message`` handling stays for a future body-bearing producer. The
+        compound ``email_id`` is already known here, so it also travels as
+        routing metadata (``platform``/``conversation_ref``/``message_ref``);
+        see SKILL.md/operation-contract.md for the full agent-facing contract.
         """
         account_addr = payload.get("account", "")
         email_id = payload.get("email_id", "")
@@ -417,6 +420,9 @@ class IMAPMailManager:
                     "account": account_addr,
                     "preview_truncated": len(message) > 300,
                     "full_length": len(message),
+                    "platform": "imap",
+                    "conversation_ref": account_addr,
+                    "message_ref": email_id,
                 },
                 "wake": True,
             })

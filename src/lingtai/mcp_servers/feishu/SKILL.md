@@ -63,8 +63,12 @@ schema-2.0 `card`, media, shares, or sticker. `edit` accepts text/markdown/post
 or complete card replacement, not media. See the message reference for exact
 unions and media source shapes.
 
-A safe inbound start is `feishu(action="check", input={}, reasoning="inspect incoming chats")`,
-then `read` the affected chat; obtain its exact ID before replying.
+A safe inbound start without a pending notification is
+`feishu(action="check", input={}, reasoning="inspect incoming chats")`, then
+`read` the affected chat to obtain its exact ID before replying. When a
+notification already carries a compound message id and untruncated text
+(see [`reference/message-semantics.md`](reference/message-semantics.md#notifications-and-progress)),
+reply or react with that id directly instead of a routine re-check/re-read.
 
 ## BEFORE A SIDE EFFECT
 

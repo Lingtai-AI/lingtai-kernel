@@ -5,8 +5,8 @@ description: |
   schema carries safe first-use guidance; call `manual` for the action map,
   inbound-first/reply routing, channel/media/rendering rules, settings, Task Card
   projection, and error handling.
-version: 1.9.0
-last_changed_at: 2026-09-09T00:00:00Z
+version: 1.9.2
+last_changed_at: 2026-09-11T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/task_card/event_projection.py
@@ -51,11 +51,19 @@ are required, `summarize` is optional and not action input, and only the selecte
 action's fields belong in `input`. `reasoning` is audit metadata, not a message;
 `manual` and `settings` take `{}`.
 
-1. Begin read-only with `check`, `read`, or `search`. `check` shows recent chats
-   and incoming unread counts without marking read; `read` is the one-chat view
-   and marks returned records read.
+1. When a current notification already carries the message to handle, its own
+   compound `id` is a valid `reply` target directly. Do not call `check`,
+   `read`, or `search` merely to reread that same text or to obtain an id
+   already given. Otherwise, begin read-only with `check`, `read`, or `search`.
+   `check` shows recent chats and incoming unread counts without marking read;
+   `read` is the one-chat view, marks returned records read, and is also the
+   correct way to recover required content absent from all available current
+   copies. A `text_truncated` shorter preview does not require a reread when
+   full current raw content is already available. Needed media without a
+   local `path` or recorded `download_error` may require recovery.
 2. Answer on Telegram, not private output. For one incoming message, `reply`
-   with its copied compound `message_id` from `read`/`search`; never guess an ID.
+   with its exact compound `message_id` as given by the current notification/persistent
+   record or `read`/`search`; never guess an ID.
 3. For a standalone message, `send` to a real numeric `chat_id` with text, media (optionally captioned),
    rich content, or an indicator as described below. Contacts are local aliases, not inbound permission; account
    setup/configuration is not a tool call.
@@ -159,9 +167,18 @@ absolute inbox `path`; voice may add `voice_transcript`. Use `vision` for
 image-like attachments, not filename guesses. `download_error` retains metadata
 without a path: read the text and ask for a resend/another transfer method. The
 hosted Bot API `getFile` limit is 20 MB; no local Bot API server is configured.
-Notification previews follow `notification_header.md`: handle the latest
-unresponded incoming message, and use `read` when truncated, ambiguous,
-media/callback-heavy, or exact anchoring is needed.
+Notification previews follow `notification_header.md`: for an ordinary
+(non-synthetic) message record, handle the latest unresponded incoming
+message using its own `id` and current full text directly — not for
+ambiguity, callback presence, media, or an id already given. Synthetic
+`updates` records and callback-only entries stay read/search-only and are
+never reply targets. The agent SHOULD NOT reread required content already
+complete in the final current notification, including usable raw Telegram
+text/caption: `text_truncated` on a shorter copy or older-history overflow
+does not change that. Call `read` only for required content absent from all
+current copies (including omitted/id-only records), or needed media with no
+local `path` and no `download_error`. An attachment already carrying
+`download_error` needs a resend, not a reread.
 
 ## Slash commands and local preferences
 
