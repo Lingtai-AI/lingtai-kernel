@@ -131,7 +131,7 @@ def _shell_setting_rows(manager: Any) -> tuple[SettingRow, ...]:
         SettingRow(
             "command_policy",
             "configured",
-            "platform-packaged",
+            "yolo",
             True,
             "shell-manual#settings-inventory",
             _sensitive=True,
@@ -359,7 +359,15 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
     kind = _resolve_shell_kind(ShellKind.coerce(values.get("shell_kind")))
     dialect = _select_shell_dialect(kind)
     policy_file = values.get("policy_file")
-    if values.get("yolo", False):
+    # The one Shell default rule, shared by direct setup, manifest/preset
+    # capability kwargs, and the detached daemon binding: omitted ``yolo`` is
+    # permissive unless an explicit ``policy_file`` was given. Explicit
+    # ``yolo: true`` wins; explicit ``yolo: false`` without a file selects the
+    # packaged platform policy.
+    yolo = values.get("yolo")
+    if yolo is None:
+        yolo = policy_file is None
+    if yolo:
         policy = ShellPolicy.yolo()
     elif policy_file is not None:
         policy = ShellPolicy.from_file(policy_file)

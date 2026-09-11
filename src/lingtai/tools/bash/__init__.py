@@ -5,8 +5,8 @@ because not every agent should have shell access — it's a powerful
 capability that should be explicitly opted into.
 
 Usage:
+    agent.add_capability("shell")  # omitted config: yolo, no restrictions
     agent.add_capability("shell", policy_file="path/to/policy.json")
-    agent.add_capability("shell", yolo=True)  # no restrictions
 """
 from __future__ import annotations
 
@@ -2221,7 +2221,7 @@ def _mount_declared_shell(
 def setup(
     agent: "BaseAgent",
     policy_file: str | None = None,
-    yolo: bool = False,
+    yolo: bool | None = None,
     shell_kind: "ShellKind | str | None" = None,
     **unsupported: object,
 ) -> ShellManager:

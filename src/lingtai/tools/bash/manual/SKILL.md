@@ -85,7 +85,7 @@ authority and an unavailable value fails the whole action without partial rows.
 | `result_max_chars` | Per-stream stdout/stderr capture limit, default 50000. Only an authorized embedding owner can pass positive `ShellManager(max_output=...)` before rebuilding the manager. Normal capability setup exposes no key or environment override. |
 | `async_default` | Built-in false, immutable; `input.async` selects one call. |
 | `async_reminder_default_seconds` | Built-in 1800, immutable. For one async run, `input.reminder` must be finite/non-negative within the platform timer bound; it is fallback, not completion. |
-| `command_policy` | Both values stay redacted. Authorized setup selects `yolo=true`, then `policy_file`, then packaged policy; rebuild/relaunch and verify SHOW. No rules/paths are disclosed. |
+| `command_policy` | Both values stay redacted. Default (omitted config or `shell: {}`) is yolo. Authorized setup selects explicit `yolo=true`, then `policy_file`, then packaged policy for explicit `yolo=false`; rebuild/relaunch and verify SHOW. No rules/paths are disclosed. |
 
 SHOW is strict-empty and read-only; there is no Shell settings file or mutation
 verb. Verify an authorized change through its owning construction procedure and

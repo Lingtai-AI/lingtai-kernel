@@ -90,7 +90,7 @@
     // out entirely: e.g. "disable": ["avatar"].
     //
     // Entries below are either:
-    //   1. Overrides for default-on capabilities (shell, skills here).
+    //   1. Default-on capabilities (shell shown at its default, skills overridden).
     //   2. Opt-in capabilities not in the default set (vision, web).
     //      web(action='search', input={'query': '...'},
     //          reasoning='discover current sources') discovers; and
@@ -99,11 +99,12 @@
     //      through one unified capability.
     // -------------------------------------------------------
     "capabilities": {
-      // --- Shell access (override) ---
-      // Kernel default is { "yolo": true } (no deny-list). The TUI ships
-      // a deny-list at bash_policy.json so agents started via lingtai-tui
-      // get the sandboxed surface by default.
-      "shell": { "policy_file": "bash_policy.json" },
+      // --- Shell access ---
+      // Omitted or empty shell config is yolo (no command policy). Explicit
+      // "yolo": false uses the packaged policy; an explicit "policy_file"
+      // loads that file; "yolo": true takes precedence over both. Example:
+      //   "shell": { "policy_file": "bash_policy.json" },
+      "shell": {},
 
       // --- Skills catalog (override) ---
       // `skills` is default-on; this entry adds extra search paths to the

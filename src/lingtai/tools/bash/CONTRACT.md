@@ -1,7 +1,7 @@
 ---
 name: bash-contract
 tool: shell
-contract_version: 7
+contract_version: 8
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/bash/__init__.py
@@ -80,11 +80,24 @@ invariants.
 - One public family exposes `run`, `poll`, `cancel`, read-only `settings`, and
   `manual`; the execution engine still handles only the three operational
   actions.
-- Policy is file-based (`bash_policy.json` is the POSIX default; Windows selects the reviewed `powershell_policy.json`). `yolo=True` at setup
-  installs an allow-everything policy (unsandboxed command set) and is the
-  documented default for trusted agents. Two policy modes exist: **allowlist**
-  (only listed commands, active whenever an `allow` key is present) and
-  **denylist** (everything except listed commands). The mode is implicit.
+- Default Shell is permissive (yolo). `_bind` owns the one selection rule for
+  every route — direct `setup()`, main-Agent and preset capability kwargs, and
+  the private detached daemon binding: explicit `yolo=true` installs the
+  allow-everything policy; otherwise an explicit `policy_file` is loaded;
+  otherwise explicit `yolo=false` selects the packaged platform policy
+  (`bash_policy.json` on POSIX, the reviewed `powershell_policy.json` for
+  PowerShell); otherwise (omitted configuration, `shell: {}`) the policy is
+  yolo. `CORE_DEFAULTS["shell"]` carries no kwargs, so a merged core default
+  never masks an explicit restriction. Detached daemon Shell does not inherit
+  the parent's explicit Shell restriction: the private
+  `_setup_detached_daemon_shell()` binding supplies no policy keys, so it
+  resolves to yolo; an explicit preset `shell` entry is still set up through
+  the ordinary preset capability path with its own kwargs, and in-process
+  emanations' reuse of the parent's Shell host floor is unchanged. Two file
+  policy modes exist:
+  **allowlist** (only listed commands, active whenever an `allow` key is
+  present) and **denylist** (everything except listed commands). The mode is
+  implicit.
 
 **Non-goals:** `shell` does not sandbox the command's own filesystem writes
 beyond the `working_dir` scope check; it does not manage agent lifecycle; it
@@ -482,6 +495,7 @@ for cancellation correctness.
 | Deadline claim, bounded cancellation suppression/recovery, and terminal handling have deterministic lock-owned ordering | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_terminal_pop_before_deadline_claim_suppresses_reminder`, `::test_deadline_claim_before_terminal_pop_publishes_once`, `::test_expired_suppressing_reminder_recovers_after_manager_crash` |
 | Direct-manager fallback appends remain multi-event safe across managers | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_direct_manager_fallback_is_serialized_by_shared_store` |
 | `yolo=True` allows all commands and the registered public identity is `shell` | `src/lingtai/tools/bash/__init__.py` | `tests/test_layers_bash.py::test_add_capability_bash_yolo`, `tests/test_shell_pr1_contract.py::test_setup_registers_shell_and_advertises_selected_dialect` |
+| Omitted Shell config is yolo on every route; explicit `yolo=false`/`policy_file` stay restrictive and `yolo=true` wins | `src/lingtai/tools/bash/_tool_family.py` | `tests/test_shell_tool_plugin_declaration.py::test_shell_binding_resolves_one_default_policy_rule`, `::test_default_shell_is_permissive_on_every_composition_route` |
 | PowerShell argv/dialect policy and Windows selector composition stay behind shared Ports | `src/lingtai/adapters/windows/` and `src/lingtai/adapters/shell*.py` | `tests/test_shell_pr1_contract.py` (native Windows execution remains a separate acceptance gate) |
 | Sync `run.timeout` above the hard ceiling (`LINGTAI_TOOL_TIMEOUT_MAX_SECONDS`, default 120, floored at 30) is refused and steered to `async=true` | `src/lingtai/tools/bash/__init__.py`, `_tool_family.py` | `tests/test_bash_shell_dialect.py::test_sync_run_refuses_timeout_above_cap`, `::test_sync_run_accepts_timeout_at_cap`, `::test_sync_run_cap_follows_env_override`, `::test_cap_below_default_is_floored_at_default` |
 | Every sync timeout result carries the async steering guidance | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_shell_dialect.py::test_timeout_error_with_output_also_appends_guidance`, `::test_sync_timeout_with_captured_output_includes_guidance` |
