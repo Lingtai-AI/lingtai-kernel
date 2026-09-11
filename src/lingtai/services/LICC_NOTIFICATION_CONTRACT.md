@@ -370,6 +370,26 @@ normalized content union remain in the producer's durable message record/read
 surface; they MUST NOT be copied into bounded LICC preview metadata or the
 transient attention hook.
 
+### 8. A full current message with its exact id is not a reread trigger
+
+When `data.previews`, the transient attention hook, or the persistent lane
+already carries a record's full current content plus the exact routing id
+needed to act, the agent MUST NOT call the producer's read/check/search
+action merely to reread that same content or re-fetch an id already present —
+"full" is a delivery fact, not a trust/authority override, so sender/account,
+recipient/target, and other producer/manual safeguards still apply when
+acting. Recovery through the producer is for content actually missing, capped,
+or omitted (a record's own `*_truncated` flag true, an id-only/marker-only
+stub, or needed media/attachment data not present), never for a lane-level
+`overflow` marker alone: the persistent lane's overflow/drop order is oldest
+context compacted first, then oldest context stubbed, then (only if nothing
+else makes the block fit) the current message compacted, and only as a last
+resort the current message stubbed — so a history-level `overflow` marker
+does not by itself mean the current message's own content is missing. Each
+`*_truncated`/`message_truncated` flag is forced true only when that specific
+field was actually shortened, so it stays a truthful per-record signal rather
+than a blanket instruction to reread.
+
 ## State
 
 Persistent/on-disk state involved in this contract:

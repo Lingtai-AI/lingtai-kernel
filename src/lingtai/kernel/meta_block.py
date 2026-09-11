@@ -181,8 +181,9 @@ NOTIFICATION_PERSISTENT_TELEGRAM_SELF_OUTGOING_COMMENT = (
     "This is the agent's own recent outgoing message, included for continuity."
 )
 NOTIFICATION_PERSISTENT_TELEGRAM_TRUNCATED_COMMENT = (
-    "This message is truncated; call telegram.read for the exact full producer "
-    "state."
+    "This text copy is truncated. Only if required content is absent from "
+    "all available current copies, call telegram.read for the missing content; "
+    "do not reread a complete alternate/raw current copy."
 )
 NOTIFICATION_PERSISTENT_TELEGRAM_REFERENCED_COMMENT = (
     "This is the full Telegram message referenced by the current reply; "
@@ -200,8 +201,9 @@ NOTIFICATION_PERSISTENT_WECHAT_SELF_OUTGOING_COMMENT = (
     "This is the agent's own recent outgoing message, included for continuity."
 )
 NOTIFICATION_PERSISTENT_WECHAT_TRUNCATED_COMMENT = (
-    "This message is truncated; call wechat.read for the exact full producer "
-    "state."
+    "This text copy is truncated. Only if required content is absent from "
+    "all available current copies, call wechat.read for the missing content; "
+    "do not reread a complete alternate/raw current copy."
 )
 
 # Feishu mirrors the Telegram comment set with channel-appropriate wording.
@@ -215,8 +217,9 @@ NOTIFICATION_PERSISTENT_FEISHU_SELF_OUTGOING_COMMENT = (
     "This is the agent's own recent outgoing message, included for continuity."
 )
 NOTIFICATION_PERSISTENT_FEISHU_TRUNCATED_COMMENT = (
-    "This message is truncated; call feishu.read for the exact full producer "
-    "state."
+    "This text copy is truncated. Only if required content is absent from "
+    "all available current copies, call feishu.read for the missing content; "
+    "do not reread a complete alternate/raw current copy."
 )
 
 # Concise English comments attached to the WhatsApp persistent block. The
@@ -239,12 +242,14 @@ NOTIFICATION_PERSISTENT_WHATSAPP_SELF_OUTGOING_COMMENT = (
     "This is the agent's own recent outgoing message, included for continuity."
 )
 NOTIFICATION_PERSISTENT_WHATSAPP_TRUNCATED_COMMENT = (
-    "This message is truncated; call whatsapp.read with the compound message "
-    "id for the exact full producer state."
+    "This text copy is truncated. Only if required content is absent from "
+    "all available current copies, call whatsapp.read for this conversation; "
+    "do not reread a complete alternate current copy."
 )
 NOTIFICATION_PERSISTENT_WHATSAPP_MEDIA_COMMENT = (
-    "Non-text WhatsApp message; only type/id metadata is stored locally — use "
-    "whatsapp.read for the exact stored producer state."
+    "Non-text WhatsApp message; only type/id metadata is stored locally. "
+    "If the task needs missing media content, read cannot download it; "
+    "ask the sender to resend it through a supported transfer method."
 )
 
 NOTIFICATION_PERSISTENT_EMAIL_CONTEXT_COMMENT = (
@@ -2212,6 +2217,11 @@ _IM_PERSISTENT_LANES = (
     _WHATSAPP_PERSISTENT_LANE,
 )
 
+# Lookup from the persistent-payload channel key (e.g. "telegram") back to its
+# lane, so the size cap can attach the right channel-specific truncated-message
+# comment without re-deriving lane wiring.
+_IM_PERSISTENT_LANES_BY_CHANNEL = {lane.channel: lane for lane in _IM_PERSISTENT_LANES}
+
 
 def _im_preview_list(notification_payload: dict, source_key: str) -> list[dict]:
     """Return IM notification preview entries from the canonical payload."""
@@ -2840,15 +2850,32 @@ def _truncate_persistent_value(value: object, budget: int) -> tuple[object, bool
     return value[:budget] + "...", True
 
 
-def _compact_persistent_record(record: object, fields: tuple[str, ...], budget: int) -> object:
-    """Return a copy of *record* with its heavy string *fields* truncated."""
+def _compact_persistent_record(
+    record: object,
+    fields: tuple[str, ...],
+    budget: int,
+    *,
+    truncated_flag: str | None = None,
+) -> object:
+    """Return a copy of *record* with its heavy string *fields* truncated.
+
+    When *truncated_flag* names a boolean field (the producer's own
+    "this content is incomplete" flag, e.g. ``text_truncated`` /
+    ``message_truncated``) and truncation actually shortened a field, that flag
+    is forced ``True`` — the cap must never leave a blanked field paired with a
+    stale ``False`` that would make the record read as complete when it is not.
+    """
     if not isinstance(record, dict):
         return record
     compacted = dict(record)
+    any_changed = False
     for field in fields:
         value, changed = _truncate_persistent_value(compacted.get(field), budget)
         if changed:
             compacted[field] = value
+            any_changed = True
+    if any_changed and truncated_flag:
+        compacted[truncated_flag] = True
     return compacted
 
 
@@ -2872,7 +2899,10 @@ def _compact_email_persistent_lane(
             out.append(item)
             continue
         email = _compact_persistent_record(
-            item, NOTIFICATION_PERSISTENT_EMAIL_HEAVY_FIELDS, budget
+            item,
+            NOTIFICATION_PERSISTENT_EMAIL_HEAVY_FIELDS,
+            budget,
+            truncated_flag="message_truncated",
         )
         if comment is not None:
             existing = item.get("comment")
@@ -2886,15 +2916,59 @@ def _compact_email_persistent_lane(
     return compacted
 
 
-def _compact_im_persistent_lane(lane_payload: dict, budget: int) -> dict:
+def _compact_im_persistent_record(
+    record: object,
+    budget: int,
+    lane: _ImPersistentLane | None,
+    *,
+    protect_current: bool,
+) -> object:
+    """Protect current records first; mark each shortened field truthfully.
+
+    Recovery notes are conditional on required content being unavailable in
+    every current representation. A channel key alone does not prove that
+    a raw payload is complete, current, or sufficient for the task.
+    """
+    if not isinstance(record, dict):
+        return record
+    if protect_current and record.get("is_current"):
+        return dict(record)
+    compacted = _compact_persistent_record(
+        record,
+        NOTIFICATION_PERSISTENT_IM_HEAVY_FIELDS,
+        budget,
+        truncated_flag="text_truncated",
+    )
+    if (
+        isinstance(compacted, dict)
+        and compacted.get("text_truncated")
+        and lane is not None
+    ):
+        existing = compacted.get("comment")
+        note = lane.truncated_comment
+        if isinstance(existing, str) and existing:
+            if note not in existing:
+                compacted["comment"] = f"{existing} {note}"
+        else:
+            compacted["comment"] = note
+    return compacted
+
+
+def _compact_im_persistent_lane(
+    lane_payload: dict,
+    budget: int,
+    lane: _ImPersistentLane | None,
+    *,
+    protect_current: bool,
+) -> dict:
     """Compact one IM lane: keep every message and its identity fields."""
     compacted = dict(lane_payload)
     for key in ("messages", "referenced_messages"):
         records = compacted.get(key)
         if isinstance(records, list):
             compacted[key] = [
-                _compact_persistent_record(
-                    record, NOTIFICATION_PERSISTENT_IM_HEAVY_FIELDS, budget
+                _compact_im_persistent_record(
+                    record, budget, lane, protect_current=protect_current
                 )
                 for record in records
             ]
@@ -2902,9 +2976,21 @@ def _compact_im_persistent_lane(lane_payload: dict, budget: int) -> dict:
 
 
 def _compact_notification_persistent(
-    persistent: dict, budget: int, overflow_marker: dict, comment: str | None
+    persistent: dict,
+    budget: int,
+    overflow_marker: dict,
+    comment: str | None,
+    *,
+    protect_current: bool = False,
 ) -> dict:
-    """Return a fresh compacted copy of *persistent* at one per-field budget."""
+    """Return a fresh compacted copy of *persistent* at one per-field budget.
+
+    *protect_current* leaves any IM record flagged ``is_current`` untouched at
+    this budget tier — see ``_compact_im_persistent_record``. The per-record
+    IM truncated-message comment is only ever attached to a record that is
+    actually returned truncated below, so it never fires for the protected
+    current message (see ``_compact_im_persistent_record``).
+    """
     compacted: dict = {}
     for key, value in persistent.items():
         if key == NOTIFICATION_PERSISTENT_EMAIL_CHANNEL and isinstance(value, dict):
@@ -2912,11 +2998,16 @@ def _compact_notification_persistent(
         elif key == NOTIFICATION_PERSISTENT_MCP_KEY and isinstance(value, dict):
             compacted[key] = {
                 channel: (
-                    _compact_im_persistent_lane(lane, budget)
-                    if isinstance(lane, dict)
-                    else lane
+                    _compact_im_persistent_lane(
+                        lane_payload,
+                        budget,
+                        _IM_PERSISTENT_LANES_BY_CHANNEL.get(channel),
+                        protect_current=protect_current,
+                    )
+                    if isinstance(lane_payload, dict)
+                    else lane_payload
                 )
-                for channel, lane in value.items()
+                for channel, lane_payload in value.items()
             }
         else:
             compacted[key] = value
@@ -2941,7 +3032,10 @@ def _stub_persistent_record(record: dict) -> dict:
 
 
 def _drop_notification_persistent_records(
-    persistent: dict, max_chars: int | None = None
+    persistent: dict,
+    max_chars: int | None = None,
+    *,
+    passes: tuple[bool, ...] = (True, False),
 ) -> dict:
     """Replace the oldest messages with id-only stubs until the envelope fits.
 
@@ -2950,6 +3044,16 @@ def _drop_notification_persistent_records(
     leaves an ``{"id": ..., "event_id": ...}`` stub (so
     ``record_notification_persistent_delivery`` still records it and the agent
     never re-receives it forever) plus its id in the lane's ``dropped_ids``.
+
+    Runs one pass per entry in *passes* (default both): a ``True`` pass skips
+    any record flagged ``is_current`` (the producer's current/new message),
+    stubbing only obsolete history across every lane; a ``False`` pass also
+    stubs the current message once every other record is already a stub.
+    Callers that must not touch the current message yet pass ``(True,)``
+    alone. Email records never carry ``is_current``, so the ``True`` pass does
+    not skip or protect any of them — it already stubs eligible email records
+    exactly like the ``False`` pass would; only the IM lanes get a distinct
+    protected first pass ahead of their current message being touched.
     """
     lanes: list[tuple[dict, str]] = []
     email_lane = persistent.get(NOTIFICATION_PERSISTENT_EMAIL_CHANNEL)
@@ -2965,30 +3069,35 @@ def _drop_notification_persistent_records(
     if not lanes:
         return persistent
 
-    cursors = [0] * len(lanes)
-    progressed = True
     if max_chars is None:
         max_chars = _notification_persistent_max_chars()
-    while progressed:
-        if _notification_persistent_envelope_chars(persistent) <= max_chars:
-            return persistent
-        progressed = False
-        for slot, (lane_payload, key) in enumerate(lanes):
-            records = lane_payload[key]
-            index = cursors[slot]
-            while index < len(records) and not isinstance(records[index], dict):
-                index += 1
-            if index >= len(records):
-                cursors[slot] = index
-                continue
-            record = records[index]
-            records[index] = _stub_persistent_record(record)
-            dropped = lane_payload.setdefault("dropped_ids", [])
-            record_id = record.get("id")
-            if isinstance(record_id, str) and record_id and record_id not in dropped:
-                dropped.append(record_id)
-            cursors[slot] = index + 1
-            progressed = True
+
+    for protect_current in passes:
+        cursors = [0] * len(lanes)
+        progressed = True
+        while progressed:
+            if _notification_persistent_envelope_chars(persistent) <= max_chars:
+                return persistent
+            progressed = False
+            for slot, (lane_payload, key) in enumerate(lanes):
+                records = lane_payload[key]
+                index = cursors[slot]
+                while index < len(records) and (
+                    not isinstance(records[index], dict)
+                    or (protect_current and records[index].get("is_current"))
+                ):
+                    index += 1
+                if index >= len(records):
+                    cursors[slot] = index
+                    continue
+                record = records[index]
+                records[index] = _stub_persistent_record(record)
+                dropped = lane_payload.setdefault("dropped_ids", [])
+                record_id = record.get("id")
+                if isinstance(record_id, str) and record_id and record_id not in dropped:
+                    dropped.append(record_id)
+                cursors[slot] = index + 1
+                progressed = True
     return persistent
 
 
@@ -3105,6 +3214,13 @@ def _cap_notification_persistent(agent, persistent: dict) -> dict:
     file, no marker, byte-identical block.  Over the cap the full block is
     spilled to disk and the returned copy carries an ``overflow`` marker with
     the spill path, the original size, and truncated content.
+
+    Obsolete history is always fully compacted AND fully stubbed — both
+    degradation steps — before the current/new IM message is touched at all;
+    a record with bulky non-text fields that compaction alone cannot shrink
+    (heavy-field truncation caps ``text``/``caption`` only) still gets fully
+    stubbed ahead of the current message, which never has its own content
+    shortened merely because stubbing history was still pending.
     """
     full_chars = _notification_persistent_envelope_chars(persistent)
     max_chars = _notification_persistent_max_chars(agent)
@@ -3125,21 +3241,41 @@ def _cap_notification_persistent(agent, persistent: dict) -> dict:
         marker["spill_failed"] = True
         comment = NOTIFICATION_PERSISTENT_OVERFLOW_NO_SPILL_COMMENT
 
-    compacted = persistent
     widest = NOTIFICATION_PERSISTENT_COMPACT_BUDGETS[0]
-    for budget in NOTIFICATION_PERSISTENT_COMPACT_BUDGETS:
-        compacted = _compact_notification_persistent(
-            persistent, budget, marker, comment if budget >= widest else None
+    base = persistent
+    compacted = persistent
+    # Two full degradation tiers — current/new IM message protected in the
+    # first, unprotected only in the second (common-contract priority of
+    # current-message retention over obsolete history). Within EACH tier,
+    # compaction (shrink every heavy text field, budget by budget) always
+    # runs to exhaustion before stubbing (blank even non-text bulk that
+    # compaction cannot touch) is tried at that same tier, and the stubbed
+    # result becomes the base for the next tier — so obsolete history is
+    # always fully compacted AND fully stubbed before the current message is
+    # compacted, and fully compacted AND fully stubbed again before the
+    # current message is ever stubbed.
+    for protect_current in (True, False):
+        for budget in NOTIFICATION_PERSISTENT_COMPACT_BUDGETS:
+            compacted = _compact_notification_persistent(
+                base,
+                budget,
+                marker,
+                comment if budget >= widest else None,
+                protect_current=protect_current,
+            )
+            if (
+                _notification_persistent_envelope_chars(compacted)
+                <= max_chars
+            ):
+                return compacted
+        dropped = _drop_notification_persistent_records(
+            compacted, max_chars, passes=(protect_current,)
         )
-        if (
-            _notification_persistent_envelope_chars(compacted)
-            <= max_chars
-        ):
-            return compacted
-    dropped = _drop_notification_persistent_records(compacted, max_chars)
-    if _notification_persistent_envelope_chars(dropped) <= max_chars:
-        return dropped
-    return _drop_notification_persistent_terminal(dropped, marker, max_chars)
+        if _notification_persistent_envelope_chars(dropped) <= max_chars:
+            return dropped
+        base = dropped
+        compacted = dropped
+    return _drop_notification_persistent_terminal(compacted, marker, max_chars)
 
 
 def _notification_attention_envelope_chars(attention: dict) -> int:
@@ -3307,16 +3443,23 @@ def _compact_attention_node(node, budget: int) -> tuple[object, bool]:
 
     Walks the attention lane's per-source payloads (dicts and lists) and caps
     every heavy free-text field at *budget*; structural fields (ids, routing,
-    counts, subjects, dates) are left untouched.
+    counts, subjects, dates) are left untouched. When a heavy field is
+    actually shortened and its sibling ``<field>_truncated`` flag (the
+    producer's own naming convention: ``text_truncated``, ``preview_truncated``,
+    ``message_truncated``, ...) is present on the same dict, that flag is
+    forced ``True`` so a blanked field never survives paired with a stale
+    ``False`` that would read as complete content.
     """
     if isinstance(node, dict):
         out: dict = {}
         changed = False
+        truncated_fields: set[str] = set()
         for key, value in node.items():
             if key in NOTIFICATION_ATTENTION_HEAVY_FIELDS and isinstance(value, str):
                 new_value, this_changed = _truncate_persistent_value(value, budget)
                 if this_changed:
                     changed = True
+                    truncated_fields.add(key)
                 out[key] = new_value
             elif isinstance(value, (dict, list)):
                 new_value, this_changed = _compact_attention_node(value, budget)
@@ -3325,6 +3468,10 @@ def _compact_attention_node(node, budget: int) -> tuple[object, bool]:
                 out[key] = new_value
             else:
                 out[key] = value
+        for field in truncated_fields:
+            flag_key = f"{field}_truncated"
+            if flag_key in out:
+                out[flag_key] = True
         return out, changed
     if isinstance(node, list):
         out_list = []
@@ -3724,7 +3871,10 @@ def _sanitize_im_notification_after_persistent(
     channel["data"] = minimal_data
     channel["instructions"] = (
         f"High-attention {lane.display_name} hook: use notification_persistent "
-        "for content/context; when handled, dismiss this notification."
+        "for content/context; when it already has the full current message and "
+        f"exact id, act from it directly — do not call {lane.display_name}'s "
+        "read/check merely to reread that same content. When handled, dismiss "
+        "this notification."
     )
 
 

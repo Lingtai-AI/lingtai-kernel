@@ -4,9 +4,9 @@ description: >
   Notification payload, mirror, allowlist, hook, delivery, delay, and block-cap
   reference. Read after notification-manual when interpreting current channel
   state or diagnosing delivery; dismissal policy belongs to dismissal-safety.
-version: 0.8.0
+version: 0.8.1
 tags: [lingtai, notifications, channels, protocol, sync, delay, alarm, nudge, hooks, whitelist]
-last_changed_at: "2026-09-09T05:30:00Z"
+last_changed_at: "2026-09-11T00:00:00Z"
 related_files:
 - src/lingtai/tools/notification/manual/SKILL.md
 - src/lingtai/tools/notification/schema.py
@@ -115,7 +115,7 @@ for persistent and attention lanes. Metadata files are not channels. Resolution 
 byte-identical. Above cap, persistent output spills to
 `logs/notification-overflow-<ts>.json`; attention output uses the
 content-addressed `notification-attention-overflow-<digest8>.json` (with a
-collision suffix). Both model copies compact while preserving routing ids. If an id-only copy still cannot fit, the marker-only envelope may omit its long `path` (`path_omitted=true`) while retaining the exact basename in `spill_file`. Read the full spill before acting; if `spill_failed`, use the producer tool for full content. This is context-size control, not
+collision suffix). Both model copies compact while preserving routing ids and marking shortened fields truthfully where the producer defines a truncation flag. Only the persistent lane protects the IM current/new message (`is_current`): it fully compacts, then fully stubs, older context in the same block before the current message's own content is ever touched; the attention lane has no per-message `is_current` protection. If an id-only copy still cannot fit, the marker-only envelope may omit its long `path` (`path_omitted=true`) while retaining the exact basename in `spill_file`. A block-level `overflow` marker alone is not a reason to reread the whole block — open the spill (or, on `spill_failed`, call the producer tool) only for required content absent from all available current copies, including omitted/id-only records. A complete usable alternate/raw copy needs no reread even if a shorter preview's flag is true; a false or missing flag is not proof of completeness. This is context-size control, not
 access or delivery accounting.
 
 The SHOW row reports the same effective clamped value and never writes, refreshes,

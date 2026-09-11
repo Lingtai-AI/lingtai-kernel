@@ -5,9 +5,9 @@ description: >
   mirrors. Routine check uses the schema; read a reference for unfamiliar payload,
   producer, dismissal, delay, or settings detail. Large-result compaction belongs
   to `context-manual`, not here.
-version: 0.16.0
+version: 0.16.1
 tags: [lingtai, notifications, channels, dismiss, delay, alarm, settings, manual, force, stale, nudge, hooks, whitelist]
-last_changed_at: "2026-09-09T05:30:00Z"
+last_changed_at: "2026-09-11T00:00:00Z"
 related_files:
 - src/lingtai/prompts/meta_guidance/catalog/notification_handling.md
 - src/lingtai/tools/notification/ANATOMY.md
@@ -51,7 +51,7 @@ Change the environment only with owner approval and apply it through the authori
 
 ## Block size cap (persistent and attention lanes)
 
-`notification.max_chars` is one live cap for both lanes: environment `LINGTAI_NOTIFICATION_MAX_CHARS`, then valid System-v2 `notification_max_chars`, then `10000`, clamped to `2048..10000`. Malformed values fall through. It limits context size, not access or delivery. Oversized content spills before compaction; follow the exact spill locator (or producer tool on `spill_failed`) before acting on a capped payload. See [channel model](reference/channel-model/SKILL.md).
+`notification.max_chars` is one live cap for both lanes: environment `LINGTAI_NOTIFICATION_MAX_CHARS`, then valid System-v2 `notification_max_chars`, then `10000`, clamped to `2048..10000`. Malformed values fall through. It limits context size, not access or delivery. Oversized content spills before compaction; only the persistent lane protects the current/new message (compacting and stubbing older context first), the attention lane has no such per-message protection. Shortened fields carry truthful truncation flags where defined. Follow the exact spill locator (or producer on `spill_failed`) only for required content absent from all current copies, including omitted/id-only records: a flag or block-level `overflow` alone is not a reread trigger, and a complete alternate/raw copy needs no recovery. See [channel model](reference/channel-model/SKILL.md).
 
 Use only the authorized environment or closed System-v2 owner procedure. The file layer is hot-read; it does not require a refresh just for this value. Environment/launcher changes need the appropriate authorized refresh/relaunch. SHOW again to verify.
 
