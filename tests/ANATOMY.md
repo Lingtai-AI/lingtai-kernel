@@ -442,6 +442,7 @@ related_files:
   - tests/test_wechat_media_validation.py
   - tests/test_wechat_media_warning_integration.py
   - tests/test_wechat_notification_metadata.py
+  - tests/test_wechat_notification_no_reread.py
   - tests/test_wechat_reply_read_state.py
   - tests/test_wechat_settings.py
   - tests/test_wechat_toolfamily_ltpv2.py
