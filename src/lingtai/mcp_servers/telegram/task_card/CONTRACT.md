@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 9
+contract_version: 10
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -200,6 +200,15 @@ this component.
     exact static HTML lines, so dynamic text never becomes markup; programmable
     HTML is producer-authored and is not rewritten by Telegram. Non-Telegram
     consumers keep the shared Markdown frame unchanged.
+15. Automatic Task Card transport must remain diff-only on meaningful content.
+    Its stable fingerprint excludes only the renderer-owned wall-clock
+    `Last Updated` field (whether raw or wrapped in Telegram's exact static
+    presentation prefix) and the numeric seconds in the canonical active-session
+    field; lifecycle and every other row, footer, and metadata change remain
+    transport-visible. Renderer HTML or emoji decoration must never turn those
+    volatile-only ticks back into edits. This is rate-limit-critical behavior:
+    regressing it produces no-op Bot API writes on every projection poll and can
+    trigger Telegram `429 Too Many Requests` throttling.
 
 ## Tests
 
