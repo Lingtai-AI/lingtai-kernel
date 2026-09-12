@@ -98,6 +98,74 @@ def test_detects_generic_api_error_with_strong_overflow_phrase():
     assert OpenAIChatSession._is_context_overflow_error(err) is True
 
 
+def _make_bad_request_message_only(msg):
+    """BadRequestError with no canonical body code — message match only."""
+    return openai.BadRequestError(
+        message=msg,
+        response=MagicMock(status_code=400),
+        body={"error": {"message": msg}},
+    )
+
+
+@pytest.mark.parametrize("msg", [
+    "Input tokens exceed 200000. The configured limit is 128000 tokens.",
+    "input tokens exceed 262144, the configured limit is 65536 tokens",
+    "INPUT TOKENS EXCEED 131072 TOKENS; CONFIGURED LIMIT 65536 TOKENS",
+])
+def test_detects_bad_request_message_only_strong_input_token_limit_phrase(msg):
+    """Evidence-backed strong family: exact sanitized wording, a different
+    numeric limit, and mixed case — no canonical body code."""
+    assert OpenAIChatSession._is_context_overflow_error(
+        _make_bad_request_message_only(msg)
+    ) is True
+
+
+@pytest.mark.parametrize("msg", [
+    "output tokens exceed the configured limit",
+    "input tokens exceed the configured rate limit",
+    "requests exceed the configured rate limit",
+    "input tokens exceed the configured quota",
+    "tokens exceed the configured limit",
+    "input tokens exceed 128000",
+])
+def test_rejects_strong_phrase_adversarial_negatives_bad_request_and_generic(msg):
+    """Output-token, quota/rate, and same-prefix rate wording must NOT be
+    classified — either class would trigger destructive trim/retry."""
+    assert OpenAIChatSession._is_context_overflow_error(
+        _make_bad_request_message_only(msg)
+    ) is False
+    err = openai.APIError(message=msg, request=MagicMock(), body={})
+    assert OpenAIChatSession._is_context_overflow_error(err) is False
+
+
+def test_detects_generic_api_error_strong_input_token_limit_phrase():
+    """Sol-preferred contract: the observed exception class is unconfirmed,
+    so the same strong family is one additional narrow generic-APIError
+    case (never a copy of the broad BadRequest tuple)."""
+    err = openai.APIError(
+        message="provider rejected request: input tokens exceed 200000, "
+                "the configured limit is 128000 tokens",
+        request=MagicMock(),
+        body={},
+    )
+    assert OpenAIChatSession._is_context_overflow_error(err) is True
+
+
+def test_weak_generic_context_text_remains_false():
+    err = openai.APIError(
+        message="context window service is temporarily unavailable",
+        request=MagicMock(),
+        body={},
+    )
+    assert OpenAIChatSession._is_context_overflow_error(err) is False
+    err2 = openai.APIError(
+        message="the configured limit was updated for your account",
+        request=MagicMock(),
+        body={},
+    )
+    assert OpenAIChatSession._is_context_overflow_error(err2) is False
+
+
 def test_does_not_detect_generic_api_error_for_weak_context_text():
     err = openai.APIError(
         message="context window service is temporarily unavailable",
@@ -266,6 +334,121 @@ def test_recovery_succeeds_after_generic_api_error_strong_phrase():
     assert attempts["n"] == 2
     assert rounds == 1
     assert dropped >= 1
+
+
+def test_recovery_succeeds_after_bad_request_strong_input_token_limit_phrase():
+    """Message-only BadRequest (no canonical code) on the new phrase must
+    drive an actual trim/retry, not just a boolean match."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+    _seed_history(iface, n_pairs=20)
+    session = _make_session(client=MagicMock(), interface=iface)
+
+    attempts = {"n": 0}
+    err = _make_bad_request_message_only(
+        "Input tokens exceed 200000. The configured limit is 128000 tokens."
+    )
+
+    def do_call():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise err
+        return "result"
+
+    result, dropped, rounds = session._run_with_overflow_recovery(do_call)
+    assert result == "result"
+    assert attempts["n"] == 2
+    assert rounds == 1
+    assert dropped >= 1
+
+
+def test_recovery_succeeds_after_generic_api_error_strong_input_token_limit_phrase():
+    """Generic APIError carrying the strong family also trims and retries —
+    the Sol-preferred contract for the unconfirmed exception class."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+    _seed_history(iface, n_pairs=20)
+    session = _make_session(client=MagicMock(), interface=iface)
+
+    attempts = {"n": 0}
+    err = openai.APIError(
+        message="provider rejected request: input tokens exceed 200000, "
+                "the configured limit is 128000 tokens",
+        request=MagicMock(),
+        body={},
+    )
+
+    def do_call():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise err
+        return "result"
+
+    result, dropped, rounds = session._run_with_overflow_recovery(do_call)
+    assert result == "result"
+    assert attempts["n"] == 2
+    assert rounds == 1
+    assert dropped >= 1
+
+
+def test_recovery_passthrough_for_weak_generic_context_text():
+    """Weak generic text (both clauses absent or only one present) must
+    NOT trim or retry — the original exception propagates untouched."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+    _seed_history(iface, n_pairs=20)
+    session = _make_session(client=MagicMock(), interface=iface)
+
+    weak_messages = [
+        "context window service is temporarily unavailable",
+        "the configured limit was updated for your account",
+        "input tokens exceed the configured rate limit",
+        "input tokens exceed 128000",
+    ]
+    for weak in weak_messages:
+        err = openai.APIError(message=weak, request=MagicMock(), body={})
+        attempts = {"n": 0}
+
+        def do_call():
+            attempts["n"] += 1
+            raise err
+
+        with pytest.raises(openai.APIError) as ei:
+            session._run_with_overflow_recovery(do_call)
+        assert ei.value is err
+        assert attempts["n"] == 1
+
+
+def test_send_recovers_from_message_only_strong_input_token_limit_phrase():
+    """End-to-end via send(): message-only new phrase overflows once, the
+    adapter trims, retries, and injects the kernel notice."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+    _seed_history(iface, n_pairs=20)
+
+    client = MagicMock()
+    raw = _make_raw_response()
+    client.chat.completions.create.side_effect = [
+        _make_bad_request_message_only(
+            "input tokens exceed 262144, the configured limit is 65536 tokens"
+        ),
+        raw,
+    ]
+    session = _make_session(client=client, interface=iface)
+
+    response = session.send("a brand new question")
+    assert response.text == "ok"
+    assert client.chat.completions.create.call_count == 2
+
+    found = False
+    for entry in iface._entries:
+        for b in entry.content:
+            if (isinstance(b, TextBlock)
+                and b.text.startswith("[kernel]")
+                and "molt" in b.text.lower()):
+                found = True
+                break
+    assert found, "expected a [kernel] molt-recommendation notice in interface"
 
 
 def test_recovery_gives_up_after_max_rounds():

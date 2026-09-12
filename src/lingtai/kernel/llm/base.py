@@ -43,6 +43,32 @@ def safe_exception_description(exc: BaseException) -> str:
     return f"<unrenderable {name}>"
 
 
+# Strong overflow phrase family reported by compatible endpoints, e.g.
+# ``Input tokens exceed 200000. The configured limit is 128000 tokens.``
+# Both clauses must co-occur in the (already render-safe) exception text:
+# either clause alone is far too weak — ``configured limit`` also shows up
+# in quota/rate errors, and an ``input tokens exceed`` prefix can continue
+# into ``... the configured rate limit``, which must NOT route a token-rate
+# error into history deletion.  Matched case-insensitively.
+_STRONG_INPUT_TOKEN_LIMIT_CLAUSES = (
+    "input tokens exceed",
+    "configured limit",
+)
+
+
+def is_strong_input_token_limit_phrase(message: str) -> bool:
+    """Return True only for the input-token + configured-limit phrase family.
+
+    This deliberately requires BOTH clauses.  Bare ``tokens exceed`` and
+    bare ``configured limit`` are rejected, and same-prefix rate/quota
+    wording (``input tokens exceed the configured rate limit``) stays
+    false because the contiguous ``configured limit`` clause never
+    appears there.
+    """
+    lowered = message.lower()
+    return all(clause in lowered for clause in _STRONG_INPUT_TOKEN_LIMIT_CLAUSES)
+
+
 class LLMReplayTerminalError(Exception):
     """Trusted wrapper when a provider exception cannot carry replay metadata.
 

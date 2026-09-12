@@ -673,6 +673,11 @@ def test_manifest_carries_namespaced_artifact_marker(tmp_path):
     "tokens in the input are above the limit",
     "request too large",
     "too many tokens",
+    # Strong input-token + configured-limit family (evidence-backed report):
+    # exact sanitized wording, a different numeric limit, and mixed case.
+    "Input tokens exceed 200000. The configured limit is 128000 tokens.",
+    "input tokens exceed 262144, the configured limit is 65536 tokens",
+    "INPUT TOKENS EXCEED 131072 TOKENS; CONFIGURED LIMIT 65536 TOKENS",
 ])
 def test_is_over_window_error_matches_provider_phrasing(phrase):
     from lingtai.kernel.base_agent.turn import _is_over_window_error
@@ -685,6 +690,88 @@ def test_is_over_window_error_does_not_match_unrelated_errors():
     assert not _is_over_window_error(RuntimeError("rate limit hit"))
     assert not _is_over_window_error(RuntimeError("auth failed"))
     assert not _is_over_window_error(RuntimeError(""))
+
+
+def test_is_over_window_error_strong_phrase_family_adversarial_negatives():
+    """The strong family requires BOTH clauses.  Output-token limits,
+    request/quota/rate wording, and the same-prefix
+    ``input tokens exceed the configured rate limit`` case must stay
+    false — a false positive here routes history deletion."""
+    from lingtai.kernel.base_agent.turn import _is_over_window_error
+    assert not _is_over_window_error(RuntimeError(
+        "output tokens exceed the configured limit"
+    ))
+    assert not _is_over_window_error(RuntimeError(
+        "input tokens exceed the configured rate limit"
+    ))
+    assert not _is_over_window_error(RuntimeError(
+        "requests exceed the configured rate limit"
+    ))
+    assert not _is_over_window_error(RuntimeError(
+        "input tokens exceed the configured quota"
+    ))
+    # Each clause alone is too weak.
+    assert not _is_over_window_error(RuntimeError(
+        "tokens exceed the configured limit"
+    ))
+    assert not _is_over_window_error(RuntimeError(
+        "input tokens exceed 128000"
+    ))
+    assert not _is_over_window_error(RuntimeError(
+        "the configured limit was updated for your account"
+    ))
+
+
+def test_aed_over_window_strong_phrase_full_recovery_path(tmp_path, monkeypatch):
+    """_run_loop integration for the new phrase: over-window classification,
+    no rate/transient retry, aed_over_window compaction, and compaction
+    BEFORE the session rebuild sees the interface."""
+    from lingtai.kernel.base_agent import turn
+
+    big = "N" * (RETROACTIVE_MAX_CHARS * 2)
+    agent, iface = _make_run_loop_agent_with_oversized_history(tmp_path, big)
+
+    state = {"handle_n": 0}
+
+    def fake_handle(_agent, _msg):
+        state["handle_n"] += 1
+        if state["handle_n"] == 1:
+            raise RuntimeError(
+                "Input tokens exceed 200000. The configured limit is "
+                "128000 tokens."
+            )
+        _agent._shutdown.set()
+
+    def watching_rebuild(interface):
+        block = interface._entries[1].content[0]
+        state["rebuild_saw_manifest"] = is_spill_manifest(block.content)
+
+    agent._session._rebuild_session = watching_rebuild
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
+
+    turn._run_loop(agent)
+
+    detected = [e for e in agent._logs if e[0] == "aed_over_window_detected"]
+    assert len(detected) == 1
+    assert "input tokens exceed" in detected[0][1]["error"].lower()
+
+    transient_logs = [e for e in agent._logs if e[0] == "aed_transient_retry"]
+    assert len(transient_logs) == 0
+    rate_logs = [e for e in agent._logs if e[0] == "aed_rate_limit_retry"]
+    assert len(rate_logs) == 0
+
+    compactions = [e for e in agent._logs
+                   if e[0] == "aed_history_compacted"
+                   and e[1].get("source") == "aed_over_window"]
+    assert len(compactions) == 1
+    assert compactions[0][1]["compacted_blocks"] == 1
+
+    assert "retroactive_compaction" in agent.save_history_calls
+    assert state.get("rebuild_saw_manifest") is True
 
 
 def test_aed_over_window_takes_deterministic_branch_not_transient(tmp_path, monkeypatch):

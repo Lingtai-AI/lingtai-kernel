@@ -30,6 +30,7 @@ from ..turn_permissions import broker_permission_check
 from ..tool_result_artifacts import CompactionStats, compact_oversized_history
 from ..llm.base import (
     is_all_empty_response,
+    is_strong_input_token_limit_phrase,
     llm_replay_terminal_flags,
     safe_exception_description,
 )
@@ -682,7 +683,12 @@ def _is_over_window_error(exc: Exception) -> bool:
     if isinstance(exc, EmptyLLMResponseError):
         return False
     msg = safe_exception_description(exc).lower()
-    return any(fragment in msg for fragment in _OVER_WINDOW_MSG_FRAGMENTS)
+    if any(fragment in msg for fragment in _OVER_WINDOW_MSG_FRAGMENTS):
+        return True
+    # Strong phrase family ("Input tokens exceed ... configured limit")
+    # shared with the OpenAI adapter's overflow classifier.  Both clauses
+    # must co-occur; rate/quota same-prefix wording stays false.
+    return is_strong_input_token_limit_phrase(msg)
 
 
 def _compact_history_before_retry(agent, *, source: str) -> "CompactionStats | None":
