@@ -148,6 +148,11 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
    not alter tool execution or settlement.
 8. Inspect permission tests: absent brokerage passes through; a bound broker sees
    only safe identity; exceptions/invalid decisions deny; consecutive turns reset scope.
+9. Inspect the authenticated retry tests: provider failure followed by recovery
+   settles the same handle normally with the original provider-admission parent;
+   cancellation during backoff prevents another provider call. Copied, settled,
+   cancelled, cross-turn and policy-revoked controls cannot authorize retries,
+   and a forged correlated message cannot reach provider dispatch.
 
 ### Expected evidence
 - [ ] All focused tests pass without a provider or network call.

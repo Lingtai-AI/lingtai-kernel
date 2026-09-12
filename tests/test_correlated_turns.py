@@ -4,6 +4,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -568,6 +569,109 @@ def test_profile_binds_root_provider_admission_only_for_the_admitted_turn(
     assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
     assert seen == [("turn-provider-admission", RUNTIME_POLICY.policy_version)]
     assert current_provider_admission() is None
+
+
+@pytest.mark.parametrize("failure", [ConnectionError("Connection reset by peer"), RuntimeError("model failed")])
+def test_authenticated_turn_retries_provider_failure_with_original_admission(
+    tmp_path, monkeypatch, failure
+):
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    handle = submit_turn(
+        agent, "hello", correlation_id="retry-origin",
+        origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+    )
+    seen = []
+
+    def provider(current, msg):
+        parent = current_provider_admission()
+        seen.append((parent.correlation_id, msg.sender))
+        if len(seen) == 1:
+            raise failure
+        return {"text": "recovered", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_request", provider)
+    monkeypatch.setattr(turn, "_compact_history_before_retry", lambda *a, **k: None)
+    monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
+    worker = threading.Thread(target=turn._run_loop, args=(agent,))
+    worker.start()
+    try:
+        result = handle.result(timeout=5)
+        assert result.outcome is TurnOutcome.NORMAL
+        assert result.text == "recovered"
+        assert seen == [("retry-origin", "user"), ("retry-origin", "system")]
+        assert not any(name == "turn_origin_rejected" for name, _ in agent.logs)
+    finally:
+        _stop_loop(agent, worker)
+
+
+@pytest.mark.parametrize("invalid", ["forged", "settled", "cancelled", "cross_turn", "policy", "shutdown"])
+def test_retry_cannot_borrow_invalid_turn_control(tmp_path, invalid):
+    from lingtai.kernel.turns import correlated_retry_message
+
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    handle = submit_turn(agent, "hello", origin=TurnOrigin.AUTHENTICATED_ADAPTER)
+    control = begin_turn(agent, agent.inbox.get_nowait())
+    retry = _make_message(MSG_REQUEST, "system", "retry")
+    if invalid == "forged":
+        control = replace(control)  # Even an exact id/origin copy is not authority.
+    elif invalid == "settled":
+        settle_turn(agent, control, outcome=TurnOutcome.NORMAL)
+    elif invalid == "cancelled":
+        handle.cancel()
+    elif invalid == "cross_turn":
+        submit_turn(agent, "other", origin=TurnOrigin.AUTHENTICATED_ADAPTER)
+        begin_turn(agent, agent.inbox.get_nowait())
+    elif invalid == "policy":
+        agent._turn_origin_policy = None
+        agent._requires_turn_origin_policy = True
+    elif invalid == "shutdown":
+        agent._shutdown.set()
+    assert correlated_retry_message(agent, control, retry) is None
+
+
+def test_cancel_during_retry_backoff_prevents_another_provider_call(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    handle = submit_turn(agent, "hello", origin=TurnOrigin.AUTHENTICATED_ADAPTER)
+    calls = []
+
+    def provider(_current, _msg):
+        calls.append(True)
+        raise ConnectionError("Connection reset by peer")
+
+    monkeypatch.setattr(turn, "_handle_request", provider)
+    monkeypatch.setattr(turn, "_compact_history_before_retry", lambda *a, **k: None)
+    monkeypatch.setattr(turn.time, "sleep", lambda _seconds: handle.cancel())
+    worker = threading.Thread(target=turn._run_loop, args=(agent,))
+    worker.start()
+    try:
+        assert handle.result(timeout=5).outcome is TurnOutcome.CANCELLED
+        assert len(calls) == 1
+    finally:
+        _stop_loop(agent, worker)
+
+
+def test_forged_correlated_type_cannot_enter_run_loop(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    agent.inbox.put(_make_message(MSG_CORRELATED_TURN, "system", {"correlation_id": "fake"}))
+    handle = submit_turn(agent, "real", origin=TurnOrigin.AUTHENTICATED_ADAPTER)
+    calls = []
+
+    def provider(_current, msg):
+        calls.append(msg.content)
+        return {"text": "ok", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_request", provider)
+    worker = threading.Thread(target=turn._run_loop, args=(agent,))
+    worker.start()
+    try:
+        assert handle.result(timeout=5).outcome is TurnOutcome.NORMAL
+        assert calls == ["real"]
+    finally:
+        _stop_loop(agent, worker)
 
 
 def test_cancel_and_terminal_settlement_linearize_exactly_once(tmp_path):

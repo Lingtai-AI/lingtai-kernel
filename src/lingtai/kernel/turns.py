@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 from uuid import uuid4
 
-from .message import MSG_CORRELATED_TURN, Message, _make_message
+from .message import MSG_CORRELATED_TURN, MSG_REQUEST, Message, _make_message
 from .execution_workspace import ExecutionWorkspace
 from .turn_events import TurnToolObserver
 from .turn_permissions import TurnPermissionBroker
@@ -341,6 +341,37 @@ def correlated_message_text(msg: Message) -> Message:
     if control is None:
         return msg
     return _make_message(MSG_CORRELATED_TURN, control.sender, control.content)
+
+
+def correlated_retry_message(agent, control, msg: Message) -> Message | None:
+    """Keep an internal retry inside its still-current, admitted logical turn.
+
+    Only the serialized run loop supplies the original control object. Message
+    ids, sender strings and correlated type labels cannot supply this authority.
+    This translates an in-loop retry; it neither queues nor registers a turn.
+    """
+    if (
+        not isinstance(control, _TurnControl)
+        or msg.type != MSG_REQUEST
+        or not isinstance(msg.content, str)
+    ):
+        return None
+    try:
+        admit_turn_origin(agent, control.origin)
+    except TurnAdmissionError:
+        return None
+    lock, controls = _ensure_turn_state(agent)
+    with lock:
+        if (
+            controls.get(control.correlation_id) is not control
+            or agent._current_turn_control is not control
+            or control.settlement_claimed
+            or control.cancel_requested.is_set()
+            or agent._cancel_event.is_set()
+            or agent._shutdown.is_set()
+        ):
+            return None
+        return _make_message(MSG_CORRELATED_TURN, msg.sender, msg.content)
 
 
 def settle_turn(

@@ -1220,6 +1220,7 @@ def _run_loop_body(agent) -> None:
                 admit_turn_origin,
                 begin_turn,
                 correlated_message_text,
+                correlated_retry_message,
                 settle_turn,
             )
 
@@ -1345,6 +1346,12 @@ def _run_loop_body(agent) -> None:
                         and turn_control.cancel_requested.is_set()
                     ):
                         break
+                    if turn_control is not None and msg.type != MSG_CORRELATED_TURN:
+                        retry = correlated_retry_message(agent, turn_control, msg)
+                        if retry is None:
+                            terminal_failure = "retry turn is no longer admitted"
+                            break
+                        msg = retry
                     # Fail closed: if a prior turn already poisoned the
                     # interface, do not run another turn against it. Request
                     # refresh and sleep instead.
