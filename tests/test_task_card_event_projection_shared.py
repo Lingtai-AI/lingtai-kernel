@@ -526,3 +526,28 @@ def test_session_usage_accepts_optional_or_over_window_context_metadata() -> Non
     over_window["session_usage"]["context_usage"] = round(300_000 / 272_000, 5)
     projected = TaskCardEventProjection.project_llm_response_session_usage(over_window)
     assert projected["metadata"]["context_usage"] > 1.0
+
+
+def test_malformed_new_generation_allows_its_first_valid_snapshot() -> None:
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        None,
+        _session_usage_event(molt_count=2, api_call_index=5),
+    )
+    malformed_new = _session_usage_event(molt_count=3, api_call_index=1)
+    malformed_new["session_usage"]["api_call_index"] = "bad"
+    state = TaskCardEventProjection.reduce_session_usage_event(state, malformed_new)
+    assert TaskCardEventProjection.session_usage_metadata(state) == {}
+
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        state,
+        _session_usage_event(
+            molt_count=3,
+            api_call_index=1,
+            input_tokens=150_300,
+            output_tokens=100,
+            cached_tokens=120_000,
+        ),
+    )
+    metadata = TaskCardEventProjection.session_usage_metadata(state)
+    assert metadata["api_calls"] == 1
+    assert metadata["input_tokens"] == 150_300

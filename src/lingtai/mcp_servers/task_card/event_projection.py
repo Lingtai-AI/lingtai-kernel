@@ -750,7 +750,14 @@ class TaskCardEventProjection:
                 "metadata": {},
                 "versioned_seen": True,
                 "molt_count": generation if generation is not None else known_generation,
-                "api_call_index": index if index is not None else known_index,
+                "api_call_index": (
+                    index
+                    if index is not None
+                    else 0
+                    if generation is not None
+                    and (type(known_generation) is not int or generation > known_generation)
+                    else known_index
+                ),
                 "snapshot": None,
                 "invalidated": True,
                 "awaiting_new_generation": bool(previous.get("awaiting_new_generation")),
