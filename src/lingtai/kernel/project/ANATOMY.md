@@ -3,11 +3,14 @@ related_files:
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/project/CONTRACT.md
   - src/lingtai/kernel/project/__init__.py
+  - src/lingtai/kernel/workdir.py
   - src/lingtai/adapters/project_workspace.py
   - src/lingtai/cli_project.py
   - src/lingtai/tools/psyche/settings.py
   - docs/references/project-create.md
+  - docs/references/project-inspect.md
   - tests/test_project_creation.py
+  - tests/test_project_inspection.py
 maintenance: |
   Keep this map reciprocal with the Project Contract and parent kernel Anatomy.
   Update it with changed Project ownership, composition, or state; code remains
@@ -15,40 +18,50 @@ maintenance: |
 ---
 # project
 
-`kernel/project` owns the small Core boundary for creating one fresh local
-Project seed. Its Contract defines the CLI-visible behavior.
+`kernel/project` owns the small Core boundary for fresh local Project creation
+and one-level, read-only Project inspection. Its Contract defines both CLI-visible
+behaviors without assigning runtime-validity or repair policy to this component.
 
 ## Components
 
-- `__init__.py` — request/seed/result values, one `ProjectWorkspacePort`, input
-  validation, and `ProjectCreationUseCase`.
-- `src/lingtai/adapters/project_workspace.py` — the filesystem implementation
-  that exclusively creates `.lingtai`, writes the seed, and calls an injected
-  reader validator.
-- `src/lingtai/cli_project.py` — parser and composition root for caller inputs,
-  wrapper preset loading, the adapter, and output.
+- `ProjectWorkspacePort`, creation values, validation, and
+  `ProjectCreationUseCase` own the fresh-seed Core flow
+  (`src/lingtai/kernel/project/__init__.py:28-57,93-98,121-164,198-206`).
+- `ProjectState`, inspection observation/result values,
+  `ProjectInspectionPort`, and `ProjectInspectionUseCase` own mechanical state
+  classification (`src/lingtai/kernel/project/__init__.py:60-106,167-195,209-227`).
+- `FilesystemProjectWorkspaceAdapter` exclusively creates and validates one
+  `.lingtai` seed (`src/lingtai/adapters/project_workspace.py:41-93`).
+- `FilesystemProjectInspectionAdapter` reads only direct entry types and the
+  `WorkdirLayout` manifest/init marker paths; it never opens marker content
+  (`src/lingtai/adapters/project_workspace.py:111-191`).
+- `add_project_parser`, `_handle_inspect`, and `handle_project_command` compose
+  caller input, adapters, and deterministic output
+  (`src/lingtai/cli_project.py:23-48,121-175`).
 
 ## Connections
 
-`cli_project` calls wrapper `agent.load_preset`, asks Psyche's public v1
-serializer for the owner-document content, and supplies the same init and
-Psyche owner readers used by reconstruction. Project Core receives that content
-as an opaque seed string and depends only on `ProjectWorkspacePort`; the adapter
-depends inward on Core values.
+For creation, `cli_project` calls wrapper `agent.load_preset`, asks Psyche's
+public v1 serializer for owner-document content, and injects the current init and
+Psyche readers. For inspection it constructs only the filesystem inspection
+adapter; that adapter depends inward on Project Core and reuses marker names
+from `kernel.workdir`, while Core alone maps observations to public states.
 
 ## Composition
 
-`lingtai-agent project create --dir ROOT --name AGENT --preset PRESET
---covenant-file FILE` constructs a request, asks the use case to create a seed,
-and emits a small result. It never calls `Agent.start` or `cli.run`.
+`lingtai-agent project create ...` publishes one fresh seed.
+`lingtai-agent project inspect --root ROOT [--json]` observes an existing caller
+root without calling creation, Agent, preset, Psyche, registry, or runtime paths.
 
 ## State
 
-Success writes `ROOT/.lingtai/` with `human` and the named agent, their
-mailboxes and manifests, plus the named agent's `init.json` and
-`settings/psyche.json`. No global or runtime state is written.
+Creation success writes `ROOT/.lingtai/` with `human` and one named agent.
+Inspection owns no persistent state: its immutable observation/result values live
+only for the call, and it neither creates nor alters the caller tree.
 
 ## Notes
 
-The public command procedure is
-[`docs/references/project-create.md`](../../../../docs/references/project-create.md).
+The procedures are [`project-create.md`](../../../../docs/references/project-create.md)
+and [`project-inspect.md`](../../../../docs/references/project-inspect.md).
+Inspection state is mechanical evidence, not a runtime validity verdict or an
+infant-root repair mechanism.
