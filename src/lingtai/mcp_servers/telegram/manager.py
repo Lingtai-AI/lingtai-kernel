@@ -3137,8 +3137,9 @@ class TelegramManager:
         """Reverse-scan bounded chunks from EOF to collect the latest-N matches.
 
         Reads growing chunks backward from the end of the file until either
-        ``_TASK_CARD_EVENT_WINDOW`` matching rows are found or the file start is
-        reached — never a full read of a large (e.g. multi-hundred-MB) log.
+        ``_TASK_CARD_EVENT_WINDOW`` activity groups or SESSION events are found,
+        or the file start is reached.  SESSION-only histories therefore obey the
+        same existing tail window instead of forcing a full history scan.
         The tail chunk may start mid-line; the leading partial fragment is
         discarded (its predecessor chunk will complete it on the next round).
 
@@ -3166,10 +3167,17 @@ class TelegramManager:
                 chunk_size = self._TASK_CARD_EVENT_TAIL_CHUNK
                 carry = b""
                 first_chunk = True
-                # Keep the existing latest-row bound: SESSION coherence is
-                # reduced only from the same bounded event slice and never by a
-                # second token-ledger scan or an unbounded history walk.
-                while end > 0 and len({self._event_group_id(event, i) for i, (event, _row) in enumerate(projected_events)}) < window:
+                # Keep the existing tail window for both visible activity
+                # groups and SESSION events.  Either kind of current evidence
+                # is enough to bound restart work; older visible rows should
+                # not force a full scan through a SESSION-only recent history.
+                while end > 0 and max(
+                    len({
+                        self._event_group_id(event, i)
+                        for i, (event, _row) in enumerate(projected_events)
+                    }),
+                    len(session_events),
+                ) < window:
                     start = max(0, end - chunk_size)
                     f.seek(start)
                     data = f.read(end - start)
@@ -3228,7 +3236,9 @@ class TelegramManager:
                         if llm_usage is not None:
                             llm_call_id, usage = llm_usage
                             per_call_usages[llm_call_id] = usage
-                    session_events = round_session_events + session_events
+                    session_events = (
+                        round_session_events + session_events
+                    )[-window:]
                     projected_events = round_projected + projected_events
                     chunk_size *= 2
         except OSError:

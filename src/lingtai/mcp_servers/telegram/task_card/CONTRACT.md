@@ -225,7 +225,10 @@ this component.
 16. Telegram must not derive SESSION totals by summing its bounded event window,
     scanning the token ledger, or reading Agent Session state directly. It may
     only reduce versioned `llm_response` snapshots and legacy carriers already in
-    its bounded event tail through the shared pure projector.
+    its bounded event tail through the shared pure projector. Restart rehydrate
+    applies the existing event window to SESSION events even when the recent tail
+    has no projectable activity rows; it must not retain or scan the full history
+    merely to recover an older visible row.
 
 ## Tests
 

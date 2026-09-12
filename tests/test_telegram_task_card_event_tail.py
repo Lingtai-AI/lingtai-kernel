@@ -270,6 +270,58 @@ def test_restart_rehydrates_latest_n_from_tail_without_checkpoint_file(tmp_path)
     assert [call[0:3] for call in acct.calls] == [("edit_message", 555, 1)]
 
 
+def test_restart_rehydrate_bounds_session_only_history(tmp_path, monkeypatch):
+    """SESSION-only history uses the existing event window for read/retention."""
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    manager._TASK_CARD_EVENT_WINDOW = 3
+    manager._TASK_CARD_EVENT_TAIL_CHUNK = 1024
+
+    lines = [
+        _llm_response_session_line(
+            current_input=index * 100,
+            total_input=index * 100,
+            total_output=index * 10,
+            total_cached=index * 50,
+            api_call_index=index,
+        )
+        for index in range(1, 101)
+    ]
+    _write_lines(_events_path(tmp_path), lines)
+
+    decoded = 0
+    original_decode = manager._decode_event_line
+
+    def counted_decode(raw):
+        nonlocal decoded
+        decoded += 1
+        return original_decode(raw)
+
+    reduced_indexes: list[int] = []
+    original_reduce = TaskCardEventProjection.reduce_session_usage_event
+
+    def counted_reduce(state, event, *, event_order=None):
+        snapshot = event.get("session_usage")
+        if isinstance(snapshot, dict):
+            reduced_indexes.append(snapshot["api_call_index"])
+        return original_reduce(state, event, event_order=event_order)
+
+    monkeypatch.setattr(manager, "_decode_event_line", counted_decode)
+    monkeypatch.setattr(
+        TaskCardEventProjection,
+        "reduce_session_usage_event",
+        counted_reduce,
+    )
+
+    manager._init_event_tail()
+
+    assert decoded < len(lines), "restart must not scan the full SESSION-only log"
+    assert reduced_indexes == [98, 99, 100]
+    assert manager._task_card_event_window() == []
+    assert manager._task_card_event_metadata["api_calls"] == 100
+    assert manager._task_card_event_metadata["input_tokens"] == 10_000
+
+
 # ---------------------------------------------------------------------------
 # Non-whitelisted / malformed / partial-line rows are skipped safely
 # ---------------------------------------------------------------------------
