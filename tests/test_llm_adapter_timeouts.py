@@ -12,18 +12,28 @@ drives a real ``messages.create`` through an ``httpx2.MockTransport`` and
 asserts the per-phase values the transport actually receives
 (``test_*_timeout_reaches_transport_as_per_phase_floats``).
 
-No ``pull_request``-triggered workflow exists in ``.github/workflows`` (the
-``*-pr.yml`` jobs trigger on ``release: published`` / ``workflow_dispatch`` and
-run only specific shell/windows/wheel test files), and no workflow there selects
-this module. Treat these as a LOCAL guard — run the suite locally against a
-fresh dependency resolve to exercise them. They also only track the real SDK surface while
-``uv.lock`` stays uncommitted; a PR that commits a lockfile (or wires a real
-``pull_request`` CI job) must add an explicit SDK version matrix (anthropic
-across ``>=1.2`` including the httpx2-fork range), else this group silently
-freezes on the locked version. The same premise backstops the
-``getattr(..., "Timeout", httpx.Timeout)`` fallback's failure mode (a future SDK
-dropping the re-export while still on httpx2 would fall back to a class that is
-then rejected/mis-coerced).
+No ``pull_request``-triggered workflow exists in ``.github/workflows``: the four
+jobs (including the misleadingly named ``kernel-*-pr.yml``) trigger on
+``release: published`` / ``workflow_dispatch`` and run only explicit
+shell/windows/wheel test-file whitelists — none selects this module. CI also
+installs via ``pip install -e .``, not uv, so the "``uv.lock`` uncommitted =>
+fresh resolve" premise is a LOCAL-uv property, not a CI one. Treat these as a
+LOCAL guard (run the suite locally against a fresh resolve). The
+threat-model-matching CI sensor for "a new SDK release breaks us" is a SCHEDULE
+(cron) workflow that freshly installs and runs this module — a ``pull_request``
+trigger is the wrong sensor (SDK releases are unrelated to kernel PRs). Wiring
+that (or committing a lock + an SDK version matrix) is a maintainer decision;
+until then this is local-only and only runs when someone remembers to.
+
+Matrix by BEHAVIOR CLASS, not version sampling — three classes, boundaries
+pinned empirically (not from ``requires_dist``): (a) fail-fast ``TypeError``
+(anthropic 1.4/1.5), (b) silent mis-coercion, whole object into every phase
+(1.2.0), (c) pre-httpx2 native ``httpx`` (the ``getattr`` fallback branch). A
+single in-process pytest run only exercises the installed SDK's class: the
+production-path test below covers whichever class is installed,
+``test_anthropic_timeout_getattr_fallback_branch`` covers class (c)
+synthetically, and the full real-SDK three-class matrix is the schedule/CI item
+above (run externally for this PR across 1.2.0/1.4.0/1.5.0 — see PR description).
 """
 from __future__ import annotations
 
@@ -142,6 +152,18 @@ def test_anthropic_timeout_is_sdk_native_class():
     # The real oracle for "is the approach correct" is the production-path test
     # test_anthropic_timeout_reaches_transport_as_per_phase_floats below.
     assert type(anthropic_timeout(300.0)) is getattr(anthropic, "Timeout", httpx.Timeout)
+
+
+def test_anthropic_timeout_getattr_fallback_branch(monkeypatch):
+    # Cover the getattr FALLBACK path (the ``httpx.Timeout`` default). No anthropic
+    # version in the current support range exercises it in-process (all export
+    # ``Timeout``), so force it by removing the re-export. The real case this
+    # serves is a pre-httpx2 native-httpx SDK, where ``httpx.Timeout`` IS the
+    # correct type; assert the fallback still produces the right per-phase floats.
+    monkeypatch.delattr(anthropic, "Timeout", raising=False)
+    t = anthropic_timeout(300.0)
+    assert isinstance(t, httpx.Timeout)
+    assert (t.connect, t.read, t.write, t.pool) == (30.0, 300.0, 30.0, 10.0)
 
 
 def test_openai_timeout_is_httpx_timeout():
