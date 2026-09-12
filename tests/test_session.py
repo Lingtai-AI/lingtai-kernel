@@ -40,6 +40,8 @@ def make_session_manager(**kw):
         build_system_prompt_fn=lambda: "test prompt",
         build_tool_schemas_fn=lambda: [],
         logger_fn=kw.get("logger_fn", None),
+        molt_count_fn=kw.get("molt_count_fn"),
+        cache_miss_budget_fn=kw.get("cache_miss_budget_fn"),
     ), svc, mock_session
 
 
@@ -313,6 +315,49 @@ def test_track_usage_accumulates():
     usage = sm.get_token_usage()
     assert usage["input_tokens"] == 200
     assert usage["api_calls"] == 2
+
+
+def test_llm_response_session_snapshot_includes_current_round_counters():
+    events = []
+    sm, _, _ = make_session_manager(
+        logger_fn=lambda event_type, **fields: events.append((event_type, fields)),
+        config=AgentConfig(context_limit=1_000),
+        molt_count_fn=lambda: 7,
+        cache_miss_budget_fn=lambda: 500,
+    )
+    response = MagicMock()
+    response.usage.input_tokens = 100
+    response.usage.output_tokens = 50
+    response.usage.thinking_tokens = 10
+    response.usage.cached_tokens = 20
+    response.usage.extra = {}
+    response.api_call_id = "api-current"
+
+    sm._track_usage(response)
+    sm._track_usage(response)
+
+    logged = [fields for kind, fields in events if kind == "llm_response"][-1]
+    snapshot = logged["session_usage"]
+    assert snapshot == {
+        "schema": "lingtai.token_usage.session/v1",
+        "molt_count": 7,
+        "api_call_index": 2,
+        "session_cache_rate": 0.2,
+        "api_calls": 2,
+        "input_tokens": 200,
+        "output_tokens": 100,
+        "cached_tokens": 40,
+        "avg_input_tokens_per_api_call": 100,
+        "cache_miss_tokens": 160,
+        "context_tokens": 100,
+        "context_window": 1_000,
+        "context_usage": 0.1,
+        "cache_miss_budget": 500,
+        "cache_miss_remaining_tokens": 340,
+    }
+    assert snapshot["input_tokens"] >= logged["input_tokens"]
+    assert snapshot["output_tokens"] >= logged["output_tokens"]
+    assert snapshot["context_tokens"] == logged["input_tokens"]
 
 
 def test_track_usage_triggers_decomposition_update():

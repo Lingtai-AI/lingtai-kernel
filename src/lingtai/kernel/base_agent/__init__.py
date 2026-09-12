@@ -1011,6 +1011,10 @@ class BaseAgent:
             logger_fn=self._log,
             build_system_batches_fn=self._build_system_prompt_batches,
             tool_result_recovery_lookup_fn=self._recover_pending_tool_result,
+            molt_count_fn=lambda: self._molt_count,
+            cache_miss_budget_fn=lambda: getattr(
+                self, "resolve_cache_miss_budget"
+            )(),
         )
 
         # Boot ordinary intrinsics first. Official-intrinsic shims retain the
@@ -2850,20 +2854,26 @@ class BaseAgent:
 
         try:
             wall_now = self._lifecycle_clock.wall_seconds()
-            if not should_refresh_agent_record(
-                self._session_stats_last_written_at,
-                wall_now,
-                session_stats_refresh_seconds(),
-            ):
-                return
             snapshot_owner = getattr(self, "_async_work_snapshot", None)
             if snapshot_owner is None:
                 snapshot_owner = RecentAsyncWorkSnapshot(self._working_dir)
                 self._async_work_snapshot = snapshot_owner
-            # Never wait for daemon ledger or Shell job reads: blocked storage
-            # must not delay the heartbeat's liveness publication.
-            snapshot_owner.schedule()
-            snapshot = snapshot_owner.snapshot()
+
+            snapshot, generation, dirty = snapshot_owner.publication_snapshot()
+            if not dirty:
+                if not should_refresh_agent_record(
+                    self._session_stats_last_written_at,
+                    wall_now,
+                    session_stats_refresh_seconds(),
+                ):
+                    return
+                # Never wait for daemon ledger or Shell job reads: blocked
+                # storage must not delay heartbeat liveness publication.  A
+                # dirty completion bypass never schedules here, preventing a
+                # completion/write/refresh loop.
+                snapshot_owner.schedule()
+                snapshot, generation, _dirty = snapshot_owner.publication_snapshot()
+
             self._session_stats_sequence += 1
             record = build_agent_record(
                 self,
@@ -2872,6 +2882,7 @@ class BaseAgent:
                 async_work_snapshot=snapshot["async_work"],
             )
             write_agent_record(self._working_dir, record)
+            snapshot_owner.mark_published(generation)
             self._session_stats_last_written_at = wall_now
         except Exception as e:
             logger.warning(f"[{self.agent_name}] Failed to write agent record: {e}")

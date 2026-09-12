@@ -16,6 +16,7 @@ related_files:
   - tests/test_telegram_task_card_programmable.py
   - tests/test_telegram_task_card_toggle.py
   - tests/test_telegram_task_card_event_tail.py
+  - tests/test_task_card_event_projection_shared.py
   - tests/test_telegram_task_card_rows.py
   - tests/test_telegram_task_card_display_expression.py
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
@@ -80,7 +81,13 @@ onto its one tracked resident Task Card target per account+chat.
   rendering, including compact per-call output/thinking/cache metrics from the
   normalized current-call carrier or `llm_response` fallback and the safe
   `(summary, time, input in, output out)` line correlated from already-recorded
-  event/ledger facts. It owns no journal I/O, route, resident, or transport state.
+  event/ledger facts. It also owns strict `lingtai.token_usage.session/v1`
+  validation and the journal-ordered SESSION reducer: fresh `llm_response`
+  snapshots are authoritative, legacy notification carriers are fallback only,
+  carrier-less legacy responses invalidate stale fallback, monotonic generation/
+  API ordering rejects regressions, and `psyche_molt` clears the old generation.
+  Malformed/incoherent values fail closed. It owns no journal I/O, route,
+  resident, or transport state.
   `DISPLAY_SLOTS`/`DEFAULT_DISPLAY_EXPRESSION`/`validate_display_expression`/
   `compose_display` define and enforce the small declarative display-expression
   grammar: an ordered, allowlisted selection of the fragments
@@ -116,9 +123,11 @@ onto its one tracked resident Task Card target per account+chat.
   correlated summary accounting row. It reads Async Work only through
   `kernel.session_stats.query_published_async_work`; stale/malformed/missing
   snapshots disappear rather than triggering a private store scan. It delegates
-  only pure safe-field correlation/projection/grouping/rendering to
-  `TaskCardEventProjection` and keeps unrelated private helpers as compatibility
-  wrappers.
+  pure safe-field correlation/projection/grouping/rendering and SESSION reduction
+  to `TaskCardEventProjection`; both forward append and bounded reverse-tail
+  rehydrate feed that reducer in journal order, producing one in-memory provenance
+  state and the same render metadata. Unrelated private helpers remain
+  compatibility wrappers.
 - `TelegramManager` constructs `TaskCardResidentTransport` with dynamic provider
   callbacks and supplies Telegram's HTML programmable-section header. The shared
   core only composes that injected provider label; it never imports Telegram,

@@ -345,3 +345,139 @@ def test_format_elapsed_ms_renders_milliseconds_defensively() -> None:
     assert TaskCardEventProjection.format_elapsed_ms(10**12) == (
         f"{TaskCardEventProjection.MAX_ELAPSED_MS / 1000:.1f}s"
     )
+
+
+def _session_usage_event(
+    *,
+    molt_count: int = 2,
+    api_call_index: int = 2,
+    input_tokens: int = 250_000,
+    output_tokens: int = 1_000,
+    cached_tokens: int = 200_000,
+    current_input: int = 150_300,
+    current_output: int = 100,
+    current_cached: int = 120_000,
+) -> dict:
+    cache_miss = input_tokens - cached_tokens
+    window = 272_000
+    budget = 1_000_000
+    return {
+        "type": "llm_response",
+        "api_call_id": f"api-{api_call_index}",
+        "input_tokens": current_input,
+        "output_tokens": current_output,
+        "cached_tokens": current_cached,
+        "session_usage": {
+            "schema": TaskCardEventProjection.SESSION_USAGE_SCHEMA,
+            "molt_count": molt_count,
+            "api_call_index": api_call_index,
+            "api_calls": api_call_index,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_tokens": cached_tokens,
+            "avg_input_tokens_per_api_call": int(round(input_tokens / api_call_index)),
+            "session_cache_rate": round(cached_tokens / input_tokens, 5),
+            "cache_miss_tokens": cache_miss,
+            "cache_miss_budget": budget,
+            "cache_miss_remaining_tokens": budget - cache_miss,
+            "context_tokens": current_input,
+            "context_window": window,
+            "context_usage": round(current_input / window, 5),
+        },
+    }
+
+
+def _legacy_session_carrier(api_calls: object) -> dict:
+    return {
+        "type": "notification_block_injected",
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+            "session": {"api_calls": api_calls},
+        }}}},
+    }
+
+
+def test_session_usage_reducer_prefers_v1_and_rejects_out_of_order() -> None:
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        None, _legacy_session_carrier(93),
+    )
+    assert TaskCardEventProjection.session_usage_metadata(state)["api_calls"] == 93
+
+    fresh = _session_usage_event()
+    state = TaskCardEventProjection.reduce_session_usage_event(state, fresh)
+    assert TaskCardEventProjection.session_usage_metadata(state)["input_tokens"] == 250_000
+
+    # Legacy can no longer overwrite v1, and a lower same-generation call index
+    # cannot overwrite the newer cumulative snapshot.
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        state, _legacy_session_carrier(999),
+    )
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        state,
+        _session_usage_event(
+            api_call_index=1,
+            input_tokens=160_000,
+            output_tokens=200,
+            cached_tokens=125_000,
+        ),
+    )
+    metadata = TaskCardEventProjection.session_usage_metadata(state)
+    assert metadata["input_tokens"] == 250_000
+    assert metadata["api_calls"] == 2
+
+
+def test_session_usage_reducer_fails_closed_and_molt_allows_reset() -> None:
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        None, _session_usage_event(),
+    )
+    malformed = _session_usage_event(api_call_index=3, input_tokens=300_000)
+    malformed["session_usage"]["cache_miss_tokens"] += 1
+    state = TaskCardEventProjection.reduce_session_usage_event(state, malformed)
+    assert TaskCardEventProjection.session_usage_metadata(state) == {}
+
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        state, {"type": "psyche_molt", "molt_count": 3},
+    )
+    assert TaskCardEventProjection.session_usage_metadata(state) == {}
+    reset = _session_usage_event(
+        molt_count=3,
+        api_call_index=1,
+        input_tokens=150_300,
+        output_tokens=100,
+        cached_tokens=120_000,
+    )
+    state = TaskCardEventProjection.reduce_session_usage_event(state, reset)
+    assert TaskCardEventProjection.session_usage_metadata(state)["api_calls"] == 1
+    assert TaskCardEventProjection.session_usage_metadata(state)["input_tokens"] == 150_300
+
+    # An old-generation event after the reset is ignored.
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        state, _session_usage_event(molt_count=2, api_call_index=9),
+    )
+    assert TaskCardEventProjection.session_usage_metadata(state)["input_tokens"] == 150_300
+
+
+def test_carrierless_legacy_llm_response_invalidates_legacy_session() -> None:
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        None, _legacy_session_carrier(7),
+    )
+    assert TaskCardEventProjection.session_usage_metadata(state) == {"api_calls": 7}
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        state,
+        {
+            "type": "llm_response",
+            "api_call_id": "api-legacy",
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "cached_tokens": 0,
+        },
+    )
+    assert TaskCardEventProjection.session_usage_metadata(state) == {}
+
+
+def test_session_usage_projector_rejects_non_numeric_and_incoherent_fields() -> None:
+    event = _session_usage_event()
+    event["session_usage"]["context_tokens"] = "150300"
+    assert TaskCardEventProjection.project_llm_response_session_usage(event) == {}
+    event = _session_usage_event()
+    event["session_usage"]["input_tokens"] = 100
+    assert TaskCardEventProjection.project_llm_response_session_usage(event) == {}

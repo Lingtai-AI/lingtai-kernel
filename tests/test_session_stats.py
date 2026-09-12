@@ -329,6 +329,12 @@ def test_write_session_stats_record_publishes_last_complete_async_work_pair(tmp_
         def snapshot(self):
             return {"daemons": daemon_summary, "async_work": async_work}
 
+        def publication_snapshot(self):
+            return self.snapshot(), 0, False
+
+        def mark_published(self, generation):
+            pass
+
     monkeypatch.setattr(session_stats, "RecentAsyncWorkSnapshot", _Owner)
     agent = _stub_agent(tmp_path)
     agent._session_stats_last_written_at = None
@@ -353,6 +359,62 @@ def test_write_session_stats_record_throttled_within_window(tmp_path, monkeypatc
 
     assert session_stats.read_agent_record(tmp_path) is None
     assert agent._session_stats_sequence == 0
+
+
+def test_completed_async_work_is_published_on_next_hook_without_second_refresh(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv(session_stats.REFRESH_SECONDS_ENV, "5")
+    old_daemons = {"present": 0, "refreshing": False}
+    fresh_daemons = {"present": 9, "refreshing": False}
+
+    class _Owner:
+        def __init__(self):
+            self.pair = {"daemons": old_daemons, "async_work": None}
+            self.completed = 0
+            self.published = 0
+            self.schedules = 0
+
+        def schedule(self):
+            self.schedules += 1
+            return True
+
+        def publication_snapshot(self):
+            return (
+                {"daemons": dict(self.pair["daemons"]), "async_work": self.pair["async_work"]},
+                self.completed,
+                self.completed > self.published,
+            )
+
+        def mark_published(self, generation):
+            self.published = max(self.published, generation)
+
+        def complete(self):
+            self.pair = {"daemons": fresh_daemons, "async_work": None}
+            self.completed += 1
+
+    owner = _Owner()
+    agent = _stub_agent(tmp_path, _lifecycle_clock=_FakeClock(wall=1_000.0))
+    agent._session_stats_last_written_at = None
+    agent._session_stats_sequence = 0
+    agent._async_work_snapshot = owner
+
+    BaseAgent._write_session_stats_record(agent)
+    assert owner.schedules == 1
+    assert session_stats.read_agent_record(tmp_path)["daemons"] == old_daemons
+
+    owner.complete()
+    # Same clock is still inside the throttle window. Dirty completion bypasses
+    # it once and, crucially, does not schedule another background refresh.
+    BaseAgent._write_session_stats_record(agent)
+    record = session_stats.read_agent_record(tmp_path)
+    assert record["sequence"] == 2
+    assert record["daemons"] == fresh_daemons
+    assert owner.schedules == 1
+
+    BaseAgent._write_session_stats_record(agent)
+    assert session_stats.read_agent_record(tmp_path)["sequence"] == 2
+    assert owner.schedules == 1
 
 
 def test_write_session_stats_record_failure_is_logged_not_raised(tmp_path, monkeypatch, caplog):
@@ -933,6 +995,12 @@ def test_recent_async_work_snapshot_single_flight_and_nonblocking(tmp_path, monk
     assert snapshot["daemons"]["present"] == 1
     assert snapshot["daemons"]["refreshing"] is False
     assert snapshot["async_work"] == async_work
+    published_pair, generation, dirty = owner.publication_snapshot()
+    assert published_pair == snapshot
+    assert generation == 1
+    assert dirty is True
+    owner.mark_published(generation)
+    assert owner.publication_snapshot()[2] is False
 
 
 def test_recent_async_work_snapshot_partial_failure_does_not_freeze_daemons(

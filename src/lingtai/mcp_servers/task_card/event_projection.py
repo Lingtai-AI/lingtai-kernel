@@ -437,15 +437,320 @@ class TaskCardEventProjection:
         supported = (
             "input_tokens",
             "output_tokens",
+            "cached_tokens",
             "session_cache_rate",
             "cache_miss_tokens",
             "cache_miss_budget",
+            "cache_miss_remaining_tokens",
             "api_calls",
+            "avg_input_tokens_per_api_call",
             "context_tokens",
             "context_window",
             "context_usage",
         )
         return {key: session[key] for key in supported if key in session}
+
+    SESSION_USAGE_SCHEMA = "lingtai.token_usage.session/v1"
+    _SESSION_METADATA_FIELDS = (
+        "input_tokens",
+        "output_tokens",
+        "cached_tokens",
+        "session_cache_rate",
+        "cache_miss_tokens",
+        "cache_miss_budget",
+        "cache_miss_remaining_tokens",
+        "api_calls",
+        "avg_input_tokens_per_api_call",
+        "context_tokens",
+        "context_window",
+        "context_usage",
+    )
+
+    @staticmethod
+    def _exact_non_negative_int(value: Any) -> int | None:
+        return value if type(value) is int and value >= 0 else None
+
+    @staticmethod
+    def _finite_number(value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        number = float(value)
+        return number if math.isfinite(number) else None
+
+    @classmethod
+    def project_llm_response_session_usage(
+        cls, event: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Validate and project authoritative v1 SESSION telemetry.
+
+        ``None`` means the event is not an ``llm_response``.  ``{}`` means it is
+        an ``llm_response`` but its snapshot is absent or incoherent; consumers
+        must fail closed instead of retaining a stale SESSION footer.
+        """
+        if event.get("type") != "llm_response":
+            return None
+        raw = event.get("session_usage")
+        if not isinstance(raw, dict) or raw.get("schema") != cls.SESSION_USAGE_SCHEMA:
+            return {}
+
+        int_fields = (
+            "molt_count",
+            "api_call_index",
+            "api_calls",
+            "input_tokens",
+            "output_tokens",
+            "cached_tokens",
+            "avg_input_tokens_per_api_call",
+            "cache_miss_tokens",
+            "cache_miss_budget",
+            "cache_miss_remaining_tokens",
+            "context_tokens",
+            "context_window",
+        )
+        values: dict[str, Any] = {}
+        for key in int_fields:
+            value = cls._exact_non_negative_int(raw.get(key))
+            if value is None:
+                return {}
+            values[key] = value
+        for key in ("session_cache_rate", "context_usage"):
+            value = cls._finite_number(raw.get(key))
+            if value is None:
+                return {}
+            values[key] = value
+
+        current_input = cls._exact_non_negative_int(event.get("input_tokens"))
+        current_output = cls._exact_non_negative_int(event.get("output_tokens"))
+        current_cached = cls._exact_non_negative_int(event.get("cached_tokens"))
+        if current_input is None or current_output is None or current_cached is None:
+            return {}
+        if (
+            values["api_call_index"] < 1
+            or values["api_calls"] != values["api_call_index"]
+            or values["input_tokens"] < current_input
+            or values["output_tokens"] < current_output
+            or current_cached > current_input
+            or values["cached_tokens"] < current_cached
+            or values["cached_tokens"] > values["input_tokens"]
+            or values["cache_miss_tokens"]
+            != values["input_tokens"] - values["cached_tokens"]
+            or values["avg_input_tokens_per_api_call"]
+            != int(round(values["input_tokens"] / values["api_calls"]))
+            or values["context_tokens"] != current_input
+            or values["context_window"] <= 0
+            or values["cache_miss_budget"] <= 0
+            or values["cache_miss_remaining_tokens"]
+            != max(values["cache_miss_budget"] - values["cache_miss_tokens"], 0)
+        ):
+            return {}
+        expected_cache_rate = (
+            round(values["cached_tokens"] / values["input_tokens"], 5)
+            if values["input_tokens"] > 0
+            else 0.0
+        )
+        expected_context_usage = round(
+            values["context_tokens"] / values["context_window"], 5
+        )
+        if (
+            not 0.0 <= values["session_cache_rate"] <= 1.0
+            or not math.isclose(
+                values["session_cache_rate"], expected_cache_rate, abs_tol=1e-5
+            )
+            or not 0.0 <= values["context_usage"]
+            or not math.isclose(
+                values["context_usage"], expected_context_usage, abs_tol=1e-5
+            )
+        ):
+            return {}
+        return {
+            "molt_count": values["molt_count"],
+            "api_call_index": values["api_call_index"],
+            "metadata": {
+                key: values[key] for key in cls._SESSION_METADATA_FIELDS
+            },
+        }
+
+    @classmethod
+    def _project_legacy_session_usage(
+        cls, event: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        projected = cls.project_final_carrier_metadata(event)
+        if projected is None:
+            return None
+        if not projected:
+            return {}
+        int_fields = {
+            "input_tokens",
+            "output_tokens",
+            "cached_tokens",
+            "cache_miss_tokens",
+            "cache_miss_budget",
+            "cache_miss_remaining_tokens",
+            "api_calls",
+            "avg_input_tokens_per_api_call",
+            "context_tokens",
+            "context_window",
+        }
+        for key, value in projected.items():
+            if key in int_fields and cls._exact_non_negative_int(value) is None:
+                return {}
+            if key in {"session_cache_rate", "context_usage"}:
+                number = cls._finite_number(value)
+                if number is None or not 0.0 <= number <= 1.0:
+                    return {}
+        if (
+            "cache_miss_budget" in projected
+            and projected["cache_miss_budget"] <= 0
+        ) or ("context_window" in projected and projected["context_window"] <= 0):
+            return {}
+        if (
+            "input_tokens" in projected
+            and "cache_miss_tokens" in projected
+            and projected["cache_miss_tokens"] > projected["input_tokens"]
+        ):
+            return {}
+        return dict(projected)
+
+    @classmethod
+    def reduce_session_usage_event(
+        cls,
+        state: dict[str, Any] | None,
+        event: dict[str, Any],
+        *,
+        event_order: int | None = None,
+    ) -> dict[str, Any]:
+        """Reduce one journal-ordered event into transport-neutral SESSION state."""
+        previous = dict(state or {})
+        order = (
+            event_order
+            if type(event_order) is int and event_order >= 0
+            else int(previous.get("event_order", -1)) + 1
+        )
+        previous.setdefault("source", None)
+        previous.setdefault("metadata", {})
+        previous.setdefault("versioned_seen", False)
+        previous.setdefault("molt_count", None)
+        previous.setdefault("api_call_index", 0)
+        previous["event_order"] = order
+
+        if event.get("type") == "psyche_molt":
+            generation = cls._exact_non_negative_int(event.get("molt_count"))
+            known = previous.get("molt_count")
+            if generation is not None and type(known) is int and generation <= known:
+                return previous
+            return {
+                "source": None,
+                "metadata": {},
+                "versioned_seen": False,
+                "molt_count": generation,
+                "api_call_index": 0,
+                "snapshot": None,
+                "event_order": order,
+            }
+
+        projected = cls.project_llm_response_session_usage(event)
+        if projected is not None:
+            if projected:
+                generation = projected["molt_count"]
+                index = projected["api_call_index"]
+                known_generation = previous.get("molt_count")
+                known_index = previous.get("api_call_index", 0)
+                if type(known_generation) is int and (
+                    generation < known_generation
+                    or (generation == known_generation and index < known_index)
+                ):
+                    return previous
+                old_snapshot = previous.get("snapshot")
+                if (
+                    generation == known_generation
+                    and isinstance(old_snapshot, dict)
+                ):
+                    monotonic = ("api_calls", "input_tokens", "output_tokens", "cached_tokens", "cache_miss_tokens")
+                    old_metadata = old_snapshot.get("metadata", {})
+                    new_metadata = projected["metadata"]
+                    if index == known_index:
+                        if any(new_metadata[key] != old_metadata.get(key) for key in monotonic):
+                            projected = {}
+                    elif any(new_metadata[key] < old_metadata.get(key, 0) for key in monotonic):
+                        projected = {}
+                if projected:
+                    return {
+                        "source": "v1",
+                        "metadata": dict(projected["metadata"]),
+                        "versioned_seen": True,
+                        "molt_count": generation,
+                        "api_call_index": index,
+                        "snapshot": projected,
+                        "event_order": order,
+                    }
+                # A journal-newer, orderable but incoherent snapshot invalidates
+                # the display and advances the cursor so old data cannot revive.
+                return {
+                    **previous,
+                    "source": None,
+                    "metadata": {},
+                    "versioned_seen": True,
+                    "molt_count": generation,
+                    "api_call_index": index,
+                    "snapshot": None,
+                    "event_order": order,
+                }
+            # A malformed v1 may still have a coherent ordering envelope.  A
+            # proven lower envelope is ignored; a current/newer one clears the
+            # display and advances the fence so old snapshots cannot revive.
+            raw_snapshot = event.get("session_usage")
+            generation = (
+                cls._exact_non_negative_int(raw_snapshot.get("molt_count"))
+                if isinstance(raw_snapshot, dict)
+                and raw_snapshot.get("schema") == cls.SESSION_USAGE_SCHEMA
+                else None
+            )
+            index = (
+                cls._exact_non_negative_int(raw_snapshot.get("api_call_index"))
+                if generation is not None
+                else None
+            )
+            known_generation = previous.get("molt_count")
+            known_index = previous.get("api_call_index", 0)
+            if (
+                generation is not None
+                and index is not None
+                and type(known_generation) is int
+                and (
+                    generation < known_generation
+                    or (generation == known_generation and index < known_index)
+                )
+            ):
+                return previous
+            return {
+                **previous,
+                "source": None,
+                "metadata": {},
+                "versioned_seen": bool(previous.get("versioned_seen"))
+                or isinstance(raw_snapshot, dict),
+                "molt_count": generation if generation is not None else known_generation,
+                "api_call_index": index if index is not None else known_index,
+                "snapshot": None,
+                "event_order": order,
+            }
+
+        legacy = cls._project_legacy_session_usage(event)
+        if legacy is not None:
+            if previous.get("versioned_seen"):
+                return previous
+            return {
+                **previous,
+                "source": "legacy" if legacy else None,
+                "metadata": legacy,
+                "event_order": order,
+            }
+        return previous
+
+    @staticmethod
+    def session_usage_metadata(state: dict[str, Any] | None) -> dict[str, Any]:
+        """Return a detached safe metadata projection from reducer state."""
+        metadata = (state or {}).get("metadata")
+        return dict(metadata) if isinstance(metadata, dict) else {}
 
     @staticmethod
     def decode_event_line(raw: bytes) -> dict[str, Any] | None:

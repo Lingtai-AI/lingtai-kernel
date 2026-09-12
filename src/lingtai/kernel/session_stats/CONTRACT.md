@@ -50,8 +50,10 @@ and execution policy.
 `build_agent_record`/`write_agent_record` are the only normal Agent Record
 writer. They never serialize secrets, environment/config values, prompts,
 messages, raw tool payloads, paths, PIDs, Shell commands, or unbounded task
-text. The writer is best-effort and remains throttled by the live validated
-`LINGTAI_SESSION_STATS_REFRESH_SECONDS` value.
+text. The writer is best-effort. Normal clean cadence is throttled by the live
+validated `LINGTAI_SESSION_STATS_REFRESH_SECONDS` value; one completed dirty
+snapshot generation bypasses that throttle until a successful write acknowledges
+it.
 
 The existing `agent_record.daemons` block remains a bounded dispatch-history
 view. `aggregate_daemon_records` reads at most
@@ -82,9 +84,14 @@ otherwise readable daemon object; none invents a lifecycle.
 
 The heartbeat never awaits collection. `RecentAsyncWorkSnapshot` is the one
 single-flight boundary: `schedule()` coalesces while a refresh runs, and
-`snapshot()` returns the latest detached daemon-summary/async-work values as one
-pair. Each value advances only after its own complete read; a failure retains
-that value's predecessor without freezing the other existing publication path.
+`publication_snapshot()` atomically returns the latest detached daemon-summary/
+async-work pair, its completed generation, and whether that generation is still
+unpublished. Each value advances only after its own complete read; a failure
+retains that value's predecessor without freezing the other existing publication
+path. Worker completion only marks the in-memory generation dirty. The next
+existing Agent Record hook publishes it even inside the normal throttle window,
+does not schedule another refresh on that dirty path, and acknowledges the
+captured generation only after the atomic write succeeds.
 
 Published consumer validation is strict. Missing, malformed, future-dated, or
 older-than-600-second `async_work` returns unavailable (`None`), never fabricated
@@ -131,9 +138,10 @@ wall_now=...)` returns a detached safe v1 projection or `None`.
 
 ## Adapters
 
-`BaseAgent._write_session_stats_record` is the Core publication driver. It
-schedules the single-flight owner and atomically publishes its last complete
-pair through `kernel._fsutil.atomic_write_json`. Daemon input comes from the
+`BaseAgent._write_session_stats_record` is the Core publication driver. On
+normal cadence it schedules the single-flight owner and atomically publishes its
+last complete pair through `kernel._fsutil.atomic_write_json`; on a dirty
+completion it bypasses throttle once and publishes without scheduling. Daemon input comes from the
 kernel dispatch-ledger reader, bounded by its configured ledger tail. Shell
 input is a read-only projection of the Shell owner's atomically replaced
 `system/jobs/<job-id>/state.json`; its background pass enumerates every retained
@@ -156,13 +164,17 @@ probes, cancels, polls, or mutates a job. Telegram is a consumer adapter through
    presentation; consumers do not infer counts or scan fallback stores.
 9. No per-run `session_stats.json`, new transport, database, socket, or cleanup
    side effect is introduced.
+10. A completed unpublished generation is publishable on the next existing hook
+    without waiting for another throttle period. That dirty path never schedules
+    a refresh, and failed record writes leave the generation dirty for retry.
 
 ## Contract tests
 
 `tests/test_session_stats.py` protects atomic publication, redaction, exact
 nested schema, mixed arithmetic, daemon-scoped details, 600-second boundary,
-malformed-state omission, strict stale/malformed/missing reads, and single-flight
-nonblocking behavior. `tests/test_daemon_dispatch_ledger.py` protects ledger
+malformed-state omission, strict stale/malformed/missing reads, single-flight
+nonblocking behavior, and completion publication on the next hook without a
+second refresh loop. `tests/test_daemon_dispatch_ledger.py` protects ledger
 selection and diagnostics. `tests/test_provider_admission.py` audits the one
 background thread owner. `tests/test_telegram_task_card_rows.py` proves Telegram
 reads the published common snapshot without fallback.

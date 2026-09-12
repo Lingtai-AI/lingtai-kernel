@@ -893,10 +893,10 @@ class TelegramManager:
         self._task_card_event_identity: tuple[str, float | int] | None = None
         # Grouped by provider call; the compatibility row view is derived.
         self._task_card_event_groups: list[dict] = []
-        # The current telemetry snapshot is carried only by the latest final
-        # ``notification_block_injected`` event. ``None`` means no such carrier has been seen;
-        # an empty dict is a seen-but-malformed carrier and deliberately clears
-        # any older snapshot.
+        # Shared reducer state makes every fresh versioned ``llm_response``
+        # authoritative for SESSION telemetry.  Legacy notification carriers are
+        # fallback only; generation/order fences remain hidden in this state.
+        self._task_card_session_usage_state: dict | None = None
         self._task_card_event_metadata: dict | None = None
         self._task_card_event_lock = threading.Lock()
         # Blanket-delivery dedupe: the last automatic frame fingerprint seen per
@@ -3095,6 +3095,7 @@ class TelegramManager:
                 self._task_card_event_inode = None
                 self._task_card_event_identity = None
                 self._task_card_event_groups = []
+                self._task_card_session_usage_state = None
                 self._task_card_event_metadata = None
             return
 
@@ -3111,9 +3112,10 @@ class TelegramManager:
                 self._task_card_event_inode = None
                 self._task_card_event_identity = None
                 self._task_card_event_groups = []
+                self._task_card_session_usage_state = None
                 self._task_card_event_metadata = None
             return
-        rows, offset, metadata, usages = result
+        rows, offset, session_state, usages = result
         with self._task_card_event_lock:
             self._task_card_event_path = path
             self._task_card_event_offset = offset
@@ -3125,7 +3127,9 @@ class TelegramManager:
             TaskCardEventProjection.apply_tool_usages(
                 self._task_card_event_groups, usages,
             )
-            self._task_card_event_metadata = metadata
+            self._task_card_session_usage_state = session_state
+            metadata = TaskCardEventProjection.session_usage_metadata(session_state)
+            self._task_card_event_metadata = metadata or None
 
     def _reverse_tail_latest_rows(
         self, path: Path, size: int,
@@ -3138,9 +3142,10 @@ class TelegramManager:
         The tail chunk may start mid-line; the leading partial fragment is
         discarded (its predecessor chunk will complete it on the next round).
 
-        Returns ``(rows, offset, metadata, usages)`` where ``offset`` is the forward
-        byte offset the poller should resume from and ``metadata`` is the latest
-        final-carrier session projection (or ``None`` when no carrier exists)
+        Returns ``(rows, offset, session_state, usages)`` where ``offset`` is the
+        forward byte offset the poller should resume from and ``session_state`` is
+        the shared journal-ordered SESSION reducer state (or ``None`` when no
+        relevant event exists)
         — ``size`` unless the file's final line
         has no trailing newline yet (writer mid-append), in which case it is
         the start of that incomplete tail so the poller re-reads it whole once
@@ -3150,7 +3155,7 @@ class TelegramManager:
         """
         window = self._TASK_CARD_EVENT_WINDOW
         projected_events: list[tuple[dict, dict]] = []
-        latest_metadata: dict | None = None
+        session_events: list[dict] = []
         per_call_usages: dict[str, dict] = {}
         tool_results: dict[str, dict] = {}
         summary_times: dict[str, float] = {}
@@ -3161,10 +3166,9 @@ class TelegramManager:
                 chunk_size = self._TASK_CARD_EVENT_TAIL_CHUNK
                 carry = b""
                 first_chunk = True
-                # Reverse order means the first recognized carrier in the
-                # bounded tail is the latest one available to this rehydrate.
-                # Keep the existing latest-row bound; a log without a nearby
-                # carrier must not turn startup into an unbounded full scan.
+                # Keep the existing latest-row bound: SESSION coherence is
+                # reduced only from the same bounded event slice and never by a
+                # second token-ledger scan or an unbounded history walk.
                 while end > 0 and len({self._event_group_id(event, i) for i, (event, _row) in enumerate(projected_events)}) < window:
                     start = max(0, end - chunk_size)
                     f.seek(start)
@@ -3191,11 +3195,17 @@ class TelegramManager:
                     carry = lines[0] if start > 0 else b""
                     complete = lines[1:] if start > 0 else lines
                     round_projected: list[tuple[dict, dict]] = []
-                    round_metadata: dict | None = None
+                    round_session_events: list[dict] = []
                     for raw in complete:
                         event = self._decode_event_line(raw)
                         if event is None:
                             continue
+                        if event.get("type") in {
+                            "llm_response",
+                            "notification_block_injected",
+                            "psyche_molt",
+                        }:
+                            round_session_events.append(event)
                         call_id = event.get("tool_call_id")
                         if (
                             event.get("type") == "tool_result"
@@ -3218,13 +3228,7 @@ class TelegramManager:
                         if llm_usage is not None:
                             llm_call_id, usage = llm_usage
                             per_call_usages[llm_call_id] = usage
-                        candidate = self._project_final_carrier_metadata(event)
-                        if candidate is not None:
-                            # ``complete`` is oldest-to-newest within this
-                            # chunk; the last candidate is the newest here.
-                            round_metadata = candidate
-                    if latest_metadata is None and round_metadata is not None:
-                        latest_metadata = round_metadata
+                    session_events = round_session_events + session_events
                     projected_events = round_projected + projected_events
                     chunk_size *= 2
         except OSError:
@@ -3238,9 +3242,14 @@ class TelegramManager:
         TaskCardEventProjection.apply_apriori_summary_metrics(
             groups, summary_times, summary_usages,
         )
+        session_state = None
+        for event_order, event in enumerate(session_events):
+            session_state = TaskCardEventProjection.reduce_session_usage_event(
+                session_state, event, event_order=event_order,
+            )
         return self._flatten_task_card_groups(
             groups, include_group_id=True,
-        ), tail_offset, latest_metadata, per_call_usages
+        ), tail_offset, session_state, per_call_usages
 
     @staticmethod
     def _decode_event_line(raw: bytes) -> dict | None:
@@ -3266,7 +3275,7 @@ class TelegramManager:
             self._init_event_tail()
             with self._task_card_event_lock:
                 rehydrated_rows = bool(self._task_card_event_groups)
-                rehydrated_metadata = self._task_card_event_metadata is not None
+                rehydrated_metadata = self._task_card_session_usage_state is not None
             if rehydrated_rows or rehydrated_metadata:
                 self._broadcast_task_card_event_window()
             return
@@ -3337,7 +3346,7 @@ class TelegramManager:
         new_offset = offset + len(complete)
 
         projected_events: list[tuple[dict, dict]] = []
-        latest_metadata: dict | None = None
+        session_events: list[dict] = []
         tool_results: dict[str, dict] = {}
         per_call_usages: dict[str, dict] = {}
         summary_times: dict[str, float] = {}
@@ -3345,6 +3354,12 @@ class TelegramManager:
             event = self._decode_event_line(raw)
             if event is None:
                 continue
+            if event.get("type") in {
+                "llm_response",
+                "notification_block_injected",
+                "psyche_molt",
+            }:
+                session_events.append(event)
             call_id = event.get("tool_call_id")
             if event.get("type") == "tool_result" and isinstance(call_id, str) and call_id:
                 tool_results[call_id] = event
@@ -3363,20 +3378,19 @@ class TelegramManager:
             row = self._project_task_card_event(event)
             if row is not None:
                 projected_events.append((event, row))
-            candidate = self._project_final_carrier_metadata(event)
-            if candidate is not None:
-                # Forward append order is oldest-to-newest, so the last
-                # candidate is the only current snapshot.
-                latest_metadata = candidate
 
         summary_usages = self._read_apriori_summary_usages(set(summary_times))
         with self._task_card_event_lock:
-            metadata_changed = (
-                latest_metadata is not None
-                and latest_metadata != self._task_card_event_metadata
-            )
-            if latest_metadata is not None:
-                self._task_card_event_metadata = latest_metadata
+            session_state = self._task_card_session_usage_state
+            for event in session_events:
+                session_state = TaskCardEventProjection.reduce_session_usage_event(
+                    session_state, event,
+                )
+            metadata = TaskCardEventProjection.session_usage_metadata(session_state)
+            rendered_metadata = metadata or None
+            metadata_changed = rendered_metadata != self._task_card_event_metadata
+            self._task_card_session_usage_state = session_state
+            self._task_card_event_metadata = rendered_metadata
             self._task_card_event_offset = new_offset
             self._task_card_event_size = size
             if projected_events:
