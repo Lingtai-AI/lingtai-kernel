@@ -605,6 +605,69 @@ def test_authenticated_turn_retries_provider_failure_with_original_admission(
         _stop_loop(agent, worker)
 
 
+@pytest.mark.parametrize("during_backoff", ["recover", "cancel", "revoke_policy"])
+def test_authenticated_429_retry_rechecks_admission_after_backoff(
+    tmp_path, monkeypatch, during_backoff
+):
+    import httpx
+
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    agent._requires_turn_origin_policy = True
+    handle = submit_turn(
+        agent, "hello", correlation_id="rate-limit-origin",
+        origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+    )
+    request = httpx.Request("POST", "https://provider.invalid/messages")
+    response = httpx.Response(429, headers={"Retry-After": "7"}, request=request)
+    failure = httpx.HTTPStatusError("rate limited", request=request, response=response)
+    parents = []
+    waits = []
+
+    def provider(_current, _msg):
+        parent = current_provider_admission()
+        assert parent is not None
+        assert parent.correlation_id == "rate-limit-origin"
+        assert parent.policy_version == RUNTIME_POLICY.policy_version
+        parents.append(parent)
+        if len(parents) == 1:
+            raise failure
+        return {"text": "recovered", "failed": False, "errors": []}
+
+    def backoff(seconds):
+        waits.append(seconds)
+        assert len(parents) == 1
+        if during_backoff == "cancel":
+            handle.cancel()
+        elif during_backoff == "revoke_policy":
+            agent._turn_origin_policy = None
+        return False
+
+    monkeypatch.setattr(turn, "_handle_request", provider)
+    monkeypatch.setattr(agent._shutdown, "wait", backoff)
+    worker = threading.Thread(target=turn._run_loop, args=(agent,))
+    worker.start()
+    try:
+        result = handle.result(timeout=5)
+        assert waits == [7.0]
+        assert sum(name == "aed_rate_limit_retry" for name, _ in agent.logs) == 1
+        assert not any(name in {"aed_transient_retry", "aed_attempt"} for name, _ in agent.logs)
+        if during_backoff == "recover":
+            assert result.outcome is TurnOutcome.NORMAL
+            assert result.text == "recovered"
+            assert len(parents) == 2
+            assert parents[1] is parents[0]
+        else:
+            expected = TurnOutcome.CANCELLED if during_backoff == "cancel" else TurnOutcome.FAILED
+            assert result.outcome is expected
+            assert len(parents) == 1
+            if during_backoff == "revoke_policy":
+                assert result.error == "rate limited"
+        assert handle.result(timeout=0) is result
+    finally:
+        _stop_loop(agent, worker)
+
+
 @pytest.mark.parametrize("invalid", ["forged", "settled", "cancelled", "cross_turn", "policy", "shutdown"])
 def test_retry_cannot_borrow_invalid_turn_control(tmp_path, invalid):
     from lingtai.kernel.turns import correlated_retry_message
