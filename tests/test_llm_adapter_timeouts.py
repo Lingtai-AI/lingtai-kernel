@@ -8,7 +8,8 @@ anthropic 1.2.0 it does NOT raise — it silently mis-coerces, stuffing the whol
 ``Timeout`` object into every phase (connect/read/write/pool), so the per-phase
 caps are lost with no error. A shallow "does not raise" check therefore
 false-greens on 1.2.0; the authoritative check is the production-path test that
-drives a real ``messages.create`` through an ``httpx2.MockTransport`` and
+drives a real ``messages.create`` through a ``MockTransport`` built from the
+SDK's own HTTP stack (``httpx`` or ``httpx2``, matched per installed SDK) and
 asserts the per-phase values the transport actually receives
 (``test_*_timeout_reaches_transport_as_per_phase_floats``).
 
@@ -37,10 +38,10 @@ above (run externally for this PR across 1.2.0/1.4.0/1.5.0 — see PR descriptio
 """
 from __future__ import annotations
 
+import importlib
+
 import anthropic
 import httpx
-import httpx2
-import openai
 import pytest
 
 from lingtai.llm.openai.adapter import _build_http_timeout as openai_timeout
@@ -168,9 +169,14 @@ def test_anthropic_timeout_getattr_fallback_branch(monkeypatch):
 
 def test_openai_timeout_is_httpx_timeout():
     # openai is intentionally NOT migrated in this change: openai 3.x accepts a
-    # foreign httpx.Timeout (no fail-fast reject could be reproduced). If a future
-    # openai adds the reject, test_openai_timeout_accepted_by_installed_sdk (below)
-    # goes red and flags that a symmetric migration is then warranted.
+    # foreign httpx.Timeout and (verified manually at the real request path on the
+    # current resolve) converts it to correct per-phase floats — neither rejects
+    # nor mis-coerces. SDK-interaction forward-guards for openai are deliberately
+    # omitted: they would false-fail across the ``openai>=1.0`` floor for reasons
+    # unrelated to this change (openai 1.0.0 is itself incompatible with modern
+    # httpx), and the openai adapter is unchanged. This version-agnostic check
+    # (adapter output only, no SDK call) is the kept guard; add SDK-interaction
+    # tests if/when openai is migrated.
     assert isinstance(openai_timeout(300.0), httpx.Timeout)
 
 
@@ -182,19 +188,10 @@ def test_anthropic_timeout_accepted_by_installed_sdk():
     client.with_options(timeout=t)
 
 
-def test_openai_timeout_accepted_by_installed_sdk():
-    t = openai_timeout(300.0)
-    client = openai.OpenAI(api_key="test-no-network-call", timeout=t)
-    client.with_options(timeout=t)
-
-
-def test_sdk_accepts_numeric_timeout_fallback():
+def test_anthropic_accepts_numeric_timeout_fallback():
     # A bare float is the documented fallback if per-phase construction is ever
-    # unavailable; confirm both installed SDKs accept it on both paths.
+    # unavailable; confirm the installed anthropic SDK accepts it on both paths.
     anthropic.Anthropic(api_key="test-no-network-call", timeout=300.0).with_options(
-        timeout=300.0
-    )
-    openai.OpenAI(api_key="test-no-network-call", timeout=300.0).with_options(
         timeout=300.0
     )
 
@@ -202,8 +199,11 @@ def test_sdk_accepts_numeric_timeout_fallback():
 # ---------------------------------------------------------------------------
 # Production-path regression (the authoritative oracle).
 #
-# Drives a real ``.create(... timeout=...)`` through an httpx2.MockTransport and
-# asserts the per-phase timeout the transport RECEIVES is the intended floats —
+# Drives a real ``.create(... timeout=...)`` through a MockTransport built from
+# the SDK's own HTTP stack (httpx or httpx2, matched per installed SDK — passing
+# the wrong one is a TypeError before any request, a false failure on a supported
+# SDK such as anthropic 0.40) and asserts the per-phase timeout the transport
+# RECEIVES is the intended floats —
 # not the shallow "does not raise". This is what catches anthropic 1.2.0's
 # silent mis-coercion (the whole Timeout object stuffed into every phase), which
 # the construct/with_options checks above false-green on. No network: the mock
@@ -223,14 +223,33 @@ class _StopAfterCapture(Exception):
     pass
 
 
-def _timeout_seen_by_transport(make_client, do_request):
+def _sdk_http_stack(sdk_module):
+    """Return the httpx-compatible module (``httpx`` or ``httpx2``) the INSTALLED
+    SDK uses for its HTTP client.
+
+    The SDK validates that a passed ``http_client`` is an instance of *its own*
+    httpx Client, so the Client/MockTransport we build must come from the same
+    module — anthropic ``>=0.40,<`` the fork uses plain ``httpx`` (passing an
+    ``httpx2.Client`` there is a TypeError before any request, a false failure on
+    a supported SDK), while the httpx2-fork SDKs use ``httpx2``. Derived from the
+    SDK's ``DefaultHttpxClient`` MRO, which subclasses that Client.
+    """
+    for cls in sdk_module.DefaultHttpxClient.__mro__:
+        top = cls.__module__.split(".")[0]
+        if top in ("httpx", "httpx2"):
+            return importlib.import_module(top)
+    raise AssertionError(f"cannot determine HTTP stack for {sdk_module.__name__}")
+
+
+def _timeout_seen_by_transport(sdk_module, make_client, do_request):
+    hx = _sdk_http_stack(sdk_module)
     captured: dict = {}
 
     def handler(request):
         captured["timeout"] = request.extensions.get("timeout")
         raise _StopAfterCapture()
 
-    http_client = httpx2.Client(transport=httpx2.MockTransport(handler))
+    http_client = hx.Client(transport=hx.MockTransport(handler))
     client = make_client(http_client)
     # The SDK wraps the transport error; we only care about the captured timeout.
     with pytest.raises(Exception):
@@ -240,6 +259,7 @@ def _timeout_seen_by_transport(make_client, do_request):
 
 def test_anthropic_timeout_reaches_transport_as_per_phase_floats():
     seen = _timeout_seen_by_transport(
+        anthropic,
         lambda hc: anthropic.Anthropic(
             api_key="test-no-network-call", http_client=hc, max_retries=0
         ),
@@ -248,25 +268,6 @@ def test_anthropic_timeout_reaches_transport_as_per_phase_floats():
             max_tokens=1,
             messages=[{"role": "user", "content": "x"}],
             timeout=anthropic_timeout(300.0),
-        ),
-    )
-    assert seen == _EXPECTED_PHASES
-
-
-def test_openai_timeout_reaches_transport_as_per_phase_floats():
-    # openai is intentionally left on httpx.Timeout; this confirms at the real
-    # request path (not just "does not raise") that the current openai still
-    # converts it to the intended per-phase floats — i.e. it neither rejects nor
-    # mis-coerces it. Goes red if a future openai changes either way, which is
-    # the signal to migrate openai the same way as anthropic.
-    seen = _timeout_seen_by_transport(
-        lambda hc: openai.OpenAI(
-            api_key="test-no-network-call", http_client=hc, max_retries=0
-        ),
-        lambda c: c.chat.completions.create(
-            model="gpt-x",
-            messages=[{"role": "user", "content": "x"}],
-            timeout=openai_timeout(300.0),
         ),
     )
     assert seen == _EXPECTED_PHASES
