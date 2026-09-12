@@ -387,11 +387,11 @@ def _session_usage_event(
     }
 
 
-def _legacy_session_carrier(api_calls: object) -> dict:
+def _legacy_session_carrier(api_calls: object, **metadata: object) -> dict:
     return {
         "type": "notification_block_injected",
         "_meta": {"agent_meta": {"agent_state": {"token_usage": {
-            "session": {"api_calls": api_calls},
+            "session": {"api_calls": api_calls, **metadata},
         }}}},
     }
 
@@ -483,6 +483,13 @@ def test_session_usage_projector_rejects_non_numeric_and_incoherent_fields() -> 
     assert TaskCardEventProjection.project_llm_response_session_usage(event) == {}
 
 
+def test_session_usage_projector_rejects_nearby_noncanonical_rates() -> None:
+    for key in ("session_cache_rate", "context_usage"):
+        event = _session_usage_event()
+        event["session_usage"][key] += 0.000009
+        assert TaskCardEventProjection.project_llm_response_session_usage(event) == {}
+
+
 def test_malformed_lower_generation_cannot_reopen_an_old_session() -> None:
     state = TaskCardEventProjection.reduce_session_usage_event(
         None,
@@ -526,6 +533,18 @@ def test_session_usage_accepts_optional_or_over_window_context_metadata() -> Non
     over_window["session_usage"]["context_usage"] = round(300_000 / 272_000, 5)
     projected = TaskCardEventProjection.project_llm_response_session_usage(over_window)
     assert projected["metadata"]["context_usage"] > 1.0
+
+    legacy = _legacy_session_carrier(
+        2,
+        context_tokens=300_000,
+        context_window=272_000,
+        context_usage=round(300_000 / 272_000, 5),
+    )
+    legacy_projected = TaskCardEventProjection._project_legacy_session_usage(legacy)
+    assert legacy_projected["context_usage"] > 1.0
+    for invalid in (-0.1, float("inf"), float("nan")):
+        legacy = _legacy_session_carrier(2, context_usage=invalid)
+        assert TaskCardEventProjection._project_legacy_session_usage(legacy) == {}
 
 
 def test_malformed_new_generation_allows_its_first_valid_snapshot() -> None:

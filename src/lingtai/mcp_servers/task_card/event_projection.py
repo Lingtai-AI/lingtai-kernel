@@ -548,9 +548,7 @@ class TaskCardEventProjection:
         )
         if (
             not 0.0 <= values["session_cache_rate"] <= 1.0
-            or not math.isclose(
-                values["session_cache_rate"], expected_cache_rate, abs_tol=1e-5
-            )
+            or values["session_cache_rate"] != expected_cache_rate
         ):
             return {}
         raw_context_window = raw.get("context_window")
@@ -561,9 +559,7 @@ class TaskCardEventProjection:
             if context_window is None or context_window <= 0 or context_usage is None:
                 return {}
             expected_context_usage = round(values["context_tokens"] / context_window, 5)
-            if context_usage < 0.0 or not math.isclose(
-                context_usage, expected_context_usage, abs_tol=1e-5
-            ):
+            if context_usage < 0.0 or context_usage != expected_context_usage:
                 return {}
             values["context_window"] = context_window
             values["context_usage"] = context_usage
@@ -601,9 +597,13 @@ class TaskCardEventProjection:
         for key, value in projected.items():
             if key in int_fields and cls._exact_non_negative_int(value) is None:
                 return {}
-            if key in {"session_cache_rate", "context_usage"}:
+            if key == "session_cache_rate":
                 number = cls._finite_number(value)
                 if number is None or not 0.0 <= number <= 1.0:
+                    return {}
+            if key == "context_usage":
+                number = cls._finite_number(value)
+                if number is None or number < 0.0:
                     return {}
         if (
             "cache_miss_budget" in projected
@@ -1252,7 +1252,7 @@ class TaskCardEventProjection:
             type(usage) in {int, float}
             and not isinstance(usage, bool)
             and math.isfinite(float(usage))
-            and 0 <= usage <= 1
+            and usage >= 0
         ):
             if context is not None:
                 session_parts.append(
