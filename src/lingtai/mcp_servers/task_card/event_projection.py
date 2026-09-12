@@ -556,7 +556,7 @@ class TaskCardEventProjection:
             or not math.isclose(
                 values["session_cache_rate"], expected_cache_rate, abs_tol=1e-5
             )
-            or not 0.0 <= values["context_usage"]
+            or not 0.0 <= values["context_usage"] <= 1.0
             or not math.isclose(
                 values["context_usage"], expected_context_usage, abs_tol=1e-5
             )
@@ -631,6 +631,8 @@ class TaskCardEventProjection:
         previous.setdefault("versioned_seen", False)
         previous.setdefault("molt_count", None)
         previous.setdefault("api_call_index", 0)
+        previous.setdefault("invalidated", False)
+        previous.setdefault("awaiting_new_generation", False)
         previous["event_order"] = order
 
         if event.get("type") == "psyche_molt":
@@ -641,10 +643,12 @@ class TaskCardEventProjection:
             return {
                 "source": None,
                 "metadata": {},
-                "versioned_seen": False,
-                "molt_count": generation,
-                "api_call_index": 0,
+                "versioned_seen": True,
+                "molt_count": generation if generation is not None else known,
+                "api_call_index": 0 if generation is not None else previous.get("api_call_index", 0),
                 "snapshot": None,
+                "invalidated": True,
+                "awaiting_new_generation": generation is None,
                 "event_order": order,
             }
 
@@ -655,9 +659,17 @@ class TaskCardEventProjection:
                 index = projected["api_call_index"]
                 known_generation = previous.get("molt_count")
                 known_index = previous.get("api_call_index", 0)
+                if previous.get("awaiting_new_generation") and type(known_generation) is int and generation <= known_generation:
+                    return previous
                 if type(known_generation) is int and (
                     generation < known_generation
                     or (generation == known_generation and index < known_index)
+                ):
+                    return previous
+                if (
+                    previous.get("invalidated")
+                    and generation == known_generation
+                    and index <= known_index
                 ):
                     return previous
                 old_snapshot = previous.get("snapshot")
@@ -669,7 +681,7 @@ class TaskCardEventProjection:
                     old_metadata = old_snapshot.get("metadata", {})
                     new_metadata = projected["metadata"]
                     if index == known_index:
-                        if any(new_metadata[key] != old_metadata.get(key) for key in monotonic):
+                        if projected != old_snapshot:
                             projected = {}
                     elif any(new_metadata[key] < old_metadata.get(key, 0) for key in monotonic):
                         projected = {}
@@ -681,6 +693,8 @@ class TaskCardEventProjection:
                         "molt_count": generation,
                         "api_call_index": index,
                         "snapshot": projected,
+                        "invalidated": False,
+                        "awaiting_new_generation": False,
                         "event_order": order,
                     }
                 # A journal-newer, orderable but incoherent snapshot invalidates
@@ -693,6 +707,8 @@ class TaskCardEventProjection:
                     "molt_count": generation,
                     "api_call_index": index,
                     "snapshot": None,
+                    "invalidated": True,
+                    "awaiting_new_generation": bool(previous.get("awaiting_new_generation")),
                     "event_order": order,
                 }
             # A malformed v1 may still have a coherent ordering envelope.  A
@@ -726,11 +742,12 @@ class TaskCardEventProjection:
                 **previous,
                 "source": None,
                 "metadata": {},
-                "versioned_seen": bool(previous.get("versioned_seen"))
-                or isinstance(raw_snapshot, dict),
+                "versioned_seen": True,
                 "molt_count": generation if generation is not None else known_generation,
                 "api_call_index": index if index is not None else known_index,
                 "snapshot": None,
+                "invalidated": True,
+                "awaiting_new_generation": bool(previous.get("awaiting_new_generation")),
                 "event_order": order,
             }
 

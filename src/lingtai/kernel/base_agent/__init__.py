@@ -934,6 +934,7 @@ class BaseAgent:
         # impossible, sequence is a bonus ordering signal for one process.
         self._session_stats_last_written_at: float | None = None
         self._session_stats_sequence: int = 0
+        self._session_stats_write_lock = threading.Lock()
         # Created lazily by _write_session_stats_record so the explicit
         # background owner is only present for agents that publish this record.
         self._async_work_snapshot = None
@@ -2852,40 +2853,45 @@ class BaseAgent:
             write_agent_record,
         )
 
-        try:
-            wall_now = self._lifecycle_clock.wall_seconds()
-            snapshot_owner = getattr(self, "_async_work_snapshot", None)
-            if snapshot_owner is None:
-                snapshot_owner = RecentAsyncWorkSnapshot(self._working_dir)
-                self._async_work_snapshot = snapshot_owner
+        session_stats_write_lock = getattr(self, "_session_stats_write_lock", None)
+        if session_stats_write_lock is None:
+            session_stats_write_lock = threading.Lock()
+            self._session_stats_write_lock = session_stats_write_lock
+        with session_stats_write_lock:
+            try:
+                wall_now = self._lifecycle_clock.wall_seconds()
+                snapshot_owner = getattr(self, "_async_work_snapshot", None)
+                if snapshot_owner is None:
+                    snapshot_owner = RecentAsyncWorkSnapshot(self._working_dir)
+                    self._async_work_snapshot = snapshot_owner
 
-            snapshot, generation, dirty = snapshot_owner.publication_snapshot()
-            if not dirty:
-                if not should_refresh_agent_record(
-                    self._session_stats_last_written_at,
-                    wall_now,
-                    session_stats_refresh_seconds(),
-                ):
-                    return
-                # Never wait for daemon ledger or Shell job reads: blocked
-                # storage must not delay heartbeat liveness publication.  A
-                # dirty completion bypass never schedules here, preventing a
-                # completion/write/refresh loop.
-                snapshot_owner.schedule()
-                snapshot, generation, _dirty = snapshot_owner.publication_snapshot()
+                snapshot, generation, dirty = snapshot_owner.publication_snapshot()
+                if not dirty:
+                    if not should_refresh_agent_record(
+                        self._session_stats_last_written_at,
+                        wall_now,
+                        session_stats_refresh_seconds(),
+                    ):
+                        return
+                    # Never wait for daemon ledger or Shell job reads: blocked
+                    # storage must not delay heartbeat liveness publication.  A
+                    # dirty completion bypass never schedules here, preventing a
+                    # completion/write/refresh loop.
+                    snapshot_owner.schedule()
+                    snapshot, generation, _dirty = snapshot_owner.publication_snapshot()
 
-            self._session_stats_sequence += 1
-            record = build_agent_record(
-                self,
-                sequence=self._session_stats_sequence,
-                daemon_summary=snapshot["daemons"],
-                async_work_snapshot=snapshot["async_work"],
-            )
-            write_agent_record(self._working_dir, record)
-            snapshot_owner.mark_published(generation)
-            self._session_stats_last_written_at = wall_now
-        except Exception as e:
-            logger.warning(f"[{self.agent_name}] Failed to write agent record: {e}")
+                self._session_stats_sequence += 1
+                record = build_agent_record(
+                    self,
+                    sequence=self._session_stats_sequence,
+                    daemon_summary=snapshot["daemons"],
+                    async_work_snapshot=snapshot["async_work"],
+                )
+                write_agent_record(self._working_dir, record)
+                snapshot_owner.mark_published(generation)
+                self._session_stats_last_written_at = wall_now
+            except Exception as e:
+                logger.warning(f"[{self.agent_name}] Failed to write agent record: {e}")
 
     # ------------------------------------------------------------------
     # Messaging (pass-throughs)
