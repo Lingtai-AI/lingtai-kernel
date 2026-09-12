@@ -1,4 +1,17 @@
-"""Tests for explicit per-phase HTTP timeout construction in adapters."""
+"""Tests for explicit per-phase HTTP timeout construction in adapters.
+
+Maintenance premise (read before committing a lockfile): the SDK-acceptance
+tests below (``test_*_timeout_accepted_by_installed_sdk``) and the openai
+forward-guard (``test_openai_timeout_is_httpx_timeout`` +
+``test_openai_timeout_accepted_by_installed_sdk``) only track *reality* because
+``uv.lock`` is not committed and CI resolves the SDK fresh. If a PR ever commits
+a lockfile, this group silently freezes on the locked SDK version and its
+forward-guarding value degrades in lock-step; such a PR must also add an
+explicit SDK version matrix (anthropic/openai across the supported range).
+The same premise is what catches the ``getattr(..., "Timeout", httpx.Timeout)``
+fallback's failure mode (a future SDK dropping the re-export while still sitting
+on httpx2 would fall back to the class that happens to be rejected).
+"""
 from __future__ import annotations
 
 import anthropic
@@ -110,6 +123,11 @@ def test_anthropic_timeout_is_sdk_native_class():
     # type) would still satisfy the duck-typed attribute checks above, so assert
     # the concrete class IS the anthropic SDK's own Timeout — httpx2.Timeout on
     # SDKs that moved to the fork, httpx.Timeout on older ones.
+    # NOTE (self-reference): the expected class is derived with the SAME getattr
+    # expression the implementation uses, so this cannot catch the getattr
+    # approach itself being wrong — it only catches a wrong/absent return type.
+    # The real oracle for "is the approach correct" is
+    # test_anthropic_timeout_accepted_by_installed_sdk below.
     assert type(anthropic_timeout(300.0)) is getattr(anthropic, "Timeout", httpx.Timeout)
 
 
