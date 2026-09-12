@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from lingtai.mcp_servers.task_card.event_projection import TaskCardEventProjection
+from lingtai.mcp_servers.telegram.service import (
+    _TASKCARD_DEFAULT_ENABLED,
+    _TASKCARD_DEFAULT_NORMAL_ROWS,
+)
 from lingtai.tools.tool_family import SettingRow, SettingsProvider
 
 DEFAULT_AUTOMATIC_POLL_INTERVAL_SECONDS = 5.0
@@ -112,11 +116,11 @@ def telegram_setting_rows(manager: Any | None) -> Iterable[SettingRow]:
             "telegram-mcp-manual#task-card-poll-interval",
         ),
         SettingRow(
-            "automatic.enabled", enabled, True, True,
+            "automatic.enabled", enabled, _TASKCARD_DEFAULT_ENABLED, True,
             "telegram-mcp-manual#task-card-delivery",
         ),
         SettingRow(
-            "automatic.normal_rows", normal_rows, 1, True,
+            "automatic.normal_rows", normal_rows, _TASKCARD_DEFAULT_NORMAL_ROWS, True,
             "telegram-mcp-manual#task-card-normal-rows",
         ),
         SettingRow(

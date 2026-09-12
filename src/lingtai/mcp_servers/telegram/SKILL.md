@@ -251,7 +251,7 @@ and fully restart the MCP.
 stopping mechanics. Use `/taskcard on|off`, then `/taskcard` and SHOW.
 
 ### Task Card normal rows
-`automatic.normal_rows` is the rolling API-call-group window (default `1`,
+`automatic.normal_rows` is the rolling API-call-group window (default `3`,
 accepted `1..10`), not a tool-row count. Use `/taskcard N` and SHOW;
 compatibility `max_refreshes` is not an active Telegram runtime ceiling.
 

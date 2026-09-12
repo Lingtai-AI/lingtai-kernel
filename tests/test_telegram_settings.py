@@ -150,7 +150,7 @@ def test_show_returns_exact_keys_values_defaults_and_manual_pointers(
     assert rows["automatic.enabled"]["current"] is False
     assert rows["automatic.enabled"]["default"] is True
     assert rows["automatic.normal_rows"]["current"] == 4
-    assert rows["automatic.normal_rows"]["default"] == 1
+    assert rows["automatic.normal_rows"]["default"] == 3
     assert rows["automatic.locale"]["current"] == "zh"
     assert rows["automatic.locale"]["default"] == "en"
     assert rows["automatic.display_expression"]["current"] == ["footer", "header"]

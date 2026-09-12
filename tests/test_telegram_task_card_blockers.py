@@ -180,9 +180,10 @@ def test_timestamped_moderate_rows_stay_under_text_limit():
         if ln.startswith(("•", "✓")):
             assert "04:08:08 UTC-07" not in ln
     # The bottom line is the single render-time stamp, distinct from row stamps.
-    assert text.splitlines()[-2:] == [
+    assert text.splitlines()[-3:] == [
         "🕒 Last Updated: 17:18:36 U-7",
         '💬 <i>Ask agent for "Task Card"</i>',
+        "⚙️ <i>Settings: /taskcard on|off · /taskcard N (1-10)</i>",
     ]
 
 
@@ -214,9 +215,10 @@ def test_extreme_row_count_exceeds_budget_but_keeps_every_row():
     assert not text.endswith("…")
     # The fixed footer and the single render-time line still render.
     assert _TASK_CARD_FOOTER in text
-    assert text.splitlines()[-2:] == [
+    assert text.splitlines()[-3:] == [
         "🕒 Last Updated: 17:18:36 U-7",
         '💬 <i>Ask agent for "Task Card"</i>',
+        "⚙️ <i>Settings: /taskcard on|off · /taskcard N (1-10)</i>",
     ]
 
 

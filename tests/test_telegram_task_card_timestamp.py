@@ -52,9 +52,10 @@ def test_manager_renders_current_time_line_from_render_instant_not_row_start():
     ], now=_NOW)
     lines = text.splitlines()
     # The render-time stamp precedes the approved ask-agent final line.
-    assert lines[-2:] == [
+    assert lines[-3:] == [
         "🕒 Last Updated: 17:18:36 U-7",
         '💬 <i>Ask agent for "Task Card"</i>',
+        "⚙️ <i>Settings: /taskcard on|off · /taskcard N (1-10)</i>",
     ]
 
 
@@ -96,9 +97,10 @@ def test_current_time_line_present_even_when_no_row_has_a_stamp():
     assert "bash.run" in text
     # Last Updated never depends on any row carrying a stamp — it always
     # reflects the render instant.
-    assert text.splitlines()[-2:] == [
+    assert text.splitlines()[-3:] == [
         "🕒 Last Updated: 17:18:36 U-7",
         '💬 <i>Ask agent for "Task Card"</i>',
+        "⚙️ <i>Settings: /taskcard on|off · /taskcard N (1-10)</i>",
     ]
     # Tool rows never render an inline stamp even when one is supplied.
     for ln in text.splitlines():
@@ -119,7 +121,8 @@ def test_api_error_row_never_carries_a_stamp_alongside_a_tool_row():
     assert "UTC" not in bash_line
     api_line = next(ln for ln in text.splitlines() if "API error" in ln)
     assert "UTC" not in api_line
-    assert text.splitlines()[-2:] == [
+    assert text.splitlines()[-3:] == [
         "🕒 Last Updated: 17:18:36 U-7",
         '💬 <i>Ask agent for "Task Card"</i>',
+        "⚙️ <i>Settings: /taskcard on|off · /taskcard N (1-10)</i>",
     ]
