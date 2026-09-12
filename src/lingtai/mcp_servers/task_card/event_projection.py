@@ -505,7 +505,6 @@ class TaskCardEventProjection:
             "cache_miss_budget",
             "cache_miss_remaining_tokens",
             "context_tokens",
-            "context_window",
         )
         values: dict[str, Any] = {}
         for key in int_fields:
@@ -513,7 +512,7 @@ class TaskCardEventProjection:
             if value is None:
                 return {}
             values[key] = value
-        for key in ("session_cache_rate", "context_usage"):
+        for key in ("session_cache_rate",):
             value = cls._finite_number(raw.get(key))
             if value is None:
                 return {}
@@ -537,7 +536,6 @@ class TaskCardEventProjection:
             or values["avg_input_tokens_per_api_call"]
             != int(round(values["input_tokens"] / values["api_calls"]))
             or values["context_tokens"] != current_input
-            or values["context_window"] <= 0
             or values["cache_miss_budget"] <= 0
             or values["cache_miss_remaining_tokens"]
             != max(values["cache_miss_budget"] - values["cache_miss_tokens"], 0)
@@ -548,25 +546,34 @@ class TaskCardEventProjection:
             if values["input_tokens"] > 0
             else 0.0
         )
-        expected_context_usage = round(
-            values["context_tokens"] / values["context_window"], 5
-        )
         if (
             not 0.0 <= values["session_cache_rate"] <= 1.0
             or not math.isclose(
                 values["session_cache_rate"], expected_cache_rate, abs_tol=1e-5
             )
-            or not 0.0 <= values["context_usage"] <= 1.0
-            or not math.isclose(
-                values["context_usage"], expected_context_usage, abs_tol=1e-5
-            )
         ):
             return {}
+        raw_context_window = raw.get("context_window")
+        raw_context_usage = raw.get("context_usage")
+        if raw_context_window is not None or raw_context_usage is not None:
+            context_window = cls._exact_non_negative_int(raw_context_window)
+            context_usage = cls._finite_number(raw_context_usage)
+            if context_window is None or context_window <= 0 or context_usage is None:
+                return {}
+            expected_context_usage = round(values["context_tokens"] / context_window, 5)
+            if context_usage < 0.0 or not math.isclose(
+                context_usage, expected_context_usage, abs_tol=1e-5
+            ):
+                return {}
+            values["context_window"] = context_window
+            values["context_usage"] = context_usage
         return {
             "molt_count": values["molt_count"],
             "api_call_index": values["api_call_index"],
             "metadata": {
-                key: values[key] for key in cls._SESSION_METADATA_FIELDS
+                key: values[key]
+                for key in cls._SESSION_METADATA_FIELDS
+                if key in values
             },
         }
 
@@ -728,16 +735,15 @@ class TaskCardEventProjection:
             )
             known_generation = previous.get("molt_count")
             known_index = previous.get("api_call_index", 0)
-            if (
-                generation is not None
-                and index is not None
-                and type(known_generation) is int
-                and (
-                    generation < known_generation
-                    or (generation == known_generation and index < known_index)
-                )
-            ):
-                return previous
+            if generation is not None and type(known_generation) is int:
+                if generation < known_generation:
+                    return previous
+                if (
+                    generation == known_generation
+                    and index is not None
+                    and index < known_index
+                ):
+                    return previous
             return {
                 **previous,
                 "source": None,

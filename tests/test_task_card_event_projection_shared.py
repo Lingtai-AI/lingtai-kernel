@@ -481,3 +481,48 @@ def test_session_usage_projector_rejects_non_numeric_and_incoherent_fields() -> 
     event = _session_usage_event()
     event["session_usage"]["input_tokens"] = 100
     assert TaskCardEventProjection.project_llm_response_session_usage(event) == {}
+
+
+def test_malformed_lower_generation_cannot_reopen_an_old_session() -> None:
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        None,
+        _session_usage_event(molt_count=3, api_call_index=5),
+    )
+    expected = TaskCardEventProjection.session_usage_metadata(state)
+
+    malformed_old = _session_usage_event(molt_count=2, api_call_index=6)
+    malformed_old["session_usage"]["api_call_index"] = "bad"
+    state = TaskCardEventProjection.reduce_session_usage_event(state, malformed_old)
+    assert TaskCardEventProjection.session_usage_metadata(state) == expected
+
+    state = TaskCardEventProjection.reduce_session_usage_event(
+        state,
+        _session_usage_event(
+            molt_count=2,
+            api_call_index=6,
+            input_tokens=300_000,
+            output_tokens=1_100,
+            cached_tokens=210_000,
+        ),
+    )
+    assert TaskCardEventProjection.session_usage_metadata(state) == expected
+
+
+def test_session_usage_accepts_optional_or_over_window_context_metadata() -> None:
+    without_window = _session_usage_event()
+    without_window["session_usage"].pop("context_window")
+    without_window["session_usage"].pop("context_usage")
+    projected = TaskCardEventProjection.project_llm_response_session_usage(
+        without_window
+    )
+    assert projected
+    assert "context_window" not in projected["metadata"]
+    assert "context_usage" not in projected["metadata"]
+
+    over_window = _session_usage_event(
+        input_tokens=400_000,
+        current_input=300_000,
+    )
+    over_window["session_usage"]["context_usage"] = round(300_000 / 272_000, 5)
+    projected = TaskCardEventProjection.project_llm_response_session_usage(over_window)
+    assert projected["metadata"]["context_usage"] > 1.0
