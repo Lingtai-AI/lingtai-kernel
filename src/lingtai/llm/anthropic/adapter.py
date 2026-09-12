@@ -60,7 +60,19 @@ def _build_http_timeout(request_timeout: float | None):
     """
     if request_timeout is None:
         return None
-    return httpx.Timeout(
+    # Construct the SDK's own ``Timeout`` class, never ``httpx.Timeout`` directly:
+    # anthropic SDKs built on the ``httpx2`` fork do not accept a foreign
+    # ``httpx.Timeout``, and the failure is VERSION-DEPENDENT — e.g. 1.4/1.5
+    # fail-fast with a TypeError before any request, while 1.2.0 does NOT raise
+    # but silently mis-coerces it, stuffing the whole object into every phase
+    # (connect/read/write/pool); either way the per-phase caps are lost.
+    # ``anthropic.Timeout`` re-exports whichever Timeout the installed SDK actually
+    # uses — ``httpx`` for SDKs on plain httpx, ``httpx2`` for SDKs on the fork —
+    # so this keys on what the SDK accepts rather than on which httpx package is
+    # importable (httpx2 is installed across the current range, so "is httpx2
+    # importable" would be a constant-true, useless predicate).
+    timeout_cls = getattr(anthropic, "Timeout", httpx.Timeout)
+    return timeout_cls(
         connect=min(float(request_timeout), 30.0),
         read=min(float(request_timeout), _read_timeout_cap()),
         write=min(float(request_timeout), 30.0),

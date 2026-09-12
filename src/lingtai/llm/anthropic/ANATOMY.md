@@ -35,7 +35,7 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 
 | Function | Line | Purpose |
 |----------|------|---------|
-| `_build_http_timeout` | 29 | Per-phase `httpx.Timeout` from `request_timeout` |
+| `_build_http_timeout` | 29 | Per-phase timeout from `request_timeout`, built from the SDK's own `anthropic.Timeout` (httpx/httpx2 per installed SDK), never a foreign `httpx.Timeout` — httpx2-fork SDKs mishandle that version-dependently (fail-fast TypeError e.g. 1.4/1.5, or silent mis-coercion into every phase e.g. 1.2.0) |
 | `_build_tools` | 60 | `FunctionSchema` → Anthropic tool dicts (`input_schema`, not `parameters`) |
 | `_build_system_with_cache` | 79 | System prompt → single text block with `cache_control: ephemeral` |
 | `_build_system_batches_with_cache` | 97 | Multi-batch system prompt with per-batch breakpoints (≤3 markers, last batch un-marked) |
