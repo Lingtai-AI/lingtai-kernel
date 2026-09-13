@@ -168,7 +168,15 @@ def test_shared_render_stays_unchanged_while_telegram_relayouts_metadata() -> No
         "⚙️ <b>ASYNC WORK</b>\n"
         "<b>Status</b> · running 1\n"
         "🕒 Last Updated: 02:30:00 U+8\n"
-        "💬 <i>Ask agent for \"Task Card\"</i>"
+        "💬 <i>Ask agent for \"Task Card\"</i>\n"
+        "⚙️ <i>Settings: /taskcard on|off · /taskcard N (1-10)</i>"
+    )
+
+
+def test_telegram_html_converter_localizes_taskcard_settings_hint() -> None:
+    assert _telegram_task_card_html('向 agent 询问 "Task Card"') == (
+        '💬 <i>向 agent 询问 "Task Card"</i>\n'
+        "⚙️ <i>设置: /taskcard on|off · /taskcard N (1-10)</i>"
     )
 
 

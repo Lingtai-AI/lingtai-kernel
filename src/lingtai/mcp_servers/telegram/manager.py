@@ -50,6 +50,7 @@ from . import _family
 from . import updates as tg_updates
 from .plugin import TELEGRAM_PLUGIN
 from .account import TelegramRateLimitError
+from .service import _TASKCARD_DEFAULT_NORMAL_ROWS
 
 if TYPE_CHECKING:
     from lingtai.kernel.notification_store import NotificationStorePort
@@ -154,7 +155,7 @@ _TELEGRAM_TASK_CARD_PARSE_MODE = "HTML"
 # "current: X" suffix is appended per-render from the manager's live
 # normal-row setting; see ``_task_card_footer``.
 _TASK_CARD_FOOTER = TaskCardEventProjection.FOOTER
-_TASK_CARD_DEFAULT_NORMAL_ROWS = TaskCardEventProjection.DEFAULT_NORMAL_ROWS
+_TASK_CARD_DEFAULT_NORMAL_ROWS = _TASKCARD_DEFAULT_NORMAL_ROWS
 _TASK_CARD_METADATA_MAX_CHARS = TaskCardEventProjection.METADATA_MAX_CHARS
 
 # Canonical AgentState values that render without a /refresh hint; "stuck" is
@@ -189,6 +190,10 @@ def _telegram_task_card_html(text: str) -> str:
     asks = {
         'Ask agent for "Task Card"': 'Ask agent for "Task Card"',
         '向 agent 询问 "Task Card"': '向 agent 询问 "Task Card"',
+    }
+    settings_hints = {
+        'Ask agent for "Task Card"': 'Settings: /taskcard on|off · /taskcard N (1-10)',
+        '向 agent 询问 "Task Card"': '设置: /taskcard on|off · /taskcard N (1-10)',
     }
     metadata_prefixes = (
         ("Session · ", "📊 <b>SESSION</b>", "session"),
@@ -295,7 +300,8 @@ def _telegram_task_card_html(text: str) -> str:
         if line in headers:
             safe = f"📋 <b>{headers[line]}</b>"
         elif line in asks:
-            safe = f"💬 <i>{html_escape(asks[line], quote=False)}</i>"
+            rendered.append(f"💬 <i>{html_escape(asks[line], quote=False)}</i>")
+            safe = f"⚙️ <i>{html_escape(settings_hints[line], quote=False)}</i>"
         elif line.startswith(("Last Updated: ", "最后更新: ")):
             safe = f"🕒 {safe}"
         rendered.append(safe)

@@ -132,7 +132,9 @@ semantics live here. The public producer contract lives in
     remains authored content: its Telegram-targeted
     producer must emit valid Telegram HTML or common plain text. Invalid provider
     markup is an ordinary failed edit/send and preserves the last committed card.
-    Feishu and other consumers keep their own rendering mode.
+    Feishu and other consumers keep their own rendering mode. Telegram appends a
+    concise `/taskcard on|off` and `/taskcard N (1-10)` settings hint immediately
+    after the existing ask-agent line.
 14. Every new kernel `llm_response` may carry the additive child schema
     `lingtai.token_usage.session/v1`. It is the authoritative since-molt SESSION
     source for both live append and bounded rehydrate; legacy

@@ -143,7 +143,7 @@ def test_service_display_expression_persists_and_reloads(tmp_path: Path) -> None
     reborn = _service(tmp_path)
     assert reborn.taskcard_display_expression() == ("footer", "header")
     assert reborn.taskcard_enabled() is True
-    assert reborn.taskcard_normal_rows() == 1
+    assert reborn.taskcard_normal_rows() == 3
 
 
 def test_manager_broadcast_composes_with_custom_display_expression(
@@ -171,7 +171,7 @@ def test_manager_broadcast_composes_with_custom_display_expression(
     assert calls and calls[0][0] == "send"
     sent_text = calls[0][2]
     header = "📋 <b>ACTIVITIES</b>"
-    footer = TaskCardEventProjection.footer(1, "en").strip("_")
+    footer = TaskCardEventProjection.footer(3, "en").strip("_")
     assert sent_text == f"{footer}\n{header}"
 
 
@@ -229,7 +229,7 @@ def test_hot_reload_reaches_the_live_manager_projection(
 
     state_path = tmp_path / "telegram" / "taskcard.json"
     data = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {
-        "taskcard": True, "normal_rows": 1, "max_refreshes": 1000, "locale": "en",
+        "taskcard": True, "normal_rows": 3, "max_refreshes": 1000, "locale": "en",
     }
     data["display_expression"] = ["footer", "header"]
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -239,7 +239,7 @@ def test_hot_reload_reaches_the_live_manager_projection(
     manager._broadcast_task_card_event_window(force=True)
     assert calls
     header = "📋 <b>ACTIVITIES</b>"
-    footer = TaskCardEventProjection.footer(1, "en").strip("_")
+    footer = TaskCardEventProjection.footer(3, "en").strip("_")
     assert calls[-1][-1] == f"{footer}\n{header}"
 
 
