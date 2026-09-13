@@ -398,6 +398,12 @@ Clause IDs are stable; each rule composes the linked normative source.
    settles exactly once as `normal`, `cancelled`, or `failed`, with completed
    response text only on normal settlement. Correlated envelopes are distinct
    from mergeable fire-and-forget text messages and retain inbox serialization.
+   Internal transient, rate-limit, and AED retries retain the original live
+   control and its admitted origin. Before retry dispatch, Core rechecks origin
+   policy and the registered/current control's object identity and cancellation
+   state. A copied id, forged message type, ended control, or another turn's
+   control MUST NOT authorize a retry. The provider-call gate still runs for
+   every actual request; this does not grant independent internal-event turns.
    Cancelling a pending handle marks only that control; it MUST NOT set the
    process-global latch for the turn ahead. When the matching handle becomes
    current, or is cancelled while current, it composes onto
