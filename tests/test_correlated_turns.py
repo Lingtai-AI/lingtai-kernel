@@ -296,6 +296,69 @@ def test_correlated_turn_binds_admission_witness_scope_on_production_path(
     assert getattr(agent, "_puffo_admission_watermark", "UNSET") == -1
 
 
+def test_correlated_turn_abandoned_fact_emitted_on_production_teardown(
+    tmp_path, monkeypatch,
+):
+    """Positive control for 甲 on the REAL loop: a receipt-bearing fact that
+    fails delivery at a settle point must surface a ``puffo_admission_fact_abandoned``
+    event at the production teardown.
+
+    Every unit test in ``test_puffo_admission_witness.py`` calls
+    ``end_admission_witness_scope`` by hand; only this drives the real
+    ``_run_loop``, so it is the sole check that the production wiring actually
+    emits -- the real bind (``turn.py`` ~1344), the observer bind/reset ordering
+    (~1337 -> ~1930 before the ~1935 teardown), and the teardown itself. Its
+    value is exactly a positive control: without it, "no abandoned events in
+    production" and "the instrument never fires" are indistinguishable in the
+    data, and 甲 is the instrument we told the humans turns the loss rate from a
+    guess into a number. Deleting the bind makes the in-turn scan a no-op (no
+    outstanding) -> no event -> red; deleting the teardown never emits -> red.
+    """
+    from lingtai.kernel.llm.interface import ChatInterface, ToolResultBlock
+
+    class _FailingObserver:
+        def on_tool_lifecycle(self, _event):
+            pass
+
+        def on_tool_results_committed(self, _event):
+            # notify_tool_results_committed guards this and reports non-delivery.
+            raise RuntimeError("delivery boom")
+
+    agent = _agent(tmp_path)
+    handle = submit_turn(
+        agent, "committed", correlation_id="turn-abandon",
+        tool_observer=_FailingObserver(),
+    )
+
+    def fake_handle(current, msg):
+        # Stand in for _process_response: put a receipt-bearing result on the
+        # wire and run a REAL settle-point scan under the bound (failing)
+        # observer, so the fact is seen-but-not-delivered and left outstanding.
+        iface = ChatInterface()
+        iface.add_tool_results([
+            ToolResultBlock(
+                id="tc-1", name="puffo_tool",
+                content="[puffo:model-visible-read:R1]",
+            )
+        ])
+        current._chat = SimpleNamespace(interface=iface)
+        turn.scan_and_emit_committed_facts(current)
+        current._shutdown.set()
+        return {"text": msg.content, "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+
+    assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
+    abandoned = [
+        fields for name, fields in agent.logs
+        if name == "puffo_admission_fact_abandoned"
+    ]
+    assert len(abandoned) == 1, agent.logs
+    assert abandoned[0]["tool_call_id"] == "tc-1"
+    assert abandoned[0]["reason"] == "not_delivered"
+
+
 def test_consecutive_correlated_turns_reset_permission_broker(tmp_path, monkeypatch):
     agent = _agent(tmp_path)
     broker = SimpleNamespace(request_permission=lambda _request: None)
