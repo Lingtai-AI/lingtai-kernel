@@ -37,6 +37,7 @@ from .llm_utils import (
 from .llm.reasoning_effort import ReasoningEffortController, ReasoningEffortResult
 from .agent_session import AgentSession, RuntimeSession, new_runtime_session
 from .logging import get_logger
+from .meta_block import CACHE_MISS_BUDGET_DEFAULT, build_session_token_economy
 from .reminders.context_pressure import ContextPressureReminder
 from .token_counter import count_tokens, count_tool_tokens
 
@@ -199,6 +200,8 @@ class SessionManager:
         logger_fn: Callable[..., None] | None,
         build_system_batches_fn: Callable[[], list[str]] | None = None,
         tool_result_recovery_lookup_fn: Callable[[Any], Any] | None = None,
+        molt_count_fn: Callable[[], int] | None = None,
+        cache_miss_budget_fn: Callable[[], int] | None = None,
     ):
         self._llm_service = llm_service
         self._config = config
@@ -209,6 +212,8 @@ class SessionManager:
         self._build_tool_schemas_fn = build_tool_schemas_fn
         self._logger_fn = logger_fn
         self._tool_result_recovery_lookup_fn = tool_result_recovery_lookup_fn
+        self._molt_count_fn = molt_count_fn
+        self._cache_miss_budget_fn = cache_miss_budget_fn
         # Optional batched system-prompt builder. When provided, adapters
         # that support per-block caching receive mutation-frequency batches
         # and can place cache breakpoints between them. When absent, the
@@ -651,6 +656,30 @@ class SessionManager:
         self._tools_tokens = count_tool_tokens(self._build_tool_schemas_fn())
         self._token_decomp_dirty = False
 
+    def _current_molt_count(self) -> int:
+        """Resolve the current Agent Session generation without an agent reference."""
+        if self._molt_count_fn is not None:
+            try:
+                value = self._molt_count_fn()
+            except Exception:
+                value = None
+            if type(value) is int and value >= 0:
+                return value
+        installed = self._agent_session
+        value = getattr(installed, "molt_count", 0)
+        return value if type(value) is int and value >= 0 else 0
+
+    def _current_cache_miss_budget(self) -> int:
+        """Resolve the effective budget through the optional narrow callback."""
+        if self._cache_miss_budget_fn is not None:
+            try:
+                value = self._cache_miss_budget_fn()
+            except Exception:
+                value = None
+            if type(value) is int and value > 0:
+                return value
+        return CACHE_MISS_BUDGET_DEFAULT
+
     def _track_usage(
         self,
         response: LLMResponse,
@@ -789,6 +818,27 @@ class SessionManager:
             if api_call_id:
                 snapshot["api_call_id"] = str(api_call_id)
             self._latest_token_usage_snapshot = snapshot
+
+            # Additive, versioned, since-molt snapshot.  This is built only after
+            # ``track_llm_usage`` advanced every cumulative counter, so it is
+            # coherent with this exact provider round even when no notification
+            # carrier/tool result follows (pure text and carrier-less tool use).
+            session_usage = {
+                "schema": "lingtai.token_usage.session/v1",
+                "molt_count": self._current_molt_count(),
+                "api_call_index": int(self._api_calls),
+                **build_session_token_economy(
+                    {
+                        "api_calls": self._api_calls,
+                        "input_tokens": self._total_input_tokens,
+                        "output_tokens": self._total_output_tokens,
+                        "cached_tokens": self._total_cached_tokens,
+                    },
+                    context_tokens=input_tokens,
+                    context_window=latest_context_window,
+                    cache_miss_budget=self._current_cache_miss_budget(),
+                ),
+            }
             usage_track_ms = _elapsed_ms(usage_start)
             telemetry_fields = dict(timing_fields or {})
             telemetry_fields["usage_track_ms"] = usage_track_ms
@@ -803,6 +853,7 @@ class SessionManager:
                 cached_tokens=response.usage.cached_tokens,
                 estimated=fallback,
                 api_call_id=response.api_call_id,
+                session_usage=session_usage,
                 **telemetry_fields,
             )
 

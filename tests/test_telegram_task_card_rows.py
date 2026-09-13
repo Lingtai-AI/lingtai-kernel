@@ -359,7 +359,7 @@ def test_metadata_omits_untrusted_or_invalid_values():
         "api_calls": object(),
         "context_tokens": "bad",
         "context_window": None,
-        "context_usage": 7,
+        "context_usage": -1,
     })
     assert lines == []
 

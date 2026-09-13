@@ -50,15 +50,20 @@ bounded safe fields and never creates another job engine.
   summary used by the existing `daemons` block
   (`src/lingtai/kernel/session_stats/__init__.py:787-831`).
 - `RecentAsyncWorkSnapshot` is the one per-agent single-flight owner. Under one
-  lock it advances each successfully completed value and returns daemon history
-  plus common recent work as one detached in-memory pair
-  (`src/lingtai/kernel/session_stats/__init__.py:834-907`).
+  lock it advances each successfully completed value, increments a completion
+  generation, and returns daemon history plus common recent work as one detached
+  in-memory pair with a dirty/publication signal. A successful Agent Record write
+  acknowledges that exact generation; the worker never calls a transport or
+  writes the record (`RecentAsyncWorkSnapshot.publication_snapshot`,
+  `RecentAsyncWorkSnapshot.mark_published`).
 
 ## Connections
 
 `BaseAgent._write_session_stats_record` schedules the owner without waiting,
 reads its last complete pair, and publishes that pair in one atomic
-`system/agent_record.json` replacement. The daemon lane reads only
+`system/agent_record.json` replacement. A completed dirty generation bypasses
+that hook's throttle once and is published without scheduling another refresh;
+normal clean cadence schedules the next read. The daemon lane reads only
 `daemon_dispatch.read_recent_daemon_states`; the Shell lane reads only atomic
 `system/jobs/<job-id>/state.json` truth and never probes a process. Telegram
 calls `query_published_async_work` and has no fallback state collector.
@@ -73,8 +78,9 @@ event projector is filesystem-neutral.
 ## State
 
 `BaseAgent` owns the Agent Record write throttle/sequence and one ephemeral
-`RecentAsyncWorkSnapshot`. The snapshot has no durable cursor or materialized
-history. Durable membership/state remains `daemons/.dispatch-ledger.jsonl`, the
+`RecentAsyncWorkSnapshot`. The owner keeps only lock-protected completed and
+published generation counters; those are process-local completion signals, not a
+new timer, queue, durable cursor, or materialized history. Durable membership/state remains `daemons/.dispatch-ledger.jsonl`, the
 selected `daemon.json` files, and `system/jobs/<job-id>/state.json`. The only
 new durable state is the nested `async_work` value inside the existing atomic
 Agent Record.

@@ -1659,6 +1659,57 @@ def _session_context_window(agent) -> int:
     return fallback if isinstance(fallback, int) and fallback > 0 else 0
 
 
+def build_session_token_economy(
+    aggregate: Mapping[str, Any],
+    *,
+    context_tokens: int | None = None,
+    context_window: int | None = None,
+    cache_miss_budget: int | None = None,
+) -> dict[str, Any]:
+    """Build one canonical since-molt token economy from raw counters.
+
+    This pure projection is shared by model-visible ``agent_meta`` and durable
+    ``llm_response.session_usage`` telemetry.  Keeping the arithmetic here makes
+    cache rate, cache miss, averages, context usage, and budget remaining
+    byte-for-byte comparable at both boundaries.
+    """
+    api_calls = _non_negative_int(aggregate.get("api_calls"))
+    input_tokens = _non_negative_int(aggregate.get("input_tokens"))
+    output_tokens = _non_negative_int(aggregate.get("output_tokens"))
+    cached_tokens = _non_negative_int(aggregate.get("cached_tokens"))
+    avg_input = int(round(input_tokens / api_calls)) if api_calls > 0 else 0
+    session_cache_rate = (
+        round(min(cached_tokens / input_tokens, 1.0), 5)
+        if input_tokens > 0
+        else 0.0
+    )
+    cache_miss = max(input_tokens - cached_tokens, 0)
+    economy: dict[str, Any] = {
+        "session_cache_rate": session_cache_rate,
+        "api_calls": api_calls,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_tokens": cached_tokens,
+        "avg_input_tokens_per_api_call": avg_input,
+        TOKEN_USAGE_CACHE_MISS_TOKENS_KEY: cache_miss,
+    }
+
+    if type(context_tokens) is int and context_tokens >= 0:
+        economy[TOKEN_USAGE_CONTEXT_TOKENS_KEY] = context_tokens
+        if type(context_window) is int and context_window > 0:
+            economy[TOKEN_USAGE_CONTEXT_WINDOW_KEY] = context_window
+            economy[TOKEN_USAGE_CONTEXT_USAGE_KEY] = round(
+                context_tokens / context_window, 5
+            )
+
+    if type(cache_miss_budget) is int and cache_miss_budget > 0:
+        economy[TOKEN_USAGE_CACHE_MISS_BUDGET_KEY] = cache_miss_budget
+        economy[TOKEN_USAGE_CACHE_MISS_REMAINING_KEY] = max(
+            cache_miss_budget - cache_miss, 0
+        )
+    return economy
+
+
 def _build_session_token_economy(
     agent, *, resolved_budget: int | None = None
 ) -> dict:
@@ -1742,48 +1793,23 @@ def _build_session_token_economy(
         if isinstance(candidate, Mapping):
             agg = candidate
 
-    api_calls = _non_negative_int(agg.get("api_calls"))
-    input_tokens = _non_negative_int(agg.get("input_tokens"))
-    output_tokens = _non_negative_int(agg.get("output_tokens"))
-    cached_tokens = _non_negative_int(agg.get("cached_tokens"))
-    avg_input = int(round(input_tokens / api_calls)) if api_calls > 0 else 0
-    session_cache_rate = (
-        round(min(cached_tokens / input_tokens, 1.0), 5)
-        if input_tokens > 0
-        else 0.0
+    context_tokens = (
+        _non_negative_int(usage.get("ctx_total_tokens"))
+        if "ctx_total_tokens" in usage
+        else None
     )
-    cache_miss = max(input_tokens - cached_tokens, 0)
-    economy = {
-        "session_cache_rate": session_cache_rate,
-        "api_calls": api_calls,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "cached_tokens": cached_tokens,
-        "avg_input_tokens_per_api_call": avg_input,
-        # Always-on: derivable from the cumulative counters alone.
-        TOKEN_USAGE_CACHE_MISS_TOKENS_KEY: cache_miss,
-    }
-
-    # Current context state — only when resolvable (never invented).
-    if "ctx_total_tokens" in usage:
-        context_tokens = _non_negative_int(usage.get("ctx_total_tokens"))
-        economy[TOKEN_USAGE_CONTEXT_TOKENS_KEY] = context_tokens
-        window = _session_context_window(agent)
-        if window > 0:
-            economy[TOKEN_USAGE_CONTEXT_WINDOW_KEY] = window
-            economy[TOKEN_USAGE_CONTEXT_USAGE_KEY] = round(
-                context_tokens / window, 5
-            )
-
+    window = _session_context_window(agent) if context_tokens is not None else None
     budget = (
         _resolve_cache_miss_budget(agent)
         if resolved_budget is None
         else resolved_budget
     )
-    if isinstance(budget, int) and not isinstance(budget, bool) and budget > 0:
-        economy[TOKEN_USAGE_CACHE_MISS_BUDGET_KEY] = budget
-        economy[TOKEN_USAGE_CACHE_MISS_REMAINING_KEY] = max(budget - cache_miss, 0)
-    return economy
+    return build_session_token_economy(
+        agg,
+        context_tokens=context_tokens,
+        context_window=window,
+        cache_miss_budget=budget,
+    )
 
 
 def build_tool_meta_token_usage(

@@ -853,6 +853,11 @@ class RecentAsyncWorkSnapshot:
         }
         self._lock = threading.Lock()
         self._refreshing = False
+        # Completion is distinct from publication: the worker only advances this
+        # in-memory generation.  An existing heartbeat/status hook consumes the
+        # dirty generation and remains the sole external record writer.
+        self._completed_generation = 0
+        self._published_generation = 0
 
     def schedule(self) -> bool:
         """Start one refresh if idle; return ``False`` when it was coalesced."""
@@ -880,6 +885,31 @@ class RecentAsyncWorkSnapshot:
         with self._lock:
             return copy.deepcopy(self._snapshot)
 
+    def publication_snapshot(self) -> tuple[dict[str, Any], int, bool]:
+        """Return ``(snapshot, generation, dirty)`` atomically.
+
+        ``dirty`` means a worker completion has not yet been included in a
+        successful Agent Record write.  The caller may bypass its normal
+        throttle exactly for that completed generation.
+        """
+        with self._lock:
+            generation = self._completed_generation
+            return (
+                copy.deepcopy(self._snapshot),
+                generation,
+                generation > self._published_generation,
+            )
+
+    def mark_published(self, generation: int) -> None:
+        """Acknowledge a generation only after its Agent Record write succeeds."""
+        with self._lock:
+            if type(generation) is not int:
+                return
+            self._published_generation = max(
+                self._published_generation,
+                min(generation, self._completed_generation),
+            )
+
     def _refresh(self) -> None:
         try:
             daemon_summary = aggregate_daemon_records(
@@ -905,6 +935,10 @@ class RecentAsyncWorkSnapshot:
             if isinstance(async_work, dict):
                 self._snapshot["async_work"] = async_work
             self._refreshing = False
+            # Completion itself is publishable even after a partial read failure:
+            # the detached pair (including ``refreshing=False`` and whichever
+            # source advanced) is newer than the in-flight record.
+            self._completed_generation += 1
 
 def _empty_daemon_usage_totals() -> dict:
     return {

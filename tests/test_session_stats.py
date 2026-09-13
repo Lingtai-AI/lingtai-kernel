@@ -310,37 +310,53 @@ def test_write_session_stats_record_writes_on_first_call(tmp_path):
     assert agent._session_stats_last_written_at == 1000.0
 
 
-def test_write_session_stats_record_publishes_last_complete_async_work_pair(tmp_path, monkeypatch):
+def test_write_session_stats_record_publishes_completion_once_inside_throttle(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv(session_stats.REFRESH_SECONDS_ENV, "5")
     async_work = session_stats.build_async_work_snapshot(tmp_path, now_epoch=1_000.0)
     assert async_work is not None
-    daemon_summary = {
-        "source": "dispatch_ledger", "present": 0, "scanned": 0,
-        "limit": 1000, "counts_by_state": {}, "usage": {},
-        "checked": {}, "warnings": [], "refreshing": False,
-    }
+    old_daemons = {"present": 0, "refreshing": False}
+    fresh_daemons = {"present": 9, "refreshing": False}
 
     class _Owner:
-        def __init__(self, *args, **kwargs):
-            pass
+        def __init__(self):
+            self.pair = {"daemons": old_daemons, "async_work": async_work}
+            self.generation = self.published = self.schedules = 0
 
         def schedule(self):
+            self.schedules += 1
             return True
 
-        def snapshot(self):
-            return {"daemons": daemon_summary, "async_work": async_work}
+        def publication_snapshot(self):
+            return dict(self.pair), self.generation, self.generation > self.published
 
-    monkeypatch.setattr(session_stats, "RecentAsyncWorkSnapshot", _Owner)
-    agent = _stub_agent(tmp_path)
+        def mark_published(self, generation):
+            self.published = max(self.published, generation)
+
+        def complete(self):
+            self.pair = {"daemons": fresh_daemons, "async_work": async_work}
+            self.generation += 1
+
+    owner = _Owner()
+    agent = _stub_agent(tmp_path, _lifecycle_clock=_FakeClock(wall=1_000.0))
     agent._session_stats_last_written_at = None
     agent._session_stats_sequence = 0
-    agent._async_work_snapshot = None
+    agent._async_work_snapshot = owner
 
     BaseAgent._write_session_stats_record(agent)
-
     record = session_stats.read_agent_record(tmp_path)
-    assert record is not None
-    assert record["daemons"] == daemon_summary
-    assert record["async_work"] == async_work
+    assert (record["daemons"], record["async_work"]) == (old_daemons, async_work)
+
+    owner.complete()
+    BaseAgent._write_session_stats_record(agent)
+    record = session_stats.read_agent_record(tmp_path)
+    assert (record["sequence"], record["daemons"]) == (2, fresh_daemons)
+    assert (owner.schedules, owner.published) == (1, 1)
+
+    BaseAgent._write_session_stats_record(agent)
+    assert session_stats.read_agent_record(tmp_path)["sequence"] == 2
+    assert owner.schedules == 1
 
 
 def test_write_session_stats_record_throttled_within_window(tmp_path, monkeypatch):
@@ -933,6 +949,12 @@ def test_recent_async_work_snapshot_single_flight_and_nonblocking(tmp_path, monk
     assert snapshot["daemons"]["present"] == 1
     assert snapshot["daemons"]["refreshing"] is False
     assert snapshot["async_work"] == async_work
+    published_pair, generation, dirty = owner.publication_snapshot()
+    assert published_pair == snapshot
+    assert generation == 1
+    assert dirty is True
+    owner.mark_published(generation)
+    assert owner.publication_snapshot()[2] is False
 
 
 def test_recent_async_work_snapshot_partial_failure_does_not_freeze_daemons(

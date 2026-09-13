@@ -18,6 +18,7 @@ related_files:
   - tests/test_telegram_task_card_programmable.py
   - tests/test_telegram_task_card_toggle.py
   - tests/test_telegram_task_card_event_tail.py
+  - tests/test_task_card_event_projection_shared.py
   - tests/test_telegram_task_card_rows.py
   - tests/test_telegram_task_card_display_expression.py
   - tests/test_mcp_skill_manuals.py
@@ -134,6 +135,18 @@ semantics live here. The public producer contract lives in
     Feishu and other consumers keep their own rendering mode. Telegram appends a
     concise `/taskcard on|off` and `/taskcard N (1-10)` settings hint immediately
     after the existing ask-agent line.
+14. Every new kernel `llm_response` may carry the additive child schema
+    `lingtai.token_usage.session/v1`. It is the authoritative since-molt SESSION
+    source for both live append and bounded rehydrate; legacy
+    `notification_block_injected` session metadata is fallback only until a valid
+    v1 snapshot is observed. A newer legacy carrier-less `llm_response`
+    invalidates stale legacy SESSION, and `psyche_molt` clears the old generation.
+    The shared reducer validates same-generation API ordering, cumulative/current
+    relationships, exact cache miss, cache/context rates and budget remaining,
+    monotonic counters, and generation reset. Malformed or incoherent current
+    snapshots render no SESSION; lower generation/index snapshots cannot replace
+    a newer accepted state. Per-call dividers and all non-token metadata retain
+    their existing sources and rendering.
 
 ## Port
 
@@ -211,6 +224,13 @@ this component.
     volatile-only ticks back into edits. This is rate-limit-critical behavior:
     regressing it produces no-op Bot API writes on every projection poll and can
     trigger Telegram `429 Too Many Requests` throttling.
+16. Telegram must not derive SESSION totals by summing its bounded event window,
+    scanning the token ledger, or reading Agent Session state directly. It may
+    only reduce versioned `llm_response` snapshots and legacy carriers already in
+    its bounded event tail through the shared pure projector. Restart rehydrate
+    applies the existing event window to SESSION events even when the recent tail
+    has no projectable activity rows; it must not retain or scan the full history
+    merely to recover an older visible row.
 
 ## Tests
 
@@ -222,9 +242,11 @@ this component.
   hidden-finalize clear semantics.
 - `tests/test_telegram_task_card_event_tail.py` continues to cover the automatic
   channel independently, including identical parenthesized reasoning-token
-  rendering from current-call carriers and `llm_response` fallbacks, plus
-  correlated a-priori summary time/input/output rendering from existing events
-  and a bounded ledger tail with fail-closed legacy/malformed cases.
+  rendering from current-call carriers and `llm_response` fallbacks, authoritative
+  v1 SESSION updates (including the 93.8k-to-150.3k stale regression),
+  carrier-less invalidation, molt clearing, live/rehydrate parity, plus correlated
+  a-priori summary time/input/output rendering from existing events and a bounded
+  ledger tail with fail-closed legacy/malformed cases.
 - `tests/test_telegram_task_card_rows.py` proves strict common `async_work`
   consumption, missing/malformed/stale omission, mixed-lane rendering, and
   pending sync-versus-async Shell wording without raw-argument leakage.

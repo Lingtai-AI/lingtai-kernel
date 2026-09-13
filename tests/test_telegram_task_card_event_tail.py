@@ -5,7 +5,8 @@ The automatic slot mechanically consumes the agent's authoritative
 ``logs/token_ledger.jsonl`` for correlated a-priori summary input/output counts,
 keeps the most recent N provider-call groups of canonical ``diary`` text and safe
 tool fields, and projects
-current session telemetry only from the latest final-carrier ``notification_block_injected``,
+current SESSION telemetry from authoritative versioned ``llm_response`` snapshots
+with legacy final-carrier ``notification_block_injected`` fallback,
 and broadcasts the same projection to every resident Task Card for the agent
 (no per-route correlation — this is an agent-behavior broadcast, not per-chat
 visibility).
@@ -154,6 +155,54 @@ def _tool_call_line(
     })
 
 
+def _llm_response_session_line(
+    *,
+    current_input: int = 150_300,
+    total_input: int = 150_300,
+    total_output: int = 500,
+    total_cached: int = 120_000,
+    molt_count: int = 4,
+    api_call_index: int = 1,
+) -> str:
+    budget = 1_000_000
+    miss = total_input - total_cached
+    window = 272_000
+    return json.dumps({
+        "type": "llm_response",
+        "api_call_id": f"api-{api_call_index}",
+        "input_tokens": current_input,
+        "output_tokens": 500,
+        "thinking_tokens": 20,
+        "cached_tokens": min(total_cached, current_input),
+        "session_usage": {
+            "schema": TaskCardEventProjection.SESSION_USAGE_SCHEMA,
+            "molt_count": molt_count,
+            "api_call_index": api_call_index,
+            "api_calls": api_call_index,
+            "input_tokens": total_input,
+            "output_tokens": total_output,
+            "cached_tokens": total_cached,
+            "avg_input_tokens_per_api_call": int(round(total_input / api_call_index)),
+            "session_cache_rate": round(total_cached / total_input, 5),
+            "cache_miss_tokens": miss,
+            "cache_miss_budget": budget,
+            "cache_miss_remaining_tokens": budget - miss,
+            "context_tokens": current_input,
+            "context_window": window,
+            "context_usage": round(current_input / window, 5),
+        },
+    })
+
+
+def _legacy_session_line(**session: object) -> str:
+    return json.dumps({
+        "type": "notification_block_injected",
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+            "session": session,
+        }}}},
+    })
+
+
 def _pre_resident(account: FakeAccount, chat_id: int, manager: TelegramManager) -> None:
     """Seed a resident Task Card target the way an existing account would have one."""
     account.set_task_card(chat_id, f"{account.alias}:{chat_id}:1")
@@ -228,6 +277,43 @@ def test_restart_rehydrates_latest_n_from_tail_without_checkpoint_file(tmp_path)
     manager2._broadcast_task_card_event_window()
     assert acct.get_task_card(555) == "mybot:555:1"
     assert [call[0:3] for call in acct.calls] == [("edit_message", 555, 1)]
+
+
+def test_restart_rehydrate_bounds_session_only_history(tmp_path, monkeypatch):
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    manager._TASK_CARD_EVENT_WINDOW = 3
+    manager._TASK_CARD_EVENT_TAIL_CHUNK = 1024
+    _write_lines(_events_path(tmp_path), [
+        _llm_response_session_line(
+            current_input=index * 100,
+            total_input=index * 100,
+            total_output=index * 10,
+            total_cached=index * 50,
+            api_call_index=index,
+        )
+        for index in range(1, 101)
+    ])
+
+    reduced_indexes = []
+    original_reduce = TaskCardEventProjection.reduce_session_usage_event
+
+    def counted_reduce(state, event, *, event_order=None):
+        if isinstance(event.get("session_usage"), dict):
+            reduced_indexes.append(event["session_usage"]["api_call_index"])
+        return original_reduce(state, event, event_order=event_order)
+
+    monkeypatch.setattr(
+        TaskCardEventProjection, "reduce_session_usage_event", counted_reduce
+    )
+    manager._init_event_tail()
+
+    assert reduced_indexes == [98, 99, 100]
+    assert manager._task_card_event_window() == []
+    assert (
+        manager._task_card_event_metadata["api_calls"],
+        manager._task_card_event_metadata["input_tokens"],
+    ) == (100, 10_000)
 
 
 # ---------------------------------------------------------------------------
@@ -1030,6 +1116,40 @@ def test_malformed_current_telemetry_carrier_clears_previous_snapshot(tmp_path):
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert "calls 7" not in edits[-1][3]
     assert "session ·" not in edits[-1][3]
+
+
+def test_fresh_llm_response_replaces_exact_stale_93_8k_session_and_rehydrates(tmp_path):
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [
+        _tool_call_line(),
+        _legacy_session_line(
+            input_tokens=93_800,
+            output_tokens=100,
+            session_cache_rate=0.5,
+            cache_miss_tokens=46_900,
+            cache_miss_budget=1_000_000,
+            api_calls=1,
+            context_tokens=93_800,
+            context_window=272_000,
+            context_usage=round(93_800 / 272_000, 5),
+        ),
+    ])
+    manager._poll_event_tail()
+    assert "tokens 93.8k" in acct.calls[-1][3]
+
+    _write_lines(events_path, [_llm_response_session_line()])
+    manager._poll_event_tail()
+    rendered = acct.calls[-1][3]
+    assert "tokens 150.3k" in rendered and "tokens 93.8k" not in rendered
+    assert "ctx 55% · 150.3k/272.0k" in rendered
+
+    manager2, _ = _manager(tmp_path, acct)
+    manager2._init_event_tail()
+    assert manager2._task_card_event_metadata == manager._task_card_event_metadata
+    assert manager2._task_card_event_metadata["input_tokens"] == 150_300
 
 
 def _programmable_update(manager, account, chat_id, lines):
