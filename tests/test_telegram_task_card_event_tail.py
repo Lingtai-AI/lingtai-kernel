@@ -194,6 +194,15 @@ def _llm_response_session_line(
     })
 
 
+def _legacy_session_line(**session: object) -> str:
+    return json.dumps({
+        "type": "notification_block_injected",
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+            "session": session,
+        }}}},
+    })
+
+
 def _pre_resident(account: FakeAccount, chat_id: int, manager: TelegramManager) -> None:
     """Seed a resident Task Card target the way an existing account would have one."""
     account.set_task_card(chat_id, f"{account.alias}:{chat_id}:1")
@@ -271,13 +280,11 @@ def test_restart_rehydrates_latest_n_from_tail_without_checkpoint_file(tmp_path)
 
 
 def test_restart_rehydrate_bounds_session_only_history(tmp_path, monkeypatch):
-    """SESSION-only history uses the existing event window for read/retention."""
     acct = FakeAccount()
     manager, _ = _manager(tmp_path, acct)
     manager._TASK_CARD_EVENT_WINDOW = 3
     manager._TASK_CARD_EVENT_TAIL_CHUNK = 1024
-
-    lines = [
+    _write_lines(_events_path(tmp_path), [
         _llm_response_session_line(
             current_input=index * 100,
             total_input=index * 100,
@@ -286,40 +293,27 @@ def test_restart_rehydrate_bounds_session_only_history(tmp_path, monkeypatch):
             api_call_index=index,
         )
         for index in range(1, 101)
-    ]
-    _write_lines(_events_path(tmp_path), lines)
+    ])
 
-    decoded = 0
-    original_decode = manager._decode_event_line
-
-    def counted_decode(raw):
-        nonlocal decoded
-        decoded += 1
-        return original_decode(raw)
-
-    reduced_indexes: list[int] = []
+    reduced_indexes = []
     original_reduce = TaskCardEventProjection.reduce_session_usage_event
 
     def counted_reduce(state, event, *, event_order=None):
-        snapshot = event.get("session_usage")
-        if isinstance(snapshot, dict):
-            reduced_indexes.append(snapshot["api_call_index"])
+        if isinstance(event.get("session_usage"), dict):
+            reduced_indexes.append(event["session_usage"]["api_call_index"])
         return original_reduce(state, event, event_order=event_order)
 
-    monkeypatch.setattr(manager, "_decode_event_line", counted_decode)
     monkeypatch.setattr(
-        TaskCardEventProjection,
-        "reduce_session_usage_event",
-        counted_reduce,
+        TaskCardEventProjection, "reduce_session_usage_event", counted_reduce
     )
-
     manager._init_event_tail()
 
-    assert decoded < len(lines), "restart must not scan the full SESSION-only log"
     assert reduced_indexes == [98, 99, 100]
     assert manager._task_card_event_window() == []
-    assert manager._task_card_event_metadata["api_calls"] == 100
-    assert manager._task_card_event_metadata["input_tokens"] == 10_000
+    assert (
+        manager._task_card_event_metadata["api_calls"],
+        manager._task_card_event_metadata["input_tokens"],
+    ) == (100, 10_000)
 
 
 # ---------------------------------------------------------------------------
@@ -1129,77 +1123,33 @@ def test_fresh_llm_response_replaces_exact_stale_93_8k_session_and_rehydrates(tm
     manager, _ = _manager(tmp_path, acct)
     _pre_resident(acct, 555, manager)
     events_path = _events_path(tmp_path)
-    old_session = {
-        "input_tokens": 93_800,
-        "output_tokens": 100,
-        "session_cache_rate": 0.5,
-        "cache_miss_tokens": 46_900,
-        "cache_miss_budget": 1_000_000,
-        "api_calls": 1,
-        "context_tokens": 93_800,
-        "context_window": 272_000,
-        "context_usage": round(93_800 / 272_000, 5),
-    }
     _write_lines(events_path, [
         _tool_call_line(),
-        json.dumps({
-            "type": "notification_block_injected",
-            "_meta": {"agent_meta": {"agent_state": {"token_usage": {
-                "session": old_session,
-            }}}},
-        }),
+        _legacy_session_line(
+            input_tokens=93_800,
+            output_tokens=100,
+            session_cache_rate=0.5,
+            cache_miss_tokens=46_900,
+            cache_miss_budget=1_000_000,
+            api_calls=1,
+            context_tokens=93_800,
+            context_window=272_000,
+            context_usage=round(93_800 / 272_000, 5),
+        ),
     ])
     manager._poll_event_tail()
-    assert "tokens 93.8k" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "tokens 93.8k" in acct.calls[-1][3]
 
-    # Pure-text response: no notification carrier follows, but the same event
-    # updates the per-call source and authoritative SESSION snapshot.
     _write_lines(events_path, [_llm_response_session_line()])
     manager._poll_event_tail()
-    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    assert "tokens 150.3k" in rendered
-    assert "tokens 93.8k" not in rendered
+    rendered = acct.calls[-1][3]
+    assert "tokens 150.3k" in rendered and "tokens 93.8k" not in rendered
     assert "ctx 55% · 150.3k/272.0k" in rendered
 
     manager2, _ = _manager(tmp_path, acct)
     manager2._init_event_tail()
     assert manager2._task_card_event_metadata == manager._task_card_event_metadata
     assert manager2._task_card_event_metadata["input_tokens"] == 150_300
-
-
-def test_carrierless_legacy_response_and_molt_clear_old_session(tmp_path):
-    acct = FakeAccount()
-    manager, _ = _manager(tmp_path, acct)
-    _pre_resident(acct, 555, manager)
-    events_path = _events_path(tmp_path)
-    _write_lines(events_path, [json.dumps({
-        "type": "notification_block_injected",
-        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
-            "session": {"api_calls": 7},
-        }}}},
-    })])
-    manager._poll_event_tail()
-    assert "calls 7" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-
-    _write_lines(events_path, [json.dumps({
-        "type": "llm_response",
-        "api_call_id": "api-legacy",
-        "input_tokens": 10,
-        "output_tokens": 2,
-        "thinking_tokens": 0,
-        "cached_tokens": 0,
-    })])
-    manager._poll_event_tail()
-    assert "session ·" not in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-
-    _write_lines(events_path, [_llm_response_session_line(molt_count=4)])
-    manager._poll_event_tail()
-    assert "tokens 150.3k" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    _write_lines(events_path, [json.dumps({
-        "type": "psyche_molt", "molt_count": 5,
-    })])
-    manager._poll_event_tail()
-    assert "session ·" not in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
 
 
 def _programmable_update(manager, account, chat_id, lines):

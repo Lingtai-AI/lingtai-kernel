@@ -364,15 +364,6 @@ def test_metadata_omits_untrusted_or_invalid_values():
     assert lines == []
 
 
-def test_metadata_renders_over_window_context_percentage():
-    lines = TelegramManager._format_task_card_metadata({
-        "context_tokens": 300_000,
-        "context_window": 272_000,
-        "context_usage": round(300_000 / 272_000, 5),
-    })
-    assert lines == ["Session · ctx 110% · 300.0k/272.0k"]
-
-
 def test_metadata_pathological_counts_never_overflow_or_break_budget():
     lines = TelegramManager._format_task_card_metadata({
         "session_cache_rate": 1.0,

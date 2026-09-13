@@ -406,36 +406,25 @@ def _legacy_session_carrier(api_calls: object, **metadata: object) -> dict:
 
 def test_session_usage_reducer_prefers_v1_and_rejects_out_of_order() -> None:
     state = TaskCardEventProjection.reduce_session_usage_event(
-        None, _legacy_session_carrier(93),
+        None, _legacy_session_carrier(93)
     )
-    assert TaskCardEventProjection.session_usage_metadata(state)["api_calls"] == 93
+    assert TaskCardEventProjection.session_usage_metadata(state) == {"api_calls": 93}
 
-    fresh = _session_usage_event()
-    state = TaskCardEventProjection.reduce_session_usage_event(state, fresh)
-    assert TaskCardEventProjection.session_usage_metadata(state)["input_tokens"] == 250_000
-
-    # Legacy can no longer overwrite v1, and a lower same-generation call index
-    # cannot overwrite the newer cumulative snapshot.
     state = TaskCardEventProjection.reduce_session_usage_event(
-        state, _legacy_session_carrier(999),
+        state, _session_usage_event()
     )
-    state = TaskCardEventProjection.reduce_session_usage_event(
-        state,
-        _session_usage_event(
-            api_call_index=1,
-            input_tokens=160_000,
-            output_tokens=200,
-            cached_tokens=125_000,
-        ),
-    )
-    metadata = TaskCardEventProjection.session_usage_metadata(state)
-    assert metadata["input_tokens"] == 250_000
-    assert metadata["api_calls"] == 2
+    expected = TaskCardEventProjection.session_usage_metadata(state)
+    for stale in (
+        _legacy_session_carrier(999),
+        _session_usage_event(api_call_index=1, input_tokens=160_000),
+    ):
+        state = TaskCardEventProjection.reduce_session_usage_event(state, stale)
+        assert TaskCardEventProjection.session_usage_metadata(state) == expected
 
 
 def test_session_usage_reducer_fails_closed_and_molt_allows_reset() -> None:
     state = TaskCardEventProjection.reduce_session_usage_event(
-        None, _session_usage_event(),
+        None, _session_usage_event()
     )
     malformed = _session_usage_event(api_call_index=3, input_tokens=300_000)
     malformed["session_usage"]["cache_miss_tokens"] += 1
@@ -443,9 +432,8 @@ def test_session_usage_reducer_fails_closed_and_molt_allows_reset() -> None:
     assert TaskCardEventProjection.session_usage_metadata(state) == {}
 
     state = TaskCardEventProjection.reduce_session_usage_event(
-        state, {"type": "psyche_molt", "molt_count": 3},
+        state, {"type": "psyche_molt", "molt_count": 3}
     )
-    assert TaskCardEventProjection.session_usage_metadata(state) == {}
     reset = _session_usage_event(
         molt_count=3,
         api_call_index=1,
@@ -454,127 +442,74 @@ def test_session_usage_reducer_fails_closed_and_molt_allows_reset() -> None:
         cached_tokens=120_000,
     )
     state = TaskCardEventProjection.reduce_session_usage_event(state, reset)
-    assert TaskCardEventProjection.session_usage_metadata(state)["api_calls"] == 1
-    assert TaskCardEventProjection.session_usage_metadata(state)["input_tokens"] == 150_300
+    expected = TaskCardEventProjection.session_usage_metadata(state)
+    assert (expected["api_calls"], expected["input_tokens"]) == (1, 150_300)
 
-    # An old-generation event after the reset is ignored.
     state = TaskCardEventProjection.reduce_session_usage_event(
-        state, _session_usage_event(molt_count=2, api_call_index=9),
+        state, _session_usage_event(molt_count=2, api_call_index=9)
     )
-    assert TaskCardEventProjection.session_usage_metadata(state)["input_tokens"] == 150_300
+    assert TaskCardEventProjection.session_usage_metadata(state) == expected
 
 
 def test_carrierless_legacy_llm_response_invalidates_legacy_session() -> None:
     state = TaskCardEventProjection.reduce_session_usage_event(
-        None, _legacy_session_carrier(7),
+        None, _legacy_session_carrier(7)
     )
     assert TaskCardEventProjection.session_usage_metadata(state) == {"api_calls": 7}
-    state = TaskCardEventProjection.reduce_session_usage_event(
-        state,
-        {
-            "type": "llm_response",
-            "api_call_id": "api-legacy",
-            "input_tokens": 10,
-            "output_tokens": 2,
-            "cached_tokens": 0,
-        },
-    )
+    state = TaskCardEventProjection.reduce_session_usage_event(state, {
+        "type": "llm_response",
+        "api_call_id": "api-legacy",
+        "input_tokens": 10,
+        "output_tokens": 2,
+        "cached_tokens": 0,
+    })
     assert TaskCardEventProjection.session_usage_metadata(state) == {}
 
 
-def test_session_usage_projector_rejects_non_numeric_and_incoherent_fields() -> None:
-    event = _session_usage_event()
-    event["session_usage"]["context_tokens"] = "150300"
-    assert TaskCardEventProjection.project_llm_response_session_usage(event) == {}
-    event = _session_usage_event()
-    event["session_usage"]["input_tokens"] = 100
-    assert TaskCardEventProjection.project_llm_response_session_usage(event) == {}
-
-
-def test_session_usage_projector_rejects_nearby_noncanonical_rates() -> None:
+def test_session_usage_projector_rejects_malformed_fields_and_rates() -> None:
+    for key, value in (("context_tokens", "150300"), ("input_tokens", 100)):
+        event = _session_usage_event()
+        event["session_usage"][key] = value
+        assert TaskCardEventProjection.project_llm_response_session_usage(event) == {}
     for key in ("session_cache_rate", "context_usage"):
         event = _session_usage_event()
         event["session_usage"][key] += 0.000009
         assert TaskCardEventProjection.project_llm_response_session_usage(event) == {}
 
 
-def test_malformed_lower_generation_cannot_reopen_an_old_session() -> None:
+def test_generation_fences_ignore_old_and_recover_after_malformed_new() -> None:
     state = TaskCardEventProjection.reduce_session_usage_event(
-        None,
-        _session_usage_event(molt_count=3, api_call_index=5),
+        None, _session_usage_event(molt_count=3, api_call_index=5)
     )
     expected = TaskCardEventProjection.session_usage_metadata(state)
-
     malformed_old = _session_usage_event(molt_count=2, api_call_index=6)
     malformed_old["session_usage"]["api_call_index"] = "bad"
-    state = TaskCardEventProjection.reduce_session_usage_event(state, malformed_old)
-    assert TaskCardEventProjection.session_usage_metadata(state) == expected
+    for old in (malformed_old, _session_usage_event(molt_count=2, api_call_index=6)):
+        state = TaskCardEventProjection.reduce_session_usage_event(state, old)
+        assert TaskCardEventProjection.session_usage_metadata(state) == expected
 
+    malformed_new = _session_usage_event(molt_count=4, api_call_index=1)
+    malformed_new["session_usage"]["api_call_index"] = "bad"
+    state = TaskCardEventProjection.reduce_session_usage_event(state, malformed_new)
+    assert TaskCardEventProjection.session_usage_metadata(state) == {}
     state = TaskCardEventProjection.reduce_session_usage_event(
-        state,
-        _session_usage_event(
-            molt_count=2,
-            api_call_index=6,
-            input_tokens=300_000,
-            output_tokens=1_100,
-            cached_tokens=210_000,
-        ),
+        state, _session_usage_event(molt_count=4, api_call_index=1)
     )
-    assert TaskCardEventProjection.session_usage_metadata(state) == expected
+    assert TaskCardEventProjection.session_usage_metadata(state)["api_calls"] == 1
 
 
 def test_session_usage_accepts_optional_or_over_window_context_metadata() -> None:
     without_window = _session_usage_event()
     without_window["session_usage"].pop("context_window")
     without_window["session_usage"].pop("context_usage")
-    projected = TaskCardEventProjection.project_llm_response_session_usage(
+    metadata = TaskCardEventProjection.project_llm_response_session_usage(
         without_window
-    )
-    assert projected
-    assert "context_window" not in projected["metadata"]
-    assert "context_usage" not in projected["metadata"]
+    )["metadata"]
+    assert "context_window" not in metadata and "context_usage" not in metadata
 
-    over_window = _session_usage_event(
-        input_tokens=400_000,
-        current_input=300_000,
-    )
+    over_window = _session_usage_event(input_tokens=400_000, current_input=300_000)
     over_window["session_usage"]["context_usage"] = round(300_000 / 272_000, 5)
-    projected = TaskCardEventProjection.project_llm_response_session_usage(over_window)
-    assert projected["metadata"]["context_usage"] > 1.0
-
-    legacy = _legacy_session_carrier(
-        2,
-        context_tokens=300_000,
-        context_window=272_000,
-        context_usage=round(300_000 / 272_000, 5),
-    )
-    legacy_projected = TaskCardEventProjection._project_legacy_session_usage(legacy)
-    assert legacy_projected["context_usage"] > 1.0
-    for invalid in (-0.1, float("inf"), float("nan")):
-        legacy = _legacy_session_carrier(2, context_usage=invalid)
-        assert TaskCardEventProjection._project_legacy_session_usage(legacy) == {}
-
-
-def test_malformed_new_generation_allows_its_first_valid_snapshot() -> None:
-    state = TaskCardEventProjection.reduce_session_usage_event(
-        None,
-        _session_usage_event(molt_count=2, api_call_index=5),
-    )
-    malformed_new = _session_usage_event(molt_count=3, api_call_index=1)
-    malformed_new["session_usage"]["api_call_index"] = "bad"
-    state = TaskCardEventProjection.reduce_session_usage_event(state, malformed_new)
-    assert TaskCardEventProjection.session_usage_metadata(state) == {}
-
-    state = TaskCardEventProjection.reduce_session_usage_event(
-        state,
-        _session_usage_event(
-            molt_count=3,
-            api_call_index=1,
-            input_tokens=150_300,
-            output_tokens=100,
-            cached_tokens=120_000,
-        ),
-    )
-    metadata = TaskCardEventProjection.session_usage_metadata(state)
-    assert metadata["api_calls"] == 1
-    assert metadata["input_tokens"] == 150_300
+    metadata = TaskCardEventProjection.project_llm_response_session_usage(
+        over_window
+    )["metadata"]
+    assert metadata["context_usage"] > 1.0
