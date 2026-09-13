@@ -188,7 +188,7 @@ class TelegramAccount:
         # this account is one of several Telegram bots/chats.
         self._taskcard_enabled = taskcard_enabled or (lambda: True)
         self._set_taskcard_enabled = set_taskcard_enabled
-        self._taskcard_normal_rows = taskcard_normal_rows or (lambda: 1)
+        self._taskcard_normal_rows = taskcard_normal_rows or (lambda: 3)
         self._set_taskcard_normal_rows = set_taskcard_normal_rows
         self._taskcard_locale = taskcard_locale or (lambda: "en")
         self._set_taskcard_locale = set_taskcard_locale

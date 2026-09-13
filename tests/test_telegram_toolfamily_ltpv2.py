@@ -168,7 +168,7 @@ def test_taskcard_refresh_setting_defaults_invalid_values_preserves_valid_siblin
         service = TelegramService(tmp_path, [{"alias": "acct", "bot_token": "x"}], lambda *_: None)
         assert any("max_refreshes" in record.message for record in caplog.records)
         assert service.taskcard_enabled() is payload.get("taskcard", True)
-        assert service.taskcard_normal_rows() == payload.get("normal_rows", 1)
+        assert service.taskcard_normal_rows() == payload.get("normal_rows", 3)
         assert service.taskcard_max_refreshes() == 1000
         service.set_taskcard_max_refreshes(7)
         persisted = json.loads(path.read_text())

@@ -39,7 +39,7 @@ def test_footer_renders_with_current_row_count_suffix():
     ])
     assert (
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
-        "/taskcard N sets normal rows (1-10, current: 1)."
+        "/taskcard N sets normal rows (1-10, current: 3)."
     ) in text
 
 
