@@ -14,6 +14,6 @@
   "email.unread_digest.no_subject": "（无题）",
   "soul.dismiss_description": "销心流之告。action='dismiss' 时用。",
   "avatar.parent_prompt": "[系统] 汝乃 {parent_name} 之他我，其址为 {parent_address}。请记此事于汝 psyche memory 之中，以志本源。若功成、遇难解之事、或需复命之时，以飞鸽达汝父代，址如上所示。",
-  "knowledge.preamble": "下列诸卷，汝跨凝蜕之私藏长记也。欲忆昔之所习、所断、所悟者，以 read 取其 location 所指之 KNOWLEDGE.md，循而依之。每卷之匣或附副件（script、素材、原始之日志）——KNOWLEDGE.md 自有所引。常用之卷可志于 system/pad.md：以 file.write/file.edit 书之，再以 context.rebuild 行之。知识乃汝私藏；若无可取者，勿妄载。",
-  "skills.preamble": "下列诸技，各司其事。凡所遇事与技之描合者，以 read 取其 location 所指之 SKILL.md，循而行之。每技之匣，或含副件（script、template、data），SKILL.md 自有所引。常用之技，可志于 system/pad.md：以 file.write/file.edit 书之，再以 context.rebuild 行之。若无可取者，勿妄载。"
+  "knowledge.preamble": "下列诸卷，汝跨凝蜕之私藏长记也。欲忆昔之所习、所断、所悟者，以 shell 取其 location 所指之 KNOWLEDGE.md，循而依之。每卷之匣或附副件（script、素材、原始之日志）——KNOWLEDGE.md 自有所引。常用之卷可志于 system/pad.md：以 shell 书之，再以 context.rebuild 行之。知识乃汝私藏；若无可取者，勿妄载。",
+  "skills.preamble": "下列诸技，各司其事。凡所遇事与技之描合者，以 shell 取其 location 所指之 SKILL.md，循而行之。每技之匣，或含副件（script、template、data），SKILL.md 自有所引。常用之技，可志于 system/pad.md：以 shell 书之，再以 context.rebuild 行之。若无可取者，勿妄载。"
 }

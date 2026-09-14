@@ -20,7 +20,6 @@ related_files:
   - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md
   - src/lingtai/intrinsic_skills/pad-manual/SKILL.md
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/read-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/goal-manual/SKILL.md
@@ -82,8 +81,8 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   `scripts/bench_agent_session_rebuild.py`.
 - `lingtai-doctor/` — read-only health diagnostics for agents and bots, with a
   bundled `scripts/doctor.py` for layered local checks that expose no secrets.
-- Single-file bundles — `lingtai-manual/`, `pad-manual/`, `psyche-manual/`, and
-  `read-manual/`, each one `SKILL.md` documenting its namesake surface.
+- Single-file bundles — `lingtai-manual/`, `pad-manual/`, and `psyche-manual/`,
+  each one `SKILL.md` documenting its namesake surface.
 
 ## Connections
 

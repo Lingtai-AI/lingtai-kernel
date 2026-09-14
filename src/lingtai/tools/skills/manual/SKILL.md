@@ -60,10 +60,10 @@ psyche(action="skills", input={}, reasoning="load skills guidance")
 This strict-empty signpost performs no scan, injection, create, edit, or load.
 Routine schema-sufficient calls need no ritual manual reload; read this route when
 the catalog, roots, or skill lifecycle is unfamiliar. To inspect a cataloged body,
-use its `location` with the complete read call:
+use its `location` with a bounded `shell` read:
 
 ```text
-file(action="read", input={"file_path": "<location>", "offset": null, "limit": null, "max_chars": null}, reasoning="read cataloged skill")
+shell(action="run", input={"command": "sed -n '1,120p' -- \"<location>\"", "timeout": null, "working_dir": null, "async": null, "reminder": null}, reasoning="read cataloged skill, bounded")
 ```
 
 `context(action="rebuild", input={}, reasoning="rescan skills catalog")` rescans
@@ -120,8 +120,10 @@ rename or reuse an existing skill on a collision. The example only scans `.libra
 Installation never authorizes side effects described by the skill. For sharing, send the source URL or artifact path and this local-install /
 validate / rebuild recipe; each receiver owns its copy and rollback.
 
-To author a skill, use the complete write envelope
-`file(action="write", input={"file_path": ".library/custom/<skill-name>/SKILL.md", "content": "..."}, reasoning="author skill")`, then put at least this frontmatter in the file:
+To author a skill, write it with `shell` from your working directory
+(`mkdir -p .library/custom/<skill-name>`, then a quoted heredoc into
+`.library/custom/<skill-name>/SKILL.md`, then `cat` it back to verify), and
+put at least this frontmatter in the file:
 
 ```yaml
 ---

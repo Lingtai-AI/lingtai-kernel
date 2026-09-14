@@ -46,12 +46,6 @@ def test_agent_double_start(tmp_path):
     agent.stop(timeout=2.0)
 
 
-def test_base_agent_file_io_defaults_to_none(tmp_path):
-    """BaseAgent should have _file_io=None when no file_io is passed."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    assert agent._file_io is None
-
-
 # ---------------------------------------------------------------------------
 # Intrinsics filtering
 # ---------------------------------------------------------------------------
@@ -822,7 +816,7 @@ def test_base_agent_has_no_non_kernel_imports():
     else:
         sources = [kernel_dir / "base_agent.py"]
 
-    non_kernel = {"services.file_io", "services.mcp", "services.vision", "services.websearch",
+    non_kernel = {"services.mcp", "services.vision", "services.websearch",
                   "services.tts", "services.image_gen", "services.transcription", "services.music_gen",
                   "capabilities", "addons", "agent"}
 

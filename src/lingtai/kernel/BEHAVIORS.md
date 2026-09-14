@@ -84,7 +84,7 @@ the executing agent's `.notification/` or session state.
   shared global Nudge policy
   ([CONTRACT.md](../CONTRACT.md#contract-rules))
 - **supersedes**: `tests/test_kernel_version_nudge.py::test_installed_runtime_refresh_nudge_does_not_hit_remote`
-- **runner**: any LingTai agent with `shell` and `file` tools at a checkout of
+- **runner**: any LingTai agent with the `shell` tool at a checkout of
   this repository (Python 3.10+)
 - **prerequisites**: a checkout of this repo at `<repo-root>`; an empty scratch
   dir `<scratch>`; python on PATH
@@ -208,7 +208,7 @@ remote probe was started (`last_remote_check_date`/`latest_seen` present).
   `tests/test_kernel_version_nudge.py::test_dev_or_editable_runtime_skips_and_clears_kernel_nudge`,
   `tests/test_kernel_version_nudge.py::test_runtime_info_detects_source_checkout_from_wrapper_file`,
   `tests/test_kernel_version_nudge.py::test_malformed_remote_version_cannot_be_promoted_by_numeric_substrings`
-- **runner**: any LingTai agent with `shell` and `file` tools at a checkout of
+- **runner**: any LingTai agent with the `shell` tool at a checkout of
   this repository
 - **prerequisites**: a checkout of this repo at `<repo-root>`; an empty scratch
   dir `<scratch>`; python on PATH
@@ -440,7 +440,7 @@ summary is accepted or a non-error result is returned.
 - **supersedes**: `tests/test_large_result_rescan.py::test_rescan_returns_zero_for_huge_history`,
   `tests/test_large_result_no_notification.py::test_large_result_still_reported_by_current_tool_result_chars`,
   `tests/test_large_result_no_notification.py::test_current_tool_result_chars_reports_threshold_and_over_count`
-- **runner**: any LingTai agent with `shell` and `file` tools at a checkout of
+- **runner**: any LingTai agent with the `shell` tool at a checkout of
   this repository
 - **prerequisites**: a checkout of this repo at `<repo-root>`; python on PATH
 - **estimate**: 2 min
@@ -557,7 +557,7 @@ publish does not land in `system.json`.
 - **supersedes**: `tests/test_tool_meta_comment_overflow.py::test_spilled_result_carries_overflow_comment`,
   `tests/test_tool_meta_comment_overflow.py::test_large_inline_result_carries_overflow_comment`,
   `tests/test_tool_meta_comment_overflow.py::test_small_result_has_no_overflow_comment`
-- **runner**: any LingTai agent with `shell` and `file` tools at a checkout of
+- **runner**: any LingTai agent with the `shell` tool at a checkout of
   this repository
 - **prerequisites**: a checkout of this repo at `<repo-root>`; python on PATH
 - **estimate**: 2 min
@@ -680,7 +680,7 @@ identity fields.
   and the shared global policy
   ([CONTRACT.md](../CONTRACT.md#contract-rules))
 - **supersedes**: `tests/test_source_drift.py` (emit/clear scenarios)
-- **runner**: any LingTai agent with `shell` and `file` tools at a checkout of
+- **runner**: any LingTai agent with the `shell` tool at a checkout of
   this repository
 - **prerequisites**: a checkout of this repo at `<repo-root>`; an empty scratch
   dir `<scratch>`; python and `git` on PATH

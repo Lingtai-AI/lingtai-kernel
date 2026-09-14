@@ -23,7 +23,7 @@ def _build_lib(plib: Path, *, big_limit=200000, small_limit=8000):
         "manifest": {
             "llm": {"provider": "p1", "model": "m1",
                     "api_key": None, "api_key_env": "P1KEY"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
             "context_limit": big_limit,
         },
     }))
@@ -33,7 +33,7 @@ def _build_lib(plib: Path, *, big_limit=200000, small_limit=8000):
         "manifest": {
             "llm": {"provider": "p2", "model": "m2",
                     "api_key": None, "api_key_env": "P2KEY"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
             "context_limit": small_limit,
         },
     }))
@@ -43,7 +43,7 @@ def _build_lib(plib: Path, *, big_limit=200000, small_limit=8000):
         "manifest": {
             "llm": {"provider": "p3", "model": "m3",
                     "api_key": None, "api_key_env": "P3KEY"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
             # NB: no context_limit field
         },
     }))
@@ -217,7 +217,7 @@ def test_swap_skips_guard_when_target_limit_is_zero(tmp_path, monkeypatch):
         "manifest": {
             "llm": {"provider": "p4", "model": "m4",
                     "api_key": None, "api_key_env": "P4KEY"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
             "context_limit": 0,
         },
     }))
@@ -251,7 +251,7 @@ def test_swap_skips_guard_when_target_limit_is_negative(tmp_path, monkeypatch):
         "manifest": {
             "llm": {"provider": "p5", "model": "m5",
                     "api_key": None, "api_key_env": "P5KEY"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
             "context_limit": -1,
         },
     }))
@@ -293,7 +293,7 @@ def test_guard_reads_context_limit_from_llm_block(tmp_path, monkeypatch):
             "llm": {"provider": "px", "model": "mx",
                     "api_key": None, "api_key_env": "PXKEY",
                     "context_limit": 8000},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
         },
     }))
     _allow_preset(agent, plib / "tight.json")

@@ -32,7 +32,7 @@ Pinned pytest commands must run from the repo root with the project's Python.
 - **id**: PY001
 - **title**: Psyche manuals and settings are read-only; durable changes apply only through file + rebuild
 - **guards**: `psyche-tool-contract` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
 - **estimate**: ≈ 15 minutes
 
@@ -46,7 +46,7 @@ Pinned pytest commands must run from the repo root with the project's Python.
    reconstruct, and confirm the focused provider assertion sees the newly
    applied snapshot. Call settings with any input key and record the rejection.
    Hash all prompt/source files around each SHOW call.
-4. Make a durable change with `file.edit` on the domain's own source and confirm the prompt section does not change until one explicit `context(action="rebuild", input={}, reasoning="...")` (or passive refresh/molt) is applied.
+4. Make a durable change with `shell` (a verified exact replacement on the domain's own source, read back afterwards) and confirm the prompt section does not change until one explicit `context(action="rebuild", input={}, reasoning="...")` (or passive refresh/molt) is applied.
 5. Inspect the focused prompt-plan tests and confirm the three static sections are
    composed in order as one immutable candidate, startup passes the exact same
    object through reconstruction, and a failed final flush restores that plan

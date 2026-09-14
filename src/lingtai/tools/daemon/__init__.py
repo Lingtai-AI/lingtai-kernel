@@ -583,17 +583,16 @@ def _parent_host_tool_floor() -> frozenset[str]:
     NOT re-declare the parent's always-on ``CORE_DEFAULTS`` host floor, because
     the TUI preset wizard only writes overrides/opt-ins into
     ``manifest.capabilities``. So those floor tools must still resolve from the
-    parent surface under a preset. But the floor is exactly the host
-    primitives — ``shell`` and ``file`` (the one family whose actions are
-    read/write/edit/glob/grep) — and nothing more: optional/provider parent
-    tools (e.g. ``vision``, ``web_search``) must NOT silently fall back to the
-    parent when a preset omits or fails them.
+    parent surface under a preset. But the floor is exactly the one host
+    primitive — ``shell`` — and nothing more: optional/provider parent tools
+    (e.g. ``vision``, ``web_search``) must NOT silently fall back to the parent
+    when a preset omits or fails them.
 
     This is an explicit contract allowlist. Growing ``CORE_DEFAULTS`` must not
     silently widen what a preset child may borrow from its parent.
-    The result is exactly {shell, file}.
+    The result is exactly {shell}.
     """
-    return frozenset({"shell", "file"})
+    return frozenset({"shell"})
 
 
 # Env vars that override Claude Code's normal first-party OAuth credentials.

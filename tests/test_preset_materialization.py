@@ -17,7 +17,7 @@ def _make_workdir(tmp_path: Path, active_preset: str | None = None,
         "language": "en",
         "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
                 "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-        "capabilities": {"file": {}},
+        "capabilities": {"shell": {}},
         "soul": {"delay": 120},
         "stamina": 3600,
         "molt_pressure": 0.8,
@@ -89,7 +89,7 @@ def test_materialize_substitutes_llm_and_capabilities(tmp_path, monkeypatch):
             "manifest": {
                 "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
                         "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
-                "capabilities": {"file": {}, "vision": {"provider": "minimax",
+                "capabilities": {"shell": {}, "vision": {"provider": "minimax",
                                                         "api_key_env": "MINIMAX_API_KEY"}},
             },
         },
@@ -117,7 +117,7 @@ def test_materialize_preserves_thinking_from_active_preset(tmp_path):
                     "model": "gpt-5.5",
                     "thinking": "xhigh",
                 },
-                "capabilities": {"file": {}},
+                "capabilities": {"shell": {}},
             },
         },
     })
@@ -153,7 +153,7 @@ def test_refresh_preset_thinking_reaches_session_path(tmp_path):
                     "model": "gpt-5.5",
                     "thinking": "xhigh",
                 },
-                "capabilities": {"file": {}},
+                "capabilities": {"shell": {}},
             },
         },
     })
@@ -215,7 +215,7 @@ def test_refresh_preset_omitted_thinking_defaults_to_xhigh(tmp_path, monkeypatch
                     "provider": "codex",
                     "model": "gpt-5.5",
                 },
-                "capabilities": {"file": {}},
+                "capabilities": {"shell": {}},
             },
         },
     })
@@ -268,7 +268,7 @@ def test_refresh_custom_responses_thinking_reaches_session_path(
             "description": {"summary": "Custom Responses"},
             "manifest": {
                 "llm": llm,
-                "capabilities": {"file": {}},
+                "capabilities": {"shell": {}},
             },
         },
     })
@@ -321,7 +321,7 @@ def test_materialize_default_presets_path(tmp_path, monkeypatch):
         "manifest": {
             "llm": {"provider": "deepseek-NEW", "model": "v4-NEW",
                     "api_key": None, "api_key_env": "X"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
         },
     }))
     wd = _make_workdir(tmp_path, active_preset="~/.lingtai-tui/presets/deepseek.json")
@@ -343,7 +343,7 @@ def test_materialize_relative_presets_path_resolves_against_workdir(tmp_path, mo
         "manifest": {
             "llm": {"provider": "p1", "model": "m1",
                     "api_key": None, "api_key_env": "P1KEY"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
         },
     }))
     # Set up env_file (validate_init requires it when api_key_env is set)
@@ -400,7 +400,7 @@ def test_materialize_discards_context_limit_from_legacy_layout(tmp_path, monkeyp
             "manifest": {
                 "llm": {"provider": "p", "model": "m",
                         "api_key": None, "api_key_env": "PKEY"},
-                "capabilities": {"file": {}},
+                "capabilities": {"shell": {}},
                 "context_limit": 16384,
             },
         },
@@ -433,7 +433,7 @@ def test_materialize_discards_context_limit_from_llm_block(tmp_path, monkeypatch
                 "llm": {"provider": "p", "model": "m",
                         "api_key": None, "api_key_env": "PKEY",
                         "context_limit": 16384},
-                "capabilities": {"file": {}},
+                "capabilities": {"shell": {}},
             },
         },
     })
@@ -464,7 +464,7 @@ def test_materialize_preserves_init_capability_overrides(tmp_path, monkeypatch):
                 "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
                         "api_key": None, "api_key_env": "GEMINI_API_KEY"},
                 # Preset enables daemon with its own (default-ish) ceiling.
-                "capabilities": {"file": {}, "daemon": {"manager_pool_size": 10}},
+                "capabilities": {"shell": {}, "daemon": {"manager_pool_size": 10}},
             },
         },
     })
@@ -477,8 +477,8 @@ def test_materialize_preserves_init_capability_overrides(tmp_path, monkeypatch):
     a = _make_probe_agent(wd)
     data = a._read_init()
     caps = data["manifest"]["capabilities"]
-    # Preset still chose the capability set (file is present from the preset)...
-    assert "file" in caps
+    # Preset still chose the capability set (shell is present from the preset)...
+    assert "shell" in caps
     assert "daemon" in caps
     # ...but the init.json override wins for the key it specified.
     assert caps["daemon"]["manager_pool_size"] == 30
@@ -535,7 +535,7 @@ def test_materialize_preserves_core_default_override_when_preset_omits_it(tmp_pa
                 "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
                         "api_key": None, "api_key_env": "GEMINI_API_KEY"},
                 # Note: NO daemon key. Has a non-core optional cap instead.
-                "capabilities": {"file": {}, "web_search": {"provider": "inherit"}},
+                "capabilities": {"shell": {}, "web_search": {"provider": "inherit"}},
             },
         },
     })
@@ -571,7 +571,7 @@ def test_materialize_core_default_no_init_override_left_to_apply_core_defaults(t
             "manifest": {
                 "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
                         "api_key": None, "api_key_env": "GEMINI_API_KEY"},
-                "capabilities": {"file": {}},
+                "capabilities": {"shell": {}},
             },
         },
     })
@@ -579,7 +579,7 @@ def test_materialize_core_default_no_init_override_left_to_apply_core_defaults(t
     # init.json declares only file (no daemon kwargs).
     wd = _make_workdir(
         tmp_path, active_preset=str(plib / "codex.json"),
-        manifest_extra={"capabilities": {"file": {}}},
+        manifest_extra={"capabilities": {"shell": {}}},
     )
     a = _make_probe_agent(wd)
     data = a._read_init()
@@ -602,7 +602,7 @@ def test_refresh_preset_omitting_daemon_keeps_override_in_manager(tmp_path, monk
             "manifest": {
                 "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
                         "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-                "capabilities": {"file": {}},   # no daemon entry
+                "capabilities": {"shell": {}},   # no daemon entry
             },
         },
     })
@@ -702,7 +702,7 @@ def test_refresh_preset_omitting_mcp_keeps_channel_reply_surface(tmp_path, monke
                 },
                 # Deliberately no mcp/email/psyche entries, matching the
                 # stranding incident described in #235.
-                "capabilities": {"file": {}},
+                "capabilities": {"shell": {}},
             },
         },
     })
@@ -710,7 +710,7 @@ def test_refresh_preset_omitting_mcp_keeps_channel_reply_surface(tmp_path, monke
     wd = _make_workdir(
         tmp_path,
         active_preset=str(plib / "codex.json"),
-        manifest_extra={"capabilities": {"file": {}}},
+        manifest_extra={"capabilities": {"shell": {}}},
     )
 
     init_path = wd / "init.json"
@@ -781,7 +781,7 @@ def _build_init_with_active_and_default(
             "language": "en",
             "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
             "soul": {"delay": 120},
             "stamina": 3600,
             "molt_pressure": 0.8,
@@ -811,7 +811,7 @@ def test_materialize_missing_active_falls_back_to_default(tmp_path, monkeypatch)
             "manifest": {
                 "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
                         "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
-                "capabilities": {"file": {}},
+                "capabilities": {"shell": {}},
             },
         },
     })
@@ -887,7 +887,7 @@ def test_materialize_malformed_active_does_not_fall_back(tmp_path):
         "manifest": {
             "llm": {"provider": "p", "model": "m",
                     "api_key": None, "api_key_env": "K"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
         },
     }))
     env_file = tmp_path / ".env"
@@ -913,7 +913,7 @@ def test_read_init_recovers_when_active_preset_missing(tmp_path, monkeypatch):
             "manifest": {
                 "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
                         "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
-                "capabilities": {"file": {}},
+                "capabilities": {"shell": {}},
             },
         },
     })

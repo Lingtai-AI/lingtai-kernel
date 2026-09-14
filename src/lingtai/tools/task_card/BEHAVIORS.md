@@ -33,7 +33,7 @@ pytest commands must run from the repo root with the project's Python.
 - **id**: TK001
 - **title**: start writes the body atomically before exact active, and a second start fails closed
 - **guards**: `intrinsic-task-card` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` with a renderer script inside it
 - **estimate**: ≈ 20 minutes
 

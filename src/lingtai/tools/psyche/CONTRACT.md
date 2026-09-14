@@ -146,12 +146,13 @@ the generic fixed `SETTINGS_UNAVAILABLE` result with no partial inventory or
 exception text. The complete response MUST remain subject to the generic
 incremental 65,536-byte UTF-8 bound.
 
-To change a durable source, an agent MUST use the generic text operations —
-`file.write` for a full create/overwrite, `file.edit` for exact replacement — on
-that domain's own source, and then apply the change with one explicit
-`context(action="rebuild", input={}, reasoning="...")` or let passive
-refresh/molt reconstruction apply it.
-File mutation never hot-loads the prompt.
+To change a durable source, an agent MUST use `shell` on that domain's own
+source — anchor the authorized working directory, precondition an exact
+replacement (verify the old text exists exactly once before replacing), and
+read the file back to verify the mutation — and then apply the change with one
+explicit `context(action="rebuild", input={}, reasoning="...")` or let passive
+refresh/molt reconstruction apply it. Filesystem mutation never hot-loads the
+prompt.
 
 Agents SHOULD read the relevant domain manual before acting on a domain they do
 not already know, and SHOULD leave root `summarize` false so exact procedure and
@@ -220,7 +221,7 @@ Neither the binder nor settings provider receives an Agent.
 - The exact action order is `pad | lingtai | knowledge | skills | settings |
   manual`; the reserved settings action is immediately before `manual`.
 - Every child is mutation-free. A future mutating action does not belong in this
-  family; durable mutation has exactly one owner, `file`.
+  family; durable mutation happens through `shell`, never through Psyche.
 - The four domain actions load the domains' existing manuals as progressively
   disclosed references. This router MUST NOT copy those manual bodies inline.
 - Catalog composition, configured Skills paths, disabled-domain behavior, and the

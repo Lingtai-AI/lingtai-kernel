@@ -217,7 +217,7 @@ def test_max_turns_is_legacy_ignored():
 
 def test_wrong_type_capabilities():
     data = _valid_init()
-    data["manifest"]["capabilities"] = ["file", "bash"]
+    data["manifest"]["capabilities"] = ["shell", "bash"]
     with pytest.raises(ValueError, match="manifest.capabilities.*object"):
         validate_init(data)
 

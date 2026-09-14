@@ -108,8 +108,7 @@ Avatar has its own declaration and earned `avatar_parent` port; Context's static
 `DECLARATION` in `src/lingtai/tools/context/__init__.py` requires only `workdir`
 and the earned `context_runtime` port; Daemon's static `DECLARATION` in
 `src/lingtai/tools/daemon/__init__.py` requires only `workdir` and the earned
-`daemon_runtime` port; Email earns its family-owned `email_runtime` port; File
-requires exactly `workdir` and the earned `file_io` port; and Plugin's static
+`daemon_runtime` port; Email earns its family-owned `email_runtime` port; and Plugin's static
 `DECLARATION` in `src/lingtai/tools/plugin/__init__.py` requires `workdir`, its
 own `prompt_section`, and the read-only `plugin_catalog` projection
 (`src/lingtai/kernel/tool_plugin/ANATOMY.md`,

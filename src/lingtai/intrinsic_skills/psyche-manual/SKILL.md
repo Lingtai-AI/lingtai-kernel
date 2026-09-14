@@ -52,11 +52,14 @@ root `summarize=false` when exact guidance matters.
 
 ## One mutation model
 
-Change durable content with `file.write` (full rewrite) or `file.edit` (exact
-replacement) on its owning path, then apply one
+Change durable content through `shell` on its owning path — a full rewrite, or
+an exact replacement after verifying the old text exists exactly once — anchored
+in the authorized working directory, and verify the result after writing. Then
+apply one
 `context(action="rebuild", input={}, reasoning="apply durable changes")` (or let
-refresh/molt reconstruct). File mutation never hot-loads; there is no per-domain
-reload, and Skills/Knowledge retain catalog ownership.
+refresh/molt reconstruct). A filesystem mutation never hot-loads; there is no
+per-domain reload, and Skills/Knowledge retain catalog ownership. Platform
+recipes live in `shell-manual`.
 
 ## Lifecycle and settings
 

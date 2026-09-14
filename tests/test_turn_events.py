@@ -24,7 +24,7 @@ class _Observer:
 
 
 def test_bind_notify_reset_and_unbound_noop():
-    event = ToolLifecycleEvent("tc-1", "file", ToolLifecycleState.STARTED)
+    event = ToolLifecycleEvent("tc-1", "shell", ToolLifecycleState.STARTED)
     observer = _Observer()
     token = bind_turn_tool_observer(observer)
     try:

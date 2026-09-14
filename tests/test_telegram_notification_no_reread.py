@@ -89,7 +89,9 @@ def test_notification_header_drops_stale_and_heuristic_reread_triggers() -> None
     _assert_no_reread_guidance(header)
     lowered = _normalize_ws(header.lower())
     assert "telegram.read" in header
-    assert "vision" in lowered or "file tool" in lowered
+    assert "vision" in lowered
+    assert "shell" in lowered
+    assert "file tool" not in lowered
     # Non-synthetic carve-out: synthetic/callback-only records are never
     # implied to be valid reply targets just because they carry an id.
     assert "synthetic" in lowered

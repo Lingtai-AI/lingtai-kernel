@@ -20,7 +20,7 @@ def _make_run_dir(tmp_path: Path, **overrides) -> DaemonRunDir:
         parent_working_dir=parent_wd,
         handle="em-3",
         task="find todos",
-        tools=["file"],
+        tools=["shell"],
         model="mock-model",
         max_turns=30,
         timeout_s=300.0,
@@ -73,7 +73,7 @@ def test_initial_daemon_json_fields(tmp_path):
     assert data["parent_addr"] == "parent"
     assert data["parent_pid"] == 12345
     assert data["task"] == "find todos"
-    assert data["tools"] == ["file"]
+    assert data["tools"] == ["shell"]
     assert data["model"] == "mock-model"
     assert data["max_turns"] == 30
     assert data["timeout_s"] == 300.0

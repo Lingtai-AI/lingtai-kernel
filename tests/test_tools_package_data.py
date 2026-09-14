@@ -10,12 +10,11 @@ consolidation blocker this test guards).
 
 Rather than grepping the config text, this test builds a real wheel and inspects
 the distribution manifest at the correct boundary — the archive that pip
-actually installs. Both the pure-Python wheel (built here) and the native
-sidecar wheel place packages at the archive root (``lingtai/tools/...``): the native
-wheel is platlib-compliant, so it does *not* bury packages under
-``<name>-<ver>.data/purelib/`` — that placement was the auditwheel release
-blocker fixed in ``setup.py`` and is guarded by
-``tests/test_wheel_platlib_layout.py``.
+actually installs. The kernel is pure Python, so the one release artifact is a
+universal ``py3-none-any`` wheel with every package at the archive root
+(``lingtai/tools/...``); ``test_wheel_is_pure_python_universal`` pins that
+contract so a native payload or ``<name>-<ver>.data/purelib/`` layout can never
+reappear silently.
 """
 
 from __future__ import annotations
@@ -30,10 +29,10 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Every shipped tool package owning a top-level CONTRACT.md. ``file`` is the
-# sole owner of the file surface: the five pre-migration per-operation packages
-# (read/write/edit/glob/grep), their contracts, and their glossaries were
-# deleted into it. ``psyche`` is the one public root for the four durable
+# Every shipped tool package owning a top-level CONTRACT.md. There is no file
+# package: the ``file`` family (and the still-older per-operation packages it
+# had absorbed) was removed outright, so durable filesystem work goes through
+# ``bash``/``shell``. ``psyche`` is the one public root for the four durable
 # domains; ``pad``, ``lingtai``, ``knowledge``, and ``skills`` remain shipped
 # packages that own their contracts and glossaries as PRIVATE domain owners
 # after their public roots were retired, and ``context`` is what remained of
@@ -44,7 +43,6 @@ _BUILTIN_TOOLS = [
     "context",
     "daemon",
     "email",
-    "file",
     "knowledge",
     "lingtai",
     "mcp",
@@ -89,8 +87,6 @@ _SYSTEM_MANUAL_EXTERNAL_ATTACH_FILES = (
     "lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md",
     "lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/scripts/external_attach_diagnostic.py",
 )
-_FILE_MANUAL_SOURCE_FILES = ("lingtai/tools/file/manual/SKILL.md",)
-
 # The three per-tool glossary languages that each package must ship.
 _WEB_SEARCH_MANUAL_FILES = (
     "lingtai/tools/web_search/manual/SKILL.md",
@@ -135,15 +131,12 @@ _MCP_BUILTIN_PLUGIN_FILES = (
 
 
 def _build_wheel(dest: Path) -> Path:
-    """Build a pure-Python wheel (Rust sidecar skipped) into ``dest``.
+    """Build the pure-Python universal wheel into ``dest``.
 
-    ``LINGTAI_SKIP_RUST_BUILD=1`` keeps the build fast and Rust-independent:
-    the package-data globs are identical with or without the sidecar, and a
-    pure wheel exercises the root ``lingtai/tools/...`` layout. Build isolation lets
-    pip pick a setuptools that understands the PEP 639 license expression.
+    Build isolation lets pip pick a setuptools that understands the PEP 639
+    license expression, matching the release build.
     """
     env = dict(os.environ)
-    env["LINGTAI_SKIP_RUST_BUILD"] = "1"
     result = subprocess.run(
         [
             sys.executable,
@@ -177,11 +170,9 @@ def _logical(path: str) -> str:
     distribution root plus ``src/``; those prefixes are stripped only after the
     exact package-root segment is found. This also lets this test cover bundled
     standalone intrinsic-skill assets, not just ``lingtai/tools`` resources. A
-    ``*.data/{purelib,platlib}/`` prefix is *not* normalized away — it is the
-    auditwheel-rejected layout the
-    packaging fix eliminated. If one ever reappears it must surface as a broken
-    path, not be silently accepted; ``test_wheel_platlib_layout.py`` asserts the
-    native wheel never produces one.
+    ``*.data/{purelib,platlib}/`` prefix is *not* normalized away: a pure wheel
+    keeps every package at the archive root, so if one ever reappears it must
+    surface as a broken path, not be silently accepted.
     """
     parts = path.split("/")
     for i, segment in enumerate(parts):
@@ -211,6 +202,29 @@ def wheel_entries(wheel_archive: Path) -> set[str]:
         return {_logical(name) for name in zf.namelist()}
 
 
+def test_wheel_is_pure_python_universal(wheel_archive: Path, wheel_entries: set[str]):
+    """The release artifact is one universal wheel with no native payload.
+
+    This is the packaging invariant the release manifest generator and the
+    wheels workflow both re-check: a platform tag, an impure root, a bundled
+    binary under ``lingtai/bin/``, or an install-scheme ``.data`` prefix would
+    each mean a native build hook crept back into a pure-Python project.
+    """
+    assert wheel_archive.name.endswith("-py3-none-any.whl"), wheel_archive.name
+    with zipfile.ZipFile(wheel_archive) as zf:
+        wheel_meta = next(n for n in zf.namelist() if n.endswith(".dist-info/WHEEL"))
+        fields = {}
+        for line in zf.read(wheel_meta).decode("utf-8").splitlines():
+            key, _, value = line.partition(":")
+            fields[key.strip()] = value.strip()
+        raw_names = zf.namelist()
+    assert fields.get("Root-Is-Purelib") == "true", fields
+    assert fields.get("Tag") == "py3-none-any", fields
+    assert not [n for n in raw_names if ".data/" in n], raw_names[:20]
+    assert not [n for n in wheel_entries if n.startswith("lingtai/bin/")]
+    assert "lingtai/__init__.py" in wheel_entries
+
+
 def test_wheel_ships_vision_manual(wheel_entries: set[str]):
     assert "lingtai/tools/vision/manual/SKILL.md" in wheel_entries
 
@@ -236,7 +250,7 @@ def test_wheel_ships_complete_web_search_manual_bundle(wheel_entries: set[str]):
 
 
 def test_wheel_ships_exact_expected_tool_contracts(wheel_entries: set[str]):
-    # Keep the manifest closed: the shared tools contract, twenty-one top-level
+    # Keep the manifest closed: the shared tools contract, twenty top-level
     # built-in tool contracts, and one intentional daemon component contract.
     # No other nested/manual contract may sneak in through an over-broad glob.
     expected = {
@@ -300,13 +314,16 @@ def test_archives_ship_system_manual_external_attach_diagnostic(request, entries
 
 
 @pytest.mark.parametrize("entries_fixture", ("wheel_entries", "sdist_entries"), ids=("wheel", "sdist"))
-def test_archives_ship_file_package_manual(request, entries_fixture: str):
+def test_archives_ship_no_removed_file_package(request, entries_fixture: str):
+    """The removed ``file`` family must not resurface through a stale glob."""
     entries = request.getfixturevalue(entries_fixture)
-    missing = [path for path in _FILE_MANUAL_SOURCE_FILES if path not in entries]
-    assert not missing, "File manual sources missing from %s: %r" % (
-        entries_fixture,
-        missing,
+    leaked = sorted(
+        path for path in entries
+        if path.startswith("lingtai/tools/file/")
+        or path.startswith("lingtai/intrinsic_skills/read-manual/")
+        or path in ("lingtai/services/file_io.py", "lingtai/services/file_io_sidecar.py")
     )
+    assert not leaked, "removed File surface leaked into %s: %r" % (entries_fixture, leaked)
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +409,6 @@ def sdist_entries(tmp_path_factory) -> set[str]:
     tmp = tmp_path_factory.mktemp("lingtai-sdist-test")
     outdir = tmp / "sdist"
     env = dict(os.environ)
-    env["LINGTAI_SKIP_RUST_BUILD"] = "1"
     result = subprocess.run(
         [
             sys.executable,

@@ -112,9 +112,9 @@ correct even before Agent composition runs). `build_schema()` always
 advertises `summarize` to the model regardless of family; whether the kernel
 actually honors it is a separate, per-family allowlist decision
 (`kernel/tool_result_summary.py` `_LTP_V2_MIGRATED_FAMILIES`) that this
-package does not own or enforce. Today `web`, `mcp`, `knowledge`, `file`,
-`vision`, `avatar`, `soul`, `shell`, `skills`, `notification`, `system`, and
-`daemon` are on that allowlist, so `summarize` is
+package does not own or enforce. Today `web`, `mcp`, `plugin`, `vision`,
+`avatar`, `soul`, `shell`, `notification`, `system`, `daemon`, `email`,
+`task_card`, `context`, and `psyche` are on that allowlist, so `summarize` is
 meaningful for the families that use this infrastructure; a family adopting
 `ToolFamily` without also joining the kernel allowlist would advertise a
 model-visible `summarize` control that the kernel silently ignores —
@@ -285,8 +285,9 @@ normalizes only the generic `ACTION_REQUIRED` envelope failure back to
 knowledge's exact pre-migration unknown-action result.
 
 `avatar/__init__.py` is the fourth production Adapter/consumer to touch this
-contract (after `file` and `vision`, which adopt this package per
-`../CONTRACT.md` without a dedicated Adapter paragraph here):
+contract (after `vision`, which adopts this package per `../CONTRACT.md`
+without a dedicated Adapter paragraph here, and the since-removed `file`
+family):
 `AvatarManager.__init__` builds a per-instance `ToolFamily` with a `spawn`
 handler bound to that instance (the former `rules` handler was removed, not
 relocated — avatar CONTRACT.md contract_version 9), the generic `settings`
@@ -504,8 +505,9 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006) and
   exists only for a genuinely misplaced-and-otherwise-absent field (observed
   cause: a calling model's own native flat tool shape, e.g. an
   `Edit(file_path, old_string, new_string, replace_all)`-style tool, leaking
-  `replace_all` to root instead of nesting it under `input` for the `file`
-  family's `edit` action), not for tolerating a redundant or conflicting
+  `replace_all` to root instead of nesting it under `input` — first observed
+  against the since-removed `file` family's `edit` action), not for
+  tolerating a redundant or conflicting
   duplicate. This exception applies per-family, automatically, to every
   family built on this dispatcher — it is not something an individual family
   opts into or configures.

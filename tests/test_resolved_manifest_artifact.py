@@ -21,7 +21,7 @@ def _make_workdir(tmp_path: Path, active_preset: str | None = None,
         "language": "en",
         "llm": llm or {"provider": "deepseek", "model": "deepseek-v4-flash",
                        "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-        "capabilities": {"file": {}},
+        "capabilities": {"shell": {}},
         "soul": {"delay": 120},
         "stamina": 3600,
         "molt_pressure": 0.8,
@@ -138,7 +138,7 @@ def test_artifact_publishes_materialized_skills_paths(tmp_path, monkeypatch):
             "manifest": {
                 "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
                         "api_key": None, "api_key_env": "GEMINI_API_KEY"},
-                "capabilities": {"file": {},
+                "capabilities": {"shell": {},
                                  "skills": {"paths": ["~/skills/curated"]}},
             },
         },
@@ -212,7 +212,7 @@ def test_artifact_redacts_api_key_like_secrets(tmp_path, monkeypatch):
         llm={"provider": "deepseek", "model": "deepseek-v4-flash",
              "api_key": secret},
         manifest_extra={"capabilities": {
-            "file": {},
+            "shell": {},
             "web": {"provider": "inherit"},
         }},
     )
@@ -248,7 +248,7 @@ def test_refresh_rewrites_artifact_after_preset_change(tmp_path, monkeypatch):
             "manifest": {
                 "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
                         "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-                "capabilities": {"file": {}},
+                "capabilities": {"shell": {}},
             },
         },
         "smart": {
@@ -257,7 +257,7 @@ def test_refresh_rewrites_artifact_after_preset_change(tmp_path, monkeypatch):
             "manifest": {
                 "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
                         "api_key": None, "api_key_env": "GEMINI_API_KEY"},
-                "capabilities": {"file": {}, "skills": {"paths": ["~/s"]}},
+                "capabilities": {"shell": {}, "skills": {"paths": ["~/s"]}},
             },
         },
     })

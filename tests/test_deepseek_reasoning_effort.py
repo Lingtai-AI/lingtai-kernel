@@ -407,7 +407,7 @@ def _write_preset(tmp_path: Path, thinking, *, model: str = FLASH, **llm) -> str
                 "api_key_env": "DEEPSEEK_API_KEY",
                 **llm,
             },
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
         },
     }
     if thinking is not ...:

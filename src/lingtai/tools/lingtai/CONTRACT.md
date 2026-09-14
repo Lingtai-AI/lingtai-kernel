@@ -31,12 +31,12 @@ Guarded by: [LG001](BEHAVIORS.md#behavior-lg001)
 content in `system/lingtai.md`, rendered into the protected `character` prompt
 section. The public action inventory is exactly `manual`.
 
-Generic mutation belongs only to `file`:
+Durable mutation of `system/lingtai.md` happens through `shell`: create or
+overwrite the complete identity file, or perform an exact text replacement
+after verifying the old text exists exactly once, then read the file back to
+verify.
 
-- `file.write` creates or overwrites the complete identity file;
-- `file.edit` performs exact text replacement.
-
-Neither operation hot-loads the prompt. Apply durable identity changes through
+No filesystem operation hot-loads the prompt. Apply durable identity changes through
 one explicit `context.rebuild`, or let passive refresh/molt reconstruction apply
 them. Retired `lingtai.update` and `lingtai.load` have no aliases and fail as
 unknown actions.

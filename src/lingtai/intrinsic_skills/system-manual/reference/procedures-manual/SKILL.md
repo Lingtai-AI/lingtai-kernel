@@ -229,8 +229,11 @@ Use existing producer/tool capabilities before inventing workflows. §7 above
 names the owner for web fetching/search/scraping (`web-manual`) and image
 understanding (`vision`). For file-specific detail:
 
-- For tricky file encodings, large files, binary-like data, or careful edit
-  workflows, read `file-manual`.
+- Durable filesystem changes go through `shell`: anchor the authorized working
+  directory, bound output, verify the old text exists exactly once before an
+  exact replacement, verify the mutation after writing, and treat binary or
+  non-UTF-8 content honestly rather than guessing. Platform recipes live in
+  `shell-manual`.
 
 When giving humans local artifacts, include a usable path and a short summary.
 Do not expose private internal IDs as if they are user-accessible artifacts.

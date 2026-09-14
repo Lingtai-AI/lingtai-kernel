@@ -44,10 +44,6 @@ class DaemonSupervisorAgentStub:
         self._intrinsic_modules = {}
         self._tool_schemas = []
         self._tool_handlers = {}
-        # Detached composition injects a correctly rooted service only when a
-        # requested file capability needs it; unlike a full Agent, this stub
-        # does not own any other host-service construction.
-        self._file_io = None
         self._mcp_tool_names = set()
         # The risky-action gate is opt-in and rooted at the daemon's parent
         # working dir (the same config the parent agent would consult), so

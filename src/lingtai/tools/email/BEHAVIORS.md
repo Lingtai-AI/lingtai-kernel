@@ -32,7 +32,7 @@ pytest commands must run from the repo root with the project's Python.
 - **id**: EM001
 - **title**: envelope failures are rejected before any mailbox I/O, and send returns the exact sent receipt
 - **guards**: `email-contract` § Tool surface
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
 - **estimate**: ≈ 20 minutes
 
@@ -54,7 +54,7 @@ Pass when the suite passes and the before-I/O rejection and exact receipt hold. 
 - **id**: EM002
 - **title**: official Email runtime is typed and does not persist a capability row
 - **guards**: `email-contract` § Declared host plugin
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
 - **estimate**: ≈ 15 minutes
 
@@ -97,7 +97,7 @@ Pass when all four steps hold and the official Email surface is mandatory by int
 - **id**: EM003
 - **title**: settings inventory is exact, read-only, and private
 - **guards**: `email-contract` § Settings
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
 - **estimate**: ≈ 10 minutes
 

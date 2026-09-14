@@ -1,6 +1,6 @@
 """Web full-result inline-vs-artifact delivery: settings/web.json, spill
 envelopes for search and browse, Unicode/threshold boundaries, atomic
-uniqueness, artifact readability via file.read, write failure, and no outer
+uniqueness, artifact readability via shell, write failure, and no outer
 double-spill.
 """
 from __future__ import annotations
@@ -255,7 +255,8 @@ def test_search_large_result_set_spills_to_json_artifact_with_no_preview(tmp_pat
     assert hashlib.sha256(content.encode("utf-8")).hexdigest() == result["content_sha256"]
     parsed = json.loads(content)
     assert len(parsed) == 400
-    assert "file.read" in result["instruction"]
+    assert "Use shell" in result["instruction"]
+    assert "file.read" not in result["instruction"]
     assert "preview" not in result
 
 
@@ -445,7 +446,8 @@ def test_browse_large_page_spills_to_text_artifact_with_no_preview(tmp_path):
     assert len(content) == result["content_chars"]
     assert hashlib.sha256(content.encode("utf-8")).hexdigest() == result["content_sha256"]
     assert "preview" not in result
-    assert "file.read" in result["instruction"]
+    assert "Use shell" in result["instruction"]
+    assert "file.read" not in result["instruction"]
 
 
 def test_browse_per_call_max_chars_overrides_delivery_threshold(tmp_path):
@@ -827,30 +829,40 @@ def test_tool_executor_does_not_double_spill_a_large_web_artifact_result(tmp_pat
     assert "spill_path" not in wire_content
 
 
-def test_artifact_readable_end_to_end_via_file_read_tool(tmp_path):
+def test_artifact_readable_end_to_end_via_shell_tool(tmp_path):
+    """The spilled artifact is a plain workdir-relative file that ``shell``
+    (the one durable filesystem surface) reads back in full."""
     from lingtai.agent import Agent
     from tests._service_helpers import make_gemini_mock_service
 
     agent = Agent(
         service=make_gemini_mock_service(),
-        agent_name="web-artifact-file-read",
+        agent_name="web-artifact-shell-read",
         working_dir=tmp_path,
         capabilities={
             "web": {"search_service": _LargeSearch(400), "browser_port": _Port(b"<p>x</p>")},
-            "file": {},
+            "shell": {"yolo": True},
         },
-        disable=["knowledge", "skills", "shell", "avatar", "daemon", "mcp", "vision"],
+        disable=["knowledge", "skills", "avatar", "daemon", "mcp", "vision"],
     )
     try:
         result = agent._tool_handlers["web"]({"action": "search", "input": {"query": "q"}})
         assert result["delivery"] == "artifact"
-        read_result = agent._tool_handlers["file"]({
-            "action": "read",
-            "input": {"file_path": result["file_path"], "offset": None, "limit": None, "max_chars": None},
+        read_result = agent._tool_handlers["shell"]({
+            "action": "run",
+            "input": {
+                "command": f"wc -c < {result['file_path']}",
+                "timeout": None,
+                "working_dir": None,
+                "async": None,
+                "reminder": None,
+            },
             "reasoning": "read the spilled web artifact",
         })
-        assert read_result.get("status") != "error"
-        assert "content" in read_result
+        assert read_result["status"] == "ok"
+        assert int(read_result["stdout"].strip()) == len(
+            (tmp_path / result["file_path"]).read_bytes()
+        )
         parsed = json.loads((tmp_path / result["file_path"]).read_text())
         assert len(parsed) == 400
     finally:

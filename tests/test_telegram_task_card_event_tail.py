@@ -605,7 +605,7 @@ def test_apriori_summary_metrics_render_after_completed_tool(tmp_path):
         "provider": "PROVIDER_SECRET",
     })])
     _write_lines(_events_path(tmp_path), [
-        _tool_call_line(tool_name="file", action="edit", call_id="c1", ts=100.0),
+        _tool_call_line(tool_name="shell", action="run", call_id="c1", ts=100.0),
         json.dumps({
             "type": "tool_result", "tool_call_id": "c1", "status": "ok",
             "elapsed_ms": 15, "ts": 102.0, "result": "RESULT_SECRET",
@@ -621,7 +621,7 @@ def test_apriori_summary_metrics_render_after_completed_tool(tmp_path):
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
     lines = rendered.splitlines()
-    tool_index = next(i for i, line in enumerate(lines) if "file.edit:" in line)
+    tool_index = next(i for i, line in enumerate(lines) if "shell.run:" in line)
     assert lines[tool_index].endswith("(15ms, success)")
     assert lines[tool_index + 1] == " (summary, 1.2s, 12.3k in, 456 out)"
     assert all(secret not in rendered for secret in (

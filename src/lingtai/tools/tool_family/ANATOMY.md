@@ -2,7 +2,6 @@
 related_files:
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/email/ANATOMY.md
-  - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/tools/tool_family/BEHAVIORS.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
@@ -123,7 +122,7 @@ provider wire. See `CONTRACT.md` "Diagnostics sidecar" for the full rules and
   strict-empty input literal it registers is exported as `MANUAL_INPUT_SCHEMA`
   so a family composing a schema-only `ToolFamily` alongside its dispatching
   one reuses the same object instead of hand-copying it and drifting (`mcp`,
-  `knowledge`, `file`, `vision`, and `soul` all do; `manual.py:1-89`) — and a
+  `knowledge`, `vision`, and `soul` all do; `manual.py:1-89`) — and a
   family supplying its own `manual` child entirely, like `avatar`, can
   reference it the same way instead of restating the literal. `web` predates
   the export and still declares its own local `_MANUAL_INPUT_SCHEMA`, which

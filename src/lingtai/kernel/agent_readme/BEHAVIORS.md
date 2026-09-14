@@ -27,7 +27,7 @@ commands must run from the repo root with the project's Python.
 - **id**: AR001
 - **title**: the generated agent-root README links system/substrate.md and carries no agent name or live values
 - **guards**: `agent-readme` § 1. 角色
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
 - **estimate**: ≈ 15 minutes
 

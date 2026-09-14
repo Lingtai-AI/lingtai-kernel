@@ -32,12 +32,11 @@ Guarded by: [PD001](BEHAVIORS.md#behavior-pd001)
 reference list associated with the agent's prompt sketchboard. Its public action
 inventory is exactly `append | manual`.
 
-Generic file mutation has one owner:
+Durable mutation of `system/pad.md` happens through `shell`: create or
+overwrite the whole file, or perform an exact text replacement after verifying
+the old text exists exactly once, then read the file back to verify.
 
-- `file.write` creates or overwrites the whole `system/pad.md` file;
-- `file.edit` performs exact text replacement in that file.
-
-Neither file action may reload or otherwise mutate the current prompt. The
+No filesystem mutation may reload or otherwise mutate the current prompt. The
 retired public `pad.edit` and `pad.load` actions have no alias or compatibility
 path and fail as unknown Pad actions.
 
@@ -86,8 +85,8 @@ refresh and active `context.rebuild`.
 
 ## State and evidence
 
-Persistent state is `system/pad.md` and `system/pad_append.json`, both owned for
-mutation by `file` — there is no Pad-owned writer. The prompt `pad` section and
+Persistent state is `system/pad.md` and `system/pad_append.json`; `system/pad.md`
+is mutated only through `shell` — there is no Pad-owned body writer. The prompt `pad` section and
 `system/system.md` are derived by the private `_pad_load` composer.
 
 Focused evidence:

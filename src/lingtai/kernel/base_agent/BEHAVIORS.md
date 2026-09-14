@@ -53,7 +53,7 @@ must run from the repo root with the project's Python.
 - **id**: BA001
 - **title**: stop retains ownership until execution quiescence, then orders manifest-persist → heartbeat-withdraw → lease-release
 - **guards**: `agent-runtime` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; no other agent process sharing the scratch working directory
 - **estimate**: ≈ 20 minutes
 
@@ -78,7 +78,7 @@ Pass when both suites pass, non-quiescent stop releases nothing, the typed publi
 - **title**: a refresh that fails before the watcher handoff stays retryable, and only a completed handoff is terminal
 - **guards**: `agent-runtime` § Contract rules, rule 5 (`agent-runtime.refresh.v1`) — see [CONTRACT.md](CONTRACT.md#contract-rules)
 - **supersedes**: `tests/test_perform_refresh_handshake.py::test_base_agent_constructs_shared_refresh_singleflight_gate`, `tests/test_perform_refresh_handshake.py::test_launch_cmd_exception_releases_single_flight_slot_for_retry`, `tests/test_perform_refresh_handshake.py::test_raising_spawn_releases_slot_without_shutdown_and_retry_is_not_coalesced`, `tests/test_perform_refresh_handshake.py::test_poison_guard_retries_every_pre_handoff_refresh_failure`, `tests/test_perform_refresh_handshake.py::test_concurrent_poison_refresh_requests_use_lifecycle_singleflight`, `tests/test_perform_refresh_handshake.py::test_successful_handoff_keeps_slot_claimed_even_if_post_handoff_logging_raises` (kept as bottom asserts)
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` containing an empty `logs/` subdirectory; no other agent process sharing `<scratch>`
 - **estimate**: ≈ 20 minutes
 - **motivation**: production defects 2026-08-24 and 2026-09-08 — lifecycle first fixed a slot retained by a raising launch-command builder; the worker-poison wrapper then added a second pre-call latch that swallowed every later poison-guard retry after any ordinary pre-handoff failure. Separately, post-handoff event logging preceded cancel/shutdown and could strand the watcher behind the old process lease.
@@ -108,7 +108,7 @@ Pass when every failure before `spawn_detached` returns leaves the slot released
 - **id**: BA003
 - **title**: one cooperative turn-cancel latch survives ACTIVE work and is consumed only by a fresh dequeue
 - **guards**: `agent-runtime.turn-cancel-latch.v1`
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; no live agent process sharing any pytest scratch working directory
 - **estimate**: ≈ 10 minutes
 
@@ -176,7 +176,7 @@ record the evidence trail in the task report.
 - **title**: every provider request is freshly admitted and a derived child cannot mint another child
 - **guards**: `agent-runtime.provider-admission.v1` in [CONTRACT.md](CONTRACT.md#contract-rules)
 - **supersedes**: `tests/test_provider_admission.py` (kept as bottom asserts)
-- **runner**: any LingTai coding agent with `shell` and `file` access to this repository
+- **runner**: any LingTai coding agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>` and the project Python with pytest; no live provider credentials are required
 - **estimate**: ≈ 5 minutes
 
@@ -204,7 +204,7 @@ Pass when the focused suite proves fresh fail-closed admission and the one-hop l
 - **title**: a poison-recovery relaunch redoes the interrupted turn from the recovery artifact, never in-process, and otherwise stays ASLEEP
 - **guards**: `agent-runtime` § Contract rules, rule 5 (`agent-runtime.refresh.v1`), poison-recovery paragraph — see [CONTRACT.md](CONTRACT.md#contract-rules)
 - **pinned by**: `tests/test_worker_hang_aed_redo.py` (all tests), `tests/test_cli_worker_poison_recovery.py::test_refresh_boot_with_pending_worker_recovery_stays_asleep_without_kickstart`, `tests/test_notification_sync.py::test_start_with_pending_worker_recovery_does_not_self_wake_on_first_sync`, `tests/test_notification_sync.py::test_baseline_refuses_when_external_notification_already_pending`, `tests/test_aed_recovery.py::test_worker_hang_request_artifact_is_bounded_and_redacted`
-- **runner**: any LingTai coding agent with `shell` and `file` access to this repository
+- **runner**: any LingTai coding agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>` and the project Python with pytest; no live agent sharing pytest scratch state
 - **estimate**: ≈ 10 minutes
 - **motivation**: production defect 2026-09-08 (Runyuan). After a 300 s provider timeout plus grace (`WorkerStillRunningError`) the agent was force-relaunched to discard the poisoned interface; #1663 stopped the relaunch from self-waking but the interrupted LLM call was never redone ("at 300s the agent SHOULD go to aed mode and REDO the llm call"). The 11:38Z recurrence was a `tc_wake_wire` turn with no notification sources, so a passive resync could not redrive it.

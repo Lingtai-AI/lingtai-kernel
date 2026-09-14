@@ -16,7 +16,7 @@ def _build_lib(plib: Path):
         "manifest": {
             "llm": {"provider": "p1", "model": "m1",
                     "api_key": None, "api_key_env": "P1KEY"},
-            "capabilities": {"file": {}, "web_search": {"provider": "duckduckgo"}},
+            "capabilities": {"shell": {}, "web_search": {"provider": "duckduckgo"}},
         },
     }))
     (plib / "beta.json").write_text(json.dumps({
@@ -26,7 +26,7 @@ def _build_lib(plib: Path):
         "manifest": {
             "llm": {"provider": "p2", "model": "m2",
                     "api_key": None, "api_key_env": "P2KEY"},
-            "capabilities": {"file": {}, "vision": {"provider": "p2",
+            "capabilities": {"shell": {}, "vision": {"provider": "p2",
                                                     "api_key_env": "P2KEY"}},
         },
     }))
@@ -157,7 +157,7 @@ def test_e2e_inherit_resolves_after_swap(tmp_path, monkeypatch):
             "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
                     "api_key": None, "api_key_env": "GEMINI_API_KEY"},
             "capabilities": {
-                "file": {},
+                "shell": {},
                 "web_search": {"provider": "inherit"},
                 "vision": {"provider": "inherit"},
             },

@@ -231,7 +231,7 @@ class TestLoadToolGlossary:
 
     def test_missing_file_falls_back_to_english(self):
         """A language with no resource falls back to English (empty)."""
-        body = load_tool_glossary("lingtai.tools.file", "fr")
+        body = load_tool_glossary("lingtai.tools.bash", "fr")
         assert body == ""  # fr normalizes to en -> empty English body
 
     def test_unimportable_package_warns_exactly_once_per_language(self):
@@ -295,8 +295,8 @@ class TestLoadToolGlossary:
 
 class TestCaching:
     def test_results_are_cached(self):
-        b1 = load_tool_glossary("lingtai.tools.file", "zh")
-        b2 = load_tool_glossary("lingtai.tools.file", "zh")
+        b1 = load_tool_glossary("lingtai.tools.bash", "zh")
+        b2 = load_tool_glossary("lingtai.tools.bash", "zh")
         assert b1 == b2
         assert b1  # non-empty
 
@@ -325,7 +325,7 @@ class TestCaching:
         def worker():
             try:
                 start.wait()
-                results.append(load_tool_glossary("lingtai.tools.file", "zh"))
+                results.append(load_tool_glossary("lingtai.tools.bash", "zh"))
             except BaseException as exc:  # surface thread assertion/barrier failures
                 errors.append(exc)
 
@@ -381,13 +381,13 @@ class TestCaching:
 class TestAppendToolGlossary:
     def test_english_no_append(self):
         result = append_tool_glossary(
-            "Base description.", tool_package="lingtai.tools.file", language="en"
+            "Base description.", tool_package="lingtai.tools.bash", language="en"
         )
         assert result == "Base description."
 
     def test_chinese_appends_body(self):
         result = append_tool_glossary(
-            "Base description.", tool_package="lingtai.tools.file", language="zh"
+            "Base description.", tool_package="lingtai.tools.bash", language="zh"
         )
         assert "Base description." in result
         assert result.startswith("Base description.\n\n")
@@ -433,21 +433,18 @@ _ALL_PACKAGES = sorted(
 # private domain packages while ``psyche`` — the public root named for
 # ``pad + lingtai + knowledge + skills = psyche`` — adds the nineteenth, and
 # the intrinsic ``task_card`` producer adds the twentieth. ``plugin``, the
-# Agent Plugins flagpost twin of ``mcp``, is the twenty-first.
-assert len(_ALL_PACKAGES) == 21, _ALL_PACKAGES
+# Agent Plugins flagpost twin of ``mcp``, was the twenty-first; the removed
+# public ``file`` family took its glossary with it, leaving twenty.
+assert len(_ALL_PACKAGES) == 20, _ALL_PACKAGES
 assert "psyche" in _ALL_PACKAGES
 assert "plugin" in _ALL_PACKAGES
 assert "task_card" in _ALL_PACKAGES
 assert "substrate" not in _ALL_PACKAGES
-# The five pre-migration file packages were deleted into ``file``; their
-# glossaries must not come back.
-assert "file" in _ALL_PACKAGES
+# The public ``file`` family is gone (durable filesystem work goes through
+# ``shell``); neither it nor the five pre-migration file packages it had
+# absorbed may bring a glossary back.
+assert "file" not in _ALL_PACKAGES
 assert not ({"read", "write", "edit", "glob", "grep"} & set(_ALL_PACKAGES))
-
-
-def test_file_zh_glossary_keeps_read_action_term():
-    """The localized file glossary keeps a bridge to its canonical action name."""
-    assert "read" in load_tool_glossary("lingtai.tools.file", "zh")
 
 
 class TestAllGlossaryOwnerInvariance:
@@ -503,26 +500,26 @@ class TestSchemaInvariance:
 
     def test_glossary_does_not_affect_identifiers(self):
         """Glossary lookup cannot change names, properties, enums, required."""
-        from lingtai.tools.file import get_schema
+        from lingtai.tools.bash._tool_family import get_schema
 
         base = get_schema()
         assert base["properties"]["action"]["enum"] == [
-            "read", "write", "edit", "glob", "grep", "settings", "manual",
+            "run", "poll", "cancel", "settings", "manual",
         ]
         assert base["required"] == ["action", "input", "reasoning"]
-        read_props = next(
+        run_props = next(
             branch for branch in base["properties"]["input"]["anyOf"]
-            if branch["title"] == "read input"
+            if branch["title"] == "run input"
         )["properties"]
-        assert "file_path" in read_props
-        assert "offset" in read_props
-        assert "limit" in read_props
+        assert "command" in run_props
+        assert "timeout" in run_props
+        assert "working_dir" in run_props
 
     def test_normal_and_daemon_resident_tools_render_selected_glossary(self, monkeypatch):
         # The resident section is opt-in (default off), so this rendering
         # contract is asserted in the state that produces it.
         monkeypatch.setenv(TOOL_PROSE_SECTION_ENABLED_ENV, "1")
-        zh_body = load_tool_glossary("lingtai.tools.file", "zh")
+        zh_body = load_tool_glossary("lingtai.tools.bash", "zh")
         schema = FunctionSchema(
             name="read",
             description="Read text files.",
@@ -536,7 +533,7 @@ class TestSchemaInvariance:
                 },
                 "required": ["file_path"],
             },
-            glossary_package="lingtai.tools.file",
+            glossary_package="lingtai.tools.bash",
         )
         sections: dict[str, str] = {}
         agent = SimpleNamespace(
@@ -608,7 +605,7 @@ class TestSchemaInvariance:
             _build_tools as build_openai_tools,
         )
 
-        body = load_tool_glossary("lingtai.tools.file", "zh")
+        body = load_tool_glossary("lingtai.tools.bash", "zh")
         parameters = {
             "type": "object",
             "properties": {
@@ -623,7 +620,7 @@ class TestSchemaInvariance:
             name="read",
             description="Read text files.",
             parameters=copy.deepcopy(parameters),
-            glossary_package="lingtai.tools.file",
+            glossary_package="lingtai.tools.bash",
         )
 
         openai_chat = build_openai_tools([schema])[0]["function"]
@@ -640,7 +637,7 @@ class TestSchemaInvariance:
         assert openai_responses["parameters"] == parameters
         assert anthropic["input_schema"] == parameters
         assert schema.parameters == parameters
-        assert schema.glossary_package == "lingtai.tools.file"
+        assert schema.glossary_package == "lingtai.tools.bash"
 
 
 # ---------------------------------------------------------------------------

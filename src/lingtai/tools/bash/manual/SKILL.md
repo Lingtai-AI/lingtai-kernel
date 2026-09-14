@@ -4,11 +4,12 @@ description: >
   **Read before running a long-lived agent/coding CLI as a shell subprocess**,
   or before setting up cron/launchd/systemd timers or scheduled reminders.
   Routes shell-side async+poll supervision, host-scheduler setup, LingTai
-  wake-by-mailbox-drop, one-shot reminders, and safe cleanup. Per-backend CLI
+  wake-by-mailbox-drop, one-shot reminders, safe cleanup, and the bounded,
+  verified discipline for durable filesystem reads and edits. Per-backend CLI
   operational detail (command shapes, flags, env contracts) for daemon-backed
   CLIs lives in `daemon-manual` → `reference/cli-backends/SKILL.md`.
-version: 1.15.0
-last_changed_at: 2026-09-09T00:00:00Z
+version: 1.16.0
+last_changed_at: 2026-09-14T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/__init__.py
 - src/lingtai/tools/bash/_tool_family.py
@@ -42,6 +43,7 @@ The selected dialect, policy, and working-directory sandbox remain boundaries.
 | Recurring or time-triggered work | [scheduled work](reference/scheduled-work/SKILL.md) |
 | One future self-wakeup | [notification reminders](reference/notification-reminders/SKILL.md) |
 | Silent, duplicated, failed, or retired scheduler | [debugging and cleanup](reference/debugging-cleanup/SKILL.md) |
+| Reading, creating, or editing durable files; large or non-UTF-8 content | Durable filesystem changes below |
 | Unfamiliar dialect, working directory, timeout, or policy boundary | First success and Settings inventory below |
 | Backend-specific CLI flags, environment, or parser behavior | `daemon-manual` → `reference/cli-backends/SKILL.md` |
 
@@ -69,6 +71,42 @@ pollable after lease/return failure. Completion is authoritative; a reminder is
 fallback. Retain artifacts unless the human authorizes cleanup. Optional
 progress is channel-neutral; use `task_card(action="manual", input={})`.
 Shell creates no watcher.
+
+## Durable filesystem changes
+
+Shell is the one filesystem tool: there is no separate file family. The same
+sandbox, policy, and authority boundaries apply to every read and write.
+
+1. **Anchor the target.** Work under the authorized working directory, or
+   `cd /absolute/path && ...` inside the command for an approved external
+   checkout. Never let a relative path or `..` decide where a write lands.
+2. **Bound every read.** Inspect metadata first (`wc -lc`, `file`, `ls -l`),
+   then read a window: `sed -n '120,200p' path`, `head -c 20000 path`,
+   `rg -n 'pattern' path`. A capped window is not the whole file; page by line
+   range until you reach the end you measured.
+3. **Precondition an exact replacement.** Before editing, prove the old text
+   exists exactly once: `rg -c -F 'old text' path` must print `1`. Then replace
+   with a tool that does not reinterpret the text (for example a short
+   `python - <<'PY'` block using `str.replace(old, new, 1)` on the UTF-8
+   content), never an unescaped `sed -i` over user data.
+4. **Create or overwrite deliberately.** Read the target before a full rewrite;
+   write with a heredoc (`cat > path <<'EOF' ... EOF`) or a Python block, and
+   create parent directories explicitly (`mkdir -p`).
+5. **Verify the mutation.** Re-read the changed lines (`sed -n`/`rg -n`) or
+   compare (`diff`) before reporting success; the write receipt is the
+   re-read, not the exit code alone.
+6. **Handle binary and non-UTF-8 honestly.** Check `file path` first. Convert
+   known encodings explicitly (`iconv -f gbk -t utf-8`) and treat lossy
+   `errors='replace'` output as review material, not as the durable copy. Do
+   not describe binary, image, or audio content you did not decode.
+7. **Rebuild when the owner requires it.** Editing a durable prompt source
+   (`system/pad.md`, `system/lingtai.md`, pinned references, knowledge, skills)
+   changes disk only; it takes effect after `context(action="rebuild",
+   input={})` or a passive refresh/molt. The owning `psyche` domain manual and
+   `context(action="manual", input={})` own that procedure.
+
+Keep private local paths out of human-facing results, and retain artifacts
+unless the human authorizes cleanup.
 
 ## Settings inventory
 

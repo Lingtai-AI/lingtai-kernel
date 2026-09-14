@@ -402,7 +402,7 @@ def test_emanate_forwards_the_full_nested_task_batch_verbatim(tmp_path):
     tasks = [
         {
             "task": "audit the parser",
-            "tools": ["file", "shell"],
+            "tools": ["shell"],
             "skills": ["./skills/audit"],
             "mcp": [{"name": "svc", "transport": "stdio", "command": "x"}],
             "preset": "~/.lingtai-tui/presets/saved/cheap.json",
@@ -633,7 +633,7 @@ def test_emanate_validation_refusal_is_returned_verbatim(tmp_path):
         {
             "action": "emanate",
             "input": {
-                "tasks": [{"task": "t", "tools": ["file"], "system_prompt": "old"}],
+                "tasks": [{"task": "t", "tools": ["shell"], "system_prompt": "old"}],
                 "backend": None, "max_turns": None, "timeout": None,
             },
             "reasoning": "r",

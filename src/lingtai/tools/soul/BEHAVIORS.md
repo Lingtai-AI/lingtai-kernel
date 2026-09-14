@@ -30,7 +30,7 @@ project's Python.
 - **id**: SU001
 - **title**: flow's disabled and ongoing paths return before any fire thread, and manual touches no soul state
 - **guards**: `soul-contract` § Tool surface
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; `LINGTAI_SOUL_FLOW_ENABLED` unset in the probe environment
 - **estimate**: ≈ 15 minutes
 

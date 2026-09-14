@@ -27,7 +27,7 @@ commands must run from the repo root with the project's Python.
 - **id**: LG001
 - **title**: the public inventory is exactly manual, and retired update/load fail as unknown actions
 - **guards**: `lingtai-tool-contract` § Public port
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
 - **estimate**: ≈ 15 minutes
 

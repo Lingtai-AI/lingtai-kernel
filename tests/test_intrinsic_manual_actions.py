@@ -5,7 +5,6 @@ from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 
 from lingtai.tools import daemon as daemon_tool
-from lingtai.tools import file as file_tool
 from lingtai.tools import email as email_tool
 from lingtai.tools import context as context_tool
 from lingtai.tools import soul as soul_tool
@@ -101,30 +100,6 @@ class _OfficialHostStub(_StubAgent):
         transaction.mark_mounted(self)
 
 
-def _bound_file_handler(agent: _StubAgent):
-    """Bind File to port-shaped doubles; this stub is intentionally not Agent."""
-    from lingtai.kernel.tool_plugin import ToolPluginHost
-
-    file_io = agent._file_io
-    return file_tool.DECLARATION.bind(
-        ToolPluginHost(
-            "file",
-            {
-                "workdir": SimpleNamespace(path=agent._working_dir),
-                "file_io": SimpleNamespace(
-                    read=file_io.read,
-                    write=file_io.write,
-                    glob=file_io.glob,
-                    grep=file_io.grep,
-                    last_traversal=getattr(file_io, "last_traversal", None),
-                    max_result_chars=None,
-                ),
-                "configuration": SimpleNamespace(values={}),
-            },
-        )
-    ).handler
-
-
 def _install_manual(workdir: Path, skill_name: str) -> tuple[str, Path]:
     path = (
         workdir
@@ -149,31 +124,13 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             "daemon",
             "email",
             "context-manual",
-            "read-manual",
             "soul-manual",
             "system-manual",
             "web",
             "vision",
-            "file-manual",
             "task_card",
         )
     }
-
-    # The five old file roots are gone; bind the one ``file`` declaration to
-    # only the three ports its family requires. This manual-only test deliberately
-    # has no whole-Agent route through File setup.
-    from lingtai.kernel.tool_plugin import ToolPluginHost
-
-    file_handler = file_tool.DECLARATION.bind(
-        ToolPluginHost(
-            "file",
-            {
-                "workdir": SimpleNamespace(path=tmp_path),
-                "file_io": object(),
-                "configuration": SimpleNamespace(values={}),
-            },
-        )
-    ).handler
 
     shell_manager = shell_tool.ShellManager.__new__(shell_tool.ShellManager)
     shell_manager._agent = agent
@@ -221,9 +178,6 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "task_card": ("task_card", lambda: task_card_manager.handle(
             {"action": "manual", "input": {}, "reasoning": "load task card guidance"}
         )),
-        "file": ("file-manual", lambda: file_handler(
-            {"action": "manual", "input": {}, "reasoning": "load file guidance"}
-        )),
     }
 
     for tool_name, (skill_name, call) in calls.items():
@@ -235,15 +189,6 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             assert result["manual"] == body
             assert result["manual_path"] == str(path)
             assert isinstance(result["current_setting"], dict)
-        elif tool_name == "file":
-            # ``file`` returns the generic ManualTool canonical child result
-            # verbatim (no double wrap): body at content[0].text, host-local
-            # path at structuredContent.manual_path.
-            assert result == {
-                "status": "ok",
-                "content": [{"type": "text", "text": body}],
-                "structuredContent": {"manual_path": str(path)},
-            }
         elif tool_name == "vision":
             # vision's family-owned manual keeps its pre-migration
             # status/action/manual shape and adds the loader's manual_path.
@@ -272,9 +217,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             }, tool_name
 
 
-def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
-    tmp_path: Path,
-) -> None:
+def test_manual_schemas_keep_their_closed_roots() -> None:
     modules = (
         shell_tool,
         daemon_tool,
@@ -283,7 +226,6 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         soul_tool,
         system_tool,
         web_tool,
-        file_tool,
         vision_tool,
         task_card_tool,
     )
@@ -298,9 +240,6 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     web_schema = web_tool.get_schema()
     assert web_schema["required"] == ["action", "input", "reasoning"]
     assert len(web_schema["properties"]["input"]["anyOf"]) == 4
-    file_schema = file_tool.get_schema()
-    assert file_schema["required"] == ["action", "input", "reasoning"]
-    assert len(file_schema["properties"]["input"]["anyOf"]) == 7
     vision_schema = vision_tool.get_schema()
     assert vision_schema["required"] == ["action", "input", "reasoning"]
     # analyze / check / list / settings / manual — one branch per public action.
@@ -312,24 +251,6 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     shell_schema = shell_tool.get_schema()
     assert shell_schema["required"] == ["action", "input", "reasoning"]
     assert len(shell_schema["properties"]["input"]["anyOf"]) == 5
-
-    agent = _StubAgent(tmp_path)
-    agent._file_io = _ActionFileIO(tmp_path)
-    agent.handlers["file"] = _bound_file_handler(agent)
-
-    def call(action, **input_):
-        return agent.handlers["file"](
-            {"action": action, "input": input_, "reasoning": "runtime check"}
-        )
-
-    # A schema-required field omitted at runtime still fails at the operation
-    # boundary, before any write lands.
-    assert call("read")["message"] == "file_path is required"
-    assert call("write", file_path=str(tmp_path / "x"))["message"] == "content is required"
-    assert call("edit", file_path=str(tmp_path / "x"), old_string="a")["message"] == "new_string is required"
-    assert call("glob")["message"] == "pattern is required"
-    assert call("grep")["message"] == "pattern is required"
-    assert not (tmp_path / "x").exists()
 
 
 def test_shipped_task_card_manuals_only_document_intrinsic_file_contract() -> None:
@@ -418,106 +339,3 @@ def test_missing_installed_manual_degrades_without_side_effects(tmp_path: Path) 
         ),
     }
     assert not (tmp_path / ".library").exists()
-
-
-class _ActionFileIO:
-    def __init__(self, root: Path):
-        self.root = root
-        self.last_traversal = None
-
-    def read(self, path):
-        return Path(path).read_text(encoding="utf-8")
-
-    def write(self, path, content):
-        target = Path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-
-    def glob(self, pattern, *, root):
-        return sorted(str(path) for path in Path(root).glob(pattern))
-
-    def grep(self, pattern, *, path, max_results, glob_filter):
-        import re
-        result = []
-        target = Path(path)
-        paths = [target] if target.is_file() else sorted(target.rglob(glob_filter or "*"))
-        for current in paths:
-            if not current.is_file():
-                continue
-            for number, line in enumerate(current.read_text(encoding="utf-8").splitlines(), 1):
-                if re.search(pattern, line):
-                    result.append(type("Match", (), {"path": str(current), "line_number": number, "line": line})())
-                    if len(result) >= max_results:
-                        return result
-        return result
-
-
-def test_file_action_modes_require_explicit_action_and_fail_loudly(tmp_path: Path) -> None:
-    """Every operation is now an explicit action of the one ``file`` family.
-
-    The pre-migration "omit action for the legacy ordinary call" dual mode is
-    gone with the five standalone roots: ``action`` is required, each action
-    name is canonical, and an unknown one fails with the family's stable typed
-    envelope error rather than a per-tool string.
-    """
-    agent = _StubAgent(tmp_path)
-    agent._file_io = _ActionFileIO(tmp_path)
-
-    schema = file_tool.get_schema()
-    assert schema["properties"]["action"]["enum"] == [
-        "read", "write", "edit", "glob", "grep", "settings", "manual",
-    ]
-    assert schema["required"] == ["action", "input", "reasoning"]
-    description = file_tool.get_description()
-    for action in (
-        "read", "write", "edit", "glob", "grep", "settings", "manual"
-    ):
-        assert f"action='{action}'" in description
-    assert "after the manual result" in description.lower()
-    assert "error loop" in description
-
-    agent.handlers["file"] = _bound_file_handler(agent)
-
-    def call(action, **input_):
-        return agent.handlers["file"](
-            {"action": action, "input": input_, "reasoning": "action mode test"}
-        )
-
-    source = tmp_path / "source.txt"
-    source.write_text("alpha\n", encoding="utf-8")
-    assert call("read", file_path=str(source))["total_lines"] == 1
-    assert call("write", file_path=str(tmp_path / "written.txt"), content="beta")["status"] == "ok"
-    assert call("edit", file_path=str(source), old_string="alpha", new_string="gamma")["status"] == "ok"
-    assert call("glob", pattern="*.txt", path=str(tmp_path))["count"] >= 2
-    assert call("grep", pattern="gamma", path=str(source))["count"] == 1
-
-    unsupported = call("unsupported")
-    assert unsupported["status"] == "failed"
-    assert unsupported["error_code"] == "ACTION_REQUIRED"
-    assert "read, write, edit, glob, grep, settings, manual" in unsupported["message"]
-
-    missing_action = agent.handlers["file"]({"input": {}, "reasoning": "no action"})
-    assert missing_action["error_code"] == "ACTION_REQUIRED"
-
-
-def test_file_manual_bodies_explain_one_time_manual_guidance() -> None:
-    """Both bodies keep the one-time manual rule after the family migration.
-
-    The pre-migration "omit action for backward compatibility" dual mode is
-    gone — ``action`` is now always required — so that phrase is no longer
-    asserted. The guidance that still matters is: manual is a one-time lookup,
-    ordinary work resumes after it, and repeating it is an error loop.
-    """
-    file_body = Path("src/lingtai/tools/file/manual/SKILL.md").read_text(encoding="utf-8")
-    read_body = Path("src/lingtai/intrinsic_skills/read-manual/SKILL.md").read_text(encoding="utf-8")
-    for body in (file_body, read_body):
-        assert "ordinary" in body
-        assert "one-time" in body
-        assert "After" in body
-        assert "error loop" in body
-        # No body may still teach the retired omit-action mode.
-        assert "omit `action`" not in body
-
-    # file-manual is the single family manual; read-manual is nested under it.
-    assert "read-manual" in file_body
-    assert "nested reference" in read_body

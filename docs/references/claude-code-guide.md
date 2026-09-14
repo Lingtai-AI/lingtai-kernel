@@ -41,7 +41,7 @@ Single-line fixes, doc tweaks, or commits that are already staged from prior wor
 
 ## What is 灵台
 
-灵台 (Língtái) is a generic agent framework — an "agent operating system" providing the minimal kernel for AI agents: thinking (LLM), perceiving (vision, search), acting (file I/O), and communicating (inter-agent email). Domain tools, coordination, and orchestration are plugged in from outside via MCP-compatible interfaces.
+灵台 (Língtái) is a generic agent framework — an "agent operating system" providing the minimal kernel for AI agents: thinking (LLM), perceiving (vision, search), acting (shell), and communicating (inter-agent email). Domain tools, coordination, and orchestration are plugged in from outside via MCP-compatible interfaces.
 
 Named after 灵台方寸山 — where 孙悟空 learned his 72 transformations. Each agent (器灵) can spawn avatars (分身) that venture into 三千世界 and return with experiences. The self-growing network of avatars IS the agent itself — memory becomes infinite through multiplication.
 
@@ -50,7 +50,7 @@ Named after 灵台方寸山 — where 孙悟空 learned his 72 transformations. 
 This repo contains both packages, published as a single `lingtai` PyPI package:
 
 - **`lingtai.kernel`** (`src/lingtai/kernel/`) — minimal agent runtime. Contains BaseAgent, intrinsics, LLM protocol (ABCs + service), mail/logging services, and core utilities. Zero hard dependencies. Can be used standalone.
-- **`lingtai`** (`src/lingtai/`) — batteries-included layer. Depends on `lingtai.kernel`. Provides Agent (capabilities layer), 10 capabilities, LLM adapter implementations, FileIO/Vision/Search services, MCP, CLI, and addons. Re-exports kernel's public API so `from lingtai import BaseAgent` works.
+- **`lingtai`** (`src/lingtai/`) — batteries-included layer. Depends on `lingtai.kernel`. Provides Agent (capabilities layer), 11 registry capabilities, LLM adapter implementations, Vision/Search services, MCP, CLI, and addons. Re-exports kernel's public API so `from lingtai import BaseAgent` works.
 
 The kernel must never import from `lingtai` — the dependency is strictly one-directional.
 
@@ -112,26 +112,25 @@ CustomAgent(Agent) — host's wrapper (subclass with domain logic)
 ```
 
 - **BaseAgent** (`lingtai.kernel.base_agent`) — kernel coordinator for lifecycle state, the message loop, tool dispatch, public APIs, and subclass hooks. Direct `BaseAgent` callers and subclasses inject all six required Core-owned Ports; `Agent` and the CLI compose adapters. See the complete six-Port constructor and adapter recipe in the [`lingtai.kernel.base_agent` Key Modules entry](#key-modules) below. Six mandatory intrinsics are wired by `BaseAgent`.
-- **Agent** (`src/lingtai/agent.py`) — accepts `capabilities=` (list or dict) at construction. `get_capability(name)` for manager access. Also provides `connect_mcp()` for MCP server integration and auto-creates `LocalFileIOService` if none provided.
+- **Agent** (`src/lingtai/agent.py`) — accepts `capabilities=` (list or dict) at construction. `get_capability(name)` for manager access. Also provides `connect_mcp()` for MCP server integration.
 - **Custom agents** — subclass Agent, add domain tools via `add_tool()` or `_setup_capability()` in `__init__`.
 
-### Four Services (all optional)
+### Three Services (all optional)
 
 | Service | What it backs | First implementation |
 |---------|--------------|---------------------|
 | `LLMService` | Core agent loop (thinking) | Adapter registry (kernel) + adapters (lingtai) |
-| `FileIOService` | file capabilities (read, edit, write, glob, grep) | `LocalFileIOService` (lingtai) |
 | `MailService` | mail (disk-backed mailbox with inbox, send, check, read, search, delete, self-send) | `PosixFilesystemMailAdapter` (`lingtai.adapters.posix.mail`) |
 | `LoggingService` | structured JSONL event logging (auto-created in working dir) | `JSONLLoggingService` (kernel) |
 
-`LLMService` lives in the kernel with an adapter registry; adapter implementations live in lingtai and register on import. `FileIOService` auto-creates `LocalFileIOService` in Agent (not BaseAgent). `LoggingService` auto-creates `JSONLLoggingService` at `{working_dir}/logs/events.jsonl` if not passed. `VisionService` and `SearchService` are capability-level — passed via `capabilities={"vision": {"vision_service": svc}}`.
+`LLMService` lives in the kernel with an adapter registry; adapter implementations live in lingtai and register on import. Durable filesystem changes go through the `shell` capability; there is no file I/O service. `LoggingService` auto-creates `JSONLLoggingService` at `{working_dir}/logs/events.jsonl` if not passed. `VisionService` and `SearchService` are capability-level — passed via `capabilities={"vision": {"vision_service": svc}}`.
 
 ### Three-Tier Tool Model
 
 | Tier | What | How added |
 |------|------|-----------|
 | **Intrinsics** | Kernel services (email, system, context, psyche, soul, notification). Email provides a disk-backed mailbox: send, check, read, dismiss, reply, reply_all, search, archive, delete, contacts. Self-send (to own address) creates persistent notes that survive context compaction. System provides lifecycle (`refresh` — reload MCP, reset session), self-sleep (`sleep`), and karma/nirvana-gated actions (`lull`, `interrupt`, `suspend`, `cpr`, `nirvana`), plus `clear`, `presets`, `name_set`, `name_nickname`, and `manual`. Context owns the agent's context lifecycle (`molt` for self-compaction, `summarize`, `rebuild`). Psyche is the read-only routing root over the four durable domains — `pad`, `lingtai`, `knowledge`, `skills` — plus `manual`; it no longer owns naming or context actions. Covenant is a protected prompt section (no tool access). Capabilities can upgrade intrinsics via `override_intrinsic()`. | Built-in, always present |
-| **Capabilities** | Composable capabilities (file [unified read/write/edit/glob/grep], knowledge, skills, shell, avatar, daemon, mcp, plugin, task_card, vision, web) | Declared at construction via `capabilities=` on Agent |
+| **Capabilities** | Composable capabilities (knowledge, skills, shell, avatar, daemon, mcp, notification, plugin, task_card, vision, web) | Declared at construction via `capabilities=` on Agent |
 | **MCP tools** | Domain tools from external MCP servers | Connected via `Agent.connect_mcp()` using `MCPClient` from `services/mcp.py`, or `add_tool()` in subclass constructors |
 
 ### Key Modules
@@ -143,13 +142,13 @@ CustomAgent(Agent) — host's wrapper (subclass with domain logic)
 - **`src/lingtai/agent.py`** — `Agent(BaseAgent)`. Accepts `capabilities=` at construction. Tracks `_capabilities` for avatar replay. `get_capability(name)` returns manager instances.
 - **`src/lingtai/state.py`** — `AgentState` enum (ACTIVE, IDLE, STUCK, ASLEEP, SUSPENDED).
 - **`src/lingtai/message.py`** — `Message` dataclass (type, sender, content, id, reply_to, timestamp), `_make_message` (auto-prepends UTC timestamp to string content), `MSG_REQUEST`, `MSG_USER_INPUT`. No synchronous reply mechanism — all communication is async.
-- **`src/lingtai/services/`** — lingtai services: `file_io.py` (ABC + LocalFileIOService), `vision.py`, `search.py`, `mcp.py`, `plugin_registry.py`. Kernel services (`mail.py`, `logging.py`) live in `lingtai.kernel.services`.
+- **`src/lingtai/services/`** — lingtai services: `vision.py`, `search.py`, `mcp.py`, `plugin_registry.py`. Kernel services (`mail.py`, `logging.py`) live in `lingtai.kernel.services`.
 - **`lingtai.kernel.llm.interface`** — `ChatInterface`, the canonical provider-agnostic conversation history. Single source of truth — adapters rebuild provider formats from this. Content blocks: `TextBlock`, `ToolCallBlock`, `ToolResultBlock`, `ThinkingBlock`, `ImageBlock`.
 - **`lingtai.kernel.llm.base`** — `LLMAdapter` (ABC), `ChatSession` (ABC), `LLMResponse`, `ToolCall`, `FunctionSchema`. All agent code depends on these, never on provider SDKs directly.
 - **`lingtai.kernel.llm.service`** — `LLMService`. Adapter registry + factory, session registry, one-shot generation gateway, context compaction orchestration. Adapters register via `LLMService.register_adapter()`. Decoupled from config files — uses injected `key_resolver` and `provider_defaults`.
 - **`src/lingtai/llm/interface_converters.py`** — Bidirectional converters between `ChatInterface` and provider-specific formats (Anthropic, OpenAI, Gemini).
 - **`tools` (the six mandatory intrinsics)** — Each file exports `get_schema(lang)`, `get_description(lang)`, and `handle(agent, args)`. All six mandatory intrinsics (email, system, context, psyche, soul, notification) — consolidated into the top-level `tools/` package and injected via `BaseAgent(intrinsics=lingtai.tools.registry.INTRINSICS)` —  have self-contained handler logic — they receive the agent as an explicit parameter. Email intrinsic provides a disk-backed mailbox with actions `send` (fire-and-forget with optional `delay` in seconds — all sends go through outbox → mailman thread → sent pipeline), `check`, `read`, `dismiss`, `reply`, `reply_all`, `search` (regex), `archive`, `delete`, and contact-book management (`contacts`, `add_contact`, `remove_contact`, `edit_contact`). Every send writes to `mailbox/outbox/`, spawns a daemon `_mailman` thread that sleeps for the delay, dispatches (filesystem write or self-send), then moves to `mailbox/sent/` with `sent_at` and `status`. Returns `{"status": "sent", "to": addr, "delay": N}` — the agent doesn't know dispatch outcome. `outbox/` (transient) and `sent/` (audit trail) are not exposed to the agent. Messages persist in `mailbox/inbox/{uuid}/message.json` — delivery is a filesystem write to the recipient's inbox directory. System intrinsic provides lifecycle (`refresh` — reload MCP, reset session), self-sleep (`sleep`), naming (`name_set` — set true name once, `name_nickname` — mutable display name), `presets` (list available presets), `manual`, and karma/nirvana-gated actions: `lull` (put other to sleep), `interrupt` (cancel other's turn), `suspend` (force other to SUSPENDED), `cpr` (resuscitate SUSPENDED agent), `clear` (force molt on another agent), `nirvana` (permanently destroy). Context intrinsic owns the agent's own context lifecycle: `molt` (self-compaction with briefing), `summarize`, `rebuild`. Psyche intrinsic is the read-only routing root over the four durable domains — `pad`, `lingtai`, `knowledge`, `skills` — plus `manual`; each domain action returns that domain's installed manual. `context_forget` is internal only (called by system-forced recovery). Covenant is injected at construction as a protected prompt section (no tool access).
-- **`src/lingtai/tools/`** — Built-in capability modules export `setup(agent, **kwargs)`. The core default floor is `file` (unified file I/O — read/write/edit/glob/grep are pre-migration names and no longer exist, with no alias), knowledge, skills, shell, avatar, daemon, mcp, plugin, and task_card; optional registry entries include vision and web (`web_search` is accepted as a one-way legacy input alias for `web`). Durable private knowledge lives in the `knowledge` capability; the skill catalog lives in `skills`. Avatar (分身) spawns `Agent` peers with `name` and `type`; `type="deep"` copies character, pad, and knowledge, while the default shallow spawn starts from `init.json` only. Reasoning is sent as the first message.
+- **`src/lingtai/tools/`** — Built-in capability modules export `setup(agent, **kwargs)`. The core default floor is knowledge, skills, shell, avatar, daemon, mcp, notification, plugin, task_card, and vision; the only opt-in registry entry is web (`web_search` is accepted as a one-way legacy input alias for `web`). There is no `file` capability: durable filesystem changes go through `shell`. Durable private knowledge lives in the `knowledge` capability; the skill catalog lives in `skills`. Avatar (分身) spawns `Agent` peers with `name` and `type`; `type="deep"` copies character, pad, and knowledge, while the default shallow spawn starts from `init.json` only. Reasoning is sent as the first message.
 - **`src/lingtai/tools/daemon/__init__.py`** — Daemon (神識) subagent capability. `DaemonManager` dispatches ephemeral `ChatSession` tool loops in threads via `ThreadPoolExecutor`. Each emanation gets a curated tool surface (parent capability handlers plus task-scoped MCP registrations, minus blacklist). Results persist in per-run daemon folders and cooperative checkpoints and terminal completion/failure are surfaced as compact built-in `daemon`-channel notifications. Actions: emanate (分), list (观), ask (问), check (察), reclaim (收), manual. Blacklist (`EMANATION_BLACKLIST`): daemon, avatar, context, psyche, knowledge, skills. Configurable: `max_emanations`, `max_turns`, `timeout`.
 - **`src/lingtai/cli.py`** — CLI entrypoint (`lingtai-agent run <working_dir>`). Reads `init.json` manifest, creates LLMService + Agent, starts the agent loop. Also `lingtai cpr <dir>` for resuscitating suspended agents.
 - **`src/lingtai/network.py`** — `AgentNetwork` class. Three-layer topology discovery: avatar edges (from `delegates/ledger.jsonl`), contact edges (from `mailbox/contacts.json`), mail edges (from `mailbox/inbox/` + `mailbox/sent/`). Returns `AgentNode` and edge objects.
@@ -164,25 +163,25 @@ CustomAgent(Agent) — host's wrapper (subclass with domain logic)
 
 11 adapter directories under `src/lingtai/llm/`, each lazy-imported and registered with `LLMService.register_adapter()` on `import lingtai.llm`: Gemini (`google-genai`), OpenAI, Anthropic, MiniMax, DeepSeek, Kimi Code, MiMo, OpenRouter, Zhipu, Claude Code, and Custom. The Custom adapter handles additional providers via `api_compat` routing. Each adapter subdirectory has `adapter.py` (implementation) and `defaults.py` (model defaults). LLM protocol ABCs live in `lingtai.kernel.llm`; adapter implementations live in `lingtai.llm`.
 
-### Built-in Capabilities (10)
+### Built-in Capabilities (11)
 
-`BUILTIN_TOOLS` (`src/lingtai/tools/registry.py`) is the exact catalog — one unified `file` capability replaced the pre-migration `read`/`write`/`edit`/`glob`/`grep` split, and there is no `email`, `web_read`, `talk`, `compose`, `draw`, `video`, or `listen` capability; `email` is a mandatory intrinsic (see Three-Tier Tool Model above), and the MiniMax-MCP-backed media capabilities were retired.
+`BUILTIN_TOOLS` (`src/lingtai/tools/registry.py`) is the exact catalog — there is no `file`, `read`, `write`, `edit`, `glob`, `grep`, `email`, `web_read`, `talk`, `compose`, `draw`, `video`, or `listen` capability; the public File tool was removed (durable filesystem changes go through `shell`), `email` is a mandatory intrinsic (see Three-Tier Tool Model above), and the MiniMax-MCP-backed media capabilities were retired.
 
 | Capability | Usage | What it adds |
 |-----------|-------|-------------|
-| `file` | `capabilities=["file"]` | Unified file I/O — read, write, edit, glob, grep operations under one schema |
 | `knowledge` | `capabilities=["knowledge"]` | Private durable knowledge across molts. Former durable-memory names `library` and `codex` are removed. |
 | `skills` | `capabilities=["skills"]` | Skill catalog access |
 | `shell` | `capabilities={"shell": {"policy_file": "p.json"}}` or `{"shell": {"yolo": True}}` | Shell command execution with the active dialect. Omitted config (or `{}`) is yolo on every route; explicit `yolo: False`/`policy_file` restrict |
 | `avatar` | `capabilities=["avatar"]` | Spawn avatar (分身) as fully independent detached process. Two params: `name` (required, true name) and `type` ('shallow' default — copies init.json only, 投胎; 'deep' — copies character/pad/knowledge too, 二重身). Each avatar gets its own working dir + `lingtai-agent run` process. Survives parent death. Reasoning = starting prompt in init.json. |
 | `mcp` | `capabilities=["mcp"]` | MCP server integration |
+| `notification` | `capabilities=["notification"]` | Official host-plugin family for notification mirrors, hooks, and delay. Always-on like the former intrinsic, but mounted only through its declared official host-plugin route. |
 | `plugin` | `manifest.plugins: ["./plugins/my-plugin"]` (canonical) or `{"plugin": {"paths": [...]}}` (alias) | Agent Plugins (agent-plugins.org, v1.0.0) catalog and registration — the twin of `mcp`. A **declared** plugin is mounted at boot: each of its containment-validated skill directories is composed into the skills catalog (not copied; a skill directory that escapes the plugin root is skipped and genuinely not mounted) and its `mcp.json` servers become `mcp_registry.jsonl` records with `source="plugin:<name>"`, appended through the same validator as curated addons — registered, **not running** (activation still needs an `init.json` top-level `mcp` entry). A plugin merely **discovered** on an inherited `skills.paths` directory is listed and nothing more. Uninstall = drop it from `manifest.plugins` and refresh; its records are pruned. Actions: `info` (registration snapshot + per-path health + why anything was skipped), `manual`. Both read-only — mounting is boot-only. Default-on. |
 | `task_card` | `capabilities=["task_card"]` | Declarative single Task Card artifact under `<workdir>/taskcard/` |
 | `vision` | `capabilities=["vision"]` or `{"vision": {"vision_service": svc}}` | Image understanding (LLM multimodal or dedicated VisionService). Always registered in `CORE_DEFAULTS` — the route defaults to the active LLM's own Responses API, with optional `preset` borrow and a `check` action. Claude-family backends return explicit "run `claude -p`" guidance. |
 | `web` | `capabilities=["web"]` or `{"web": {"search_service": svc}}` | Web search (LLM grounding or dedicated SearchService). Explicit opt-in — not in the core default floor. `web_search` is accepted as a one-way legacy input alias for this capability. |
 | `daemon` | `capabilities=["daemon"]` or `{"daemon": {"max_emanations": 100}}` | Subagent system (分神). Dispatch ephemeral LLM sessions as parallel workers in the same working dir. Actions: emanate (分, dispatch batch), list (观, status), ask (问, follow-up), check (察, status of one), reclaim (收, kill all), manual. Results return as `[daemon:em-N]` notifications. MCP registrations supplied per task via `mcp` (serialized for all backends; loaded as task-scoped tools by LingTai backend). Blacklist (`EMANATION_BLACKLIST`): daemon, avatar, context, psyche, knowledge, skills. |
 
-`knowledge`, `skills`, `shell`, `avatar`, `daemon`, `mcp`, `plugin`, `task_card`, `file`, and `vision` boot by default on every Agent (`CORE_DEFAULTS`); `web` requires provider config and stays explicit opt-in.
+`knowledge`, `skills`, `shell`, `avatar`, `daemon`, `mcp`, `notification`, `plugin`, `task_card`, and `vision` boot by default on every Agent (`CORE_DEFAULTS`, 10 of the 11); `web` requires provider config and stays explicit opt-in.
 
 ### Extension Pattern
 
@@ -190,7 +189,7 @@ CustomAgent(Agent) — host's wrapper (subclass with domain logic)
 # Layer 2: Agent with capabilities
 agent = Agent(
     service=svc, agent_name="alice", working_dir="/agents/alice",
-    capabilities=["file", "vision", "web_search", "shell"],  # "file" is the unified read/write/edit/glob/grep tool; "web_search" is a legacy alias for "web"
+    capabilities=["shell", "vision", "web_search"],  # "shell" owns durable filesystem changes; "web_search" is a legacy alias for "web"
 )
 agent = Agent(
     service=svc, agent_name="bob", working_dir="/agents/bob",
@@ -200,8 +199,8 @@ agent = Agent(
 # Layer 3: Custom agent subclass
 class ResearchAgent(Agent):
     def __init__(self, **kwargs):
-        super().__init__(capabilities=["file", "vision", "web_search"], **kwargs)
-        self._setup_capability("bash", policy_file="research.json")
+        super().__init__(capabilities=["shell", "vision", "web_search"], **kwargs)
+        self._setup_capability("shell", policy_file="research.json")
         self.add_tool("query_db", schema={...}, handler=db_handler)
 
 # Low-level API (on BaseAgent, sealed after start)
@@ -211,7 +210,7 @@ agent.override_intrinsic(name)                            # remove intrinsic, re
 agent.update_system_prompt(section, content)              # inject prompt section (open at any time)
 ```
 
-Note: `capabilities=` accepts `list[str]` (no kwargs) or `dict[str, dict]` (with kwargs per capability). Group names like `"file"` expand to individual capabilities. `add_tool()`, `remove_tool()`, and `override_intrinsic()` raise `RuntimeError` after `start()`.
+Note: `capabilities=` accepts `list[str]` (no kwargs) or `dict[str, dict]` (with kwargs per capability). `bash` and `web_search` are one-way legacy input aliases for `shell` and `web`. `add_tool()`, `remove_tool()`, and `override_intrinsic()` raise `RuntimeError` after `start()`.
 
 ### System Prompt Structure
 

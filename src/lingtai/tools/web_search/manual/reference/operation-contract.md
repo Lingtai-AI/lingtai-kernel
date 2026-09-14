@@ -165,8 +165,9 @@ complete content under workdir-relative `tmp/tool-results/` and return
 `content_chars`/`content_sha256`, format/encoding, content scope/kind, and
 output-setting source/revision/hash. Search omits `results`; browse omits
 `blocks`, `partial`, `next_cursor`, and `returned_chars`. There is no preview
-or lossy prefix; read the artifact with `file.read`, continuing from `next_offset`
-until complete (handle long-line truncation via the File read manual). Completeness
+or lossy prefix; read the artifact with `shell` in bounded line ranges (for
+example `sed -n '<start>,<end>p' -- "<file_path>"`, or `wc -l` first) until
+complete, splitting very long lines with `cut`/`fold` if needed. Completeness
 is provider-response/extracted-document scope, not the entire web/site or rendered
 JS page; link metadata is separately bounded and may carry truncation warnings.
 

@@ -25,33 +25,12 @@ permissions:
 
 jobs:
   build-wheels:
-    name: Wheels on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    # Fail loud instead of hanging: cibuildwheel across three CPythons plus a
-    # QEMU-emulated aarch64 leg is the long pole, so give it a generous but
-    # bounded ceiling rather than the 6h GitHub default.
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        # Four-platform coverage. macos-15-intel is the current GitHub-hosted
-        # Intel label (macos-13 was retired); macos-14 is Apple Silicon (arm64).
-        # cibuildwheel builds arch-specific macOS wheels (CIBW_ARCHS_MACOS=auto),
-        # so each runner yields its own native slice — no universal2.
-        os: [ubuntu-latest, macos-15-intel, macos-14, windows-latest]
-        include:
-          # macOS deployment target must match the Rust sidecar's minimum OS, or
-          # delocate rejects the wheel ("Library dependencies do not satisfy
-          # target MacOS version"). rustc defaults to 10.12 on x86_64 and 11.0 on
-          # arm64, while CPython historically tags macOS wheels 10.9 — the
-          # mismatch is what broke the Intel leg. Pin the target per arch so the
-          # wheel *tag* and the *sidecar compile* agree; the value is exported
-          # into the build env below (CIBW_ENVIRONMENT_MACOS), which both raises
-          # the wheel's platform tag and reaches cargo via setup.py.
-          - os: macos-15-intel
-            macos_target: "10.12"
-          - os: macos-14
-            macos_target: "11.0"
+    name: Universal wheel
+    runs-on: ubuntu-latest
+    # The kernel is pure Python: one ``py3-none-any`` wheel serves every
+    # platform and interpreter, so there is no per-OS matrix, no native
+    # toolchain, and no emulated architecture leg.
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
@@ -86,102 +65,63 @@ jobs:
             exit 1
           fi
 
-      - name: Set up QEMU for Linux aarch64 wheels
-        if: runner.os == 'Linux'
-        uses: docker/setup-qemu-action@v3
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
-        env:
-          # Fail CI loudly if the native sidecar cannot be built. Local/source
-          # installs still keep setup.py's soft fallback unless this env var is
-          # explicitly set.
-          LINGTAI_REQUIRE_RUST_BUILD: "1"
-          CIBW_BUILD: "cp311-* cp312-* cp313-*"
-          CIBW_SKIP: "*-musllinux_* pp*"
-          # The sidecar is a native executable, so build arch-specific macOS
-          # wheels on the Intel and Apple Silicon runners instead of universal2.
-          CIBW_ARCHS_MACOS: "auto"
-          CIBW_ARCHS_LINUX: "auto64 aarch64"
-          CIBW_ARCHS_WINDOWS: "AMD64"
-          # Consistent macOS floor for both the wheel platform tag and the cargo
-          # build of lingtai-search-sidecar (see matrix.include). Empty on
-          # non-macOS runners, where this *_MACOS override is ignored.
-          CIBW_ENVIRONMENT_MACOS: >-
-            MACOSX_DEPLOYMENT_TARGET=${{ matrix.macos_target }}
-            LINGTAI_REQUIRE_RUST_BUILD=1
-          CIBW_BEFORE_BUILD_LINUX: >-
-            curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
-          CIBW_ENVIRONMENT_LINUX: >-
-            PATH="$HOME/.cargo/bin:$PATH"
-            LINGTAI_REQUIRE_RUST_BUILD=1
-          # NOTE: no CIBW_TEST_* here on purpose. cibuildwheel's built-in test
-          # phase always `pip install`s the wheel WITH its full runtime
-          # dependency tree (not configurable), which drags in faster-whisper →
-          # av (PyAV). In the manylinux2014 test container PyAV has only an sdist
-          # that needs FFmpeg pkg-config dev libs, so the smoke test failed
-          # during unrelated dependency installation even though the repaired
-          # wheel was valid. The sidecar is verified instead by the dependency-
-          # free `Verify built wheels` step below (pip install --no-deps).
-
-      # Pin a known interpreter so the verify step's `cp3XX` tag deterministically
-      # matches one of the built wheels (cp311/cp312/cp313) on every runner,
-      # rather than depending on the image's ambient `python`.
-      - name: Set up Python for wheel verification
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Verify built wheels carry a runnable sidecar
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build universal wheel
+        run: uv build --wheel --out-dir dist
+
+      - name: Verify built wheel is a pure-Python universal artifact
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
-          wheels=(./wheelhouse/*.whl)
-          if [ ${#wheels[@]} -eq 0 ]; then
-            echo "no wheels produced in ./wheelhouse" >&2
+          wheels=(./dist/*.whl)
+          if [ ${#wheels[@]} -ne 1 ]; then
+            echo "expected exactly one wheel in ./dist, found ${#wheels[@]}" >&2
             exit 1
           fi
-          # `--auto` per wheel: the checker installs (--no-deps) and executes the
-          # sidecar when the wheel is compatible with this interpreter, else does
-          # the archive-layout check only (the QEMU aarch64 Linux wheel can't run
-          # on the x86_64 runner). Every wheel is checked; a real defect fails
-          # loud. See tests/test_wheel_sidecar_smoke.py for why this is
-          # dependency-free (the manylinux2014 PyAV/FFmpeg trap).
-          for w in "${wheels[@]}"; do
-            python tests/test_wheel_sidecar_smoke.py --auto "$w"
-          done
-          # Fail loud if NO produced wheel was compatible enough to run
-          # end-to-end here — a proof that is only ever archive-deep would be a
-          # weaker gate than intended.
-          python - "${wheels[@]}" <<'PY'
-          import sys
-          from tests.test_wheel_sidecar_smoke import wheel_runnable_here
+          # Fail loud if a native payload or a platform-specific layout crept
+          # in: the release contract is one py3-none-any wheel whose packages
+          # sit at the archive root. Then prove the wheel installs and imports
+          # without its dependency tree (the same --no-deps proof the manifest
+          # generator repeats before trusting the artifact).
+          python - "${wheels[0]}" <<'PY'
+          import sys, zipfile
           from pathlib import Path
-          if not any(wheel_runnable_here(Path(w)) for w in sys.argv[1:]):
-              sys.exit("no produced wheel was runnable on this runner; "
-                       "install+run proof did not execute")
+          wheel = Path(sys.argv[1])
+          if not wheel.name.endswith("-py3-none-any.whl"):
+              sys.exit(f"{wheel.name} is not a py3-none-any universal wheel")
+          with zipfile.ZipFile(wheel) as zf:
+              names = zf.namelist()
+          bad = [n for n in names if ".data/" in n or n.startswith("lingtai/bin/")]
+          if bad:
+              sys.exit(f"unexpected native/.data entries in {wheel.name}: {bad[:5]}")
+          if "lingtai/__init__.py" not in names:
+              sys.exit(f"{wheel.name} does not place lingtai/ at the archive root")
+          print(f"universal wheel OK: {wheel.name}")
           PY
+          python -m venv /tmp/wheel-smoke
+          /tmp/wheel-smoke/bin/python -m pip install --disable-pip-version-check --no-deps "${wheels[0]}"
+          /tmp/wheel-smoke/bin/python -c "import importlib.resources as r, lingtai; tools = r.files('lingtai.tools'); assert tools.joinpath('CONTRACT.md').is_file(); assert not tools.joinpath('file').is_dir(); print('import OK', lingtai.__version__)"
 
-      - name: Upload wheel artifacts
+      - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}
-          path: ./wheelhouse/*.whl
+          name: wheels-universal
+          path: ./dist/*.whl
           if-no-files-found: error
 
   build-sdist:
     name: Source distribution
     runs-on: ubuntu-latest
-    # Independent of build-wheels so a wheel/auditwheel failure on any platform
-    # cannot suppress the source release. The sdist is source-only (setup.py's
-    # cargo hook fires only for bdist_wheel/build_py), so it needs no Rust.
+    # Independent of build-wheels so a wheel-verification failure cannot
+    # suppress the source release, and vice versa.
     timeout-minutes: 15
 
     steps:
@@ -234,12 +174,11 @@ jobs:
     name: Generate release manifest
     needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
-    # Serial by design: this job only aggregates the wheelhouse+sdist artifacts
-    # the matrix already built and verified (see "Verify built wheels carry a
-    # runnable sidecar" above); it must never rebuild anything per platform.
-    # `needs: [build-wheels, build-sdist]` makes it wait for every matrix leg,
-    # so a partial/failed platform build fails this job loud via `needs`
-    # rather than silently shipping an incomplete manifest.
+    # Serial by design: this job only aggregates the wheel+sdist artifacts the
+    # build jobs already built and verified (see "Verify built wheel is a
+    # pure-Python universal artifact" above); it must never rebuild anything.
+    # `needs: [build-wheels, build-sdist]` makes a failed build fail this job
+    # loud via `needs` rather than silently shipping an incomplete manifest.
     timeout-minutes: 15
     permissions:
       # write is required only for the actual publish path (gh release
@@ -413,7 +352,7 @@ jobs:
               return digest.hexdigest()
 
           assets = []
-          # The wheels/sdist already carry a verified sha256 in the manifest
+          # The wheel/sdist already carry a verified sha256 in the manifest
           # (verify_local_assets() proved it matches on-disk bytes earlier in
           # this job); the manifest and SHA256SUMS files describe themselves,
           # so their digests are computed fresh here.

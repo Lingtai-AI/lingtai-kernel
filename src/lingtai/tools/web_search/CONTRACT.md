@@ -408,8 +408,8 @@ Guarded by: [W002](BEHAVIORS.md#behavior-w002)
   `artifact` (the namespaced marker `lingtai_web_output_artifact/v1`),
   `content_scope` (`provider_response` for search, `fetched_static_document`
   for browse), `content_kind`, `format`/`encoding`, `file_path`
-  (workdir-relative only, readable via the existing public `file.read`
-  tool), exact `content_chars` and `content_sha256` of the artifact file,
+  (workdir-relative only, readable with the public `shell` tool in bounded
+  chunks), exact `content_chars` and `content_sha256` of the artifact file,
   `output_setting_source`/`output_setting_revision`/`output_setting_hash`
   (the shared setting state that produced this threshold), and an explicit
   instruction that the artifact is the complete result with nothing
@@ -535,7 +535,7 @@ file, the artifact's `output_setting_source`/`revision`/`hash` fields,
 Unicode character accounting, threshold boundary on both sides, atomic
 unique artifact filenames under the canonical `tmp/tool-results/` directory
 across rapid calls, no content preview when spilled, `ARTIFACT_WRITE_FAILED`
-on a simulated write failure, an end-to-end spill-then-`file.read` round
+on a simulated write failure, an end-to-end spill-then-read-back round
 trip, Browse's per-call `max_chars` override of the shared threshold, a
 legacy `cursor` locator returning the complete document under the same
 policy, and — directly, not by inference from envelope size — that the

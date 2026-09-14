@@ -29,7 +29,7 @@ the project's Python.
 - **id**: TT001
 - **title**: the programmable frame is composed only for exact active with a nonempty body, and diff-only updates suppress transport churn
 - **guards**: `telegram-task-card-projection` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` with `taskcard/status` and `taskcard/taskcard.md`
 - **estimate**: ≈ 20 minutes
 

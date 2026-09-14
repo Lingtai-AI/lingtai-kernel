@@ -3,49 +3,52 @@ related_files:
   - .github/workflows/wheels.yml
   - scripts/generate_release_manifest.py
   - scripts/publish_release_assets.py
-  - tests/test_wheel_sidecar_smoke.py
+  - tests/test_release_manifest.py
+  - tests/test_tools_package_data.py
 maintenance: |
-  Keep this release runbook synchronized with the CI wheel/sdist workflows, manifest tooling, sidecar verification, and publication gates.
+  Keep this release runbook synchronized with the CI wheel/sdist workflow, manifest tooling, universal-wheel verification, and publication gates.
 ---
 # Releasing the `lingtai` Python kernel
 
-## Build + verify (existing, unchanged)
+## Build + verify
 
 `.github/workflows/wheels.yml` runs on `workflow_dispatch` or when a GitHub
-Release is published. Two independent jobs build the artifacts:
+Release is published. The kernel is a pure-Python distribution, so two
+independent jobs build the artifacts:
 
-- **`build-wheels`** — cibuildwheel matrix across cp311/cp312/cp313 for Linux
-  (x86_64 + aarch64), macOS (Intel + Apple Silicon), and Windows. Every wheel
-  carries the native Rust search sidecar (`lingtai/bin/lingtai-search-sidecar`)
-  and is verified with `tests/test_wheel_sidecar_smoke.py --auto` before
-  upload. **Never treat a plain `pip wheel` / `uv build --wheel` /
-  `python -m build --wheel` output as a release artifact** — without
-  `LINGTAI_REQUIRE_RUST_BUILD=1` and the cibuildwheel toolchain it silently
-  produces a pure-Python `py3-none-any` wheel with no sidecar, which the
-  installer would then ship as if it were a full platform build.
-- **`build-sdist`** — independent source-only build (`uv build --sdist`), no
-  Rust required.
+- **`build-wheels`** — `uv build --wheel` on `ubuntu-latest` produces exactly
+  one universal wheel (`lingtai-<version>-py3-none-any.whl`). The job then
+  verifies it before upload: the filename must carry the `py3-none-any` tag,
+  the archive must place `lingtai/` at its root with no `*.data/`
+  install-scheme entries and no bundled binary under `lingtai/bin/`, and a
+  dependency-free `pip install --no-deps` into a fresh venv must import the
+  package. There is no per-platform matrix, no native toolchain, and no
+  emulated architecture leg: the same wheel serves Linux, macOS, and Windows
+  on every supported interpreter
+  (`tests/test_tools_package_data.py::test_wheel_is_pure_python_universal`
+  pins the same contract locally).
+- **`build-sdist`** — independent source-only build (`uv build --sdist`), so
+  a wheel-verification failure cannot suppress the source release.
 
-Both jobs upload their outputs as GitHub Actions artifacts (`wheels-<os>`,
+Both jobs upload their outputs as GitHub Actions artifacts (`wheels-universal`,
 `sdist`) — Actions artifacts are CI-internal and are not directly visible to
 end users or the installer.
 
-## Manifest (new)
+## Manifest
 
 A third job, **`release-manifest`**, runs after both build jobs
 (`needs: [build-wheels, build-sdist]`) so it only ever aggregates already-built
-and already-verified bytes — it rebuilds nothing per platform or provider.
+and already-verified bytes — it rebuilds nothing.
 
-It downloads every `wheels-*` and the `sdist` artifact into one directory and
-runs [`scripts/generate_release_manifest.py`](scripts/generate_release_manifest.py),
+It downloads the `wheels-*` and `sdist` artifacts into one directory and runs
+[`scripts/generate_release_manifest.py`](scripts/generate_release_manifest.py),
 which:
 
-1. Re-rejects any stray `py3-none-any` wheel outright (belt-and-braces on top
-   of the build-time guard above).
-2. Re-runs the sidecar validation contract
-   (`tests/test_wheel_sidecar_smoke.py --auto`) against every wheel.
-3. Computes a SHA256 for every artifact and writes a flat `SHA256SUMS` file.
-4. Emits `lingtai-kernel-release-manifest.json`, schema `lingtai.kernel.release/v1`
+1. Re-verifies every wheel against the universal-wheel contract (a
+   platform-specific or interpreter-specific wheel, or one carrying a native
+   payload, fails loud and is never published).
+2. Computes a SHA256 for every artifact and writes a flat `SHA256SUMS` file.
+3. Emits `lingtai-kernel-release-manifest.json`, schema `lingtai.kernel.release/v1`
    (defined in [`scripts/lib/release_manifest.py`](scripts/lib/release_manifest.py) —
    the one source of truth for this shape; the generator, the publisher, and
    the TUI installer's consumer all import or mirror it):
@@ -53,21 +56,21 @@ which:
    ```json
    {
      "schema": "lingtai.kernel.release/v1",
-     "kernel_version": "0.19.5",
-     "kernel_tag": "v0.19.5",
+     "kernel_version": "1.0.5",
+     "kernel_tag": "v1.0.5",
      "commit": "<full 40-char sha>",
-     "generated_at": "2026-08-07T00:00:00Z",
+     "generated_at": "2026-09-14T00:00:00Z",
      "artifacts": [
        {
-         "filename": "lingtai-0.19.5-cp312-cp312-macosx_11_0_arm64.whl",
+         "filename": "lingtai-1.0.5-py3-none-any.whl",
          "sha256": "<64-char hex>",
          "kind": "wheel",
-         "python_tag": "cp312",
-         "abi_tag": "cp312",
-         "platform_tag": "macosx_11_0_arm64"
+         "python_tag": "py3",
+         "abi_tag": "none",
+         "platform_tag": "any"
        },
        {
-         "filename": "lingtai-0.19.5.tar.gz",
+         "filename": "lingtai-1.0.5.tar.gz",
          "sha256": "<64-char hex>",
          "kind": "sdist",
          "python_tag": null,
@@ -75,14 +78,18 @@ which:
          "platform_tag": null
        }
      ],
-     "sdist_fallback": "lingtai-0.19.5.tar.gz"
+     "sdist_fallback": "lingtai-1.0.5.tar.gz"
    }
    ```
+
+   The schema is unchanged from the platform-wheel era: a consumer that
+   selects a wheel by tag now finds one `py3/none/any` entry that matches
+   every platform, and the sdist fallback remains available.
 
 The manifest and `SHA256SUMS` are uploaded as their own `release-manifest`
 Actions artifact so any run (including a manual `workflow_dispatch` shape
 check) produces inspectable output without publishing anything. The publisher
-also attaches both files alongside the wheels/sdist.
+also attaches both files alongside the wheel/sdist.
 
 ## Publish
 
@@ -94,8 +101,7 @@ also attaches both files alongside the wheels/sdist.
   defaults `false`); pass `publish: true` to deliberately publish from a
   manual run too (for example to republish after a partial failure).
 - Every other shape (default manual dispatch) stays dry-run, so re-running
-  this workflow to sanity-check the manifest/wheel matrix has no side
-  effects.
+  this workflow to sanity-check the manifest has no side effects.
 
 ### Gitee is not part of the workflow
 
@@ -108,12 +114,12 @@ nor uploads assets there, so a Gitee problem can never delay, cancel, or
 fail a release. The Gitee scripts remain in the repository with their own
 tests, but nothing in CI invokes them.
 
-### Publish — manifest/wheels/sdist to the GitHub release
+### Publish — manifest/wheel/sdist to the GitHub release
 
 [`scripts/publish_release_assets.py`](scripts/publish_release_assets.py)
 uploads the exact manifest + asset bytes to **GitHub Releases**, via the `gh`
 CLI (`gh release create` / `gh release upload`), attaching the manifest and
-`SHA256SUMS` alongside the wheels/sdist.
+`SHA256SUMS` alongside the wheel/sdist.
 
 Every mutating action requires the explicit `--execute` flag; the workflow
 passes it only when the trigger is a real release (or an explicit
@@ -149,10 +155,10 @@ receiving side's contract.
 
 ```bash
 # after a wheels.yml run, download its `wheels-*` + `sdist` artifacts into
-# ./release-assets, then:
+# ./release-assets (or build them locally with `uv build --out-dir release-assets`), then:
 python scripts/generate_release_manifest.py \
   --assets-dir release-assets \
-  --kernel-version 0.19.5 --kernel-tag v0.19.5 \
+  --kernel-version 1.0.5 --kernel-tag v1.0.5 \
   --commit "$(git rev-parse HEAD)" \
   --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --out-manifest release-assets/lingtai-kernel-release-manifest.json \

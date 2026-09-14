@@ -399,7 +399,7 @@ def test_lingtai_backend_ignores_env_overlay(tmp_path):
         "action": "emanate",
         "tasks": [{
             "task": "lingtai task",
-            "tools": ["file"],
+            "tools": ["shell"],
             # Invalid for a CLI backend; the lingtai backend never reads it.
             "backend_options": {"env": {"9BAD": 7}},
         }],
@@ -428,7 +428,7 @@ def test_lingtai_backend_ignores_backend_options(tmp_path):
         # backend defaults to "lingtai"
         "tasks": [{
             "task": "lingtai task",
-            "tools": ["file"],
+            "tools": ["shell"],
             # This must be ignored, not validated. Even an "invalid" object
             # would be accepted because the lingtai backend never reads it.
             "backend_options": {"effort": "high"},

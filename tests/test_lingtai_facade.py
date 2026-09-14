@@ -23,8 +23,6 @@ _FORBIDDEN_AFTER_BARE_IMPORT: frozenset[str] = frozenset(
         "lingtai.kernel",
         "lingtai.tools",
         "lingtai.llm",
-        "lingtai.services.file_io",
-        "lingtai.services.file_io_sidecar",
         "lingtai.services.vision",
         "lingtai.services.websearch",
         "lingtai.mcp_servers",
@@ -119,8 +117,6 @@ def test_facade_names_match_canonical_objects():
     import lingtai.kernel.state
     import lingtai.kernel.turns
     import lingtai.kernel.types
-    import lingtai.services.file_io
-    import lingtai.services.file_io_sidecar
     import lingtai.services.vision
     import lingtai.services.websearch
     import lingtai.tools.avatar
@@ -155,24 +151,6 @@ def test_facade_names_match_canonical_objects():
     assert lingtai.BashManager is lingtai.tools.bash.BashManager
     assert lingtai.AvatarManager is lingtai.tools.avatar.AvatarManager
     assert lingtai.EmailManager is lingtai.tools.email.EmailManager
-
-    assert lingtai.FileIOBackend is lingtai.services.file_io.FileIOBackend
-    assert lingtai.FileIOService is lingtai.services.file_io.FileIOService
-    assert lingtai.GrepMatch is lingtai.services.file_io.GrepMatch
-    assert lingtai.LocalFileIOBackend is lingtai.services.file_io.LocalFileIOBackend
-    assert lingtai.LocalFileIOService is lingtai.services.file_io.LocalFileIOService
-    assert lingtai.BACKEND_ENV_VAR is lingtai.services.file_io_sidecar.BACKEND_ENV_VAR
-    assert lingtai.RustFileIOBackend is lingtai.services.file_io_sidecar.RustFileIOBackend
-    assert lingtai.SidecarAdapter is lingtai.services.file_io_sidecar.SidecarAdapter
-    assert lingtai.SidecarError is lingtai.services.file_io_sidecar.SidecarError
-    assert (
-        lingtai.default_file_io_service
-        is lingtai.services.file_io_sidecar.default_file_io_service
-    )
-    assert (
-        lingtai.resolve_sidecar_binary
-        is lingtai.services.file_io_sidecar.resolve_sidecar_binary
-    )
 
     assert lingtai.MailService is lingtai.kernel.mail_transport.MailTransportPort
     assert (

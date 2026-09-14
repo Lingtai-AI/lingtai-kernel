@@ -193,8 +193,10 @@ def test_router_manual_is_a_routing_table_naming_all_four_domains(tmp_path):
         for domain in ("pad", "lingtai", "knowledge", "skills"):
             assert f'action="{domain}"' in body
         # It teaches the shared mutation/rebuild model rather than duplicating
-        # the domain manuals it points at.
-        assert "file.write" in body and "file.edit" in body
+        # the domain manuals it points at. Durable sources change through
+        # ``shell``; the removed ``file`` tool must not be taught.
+        assert "shell" in body
+        assert "file.write" not in body and "file.edit" not in body
         assert 'context(action="rebuild"' in body
     finally:
         agent.stop(timeout=1.0)
@@ -480,6 +482,8 @@ STALE_BODY_CLAIMS = {
         # A. remnants of the retired info|manual two-action surface
         ("both actions", "assumes the retired two-action surface"),
         ("settings/knowledge.", "names a retired per-domain settings address"),
+        # C. the removed public ``file`` tool (durable work goes through shell)
+        ('file(action="', "teaches the removed file tool"),
     ],
     "skills": [
         # B. pre-current call shapes that would fail if a model copied them
@@ -490,6 +494,8 @@ STALE_BODY_CLAIMS = {
         # B. refresh-only apply path, superseded by active context.rebuild
         ("ends with a refresh.", "teaches refresh as the only apply path"),
         ("settings/skills.json", "names a retired per-domain settings address"),
+        # C. the removed public ``file`` tool (durable work goes through shell)
+        ('file(action="', "teaches the removed file tool"),
     ],
 }
 
@@ -497,91 +503,17 @@ STALE_BODY_CLAIMS = {
 REQUIRED_BODY_ROUTES = {
     "knowledge": [
         'psyche(action="knowledge"',
-        'file(action="write"',
-        'file(action="read"',
         'context(action="rebuild"',
     ],
     "skills": [
         'psyche(action="skills"',
         'context(action="rebuild"',
         'shell(action="run"',
-        'file(action="read"',
         # The config-owner path keeps the exact refresh envelope.
         'system(action="refresh"',
         '"revert_preset": null',
     ],
 }
-
-
-#: Every ``file`` child's exact required input fields, read from the live schema
-#: rather than hardcoded, so a schema change breaks this test instead of silently
-#: letting an undispatchable snippet ship.
-def _file_required_fields():
-    from lingtai.tools.file import get_schema
-
-    branches = get_schema()["properties"]["input"]["anyOf"]
-    return {b["title"].split()[0]: list(b.get("required", [])) for b in branches}
-
-
-def _file_snippets(body):
-    """Yield ``(action, snippet)`` for every inline ``file(action="...")`` call.
-
-    A snippet runs to the closing ``reasoning="..."`` so a call wrapped across
-    source lines is still captured whole.
-    """
-    import re
-
-    for match in re.finditer(
-        r'file\(action="(\w+)",\s*(.*?)reasoning=', body, flags=re.S
-    ):
-        yield match.group(1), match.group(0)
-
-
-@pytest.mark.parametrize("action", ["knowledge", "skills"])
-def test_returned_manual_file_calls_are_dispatchable(tmp_path, action):
-    """Every displayed ``file(...)`` call carries that child's full strict input.
-
-    The `file` children declare every field as required — including the nullable
-    `offset`/`limit`/`max_chars` on `read` — so an abbreviated snippet a model
-    copies verbatim is rejected before dispatch. A manual that ships one is
-    teaching a call that cannot work.
-    """
-    required = _file_required_fields()
-
-    agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
-    try:
-        body = _call(agent, action)["manual"]
-        snippets = list(_file_snippets(body))
-        assert snippets, f"{action} manual shows no file(...) call to check"
-
-        for file_action, snippet in snippets:
-            assert file_action in required, (
-                f"{action} manual shows unknown file action {file_action!r}"
-            )
-            for field in required[file_action]:
-                assert f'"{field}"' in snippet, (
-                    f"{action} manual's file(action={file_action!r}) snippet omits "
-                    f"required input field {field!r}: {snippet.strip()!r}"
-                )
-    finally:
-        agent.stop(timeout=1.0)
-
-
-@pytest.mark.parametrize("action", ["knowledge", "skills"])
-def test_returned_manual_has_no_abbreviated_file_calls(tmp_path, action):
-    """Reject the ``file(action="grep", ...)`` elision that hid missing fields."""
-    import re
-
-    agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
-    try:
-        body = _call(agent, action)["manual"]
-        elided = re.findall(r'file\(action="\w+",\s*\.\.\.', body)
-        assert not elided, (
-            f"{action} manual abbreviates a file call instead of showing its "
-            f"full strict input: {elided}"
-        )
-    finally:
-        agent.stop(timeout=1.0)
 
 
 @pytest.mark.parametrize("action", sorted(STALE_BODY_CLAIMS))

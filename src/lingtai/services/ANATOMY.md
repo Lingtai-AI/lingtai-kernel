@@ -1,13 +1,9 @@
 ---
 related_files:
   - docs/references/licc-notification-wake-runbook.md
-  - setup.py
   - src/lingtai/ANATOMY.md
   - src/lingtai/services/__init__.py
-  - src/lingtai/services/file_io.py
   - src/lingtai/services/daemon.py
-  - src/lingtai/services/file_io_sidecar.py
-  - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/services/mail.py
   - src/lingtai/services/mcp.py
   - src/lingtai/services/session_mcp.py
@@ -58,8 +54,6 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 |---|---|---|
 | `__init__.py` | 1 | Docstring-only package marker |
 | `daemon.py` | — | `DaemonService(state_root)`: standalone, non-Agent composition of the existing `DaemonManager` and `DaemonFamilyDispatcher`; native calls require direct preset paths and readback uses ledger-driven mutation-free views |
-| `file_io.py` | 533 | `FileIOService` facade contract + `FileIOBackend`/`LocalFileIOBackend` — backs read/edit/write/glob/grep. `grep` accepts an optional basename `glob_filter` that prunes the candidate set before stat/read |
-| `file_io_sidecar.py` | 771 | Rust-backed grep/glob: `RustFileIOBackend`, `SidecarAdapter`, `SidecarError`, plus the `resolve_sidecar_binary` resolver and the `default_file_io_service` factory used by `Agent.__init__`. The factory retains an immutable File construction snapshot: normalized backend selection plus the applied canonical/legacy override source and resolved value; the sensitive value is excluded from repr and fully redacted by owner SHOW. `grep`'s `glob_filter` is applied as a Python-side basename post-filter (the sidecar wire protocol carries no glob field yet) |
 | `mail.py` | 19 | High-level compatibility surface: re-exports the Core `MailTransportPort` as `MailService` and the POSIX adapter as both `PosixFilesystemMailAdapter` and the legacy public name `FilesystemMailService` |
 | `mcp.py` | 1130 | `MCPClient` (stdio) + `HTTPMCPClient` (streamable HTTP) — async-to-sync bridges over the official MCP Python SDK v2 `mcp.Client`, with shared schema-aware host-private argument preparation (`mcp.py:32-88`), tool-record adaptation, rich-result preservation, and the legacy structured-result projection |
 | `session_mcp.py` | — | Process-local stdio MCP overlay ownership for driving sessions: starts/lists every client before one collision-checked publication, rebuilds an existing managed provider session against its preserved canonical interface when the live tool surface changes, returns an idempotent lease, restores the prior tool surface on failure, and removes only handler/route/schema identities still owned by that lease before closing children in reverse order |
@@ -70,7 +64,7 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 | `LICC_NOTIFICATION_CONTRACT.md` | — | The LICC notification two-lane projection contract governing curated IM producers; live diagnosis and recovery are documented in `docs/references/licc-notification-wake-runbook.md` |
 
 **Sub-packages (not covered here):** `vision/` (7 provider files), `websearch/` (6 provider files).
-**Sibling crates:** `crates/lingtai-search-sidecar/` (Rust) — opt-in binary that backs `RustFileIOBackend`. Not required for install/tests.
+There is no file-I/O service here any more: `file_io.py`, `file_io_sidecar.py`, and the Rust search sidecar crate were removed with the public `file` tool; durable filesystem work goes through `shell`.
 
 ## Connections
 
@@ -80,28 +74,18 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 - **→ `mcp.Client`**, **`mcp.client.stdio`**, **`mcp.client.streamable_http`**, **`httpx2`** — official MCP Python SDK v2 (`mcp>=2,<3`, protocol `2026-07-28`) plus the `httpx2` client the HTTP transport requires. Imported lazily inside the async connect methods.
 - **← `lingtai.tools.vision`** — uses `services.vision.VisionService`.
 - **← `lingtai.tools.web_search`** — uses `services.websearch.SearchService`.
-- **← `lingtai.tools.file`** — the unified File family uses `FileIOService`
-  (injected as `agent._file_io`) for its five operations and receives the
-  factory-applied bounded construction snapshot for SHOW through a separate
-  immutable host configuration port; the sensitive value is projected only
-  through full redaction.
 - **← `lingtai.cli_daemon`** — thin command driver over `DaemonService`; it owns no daemon policy or Agent facade.
 - **→ `lingtai.tools.daemon`** — `DaemonService` composes the existing manager/family dispatcher and artifacts rather than implementing a second engine.
 - **← `lingtai.agent` / `lingtai.tools.daemon`** — stdio, HTTP, and task-scoped MCP handlers call `prepare_mcp_tool_arguments` immediately before provider dispatch, using the server's original input schema as authority.
 
 ## Composition
 
-`daemon.py` is the reusable standalone composition root: its only durable owner is the caller-selected state root, native configuration comes from each task’s direct preset path, and it never constructs or leases an Agent. `file_io.py` is a pure stdlib abstraction layer. `LocalFileIOService` is the tool-facing facade while `LocalFileIOBackend` owns the default Python local filesystem implementation. `file_io_sidecar.py` provides `RustFileIOBackend`, an opt-in alternative backend that delegates `read`/`write`/`edit` to a private `LocalFileIOBackend` but routes `grep`/`glob` to the Rust binary under `crates/lingtai-search-sidecar/` via short-lived JSON subprocess calls. `mail.py` is a high-level compatibility re-export across the Core Port and POSIX Adapter; it owns no implementation. `mcp.py` keeps two transport-specific client classes and composes them with one protocol-generic result decoder and one schema-aware host-private argument adapter shared by Agent and task-daemon handlers. `session_mcp.py` composes only the existing stdio client into an ephemeral, Agent-surface lease; it writes no registry or persistent configuration.
+`daemon.py` is the reusable standalone composition root: its only durable owner is the caller-selected state root, native configuration comes from each task’s direct preset path, and it never constructs or leases an Agent. `mail.py` is a high-level compatibility re-export across the Core Port and POSIX Adapter; it owns no implementation. `mcp.py` keeps two transport-specific client classes and composes them with one protocol-generic result decoder and one schema-aware host-private argument adapter shared by Agent and task-daemon handlers. `session_mcp.py` composes only the existing stdio client into an ephemeral, Agent-surface lease; it writes no registry or persistent configuration.
 
 ## State
 
 - **`SessionMCPLease`**: owns an immutable mapping of tool names to the exact client/handler/schema identities it published plus the started client list; close is lock-protected and idempotent, unpublishes only still-owned identities, and closes children in reverse order.
 - **`MCPClient` / `HTTPMCPClient`**: each instance manages a background daemon thread, an asyncio event loop (`_loop`), a first-class SDK v2 `Client` (`_client`) whose entered value is held as `_session`, the last preserved typed result (`_last_result`), and a 50-entry activity log. `HTTPMCPClient` additionally owns the `httpx2.AsyncClient` (`_http_client`) it constructs, enters before the `Client`, and exits after it. Thread-safe via `threading.Lock` and `threading.Event`.
-- **`LocalFileIOService`**: facade over a `_backend`; exposes `last_traversal` from the backend for tool metadata.
-- **`LocalFileIOBackend`**: default Python local filesystem backend; state is optional `_root` plus `last_traversal`.
-- **`RustFileIOBackend`**: holds an embedded `LocalFileIOBackend` (for read/write/edit), a `SidecarAdapter` (subprocess client), and a `last_traversal` rebuilt from each sidecar envelope.
-- **`SidecarAdapter`**: either pins a strict explicit/environment-selected binary path or re-resolves automatic packaged/dev-tree sources per call; one subprocess per `call()`.
-- **`FileIOService` / `FileIOBackend` ABCs**: pure interfaces, no state.
 
 ## Notes
 
@@ -115,4 +99,3 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 - **HTTP non-retry is contractual.** `HTTPMCPClient.call_tool` deliberately takes no `retry_policy`: an HTTP tool call has the same unknowable remote commit point as stdio, so it never replays. The client still `restart()`s a stale HTTP/SSE transport on a stale error (issue #740) so a future independent call can succeed — recovery of the connection, not replay of the call. This asymmetry is a stated policy, not an unfinished feature, and `tests/test_mcp_closed_resource_restart.py` asserts the parameter's absence.
 - The transport lifecycle, `list_tools()`, `_run_loop()`, and `_async_cleanup()` patterns remain duplicated between the two clients; result normalization is deliberately shared.
 - `mail.py` is a compatibility-only alias surface. The normative boundary is `lingtai.kernel.mail_transport.MailTransportPort`; the production implementation is `lingtai.adapters.posix.mail.PosixFilesystemMailAdapter`. The legacy public names remain aliases, not a second implementation or a Core shim.
-- `file_io_sidecar.py` is the **default native backend** for `Agent`-created file-I/O services. `default_file_io_service` is the factory that `Agent.__init__` calls; it consults `LINGTAI_FILE_IO_BACKEND` (`auto` / `rust` / `python`, default `auto`) and `resolve_sidecar_binary` to pick between Rust and the pure-Python `LocalFileIOBackend`. Resolver priority: explicit `binary_path=` > `LINGTAI_FILE_IO_SIDECAR` env > `LINGTAI_SEARCH_SIDECAR` (legacy) env > packaged `lingtai/bin/` binary (shipped in platform-specific wheels by `setup.py`) > dev-tree `crates/lingtai-search-sidecar/target/{release,debug}/`. The factory attaches a bounded construction snapshot: normalized selected mode, which environment alias supplied an applied override, and that resolved override value. The sensitive value is private, absent from snapshot repr, and projected only through the generic full-redaction flag. The strict `SidecarAdapter()` constructor still ignores packaged / dev-tree sources — opt-in callers see `not_configured` rather than picking up a stale binary. A valid environment selection is a service-construction input and stays pinned/strict until the service restarts; when neither environment value resolves at construction, the factory's `SidecarAdapter.autodiscover()` adapter re-resolves only automatic packaged/dev-tree sources on every call. Thus a staged packaged copy that a later `setup.py` build clears (it is a gitignored artifact) cannot leave a live agent's glob/grep bound to a missing path while the dev-tree binary still resolves, and a later environment mutation cannot take over that service. Defaults (`DEFAULT_*` constants) are imported from `file_io.py` so both backends stay in lock-step. Cargo is **not** required for install or the normal test suite — tests use a Python-script "sidecar"; only `test_rust_sidecar_integration_grep_and_glob` is cargo-gated.

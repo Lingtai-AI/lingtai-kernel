@@ -13,8 +13,8 @@ related_files:
 - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
 - src/lingtai/tools/context/manual/SKILL.md
 maintenance: |
-  Keep the manual-only Psyche route, generic file ownership, no-hot-load rule,
-  identity modes, and context reconstruction route aligned with code.
+  Keep the manual-only Psyche route, Shell ownership of durable edits, no-hot-load
+  rule, identity modes, and context reconstruction route aligned with code.
 ---
 
 # LingTai Manual
@@ -34,12 +34,11 @@ disk or prompt mutation; there is no update, load, or reload action or alias.
 
 ## Change durable identity
 
-Rewrite with
-`file(action="write", input={"file_path": "system/lingtai.md", "content": "..."}, reasoning="rewrite identity")`
-or make a bounded exact change with
-`file(action="edit", input={"file_path": "system/lingtai.md", "old_string": "...", "new_string": "...", "replace_all": null}, reasoning="edit identity")`.
-Preserve all character content you intend to keep when rewriting.
-Neither hot-loads the prompt; use one
+Durable identity changes go through `shell`, anchored in the authorized working
+directory: rewrite `system/lingtai.md` in full, or make a bounded exact change
+after verifying the old text exists exactly once, then verify the written file.
+Platform recipes live in `shell-manual`. Preserve all character content you
+intend to keep when rewriting. No shell write hot-loads the prompt; use one
 `context(action="rebuild", input={}, reasoning="apply identity change")`.
 
 - **Self-evolve:** an absent or empty **resolved** `lingtai` value (inline or

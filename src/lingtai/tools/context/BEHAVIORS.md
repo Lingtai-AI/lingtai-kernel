@@ -58,7 +58,7 @@ self-contained and executable verbatim by an agent with the tools listed in its
   ASLEEP, process keeps running; state machine
   `ACTIVE/IDLE --(sleep)--> ASLEEP` (`src/lingtai/kernel/state.py`)
 - **supersedes**: `tests/test_cli_integration.py::test_sleep_signal_triggers_asleep`
-- **runner**: any LingTai agent with a `shell` and `file` tool on POSIX
+- **runner**: any LingTai agent with a `shell` tool on POSIX
   (Linux/macOS), with `lingtai` importable (installed, or
   `PYTHONPATH=<repo>/src`)
 - **prerequisites**: a scratch agent workdir `<WD>` (empty directory);
@@ -114,7 +114,7 @@ touched by this LABT, and `<WD>` must not be deleted.
   shuts down; state machine `ASLEEP --(.suspend/SIGINT)--> SUSPENDED`
   (`src/lingtai/kernel/state.py`)
 - **supersedes**: `tests/test_cli_integration.py::test_suspend_triggers_shutdown`
-- **runner**: any LingTai agent with a `shell` and `file` tool on POSIX, with
+- **runner**: any LingTai agent with a `shell` tool on POSIX, with
   `lingtai` importable (same environment as L001)
 - **prerequisites**: same scratch workdir `<WD>` and `init.json` as L001 (step 1)
 - **estimate**: 2 min
@@ -151,7 +151,7 @@ if process exit + file consumption are observed.
   summary paths remain under `history/` and `system/summaries/`; notification
   files survive the shed
 - **supersedes**: `tests/test_molt_notification_persistence.py::test_notification_files_survive_agent_molt`
-- **runner**: any LingTai agent with `context`, `file`, and `shell` tools
+- **runner**: any LingTai agent with `context` and `shell` tools
 - **prerequisites**: a **disposable executor agent** — this LABT performs a real
   molt on the executing agent's own context. The session-journal sub-entry must
   exist BEFORE the molt call (the kernel refuses a molt without it)
@@ -217,7 +217,7 @@ resolve. Forbidden side effects: the molt must not delete `.notification/`,
   (`test_agent_molt_publishes_post_molt_with_reasoning`,
   `test_agent_molt_carries_continuation_fields`,
   `test_instructions_spell_out_reconstruct_then_ack`)
-- **runner**: any LingTai agent with `context`, `notification`, and `file` tools
+- **runner**: any LingTai agent with `context`, `notification`, and `shell` tools
 - **prerequisites**: a disposable executor agent; stage the same journal entry
   and pad file as L003 steps 1–2 before molting
 - **estimate**: 3 min
@@ -278,7 +278,7 @@ cleanup must never remove `post-molt.json`.
   (`test_swap_refused_when_current_context_exceeds_target_limit`,
   `test_guard_reads_context_limit_from_llm_block`,
   `test_revert_refused_when_current_context_exceeds_default_limit`)
-- **runner**: any LingTai agent with `system` and `file` tools
+- **runner**: any LingTai agent with `system` and `shell` tools
 - **prerequisites**: a **disposable agent** whose `<WD>/init.json` you may edit
   (this LABT mutates the `manifest.preset` block and may persist
   `manifest.preset.default`); the preset library and `.env` file created in the
@@ -289,12 +289,12 @@ cleanup must never remove `post-molt.json`.
 1. Create a preset library `<PLIB>/` with four files. Use your own working
    provider values (api key/base_url from your environment) but keep the
    `context_limit` values exactly:
-   - `big.json`: `{"name": "big", "manifest": {"llm": {"provider": "<yours>", "model": "<yours>", "api_key": "<yours>", "context_limit": 200000}, "capabilities": {"file": {}}}}`
+   - `big.json`: `{"name": "big", "manifest": {"llm": {"provider": "<yours>", "model": "<yours>", "api_key": "<yours>", "context_limit": 200000}, "capabilities": {"shell": {}}}}`
    - `small.json`: same shape with `"name": "small"` and `"context_limit": 1000`
      at the **manifest root** (sibling of `llm`)
    - `tight.json`: same shape with `"name": "tight"` and `"context_limit": 1000`
      **inside** `manifest.llm` (nested layout — the guard must find it there too)
-   - `no_limit.json`: `{"name": "no_limit", "manifest": {"llm": {"provider": "<yours>", "model": "<yours>", "api_key": "<yours>"}, "capabilities": {"file": {}}}}` — no `context_limit` field at all
+   - `no_limit.json`: `{"name": "no_limit", "manifest": {"llm": {"provider": "<yours>", "model": "<yours>", "api_key": "<yours>"}, "capabilities": {"shell": {}}}}` — no `context_limit` field at all
 2. Write `<WD>/.env` containing `P1KEY=sk-test` (or any value your provider
    reads) and set `manifest.env_file` in `<WD>/init.json` to `"<WD>/.env"`.
 3. Edit `<WD>/init.json` so `manifest.preset` is:
@@ -346,7 +346,7 @@ still fail with the not-found/unauthorized error (the guard must not mask it).
   workflow in `system-manual`"; V1 contract of
   `reference/migration-guide/SKILL.md`
 - **supersedes**: `tests/test_how_to_change_name_e2e.py::test_real_agent_suspend_rename_rebase_and_resume`
-- **runner**: an agent with `shell` and `file` tools on POSIX (Linux/macOS);
+- **runner**: an agent with the `shell` tool on POSIX (Linux/macOS);
   Windows and network filesystems are out of scope
 - **prerequisites**: POSIX host; Python ≥ 3.10 that can import `lingtai`;
   `<REPO>` = the lingtai-kernel checkout; a scratch root `<ROOT>` (empty); the
@@ -480,7 +480,7 @@ action renames the workdir/address.
   (`test_goal_reminder_publishes_short_system_event_after_idle_delay`,
   `test_goal_reminder_does_not_duplicate_existing_event`,
   `test_goal_reminder_clears_when_goal_becomes_done`)
-- **runner**: any LingTai agent with `shell` and `file` tools on POSIX, with
+- **runner**: any LingTai agent with the `shell` tool on POSIX, with
   `lingtai` importable (the target agent must be IDLE — the goal check runs in
   the target's own idle loop, never while it is ACTIVE)
 - **prerequisites**: a scratch agent workdir `<WD>` booted as in L001 steps 1–3

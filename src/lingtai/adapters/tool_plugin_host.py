@@ -24,7 +24,7 @@ from copy import deepcopy
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.kernel.time_veil import now_iso as render_now_iso
@@ -36,8 +36,6 @@ if TYPE_CHECKING:
 from lingtai.kernel import notifications
 from lingtai.kernel.tool_plugin import (
     BoundToolPlugin,
-    FileGrepMatch,
-    FileTraversalStats,
     PluginCatalogState,
     ToolPluginDeclaration,
     register_official_tool_plugins,
@@ -49,7 +47,6 @@ __all__ = [
     "AgentActiveProviderAdapter",
     "AgentProviderIdentityAdapter",
     "AgentPromptSectionAdapter",
-    "AgentFileIOAdapter",
     "AgentContextRuntimeAdapter",
     "AgentAvatarParentAdapter",
     "AgentDaemonRuntimeAdapter",
@@ -286,90 +283,6 @@ class StaticConfigurationAdapter:
     @property
     def values(self) -> Mapping[str, Any]:
         return self._values
-
-
-class _FileGlobOperation(Protocol):
-    def __call__(self, pattern: str, root: str | None = None) -> list[str]: ...
-
-
-class _FileGrepOperation(Protocol):
-    def __call__(
-        self,
-        pattern: str,
-        path: str | None = None,
-        max_results: int = 50,
-        *,
-        glob_filter: str | None = None,
-    ) -> list[FileGrepMatch]: ...
-
-
-class AgentFileIOAdapter:
-    """``FileIOPort`` assembled from only File's consumed host callables.
-
-    The adapter owns no Agent, has no generic forwarding or dispatch operation,
-    and never publishes the backing FileIOService. It receives individual
-    service methods plus two read-only fact readers and forwards only the exact
-    vocabulary the declared ``file`` family consumes. Workdir remains a separate
-    port, and model-facing mounting remains registrar-only.
-    """
-
-    __slots__ = (
-        "_read",
-        "_write",
-        "_glob",
-        "_grep",
-        "_last_traversal",
-        "_max_result_chars",
-    )
-
-    def __init__(
-        self,
-        *,
-        read: Callable[[str], str],
-        write: Callable[[str, str], None],
-        glob: _FileGlobOperation,
-        grep: _FileGrepOperation,
-        last_traversal: Callable[[], FileTraversalStats | None],
-        max_result_chars: Callable[[], int | None],
-    ) -> None:
-        self._read = read
-        self._write = write
-        self._glob = glob
-        self._grep = grep
-        self._last_traversal = last_traversal
-        self._max_result_chars = max_result_chars
-
-    def read(self, path: str) -> str:
-        return self._read(path)
-
-    def write(self, path: str, content: str) -> None:
-        self._write(path, content)
-
-    def glob(self, pattern: str, root: str | None = None) -> list[str]:
-        return self._glob(pattern, root=root)
-
-    def grep(
-        self,
-        pattern: str,
-        path: str | None = None,
-        max_results: int = 50,
-        *,
-        glob_filter: str | None = None,
-    ) -> list[FileGrepMatch]:
-        return self._grep(
-            pattern,
-            path=path,
-            max_results=max_results,
-            glob_filter=glob_filter,
-        )
-
-    @property
-    def last_traversal(self) -> FileTraversalStats | None:
-        return self._last_traversal()
-
-    @property
-    def max_result_chars(self) -> int | None:
-        return self._max_result_chars()
 
 
 class AgentNotificationStateAdapter:
@@ -1607,7 +1520,7 @@ def agent_host_ports(
     """Build the complete grantable table for one declaration on *agent*.
 
     The table preserves the landed MCP, Avatar, Plugin, Psyche, Context, Daemon,
-    Email, and File wiring while constructing only each declaration's earned adapter.
+    and Email wiring while constructing only each declaration's earned adapter.
     Psyche receives only its read-through applied Pad settings snapshot;
     Notification receives its narrow state port at this composition boundary, and
     Shell receives its narrow durable-notification port here too; Shell's
@@ -1737,7 +1650,7 @@ def register_agent_tool_plugins(
     unmounting is not a capability this component owns.
 
     ``extra_ports`` remains the current Context compatibility seam. Daemon,
-    Email, File, Shell, Vision, and Web use ``extra_ports_for`` so each can earn
+    Email, Shell, Vision, and Web use ``extra_ports_for`` so each can earn
     its runtime or setup-selected port; Notification, Shell, Vision, and Web
     receive their dedicated Agent-derived ports in ``agent_host_ports``,
     without granting them to every declaration. Both maps are merged per

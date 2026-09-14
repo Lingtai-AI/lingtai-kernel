@@ -28,7 +28,7 @@ from the repo root with the project's Python.
 - **id**: PL001
 - **title**: info reports health and every non-mounting component explains itself in skipped
 - **guards**: `plugin-contract` § Tool surface
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` with one declared plugin
 - **estimate**: ≈ 15 minutes
 

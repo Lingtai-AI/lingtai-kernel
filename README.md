@@ -52,8 +52,8 @@ bare `pip install` here as the normal installation path.
   batteries-included runtime, CLI, and services that build `Agent(BaseAgent)` on top
   of it and re-export the kernel's public API.
 - **The batteries** — the bundled built-in tools, the LLM adapters, the curated MCP
-  server implementations, the packaging (Python distribution plus the bundled Rust
-  search sidecar). These are ownership boundaries, not a feature list.
+  server implementations, and the packaging (a pure-Python distribution). These
+  are ownership boundaries, not a feature list.
 
 ## Developer quick start
 
@@ -72,10 +72,10 @@ The confirmed `onnxruntime` wheels make macOS 13 the support floor. Only Apple
 Silicon on macOS 14+ supports Python 3.14 in the dependency matrix (onnxruntime
 1.28.0 publishes a cp314 ARM wheel); an x86_64 process under Rosetta follows the
 Intel row. The **managed runtime selector** caps at Python 3.13 on every macOS
-cell because the release workflow builds only cp311/cp312/cp313 wheels for
-LingTai itself — a managed 3.14 choice would fall onto a source build that can
-omit the native Rust sidecar when Rust is unavailable. Python 3.14 remains
-usable for source installs outside the managed selector.
+cell because that is the interpreter range the managed dependency matrix is
+verified on; LingTai itself ships as a pure-Python universal wheel, so the cap
+is not a LingTai native-build limit. Python 3.14 remains usable for source
+installs outside the managed selector.
 
 ```bash
 git clone https://github.com/Lingtai-AI/lingtai-kernel.git

@@ -428,13 +428,10 @@ SYSTEM_ENVIRONMENT_CLASSIFICATION: dict[str, frozenset[str]] = {
             "LINGTAI_DAEMON_MAX_TURNS",
             "LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS",
             "LINGTAI_FEISHU_CONFIG",
-            "LINGTAI_FILE_IO_BACKEND",
-            "LINGTAI_FILE_IO_SIDECAR",
             "LINGTAI_IMAP_CONFIG",
             "LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS",
             "LINGTAI_NOTIFICATION_MAX_CHARS",
             "LINGTAI_PUFFO_V0_REGISTRY",
-            "LINGTAI_SEARCH_SIDECAR",
             "LINGTAI_SHELL",
             "LINGTAI_SOUL_FLOW_ENABLED",
             "LINGTAI_TASKCARD_POLL_INTERVAL",
@@ -462,12 +459,6 @@ SYSTEM_ENVIRONMENT_CLASSIFICATION: dict[str, frozenset[str]] = {
             "LINGTAI_REFRESH_ENV_OVERWRITE",
             "LINGTAI_RUNTIME_PYTHON",
             "LINGTAI_RUNTIME_VENV",
-        }
-    ),
-    "build_only": frozenset(
-        {
-            "LINGTAI_REQUIRE_RUST_BUILD",
-            "LINGTAI_SKIP_RUST_BUILD",
         }
     ),
     "test_only": frozenset(

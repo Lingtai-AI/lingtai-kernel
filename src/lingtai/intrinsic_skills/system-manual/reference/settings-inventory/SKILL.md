@@ -128,7 +128,7 @@ repository first; if that fails, snapshots stay off for the process and
 `snapshot_initialize_failed` is logged.
 
 After explicit owner/human authorization, edit the intended environment value
-at its launcher owner or the corresponding v2 field with File/Shell, preserving
+at its launcher owner or the corresponding v2 field with Shell, preserving
 unrelated fields. Follow `refresh-precheck` before applying a change at the
 boot/refresh timing in the table, then query System settings again. An
 invalid owner document applies no partial subset; this does not authorize
@@ -172,7 +172,7 @@ the budget must be positive, and no other or duplicate keys are accepted.
 Authorized change procedure: after explicit owner/human authorization, set
 `LINGTAI_CACHE_MISS_BUDGET` in the launcher or the agent's configured
 `env_file` (an `env_file` edit needs refresh before the running agent sees
-it), or use the existing File/Shell capability to write one of the two
+it), or use the existing Shell capability to write one of the two
 document shapes above to `settings/system.json` (remove the file through the
 same capability to return to the default), then call
 `system(action="settings", input={})` again and verify `current`. If the
@@ -195,7 +195,7 @@ uses the generic sensitive-value seam to fully redact both current and default p
 System neither duplicates that row nor exposes the paths.
 
 Authorized change procedure: after explicit owner/human authorization, edit
-the exact `init.json` field with the existing File or Shell capability. For a
+the exact `init.json` field with the existing Shell capability. For a
 preset-owned LLM/context value, edit the authorized preset outside SHOW or use
 the existing `system(action="refresh", input={"preset": ...})` workflow; never
 edit the derived resolved manifest or widen `preset.allowed` as a shortcut.
@@ -294,7 +294,7 @@ These classifications are tested against the canonical schemas/registry so
 future fields cannot vanish silently:
 
 - Concrete ToolPlugin owners stay out of System: Soul; Shell; Daemon;
-  Notification; File/search sidecars; Vision; Web; Task Card; Plugin/Psyche;
+  Notification; Vision; Web; Task Card; Plugin/Psyche;
   Skills; LingTai character; MCP, curated addons, and their config/session
   paths. Psyche owns the live Pad prompt inputs at root `pad`/`pad_file` and
   the six configurable system-prompt inputs in `settings/psyche.json`.
@@ -324,13 +324,10 @@ not System:
 - `LINGTAI_DAEMON_MAX_TURNS`
 - `LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS`
 - `LINGTAI_FEISHU_CONFIG`
-- `LINGTAI_FILE_IO_BACKEND`
-- `LINGTAI_FILE_IO_SIDECAR`
 - `LINGTAI_IMAP_CONFIG`
 - `LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS`
 - `LINGTAI_NOTIFICATION_MAX_CHARS`
 - `LINGTAI_PUFFO_V0_REGISTRY`
-- `LINGTAI_SEARCH_SIDECAR`
 - `LINGTAI_SHELL`
 - `LINGTAI_SOUL_FLOW_ENABLED`
 - `LINGTAI_TASKCARD_POLL_INTERVAL`
@@ -360,11 +357,6 @@ not an adjustable kernel policy:
 - `LINGTAI_REFRESH_ENV_OVERWRITE`
 - `LINGTAI_RUNTIME_PYTHON`
 - `LINGTAI_RUNTIME_VENV`
-
-### Build-only environment exclusions
-
-- `LINGTAI_REQUIRE_RUST_BUILD`
-- `LINGTAI_SKIP_RUST_BUILD`
 
 ### Test-only environment exclusions
 

@@ -54,8 +54,9 @@ cursor-only input fails. Fresh success never creates `next_cursor`.
 Exact [call and continuation rules](reference/operation-contract.md#action-envelope-and-first-call-rules).
 
 Both actions deliver complete content inline or through a complete artifact
-under `tmp/tool-results/`; read the returned file with `file.read`, in chunks
-if necessary. `max_chars` controls delivery, not truncation or pagination.
+under `tmp/tool-results/`; read the returned file with `shell` (for example
+`sed -n '1,200p' -- "<file_path>"`), in bounded chunks if necessary.
+`max_chars` controls delivery, not truncation or pagination.
 [Artifact fields and failure semantics](reference/operation-contract.md#output-size-and-complete-artifacts).
 
 Only typed OpenAI search failure gets one automatic DuckDuckGo attempt, with

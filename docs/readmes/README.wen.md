@@ -37,7 +37,7 @@ maintenance: |
   LLM 之约、书信、日志）；其二 `lingtai`，具足之运行时、CLI 与服务，于其上构
   `Agent(BaseAgent)`，且重导内核公开之 API。
 - **配属之物** —— 所捆之内置工具、LLM 适配之器、精择之 MCP 服务器诸实现，暨其打包
-  （Python 发行之物与随附之 Rust 搜索 sidecar）。此皆所辖之界，非罗列之能也。
+  （纯 Python 发行之物）。此皆所辖之界，非罗列之能也。
 
 ## 开发者速启
 

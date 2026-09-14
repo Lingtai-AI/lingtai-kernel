@@ -201,7 +201,7 @@ def test_family_opt_in_order_and_unchanged_dismiss_action(tmp_path):
         ).DECLARATION.settings
     ]
     assert enabled == [
-        "mcp", "avatar", "daemon", "email", "file", "plugin", "notification",
+        "mcp", "avatar", "daemon", "email", "plugin", "psyche", "notification",
         "shell", "soul", "system", "task_card", "vision", "web",
     ]
     assert soul.DECLARATION.public_actions == (

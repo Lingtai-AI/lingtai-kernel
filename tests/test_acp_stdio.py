@@ -482,7 +482,7 @@ def test_matching_non_allow_permission_responses_deny_without_response(response)
     broker = agent.submissions[0]["permission_broker"]
     result = []
     waiter = threading.Thread(target=lambda: result.append(
-        broker.request_permission(ToolPermissionRequest("trace", "file"))
+        broker.request_permission(ToolPermissionRequest("trace", "shell"))
     ))
     waiter.start()
     request = _wait_for(output, 4)[3]
@@ -536,7 +536,7 @@ def test_close_and_cancel_wake_permission_waiter_with_denial(terminal):
     broker = agent.submissions[0]["permission_broker"]
     result = []
     waiter = threading.Thread(target=lambda: result.append(
-        broker.request_permission(ToolPermissionRequest("trace", "file"))
+        broker.request_permission(ToolPermissionRequest("trace", "shell"))
     ))
     waiter.start()
     _wait_for(output, 4)
@@ -567,7 +567,7 @@ def test_unknown_response_id_is_ignored_and_cannot_authorize_pending_request():
     broker = agent.submissions[0]["permission_broker"]
     result = []
     waiter = threading.Thread(target=lambda: result.append(
-        broker.request_permission(ToolPermissionRequest("trace", "file"))
+        broker.request_permission(ToolPermissionRequest("trace", "shell"))
     ))
     waiter.start()
     request = _wait_for(output, 4)[3]
@@ -688,10 +688,10 @@ def test_tool_lifecycle_projects_ordered_private_free_updates_before_terminal():
     })
     observer = agent.submissions[0]["tool_observer"]
     observer.on_tool_lifecycle(
-        ToolLifecycleEvent("provider-id", "file", ToolLifecycleState.STARTED)
+        ToolLifecycleEvent("provider-id", "shell", ToolLifecycleState.STARTED)
     )
     observer.on_tool_lifecycle(
-        ToolLifecycleEvent("provider-id", "file", ToolLifecycleState.COMPLETED)
+        ToolLifecycleEvent("provider-id", "shell", ToolLifecycleState.COMPLETED)
     )
     handle._future.set_result(
         TurnResult(handle.correlation_id, TurnOutcome.NORMAL, text="done")
@@ -708,7 +708,7 @@ def test_tool_lifecycle_projects_ordered_private_free_updates_before_terminal():
     assert initial == {
         "sessionUpdate": "tool_call",
         "toolCallId": f"{handle.correlation_id}:provider-id",
-        "title": "file",
+        "title": "shell",
         "status": "in_progress",
     }
     assert update == {
@@ -920,7 +920,7 @@ def test_denied_tool_projects_one_initial_failed_update_and_close_drops_events()
     server.close()
     before = output.getvalue()
     observer.on_tool_lifecycle(
-        ToolLifecycleEvent("after-close", "file", ToolLifecycleState.STARTED)
+        ToolLifecycleEvent("after-close", "shell", ToolLifecycleState.STARTED)
     )
     time.sleep(0.02)
     assert output.getvalue() == before
@@ -1775,7 +1775,7 @@ def test_outbound_queue_full_aborts_transport_and_cancels_active_prompt(monkeypa
     })
     broker = agent.submissions[0]["permission_broker"]
     assert broker.request_permission(
-        ToolPermissionRequest("queue-full", "file")
+        ToolPermissionRequest("queue-full", "shell")
     ) is PermissionDecision.DENY
 
     assert server._aborted and server._closing

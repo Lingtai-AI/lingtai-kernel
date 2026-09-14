@@ -4,7 +4,7 @@ Pad has no public tool root any more: the former ``pad`` root and its ``append``
 action were retired into the read-only ``psyche(action='pad')`` manual
 loader. What is tested here is what remains — the durable ``system/pad.md``
 source, the pinned ``system/pad_append.json`` reference list, and the private
-``_pad_load`` composer. Generic body mutation is covered by the file family.
+``_pad_load`` composer. Generic body mutation is covered by Shell.
 """
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ def test_pinned_reference_list_still_composes_into_the_pad_section(tmp_path):
     try:
         ref = agent.working_dir / "ref.md"
         ref.write_text("reference body", encoding="utf-8")
-        # The durable source is ordinary text the agent edits with file.write.
+        # The durable source is ordinary text the agent edits with shell.
         append_path = agent.working_dir / "system" / "pad_append.json"
         append_path.write_text(json.dumps(["ref.md"]), encoding="utf-8")
 

@@ -19,10 +19,11 @@ maintenance: |
   tests/test_telegram_task_card_last_message.py (C001) and
   tests/test_telegram_reaction_states.py (C002). This file now covers only the
   Telegram task-card projection and Telegram reaction states. The former
-  C003/C004 (web_search), C005 (file read continuation), and C006 (feishu LTP
-  v2) LABTs were re-homed to src/lingtai/tools/web_search/BEHAVIORS.md,
-  src/lingtai/tools/file/BEHAVIORS.md, and src/lingtai/tools/feishu/BEHAVIORS.md
-  respectively (all three are listed in the root BEHAVIORS.md related_files).
+  C003/C004 (web_search) and C006 (feishu LTP v2) LABTs were re-homed to
+  src/lingtai/tools/web_search/BEHAVIORS.md and
+  src/lingtai/tools/feishu/BEHAVIORS.md respectively (both listed in the root
+  BEHAVIORS.md related_files); the former C005 (file read continuation) was
+  retired with the removed `file` tool.
   There is no root CONTRACT.md beside this file; the task-card contract lives
   at src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md (frontmatter name
   `telegram-task-card-projection`) and Telegram reaction semantics are guarded

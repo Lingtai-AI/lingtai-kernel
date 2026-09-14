@@ -45,7 +45,6 @@ _TOOL_MANUAL_DESTINATION_NAMES: dict[str, str] = {
     "bash": "shell",
     "web_search": "web",
     "context": "context-manual",
-    "file": "file-manual",
     "soul": "soul-manual",
 }
 
@@ -202,7 +201,6 @@ class Agent(BaseAgent):
             (no kwargs) or a dict mapping names to kwargs dicts.
             Each capability dict may include ``"provider"`` to route that
             capability to a specific LLM provider (e.g. ``"gemini"``, ``"minimax"``).
-            Group names (e.g. ``"file"``) expand to individual capabilities.
         plugins: Agent Plugin package directories to register, the constructor
             form of ``init.json`` ``manifest.plugins``. Each declared plugin's
             ``skills/`` joins the skills catalog and its ``mcp.json`` servers
@@ -402,15 +400,6 @@ class Agent(BaseAgent):
 
         # Persist LLM config for revive (self-sufficient agents contract)
         self._persist_llm_config()
-
-        # Auto-create FileIOService if not provided by host. Uses the
-        # ``default_file_io_service`` factory so the Rust sidecar gets
-        # picked up automatically when a wheel-bundled or env-provided
-        # binary is available, with transparent pure-Python fallback.
-        # See LINGTAI_FILE_IO_BACKEND in services/file_io_sidecar.py.
-        if self._file_io is None:
-            from .services.file_io_sidecar import default_file_io_service
-            self._file_io = default_file_io_service(root=self._working_dir)
 
         # The CLI has already validated init.json and immediately delegates the
         # complete wrapper composition to `_setup_from_init`. Keep this initial

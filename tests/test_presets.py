@@ -118,7 +118,7 @@ def _valid_preset(name: str = "test") -> dict:
         "manifest": {
             "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-            "capabilities": {"file": {}, "email": {}},
+            "capabilities": {"shell": {}, "email": {}},
         },
     }
 
@@ -184,7 +184,7 @@ def test_load_preset_jsonc_strips_comments(tmp_path):
       "description": {"summary": "tests JSONC"},
       "manifest": {
         "llm": {"provider": "x", "model": "y"},
-        "capabilities": {"file": {}},   // trailing comma here
+        "capabilities": {"shell": {}},   // trailing comma here
       },
     }'''
     p = tmp_path / "withcomments.jsonc"
@@ -492,13 +492,13 @@ def test_expand_inherit_resolves_to_main_llm():
     caps = {
         "web_search": {"provider": "inherit"},
         "vision":     {"provider": "inherit"},
-        "file":       {},
+        "shell":      {},
     }
     expand_inherit(caps, main_llm)
     assert caps["web_search"]["provider"] == "gemini"
     assert caps["web_search"]["api_key_env"] == "GEMINI_API_KEY"
     assert caps["vision"]["provider"] == "gemini"
-    assert caps["file"] == {}
+    assert caps["shell"] == {}
 
 
 def test_expand_inherit_does_not_inherit_model():

@@ -27,7 +27,7 @@ Pinned pytest commands must run from the repo root with the project's Python.
 - **id**: MG001
 - **title**: the version counter advances only after a transform succeeds, so a failure at N+1 leaves the persisted version at N
 - **guards**: `migration-workspace` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch migration workspace `<scratch>`
 - **estimate**: ≈ 20 minutes
 

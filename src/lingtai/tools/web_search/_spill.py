@@ -149,8 +149,8 @@ def spill_if_over_threshold(
         "instruction": (
             f"The complete {content_kind} ({content_chars} characters) exceeded "
             f"the {max_chars}-character inline delivery threshold and was saved "
-            "in full, with no truncation, to the file at file_path. Use the "
-            "file.read tool to read it (in chunks if needed). This artifact "
+            "in full, with no truncation, to the file at file_path. Use shell "
+            "(for example bounded sed/head/rg) to read it in chunks. This artifact "
             "contains the complete canonical result; no content was omitted "
             "or shortened."
         ),

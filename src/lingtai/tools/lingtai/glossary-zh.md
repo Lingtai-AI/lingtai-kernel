@@ -17,4 +17,4 @@ maintenance: |
 **术语对照**
 
 - `lingtai`：灵台身份域（`system/lingtai.md`）；无公开工具根。
-- 其手册以 `psyche(action='lingtai', input={}, reasoning='...')` 取之，唯还手册，不改盘、不热载；durable 之改以 `file.write`/`file.edit` 加 `context.rebuild`。
+- 其手册以 `psyche(action='lingtai', input={}, reasoning='...')` 取之，唯还手册，不改盘、不热载；durable 之改以 `shell`（核实后的精确改写）加 `context.rebuild`。

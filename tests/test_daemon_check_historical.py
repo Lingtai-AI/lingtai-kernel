@@ -30,7 +30,7 @@ def _make_completed_run_dir(agent, em_id="em-5", result="final report text", run
         handle=em_id,
         run_id=run_id,
         task="historical task",
-        tools=["file"],
+        tools=["shell"],
         model="mock-model",
         max_turns=30,
         timeout_s=300.0,

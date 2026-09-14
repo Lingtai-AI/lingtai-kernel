@@ -50,8 +50,9 @@ layer, mutation action, migration, or writeback.
 
 For each pair, a readable `*_file` wins; a missing file falls back to inline.
 `~` expands and relative pointers resolve against the agent workdir. Edit this
-owner with `file.write`/`file.edit`, then apply atomically with `context.rebuild`
-(or refresh/molt), after explicit configuration authorization. Legacy top-level
+owner through `shell` (verify an exact replacement target exists once before
+changing it, and verify the written JSON afterwards), then apply atomically with
+`context.rebuild` (or refresh/molt), after explicit configuration authorization. Legacy top-level
 init spellings for **these six fields** are inert; external writers must emit
 this owner document. Before an authorized upgrade/reconstruction, preserve and
 transfer any still-needed legacy values into it: the runtime never migrates them.

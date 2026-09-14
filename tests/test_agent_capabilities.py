@@ -23,7 +23,7 @@ class FakeSearchService(SearchService):
 def test_agent_no_capabilities_boots_core_floor(tmp_path):
     """Agent with no explicit capabilities still boots the always-on tool floor.
 
-    The default-on set covers knowledge/skills/bash/avatar/daemon/mcp + file caps;
+    The default-on set covers knowledge/skills/shell/avatar/daemon/mcp;
     vision is always registered (provider-bound, defaults to the active LLM).
     The opt-in capability (web) stays off until requested.
     """
@@ -98,32 +98,18 @@ def test_agent_capabilities_list(tmp_path):
     """capabilities= as list of strings is honored alongside the core defaults."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["file"],
+        capabilities=["web"],
     )
     registered = {name for name, _ in agent._capabilities}
-    assert "file" in registered
-    # The retired per-operation names are not capabilities at all.
+    assert "web" in registered
+    # The core defaults still register alongside the opt-in list entry.
+    assert "shell" in registered
+    # The removed ``file`` family and its retired per-operation names are not
+    # capabilities at all.
+    assert "file" not in registered
     assert "read" not in registered
     assert "write" not in registered
     agent.stop(timeout=1.0)
-
-
-def test_file_tool_description_points_to_file_manual(tmp_path):
-    """The file tool should route hard file cases to the intrinsic file manual."""
-    agent = Agent(
-        service=make_mock_service(),
-        agent_name="test",
-        working_dir=tmp_path / "test",
-        capabilities=["file"],
-    )
-    try:
-        file_schema = next(schema for schema in agent._tool_schemas if schema.name == "file")
-        assert "file-manual" in file_schema.description
-        assert "non-UTF-8" in file_schema.description
-        # Read pagination depth stays a nested reference under that one manual.
-        assert "read-manual" in file_schema.description
-    finally:
-        agent.stop(timeout=1.0)
 
 
 def test_agent_capabilities_dict(tmp_path):

@@ -7,7 +7,7 @@ Key concepts:
     - **2-layer tool dispatch**: intrinsics (built-in) + capability handlers.
     - **Opaque context**: the host app can pass any context object — the agent
       stores it but never introspects it.
-    - **4 optional services**: LLM, FileIO, Mail, Event Journal —
+    - **3 optional services**: LLM, Mail, Event Journal —
       missing service auto-disables the intrinsics it backs.
 """
 
@@ -448,7 +448,6 @@ class BaseAgent:
 
     Services (all optional):
         - ``service`` (LLMService): The brain — thinking, generating text.
-        - ``file_io`` (FileIOService): File access — backs read/edit/write/glob/grep.
         - ``mail_service`` (MailTransportPort): Message transport — backs mail intrinsic.
         - ``event_journal`` (EventJournalPort): Durable structured event append.
 
@@ -487,7 +486,6 @@ class BaseAgent:
         provider_call_admission_port=None,
         derived_launch_admission_port=None,
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
-        file_io: Any | None = None,
         mail_service: Any | None = None,
         event_journal: EventJournalPort | None = None,
         config: AgentConfig | None = None,
@@ -598,9 +596,6 @@ class BaseAgent:
         self._agent_presence = agent_presence
 
         # --- Wire services ---
-        # FileIOService: optional, provided by Agent or host
-        self._file_io = file_io
-
         # MailService: None means mail intrinsic disabled
         self._mail_service = mail_service
 

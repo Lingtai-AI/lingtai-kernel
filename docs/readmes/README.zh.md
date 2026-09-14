@@ -37,7 +37,7 @@ TUI/Portal 以及日常工作流。普通用户应从那里开始，让安装器
   LLM 协议、信件、日志）；以及 `lingtai`，开箱即用的运行时、CLI 与服务，在其之上构建
   `Agent(BaseAgent)` 并重新导出内核的公开 API。
 - **配套组件** —— 捆绑的内置工具、LLM 适配器、精选的 MCP 服务器实现，以及打包
-  （Python 发行版与随附的 Rust 搜索 sidecar）。这些是所辖边界，而非功能清单。
+  （纯 Python 发行版）。这些是所辖边界，而非功能清单。
 
 ## 开发者快速开始
 
@@ -49,7 +49,7 @@ TUI/Portal 以及日常工作流。普通用户应从那里开始，让安装器
 | Apple Silicon，macOS 13 | 3.11–3.13 | 3.11–3.13 | 1.23.2 |
 | Intel/Rosetta，macOS 13+ | 3.11–3.13 | 3.11–3.13 | 1.23.2 |
 
-经确认的 `onnxruntime` 轮子将 macOS 13 定为支持下限。在此依赖矩阵中，只有运行 macOS 14+ 的 Apple Silicon 支持 Python 3.14（onnxruntime 1.28.0 发布 cp314 ARM 轮子）；Rosetta 下的 x86_64 进程遵循 Intel 一行。**托管运行时选择器**在每个 macOS 单元格都把上限设为 Python 3.13，因为 LingTai 自身的发布工作流只构建 cp311/cp312/cp313 轮子——托管选择 3.14 会落入源码构建，Rust 不可用时可能缺少原生 Rust sidecar。Python 3.14 仍可用于托管选择器之外的源码安装。
+经确认的 `onnxruntime` 轮子将 macOS 13 定为支持下限。在此依赖矩阵中，只有运行 macOS 14+ 的 Apple Silicon 支持 Python 3.14（onnxruntime 1.28.0 发布 cp314 ARM 轮子）；Rosetta 下的 x86_64 进程遵循 Intel 一行。**托管运行时选择器**在每个 macOS 单元格都把上限设为 Python 3.13，因为这是托管依赖矩阵经验证的解释器范围；LingTai 自身以纯 Python 通用轮子发布，该上限并非 LingTai 原生构建的限制。Python 3.14 仍可用于托管选择器之外的源码安装。
 
 ```bash
 git clone https://github.com/Lingtai-AI/lingtai-kernel.git

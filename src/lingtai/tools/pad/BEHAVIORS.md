@@ -27,7 +27,7 @@ from the repo root with the project's Python.
 - **id**: PD001
 - **title**: append validates every path and the aggregate limit before persisting, and never hot-loads the prompt
 - **guards**: `pad-contract` § Public port
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` with existing UTF-8 text files
 - **estimate**: ≈ 15 minutes
 

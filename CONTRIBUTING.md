@@ -4,7 +4,6 @@ related_files:
 - CONTRACT.md
 - docs/references/claude-code-guide.md
 - src/lingtai/kernel/ANATOMY.md
-- crates/lingtai-search-sidecar/README.md
 - CODE_OF_CONDUCT.md
 - SECURITY.md
 - SUPPORT.md
@@ -26,7 +25,6 @@ Thank you for helping improve the LingTai Python runtime. GitHub discovers this 
 - Claude Code / coding-agent guidance:
   [`docs/references/claude-code-guide.md`](docs/references/claude-code-guide.md)
 - Source-root anatomy: [`src/lingtai/kernel/ANATOMY.md`](src/lingtai/kernel/ANATOMY.md)
-- Rust sidecar notes: [`crates/lingtai-search-sidecar/README.md`](crates/lingtai-search-sidecar/README.md)
 
 ## Community and safety
 

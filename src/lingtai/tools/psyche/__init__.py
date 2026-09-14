@@ -97,7 +97,7 @@ def get_description(lang: str = "en") -> str:
         "never authors, edits, pins, installs, rescans, or loads anything. "
         "routine schema-sufficient calls need no manual reload, while unfamiliar "
         "or consequential domain work should call the matching manual first. "
-        "Change durable sources with file.write/file.edit, then one "
+        "Change durable sources with shell (verified exact edits), then one "
         "context.rebuild (or refresh/molt); edits never hot-load. context owns "
         "rebuild/molt and system owns lifecycle/names; leave root summarize false."
     )

@@ -178,9 +178,6 @@ related_files:
   - tests/test_feishu_rich_outbound_media.py
   - tests/test_feishu_stdio_logging.py
   - tests/test_feishu_toolfamily_ltpv2.py
-  - tests/test_file_io_sidecar.py
-  - tests/test_file_tool_family.py
-  - tests/test_file_tool_plugin_package.py
   - tests/test_filesystem_mail.py
   - tests/test_event_journal_count_nudge.py
   - tests/test_folder_size_nudge.py
@@ -223,7 +220,6 @@ related_files:
   - tests/test_layers_avatar.py
   - tests/test_layers_bash.py
   - tests/test_layers_email.py
-  - tests/test_layers_file.py
   - tests/test_licc_notification_contract_doc.py
   - tests/test_lifecycle_clock.py
   - tests/test_lifecycle_daemon_shutdown.py
@@ -306,7 +302,6 @@ related_files:
   - tests/test_psyche_family.py
   - tests/test_publish_release_assets.py
   - tests/test_python_support_matrix.py
-  - tests/test_read_continuation.py
   - tests/test_refresh_watcher_process.py
   - tests/test_refresh_watcher_windows.py
   - tests/test_release_manifest.py
@@ -320,7 +315,6 @@ related_files:
   - tests/test_runtime_identity.py
   - tests/test_secondary_schema.py
   - tests/test_sent_message_tracker.py
-  - tests/test_services_file_io.py
   - tests/test_services_integration.py
   - tests/test_services_logging.py
   - tests/test_services_mail.py
@@ -454,8 +448,6 @@ related_files:
   - tests/test_whatsapp_personal_bridge.py
   - tests/test_whatsapp_settings.py
   - tests/test_whatsapp_toolfamily_ltpv2.py
-  - tests/test_wheel_platlib_layout.py
-  - tests/test_wheel_sidecar_smoke.py
   - tests/test_wheels_workflow_publish_gating.py
   - tests/test_win32_job.py
   - tests/test_windows_cmd_shim.py

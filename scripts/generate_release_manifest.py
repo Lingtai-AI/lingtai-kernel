@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Aggregate built wheel/sdist artifacts into a release manifest + SHA256SUMS.
 
-Usage (CI, after downloading all `wheels-*` and `sdist` Actions artifacts into
+Usage (CI, after downloading the `wheels-*` and `sdist` Actions artifacts into
 one flat directory):
 
     python scripts/generate_release_manifest.py \\
@@ -13,21 +13,20 @@ one flat directory):
         --out-manifest ./release-assets/lingtai-kernel-release-manifest.json \\
         --out-sha256sums ./release-assets/SHA256SUMS
 
-By default every ``*.whl`` in --assets-dir is verified with the existing
-sidecar contract (tests/test_wheel_sidecar_smoke.py's --auto mode: install+run
-when the wheel matches this interpreter, archive-only check otherwise) before
-it is trusted into the manifest. This is what stops a plain local
-`py3-none-any` fallback wheel (no Rust sidecar) from ever being published as a
-platform artifact — it fails the archive check because it carries no
-`lingtai/bin/lingtai-search-sidecar`. Pass --skip-sidecar-check only for
-manifest-shape testing, never for a real release.
+The kernel is a pure-Python distribution, so the release contract is one
+universal ``py3-none-any`` wheel plus one sdist. Every ``*.whl`` in
+--assets-dir is verified against that contract before it is trusted into the
+manifest: the filename must carry the universal tag, the archive must place
+``lingtai/`` at its root, and it must carry no native payload or
+``*.data/{purelib,platlib}`` scheme entries. A platform-specific or
+mis-laid-out wheel fails loud here rather than being published.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -40,27 +39,38 @@ from release_manifest import (  # noqa: E402
     validate_manifest_dict,
 )
 
-SIDECAR_SMOKE_SCRIPT = REPO_ROOT / "tests" / "test_wheel_sidecar_smoke.py"
+UNIVERSAL_WHEEL_SUFFIX = "-py3-none-any.whl"
 
 
-def verify_wheel_sidecar(wheel: Path) -> None:
-    """Run the established sidecar validation contract against one wheel.
+def verify_wheel_is_universal(wheel: Path) -> None:
+    """Fail loud unless *wheel* is the pure-Python universal release artifact.
 
-    Shells out to tests/test_wheel_sidecar_smoke.py --auto rather than
-    importing it, so this script has the same dependency-free guarantee the
-    smoke test itself documents (no lingtai runtime deps required).
+    Dependency-free by design (stdlib ``zipfile`` only) so the release job
+    needs no lingtai runtime dependencies to validate the artifact.
     """
-    result = subprocess.run(
-        [sys.executable, str(SIDECAR_SMOKE_SCRIPT), "--auto", str(wheel)],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
+    if not wheel.name.endswith(UNIVERSAL_WHEEL_SUFFIX):
         raise SystemExit(
-            f"error: {wheel.name} failed the sidecar validation contract:\n"
-            f"{result.stdout}\n{result.stderr}"
+            f"error: {wheel.name} is not a py3-none-any universal wheel. The "
+            "kernel is pure Python: a platform-specific or interpreter-specific "
+            "wheel means a native payload or build hook crept back in, and it "
+            "must never be published."
         )
-    print(f"  sidecar OK: {wheel.name} -> {result.stdout.strip()}")
+    try:
+        with zipfile.ZipFile(wheel) as zf:
+            names = zf.namelist()
+    except zipfile.BadZipFile as exc:
+        raise SystemExit(f"error: {wheel.name} is not a readable wheel archive: {exc}")
+    if "lingtai/__init__.py" not in names:
+        raise SystemExit(
+            f"error: {wheel.name} does not place lingtai/ at the archive root"
+        )
+    misplaced = [n for n in names if ".data/" in n or n.startswith("lingtai/bin/")]
+    if misplaced:
+        raise SystemExit(
+            f"error: {wheel.name} carries native or install-scheme entries that "
+            f"a pure wheel must not have: {misplaced[:5]}"
+        )
+    print(f"  universal OK: {wheel.name}")
 
 
 def discover_artifacts(assets_dir: Path) -> list[Path]:
@@ -78,33 +88,12 @@ def discover_artifacts(assets_dir: Path) -> list[Path]:
     return wheels + sdists
 
 
-def reject_plain_fallback_wheel(wheel: Path) -> None:
-    """Guard against publishing the local `uv build --wheel` pure wheel.
-
-    A pure-Python fallback wheel built without the Rust sidecar carries the
-    'py3-none-any' platform/ABI/python tag combination and, more decisively,
-    contains no lingtai/bin/lingtai-search-sidecar. The sidecar smoke check
-    already fails such a wheel on the archive check, but this explicit early
-    guard produces a clearer diagnostic for the exact known-bad case named in
-    the task evidence, before spending time on a subprocess invocation.
-    """
-    if wheel.name.endswith("-py3-none-any.whl"):
-        raise SystemExit(
-            f"error: {wheel.name} looks like a plain pure-Python fallback wheel "
-            "(py3-none-any) — this is not a cibuildwheel platform artifact and "
-            "must never be published as one. Use the wheels-* Actions artifacts "
-            "from the matrix build, not a local `uv build --wheel` / "
-            "`python -m build --wheel` output."
-        )
-
-
 def build_manifest(
     assets_dir: Path,
     kernel_version: str,
     kernel_tag: str,
     commit: str,
     generated_at: str,
-    skip_sidecar_check: bool,
 ) -> ReleaseManifest:
     files = discover_artifacts(assets_dir)
     artifacts = []
@@ -112,9 +101,7 @@ def build_manifest(
 
     for path in files:
         if path.suffix == ".whl":
-            reject_plain_fallback_wheel(path)
-            if not skip_sidecar_check:
-                verify_wheel_sidecar(path)
+            verify_wheel_is_universal(path)
         digest = sha256_file(path)
         artifact = classify_artifact(path.name, digest)
         if artifact.kind == "sdist":
@@ -150,11 +137,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--generated-at", required=True, help="UTC ISO8601 timestamp, injected by the caller")
     parser.add_argument("--out-manifest", type=Path, required=True)
     parser.add_argument("--out-sha256sums", type=Path, required=True)
-    parser.add_argument(
-        "--skip-sidecar-check",
-        action="store_true",
-        help="skip the sidecar validation contract (manifest-shape testing only, never for a real release)",
-    )
     args = parser.parse_args(argv)
 
     if not args.assets_dir.is_dir():
@@ -167,7 +149,6 @@ def main(argv: list[str] | None = None) -> int:
         args.kernel_tag,
         args.commit,
         args.generated_at,
-        args.skip_sidecar_check,
     )
 
     args.out_manifest.parent.mkdir(parents=True, exist_ok=True)

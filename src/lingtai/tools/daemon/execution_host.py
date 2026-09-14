@@ -152,21 +152,10 @@ class DetachedDaemonExecutionHost:
         # it never borrows the stub's deliberately absent Agent notification/store
         # route or the parent workdir's shared system/jobs namespace.
         self._shell_prompt_event_adapter = None
-        if "file" in expanded:
-            # The ``file`` family's action handlers dereference the
-            # agent-shaped host's injected FileIOService at execution time.
-            # Mirror ordinary Agent construction, but only when the detached
-            # tool surface needs it; this remains a small host service, not a
-            # second Agent/lease. The retired per-operation names (``read``,
-            # ``write``, ``edit``, ``glob``, ``grep``) are NOT canonicalized to
-            # ``file`` — no alias survives — so a stale manifest naming them
-            # neither injects this service nor builds a surface: it is rejected
-            # as an unknown tool (see
-            # ``test_detached_retired_file_tool_names_fail_loudly``).
-            from lingtai.services.file_io_sidecar import default_file_io_service
-            self._agent._file_io = default_file_io_service(
-                root=self._agent._working_dir,
-            )
+        # The removed ``file`` family and its retired per-operation names
+        # (``read``, ``write``, ``edit``, ``glob``, ``grep``) have no alias, so
+        # a stale manifest naming them builds no surface: each is rejected as
+        # an unknown tool by ``_expand_requested_tools`` above.
         for name in sorted(expanded):
             if name not in BUILTIN_TOOLS:
                 continue

@@ -2801,7 +2801,7 @@ def test_full_tool_profile_keeps_operator_managed_capabilities_available(tmp_pat
         # This is an external product oracle, not the implementation policy's
         # own constant: the full-tool profile intentionally preserves these
         # installed, operator-managed capability families.
-        assert {"avatar", "daemon", "file", "mcp", "plugin", "shell", "task_card"} <= registered
+        assert {"avatar", "daemon", "mcp", "plugin", "shell", "task_card"} <= registered
     finally:
         agent.stop(timeout=1.0)
 

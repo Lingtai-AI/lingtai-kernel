@@ -44,7 +44,7 @@ LABT v1. These are self-contained agent-executable behavioral tests for the
 run-dir fallback, per-batch `emanate` limits, and the CLI-backend submanual
 routing contracts. Low-level mechanics stay in pytest; each LABT below is
 self-contained and executable verbatim by an agent with the `daemon` and
-`file` tools.
+`shell` tools.
 
 ## Behavior D001 — daemon.check returns the canonical JSON contract
 
@@ -54,7 +54,7 @@ self-contained and executable verbatim by an agent with the `daemon` and
 - **guards**: `daemon-contract` § Tool Surface (check success output)
   ([CONTRACT.md](CONTRACT.md#tool-surface))
 - **supersedes**: `tests/test_daemon_check.py` (JSON-shape and truncation tests)
-- **runner**: any LingTai agent with the `daemon` and `file` tools
+- **runner**: any LingTai agent with the `daemon` and `shell` tools
 - **prerequisites**: a working dir; the ability to emanate one trivial task
   and wait for its `source="daemon"` terminal notification
 - **estimate**: 3 min
@@ -63,7 +63,7 @@ self-contained and executable verbatim by an agent with the `daemon` and
 1. From your working dir, call
    `daemon(action="emanate", input={"tasks": [{"task": "Create the file
    scratch/check-evidence.txt containing the word evidence, then read it back
-   with the file tool. Reply with exactly: DONE", "tools": ["file"]}]},
+   with the shell tool. Reply with exactly: DONE", "tools": ["shell"]}]},
    reasoning="...")`. Record the returned `ids[0]` as `<id>`.
 2. Wait for the terminal notification for `<id>` (status `done`). Then call
    `daemon(action="check", input={"id": "<id>"}, reasoning="...")` with no
@@ -155,7 +155,7 @@ invalid call raises, succeeds, or returns an unbounded list.
   "check still resolves a daemon after refresh/molt"
   ([manual/SKILL.md](manual/SKILL.md))
 - **supersedes**: `tests/test_daemon_check_historical.py`
-- **runner**: any LingTai agent with the `daemon` and `file` tools
+- **runner**: any LingTai agent with the `daemon` and `shell` tools
 - **prerequisites**: a `<parent>/daemons/` directory (created by any
   emanation); file write access to it; the synthetic dirs created in the
   steps are removed at the end
@@ -207,7 +207,7 @@ behind.
 - **guards**: `daemon-contract` § Tool Surface (emanate row: optional
   `max_turns`) ([CONTRACT.md](CONTRACT.md#tool-surface))
 - **supersedes**: `tests/test_daemon_per_batch_limits.py` (max_turns tests)
-- **runner**: any LingTai agent with the `daemon` and `file` tools
+- **runner**: any LingTai agent with the `daemon` and `shell` tools
 - **prerequisites**: a working dir; each dispatched run is allowed to reach a
   terminal state (or is reclaimed at the end)
 - **estimate**: 4 min
@@ -254,7 +254,7 @@ running.
 - **guards**: `daemon-contract` § Tool Surface (emanate row: optional
   `timeout`) ([CONTRACT.md](CONTRACT.md#tool-surface))
 - **supersedes**: `tests/test_daemon_per_batch_limits.py` (timeout tests)
-- **runner**: any LingTai agent with the `daemon` and `file` tools
+- **runner**: any LingTai agent with the `daemon` and `shell` tools
 - **prerequisites**: a working dir; each dispatched run is allowed to reach a
   terminal state (or is reclaimed at the end)
 - **estimate**: 4 min
@@ -446,7 +446,7 @@ terminal completion receipt.
   ([CONTRACT.md](CONTRACT.md#6-terminal-notifications-use-published-receipts-not-attempted-claims))
 - **supersedes**: `tests/test_daemon_attention_delay.py` (classification and
   delta tables)
-- **runner**: any LingTai agent with the `daemon`, `notification`, and `file`
+- **runner**: any LingTai agent with the `daemon`, `notification`, and `shell`
   tools
 - **prerequisites**: an agent working dir; a backend whose runs accept
   `daemon(action="ask")` (claude-code, codex, opencode/oh-my-pi, or cursor) with
@@ -460,8 +460,8 @@ terminal completion receipt.
    `<id>` and wait for its terminal notice.
 2. Call `daemon(action="ask", input={"id": "<id>", "message": "Reply with
    exactly: FOLLOWUP"}, reasoning="probe")` and wait for the follow-up notice.
-3. Read `.notification/daemon/<id>.json` with the `file` tool and inspect the
-   appended events.
+3. Read `.notification/daemon/<id>.json` with the `shell` tool (bounded
+   `cat`) and inspect the appended events.
 4. Read the newest tool result's `_meta.agent_meta.agent_state.daemon` summary
    (or `notification(action="check", input={}, reasoning="probe")` plus the same
    metadata on the next result).

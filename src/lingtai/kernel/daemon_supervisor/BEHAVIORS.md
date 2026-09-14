@@ -27,7 +27,7 @@ commands must run from the repo root with the project's Python.
 - **id**: DS001
 - **title**: one supervisor owns one run from birth through terminal state and publishes one idempotent notification
 - **guards**: `daemon-supervisor` § Runtime promise
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch run directory `<scratch>`; the runtime venv interpreter
 - **estimate**: ≈ 30 minutes
 

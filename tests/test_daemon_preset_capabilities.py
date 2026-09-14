@@ -134,18 +134,18 @@ def test_collector_does_not_pollute_parent_tool_registry():
 # ---------------------------------------------------------------------------
 
 def test_instantiate_preset_capabilities_returns_schemas_and_handlers(tmp_path):
-    """Preset's capabilities (e.g. 'file' group) instantiate into the sandbox."""
+    """Preset's capabilities (e.g. 'shell') instantiate into the sandbox."""
     agent = _make_agent(tmp_path, ["daemon"])  # NOTE: parent has only daemon
     mgr = agent.get_capability("daemon")
-    # ``file`` is one capability registering one tool whose actions are
-    # read/write/edit/glob/grep — no longer a group expanding to five tools.
+    # ``shell`` is one capability registering one tool; the retired ``file``
+    # tool and its older per-operation split never appear as public tools.
     schemas, handlers = mgr._instantiate_preset_capabilities(
-        {"file": {}},
+        {"shell": {}},
         {"provider": "mock", "model": "mock"},
     )
-    assert "file" in schemas, "file not registered"
-    assert "file" in handlers, "file handler missing"
-    for retired in ("read", "write", "edit", "glob", "grep"):
+    assert "shell" in schemas, "shell not registered"
+    assert "shell" in handlers, "shell handler missing"
+    for retired in ("file", "read", "write", "edit", "glob", "grep"):
         assert retired not in schemas, f"{retired} must not be a public tool"
 
 
@@ -161,12 +161,14 @@ def test_instantiate_skips_unknown_capability_names(tmp_path):
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
     schemas, handlers = mgr._instantiate_preset_capabilities(
-        {"nonsense_capability": {}, "file": {}},
+        {"nonsense_capability": {}, "file": {}, "shell": {}},
         {"provider": "mock", "model": "mock"},
     )
     assert "nonsense_capability" not in schemas
-    # ``read`` is a one-way input alias for the ``file`` family.
-    assert "file" in schemas
+    # The retired ``file`` capability is just another unknown name now: it is
+    # skipped, never aliased onto ``shell`` or anything else.
+    assert "file" not in schemas
+    assert "shell" in schemas
 
 
 def test_instantiate_skips_intrinsic_names_in_capabilities(tmp_path):
@@ -179,7 +181,7 @@ def test_instantiate_skips_intrinsic_names_in_capabilities(tmp_path):
     mgr = agent.get_capability("daemon")
     schemas, handlers = mgr._instantiate_preset_capabilities(
         {
-            "file": {},
+            "shell": {},
             "email": {},      # intrinsic — should skip
             "psyche": {},     # intrinsic (also blacklisted) — should skip
             "system": {},     # intrinsic — should skip
@@ -187,8 +189,7 @@ def test_instantiate_skips_intrinsic_names_in_capabilities(tmp_path):
         },
         {"provider": "mock", "model": "mock"},
     )
-    # Both legacy names canonicalize to the one ``file`` family.
-    assert "file" in schemas
+    assert "shell" in schemas
     assert "email" not in schemas
     assert "psyche" not in schemas
     assert "system" not in schemas
@@ -209,11 +210,11 @@ def test_instantiate_still_raises_on_broken_known_capability(tmp_path, monkeypat
     monkeypatch.setattr("lingtai.tools.registry.setup_capability", boom)
     try:
         mgr._instantiate_preset_capabilities(
-            {"file": {}},  # known capability — should propagate the failure
+            {"shell": {}},  # known capability — should propagate the failure
             {"provider": "mock", "model": "mock"},
         )
     except ValueError as e:
-        assert "file" in str(e)
+        assert "shell" in str(e)
         assert "simulated broken setup" in str(e)
     else:
         raise AssertionError("expected ValueError for broken known capability")
@@ -237,12 +238,12 @@ def test_instantiate_skips_broken_unused_known_capability(tmp_path, monkeypatch)
     monkeypatch.setattr("lingtai.tools.registry.setup_capability", boom_for_vision)
 
     schemas, handlers = mgr._instantiate_preset_capabilities(
-        {"file": {}, "vision": {"provider": "codex", "api_key_env": "IGNORED"}},
+        {"shell": {}, "vision": {"provider": "codex", "api_key_env": "IGNORED"}},
         {"provider": "mock", "model": "mock"},
-        required_tools={"file"},
+        required_tools={"shell"},
     )
 
-    assert "file" in schemas
+    assert "shell" in schemas
     assert "vision" not in schemas
 
 
@@ -275,13 +276,13 @@ def test_instantiate_skips_blacklisted_capabilities(tmp_path):
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
     schemas, handlers = mgr._instantiate_preset_capabilities(
-        {"daemon": {}, "avatar": {}, "knowledge": {}, "file": {}},
+        {"daemon": {}, "avatar": {}, "knowledge": {}, "shell": {}},
         {"provider": "mock", "model": "mock"},
     )
     assert "daemon" not in schemas
     assert "avatar" not in schemas
     assert "knowledge" not in schemas
-    assert "file" in schemas
+    assert "shell" in schemas
 
 
 def test_instantiate_resolves_inherit_against_preset_llm(tmp_path):
@@ -315,24 +316,24 @@ def test_instantiate_resolves_inherit_against_preset_llm(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_build_tool_surface_with_preset_uses_preset_capabilities(tmp_path):
-    """Parent has only daemon; preset has 'file' — the emanation can request
-    'file' tools and they resolve from the preset's surface."""
+    """Parent has only daemon; preset has 'shell' — the emanation can request
+    'shell' tools and they resolve from the preset's surface."""
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
 
     preset_schemas, preset_handlers = mgr._instantiate_preset_capabilities(
-        {"file": {}},
+        {"shell": {}},
         {"provider": "mock", "model": "mock"},
     )
     schemas, dispatch = mgr._build_tool_surface(
-        ["file"],
+        ["shell"],
         preset_surface=(preset_schemas, preset_handlers),
     )
     names = {s.name for s in schemas}
     # Parent didn't have this — it came from the preset
-    assert "file" in names
+    assert "shell" in names
     # Handlers wired up
-    assert "file" in dispatch
+    assert "shell" in dispatch
 
 
 def test_build_tool_surface_with_preset_unknown_tool_raises(tmp_path):
@@ -341,7 +342,7 @@ def test_build_tool_surface_with_preset_unknown_tool_raises(tmp_path):
     mgr = agent.get_capability("daemon")
 
     preset_schemas, preset_handlers = mgr._instantiate_preset_capabilities(
-        {"file": {}},  # provides read/write/edit/glob/grep
+        {"shell": {}},  # provides the shell tool
         {"provider": "mock", "model": "mock"},
     )
     try:
@@ -358,13 +359,13 @@ def test_build_tool_surface_with_preset_unknown_tool_raises(tmp_path):
 def test_build_tool_surface_omitted_preset_uses_parent(tmp_path):
     """Regression: when preset_surface is None, parent's surface is used
     exactly like before."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     names = {s.name for s in schemas}
-    assert "file" in names
+    assert "shell" in names
     # And the dispatch is the parent's actual handler
-    assert dispatch["file"] is agent._tool_handlers["file"]
+    assert dispatch["shell"] is agent._tool_handlers["shell"]
 
 
 # ---------------------------------------------------------------------------
@@ -373,14 +374,14 @@ def test_build_tool_surface_omitted_preset_uses_parent(tmp_path):
 
 def test_emanate_with_preset_instantiates_caps_for_emanation(tmp_path,
                                                               monkeypatch):
-    """Parent has only ['daemon']; preset declares 'file'. Emanation can
-    request 'file' tools and the daemon spawns successfully."""
+    """Parent has only ['daemon']; preset declares 'shell'. Emanation can
+    request 'shell' tools and the daemon spawns successfully."""
     import lingtai.kernel.preset_connectivity as preset_connectivity
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
-    _write_preset(presets_dir, "thinker", capabilities={"file": {}})
+    _write_preset(presets_dir, "thinker", capabilities={"shell": {}})
 
     agent = _make_agent(tmp_path, ["daemon"], presets_dir=presets_dir)
     agent.inbox = queue.Queue()
@@ -389,7 +390,7 @@ def test_emanate_with_preset_instantiates_caps_for_emanation(tmp_path,
     thinker_path = str(presets_dir / "thinker.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "scan files", "tools": ["file"], "preset": thinker_path},
+            {"task": "scan files", "tools": ["shell"], "preset": thinker_path},
         ]})
 
     assert result["status"] == "dispatched", result.get("message")
@@ -413,7 +414,7 @@ def test_emanate_preset_with_intrinsics_dispatches(tmp_path, monkeypatch):
     presets_dir.mkdir()
     _write_preset(presets_dir, "wizard_style",
                   capabilities={
-                      "file": {},
+                      "shell": {},
                       "email": {},      # intrinsic in capabilities map
                       "psyche": {},     # intrinsic + blacklisted
                   })
@@ -425,7 +426,7 @@ def test_emanate_preset_with_intrinsics_dispatches(tmp_path, monkeypatch):
     preset_path = str(presets_dir / "wizard_style.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "x", "tools": ["file"], "preset": preset_path},
+            {"task": "x", "tools": ["shell"], "preset": preset_path},
         ]})
 
     assert result["status"] == "dispatched", \
@@ -446,7 +447,7 @@ def test_emanate_preset_request_for_email_intrinsic_dispatches(tmp_path, monkeyp
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
     _write_preset(presets_dir, "wizard_style",
-                  capabilities={"file": {}, "email": {}})
+                  capabilities={"shell": {}, "email": {}})
 
     agent = _make_agent(tmp_path, ["daemon"], presets_dir=presets_dir)
     agent.inbox = queue.Queue()
@@ -471,7 +472,7 @@ def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
-    _write_preset(presets_dir, "thinker", capabilities={"file": {}})
+    _write_preset(presets_dir, "thinker", capabilities={"shell": {}})
 
     agent = _make_agent(tmp_path, ["daemon"], presets_dir=presets_dir)
     agent.inbox = queue.Queue()
@@ -483,7 +484,7 @@ def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,
     thinker_path = str(presets_dir / "thinker.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "x", "tools": ["file"], "preset": thinker_path},
+            {"task": "x", "tools": ["shell"], "preset": thinker_path},
         ]})
     assert result["status"] == "dispatched"
 
@@ -493,7 +494,7 @@ def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,
 
 
 def test_emanate_preset_broken_unused_vision_dispatches(tmp_path, monkeypatch):
-    """File-only daemon dispatch is not blocked by broken unused vision."""
+    """Shell-only daemon dispatch is not blocked by broken unused vision."""
     import lingtai.kernel.preset_connectivity as preset_connectivity
     import lingtai.tools.registry as capabilities
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
@@ -511,9 +512,9 @@ def test_emanate_preset_broken_unused_vision_dispatches(tmp_path, monkeypatch):
     presets_dir.mkdir()
     _write_preset(
         presets_dir,
-        "file_plus_broken_vision",
+        "shell_plus_broken_vision",
         capabilities={
-            "file": {},
+            "shell": {},
             "vision": {"provider": "codex", "api_key_env": "IGNORED"},
         },
     )
@@ -522,10 +523,10 @@ def test_emanate_preset_broken_unused_vision_dispatches(tmp_path, monkeypatch):
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
-    preset_path = str(presets_dir / "file_plus_broken_vision.json")
+    preset_path = str(presets_dir / "shell_plus_broken_vision.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "scan files", "tools": ["file"], "preset": preset_path},
+            {"task": "scan files", "tools": ["shell"], "preset": preset_path},
         ]})
 
     assert result["status"] == "dispatched", result.get("message")
@@ -583,10 +584,10 @@ def test_emanate_preset_broken_requested_vision_fails(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_build_tool_surface_preset_keeps_parent_host_tools(tmp_path):
-    """Parent has the core floor (shell + file). Preset declares only a
+    """Parent has the core floor (shell). Preset declares only a
     provider capability (web_search). Requesting host tools like 'shell' must
     resolve from the parent surface, not be rejected as unknown."""
-    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
 
     # Preset sandbox declares only a provider capability — NOT the host floor.
@@ -606,30 +607,10 @@ def test_build_tool_surface_preset_keeps_parent_host_tools(tmp_path):
     assert dispatch["shell"] is agent._tool_handlers["shell"]
 
 
-def test_build_tool_surface_preset_keeps_full_host_tool_set(tmp_path):
-    """The exact failing request from the bug report: file group + shell with a
-    preset must all be accepted when valid in the parent surface."""
-    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
-    mgr = agent.get_capability("daemon")
-
-    preset_schemas, preset_handlers = mgr._instantiate_preset_capabilities(
-        {},
-        {"provider": "mock", "model": "mock"},
-    )
-    schemas, dispatch = mgr._build_tool_surface(
-        ["file", "shell"],
-        preset_surface=(preset_schemas, preset_handlers),
-    )
-    names = {s.name for s in schemas}
-    for n in ("file", "shell"):
-        assert n in names, f"host tool {n!r} must survive a preset"
-        assert n in dispatch
-
-
 def test_build_tool_surface_preset_unknown_tool_still_rejected(tmp_path):
     """Carrying parent host tools forward must NOT weaken rejection of truly
     unknown tools — names absent from both preset and parent still raise."""
-    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
 
     preset_schemas, preset_handlers = mgr._instantiate_preset_capabilities(
@@ -650,32 +631,31 @@ def test_build_tool_surface_preset_unknown_tool_still_rejected(tmp_path):
 
 def test_build_tool_surface_preset_capability_overrides_parent_handler(tmp_path):
     """When a preset re-instantiates a tool the parent also has, the preset's
-    sandbox handler wins (it may be configured against the child LLM); the
-    parent handler only fills in for floor tools the preset omitted."""
-    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
+    sandbox handler wins (it may be configured against the child LLM). The
+    parent-fallback half of the rule is covered by
+    test_build_tool_surface_preset_keeps_parent_host_tools."""
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
 
-    # Preset re-declares 'read' (gets its own sandbox handler) but omits 'shell'.
+    # Preset re-declares 'shell' and so gets its own sandbox handler.
     preset_schemas, preset_handlers = mgr._instantiate_preset_capabilities(
-        {"file": {}},
+        {"shell": {}},
         {"provider": "mock", "model": "mock"},
     )
     schemas, dispatch = mgr._build_tool_surface(
-        ["file", "shell"],
+        ["shell"],
         preset_surface=(preset_schemas, preset_handlers),
     )
-    # read resolves from the preset sandbox, not the parent
-    assert dispatch["file"] is preset_handlers["file"]
-    assert dispatch["file"] is not agent._tool_handlers["file"]
-    # shell falls back to the parent (preset didn't supply it)
-    assert dispatch["shell"] is agent._tool_handlers["shell"]
+    # shell resolves from the preset sandbox, not the parent
+    assert dispatch["shell"] is preset_handlers["shell"]
+    assert dispatch["shell"] is not agent._tool_handlers["shell"]
 
 
 def test_build_tool_surface_preset_does_not_inherit_parent_mcp(tmp_path):
     """Preserving the parent host floor must NOT smuggle parent MCP tools into a
     preset emanation. Parent MCP names are excluded from the host floor and a
     request for one still raises the task-mcp-registration guard."""
-    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     agent._sealed = False
     agent.add_tool("parent_mcp_tool", schema={"type": "object", "properties": {}},
                    handler=lambda args: {"ok": True}, description="Parent MCP tool")
@@ -710,13 +690,13 @@ def test_build_tool_surface_preset_does_not_inherit_parent_mcp(tmp_path):
 
 def test_build_tool_surface_preset_floor_excludes_extra_parent_tool(tmp_path):
     """dev-1 blocker: the parent host floor a preset may borrow is NARROW —
-    exactly {shell, read, write, edit, glob, grep}. An extra regular (non-MCP)
+    exactly {shell}. An extra regular (non-MCP)
     parent tool that is NOT in that floor and NOT in the preset must stay
     unknown under a preset: not available, not dispatchable, and rejected when
     requested. This guards against optional/provider parent tools (vision,
     web_search, …) silently falling back to the parent when a preset omits or
     fails the provider capability."""
-    agent = _make_agent(tmp_path, ["file", "shell", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     # A regular (non-MCP) parent tool outside the core host floor. This stands
     # in for an optional/provider tool like vision/web_search.
     agent._sealed = False
@@ -758,15 +738,13 @@ def test_build_tool_surface_preset_floor_excludes_extra_parent_tool(tmp_path):
             "extra non-floor parent tool must be rejected under a preset")
 
 
-def test_parent_host_tool_floor_is_exactly_shell_and_file(tmp_path):
+def test_parent_host_tool_floor_is_exactly_shell(tmp_path):
     """Lock the borrowable floor to the intended set. Derived from
     CORE_DEFAULTS minus EMANATION_BLACKLIST minus mcp, it must equal exactly
-    {shell, read, write, edit, glob, grep} — no intrinsics, no mcp, no optional
-    provider caps."""
+    {shell} — no intrinsics, no mcp, no optional provider caps, and no
+    retired ``file`` tool."""
     from lingtai.tools.daemon import _parent_host_tool_floor
-    assert _parent_host_tool_floor() == frozenset(
-        {"shell", "file"}
-    )
+    assert _parent_host_tool_floor() == frozenset({"shell"})
 
 
 def test_emanate_preset_skipped_provider_cap_still_runs_host_tools(
@@ -799,7 +777,7 @@ def test_emanate_preset_skipped_provider_cap_still_runs_host_tools(
     )
 
     # Parent agent HAS the host floor.
-    agent = _make_agent(tmp_path, ["file", "shell", "daemon"], presets_dir=presets_dir)
+    agent = _make_agent(tmp_path, ["shell", "daemon"], presets_dir=presets_dir)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 

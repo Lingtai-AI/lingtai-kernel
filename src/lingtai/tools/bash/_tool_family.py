@@ -255,7 +255,11 @@ def get_description(
         "include exit_code, ok, command_status ('success'/'failed'), and possibly a warning field: top-level status "
         "only says the shell spawned/completed the command, not inner success; check exit_code/ok and fidelity fields. Sync runs honor the timeout "
         "ceiling; on Windows a kill-on-close Job Object terminates surviving descendants, so use async for "
-        "work that must outlive the command. Read shell-manual before coding-CLI, scheduled, unfamiliar, or "
+        "work that must outlive the command. Shell is also the filesystem tool: make durable file changes "
+        "here with bounded, verified commands (read windows with sed -n/head/rg, confirm an exact match exists "
+        "once before replacing it, re-read after writing, handle binary or non-UTF-8 content explicitly, and "
+        "run context(action='rebuild') when a durable prompt source such as system/pad.md must take effect). "
+        "Read shell-manual before coding-CLI, scheduled, unfamiliar, or "
         "recovery work; its focused references own the detail."
     )
 

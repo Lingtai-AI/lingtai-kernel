@@ -109,7 +109,7 @@ def test_avatar_spawns_with_parent_default_when_active_differs(tmp_path):
             },
             "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
                     "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
-            "capabilities": {"file": {}, "vision": {"provider": "minimax"}},
+            "capabilities": {"shell": {}, "vision": {"provider": "minimax"}},
             "soul": {"delay": 120}, "stamina": 3600,
             "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
             "admin": {}, "streaming": False,
@@ -139,7 +139,7 @@ def test_avatar_no_preset_block_inherits_flat_config(tmp_path):
             "agent_name": "parent", "language": "en",
             "llm": {"provider": "x", "model": "y",
                     "api_key": None, "api_key_env": "X"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
             "soul": {"delay": 120}, "stamina": 3600,
             "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
             "admin": {}, "streaming": False,
@@ -153,7 +153,7 @@ def test_avatar_no_preset_block_inherits_flat_config(tmp_path):
     # No preset block, no stripping
     assert "preset" not in avatar_init["manifest"]
     assert avatar_init["manifest"]["llm"]["provider"] == "x"
-    assert avatar_init["manifest"]["capabilities"] == {"file": {}}
+    assert avatar_init["manifest"]["capabilities"] == {"shell": {}}
 
 
 def test_avatar_strips_materialized_when_active_equals_default(tmp_path):
@@ -166,7 +166,7 @@ def test_avatar_strips_materialized_when_active_equals_default(tmp_path):
                        "path": "/abs/path"},
             "llm": {"provider": "deepseek", "model": "v4",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
             "soul": {"delay": 120}, "stamina": 3600,
             "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
             "admin": {}, "streaming": False,

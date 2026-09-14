@@ -1,8 +1,8 @@
 """Private LingTai composer for canonical full-context reconstruction.
 
 ``_lingtai_load`` is the single canonical writer of the ``character`` prompt
-section, composed from ``system/lingtai.md`` alone. Durable mutation is owned by
-the generic file family; this module has no public mutator.
+section, composed from ``system/lingtai.md`` alone. Durable mutation goes through
+Shell; this module has no public mutator.
 """
 from __future__ import annotations
 

@@ -19,8 +19,8 @@ What remains here is the domain's private ownership, unchanged:
   existing pinned reference set keeps composing into the prompt exactly as
   before.
 
-Durable mutation of the Pad body is ``file.write`` (full create/overwrite) and
-``file.edit`` (exact replacement); neither hot-loads the prompt. Changes become
+Durable mutation of the Pad body happens through ``shell`` (a verified whole
+rewrite or exact replacement); nothing hot-loads the prompt. Changes become
 visible through one explicit ``context.rebuild`` or passive refresh/molt
 reconstruction.
 """

@@ -79,7 +79,7 @@
     // The kernel reader owns this classification; these comments are informative
     // shape guidance, not a migration registry or a runtime history file.
     // The kernel boots the `lingtai.core.*` floor by default on every
-    // agent: knowledge, skills, shell, avatar, daemon, mcp, and file — plus
+    // agent: knowledge, skills, shell, avatar, daemon, and mcp — plus
     // the always-on system, context, pad, lingtai, soul, notification, and email
     // intrinsics.
     // You do NOT need to list those here unless you want to OVERRIDE
@@ -242,8 +242,8 @@
   // Procedures prompt content is managed by the TUI as system/procedures.md;
   // init.json procedures/procedures_file overrides are no longer honored by the kernel.
 
-  // Initial pad — materialized into system/pad.md. Generic changes belong to
-  // file.write/file.edit and take effect in the live prompt only after explicit
+  // Initial pad — materialized into system/pad.md. Generic changes are made
+  // through shell and take effect in the live prompt only after explicit
   // context.rebuild (or passive refresh/molt reconstruction). pad.append only
   // persists the pinned reference list; it never hot-loads the prompt.
   "pad": ""

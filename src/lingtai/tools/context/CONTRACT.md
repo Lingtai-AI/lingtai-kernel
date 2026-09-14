@@ -62,8 +62,8 @@ configurable prompt pairs.
 `psyche.name_set`, and every other old spelling fail as unknown actions: root
 reuse is not action compatibility. The lifecycle actions live here; name changes
 remain `system.name_set | system.name_nickname`. Pad body and LingTai identity
-mutation belong to `file.write | file.edit`; neither domain exposes a public
-mutating action.
+mutation happen through `shell` (verified exact edits on the source file);
+neither domain exposes a public mutating action.
 
 ## LTP v2 port
 

@@ -27,7 +27,7 @@ from the repo root with the project's Python.
 - **id**: SK001
 - **title**: info only refreshes the catalogue and manual only reads the installed manual
 - **guards**: `skills-contract` § Tool surface
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` with a skills catalog
 - **estimate**: ≈ 15 minutes
 

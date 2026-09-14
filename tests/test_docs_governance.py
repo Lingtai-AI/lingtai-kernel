@@ -587,7 +587,7 @@ def test_all_four_notification_managers_preserve_exact_runtime_body():
 
     expected = {
         m1.__name__: "d94fd01db9c628b56f41e46e364c6c35ae7811d67fd6c31d670c449c0a942361",
-        m2.__name__: "f12c669c8b7f500f4aa9a596ed69560ed8fbfe2bcea475a1bbe92c94c9c25020",
+        m2.__name__: "a87a522d9d5684b4591bd33e23a05812ee294a7d4f4e4ae5699f975ca9d94c99",
         m3.__name__: "cdfb2d6c420880eafbd69ae92cfbabb17b1cfe35c20320d039459f6475c95ae9",
         m4.__name__: "ae176cd42178fd1cd9cf743cc1960ade62b94c66cad48d8e9822c91110aad62f",
     }
@@ -608,7 +608,7 @@ def test_glossary_owner_preserves_rendered_body_without_metadata():
     sys.path.insert(0, str(ROOT / "src"))
     from lingtai.kernel import tool_glossary
 
-    before = tool_glossary.load_tool_glossary("lingtai.tools.file", "zh")
+    before = tool_glossary.load_tool_glossary("lingtai.tools.bash", "zh")
     assert before.strip()
     assert "kind:" not in before
     assert "related_files:" not in before

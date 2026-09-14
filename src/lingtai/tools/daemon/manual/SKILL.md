@@ -64,7 +64,7 @@ checkpoint, completion, and resume status is backend-specific. Use
 ```jsonc
 daemon(action="emanate", input={
   "tasks": [{"task": "Do bounded work and leave reports/out.md.",
-              "tools": ["file"], "preset": "/approved/preset.json"}],
+              "tools": ["shell"], "preset": "/approved/preset.json"}],
   "backend": "lingtai"
 }, reasoning="bounded delegation")
 ```

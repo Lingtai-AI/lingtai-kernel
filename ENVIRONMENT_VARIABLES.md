@@ -3,8 +3,8 @@ name: environment-variable-registry
 description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
-version: 1.9.2
-last_changed_at: "2026-09-10"
+version: 1.10.0
+last_changed_at: "2026-09-14"
 related_files:
 - ANATOMY.md
 - CONTRACT.md
@@ -41,9 +41,6 @@ related_files:
 - src/lingtai/tools/bash/ANATOMY.md
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/tools/daemon/CONTRACT.md
-- src/lingtai/tools/file/ANATOMY.md
-- src/lingtai/tools/file/CONTRACT.md
-- src/lingtai/tools/file/manual/SKILL.md
 - src/lingtai/tools/mcp/ANATOMY.md
 - src/lingtai/tools/notification/ANATOMY.md
 - src/lingtai/tools/notification/CONTRACT.md
@@ -110,11 +107,6 @@ reports, prompts, or this registry.
 | `LINGTAI_AGENT_DIR` | unset; normally launcher-injected | Existing local directory | Out-of-process MCP and client workdir | MCP/client process start; restart after change | Invalid path fails the MCP or client operation | `src/lingtai/mcp_servers/_config.py` | Keep private workdir contents out of model-facing output |
 | `LINGTAI_MCP_NAME` | unset | Registered MCP name | One MCP process identity | MCP process start; restart after change | Missing or unknown name fails closed | `src/lingtai/mcp_servers/_config.py` | Prevents arbitrary server selection; it is not a secret |
 | `LINGTAI_TUI_DIR` | expanded `~/.lingtai-tui` when unset | Any path string; the environment value wins and only `Path.expanduser` is applied, so relative paths stay relative and explicit empty means `.` | Base directory for the default Codex token and auth-pool paths | Codex adapter/account-source or default token-manager construction; change the launcher or `env_file` and fully relaunch | No eager directory validation; unexpandable `~` can fail construction, while missing/unreadable/invalid auth files fail the later account/request path closed | `system` catch-all — `src/lingtai/tools/system/settings.py`; canonical consumers in `src/lingtai/auth/codex.py` and `src/lingtai/auth/codex_pool.py` | SHOW fully redacts both current and default paths; never log the resolved directory or credential paths, and do not treat a path as authorization |
-| `LINGTAI_FILE_IO_BACKEND` | `auto` | `auto`, `rust`, or `python`; case-insensitive with surrounding whitespace ignored | File-I/O service-construction mode | Service construction when no explicit factory/launcher `backend=` argument is supplied; rebuild/restart the owner service, then verify `file(action="settings", input={})` | Any other value fails service construction closed | `file` owner setting `backend.mode` in `src/lingtai/tools/file/settings.py`; applied by the File-I/O service factory | Change only through an authorized launcher/shell outside read-only SHOW. Backend selection grants no path authority |
-| `LINGTAI_FILE_IO_SIDECAR` | unset | Executable local path or command name; canonical override ahead of the legacy alias | File-I/O sidecar construction | Service construction; rebuild/restart the owner service, then verify SHOW plus a File search | A nonempty unusable value prevents the legacy alias from taking over; automatic packaged/dev discovery and `auto` Python fallback remain, while explicit `rust` fails if no usable source exists | `file` owner setting `backend.sidecar` in `src/lingtai/tools/file/settings.py`; applied by the File-I/O service factory | Change only outside SHOW; current/default are fully redacted. Validate executable ownership and never expose the resolved path |
-| `LINGTAI_SEARCH_SIDECAR` | unset | Executable local path or command name; compatibility alias used only when `LINGTAI_FILE_IO_SIDECAR` is absent | Same File-I/O sidecar construction setting as the canonical variable | Service construction; rebuild/restart the owner service, then verify SHOW plus a File search | A nonempty canonical value shadows this alias; otherwise fallback/failure follows the canonical row and never downloads a binary | Same `file` owner setting `backend.sidecar`; applied by the File-I/O service factory | Prefer the canonical variable. The alias is not a second setting row; current/default are fully redacted and the path must stay private |
-| `LINGTAI_SKIP_RUST_BUILD` | unset and off | `1` enables skipping the Rust sidecar build | Developer and package build | Build invocation; rerun build after change | Invalid values are treated as off | `setup.py` and wheel tests | Never ship a wheel claiming a sidecar that was not built |
-| `LINGTAI_REQUIRE_RUST_BUILD` | unset and off | `1` requires the Rust sidecar build | Developer and package build | Build invocation; rerun build after change | Invalid values fail the required-build path | `setup.py` and wheel tests | Build policy is not runtime authorization |
 | `LINGTAI_SOUL_FLOW_ENABLED` | disabled unless host enables it | `1`/`0` and documented component boolean forms | Optional soul-flow capability | Capability bootstrap; refresh or restart after change | Treated as disabled | `src/lingtai/tools/soul` | Not a command-execution or approval switch |
 | `LINGTAI_INJECT_REASONING_FALLBACK` | `on` | `1`/`0`, `true`/`false`, `on`/`off` (component boolean forms); explicit provider config param wins | Inject a per-turn-unique reasoning stub on assistant tool-call turns that lack preserved thinking (required by thinking-mode endpoints such as DeepSeek V4) | Adapter session construction; restart session after change | Invalid values fall back to `on` | `src/lingtai/llm/openai/adapter.py` | Reasoning stub only; not a capability or authorization switch |
 

@@ -56,7 +56,7 @@ def _tracked_text_files() -> list[str]:
     """Return repo-relative paths of tracked text files outside reports/."""
     result = subprocess.run(
         ["git", "ls-files", "src", "tests", "docs", "pyproject.toml",
-         "MANIFEST.in", "README.md", "setup.py"],
+         "MANIFEST.in", "README.md"],
         capture_output=True,
         text=True,
         cwd=str(ROOT),

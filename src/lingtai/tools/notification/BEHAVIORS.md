@@ -38,7 +38,7 @@ project's Python.
 - **id**: N001
 - **title**: notification check reports current state without mutating producer state, and an unregistered hook channel is blocked with a `blocked_channel:<channel>` system event
 - **guards**: `notification-tool` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` with a populated `.notification/`
 - **estimate**: ≈ 15 minutes
 
@@ -62,7 +62,7 @@ Pass when the suite passes, read-only manual/check observations hold, and the un
 - **id**: N002
 - **title**: an event published to a registered hook channel passes through to notifications
 - **guards**: `notification-tool` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a scratch agent working directory `<scratch>` with a registered hook channel (see `notification(action="add", ...)`)
 - **estimate**: ≈ 10 minutes
 
@@ -83,7 +83,7 @@ Pass when the registered channel's event is reported. Fail if it is blocked or d
 - **id**: N003
 - **title**: notification hook add/drop/edit/list validate inputs and keep the manifest consistent
 - **guards**: `notification-tool` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a scratch agent working directory `<scratch>` with `.notification/` writable
 - **estimate**: ≈ 10 minutes
 
@@ -106,7 +106,7 @@ Pass when add/edit/drop behave as above and the manifest stays valid. Fail on si
 - **guards**: `notification-tool` § Behavior (`delay`)
   ([CONTRACT.md](CONTRACT.md#behavior))
 - **supersedes**: `tests/test_daemon_attention_delay.py` (mask, hook-wake, and expiry assertions)
-- **runner**: any LingTai agent with the `notification`, `daemon`, and `file` tools
+- **runner**: any LingTai agent with the `notification`, `daemon`, and `shell` tools
 - **prerequisites**: an agent working dir with a writable `.notification/`; no live delay (call `notification(action="delay", input={"channel": "daemon", "seconds": 0}, reasoning="reset")` first if unsure); no `channels.daemon.alarm_threshold` in `<workdir>/notification.json`
 - **estimate**: ≈ 5 minutes
 
@@ -114,9 +114,9 @@ Pass when add/edit/drop behave as above and the manifest stays valid. Fail on si
 1. Call `daemon(action="emanate", input={"tasks": [{"task": "Reply with exactly: DONE", "tools": []}]}, reasoning="probe")`; record `ids[0]` as `<id1>` and wait for its terminal notice.
 2. Call `notification(action="delay", input={"channel": "daemon", "seconds": 60}, reasoning="probe")`.
 3. Call `notification(action="add", input={"name": "probe", "channel": "probe", "source": "external", "description": "carrier", "how_to_modify": "edit the manifest", "how_to_cancel": "stop the writer"}, reasoning="probe")`.
-4. Emanate a second identical task as `<id2>`. While the delay is live, call `notification(action="check", input={}, reasoning="probe")` and list `.notification/daemon/` with the `file` tool.
+4. Emanate a second identical task as `<id2>`. While the delay is live, call `notification(action="check", input={}, reasoning="probe")` and list `.notification/daemon/` with the `shell` tool (`ls -la .notification/daemon/`).
 5. Write one event to `.notification/probe.json` (the registered hook channel) and observe whether it is delivered/injected.
-6. Wait out the remaining 60-second window (the heartbeat/timer publishes expiry), then call `notification(action="check", input={}, reasoning="probe")` and read `.notification/delay-alarm.json` with the `file` tool.
+6. Wait out the remaining 60-second window (the heartbeat/timer publishes expiry), then call `notification(action="check", input={}, reasoning="probe")` and read `.notification/delay-alarm.json` with the `shell` tool (`cat .notification/delay-alarm.json`).
 
 ### Expected evidence
 - [ ] Step 2 returns `{"status": "ok", "action": "delayed", "channel": "daemon", ...}`.

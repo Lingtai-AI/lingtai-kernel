@@ -27,7 +27,7 @@ must run from the repo root with the project's Python.
 - **id**: LC001
 - **title**: wall and monotonic domains stay distinct and the raw wall float reaches presence unchanged
 - **guards**: `lifecycle-clock` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; the `FakeLifecycleClock` helper available in `tests/_lifecycle_clock_helpers.py`
 - **estimate**: ≈ 15 minutes
 

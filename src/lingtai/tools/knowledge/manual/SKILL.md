@@ -49,14 +49,17 @@ when authoring or reorganizing an unfamiliar store.
 
 ## Author, edit, read, apply
 
-Use the generic `file` owner with complete envelopes:
+Use `shell` for every durable change, anchored to your working directory:
 
 ```text
-file(action="write", input={"file_path": "knowledge/<name>/KNOWLEDGE.md", "content": "---\nname: <name>\ndescription: ...\n---\n..."}, reasoning="write knowledge")
-file(action="edit", input={"file_path": "knowledge/<name>/KNOWLEDGE.md", "old_string": "...", "new_string": "...", "replace_all": null}, reasoning="edit knowledge")
-file(action="read", input={"file_path": "<location>", "offset": null, "limit": null, "max_chars": null}, reasoning="read knowledge")
+shell(action="run", input={"command": "mkdir -p knowledge/<name> && cat > knowledge/<name>/KNOWLEDGE.md <<'EOF'\n---\nname: <name>\ndescription: ...\n---\n...\nEOF\ncat knowledge/<name>/KNOWLEDGE.md", "timeout": null, "working_dir": null, "async": null, "reminder": null}, reasoning="write knowledge and read it back")
+shell(action="run", input={"command": "sed -n '1,120p' -- \"<location>\"", "timeout": null, "working_dir": null, "async": null, "reminder": null}, reasoning="read knowledge, bounded")
 ```
 
+For an edit, first prove the old text exists exactly once (for example
+`grep -c -F -- '<old>' knowledge/<name>/KNOWLEDGE.md` must print `1`), then
+replace it and read the file back to verify; never replace blindly. Keep output
+bounded, and treat a binary or non-UTF-8 file honestly rather than as text.
 Writing does not hot-load the catalog. Apply one
 `context(action="rebuild", input={}, reasoning="refresh knowledge catalog")`, or
 let passive refresh/molt reconstruction apply it. Psyche's

@@ -155,7 +155,7 @@ def test_session_mcp_rebuilds_managed_noop_chat_on_mount_and_close():
 @pytest.mark.parametrize("plans", [
     [[{"name": "same", "schema": {}}, {"name": "same", "schema": {}}]],
     [[{"name": "existing", "schema": {}}]],
-    [[{"name": "file", "schema": {}}]],
+    [[{"name": "shell", "schema": {}}]],
 ])
 def test_session_mcp_rejects_duplicate_and_existing_tool_collisions(plans):
     agent = _Agent()

@@ -337,19 +337,11 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
     # copied next to capability manuals under .library/intrinsic/capabilities/.
     agent, workdir = _mk_agent(tmp_path)
     try:
-        skill_md = (
-            workdir
-            / ".library"
-            / "intrinsic"
-            / "capabilities"
-            / "file-manual"
-            / "SKILL.md"
-        )
-        assert skill_md.is_file()
-        body = skill_md.read_text(encoding="utf-8")
-        assert "name: file-manual" in body
-        assert "encoding='gbk'" in body
-        assert "iconv -f gbk -t utf-8" in body
+        capabilities_dir = workdir / ".library" / "intrinsic" / "capabilities"
+        # The removed ``file`` family left no manual behind: neither its
+        # ``file-manual`` body nor the nested ``read-manual`` is installed.
+        assert not (capabilities_dir / "file-manual").exists()
+        assert not (capabilities_dir / "read-manual").exists()
 
         system_manual_md = (
             workdir
@@ -443,21 +435,6 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "editable/source/dev" in runtime_update_body
         assert "receiving explicit confirmation" in runtime_update_body
 
-        file_manual_md = (
-            workdir
-            / ".library"
-            / "intrinsic"
-            / "capabilities"
-            / "file-manual"
-            / "SKILL.md"
-        )
-        assert file_manual_md.is_file()
-        file_manual_body = file_manual_md.read_text(encoding="utf-8")
-        package_file_manual = Path("src/lingtai/tools/file/manual/SKILL.md").read_text(
-            encoding="utf-8"
-        )
-        assert file_manual_body == package_file_manual
-        assert "# File Manual" in file_manual_body
         assert not (
             workdir
             / ".library"
@@ -914,7 +891,7 @@ def test_catalog_injected_into_skills_section(tmp_path):
     try:
         prompt = agent._prompt_manager.read_section("skills") or ""
         assert "- name: skills-manual" in prompt
-        assert "- name: file-manual" in prompt
+        assert "- name: file-manual" not in prompt
         assert "- name: shared-thing" in prompt
     finally:
         agent.stop(timeout=1.0)
@@ -1246,7 +1223,7 @@ def test_context_manual_routes_store_ownership_to_psyche():
         / "src/lingtai/tools/context/manual/SKILL.md"
     ).read_text(encoding="utf-8")
     assert 'psyche(action="manual", input={}, reasoning="load durable-store routes")' in manual
-    assert "generic writes are through `file`" in manual
+    assert "durable writes go through `shell`" in manual
     assert "intrinsic_skills/psyche-manual" not in manual
     assert "peers install it into their own `.library/custom/<name>/`" not in manual
 

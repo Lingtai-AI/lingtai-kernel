@@ -13,9 +13,9 @@ related_files:
 - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
 - src/lingtai/tools/context/manual/SKILL.md
 maintenance: |
-  Keep the manual-only Psyche route, generic file ownership, no-hot-load rule,
-  delayed activation, pinned-reference hazards, and context-manual route aligned
-  with Pad code and Contract.
+  Keep the manual-only Psyche route, Shell ownership of durable edits, no-hot-load
+  rule, delayed activation, pinned-reference hazards, and context-manual route
+  aligned with Pad code and Contract.
 ---
 
 # Pad Manual
@@ -34,11 +34,11 @@ edit, load, or reload action and no compatibility alias.
 
 ## Edit Pad sources
 
-Use the generic `file` owner: rewrite with
-`file(action="write", input={"file_path": "system/pad.md", "content": "..."}, reasoning="rewrite Pad")`
-or make a bounded exact change with
-`file(action="edit", input={"file_path": "system/pad.md", "old_string": "...", "new_string": "...", "replace_all": null}, reasoning="edit Pad")`.
-Neither call hot-loads the prompt. Apply one
+Durable Pad changes go through `shell`, anchored in the authorized working
+directory: rewrite `system/pad.md` in full, or make a bounded exact change after
+verifying the old text exists exactly once, then verify the written file and
+keep output bounded. Platform recipes live in `shell-manual`. No shell write
+hot-loads the prompt. Apply one
 `context(action="rebuild", input={}, reasoning="apply Pad change")` when immediate
 activation is needed.
 
@@ -48,14 +48,10 @@ pointers; archive completed narrative in knowledge.
 ## Pinned references
 
 `system/pad_append.json` is an ordinary JSON array of workdir-relative or
-absolute paths. Edit it with the same full `file` envelope, for example:
+absolute paths, for example `["notes/design.md", "src/api.py"]`. Edit it through
+`shell` the same way, and verify the written JSON afterwards.
 
-```text
-file(action="write", input={"file_path": "system/pad_append.json",
-  "content": "[\"notes/design.md\", \"src/api.py\"]"}, reasoning="pin references")
-```
-
-Write `[]` to clear it. File writes do not validate the pinned list or its
+Write `[]` to clear it. Shell writes do not validate the pinned list or its
 aggregate size; confirm the paths and UTF-8 contents yourself. Reconstruction
 rereads every listed file and appends its
 contents to Pad, so list edits and pinned-file edits appear only after rebuild,

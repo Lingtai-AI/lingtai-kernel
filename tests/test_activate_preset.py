@@ -16,7 +16,7 @@ def _make_workdir_and_lib(tmp_path: Path) -> tuple[Path, Path]:
         "manifest": {
             "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-            "capabilities": {"file": {}, "web_search": {"provider": "duckduckgo"}},
+            "capabilities": {"shell": {}, "web_search": {"provider": "duckduckgo"}},
         },
     }))
     (plib / "minimax.json").write_text(json.dumps({
@@ -25,7 +25,7 @@ def _make_workdir_and_lib(tmp_path: Path) -> tuple[Path, Path]:
         "manifest": {
             "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
                     "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
-            "capabilities": {"file": {}, "vision": {"provider": "minimax",
+            "capabilities": {"shell": {}, "vision": {"provider": "minimax",
                                                     "api_key_env": "MINIMAX_API_KEY"}},
         },
     }))
@@ -43,7 +43,7 @@ def _make_workdir_and_lib(tmp_path: Path) -> tuple[Path, Path]:
             },
             "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-            "capabilities": {"file": {}, "web_search": {"provider": "duckduckgo"}},
+            "capabilities": {"shell": {}, "web_search": {"provider": "duckduckgo"}},
             "soul": {"delay": 120},
             "stamina": 3600,
             "molt_pressure": 0.8,
@@ -163,7 +163,7 @@ def test_activate_preset_uses_default_path_when_unset(tmp_path, monkeypatch):
         "manifest": {
             "llm": {"provider": "minimax", "model": "x",
                     "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
         },
     }))
 

@@ -14,10 +14,6 @@ related_files:
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/knowledge/CONTRACT.md
   - src/lingtai/tools/knowledge/__init__.py
-  - src/lingtai/tools/file/CONTRACT.md
-  - src/lingtai/tools/file/__init__.py
-  - src/lingtai/tools/file/manual/SKILL.md
-  - tests/test_file_tool_plugin_package.py
   - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/task_card/__init__.py
   - src/lingtai/tools/avatar/CONTRACT.md
@@ -70,10 +66,12 @@ maintenance: |
   tool; changing either choice is a normative change, so move
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
   `src/lingtai/mcp_catalog.json` in related_files with it. `mcp`, `avatar`,
-  `context`, `daemon`, `email`, `file`, `plugin`, `psyche`, `notification`,
-  `shell`, `soul`, `system`, `task_card`, `vision`, and `web` are the fifteen
+  `context`, `daemon`, `email`, `plugin`, `psyche`, `notification`,
+  `shell`, `soul`, `system`, `task_card`, `vision`, and `web` are the fourteen
   static declared families today, in that official order; do not widen that claim
-  without another family's evidence.
+  without another family's evidence. The former `file` family was removed
+  outright (no filesystem family exists; durable filesystem changes go through
+  `shell`) — do not reintroduce it here without a real slice.
 ---
 # LingTai Tool Protocol (LTP)
 
@@ -280,11 +278,10 @@ harness; the old result-summarization control nested as `input.summary`; a
 shared settings or `_settings` foundation; runtime schema injection;
 ToolExecutor changes; a provider adapter envelope; or MCP migration.
 
-The `file` family was also a non-goal of that adopting PR. It has since been
-migrated on its own, vertically and with its own evidence, exactly as the
-"one family at a time" rule requires — see `### Relationship to current
-runtime` below and `src/lingtai/tools/file/CONTRACT.md`. Migrating it did not
-relax any rule in this file.
+The former `file` family was also a non-goal of that adopting PR. It was later
+migrated on its own, and has since been removed entirely: no filesystem family
+exists today, and durable filesystem changes go through `shell`. Neither step
+relaxed any rule in this file.
 
 The `input.summary` non-goal bans one thing: carrying the result-summarization
 *control* below root. It does not reserve the word `summary`, and it does not ban
@@ -296,20 +293,20 @@ Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 
 **Status.** This section fixes the declaration, activation, dispatch, manual,
 host, identifier, and migration vocabulary that every official model-facing tool
-family shares. The accepted declared evidence is exactly the fifteen static
-official families `mcp`, `avatar`, `context`, `daemon`, `email`, `file`,
-`plugin`, `notification`, `shell`, `soul`, `system`, `task_card`, `vision`, and
-`web`, in that order. `mcp` is the base reference; the remaining thirteen are
-accepted vertical slices with their narrow earned ports. The kernel's closed
-`GRANTABLE_HOST_PORTS` inventory has twenty-one grantable names: `workdir`,
-`prompt_section`, `avatar_parent`, `context_runtime`, `daemon_runtime`,
-`email_runtime`, `file_io`, `plugin_catalog`, `notification_state`,
-`notifications`, `configuration`, `soul_runtime`, `system_runtime`, `identity`,
-`shutdown`, `task_card_lifecycle`, `task_card_notifications`,
-`active_provider`, `web_runtime`, and `provider_identity`. Email retains its
-call-time manager port,
-File retains `workdir`/`file_io` plus a setup-selected immutable
-`configuration` snapshot, Plugin retains its protected prompt section and
+family shares. The accepted declared evidence is exactly the fourteen static
+official families `mcp`, `avatar`, `context`, `daemon`, `email`,
+`plugin`, `psyche`, `notification`, `shell`, `soul`, `system`, `task_card`,
+`vision`, and `web`, in that order. `mcp` is the base reference; the remaining
+thirteen are accepted vertical slices with their narrow earned ports. The
+kernel's closed `GRANTABLE_HOST_PORTS` inventory has twenty grantable names:
+`workdir`, `prompt_section`, `avatar_parent`, `context_runtime`,
+`daemon_runtime`, `email_runtime`, `plugin_catalog`, `psyche_settings`,
+`notification_state`, `notifications`, `configuration`, `soul_runtime`,
+`system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
+`task_card_notifications`, `active_provider`, `web_runtime`, and
+`provider_identity` (the former `file_io` port left with the removed `file`
+family). Email retains its call-time manager port,
+Plugin retains its protected prompt section and
 read-only `plugin_catalog` projection, and always-on Notification retains
 `workdir`/`notification_state` with Core-bound callbacks, Soul retains
 `workdir` plus its explicit `soul_runtime` live-self port, and System retains
@@ -349,9 +346,9 @@ this contract's classification:
 
 - **Registry families** — the intrinsics and built-in capability rows
   registered through `src/lingtai/tools/registry.py`. `mcp`, `avatar`,
-  `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
+  `context`, `daemon`, `email`, `plugin`, `psyche`, `notification`, `shell`,
   `soul`, `system`, `task_card`, `vision`, and `web` are first-party families
-  in scope; all fifteen are declared under the selected form. Every other
+  in scope; all fourteen are declared under the selected form. Every other
   family in this class is a future migration unit, and no family in this class
   is wrapped as an MCP plugin package today.
 - **Kernel-shipped MCP families** — the model-facing families this
@@ -456,7 +453,7 @@ register is family-generic rather than MCP-only.
   `DaemonManager`'s — but public semantics MUST survive unchanged.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical slice lands.
-  `mcp` is the current base reference; Avatar, Context, Daemon, Email, File,
+  `mcp` is the current base reference; Avatar, Context, Daemon, Email,
   Plugin, Notification, Shell, Soul, System, Task Card, Vision, and Web are
   accepted vertical evidence here. The former later-family target register is
   empty; a reserved name is never by itself a claim that a candidate slice has
@@ -622,7 +619,7 @@ non-goal for third-party-versus-third-party mounts.
 **Current evidence versus migration target.**
 
 - The selected form is generic. `mcp` is the base reference; Avatar, Context,
-  Daemon, Email, File, Plugin, Notification, Shell, Soul, System, Task Card,
+  Daemon, Email, Plugin, Notification, Shell, Soul, System, Task Card,
   Vision, and Web are accepted vertical evidence. Soul's declaration binds only
   `workdir`/`soul_runtime`;
   its focused suites (`tests/test_tool_family_soul_migration.py`,
@@ -632,11 +629,7 @@ non-goal for third-party-versus-third-party mounts.
   `soul-manual`. Email's declaration
   binds only `workdir`/`email_runtime`; its focused suite proves the typed port,
   one mount/no capability row, canonical manual, and call-time replacement
-  manager. File's declaration binds only
-  `workdir`/`file_io`/`configuration`; its focused suites prove the typed
-  adapters, exact grant, preserved operations, exact source/snapshot-backed
-  13-row SHOW with no writer/file, one mount, sole package body at
-  `file-manual`, and wheel/sdist package-data route. Task Card's
+  manager. Task Card's
   declaration binds only
   `workdir`/`shutdown`/`task_card_lifecycle`/`task_card_notifications`; its
   focused suites (`tests/test_task_card_controller.py`,
@@ -759,15 +752,10 @@ the manager before registration, and the narrow adapter reads that manager at
 call time without intrinsic or official-handler dispatch (see
 `src/lingtai/tools/email/CONTRACT.md`).
 
-`file` is the sixth declared vertical slice. Its declaration binds exactly
-`workdir`, kernel-owned `file_io`, and an immutable `configuration` snapshot;
-`AgentFileIOAdapter` exposes only typed text/search operations plus traversal
-and result-cap facts, and setup supplies it together with the factory-applied
-bounded backend snapshot only through `extra_ports_for`; the sensitive sidecar
-value is fully redacted before projection. The package manual
-is the one operational body,
-installed at `capabilities/file-manual` (see
-`src/lingtai/tools/file/CONTRACT.md`).
+The former `file` family was once the sixth declared vertical slice; it has
+been removed entirely together with its `file_io` port, adapter, and manual.
+No filesystem family exists today, and durable filesystem changes go through
+`shell` (see `src/lingtai/tools/bash/CONTRACT.md`).
 
 `web` is the fourteenth declared vertical slice. Its declaration binds exactly
 `workdir`, its Web-owned typed `web_runtime` composition (`WebComposition`:
@@ -782,18 +770,11 @@ global runtime table, and no automatic provider/browser fallback beyond the
 family's one documented OpenAI→DuckDuckGo runtime fallback (see
 `src/lingtai/tools/web_search/CONTRACT.md`).
 
-Separately, `file` (`read | write | edit | glob | grep | settings | manual`) is the fourth family
-migrated to the LTP envelope contract, and the first aggregation of several former public
-roots into one: its final model-facing root is exactly `action`, `input`,
-`reasoning`, and `summarize`. The migration was a clean break rather than an
-adapter layer — the five old model-facing roots, their implementation packages,
-their per-operation contracts and glossaries, and their capability names were
-all deleted, with the behavior folded into the single `lingtai.tools.file`
-owner. Those five capability names are now unknown and fail loudly; `file`
-surfaces no settings file at either level. Its `settings` action is strict,
-SHOW-only, provider-bound, and immediately before `manual`; it exposes exactly
-the File owner's 13 policy/selector rows without adding set/reset (see
-`src/lingtai/tools/file/CONTRACT.md`).
+Separately, the former `file` family was the fourth family migrated to the LTP
+envelope contract and the first aggregation of several former public roots into
+one; it has since been deleted outright, so `file`, `read`, `write`, `edit`,
+`glob`, and `grep` are all unknown capability names that fail loudly, with no
+alias, shim, or replacement family.
 
 `vision` (`analyze | check | list | settings | manual`) is the fifth: it keeps its public
 tool name and action values while moving to the same root envelope, with
@@ -958,10 +939,10 @@ manual`,
 or routing manual; `settings` returns the eight fully redacted Psyche-owned Pad
 and configurable-prompt rows. Every action mutates nothing. Those four packages remain as private lifecycle
 owners — Pad/LingTai composers and the Skills/Knowledge catalogs plus the
-Knowledge legacy migration — and register no tool. Generic durable mutation
-belongs to `file.write`/`file.edit`, which never hot-load prompt state; the
-retired `pad.append`, `skills.info`, and `knowledge.info` actions have no
-aliases. The
+Knowledge legacy migration — and register no tool. Durable mutation of those
+sources happens through `shell` (verified exact edits), which never hot-loads
+prompt state; the retired `pad.append`, `skills.info`, and `knowledge.info`
+actions have no aliases. The
 context lifecycle is `context` (`molt | summarize | rebuild | manual`,
 `src/lingtai/tools/context/CONTRACT.md`): `summarize` records only, while
 `rebuild` is the one active operation that first recomposes every canonical
@@ -976,9 +957,10 @@ The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
-v2 family (`_LTP_V2_MIGRATED_FAMILIES`, currently `web`, `mcp`, `knowledge`,
-`file`, `vision`, `avatar`, `soul`, `shell`, `skills`, `notification`, `system`,
-`daemon`, `email`, `pad`, `lingtai`, `context`, and `plugin`), so
+v2 family (`_LTP_V2_MIGRATED_FAMILIES`,
+`src/lingtai/kernel/tool_result_summary.py:156`, currently `web`, `mcp`,
+`plugin`, `vision`, `avatar`, `soul`, `shell`, `notification`, `system`,
+`daemon`, `email`, `task_card`, `context`, and `psyche`), so
 an unmigrated tool's own field literally named `summarize` is never
 reinterpreted as this control. A family adopting this envelope MUST join that
 allowlist in the same change, or the root `summarize` it advertises to the
@@ -1029,8 +1011,8 @@ and dispatch while retaining its own outer `handle()` for family-specific
 diagnostics, `mcp` is its second, retaining its own outer `handle_mcp()`
 for its exact pre-migration unknown-action envelope, `knowledge` is its
 third, using it the same way with its own outer `handle()` preserving that
-family's exact pre-migration unknown-action result, `file` is its fourth
-(below), `vision` is its fifth, using it the same way while retaining
+family's exact pre-migration unknown-action result, the removed `file` family
+was its fourth, `vision` is its fifth, using it the same way while retaining
 its own outer `handle()` for the family's flat manual/error result shapes,
 `avatar` is its sixth, restoring its own pinned unknown-action error
 envelope the same way, `soul` is its seventh, composing `get_schema()`
@@ -1054,20 +1036,6 @@ adopting part of the infrastructure is conforming. Using it is never
 required — see its own
 `src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
 binding on it exactly as it is on every family.
-
-`file` is that illustration realized: one family with actions
-`read | write | edit | glob | grep | settings | manual` whose five operation
-implementations remain fully independent, sharing nothing but the family name
-and the wire envelope —
-co-located in one package as `_read.py`, `_write.py`, `_edit.py`, `_glob.py`,
-and `_grep.py`, where none imports another. Single ownership is not shared
-implementation.
-The generic settings child and package manual remain separate reserved siblings;
-neither couples the five operation modules.
-It is also the worked example of the family-boundary rule above — the five
-operations are one family because they act on one working tree through one
-authority (the injected `FileIOService`) under one sandbox, not because their
-code looks alike.
 
 ## Contract tests
 
@@ -1101,18 +1069,6 @@ action-owned `settings/web.search.json` surface (see
 `src/lingtai/tools/web_search/CONTRACT.md` Contract tests). They remain one
 family's local evidence, not a conformance suite, and no such suite is required
 to exist.
-
-`file`'s focused suite (`tests/test_file_tool_family.py`) is the second
-migration's evidence, chosen for its own risks: exactly one public root with no
-surviving old roots, the closed envelope, action/input correlation on both
-wires, every child's schema/dispatch/result/error, cross-action rejection
-before handler I/O, the no-I/O family manual with read pagination as a nested
-reference, read continuation and line truncation, verbatim write/edit receipts,
-and the `summarize` control and truthful mixed read/write risk posture. The
-retained operations' own suites (`tests/test_layers_file.py`,
-`tests/test_read_continuation.py`) continue to cover per-operation depth. This
-is a different evidence set from web's, which is exactly what the paragraph
-above permits.
 
 `tests/test_tool_family_avatar_migration.py` is `avatar`'s own local evidence
 for the same rules, chosen for that family's risk: the closed root, per-action

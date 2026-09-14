@@ -982,15 +982,15 @@ def test_central_manager_queues_until_worker_frees(tmp_path, monkeypatch):
 
 
 def test_central_manager_dispatches_high_concurrency_without_waiting_for_queued_pid(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path, ["file", "daemon"])
+    agent = make_daemon_agent(tmp_path, ["shell", "daemon"])
     _enable_detached_fake_llm(monkeypatch, agent, sleep_s=1.0)
     manager = DaemonManager(agent, manager_pool_size=1)
 
     try:
         start = time.monotonic()
         result = manager._handle_emanate([
-            {"task": "slow task A", "tools": ["file"]},
-            {"task": "slow task B", "tools": ["file"]},
+            {"task": "slow task A", "tools": ["shell"]},
+            {"task": "slow task B", "tools": ["shell"]},
         ])
         elapsed = time.monotonic() - start
 
@@ -1021,7 +1021,7 @@ def test_central_manager_dispatches_high_concurrency_without_waiting_for_queued_
 
 
 def test_parent_restart_does_not_reap_queued_manager_owned_run(tmp_path):
-    agent = make_daemon_agent(tmp_path, ["file", "daemon"], working_dir_name="agent")
+    agent = make_daemon_agent(tmp_path, ["shell", "daemon"], working_dir_name="agent")
     run_dir, request = _make_run(tmp_path, "em-queued")
     run_dir.update_state(owner="manager")
     _write_live_manager_pid(agent)
@@ -1037,7 +1037,7 @@ def test_parent_restart_does_not_reap_queued_manager_owned_run(tmp_path):
 
 
 def test_parent_restart_does_not_reap_active_manager_owned_run(tmp_path):
-    agent = make_daemon_agent(tmp_path, ["file", "daemon"], working_dir_name="agent")
+    agent = make_daemon_agent(tmp_path, ["shell", "daemon"], working_dir_name="agent")
     run_dir, request = _make_run(tmp_path, "em-active")
     manager_pid = os.getpid()
     run_dir.update_state(
@@ -1070,7 +1070,7 @@ def test_parent_restart_does_not_reap_active_manager_owned_run(tmp_path):
 
 
 def test_central_manager_cli_route_dispatches_without_waiting_for_queued_pid(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path, ["file", "daemon"])
+    agent = make_daemon_agent(tmp_path, ["shell", "daemon"])
     _install_fake_opencode(tmp_path, monkeypatch, sleep_s=1.0)
     manager = DaemonManager(agent, manager_pool_size=1)
 
@@ -1078,8 +1078,8 @@ def test_central_manager_cli_route_dispatches_without_waiting_for_queued_pid(tmp
         start = time.monotonic()
         result = manager._handle_emanate_cli(
             [
-                {"task": "slow cli task A", "tools": ["file"]},
-                {"task": "slow cli task B", "tools": ["file"]},
+                {"task": "slow cli task A", "tools": ["shell"]},
+                {"task": "slow cli task B", "tools": ["shell"]},
             ],
             backend="opencode",
             effective_max_turns=1,
@@ -1110,12 +1110,12 @@ def test_central_manager_cli_route_dispatches_without_waiting_for_queued_pid(tmp
 
 
 def test_default_disabled_routing_uses_legacy_spawn_adapter(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path, ["file", "daemon"])
+    agent = make_daemon_agent(tmp_path, ["shell", "daemon"])
     records = install_fake_detached_owner(monkeypatch)
     manager = DaemonManager(agent, manager_pool_size=0)
 
     result = manager._handle_emanate([
-        {"task": "legacy detached", "tools": ["file"]},
+        {"task": "legacy detached", "tools": ["shell"]},
     ])
 
     assert result["status"] == "dispatched"
@@ -1236,13 +1236,13 @@ def test_reclaim_cancels_active_and_queued_central_manager_runs(tmp_path, monkey
         _dispatch_through_tool_family,
     )
 
-    agent = make_daemon_agent(tmp_path, ["file", "daemon"])
+    agent = make_daemon_agent(tmp_path, ["shell", "daemon"])
     _enable_detached_fake_llm(monkeypatch, agent, sleep_s=8.0)
     manager = DaemonManager(agent, manager_pool_size=1)
     try:
         result = manager._handle_emanate([
-            {"task": "slow task A", "tools": ["file"]},
-            {"task": "slow task B", "tools": ["file"]},
+            {"task": "slow task A", "tools": ["shell"]},
+            {"task": "slow task B", "tools": ["shell"]},
         ])
         active_dir = manager._emanations[result["ids"][0]]["run_dir"]
         queued_dir = manager._emanations[result["ids"][1]]["run_dir"]

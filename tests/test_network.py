@@ -116,7 +116,7 @@ def test_avatar_edges(tmp_path):
             "working_dir": child_addr,
             "address": "127.0.0.1:9001",
             "mission": "do research",
-            "capabilities": ["file", "web_search"],
+            "capabilities": ["shell", "web_search"],
             "provider": "anthropic",
             "model": "claude-3",
         },
@@ -130,7 +130,7 @@ def test_avatar_edges(tmp_path):
     assert edge.child_address == child_addr
     assert edge.child_name == "child"
     assert edge.mission == "do research"
-    assert edge.capabilities == ["file", "web_search"]
+    assert edge.capabilities == ["shell", "web_search"]
     assert edge.provider == "anthropic"
 
 
@@ -406,7 +406,7 @@ def test_full_network(tmp_path):
             "working_dir": worker_addr,
             "address": "127.0.0.1:8001",
             "mission": "process data",
-            "capabilities": ["file"],
+            "capabilities": ["shell"],
         },
     ])
 

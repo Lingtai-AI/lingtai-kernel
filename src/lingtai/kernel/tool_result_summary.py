@@ -155,7 +155,7 @@ def is_apriori_summary(content: Any) -> bool:
 # ``src/lingtai/tools/CONTRACT.md`` Contract rules > Envelope).
 _LTP_V2_MIGRATED_FAMILIES = frozenset(
     {
-        "web", "mcp", "plugin", "file", "vision", "avatar", "soul",
+        "web", "mcp", "plugin", "vision", "avatar", "soul",
         "shell", "notification", "system", "daemon", "email",
         "task_card",
         "context",

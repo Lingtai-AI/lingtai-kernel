@@ -220,7 +220,7 @@ conforming regime drops or rewrites the user text, returns no concrete
 
 - **id**: S004
 - **title**: durable prompt sources (`<agent>/system/*.md`, pinned references)
-  are plain files; `file` writes/edits never hot-load the running prompt, only
+  are plain files; `shell` writes never hot-load the running prompt, only
   an explicit `context(action="rebuild")` recomposes, and retired
   domain-mutation actions are rejected
 - **guards**: `context-contract` § Full reconstruction ordering
@@ -229,7 +229,7 @@ conforming regime drops or rewrites the user text, returns no concrete
   `psyche-tool-contract` § Root reuse is not action compatibility
   ([CONTRACT.md](../psyche/CONTRACT.md#root-reuse-is-not-action-compatibility))
 - **supersedes**: `tests/test_context_ownership_redesign.py`
-- **runner**: any LingTai agent with the `file`, `context`, and `psyche` tools
+- **runner**: any LingTai agent with the `shell`, `context`, and `psyche` tools
 - **prerequisites**: your working dir `<agent>`; the `system/` dir may need
   creating
 - **estimate**: 4 min
@@ -246,8 +246,11 @@ conforming regime drops or rewrites the user text, returns no concrete
 4. Call `psyche(action="lingtai", input={"content": "not allowed"},
    reasoning="x")`; record the result.
 5. Create `<agent>/system/` and write `<agent>/system/pad.md` containing
-   `DURABLE-ONE` via `file(action="write", ...)`. Read `<agent>/system/system.md`
-   (it may not exist yet) and record whether it contains `DURABLE-ONE`.
+   `DURABLE-ONE` via `shell(action="run", input={"command": "mkdir -p
+   <agent>/system && printf 'DURABLE-ONE\n' > <agent>/system/pad.md"},
+   reasoning="x")`, then re-read it with `shell` to confirm the write. Read
+   `<agent>/system/system.md` (it may not exist yet) and record whether it
+   contains `DURABLE-ONE`.
 6. Call `context(action="rebuild", input={}, reasoning="x")`; record the
    result fields. Read `<agent>/system/system.md` again and record whether it
    now contains `DURABLE-ONE`.
@@ -291,19 +294,18 @@ sources.
   ([CONTRACT.md](../../kernel/base_agent/CONTRACT.md#behavior)); incident
   regression 2026-06-12 (mimo-1) documented in the superseded test
 - **supersedes**: `tests/test_repeated_tool_error_continue.py`
-- **runner**: any LingTai agent with the `file` and `shell` tools (live
-  check), plus shell access to `<repo>` (pinned check)
+- **runner**: any LingTai agent with the `shell` tool (live check), plus
+  shell access to `<repo>` (pinned check)
 - **prerequisites**: your working dir `<agent>`; repo checkout for step 4
 - **estimate**: 3 min
 
 ### Steps
 1. Deliberately trigger the same tool error at least three times in a row,
-   e.g. `file(action="read", input={"file_path":
-   "<agent>/does-not-exist.txt"}, reasoning="x")` three times (or
-   `shell(action="run", input={"command": "definitely-not-a-command-xyz"},
-   reasoning="x")` three times).
+   e.g. `shell(action="run", input={"command": "definitely-not-a-command-xyz"},
+   reasoning="x")` three times.
 2. After the third identical error, make one more ordinary tool call (e.g.
-   glob `<agent>`) and finish the turn; record that the runtime continued
+   `shell(action="run", input={"command": "ls <agent>"}, reasoning="x")`) and
+   finish the turn; record that the runtime continued
    normally — you were not dropped to IDLE and needed no continuation/
    notification workaround.
 3. Check whether `<agent>/.notification/repeated_tool_error.json` exists.

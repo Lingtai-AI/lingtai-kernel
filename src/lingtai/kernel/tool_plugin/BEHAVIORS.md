@@ -15,7 +15,6 @@ related_files:
   - src/lingtai/tools/context/__init__.py
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/email/__init__.py
-  - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/bash/_tool_family.py
@@ -36,8 +35,6 @@ related_files:
   - tests/test_context_declared_tool_plugin.py
   - tests/test_daemon.py
   - tests/test_email_official_tool_plugin.py
-  - tests/test_file_tool_plugin_package.py
-  - tests/test_file_tool_family.py
   - tests/test_plugin_tool.py
   - tests/test_notification_settings.py
   - tests/test_notification_delay_alarm.py
@@ -61,7 +58,7 @@ maintenance: |
   drift, extend the affected evidence with that family's own focused proof rather
   than leaving a stale pass. The shared C register is family-generic and distinguishes
   target reserved names from candidate merge evidence. `mcp` is the shared-C base
-  reference; Avatar, Context, Daemon, Email, File, Plugin, Notification, Shell,
+  reference; Avatar, Context, Daemon, Email, Plugin, Notification, Shell,
   Soul, System, Task Card, Vision, and Web are current
   vertical evidence. Ports remain least-privilege and tool-specific, while registrar
   mounts are runtime-bound rather
@@ -81,7 +78,7 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 - **title**: an official declaration is static, least-privilege, and never receives the Agent
 - **guards**: `declared-host-tool-plugin` §
   [Purpose](CONTRACT.md#purpose), § Behavior, § Port
-- **runner**: any LingTai agent with `shell` and `file` access to a clean
+- **runner**: any LingTai agent with `shell` access to a clean
   checkout of the `lingtai-kernel` repository
 - **prerequisites**: a clean checkout; a working `.venv/`
 - **estimate**: ≈ 15 minutes
@@ -91,14 +88,15 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 1. Prove the declaration exists and validates before any Agent does:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.file import DECLARATION as file; print(mcp.name, mcp.actions, mcp.public_actions, mcp.requires); print(file.name, file.actions, file.public_actions, file.requires)"
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.bash._tool_family import DECLARATION as shell; print(mcp.name, mcp.actions, mcp.public_actions, mcp.requires); print(shell.name, shell.actions, shell.public_actions, shell.requires)"
    ```
 
    Expect `mcp ('info',) ('info', 'settings', 'manual') ('workdir', 'prompt_section')` and
-   `file ('read', 'write', 'edit', 'glob', 'grep') ('read', 'write', 'edit',
-   'glob', 'grep', 'settings', 'manual') ('workdir', 'file_io',
-   'configuration')`. No `Agent` was constructed; reserved generic `settings`
-   and `manual` actions are injected/appended, not declared as operations.
+   `shell ('run', 'poll', 'cancel') ('run', 'poll', 'cancel', 'settings',
+   'manual') ('workdir', 'notifications', 'configuration')`. No `Agent` was
+   constructed; reserved generic `settings` and `manual` actions are
+   injected/appended, not declared as operations. There is no `file`
+   declaration: `import lingtai.tools.file` must raise `ModuleNotFoundError`.
 
    Then prove the twelfth slice's declaration the same way:
 
@@ -147,20 +145,20 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 3. Prove a declaration is granted exactly its `requires` and nothing more:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.kernel.tool_plugin import GRANTABLE_HOST_PORTS, ToolPluginHost; from lingtai.tools.file import DECLARATION; h = ToolPluginHost.grant(DECLARATION, {'workdir': object(), 'file_io': object(), 'configuration': object(), 'prompt_section': object()}); print(GRANTABLE_HOST_PORTS, h.granted); h.prompt_section"
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.kernel.tool_plugin import GRANTABLE_HOST_PORTS, ToolPluginHost; from lingtai.tools.bash._tool_family import DECLARATION; h = ToolPluginHost.grant(DECLARATION, {'workdir': object(), 'notifications': object(), 'configuration': object(), 'prompt_section': object()}); print(GRANTABLE_HOST_PORTS, h.granted); h.prompt_section"
    ```
 
    Expect `('workdir', 'prompt_section', 'avatar_parent', 'context_runtime',
-   'daemon_runtime', 'email_runtime', 'file_io', 'plugin_catalog',
+   'daemon_runtime', 'email_runtime', 'plugin_catalog', 'psyche_settings',
    'notification_state', 'notifications', 'configuration', 'soul_runtime',
    'system_runtime', 'identity', 'shutdown', 'task_card_lifecycle',
    'task_card_notifications', 'active_provider', 'web_runtime',
-   'provider_identity') ('workdir', 'file_io', 'configuration')` printed,
+   'provider_identity') ('workdir', 'notifications', 'configuration')` printed,
    then an `AttributeError` whose message says the plugin *did not require host
-   port* `'prompt_section'`. Confirm `tool_mount` is absent from
-   `GRANTABLE_HOST_PORTS`: File receives exactly `WorkdirPort`, `FileIOPort`,
-   and its immutable setup-selected `ConfigurationPort`, even when the host
-   table contains another grantable port. The same rule
+   port* `'prompt_section'`. Confirm `tool_mount` and `file_io` are both absent
+   from `GRANTABLE_HOST_PORTS`: Shell receives exactly `WorkdirPort`,
+   `NotificationPort`, and its immutable setup-selected `ConfigurationPort`,
+   even when the host table contains another grantable port. The same rule
    covers the ports `agent_host_ports` always builds — `avatar_parent` and
    `plugin_catalog` — so run:
 
@@ -207,17 +205,18 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    grep -n "def _reconcile\|def _build_family\|def _bind" src/lingtai/tools/mcp/__init__.py
    grep -n "working_dir = host.workdir.path" src/lingtai/tools/mcp/__init__.py
    grep -n "host.prompt_section.write_protected_section(xml)" src/lingtai/tools/mcp/__init__.py
-   grep -n "host.workdir, host.file_io" src/lingtai/tools/file/__init__.py
-   grep -n "class AgentFileIOAdapter\|extra_ports_for" src/lingtai/adapters/tool_plugin_host.py src/lingtai/tools/file/__init__.py
+   grep -n "host.workdir\|host.notifications\|host.configuration" src/lingtai/tools/bash/_tool_family.py
+   grep -n "class AgentNotificationAdapter\|class StaticConfigurationAdapter\|extra_ports_for" src/lingtai/adapters/tool_plugin_host.py src/lingtai/tools/bash/__init__.py
    ```
 
    Expect MCP's three internals to take `host`, then exactly one match each for
-   its two port calls. Expect File's operations to receive only `host.workdir`
-   and `host.file_io`, and its setup to supply `AgentFileIOAdapter` only through
-   `extra_ports_for`. Read that adapter and confirm it has no `Any`-typed File
-   method/result, `__getattr__`, generic dispatch, Agent slot, or mount method.
-   Each `setup(agent, **_ignored)` still takes the Agent because it *is* the
-   composition wiring; no binder or bound family does.
+   its two port calls. Expect Shell's `_bind` to reach the body only through
+   `host.workdir`, `host.notifications`, and `host.configuration`, and its
+   `setup` to supply `StaticConfigurationAdapter` only through
+   `extra_ports_for`. Read those two adapters and confirm neither has an
+   `Any`-typed escape hatch, `__getattr__`, generic dispatch, Agent slot, or
+   mount method. Each `setup(agent, **_ignored)` still takes the Agent because
+   it *is* the composition wiring; no binder or bound family does.
 
 5. Prove the kernel still owns only the shape — no import of any tool package
    anywhere under `src/lingtai/kernel/`:
@@ -236,18 +235,16 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    not two literals that happen to match:
 
    ```bash
-   grep -n "DECLARATION.manual\|DECLARATION.name\|DECLARATION.input_schemas\|DECLARATION.manual_input_schema" src/lingtai/tools/mcp/__init__.py src/lingtai/tools/file/__init__.py
+   grep -n "DECLARATION.manual\|DECLARATION.name\|DECLARATION.input_schemas\|DECLARATION.manual_input_schema" src/lingtai/tools/mcp/__init__.py src/lingtai/tools/bash/_tool_family.py
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
      tests/test_tool_plugin_declaration.py::test_official_mcp_mount_uses_controlled_host_and_real_dispatch \
-     tests/test_file_tool_plugin_package.py::test_file_declaration_is_static_and_derives_the_public_surface \
-     tests/test_file_tool_plugin_package.py::test_file_bind_accepts_only_its_narrow_ports \
-     tests/test_file_tool_plugin_package.py::test_official_file_mount_preserves_real_operations_and_packaged_manual
+     tests/test_shell_tool_plugin_declaration.py::test_shell_declaration_is_static_and_derives_its_shipped_surface \
+     tests/test_shell_tool_plugin_declaration.py::test_shell_bind_uses_only_its_narrow_ports_and_defers_rehydration \
+     tests/test_shell_tool_plugin_declaration.py::test_official_shell_mount_uses_only_narrow_ports_and_keeps_real_dispatch
    ```
 
    Expect both families' builders/binds to read name, per-action schemas, and
    installed-manual destination back out of `DECLARATION`, then `4 passed`.
-   File's live proof also asserts the package body returns from
-   `capabilities/file-manual` and no `capabilities/file` destination exists.
 
 7. Run the contract suite:
 
@@ -255,8 +252,8 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
      tests/test_tool_plugin_declaration.py tests/test_tool_family_avatar_migration.py \
      tests/test_context_declared_tool_plugin.py tests/test_daemon.py \
-     tests/test_email_official_tool_plugin.py tests/test_file_tool_plugin_package.py \
-     tests/test_file_tool_family.py tests/test_plugin_tool.py \
+     tests/test_email_official_tool_plugin.py \
+     tests/test_shell_tool_plugin_declaration.py tests/test_plugin_tool.py \
      tests/test_notification_delay_alarm.py tests/test_notification_store.py \
      tests/test_task_card_controller.py tests/test_task_card_notifications.py \
      tests/test_tool_family_vision_migration.py tests/test_intrinsic_manual_actions.py \
@@ -286,24 +283,25 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 
 ### Expected evidence
 
-- [ ] Step 1: MCP and File `DECLARATION`s import and validate with no Agent;
-      reserved children are in `public_actions` but not in `actions`.
+- [ ] Step 1: MCP and Shell `DECLARATION`s import and validate with no Agent;
+      reserved children are in `public_actions` but not in `actions`; no
+      `file` declaration or module exists.
 - [ ] Step 2: the closed LTP root and MCP's
       `["info", "settings", "manual"]` enum are exact.
 - [ ] Step 3: only `requires` ports are granted; an ungranted port raises
-      `AttributeError`; `tool_mount` is not grantable at all; a standard-table
-      port such as `plugin_catalog` is unreachable for a declaration that did
-      not name it.
-- [ ] Step 4: MCP's workdir/prompt operations and File's workdir/file-I/O
-      operations go only through granted ports; `AgentFileIOAdapter` has no Any,
+      `AttributeError`; `tool_mount` and `file_io` are not grantable at all; a
+      standard-table port such as `plugin_catalog` is unreachable for a
+      declaration that did not name it.
+- [ ] Step 4: MCP's workdir/prompt operations and Shell's
+      workdir/notification/configuration reads go only through granted ports;
+      `AgentNotificationAdapter` and `StaticConfigurationAdapter` have no Any,
       generic dispatch, whole Agent, or mount surface; each `setup` is wiring only.
 - [ ] Step 5: no file under `src/lingtai/kernel/` imports `lingtai.tools`, by
       grep and by the AST sweep.
-- [ ] Step 6: MCP and File derive name, `input` schemas, and manual destination
-      from their declarations; the four named live/static tests pass, including
-      File's established `file-manual` destination and absent `file` destination.
+- [ ] Step 6: MCP and Shell derive name, `input` schemas, and manual destination
+      from their declarations; the four named live/static tests pass.
 - [ ] Step 7: the shared suite plus Avatar's, Context's, Daemon's, Email's,
-      File's, and Plugin's focused declared slices pass. Plugin's slice includes
+      Shell's, and Plugin's focused declared slices pass. Plugin's slice includes
       the detached per-read catalog projection: mutating a returned registration
       mapping leaves the next read unchanged.
 - [ ] Step 6: the family derives its name, `input` schemas, and manual
@@ -342,11 +340,11 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 Pass when every box above is observed. **Fail loudly** if a declaration needs a
 live Agent to construct, if an official family's public surface changed, if an
 ungranted port is reachable, if `tool_mount` becomes grantable, if any code path hands a
-whole `Agent` to a plugin, if File's adapter uses `Any`, generic dispatch, or a
+whole `Agent` to a plugin, if Shell's adapters use `Any`, generic dispatch, or a
 mount operation, if a family restates its name, its per-action input schemas, or
-its manual destination instead of deriving them from its own declaration, if
-File installs anywhere except `file-manual`, or if the kernel package imports
-`lingtai.tools`.
+its manual destination instead of deriving them from its own declaration, if a
+`file` declaration or `file_io` grant reappears, or if the kernel package
+imports `lingtai.tools`.
 Record the exact command output in the task report. This task performs no
 writes.
 
@@ -355,7 +353,7 @@ writes.
 - **id**: TP002
 - **title**: a reserved official name is claimed once and a conflict is refused before any bind or mount
 - **guards**: `declared-host-tool-plugin` § [Contract rules](CONTRACT.md#contract-rules)
-- **runner**: any LingTai agent with `shell` and `file` access to a clean
+- **runner**: any LingTai agent with `shell` access to a clean
   checkout of the `lingtai-kernel` repository
 - **prerequisites**: a clean checkout; a working `.venv/`
 - **estimate**: ≈ 15 minutes

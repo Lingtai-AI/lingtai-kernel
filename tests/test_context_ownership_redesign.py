@@ -93,32 +93,37 @@ def test_manual_only_lingtai_has_a_strict_ltp_v2_envelope(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_file_write_and_edit_change_disk_but_never_hot_load_prompt(tmp_path):
-    agent = _agent(tmp_path)
+def test_shell_write_and_edit_change_disk_but_never_hot_load_prompt(tmp_path):
+    """Durable filesystem work goes through ``shell``; edits never hot-load."""
+    agent = _agent(tmp_path, capabilities={"shell": {"yolo": True}})
     try:
         agent._prompt_manager.write_section("pad", "CURRENT-PROMPT")
-        file_call = agent._tool_handlers["file"]
+        shell_call = agent._tool_handlers["shell"]
         path = agent._working_dir / "system" / "pad.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-        result = file_call({
-            "action": "write",
-            "input": {"file_path": str(path), "content": "DURABLE-ONE"},
-            "reasoning": "update durable pad",
-        })
+        def run(command, reasoning):
+            return shell_call({
+                "action": "run",
+                "input": {
+                    "command": command,
+                    "timeout": None,
+                    "working_dir": None,
+                    "async": None,
+                    "reminder": None,
+                },
+                "reasoning": reasoning,
+            })
+
+        result = run("printf 'DURABLE-ONE' > system/pad.md", "update durable pad")
         assert result["status"] == "ok"
         assert path.read_text(encoding="utf-8") == "DURABLE-ONE"
         assert agent._prompt_manager.read_section("pad") == "CURRENT-PROMPT"
 
-        result = file_call({
-            "action": "edit",
-            "input": {
-                "file_path": str(path),
-                "old_string": "DURABLE-ONE",
-                "new_string": "DURABLE-TWO",
-                "replace_all": None,
-            },
-            "reasoning": "exact durable edit",
-        })
+        result = run(
+            "sed -i.bak 's/DURABLE-ONE/DURABLE-TWO/' system/pad.md && rm system/pad.md.bak",
+            "exact durable edit",
+        )
         assert result["status"] == "ok"
         assert path.read_text(encoding="utf-8") == "DURABLE-TWO"
         assert agent._prompt_manager.read_section("pad") == "CURRENT-PROMPT"
@@ -190,9 +195,9 @@ def _history_status(iface) -> str | None:
 def _history(tool_id: str | None = None) -> ChatInterface:
     iface = ChatInterface()
     if tool_id is not None:
-        iface.add_assistant_message([ToolCallBlock(id=tool_id, name="file", args={})])
+        iface.add_assistant_message([ToolCallBlock(id=tool_id, name="shell", args={})])
         iface.add_tool_results([
-            ToolResultBlock(id=tool_id, name="file", content="large raw result")
+            ToolResultBlock(id=tool_id, name="shell", content="large raw result")
         ])
     return iface
 

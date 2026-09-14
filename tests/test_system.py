@@ -351,7 +351,7 @@ def test_refresh_with_unauthorized_preset_returns_error(tmp_path, monkeypatch):
         "name": "minimax", "description": {"summary": "x"},
         "manifest": {"llm": {"provider": "minimax", "model": "y",
                              "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
-                     "capabilities": {"file": {}}},
+                     "capabilities": {"shell": {}}},
     }))
     agent = _make_test_agent_for_presets(tmp_path, presets_path=plib,
                                           active_preset="minimax")
@@ -536,13 +536,13 @@ def test_presets_action_lists_full_library(tmp_path):
         "name": "alpha", "description": {"summary": "alpha desc"},
         "manifest": {"llm": {"provider": "p1", "model": "m1",
                              "api_key": None, "api_key_env": "X"},
-                     "capabilities": {"file": {}, "vision": {"provider": "p1"}}},
+                     "capabilities": {"shell": {}, "vision": {"provider": "p1"}}},
     }))
     (plib / "beta.json").write_text(json.dumps({
         "name": "beta", "description": {"summary": "structured", "gains": ["a"]},
         "manifest": {"llm": {"provider": "p2", "model": "m2",
                              "api_key": None, "api_key_env": "Y"},
-                     "capabilities": {"file": {}}},
+                     "capabilities": {"shell": {}}},
     }))
     agent = _make_test_agent_for_presets(tmp_path, presets_path=plib,
                                           active_preset="alpha")
@@ -590,7 +590,7 @@ def test_presets_action_strips_credentials(tmp_path):
                              "api_key": "SECRET", "api_key_env": "ENVKEY",
                              "base_url": "https://example.com",
                              "api_compat": "openai"},
-                     "capabilities": {"file": {}}},
+                     "capabilities": {"shell": {}}},
     }))
     agent = _make_test_agent_for_presets(tmp_path, presets_path=plib,
                                           active_preset="secret")
@@ -654,13 +654,13 @@ def test_refresh_revert_preset_swaps_to_default(tmp_path, monkeypatch):
         "name": "boring", "description": {"summary": "default"},
         "manifest": {"llm": {"provider": "p1", "model": "m1",
                              "api_key": None, "api_key_env": "P1KEY"},
-                     "capabilities": {"file": {}}},
+                     "capabilities": {"shell": {}}},
     }))
     (plib / "fancy.json").write_text(json.dumps({
         "name": "fancy", "description": {"summary": "non-default"},
         "manifest": {"llm": {"provider": "p2", "model": "m2",
                              "api_key": None, "api_key_env": "P2KEY"},
-                     "capabilities": {"file": {}}},
+                     "capabilities": {"shell": {}}},
     }))
     agent = _make_test_agent_for_presets(tmp_path,
                                           presets_path=plib,
@@ -717,7 +717,7 @@ def test_refresh_empty_preset_with_revert_preset_treats_empty_as_absent(
         "name": "home", "description": {"summary": "x"},
         "manifest": {"llm": {"provider": "p", "model": "m",
                              "api_key": None, "api_key_env": "PKEY"},
-                     "capabilities": {"file": {}}},
+                     "capabilities": {"shell": {}}},
     }))
     agent = _make_test_agent_for_presets(
         tmp_path, presets_path=plib,
@@ -810,7 +810,7 @@ def test_refresh_revert_preset_when_active_equals_default_still_succeeds(tmp_pat
         "name": "home", "description": {"summary": "x"},
         "manifest": {"llm": {"provider": "p", "model": "m",
                              "api_key": None, "api_key_env": "PKEY"},
-                     "capabilities": {"file": {}}},
+                     "capabilities": {"shell": {}}},
     }))
     agent = _make_test_agent_for_presets(tmp_path,
                                           presets_path=plib,
@@ -848,7 +848,7 @@ def test_presets_action_includes_connectivity(tmp_path, monkeypatch):
             "llm": {"provider": "openai", "model": "gpt-4",
                     "api_key": None, "api_key_env": "ALPHA_KEY",
                     "base_url": "https://api.example.com"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
         },
     }))
     (plib / "beta.json").write_text(json.dumps({
@@ -857,7 +857,7 @@ def test_presets_action_includes_connectivity(tmp_path, monkeypatch):
             "llm": {"provider": "openai", "model": "gpt-3",
                     "api_key": None, "api_key_env": "BETA_KEY",
                     "base_url": "https://api.example.com"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
         },
     }))
     # alpha has credentials, beta doesn't
@@ -894,7 +894,7 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
             "llm": {"provider": "openai", "model": "gpt-4",
                     "api_key": None, "api_key_env": "BROKEN_KEY",
                     "base_url": "https://api.example.com"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
         },
     }))
     monkeypatch.setenv("BROKEN_KEY", "sk-test")

@@ -27,7 +27,7 @@ the repo root with the project's Python.
 - **id**: KN001
 - **title**: info returns health only and any input key is rejected before the handler runs
 - **guards**: `knowledge-contract` § Tool surface
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` with a `knowledge/` entry
 - **estimate**: ≈ 15 minutes
 

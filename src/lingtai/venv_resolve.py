@@ -386,13 +386,12 @@ def _python_selection_policy() -> _PythonSelectionPolicy:
         )
 
     if architecture == "arm64" and macos_major >= 14:
-        # Managed-runtime wheel floor: the release workflow builds cp311/cp312/
-        # cp313 wheels only (no cp314 yet), so a managed selector that chose
-        # Python 3.14 here would fall onto a source build that can omit the
-        # native Rust sidecar when Rust is unavailable. Keep the managed cap at
-        # 3.13 even though onnxruntime 1.28.0 ships a cp314 ARM wheel; a user who
-        # installs lingtai from source under 3.14 remains free to do so outside
-        # the managed selector. (Jason review P1-1, 2026-08-08.)
+        # Managed-runtime support window: the kernel is a pure-Python
+        # universal wheel, but its declared/tested interpreter window is
+        # 3.11-3.13 (pyproject classifiers and CI), so the managed selector
+        # keeps a 3.13 cap even though onnxruntime 1.28.0 ships a cp314 ARM
+        # wheel; a user who installs lingtai under 3.14 remains free to do so
+        # outside the managed selector. (Jason review P1-1, 2026-08-08.)
         maximum = (3, 13)
         candidate_names = (
             "python3.13",

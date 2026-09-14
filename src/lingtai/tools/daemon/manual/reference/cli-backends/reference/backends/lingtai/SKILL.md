@@ -72,7 +72,7 @@ is unrelated.
   "input": {"backend": "lingtai", "max_turns": null, "timeout": null,
     "tasks": [{
       "task": "Summarize reports/audit.md into reports/audit-summary.md. Do not alter other files.",
-      "tools": ["file"], "preset": "/approved/preset.json",
+      "tools": ["shell"], "preset": "/approved/preset.json",
       "skills": [".library/custom/audit"],
       "mcp": [{"name": "local-docs", "transport": "stdio",
                "command": "python", "args": ["-m", "local_docs_mcp"]}]
