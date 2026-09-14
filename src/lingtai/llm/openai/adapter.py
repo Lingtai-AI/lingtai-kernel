@@ -41,6 +41,7 @@ from lingtai.kernel.llm.base import (
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    is_strong_input_token_limit_phrase,
     mark_llm_replay_terminal,
     safe_exception_description,
     wire_tool_description,
@@ -2429,9 +2430,16 @@ class OpenAIChatSession(ChatSession):
         """
         if isinstance(exc, openai.APIError) and not isinstance(exc, openai.BadRequestError):
             # Some compatible endpoints surface this overflow as a generic
-            # APIError. Keep this deliberately narrow: arbitrary APIError or
-            # generic "context window" text is not a retryable overflow.
-            return "input exceeds the context window" in (safe_exception_description(exc) or "").lower()
+            # APIError. Keep this deliberately narrow: only the existing
+            # strong "input exceeds the context window" phrase plus the
+            # input-token/configured-limit family — never broad BadRequest
+            # needles or generic "context window" text, and rate/quota
+            # same-prefix wording stays false (both clauses are required).
+            msg = (safe_exception_description(exc) or "").lower()
+            return (
+                "input exceeds the context window" in msg
+                or is_strong_input_token_limit_phrase(msg)
+            )
         if not isinstance(exc, openai.BadRequestError):
             return False
         # Canonical OpenAI code on the body's error object.
@@ -2446,6 +2454,8 @@ class OpenAIChatSession(ChatSession):
         if code == "context_length_exceeded":
             return True
         msg = (safe_exception_description(exc) or "").lower()
+        if is_strong_input_token_limit_phrase(msg):
+            return True
         return any(
             needle in msg
             for needle in (
