@@ -26,6 +26,7 @@ related_files:
   - src/lingtai/intrinsic_skills/system-manual/reference/goal-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/move_project.py
   - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/refresh-precheck/SKILL.md
@@ -36,6 +37,7 @@ related_files:
   - src/lingtai/intrinsic_skills/system-manual/reference/trajectory-mining/SKILL.md
   - tests/test_intrinsic_manual_actions.py
   - tests/test_lingtai_doctor.py
+  - tests/test_move_project.py
   - tests/test_override_intrinsic.py
   - src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/scripts/external_attach_diagnostic.py
@@ -68,9 +70,10 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   `reference/` sub-skills (`environment-variables`, `goal-manual`,
   `migration-guide`, `llm-adapters`, `procedures-manual`,
   `refresh-precheck`, `runtime-update-checks`, `sqlite-log-query`,
-  `substrate-manual`, `trajectory-mining`). Two of them
-  ship executable helpers — `migration-guide/scripts/change_name.py` and
-  `sqlite-log-query/scripts/event_summary.py`. This bundle remains the
+  `substrate-manual`, `trajectory-mining`). Migration-guide ships separate
+  Agent-name and Project-root helpers, with root lifecycle and temporary-process
+  proofs in `src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/move_project.py:1-704`
+  and `tests/test_move_project.py:1-864`; sqlite-log-query ships `scripts/event_summary.py`. This bundle remains the
   canonical System operational manual: the declared official `system` family
   derives its reserved `manual` child from `DECLARATION.manual ==
   "system-manual"` (`src/lingtai/tools/system/__init__.py`), and no second
