@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT = Path(__file__).parents[1] / "src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py"
+SCRIPT = Path(__file__).parents[1] / "src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py"
 spec = importlib.util.spec_from_file_location("change_name", SCRIPT)
 change_name = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = change_name

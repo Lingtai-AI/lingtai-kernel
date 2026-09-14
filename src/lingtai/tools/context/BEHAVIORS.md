@@ -16,8 +16,8 @@ related_files:
   - src/lingtai/kernel/state.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/nudge/goal.py
-  - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
   - tests/test_cli_integration.py
   - tests/test_molt_notification_persistence.py
   - tests/test_post_molt_notification.py
@@ -344,14 +344,14 @@ still fail with the not-found/unauthorized error (the guard must not mask it).
   ([CONTRACT.md](../system/CONTRACT.md#routing-card)) — name actions "mutate
   neither address nor working directory — that is the operator migration
   workflow in `system-manual`"; V1 contract of
-  `reference/how-to-change-name/SKILL.md`
+  `reference/migration-guide/SKILL.md`
 - **supersedes**: `tests/test_how_to_change_name_e2e.py::test_real_agent_suspend_rename_rebase_and_resume`
 - **runner**: an agent with `shell` and `file` tools on POSIX (Linux/macOS);
   Windows and network filesystems are out of scope
 - **prerequisites**: POSIX host; Python ≥ 3.10 that can import `lingtai`;
   `<REPO>` = the lingtai-kernel checkout; a scratch root `<ROOT>` (empty); the
   helper source at
-  `<REPO>/src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py`
+  `<REPO>/src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py`
 - **estimate**: 5 min
 
 ### Steps
@@ -373,7 +373,7 @@ still fail with the not-found/unauthorized error (the guard must not mask it).
    }
    ```
 3. Copy the helper and make it executable:
-   `cp <REPO>/src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py <ROOT>/old/change_name.py && chmod 755 <ROOT>/old/change_name.py`.
+   `cp <REPO>/src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py <ROOT>/old/change_name.py && chmod 755 <ROOT>/old/change_name.py`.
 4. Boot the agent in the background:
    `cd <ROOT>/old && PYTHONPATH=<REPO>/src <ROOT>/old/runtime/venv/bin/python -m lingtai run <ROOT>/old`.
    Wait (up to 25 s) for `<ROOT>/old/.agent.heartbeat`, `.agent.lock`, and

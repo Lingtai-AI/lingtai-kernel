@@ -1,11 +1,12 @@
 ---
 name: system-manual
 description: >
-  Short router for runtime, lifecycle, identity, refresh transactions, presets,
-  settings, update/mismatch diagnosis, LLM adapters, and operating procedures.
-version: 1.23.0
-last_changed_at: "2026-09-09T00:00:00Z"
-tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, alarm, memory, communication, skills, settings, molt, summarize, nudge, updates, refresh, preset, llm, adapters, codex, websocket]
+  Short router for runtime, lifecycle, identity, Agent/Project relocation,
+  refresh transactions, presets, settings, update/mismatch diagnosis, LLM
+  adapters, and operating procedures.
+version: 1.24.0
+last_changed_at: "2026-09-14T00:00:00Z"
+tags: [lingtai, agent, project, workdir, relocation, runtime, procedures, substrate, system, lifecycle, alarm, memory, communication, skills, settings, molt, summarize, nudge, updates, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -20,6 +21,7 @@ related_files:
 - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/refresh-precheck/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/openai/adapter.py
@@ -52,7 +54,7 @@ read one route below for unfamiliar or consequential work.
 | SQLite traces and log queries | [SQLite log query](reference/sqlite-log-query/SKILL.md) |
 | Trajectory mining and recurring patterns | [trajectory mining](reference/trajectory-mining/SKILL.md) |
 | Goal lifecycle and goal records | [goal manual](reference/goal-manual/SKILL.md) |
-| Physical address/workdir rename | [physical rename](reference/how-to-change-name/SKILL.md) |
+| Agent or Project address/workdir rename or relocation (mechanical cutover) | [migration-guide](reference/migration-guide/SKILL.md) |
 | External attach diagnostics | [external-attach diagnostic](reference/external-attach-diagnostic/SKILL.md) |
 | ToolFamily/plugin settings | [ToolFamily settings](reference/tool-plugin-settings/SKILL.md) |
 | Context, notification, MCP, shell, daemon, avatar, soul, skills, or knowledge | Read that owning tool's manual; System does not own its procedure. |
@@ -66,9 +68,11 @@ read-only and its `comment` points to the owner; `presets` is allowed-only, so
 pass an exact returned path. Availability is not authority. Normal waiting is
 IDLE; positive `sleep.delay` is only a last-resort alarm without a reliable
 completion notification, and pending notifications require intentional `force`.
-`name_set` is immutable, `name_nickname` mutable, and neither renames the
-address/workdir. `notification` owns reads/dismissals; `context` owns
-summarize/rebuild/molt and provider replay.
+`name_set` is immutable, `name_nickname` mutable, and neither moves the
+address/workdir. Route mechanical Agent/Project address or workdir movement
+through [migration-guide](reference/migration-guide/SKILL.md).
+`notification` owns reads/dismissals; `context` owns summarize/rebuild/molt and
+provider replay.
 
 ## Consequential use
 

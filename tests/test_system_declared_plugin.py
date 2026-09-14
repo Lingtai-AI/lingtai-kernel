@@ -2006,7 +2006,7 @@ def test_system_manual_routes_declared_ltp_and_settings_owners():
         "reference/sqlite-log-query/SKILL.md",
         "reference/trajectory-mining/SKILL.md",
         "reference/goal-manual/SKILL.md",
-        "reference/how-to-change-name/SKILL.md",
+        "reference/migration-guide/SKILL.md",
         "reference/external-attach-diagnostic/SKILL.md",
         "reference/tool-plugin-settings/SKILL.md",
     )

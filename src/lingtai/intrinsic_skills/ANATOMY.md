@@ -24,8 +24,8 @@ related_files:
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/goal-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
   - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/refresh-precheck/SKILL.md
@@ -66,10 +66,10 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   subdirectory per bundle, copied verbatim, for skills without companion code.
 - `system-manual/` — the largest bundle: the `system` family manual plus ten
   `reference/` sub-skills (`environment-variables`, `goal-manual`,
-  `how-to-change-name`, `llm-adapters`, `procedures-manual`,
+  `migration-guide`, `llm-adapters`, `procedures-manual`,
   `refresh-precheck`, `runtime-update-checks`, `sqlite-log-query`,
   `substrate-manual`, `trajectory-mining`). Two of them
-  ship executable helpers — `how-to-change-name/scripts/change_name.py` and
+  ship executable helpers — `migration-guide/scripts/change_name.py` and
   `sqlite-log-query/scripts/event_summary.py`. This bundle remains the
   canonical System operational manual: the declared official `system` family
   derives its reserved `manual` child from `DECLARATION.manual ==

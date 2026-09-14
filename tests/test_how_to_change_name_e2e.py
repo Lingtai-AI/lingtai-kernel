@@ -14,7 +14,7 @@ import pytest
 
 
 ROOT = Path(__file__).parents[1]
-SCRIPT = ROOT / "src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py"
+SCRIPT = ROOT / "src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py"
 
 
 def _wait_for(path: Path, timeout: float = 25) -> bool:
