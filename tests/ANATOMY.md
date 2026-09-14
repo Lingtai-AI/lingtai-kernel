@@ -297,6 +297,7 @@ related_files:
   - tests/test_preset_swap_e2e.py
   - tests/test_presets.py
   - tests/test_project_creation.py
+  - tests/test_project_inspection.py
   - tests/test_process_identity.py
   - tests/test_process_match.py
   - tests/test_process_scan.py
@@ -548,7 +549,10 @@ complete, not to pair with a governed contract.
 - `test_*.py` (~380 modules at the top level) — the bulk of the suite, named
   after the surface each covers rather than organized into directories.
   `test_project_creation.py` is focused evidence for one fresh Project seed,
-  existing-target refusal, reader acceptance, and no Agent start. `test_architecture_documents.py`,
+  existing-target refusal, reader acceptance, and no Agent start;
+  `test_project_inspection.py` proves typed mechanical states, marker counts,
+  fail-closed shapes, zero mutation, and deterministic CLI output.
+  `test_architecture_documents.py`,
   `test_docs_governance.py`,
   `test_anatomy_drift_checker.py`, and `test_source_drift.py` are the
   self-validation group that keeps this repository's own documents honest.

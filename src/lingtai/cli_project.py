@@ -1,4 +1,4 @@
-"""CLI composition for one fresh local Project seed."""
+"""CLI composition for local Project creation and read-only inspection."""
 from __future__ import annotations
 
 import argparse
@@ -6,17 +6,31 @@ import json
 import sys
 from pathlib import Path
 
-from lingtai.adapters.project_workspace import FilesystemProjectWorkspaceAdapter
+from lingtai.adapters.project_workspace import (
+    FilesystemProjectInspectionAdapter,
+    FilesystemProjectWorkspaceAdapter,
+)
 from lingtai.kernel.project import (
     ProjectCreateRequest,
     ProjectCreationError,
     ProjectCreationUseCase,
     ProjectError,
+    ProjectInspectionError,
+    ProjectInspectionUseCase,
+)
+
+_INVALID_PROJECT_ROOT = ProjectError(
+    "invalid_project_root",
+    "project root must be an existing readable directory",
+)
+_INSPECTION_FAILED = ProjectError(
+    "project_inspect_failed",
+    "project structure could not be inspected",
 )
 
 
 def add_project_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    project = subparsers.add_parser("project", help="Create a fresh local Project seed")
+    project = subparsers.add_parser("project", help="Create or inspect a local Project")
     commands = project.add_subparsers(dest="project_command", required=True)
     create = commands.add_parser("create", help="Create one Project with one initial agent")
     create.add_argument("--dir", required=True, dest="project_dir", help="Existing project root directory")
@@ -24,6 +38,23 @@ def add_project_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     create.add_argument("--preset", required=True, help="Preset JSON/JSONC reference")
     create.add_argument("--covenant-file", required=True, dest="covenant_file", help="UTF-8 caller covenant")
     create.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON result or error")
+
+    inspect = commands.add_parser(
+        "inspect",
+        help="Observe whether .lingtai is absent, empty, or populated",
+    )
+    inspect.add_argument(
+        "--root",
+        required=True,
+        dest="project_root",
+        help="Existing caller-selected project root directory",
+    )
+    inspect.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit JSON result or error",
+    )
 
 
 def _error(code: str, message: str) -> ProjectCreationError:
@@ -96,7 +127,41 @@ def _emit_error(error: ProjectError, *, as_json: bool) -> None:
         print(f"error[{error.code}]: {error.message}", file=sys.stderr)
 
 
+def _inspection_root(value: str) -> Path:
+    try:
+        return Path(value).expanduser()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ProjectInspectionError(_INVALID_PROJECT_ROOT) from exc
+
+
+def _handle_inspect(args: argparse.Namespace) -> None:
+    try:
+        result = ProjectInspectionUseCase(
+            FilesystemProjectInspectionAdapter(_inspection_root(args.project_root))
+        ).inspect()
+    except ProjectInspectionError as exc:
+        _emit_error(exc.error, as_json=args.as_json)
+        raise SystemExit(1) from None
+    except Exception:
+        _emit_error(_INSPECTION_FAILED, as_json=args.as_json)
+        raise SystemExit(1) from None
+
+    payload = result.to_payload()
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"Project state: {result.state.value}")
+        print(
+            "Agent workdir candidates: "
+            f"{result.agent_candidates} (with init: {result.agents_with_init}, "
+            f"without init: {result.agents_without_init})"
+        )
+
+
 def handle_project_command(args: argparse.Namespace) -> None:
+    if args.project_command == "inspect":
+        _handle_inspect(args)
+        return
     if args.project_command != "create":
         raise SystemExit(2)
     try:

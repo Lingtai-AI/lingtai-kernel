@@ -1,19 +1,38 @@
-"""Filesystem adapter for one fresh local Project seed."""
+"""Filesystem adapters for fresh creation and read-only Project inspection."""
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 from collections.abc import Callable
 from pathlib import Path
 
 from lingtai.kernel.project import (
     ProjectCreationError,
     ProjectError,
+    ProjectInspectionError,
+    ProjectInspectionObservation,
+    ProjectInspectionPort,
     ProjectSeed,
     ProjectWorkspacePort,
 )
+from lingtai.kernel.workdir import workdir_layout
 
 StageValidator = Callable[[Path], None]
 _MAILBOXES = ("inbox", "outbox", "sent", "archive", "schedules")
+_FILE_ATTRIBUTE_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+_INVALID_PROJECT_ROOT = ProjectError(
+    "invalid_project_root",
+    "project root must be an existing readable directory",
+)
+_INSPECTION_FAILED = ProjectError(
+    "project_inspect_failed",
+    "project structure could not be inspected",
+)
+_UNSAFE_PROJECT_STRUCTURE = ProjectError(
+    "unsafe_project_structure",
+    "project structure contains an unsafe filesystem entry",
+)
 
 
 class ProjectWorkspaceError(ProjectCreationError):
@@ -22,6 +41,16 @@ class ProjectWorkspaceError(ProjectCreationError):
 
 def _error(code: str, message: str) -> ProjectWorkspaceError:
     return ProjectWorkspaceError(ProjectError(code, message))
+
+
+def _inspection_error(error: ProjectError) -> ProjectInspectionError:
+    return ProjectInspectionError(error)
+
+
+def _is_reparse_point(metadata: os.stat_result) -> bool:
+    """Recognize Windows reparse metadata without requiring newer pathlib APIs."""
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    return bool(attributes & _FILE_ATTRIBUTE_REPARSE_POINT)
 
 
 class FilesystemProjectWorkspaceAdapter(ProjectWorkspacePort):
@@ -79,4 +108,92 @@ class FilesystemProjectWorkspaceAdapter(ProjectWorkspacePort):
                 shutil.rmtree(target, ignore_errors=True)
 
 
-__all__ = ["FilesystemProjectWorkspaceAdapter", "ProjectWorkspaceError", "StageValidator"]
+class FilesystemProjectInspectionAdapter(ProjectInspectionPort):
+    """Observe direct Project workdir markers without reading or changing them."""
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+
+    @staticmethod
+    def _marker_present(path: Path) -> bool:
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise _inspection_error(_INSPECTION_FAILED) from exc
+        if _is_reparse_point(metadata) or not stat.S_ISREG(metadata.st_mode):
+            raise _inspection_error(_UNSAFE_PROJECT_STRUCTURE)
+        return True
+
+    @staticmethod
+    def _require_caller_root(root: Path) -> None:
+        try:
+            metadata = root.lstat()
+        except (OSError, ValueError) as exc:
+            raise _inspection_error(_INVALID_PROJECT_ROOT) from exc
+        if _is_reparse_point(metadata) or not stat.S_ISDIR(metadata.st_mode):
+            raise _inspection_error(_INVALID_PROJECT_ROOT)
+        try:
+            with os.scandir(root) as stream:
+                next(stream, None)
+        except (OSError, ValueError) as exc:
+            raise _inspection_error(_INVALID_PROJECT_ROOT) from exc
+
+    def inspect(self) -> ProjectInspectionObservation:
+        self._require_caller_root(self._root)
+        target = self._root / ".lingtai"
+        try:
+            target_metadata = target.lstat()
+        except FileNotFoundError:
+            # Distinguish a missing final target from a caller root that raced
+            # away or became invalid after the first check.
+            self._require_caller_root(self._root)
+            return ProjectInspectionObservation(False, 0, 0, 0)
+        except OSError as exc:
+            raise _inspection_error(_INSPECTION_FAILED) from exc
+        if _is_reparse_point(target_metadata) or not stat.S_ISDIR(target_metadata.st_mode):
+            raise _inspection_error(_UNSAFE_PROJECT_STRUCTURE)
+
+        total = 0
+        with_init = 0
+        try:
+            with os.scandir(target) as entries:
+                for entry in entries:
+                    metadata = entry.stat(follow_symlinks=False)
+                    if _is_reparse_point(metadata) or not (
+                        stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
+                    ):
+                        raise _inspection_error(_UNSAFE_PROJECT_STRUCTURE)
+                    if entry.name == "human":
+                        if not stat.S_ISDIR(metadata.st_mode):
+                            raise _inspection_error(_UNSAFE_PROJECT_STRUCTURE)
+                        continue
+                    if not stat.S_ISDIR(metadata.st_mode):
+                        continue
+
+                    layout = workdir_layout(Path(entry.path))
+                    has_manifest = self._marker_present(layout.agent_manifest)
+                    has_init = self._marker_present(layout.init_json)
+                    if not (has_manifest or has_init):
+                        continue
+                    total += 1
+                    if has_init:
+                        with_init += 1
+        except OSError as exc:
+            raise _inspection_error(_INSPECTION_FAILED) from exc
+
+        return ProjectInspectionObservation(
+            lingtai_root_present=True,
+            agent_candidates=total,
+            agents_with_init=with_init,
+            agents_without_init=total - with_init,
+        )
+
+
+__all__ = [
+    "FilesystemProjectInspectionAdapter",
+    "FilesystemProjectWorkspaceAdapter",
+    "ProjectWorkspaceError",
+    "StageValidator",
+]
