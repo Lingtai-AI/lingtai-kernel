@@ -147,6 +147,16 @@ _TASK_CARD_DELETE_NONDELETABLE_DESCRIPTIONS = frozenset({
     "bad request: message can not be deleted for everyone",
 })
 _TELEGRAM_TASK_CARD_PARSE_MODE = "HTML"
+_TELEGRAM_TASK_CARD_PROGRAMMABLE_HEADER = "🎯 <b>TASK CARD</b>"
+_TASK_CARD_MARKDOWN_HEADING_RE = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*$")
+_TASK_CARD_MARKDOWN_UNORDERED_RE = re.compile(r"^([ \t]*)[-+*][ \t]+(.+?)$")
+_TASK_CARD_MARKDOWN_ORDERED_RE = re.compile(r"^([ \t]*)([0-9]{1,9})[.)][ \t]+(.+?)$")
+_TASK_CARD_MARKDOWN_CHECKBOX_RE = re.compile(r"^\[([ xX])\][ \t]+(.+?)$")
+_TASK_CARD_MARKDOWN_RULE_RE = re.compile(
+    r"^[ \t]{0,3}(?:\*[ \t]*){3,}$"
+    r"|^[ \t]{0,3}(?:-[ \t]*){3,}$"
+    r"|^[ \t]{0,3}(?:_[ \t]*){3,}$"
+)
 
 # Fixed human warning shown on every Task Card render (running and frozen
 # last-behavior). Jason: never reply to the card; point directly to the local
@@ -181,6 +191,101 @@ def _task_card_footer(normal_rows: int, locale: str = "en") -> str:
     ``locale`` selects the projection language (en default, zh opt-in).
     """
     return TaskCardEventProjection.footer(normal_rows, locale)
+
+
+def _telegram_task_card_inline_html(text: str, *, strong: bool = True) -> str:
+    """Render the resident card's bounded inline Markdown with escape-first HTML.
+
+    Only markup Telegram supports is emitted, and it is generated here rather
+    than accepted from the producer. Unmatched delimiters remain escaped literal
+    text, so malformed Markdown cannot create an unbalanced provider tag.
+    """
+    rendered: list[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] == "\\" and index + 1 < len(text):
+            escaped = text[index + 1]
+            if escaped in r"\\`*#_+-.[\]()":
+                rendered.append(html_escape(escaped, quote=False))
+                index += 2
+                continue
+
+        if text[index] == "`":
+            run_end = index + 1
+            while run_end < len(text) and text[run_end] == "`":
+                run_end += 1
+            delimiter = text[index:run_end]
+            close = text.find(delimiter, run_end)
+            if close > run_end:
+                code = text[run_end:close]
+                rendered.append(f"<code>{html_escape(code, quote=False)}</code>")
+                index = close + len(delimiter)
+                continue
+
+        if strong and text.startswith("**", index):
+            close = text.find("**", index + 2)
+            if close > index + 2:
+                content = text[index + 2:close]
+                rendered.append(
+                    f"<b>{_telegram_task_card_inline_html(content, strong=False)}</b>"
+                )
+                index = close + 2
+                continue
+
+        rendered.append(html_escape(text[index], quote=False))
+        index += 1
+    return "".join(rendered)
+
+
+def _telegram_programmable_task_card_html(markdown: str) -> str:
+    """Render safe Task Card Markdown to Telegram's supported HTML subset."""
+    rendered: list[str] = []
+    for line in markdown.splitlines():
+        heading = _TASK_CARD_MARKDOWN_HEADING_RE.fullmatch(line)
+        if heading is not None:
+            rendered.append(
+                f"<b>{_telegram_task_card_inline_html(heading.group(1))}</b>"
+            )
+            continue
+
+        if _TASK_CARD_MARKDOWN_RULE_RE.fullmatch(line):
+            rendered.append(TaskCardResident.API_CALL_DIVIDER)
+            continue
+
+        unordered = _TASK_CARD_MARKDOWN_UNORDERED_RE.fullmatch(line)
+        ordered = _TASK_CARD_MARKDOWN_ORDERED_RE.fullmatch(line)
+        if unordered is not None or ordered is not None:
+            match = unordered or ordered
+            assert match is not None
+            indent = match.group(1).expandtabs(2)
+            item = match.group(2) if unordered is not None else match.group(3)
+            checkbox = _TASK_CARD_MARKDOWN_CHECKBOX_RE.fullmatch(item)
+            if checkbox is not None:
+                checked, item = checkbox.groups()
+                marker = "☑" if checked.casefold() == "x" else "☐"
+            elif unordered is not None:
+                marker = "•"
+            else:
+                marker = f"{match.group(2)}."
+            rendered.append(
+                f"{indent}{marker} {_telegram_task_card_inline_html(item)}"
+            )
+            continue
+
+        rendered.append(_telegram_task_card_inline_html(line))
+    return "\n".join(rendered)
+
+
+def _telegram_resident_task_card_html(text: str) -> str:
+    """Render only the raw programmable slot in one composed resident message."""
+    leading = f"{_TELEGRAM_TASK_CARD_PROGRAMMABLE_HEADER}\n"
+    separator = f"\n\n{_TELEGRAM_TASK_CARD_PROGRAMMABLE_HEADER}\n"
+    if text.startswith(leading):
+        return leading + _telegram_programmable_task_card_html(text[len(leading):])
+    automatic, marker, programmable = text.partition(separator)
+    if marker:
+        return automatic + marker + _telegram_programmable_task_card_html(programmable)
+    return text
 
 
 def _telegram_task_card_html(text: str) -> str:
@@ -849,7 +954,7 @@ class TelegramManager:
         self._task_card_pending_edit_stop = threading.Event()
         self._resident = TaskCardResident(
             enabled=self._raw_taskcard_enabled(),
-            programmable_header="🎯 <b>TASK CARD</b>",
+            programmable_header=_TELEGRAM_TASK_CARD_PROGRAMMABLE_HEADER,
             transport=TaskCardResidentTransport(
                 get_resident=lambda route: self._get_resident_task_card(
                     route.account,
@@ -2272,7 +2377,7 @@ class TelegramManager:
         try:
             acct = self._service.get_account(account_alias)
             result = acct.send_message(
-                chat_id, text,
+                chat_id, _telegram_resident_task_card_html(text),
                 reply_to_message_id=reply_to_message_id,
                 parse_mode=_TELEGRAM_TASK_CARD_PARSE_MODE,
             )
@@ -2365,7 +2470,7 @@ class TelegramManager:
                 self._task_card_last_edit_at[key] = now
             acct = self._service.get_account(account)
             acct.edit_message(
-                chat_id, tg_msg_id, text,
+                chat_id, tg_msg_id, _telegram_resident_task_card_html(text),
                 parse_mode=_TELEGRAM_TASK_CARD_PARSE_MODE,
             )
             return _TASK_CARD_EDIT_OK, None
@@ -2412,7 +2517,7 @@ class TelegramManager:
     _TASK_CARD_DEFAULT_CHANNEL = "automatic"
     # Header for the appended programmable section; keeps the composed message
     # legible when both channels are present. English-only (Jason #7175/#7205).
-    _TASK_CARD_PROGRAMMABLE_HEADER = "🎯 <b>TASK CARD</b>"
+    _TASK_CARD_PROGRAMMABLE_HEADER = _TELEGRAM_TASK_CARD_PROGRAMMABLE_HEADER
     # Terminal presentation delivered when clearing a programmable-ONLY resident
     # would otherwise compose to empty text. Telegram cannot edit a message to
     # empty text, so a stable, nonempty, English-only marker is shown instead,

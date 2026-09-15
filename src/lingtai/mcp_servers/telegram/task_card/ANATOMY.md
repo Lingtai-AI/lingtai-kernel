@@ -56,9 +56,9 @@ onto its one tracked resident Task Card target per account+chat.
   high-water supersession, Telegram API classification, real transport, resident
   persistence, and programmable file projection callbacks. Representative
   owning ranges are delivery/deferred coordination
-  (`src/lingtai/mcp_servers/telegram/manager.py:2237-2648`), event and usage
-  projection (`src/lingtai/mcp_servers/telegram/manager.py:2717-3401`), and
-  programmable/resident lifecycle (`src/lingtai/mcp_servers/telegram/manager.py:3403-4250`).
+  (`src/lingtai/mcp_servers/telegram/manager.py:2342-2753`), event and usage
+  projection (`src/lingtai/mcp_servers/telegram/manager.py:2822-3506`), and
+  programmable/resident lifecycle (`src/lingtai/mcp_servers/telegram/manager.py:3508-4355`).
   `_taskcard_display_expression()` reads the durable declarative display
   expression from `TelegramService` at each automatic projection tick
   (`_broadcast_task_card_event_window`, `_ensure_task_card_resident`) and
@@ -93,14 +93,20 @@ onto its one tracked resident Task Card target per account+chat.
   grammar: an ordered, allowlisted selection of the fragments
   (`header`/`rows`/`blank`/`footer`/`divider`/`metadata`/`time`/`ask_agent`)
   `format_rows_task_card_text` already renders, never arbitrary interpolated
-  data. Telegram's adapter converts this shared Markdown frame to supported
-  HTML by escaping the complete frame before substituting only exact static
-  presentation lines; within the shared source budget it shortens only escaped
-  dynamic content for fixed tag overhead, while Feishu consumes the shared frame
-  unchanged. In Telegram HTML, `_telegram_task_card_html`
-  (`src/lingtai/mcp_servers/telegram/manager.py:185-301`) gives Session the
+  data. Telegram's automatic adapter converts this shared Markdown frame to
+  supported HTML by escaping the complete frame before substituting only exact
+  static presentation lines; within the shared source budget it shortens only
+  escaped dynamic content for fixed tag overhead, while Feishu consumes the
+  shared frame unchanged. In Telegram HTML, `_telegram_task_card_html`
+  (`src/lingtai/mcp_servers/telegram/manager.py:291-413`) gives Session the
   cumulative compact `out` value, puts Async Work in a separate icon-free
-  section, and leaves the per-call metrics line as plain text.
+  section, and leaves the per-call metrics line as plain text. The separate
+  `_telegram_resident_task_card_html` transport adapter
+  (`src/lingtai/mcp_servers/telegram/manager.py:196-288`) isolates only the
+  programmable suffix after Telegram's injected header and escape-first renders
+  its ATX headings, strong spans, inline code, and list items to the closed
+  Telegram HTML subset; malformed delimiters remain safe literal text. The
+  resident's committed programmable frame remains the authored Markdown bytes.
   It renders only a pre-projected allowlisted pending-activity label
   (`src/lingtai/mcp_servers/task_card/event_projection.py:1281-1289`);
   `TelegramManager` derives that label for canonical `shell.run` from literal
@@ -130,11 +136,13 @@ onto its one tracked resident Task Card target per account+chat.
   compatibility wrappers.
 - `TelegramManager` constructs `TaskCardResidentTransport` with dynamic provider
   callbacks and supplies Telegram's HTML programmable-section header. The shared
-  core only composes that injected provider label; it never imports Telegram,
-  reads its state file, or classifies Bot API errors. Telegram send/edit use
-  `parse_mode=HTML`; the programmable body is authored Telegram HTML or common
-  plain text, while the adapter escapes the complete automatic frame before it
-  adds the exact supported HTML presentation lines.
+  core composes that injected provider label with the raw Markdown frame; it
+  never imports Telegram, reads its state file, or classifies Bot API errors.
+  Telegram send/edit keep `parse_mode=HTML`. Immediately before those provider
+  calls, the Telegram adapter locates only the programmable suffix, escapes its
+  authored text, and converts supported Markdown presentation to generated
+  Telegram HTML. The automatic frame is already independently escaped/rendered,
+  and other channels never enter this adapter.
 - `TelegramManager._broadcast_programmable_task_card_file()` reads
   `taskcard/status` first: exact `active` reads the body and projects it
   (diff-only against the last committed programmable frame); exact `inactive`

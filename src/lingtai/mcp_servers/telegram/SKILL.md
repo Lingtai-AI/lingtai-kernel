@@ -5,8 +5,8 @@ description: |
   schema carries safe first-use guidance; call `manual` for the action map,
   inbound-first/reply routing, channel/media/rendering rules, settings, Task Card
   projection, and error handling.
-version: 1.9.2
-last_changed_at: 2026-09-11T00:00:00Z
+version: 1.9.3
+last_changed_at: 2026-09-15T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/task_card/event_projection.py
@@ -107,10 +107,13 @@ The resident Telegram Task Card is separate: its automatic and programmable
 sections share one original Telegram `parse_mode='HTML'` message. Automatic rows
 HTML-escape their dynamic plain text before adding the small supported visual
 markup; when the shared frame is within its source budget, the adapter trims
-only escaped dynamic content to account for those fixed tags and emojis. A
-programmable renderer targeting Telegram must therefore emit valid
-Telegram HTML (or common plain text); unsupported or malformed markup fails the
-update and preserves the last delivered resident card. This changes no ordinary
+only escaped dynamic content to account for those fixed tags and emojis. Author
+the programmable `taskcard/taskcard.md` body as Markdown. At resident send/edit,
+Telegram escape-first renders its ATX headings/subheadings, `**bold**`, inline
+backtick code, and unordered, ordered, or task-list items into the closed Bot API
+HTML subset. Raw HTML/special characters cannot become markup, and malformed or
+unmatched delimiters remain safe literal text. The resident still stores the
+authored bytes for diff-only composition. This changes no ordinary
 `send`/`reply`/`edit` default and no other channel's Task Card renderer.
 
 ### Reply vs send

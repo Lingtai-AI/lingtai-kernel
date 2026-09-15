@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-behavior-tests
-behavior_version: 2
+behavior_version: 3
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -19,8 +19,9 @@ maintenance: |
 
 Self-contained agent behavior tasks guarding the observable behavior clauses of
 `src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md` (programmable body
-only when status is exactly active and nonempty; diff-only projection;
-no-op preservation; automatic per-call token metrics). Pinned pytest commands
+only when status is exactly active and nonempty; safe Markdown rendering;
+diff-only projection; no-op preservation; automatic per-call token metrics).
+Pinned pytest commands
 must run from the repo root with
 the project's Python.
 
@@ -89,3 +90,25 @@ Pass when both normalized usage paths render the same parenthesized reasoning co
 
 ### Pass / Fail
 Pass when only fully correlated existing data produces the second line in the required order and all unsafe/malformed cases omit it. Fail if a new producer event is required, more than the bounded ledger tail is read, an unsuccessful tool receives a summary line, or private payload fields render.
+
+## Behavior TT004 — Markdown-authored programmable content renders safely inside the complete Telegram resident
+
+- **id**: TT004
+- **title**: Markdown-authored programmable content renders safely inside the complete Telegram resident
+- **guards**: `telegram-task-card-projection` § Behavior rule 13 and Contract rule 14
+- **runner**: any LingTai agent with `shell` access to this repository
+- **prerequisites**: a clean checkout of `<repo>`
+- **estimate**: ≈ 2 minutes
+
+### Steps
+1. From `<repo>`, run `python -m pytest tests/test_telegram_task_card_programmable.py -q` and capture the outcome.
+2. Project an active `taskcard/taskcard.md` body containing ATX heading and subheading lines, `**bold**`, inline backtick code, nested unordered/task-list items, and an ordered item onto a resident that already has automatic content.
+3. Repeat with raw HTML, `<`, `>`, `&`, and unmatched bold/backtick delimiters; inspect both the provider text and the shared resident slot.
+
+### Expected evidence
+- [ ] Step 1: the programmable projection suite passes.
+- [ ] Step 2: the complete provider message retains automatic content and its Telegram HTML header, while the programmable heading markers, strong delimiters, backticks, and unordered markers are replaced by supported rendered HTML/bullets under `parse_mode=HTML`.
+- [ ] Step 3: raw HTML and special characters are escaped, generated tags remain balanced, malformed delimiters remain literal text, and the shared programmable slot still equals the exact authored Markdown bytes.
+
+### Pass / Fail
+Pass when supported Markdown renders without visible source markers, unsafe input cannot become provider markup, malformed input cannot unbalance generated HTML, and raw slot/diff-only state is unchanged. Fail on literal markers for supported syntax, HTML injection, malformed generated tags, any change to ordinary Telegram rendering, or mutation of the authored resident slot.

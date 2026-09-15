@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 10
+contract_version: 11
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -31,7 +31,7 @@ maintenance: |
 # Telegram Task Card Projection
 
 ## Purpose
-Guarded by: [TT001](BEHAVIORS.md#behavior-tt001), [TT002](BEHAVIORS.md#behavior-tt002), [TT003](BEHAVIORS.md#behavior-tt003)
+Guarded by: [TT001](BEHAVIORS.md#behavior-tt001), [TT002](BEHAVIORS.md#behavior-tt002), [TT003](BEHAVIORS.md#behavior-tt003), [TT004](BEHAVIORS.md#behavior-tt004)
 
 
 Own Telegram's provider adapter and read-only projection of the intrinsic
@@ -119,7 +119,7 @@ semantics live here. The public producer contract lives in
     reasoning but never projects command, working directory, environment,
     credentials, or any other raw argument. Completed rows keep normal result
     wording.
-13. Telegram sends and edits the one composed resident with original Bot API
+13. Telegram sends and edits the one composed resident with the original Bot API
     `parse_mode=HTML`. The automatic renderer HTML-escapes every dynamic
     shared automatic frame before replacing only exact static lines with
     Telegram-supported bold, italic, and code markup; when the shared source
@@ -128,13 +128,19 @@ semantics live here. The public producer contract lives in
     hierarchy keeps the existing Session and Identity section icons, renders the
     since-molt `token_usage.session.output_tokens` count as compact `out <count>`
     under Session's Context row, gives Async Work its own icon-free section, and
-    leaves the per-call `↻ … ↓ … ↑ …` metrics line plain. The programmable slot
-    remains authored content: its Telegram-targeted
-    producer must emit valid Telegram HTML or common plain text. Invalid provider
-    markup is an ordinary failed edit/send and preserves the last committed card.
-    Feishu and other consumers keep their own rendering mode. Telegram appends a
-    concise `/taskcard on|off` and `/taskcard N (1-10)` settings hint immediately
-    after the existing ask-agent line.
+    leaves the per-call `↻ … ↓ … ↑ …` metrics line plain. At the Telegram resident
+    transport boundary, only the programmable section after Telegram's injected
+    header is interpreted as Markdown: ATX headings/subheadings become bold
+    headings, `**strong**` becomes bold, inline backtick spans become code, and
+    unordered, ordered, and task-list items receive visible list markers. Raw
+    HTML and every dynamic character are escaped before the adapter adds only
+    its closed Telegram-supported tags. Unsupported or unmatched Markdown stays
+    escaped literal text rather than forming malformed provider markup. The
+    shared resident retains the authored programmable bytes, so diff-only,
+    slot composition, commit timing, and retry behavior do not change. Feishu
+    and other consumers keep their own rendering mode. Telegram appends a concise
+    `/taskcard on|off` and `/taskcard N (1-10)` settings hint immediately after
+    the existing ask-agent line.
 14. Every new kernel `llm_response` may carry the additive child schema
     `lingtai.token_usage.session/v1`. It is the authoritative since-molt SESSION
     source for both live append and bounded rehydrate; legacy
@@ -212,9 +218,11 @@ this component.
     projected row.
 14. Telegram Task Card transport must pass `parse_mode=HTML` on both send and
     edit. The adapter escapes the whole shared automatic frame before adding its
-    exact static HTML lines, so dynamic text never becomes markup; programmable
-    HTML is producer-authored and is not rewritten by Telegram. Non-Telegram
-    consumers keep the shared Markdown frame unchanged.
+    exact static HTML lines, and escape-first renders only the composed
+    programmable suffix from Task Card Markdown to its closed supported HTML
+    subset. Raw authored HTML never enters Telegram as markup. Non-Telegram
+    consumers and the shared resident's stored programmable frame remain
+    unchanged.
 15. Automatic Task Card transport must remain diff-only on meaningful content.
     Its stable fingerprint excludes only the renderer-owned wall-clock
     `Last Updated` field (whether raw or wrapped in Telegram's exact static
@@ -235,9 +243,12 @@ this component.
 ## Tests
 
 - `tests/test_telegram_task_card_programmable.py` covers active projection,
-  diff-only updates, exact-`inactive` frame exclusion (idempotent, resident/
-  automatic/body preserved), reactivation, and last-good preservation for
-  missing/blank producer state.
+  screenshot-shaped Markdown rendering (headings/subheadings, bold, inline code,
+  and list items), raw HTML/special-character escaping, malformed-delimiter safe
+  fallback, unchanged HTML parse mode and raw slot bytes, diff-only updates,
+  exact-`inactive` frame exclusion (idempotent, resident/automatic/body
+  preserved), reactivation, and last-good preservation for missing/blank
+  producer state.
 - `tests/test_telegram_task_card_toggle.py` covers toggle suppression and the
   hidden-finalize clear semantics.
 - `tests/test_telegram_task_card_event_tail.py` continues to cover the automatic
