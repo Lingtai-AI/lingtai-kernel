@@ -2705,32 +2705,6 @@ class OpenAIChatSession(ChatSession):
             usage=usage_dict,
         )
 
-    @staticmethod
-    def _response_to_message(raw) -> dict:
-        """Convert an OpenAI ChatCompletion response to a message dict for history."""
-        choice = raw.choices[0] if raw.choices else None
-        if not choice:
-            return {"role": "assistant", "content": ""}
-        msg = choice.message
-        result: dict[str, Any] = {"role": "assistant"}
-        if msg.content:
-            result["content"] = msg.content
-        if msg.tool_calls:
-            result["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                for tc in msg.tool_calls
-            ]
-        if not msg.content and not msg.tool_calls:
-            result["content"] = ""
-        return result
-
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
         """Send a streaming request.  Same shape as :meth:`send` —
         ``str`` / ``list`` / ``None`` (continue from wire).
