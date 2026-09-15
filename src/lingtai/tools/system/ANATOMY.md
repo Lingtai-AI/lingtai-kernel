@@ -30,6 +30,8 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/project-move/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/agent-name-move/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
   - src/lingtai/intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md
   - src/lingtai/cli.py
@@ -83,9 +85,10 @@ uses it. `tests/test_system_declared_plugin.py` is the compact vertical proof
 of declaration, mount, identity, mounted runtime sleep, and packaged manual.
 
 Physical address/workdir rename remains an operator-only System migration route,
-not a `name_set`/`name_nickname` action: the canonical procedure lives in the
-migration guide, the POSIX transaction in `change_name.py`, the incomplete-target
-launch gate in `src/lingtai/cli.py`, and the executable acceptance scenario in
+not a `name_set`/`name_nickname` action: the common procedure lives in the
+migration router, helper detail in its nested Agent-name/Project-move references,
+the POSIX transaction in `change_name.py`, the incomplete-target launch gate in
+`src/lingtai/cli.py`, and the executable acceptance scenario in
 [`context/BEHAVIORS.md` L006](../context/BEHAVIORS.md#behavior-l006).
 
 **System owns no public context-hygiene action.** The former `system(action='summarize')` moved to `context`, which split it into `context(action='summarize')` (record-only) and `context(action='rebuild')` (full prompt reconstruction, summary application, then provider replay) — see [`../context/ANATOMY.md`](../context/ANATOMY.md). `summarize.py` remains in this package as the **private engine** those two actions call, and as the source of `SUMMARIZE_MARKER`/`mark_pending_summaries_done` for the kernel's forced-rebuild path; it is not reachable as a `system` action. Conversely, `name.py` arrived here from the dissolved `psyche` family, because naming is runtime identity state this family owns. **System no longer owns any notification verb** — voluntary notification reads and generic dismiss moved to the standalone `notification` tool (sibling package `tools/notification/`, actions `check`/`dismiss_channel`/`dismiss_event`/`dismiss_ref`/`manual`). The system module remains the **conceptual home** of the notification *producer* surface, though — it re-exports `publish_notification` / `clear_notification` from the kernel-root `notifications.py` so any in-process producer (intrinsic, capability, or wired-in MCP server) submits through one canonical entry point.

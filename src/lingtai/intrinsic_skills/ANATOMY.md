@@ -24,6 +24,8 @@ related_files:
   - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/goal-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/project-move/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/agent-name-move/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/move_project.py
   - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
@@ -69,8 +71,9 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   `reference/` sub-skills (`environment-variables`, `goal-manual`,
   `migration-guide`, `llm-adapters`, `procedures-manual`,
   `refresh-precheck`, `runtime-update-checks`, `sqlite-log-query`,
-  `substrate-manual`, `trajectory-mining`). Migration-guide ships separate
-  Agent-name and Project-root helpers. The Agent-name helper owns one planned,
+  `substrate-manual`, `trajectory-mining`). Migration-guide is a short common
+  router; its nested `agent-name-move` and `project-move` references own the
+  separate helper contracts. The Agent-name helper owns one planned,
   fenced same-parent cutover
   (`src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py:563-974`);
   `src/lingtai/cli.py:242-266` owns

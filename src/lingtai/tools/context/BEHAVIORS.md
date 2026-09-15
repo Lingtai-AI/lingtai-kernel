@@ -21,6 +21,7 @@ related_files:
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/nudge/goal.py
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/agent-name-move/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
   - src/lingtai/cli.py
   - tests/test_cli.py
@@ -350,8 +351,8 @@ still fail with the not-found/unauthorized error (the guard must not mask it).
 - **guards**: `system-contract` § Routing Card
   ([CONTRACT.md](../system/CONTRACT.md#routing-card)) — name actions "mutate
   neither address nor working directory — that is the operator migration
-  workflow in `system-manual`"; narrow POSIX Agent-name contract of
-  `reference/migration-guide/SKILL.md`
+  workflow in `system-manual`"; narrow POSIX
+  [Agent-name helper contract](../../intrinsic_skills/system-manual/reference/migration-guide/reference/agent-name-move/SKILL.md)
 - **supersedes**: `tests/test_how_to_change_name_e2e.py::test_real_agent_suspend_rename_relocates_local_runtime_and_mcp_then_resumes`
 - **runner**: an agent with the `shell` tool on Linux/macOS;
   Windows, other POSIX cells, and network filesystems are out of scope

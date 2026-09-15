@@ -119,7 +119,7 @@ def _strict_json_loads(value: str | bytes, label: str):
             object_pairs_hook=object_pairs,
             parse_constant=reject_constant,
         )
-    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise ChangeNameError(f"malformed {label}: {exc}") from exc
 
 
@@ -162,7 +162,7 @@ def _probe(runtime: Path, cwd: Path) -> Path:
         if not isinstance(source, str) or not os.path.isabs(source):
             raise ValueError("lingtai.__file__ was not an absolute path")
         return Path(source)
-    except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise ChangeNameError(
             f"configured runtime cannot import lingtai without inherited Python paths or writes: {runtime}"
         ) from exc
@@ -199,7 +199,7 @@ def _try_lock(root: Path):
         stream = (root / ".agent.lock").open("a+")
         fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return stream
-    except (OSError, BlockingIOError):
+    except OSError:
         try:
             stream.close()
         except UnboundLocalError:
@@ -899,6 +899,23 @@ def _abort_pending_launch(launch: PendingLaunch) -> None:
         ) from exc
 
 
+def _recover_uncommitted_launch(
+    plan: Plan, launch: PendingLaunch, error: BaseException
+) -> None:
+    """Restore the target fence and reap a child whose gate was not committed."""
+    errors: list[str] = []
+    try:
+        _ensure_incomplete_fence(plan.new / INCOMPLETE_MARKER)
+    except BaseException as exc:
+        errors.append(f"transaction-fence restore failed: {exc}")
+    try:
+        _abort_pending_launch(launch)
+    except BaseException as exc:
+        errors.append(f"uncommitted child cleanup failed: {exc}")
+    if errors:
+        raise ChangeNameError(f"{error}; {'; '.join(errors)}") from error
+
+
 def _prepare_launch(plan: Plan, fence: MarkerProof) -> PendingLaunch:
     _apply_rewrites(plan)
     observed = _probe(plan.resumed_runtime, plan.new)
@@ -1010,9 +1027,7 @@ def supervise(old: str | Path, new_name: str, timeout: float) -> int:
     plan = None
     lease = None
     fence = None
-    launch = None
     renamed = False
-    error: BaseException | None = None
     try:
         plan = preflight(old, new_name)
         _create_transaction_marker(plan.old / ".suspend", b"change-name suspension request\n")
@@ -1030,33 +1045,13 @@ def supervise(old: str | Path, new_name: str, timeout: float) -> int:
             lease.close()
         except BaseException as exc:
             lease = None
-            cleanup_errors = []
-            try:
-                _ensure_incomplete_fence(plan.new / INCOMPLETE_MARKER)
-            except BaseException as cleanup_exc:
-                cleanup_errors.append(f"transaction-fence restore failed: {cleanup_exc}")
-            try:
-                _abort_pending_launch(launch)
-            except BaseException as cleanup_exc:
-                cleanup_errors.append(f"uncommitted child cleanup failed: {cleanup_exc}")
-            if cleanup_errors:
-                raise ChangeNameError(f"{exc}; {'; '.join(cleanup_errors)}") from exc
+            _recover_uncommitted_launch(plan, launch, exc)
             raise
         lease = None
         try:
             _commit_launch(launch)
         except BaseException as exc:
-            cleanup_errors = []
-            try:
-                _ensure_incomplete_fence(plan.new / INCOMPLETE_MARKER)
-            except BaseException as cleanup_exc:
-                cleanup_errors.append(f"transaction-fence restore failed: {cleanup_exc}")
-            try:
-                _abort_pending_launch(launch)
-            except BaseException as cleanup_exc:
-                cleanup_errors.append(f"uncommitted child cleanup failed: {cleanup_exc}")
-            if cleanup_errors:
-                raise ChangeNameError(f"{exc}; {'; '.join(cleanup_errors)}") from exc
+            _recover_uncommitted_launch(plan, launch, exc)
             raise
         pid = _wait_resumed(plan, launch, timeout)
         print(f"name change complete: {plan.old} -> {plan.new}; resumed pid {pid}")
@@ -1071,16 +1066,13 @@ def supervise(old: str | Path, new_name: str, timeout: float) -> int:
                     _remove_proven_marker(plan.old / INCOMPLETE_MARKER, fence)
             except BaseException as fence_exc:
                 error = ChangeNameError(f"{exc}; transaction-fence maintenance also failed: {fence_exc}")
-        if renamed:
-            state = (
-                "target directory is authoritative, retained, and fenced as incomplete; "
-                "inspect it before any separately authorized recovery"
-            )
-        else:
-            state = (
-                "old directory remains authoritative; inspect the possibly suspended source before any "
-                "separately authorized recovery"
-            )
+        state = (
+            "target directory is authoritative, retained, and fenced as incomplete; "
+            "inspect it before any separately authorized recovery"
+            if renamed else
+            "old directory remains authoritative; inspect the possibly suspended source before any "
+            "separately authorized recovery"
+        )
         print(f"name change failed: {error}\n{state}", file=sys.stderr)
         return 1
     finally:

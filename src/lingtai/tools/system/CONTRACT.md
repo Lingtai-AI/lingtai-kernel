@@ -24,6 +24,8 @@ related_files:
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/project-move/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/agent-name-move/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
   - src/lingtai/intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md
   - src/lingtai/cli.py
@@ -255,7 +257,8 @@ is guarded by [B008](BEHAVIORS.md#behavior-b008) and pinned by
   karma-gated verbs (`lull`/`suspend`/`cpr`/`interrupt`/`clear`/`nirvana`).
 - You are editing the agent's name: `name_set` (once, immutable) or
   `name_nickname` (mutable). Neither renames the agent's address or working
-  directory — that operator migration workflow is specified in `system-manual`
+  directory — that operator migration workflow is routed by `system-manual`,
+  specified in its [Agent-name helper reference](../../intrinsic_skills/system-manual/reference/migration-guide/reference/agent-name-move/SKILL.md),
   and guarded by [L006](../context/BEHAVIORS.md#behavior-l006).
 - You are reviewing preset listing/connectivity or the karma/nirvana authz gate.
 
