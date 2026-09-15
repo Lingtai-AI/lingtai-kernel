@@ -372,7 +372,18 @@ def test_parallel_cancel_collector_settles_started_calls_once(monkeypatch):
 
     assert all_dispatch_returned.wait(timeout=5)
     time.sleep(0.05)
-    assert results == []
+    assert [result["name"] for result in results] == [
+        "cancel-fast",
+        "cancel-slow",
+    ]
+    assert [result["result"]["tool_call_id"] for result in results] == [
+        "cancel-fast-1",
+        "cancel-slow-1",
+    ]
+    assert [result["result"]["error_phase"] for result in results] == [
+        "cancellation",
+        "cancellation",
+    ]
     assert not intercepted
     assert intercept_text == ""
     by_id = {
@@ -383,6 +394,49 @@ def test_parallel_cancel_collector_settles_started_calls_once(monkeypatch):
         "cancel-fast-1": [ToolLifecycleState.STARTED, ToolLifecycleState.FAILED],
         "cancel-slow-1": [ToolLifecycleState.STARTED, ToolLifecycleState.FAILED],
     }
+
+
+def test_precancelled_sibling_batch_keeps_pairing_without_dispatch():
+    cancel = threading.Event()
+    cancel.set()
+    dispatched = []
+    hook_order = []
+    observer = _LifecycleObserver()
+    executor = make_executor(
+        dispatch_fn=lambda tc: dispatched.append(tc.id) or {"status": "ok"},
+        known_tools={"a", "b"},
+    )
+
+    results, intercepted, text = _execute_observed(
+        executor,
+        [
+            ToolCall(name="a", args={}, id="cancel-a"),
+            ToolCall(name="b", args={}, id="cancel-b"),
+        ],
+        observer,
+        cancel_event=cancel,
+        on_result_hook=lambda name, args, result, *, tool_call_id=None: (
+            hook_order.append(tool_call_id)
+        ),
+    )
+
+    assert dispatched == []
+    assert hook_order == ["cancel-a", "cancel-b"]
+    assert [result["name"] for result in results] == ["a", "b"]
+    assert [result["result"]["tool_call_id"] for result in results] == [
+        "cancel-a",
+        "cancel-b",
+    ]
+    assert all(
+        result["result"]["error_phase"] == "cancellation"
+        for result in results
+    )
+    assert [event.state for event in observer.events] == [
+        ToolLifecycleState.FAILED,
+        ToolLifecycleState.FAILED,
+    ]
+    assert not intercepted
+    assert text == ""
 
 
 def test_parallel_dispatch_copies_workspace_without_leaking_to_caller(tmp_path):
@@ -1000,19 +1054,106 @@ def test_lifecycle_trace_events_for_dispatch_exception():
     )
 
 
-def test_execute_sequential_multiple():
-    order = []
+def test_ordinary_sibling_handlers_overlap_without_allowlist_and_keep_order():
+    barrier = threading.Barrier(2)
+    active = 0
+    max_active = 0
+    active_lock = threading.Lock()
+
     def dispatch(tc):
-        order.append(tc.name)
-        return {"status": "ok"}
-    executor = make_executor(dispatch_fn=dispatch)
-    calls = [
+        nonlocal active, max_active
+        with active_lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            barrier.wait(timeout=2)
+            # Force reverse completion order; wire order must still follow the
+            # provider's model order below.
+            if tc.name == "a":
+                time.sleep(0.03)
+            return {"status": "ok", "tool": tc.name}
+        finally:
+            with active_lock:
+                active -= 1
+
+    executor = make_executor(
+        dispatch_fn=dispatch,
+        known_tools={"a", "b"},
+        canonical_result=True,
+    )
+    results, intercepted, text = executor.execute([
         ToolCall(name="a", args={}, id="1"),
         ToolCall(name="b", args={}, id="2"),
-    ]
-    results, intercepted, text = executor.execute(calls)
-    assert len(results) == 2
-    assert order == ["a", "b"]
+    ])
+
+    assert max_active == 2
+    assert [result.id for result in results] == ["1", "2"]
+    assert [result.content["tool"] for result in results] == ["a", "b"]
+    assert not intercepted
+    assert text == ""
+
+
+def test_sibling_intercept_and_dispatch_error_keep_complete_ordered_batch():
+    hook_order = []
+
+    def dispatch(tc):
+        if tc.name == "stop":
+            return {"intercept": True, "text": "tool stopped continuation"}
+        raise RuntimeError("sibling failed")
+
+    def result_hook(name, args, result, *, tool_call_id=None):
+        hook_order.append((name, tool_call_id))
+        return "must not override earlier tool intercept"
+
+    executor = make_executor(
+        dispatch_fn=dispatch,
+        known_tools={"stop", "explode"},
+    )
+    errors = []
+    results, intercepted, text = executor.execute(
+        [
+            ToolCall(name="stop", args={}, id="stop-1"),
+            ToolCall(name="explode", args={}, id="explode-1"),
+        ],
+        on_result_hook=result_hook,
+        collected_errors=errors,
+    )
+
+    assert [result["name"] for result in results] == ["stop", "explode"]
+    assert results[0]["result"]["intercept"] is True
+    assert results[1]["result"]["status"] == "error"
+    assert results[1]["result"]["error_phase"] == "dispatch"
+    assert results[1]["result"]["tool_call_id"] == "explode-1"
+    assert hook_order == [("stop", "stop-1"), ("explode", "explode-1")]
+    assert any("sibling failed" in error for error in errors)
+    assert intercepted
+    assert text == "tool stopped continuation"
+
+
+def test_sibling_result_hook_intercept_does_not_truncate_later_result():
+    hook_order = []
+
+    def result_hook(name, args, result, *, tool_call_id=None):
+        hook_order.append(tool_call_id)
+        return "hook stopped continuation"
+
+    executor = make_executor(
+        dispatch_fn=lambda tc: {"status": "ok", "tool": tc.name},
+        known_tools={"a", "b"},
+    )
+    results, intercepted, text = executor.execute(
+        [
+            ToolCall(name="a", args={}, id="hook-a"),
+            ToolCall(name="b", args={}, id="hook-b"),
+        ],
+        on_result_hook=result_hook,
+    )
+
+    assert [result["name"] for result in results] == ["a", "b"]
+    assert [result["result"]["tool"] for result in results] == ["a", "b"]
+    assert hook_order == ["hook-a", "hook-b"]
+    assert intercepted
+    assert text == "hook stopped continuation"
 
 
 def test_execute_parallel():

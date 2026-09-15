@@ -1055,13 +1055,12 @@ class ToolExecutor:
         on_pre_dispatch_hook: Callable | None = None,
         cancel_event: Any | None = None,
     ) -> tuple[list, bool, str]:
-        all_parallel_safe = (
-            len(tool_calls) > 1
-            and self._parallel_safe_tools
-            and all(tc.name in self._parallel_safe_tools for tc in tool_calls)
-        )
-
-        if all_parallel_safe:
+        # Every sibling proposed by one provider response belongs to the same
+        # concurrent batch.  ``parallel_safe_tools`` remains a constructor
+        # compatibility field, but must not make the production default (an
+        # empty set) serialize ordinary siblings.  A single call keeps the
+        # simpler sequential path and all of its established semantics.
+        if len(tool_calls) > 1:
             return self._execute_parallel(
                 tool_calls, collected_errors,
                 on_result_hook=on_result_hook,
@@ -1499,6 +1498,103 @@ class ToolExecutor:
             tool_results.sort(key=lambda x: x[0])
             return [r for _, r in tool_results], False, ""
 
+        results_map: dict[int, Any] = {}
+        visible_map: dict[int, Any] = {}
+        errors_map: dict[int, dict] = {}
+        elapsed_map: dict[int, int] = {}
+        lifecycle_by_index = {
+            index: (tc.name, trace_id)
+            for index, tc, _args, trace_id, _verdict, _decision, _proposal
+            in to_execute
+        }
+
+        entry_by_index = {entry[0]: entry for entry in to_execute}
+
+        def record_uncollected_error(
+            index: int,
+            *,
+            error_phase: str,
+            error_type: str,
+            message: str,
+            retryable: bool | str,
+        ) -> None:
+            """Settle one approved but uncollected call with a paired result."""
+
+            _, tc, args, trace_id, verdict, decision, proposal = entry_by_index[index]
+            tc_id = getattr(tc, "id", None)
+            err_result = self._error_payload(
+                tool_name=tc.name,
+                tool_call_id=tc_id,
+                tool_trace_id=trace_id,
+                tool_args=args,
+                error_phase=error_phase,
+                error_type=error_type,
+                exception_type=error_type,
+                message=message,
+                elapsed_ms=0,
+                retryable=retryable,
+            )
+            self._stage_meta(tc_id, 0, trace_id)
+            self._attach_duplicate_advisory(err_result, verdict)
+            self._attach_guard_advisory(
+                err_result, proposal=proposal, decision=decision,
+            )
+            errors_map[index] = err_result
+            self._log_lifecycle(
+                "tool_call_dispatch_failed",
+                tool_name=tc.name,
+                tool_call_id=tc_id,
+                tool_trace_id=trace_id,
+                elapsed_ms=0,
+                exception=error_type,
+                exception_message=message,
+            )
+            emit_lifecycle(tc.name, trace_id, ToolLifecycleState.FAILED)
+            self._log_tool_result(
+                tool_name=tc.name,
+                tool_call_id=tc_id,
+                tool_trace_id=trace_id,
+                tool_args=args,
+                status="error",
+                elapsed_ms=0,
+                result=err_result,
+                exception=error_type,
+                exception_message=message,
+            )
+
+        def record_cancellation(index: int) -> None:
+            record_uncollected_error(
+                index,
+                error_phase="cancellation",
+                error_type="CancelledError",
+                message="Cancelled before the parallel tool result was collected",
+                retryable=True,
+            )
+
+        # A cancellation observed before dispatch must suppress the handlers,
+        # but every provider-proposed sibling still needs one matching result.
+        if cancel_event is not None and cancel_event.is_set():
+            for index in entry_by_index:
+                record_cancellation(index)
+            for i, tc, args, trace_id, _verdict, _decision, _proposal in to_execute:
+                tc_id = getattr(tc, "id", None)
+                err_result = errors_map[i]
+                result_msg = self._build_result_message(
+                    tc.name,
+                    err_result,
+                    tool_call_id=tc_id,
+                    tool_trace_id=trace_id,
+                    status="error",
+                    elapsed_ms=0,
+                )
+                tool_results.append((i, result_msg))
+                collected_errors.append(f"{tc.name}: {err_result['message']}")
+                self._invoke_result_hook_observe(
+                    on_result_hook, tc.name, args, result_msg, tc_id,
+                )
+            tool_results.sort(key=lambda item: item[0])
+            return [result for _, result in tool_results], False, ""
+
         # Phase 2: Serial pre-dispatch hooks (deterministic order) then
         # execute in parallel.
         if on_pre_dispatch_hook is not None:
@@ -1508,15 +1604,6 @@ class ToolExecutor:
                     on_pre_dispatch_hook(tc.name, args, tool_call_id=tc_id)
                 except Exception:
                     pass
-
-        results_map: dict[int, Any] = {}
-        errors_map: dict[int, dict] = {}
-        elapsed_map: dict[int, int] = {}
-        lifecycle_by_index = {
-            index: (tc.name, trace_id)
-            for index, tc, _args, trace_id, _verdict, _decision, _proposal
-            in to_execute
-        }
 
         def _run_one(
             index: int,
@@ -1587,7 +1674,7 @@ class ToolExecutor:
                     exception=type(e).__name__,
                     exception_message=str(e),
                 )
-                return index, err_result, timer.elapsed_ms
+                return index, err_result, err_result, timer.elapsed_ms
             self._stage_meta(tc_id, timer.elapsed_ms, trace_id)
             if isinstance(result, dict):
                 self._attach_duplicate_advisory(result, verdict)
@@ -1621,7 +1708,15 @@ class ToolExecutor:
                 elapsed_ms=timer.elapsed_ms,
                 result=result,
             )
-            return index, result, timer.elapsed_ms
+            # Keep the complete a-priori pipeline inside this copied-context
+            # worker.  The durable raw record above is therefore guaranteed to
+            # precede an optional summary, while sibling summaries can overlap.
+            visible = result
+            if not (isinstance(result, dict) and result.get("intercept")):
+                visible = self._maybe_apriori_summary(
+                    result, args=args, tool_name=tc.name, tool_call_id=tc_id,
+                )
+            return index, result, visible, timer.elapsed_ms
 
         pool = ThreadPoolExecutor(max_workers=len(to_execute))
         try:
@@ -1634,15 +1729,17 @@ class ToolExecutor:
             }
             for future in as_completed(futures, timeout=300.0):
                 if cancel_event is not None and cancel_event.is_set():
-                    for tool_name, trace_id in lifecycle_by_index.values():
-                        emit_lifecycle(
-                            tool_name, trace_id, ToolLifecycleState.FAILED
-                        )
-                    pool.shutdown(wait=False, cancel_futures=True)
-                    return [], False, ""
+                    # Preserve already accepted completions, then settle every
+                    # unresolved provider sibling with an explicit matching
+                    # cancellation result.  Never return a partial/empty batch.
+                    for index in entry_by_index:
+                        if index not in results_map and index not in errors_map:
+                            record_cancellation(index)
+                    break
                 try:
-                    idx, result, elapsed_ms = future.result()
+                    idx, result, visible, elapsed_ms = future.result()
                     results_map[idx] = result
+                    visible_map[idx] = visible
                     elapsed_map[idx] = elapsed_ms
                     tool_name, trace_id = lifecycle_by_index[idx]
                     status = (
@@ -1781,62 +1878,105 @@ class ToolExecutor:
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 
-        # Phase 3: Build result messages (sequential) and invoke the result hook.
-        # The hook sees results in input order (same as sequential execution) so
-        # notification/intercept semantics are consistent across both paths.
-        for i, tc, args, trace_id, verdict, decision, proposal in to_execute:
+        # ``as_completed`` normally accounts for every future, but a custom
+        # executor/collector failure must not violate provider call/result
+        # pairing either.  Convert any otherwise missing slot to an explicit
+        # error before ordered assembly.
+        for index in entry_by_index:
+            if index not in results_map and index not in errors_map:
+                record_uncollected_error(
+                    index,
+                    error_phase="parallel_future",
+                    error_type="RuntimeError",
+                    message="Parallel worker produced no collectable result",
+                    retryable="unknown",
+                )
+
+        # Phase 3: Build every result message in model order, then invoke result
+        # hooks in that same order.  Interception controls continuation but must
+        # never truncate the provider's sibling result batch.
+        built_by_index: dict[int, Any] = {}
+        for i, tc, _args, trace_id, _verdict, _decision, _proposal in to_execute:
             tc_id = getattr(tc, "id", None)
             if i in results_map:
                 result = results_map[i]
-                status = result.get("status", "success") if isinstance(result, dict) else "success"
-                # Parallel execution records elapsed time in the lifecycle
-                # tuple; do not recover it from handler payload keys.
-                _elapsed = elapsed_map.get(i, 0)
-                # A-priori summary: raw already durably logged in Phase 2; replace
-                # the visible payload before the wire. Intercept results are
-                # guarded out inside the summarizer, but keep error/intercept
-                # control checks below against the RAW result, not the summary.
-                visible = result
-                if not (isinstance(result, dict) and result.get("intercept")):
-                    visible = self._maybe_apriori_summary(
-                        result, args=args, tool_name=tc.name, tool_call_id=tc_id,
-                    )
-                result_msg = self._build_result_message(
-                    tc.name, visible, tool_call_id=tc_id, tool_trace_id=trace_id,
-                    status=status, elapsed_ms=_elapsed,
+                status = (
+                    result.get("status", "success")
+                    if isinstance(result, dict)
+                    else "success"
                 )
-                tool_results.append((i, result_msg))
+                # Parallel execution records handler elapsed time in the worker
+                # tuple; do not recover it from handler payload keys.
+                elapsed = elapsed_map.get(i, 0)
+                # The worker completed raw logging and optional summary as one
+                # pipeline.  Keep later control checks on the raw result.
+                result_msg = self._build_result_message(
+                    tc.name,
+                    visible_map[i],
+                    tool_call_id=tc_id,
+                    tool_trace_id=trace_id,
+                    status=status,
+                    elapsed_ms=elapsed,
+                )
                 if isinstance(result, dict) and result.get("status") == "error":
                     err_msg = result.get("message", "unknown error")
                     collected_errors.append(f"{tc.name}: {err_msg}")
-                if isinstance(result, dict) and result.get("intercept"):
-                    # Observe completion for the intercepted call too (Task Card
-                    # row freeze) without letting the hook override the intercept.
+            else:
+                err_result = errors_map[i]
+                err_msg = str(err_result.get("message", "unknown error"))
+                result_msg = self._build_result_message(
+                    tc.name,
+                    err_result,
+                    tool_call_id=tc_id,
+                    tool_trace_id=trace_id,
+                    status="error",
+                    elapsed_ms=elapsed_map.get(i, 0),
+                )
+                collected_errors.append(f"{tc.name}: {err_msg}")
+            built_by_index[i] = result_msg
+            tool_results.append((i, result_msg))
+
+        batch_intercepted = False
+        batch_intercept_text = ""
+        for i, tc, args, _trace_id, _verdict, _decision, _proposal in to_execute:
+            result_msg = built_by_index[i]
+            tc_id = getattr(tc, "id", None)
+            if i not in results_map:
+                # Collector-generated cancellation/future errors are final
+                # results too.  Observe them in order, but do not let a hook
+                # manufacture an intercept from an executor-owned failure.
+                self._invoke_result_hook_observe(
+                    on_result_hook, tc.name, args, result_msg, tc_id,
+                )
+                continue
+            result = results_map[i]
+            if isinstance(result, dict) and result.get("intercept"):
+                # The tool's own intercept is authoritative at its model-order
+                # position, but the hook still observes completion.
+                self._invoke_result_hook_observe(
+                    on_result_hook, tc.name, args, result_msg, tc_id,
+                )
+                if not batch_intercepted:
+                    batch_intercepted = True
+                    batch_intercept_text = result.get("text", "")
+            elif on_result_hook is not None:
+                if batch_intercepted:
+                    # All handlers have already run; observe later completions
+                    # without allowing them to override the first intercept.
                     self._invoke_result_hook_observe(
                         on_result_hook, tc.name, args, result_msg, tc_id,
                     )
-                    tool_results.sort(key=lambda x: x[0])
-                    return (
-                        [r for _, r in tool_results],
-                        True,
-                        result.get("text", ""),
-                    )
-                if on_result_hook is not None:
+                else:
                     intercept = self._invoke_result_hook(
                         on_result_hook, tc.name, args, result_msg, tc_id,
                     )
                     if intercept is not None:
-                        tool_results.sort(key=lambda x: x[0])
-                        return [r for _, r in tool_results], True, intercept
-            elif i in errors_map:
-                err_result = errors_map[i]
-                err_msg = str(err_result.get("message", "unknown error"))
-                _elapsed = elapsed_map.get(i, 0)
-                tool_results.append((i, self._build_result_message(
-                    tc.name, err_result, tool_call_id=tc_id, tool_trace_id=trace_id,
-                    status="error", elapsed_ms=_elapsed,
-                )))
-                collected_errors.append(f"{tc.name}: {err_msg}")
+                        batch_intercepted = True
+                        batch_intercept_text = intercept
 
-        tool_results.sort(key=lambda x: x[0])
-        return [r for _, r in tool_results], False, ""
+        tool_results.sort(key=lambda item: item[0])
+        return (
+            [result for _, result in tool_results],
+            batch_intercepted,
+            batch_intercept_text,
+        )

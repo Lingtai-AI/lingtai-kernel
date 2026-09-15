@@ -14,6 +14,8 @@ summarizer (no real LLM) to prove the contract:
 """
 from __future__ import annotations
 
+import threading
+
 from lingtai.kernel.base_agent import turn
 from lingtai.kernel.llm.base import ToolCall
 from lingtai.kernel.loop_guard import LoopGuard
@@ -161,6 +163,76 @@ def test_summary_true_under_cap_replaces_with_summary_and_preserves_raw(tmp_path
     assert gen["tool_call_id"] == "t3"
     assert gen["tool_name"] == "bash"
     assert "RAWSECRET" not in str(gen)
+
+
+def test_sibling_summaries_overlap_after_each_raw_durable_log(tmp_path):
+    events = []
+    summary_barrier = threading.Barrier(2)
+    summary_starts = []
+    state_lock = threading.Lock()
+
+    def summarizer(_system_prompt, _user_prompt, tool_name, tool_call_id):
+        # The per-call pipeline must make both raw durability boundaries visible
+        # before entering that call's summary step.
+        assert any(
+            event_type == "tool_result"
+            and fields.get("tool_call_id") == tool_call_id
+            for event_type, fields in events
+        )
+        assert any(
+            event_type == "tool_result_durable_log_visible"
+            and fields.get("tool_call_id") == tool_call_id
+            for event_type, fields in events
+        )
+        with state_lock:
+            summary_starts.append(tool_call_id)
+        summary_barrier.wait(timeout=2)
+        return f"summary for {tool_name}"
+
+    ex = _make_executor(
+        dispatch_fn=lambda tc: {"stdout": f"raw for {tc.name}"},
+        summarizer_fn=summarizer,
+        events=events,
+        tmp_path=tmp_path,
+    )
+    results, intercepted, text = ex.execute([
+        ToolCall(
+            name="bash",
+            args={"command": "first", "summary": True, "reasoning": "retain first"},
+            id="summary-1",
+        ),
+        ToolCall(
+            name="grep",
+            args={"pattern": "second", "summary": True, "reasoning": "retain second"},
+            id="summary-2",
+        ),
+    ], api_call_id="api-summaries")
+
+    assert events
+    assert all(
+        fields.get("api_call_id") == "api-summaries"
+        for _event_type, fields in events
+    )
+    assert set(summary_starts) == {"summary-1", "summary-2"}
+    assert [result["tool_call_id"] for result in results] == [
+        "summary-1",
+        "summary-2",
+    ]
+    assert [result["content"]["generated_summary"] for result in results] == [
+        "summary for bash",
+        "summary for grep",
+    ]
+    for tool_call_id in ("summary-1", "summary-2"):
+        matching = [
+            event_type
+            for event_type, fields in events
+            if fields.get("tool_call_id") == tool_call_id
+        ]
+        assert matching.index("tool_result") < matching.index(
+            "tool_result_durable_log_visible"
+        ) < matching.index("apriori_summary_generated")
+    assert not intercepted
+    assert text == ""
 
 
 def test_summary_true_over_cap_refuses_without_llm_and_hides_raw(tmp_path):
