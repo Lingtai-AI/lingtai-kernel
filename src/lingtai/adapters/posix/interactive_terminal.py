@@ -74,10 +74,6 @@ class PosixInteractiveTerminalAdapter:
             struct.pack("HHHH", command.rows, command.columns, 0, 0),
         )
 
-    @staticmethod
-    def _entry_process(entry: _Entry) -> subprocess.Popen:
-        return entry.process
-
     def spawn(
         self,
         command: InteractiveTerminalCommand,
