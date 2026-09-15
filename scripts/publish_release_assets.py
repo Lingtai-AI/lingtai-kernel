@@ -468,8 +468,6 @@ def main(argv: list[str] | None = None) -> int:
             for f in github_files:
                 print(f"  [github] DRY RUN: would upload {f.name}")
 
-    import os
-
     gitee_token = os.environ.get(args.gitee_token_env, "")
     if args.skip_gitee or not gitee_token:
         reason = "--skip-gitee" if args.skip_gitee else f"{args.gitee_token_env} is not set"
