@@ -13,6 +13,7 @@ from lingtai.adapters.tool_plugin_host import AgentTaskCardNotificationsAdapter
 from lingtai.kernel import notifications
 from lingtai.kernel.tool_plugin import ToolPluginHost
 from lingtai.tools.task_card import DECLARATION, TaskCardManager, get_description, get_schema
+from tests._tool_family_schema_helpers import action_input_schema, branch_actions
 
 
 class _FakeAgent:
@@ -184,7 +185,7 @@ def test_manual_routes_focused_references_and_keeps_first_call_guard():
         "remove",
     ):
         assert fragment in description, fragment
-    start_input = get_schema()["properties"]["input"]["anyOf"][0]
+    start_input = action_input_schema(get_schema(), "start")
     assert "renderer_path" in start_input["required"]
 
 
@@ -840,9 +841,8 @@ def test_settings_inventory_is_exact_ordered_and_read_only_by_default(agent, man
         "manual",
     )
     schema = get_schema()
-    settings_index = DECLARATION.public_actions.index("settings")
-    assert schema["properties"]["input"]["anyOf"][settings_index] == {
-        "title": "settings inventory input",
+    assert branch_actions(schema) == list(DECLARATION.public_actions)
+    assert action_input_schema(schema, "settings") == {
         "type": "object",
         "properties": {},
         "required": [],

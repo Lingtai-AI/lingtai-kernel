@@ -12,6 +12,7 @@ from lingtai.tools import vision as vision_tool
 from lingtai.tools import web_search as web_tool
 from lingtai.tools import bash as shell_tool
 from lingtai.tools import task_card as task_card_tool
+from tests._tool_family_schema_helpers import branch_actions
 from tests.test_task_card_controller import _FakeAgent, _task_card_host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -233,20 +234,25 @@ def test_manual_schemas_keep_their_closed_roots() -> None:
     # context is an LTP v2 family, so it requires the full closed root exactly
     # as web does — not a pre-migration action-only root.
     assert context_tool.get_schema()["required"] == ["action", "input", "reasoning"]
+    # One root ``oneOf`` branch per public action, in enum order.
     web_schema = web_tool.get_schema()
     assert web_schema["required"] == ["action", "input", "reasoning"]
-    assert len(web_schema["properties"]["input"]["anyOf"]) == 4
+    assert len(branch_actions(web_schema)) == 4
+    assert branch_actions(web_schema) == web_schema["properties"]["action"]["enum"]
     vision_schema = vision_tool.get_schema()
     assert vision_schema["required"] == ["action", "input", "reasoning"]
     # analyze / check / list / settings / manual — one branch per public action.
-    assert len(vision_schema["properties"]["input"]["anyOf"]) == 5
+    assert len(branch_actions(vision_schema)) == 5
+    assert branch_actions(vision_schema) == vision_schema["properties"]["action"]["enum"]
     task_card_schema = task_card_tool.get_schema()
     assert task_card_schema["required"] == ["action", "input", "reasoning"]
-    assert len(task_card_schema["properties"]["input"]["anyOf"]) == 7
+    assert len(branch_actions(task_card_schema)) == 7
+    assert branch_actions(task_card_schema) == task_card_schema["properties"]["action"]["enum"]
     # ``shell`` opts into settings immediately before its manual.
     shell_schema = shell_tool.get_schema()
     assert shell_schema["required"] == ["action", "input", "reasoning"]
-    assert len(shell_schema["properties"]["input"]["anyOf"]) == 5
+    assert len(branch_actions(shell_schema)) == 5
+    assert branch_actions(shell_schema) == shell_schema["properties"]["action"]["enum"]
 
 
 def test_shipped_task_card_manuals_only_document_intrinsic_file_contract() -> None:

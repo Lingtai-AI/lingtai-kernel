@@ -7,7 +7,13 @@ from lingtai.mcp_servers.imap._family import (
     IMAP_ACTIONS,
     IMAP_SCHEMA,
     _basic_validate,
+    _imap_input_schemas,
     handle_imap,
+)
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
 )
 
 
@@ -21,9 +27,8 @@ class _CountingManager:
 
 
 def _branches(schema: dict) -> dict[str, dict]:
-    inputs = schema["properties"]["input"]
-    branches = inputs.get("oneOf") or inputs.get("anyOf")
-    return {branch["title"].removesuffix(" input"): branch for branch in branches}
+    """Map each action to the ``input`` schema its root ``oneOf`` branch carries."""
+    return action_input_schemas(schema)
 
 
 def test_family_dispatch_rejects_root_and_cross_branch_before_manager_io():
@@ -121,15 +126,55 @@ def test_imap_root_envelope_is_strict_ltp_v2():
     assert IMAP_SCHEMA["additionalProperties"] is False
     assert "reasoning" in IMAP_SCHEMA["properties"]
     assert "summarize" in IMAP_SCHEMA["properties"]
-    assert len(IMAP_SCHEMA["allOf"]) == len(IMAP_ACTIONS)
+    # One root ``oneOf`` branch per action, discriminated by action const
+    # and carrying that action's own canonical input; no root allOf/anyOf
+    # and no duplicate branch list under ``input``.
+    assert_compact_envelope(IMAP_SCHEMA, list(IMAP_ACTIONS))
+    branches = _branches(IMAP_SCHEMA)
+    canonical = _imap_input_schemas()
+    for action in IMAP_ACTIONS:
+        if action == "settings":
+            assert branches[action] == {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            }
+            continue
+        assert branches[action] == canonical[action], action
 
 
 def test_openai_responses_scrub_preserves_family_root_and_action_branches():
+    """The root ``oneOf`` discriminated union survives the Responses scrub
+    as ``oneOf`` (only nested ``oneOf`` is rewritten), with the identical
+    per-action ``input`` correlation as the canonical schema."""
     from lingtai.llm.openai.adapter import _scrub_responses_schema
 
     wire = _scrub_responses_schema(copy.deepcopy(IMAP_SCHEMA), is_root=True)
     assert wire["required"] == IMAP_SCHEMA["required"]
     assert wire["properties"]["action"]["enum"] == list(IMAP_ACTIONS)
-    assert wire["properties"]["input"]["anyOf"]
-    assert len(wire["allOf"]) == len(IMAP_ACTIONS)
     assert wire["additionalProperties"] is False
+    assert "allOf" not in wire and "anyOf" not in wire
+    assert branch_actions(wire) == list(IMAP_ACTIONS)
+    # The typed root ``input`` only gains an empty ``properties`` map on the
+    # Responses wire; it never regains a duplicate branch list.
+    root_input = wire["properties"]["input"]
+    assert root_input["properties"] == {}
+    assert "oneOf" not in root_input and "anyOf" not in root_input
+    # Identical per-action correlation on the wire: same order, same input
+    # fields and required lists, every branch still closed. IMAP's child
+    # inputs use nullable ``anyOf`` wrappers only — no nested ``oneOf`` to
+    # rewrite anywhere.
+    wire_branches = action_input_schemas(wire)
+    canonical_branches = action_input_schemas(IMAP_SCHEMA)
+    assert list(wire_branches) == list(canonical_branches) == list(IMAP_ACTIONS)
+    assert not {a for a, b in canonical_branches.items() if "oneOf" in b}
+    for action in IMAP_ACTIONS:
+        assert set(wire_branches[action]["properties"]) == set(
+            canonical_branches[action]["properties"]
+        ), action
+        assert wire_branches[action].get("required", []) == canonical_branches[action].get(
+            "required", []
+        ), action
+        assert wire_branches[action]["additionalProperties"] is False, action
+        assert "oneOf" not in wire_branches[action], action

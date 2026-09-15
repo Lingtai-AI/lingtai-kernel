@@ -5,6 +5,7 @@ from pathlib import Path
 
 from lingtai.tools.bash._shell_dialect import ShellKind
 from lingtai.tools.bash._tool_family import get_description, get_schema
+from tests._tool_family_schema_helpers import action_input_schema
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,11 +14,7 @@ ASYNC_REFERENCE = ROOT / "src/lingtai/tools/bash/manual/reference/async-jobs/SKI
 
 
 def _run_branch() -> dict:
-    return next(
-        branch
-        for branch in get_schema()["properties"]["input"]["anyOf"]
-        if branch["title"] == "run input"
-    )
+    return action_input_schema(get_schema(), "run")
 
 
 def test_shell_description_keeps_first_call_and_safety_guards():

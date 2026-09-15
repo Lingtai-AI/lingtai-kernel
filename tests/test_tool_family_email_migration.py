@@ -32,6 +32,12 @@ from lingtai.kernel.base_agent import BaseAgent
 from lingtai.tools import email as email_tool
 from lingtai.tools.email._family_schema import ACTION_ORDER, INPUT_SCHEMAS
 from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
+from tests._tool_family_schema_helpers import (
+    action_input_schema,
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 from tests._agent_presence_helpers import make_test_presence_store
 from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
@@ -117,12 +123,13 @@ def test_settings_is_the_only_added_public_action_and_order_is_pinned():
     assert list(email_tool.DECLARATION.public_actions) == _PUBLIC_ACTIONS
 
 
-def test_email_schema_keeps_first_call_safety_while_disclosing_depth():
-    """Both resident entry points retain routing, notification, and channel guards."""
+def test_email_schema_keeps_first_call_safety_in_root_and_branch_text():
+    """Both resident entry points retain routing, notification, and channel
+    guards, and the per-action ``oneOf`` branches still route to the manual."""
     schema = email_tool.get_schema()
     description = email_tool.get_description()
     action_description = schema["properties"]["action"]["description"]
-    fields = schema["properties"]["input"]["anyOf"]
+    fields = action_input_schemas(schema).values()
     assert "50,000" in action_description
     for resident in (description, action_description):
         assert "injected in full" in resident
@@ -145,22 +152,17 @@ def test_one_canonical_child_registry_drives_schema_and_dispatch(tmp_path):
     """The advertised actions and the dispatchable children are one list.
 
     This is the anti-drift proof the acceptance asks for: the ``action`` enum,
-    the ``input.anyOf`` branch order, the ``allOf`` condition order, and the
-    real per-call dispatching family's ``child_names`` all come from
-    declaration plus settings provider, so an action cannot be advertised without being
-    dispatchable (or vice versa).
+    the root ``oneOf`` branch order, and the real per-call dispatching
+    family's ``child_names`` all come from declaration plus settings provider,
+    so an action cannot be advertised without being dispatchable (or vice
+    versa).
     """
     schema = email_tool.get_schema()
     family = email_tool._build_family(_agent(tmp_path))
     assert list(family.child_names) == _PUBLIC_ACTIONS
     assert schema["properties"]["action"]["enum"] == list(family.child_names)
-    assert [b["title"] for b in schema["properties"]["input"]["anyOf"]] == [
-        "settings inventory input" if action == "settings" else f"{action} input"
-        for action in family.child_names
-    ]
-    assert [
-        c["if"]["properties"]["action"]["const"] for c in schema["allOf"]
-    ] == list(family.child_names)
+    assert branch_actions(schema) == list(family.child_names)
+    assert_compact_envelope(schema, _PUBLIC_ACTIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -181,18 +183,27 @@ def test_every_action_input_schema_is_closed_and_self_describing(action):
         assert reserved not in branch["properties"]
 
 
-def test_all_of_correlates_every_action_const_with_its_exact_branch_schema():
+def test_root_one_of_correlates_every_action_const_with_its_exact_child_schema(tmp_path):
+    """Each root ``oneOf`` branch pairs one ``action`` const with exactly the
+    canonical child schema the dispatching family validates against — no
+    ``title``, no root ``allOf``, no second copy under ``properties.input``."""
     schema = email_tool.get_schema()
-    conditions = schema["allOf"]
-    branches = schema["properties"]["input"]["anyOf"]
-    assert len(conditions) == len(branches) == len(_PUBLIC_ACTIONS)
-    for condition, branch, action in zip(conditions, branches, _PUBLIC_ACTIONS):
-        assert condition["if"]["properties"]["action"]["const"] == action
-        assert condition["if"]["required"] == ["action"]
-        # Both surfaces derive from the same canonical child schema.
-        assert condition["then"]["properties"]["input"] == {
-            k: v for k, v in branch.items() if k != "title"
-        }
+    family = email_tool._build_family(_agent(tmp_path))
+    assert len(schema["oneOf"]) == len(_PUBLIC_ACTIONS)
+    assert "allOf" not in schema and "anyOf" not in schema
+    for duplicate in ("oneOf", "anyOf", "allOf", "properties"):
+        assert duplicate not in schema["properties"]["input"]
+    for branch, action in zip(schema["oneOf"], _PUBLIC_ACTIONS):
+        assert set(branch) == {"properties"}
+        assert set(branch["properties"]) == {"action", "input"}
+        assert branch["properties"]["action"] == {"const": action}
+        assert "title" not in branch["properties"]["input"]
+        # The wire branch and the dispatching child are one canonical schema.
+        assert branch["properties"]["input"] == dict(
+            family._children[action].input_schema
+        )
+        if action != "settings":
+            assert branch["properties"]["input"] == INPUT_SCHEMAS[action]
 
 
 def test_manual_child_reuses_the_canonical_strict_empty_input_literal():
@@ -204,8 +215,9 @@ def test_manual_child_reuses_the_canonical_strict_empty_input_literal():
     byte-identical ``manual`` input.
     """
     assert INPUT_SCHEMAS["manual"] == MANUAL_INPUT_SCHEMA
-    branch = email_tool.get_schema()["properties"]["input"]["anyOf"][-1]
-    assert {k: v for k, v in branch.items() if k != "title"} == MANUAL_INPUT_SCHEMA
+    schema = email_tool.get_schema()
+    assert branch_actions(schema)[-1] == "manual"
+    assert action_input_schema(schema, "manual") == MANUAL_INPUT_SCHEMA
 
 
 def test_action_specific_fields_live_only_in_their_own_branch():

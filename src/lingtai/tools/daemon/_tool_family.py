@@ -364,9 +364,9 @@ def build_schema(
     """Compose the action-separated public ``daemon`` schema.
 
     Generated purely from the child registry by the generic ``ToolFamily``
-    infra (root ``allOf`` correlation plus composed ``input`` disclosure) — this
-    is the schema registered for the public ``daemon`` tool, and the only one
-    the package defines. Constructing the family here is also the registry's
+    infra (one root ``oneOf`` branch per action correlating its ``action``
+    const with its exact ``input`` schema) — this is the schema registered
+    for the public ``daemon`` tool, and the only one the package defines. Constructing the family here is also the registry's
     duplicate/reserved-``manual``-collision check.
     """
     _ = lang  # The daemon tool surface is canonical English.

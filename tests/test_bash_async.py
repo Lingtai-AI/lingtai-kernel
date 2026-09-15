@@ -269,12 +269,12 @@ class TestBashAsync:
     def test_schema_requires_reminder_with_runtime_default(self, tmp_path):
         # ``reminder`` is run-only: it exists solely in the ``run`` child's
         # input on the migrated envelope, and never on poll/cancel.
-        branches = {
-            b["title"]: b for b in get_schema()["properties"]["input"]["anyOf"]
-        }
-        run_branch = branches["run input"]
+        from tests._tool_family_schema_helpers import action_input_schemas
+
+        branches = action_input_schemas(get_schema())
+        run_branch = branches["run"]
         assert run_branch["properties"]["reminder"]["default"] == 1800.0
-        for action in ("poll input", "cancel input"):
+        for action in ("poll", "cancel"):
             assert "reminder" not in branches[action]["properties"]
 
         mgr = self._make_manager(tmp_path)

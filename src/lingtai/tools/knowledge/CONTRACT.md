@@ -99,10 +99,10 @@ because neither operation ever took an argument:
 | `manual` | `{}` (strict empty) | `{status: "ok", knowledge_manual, manual_path}` |
 
 The composed schema correlates each action `const` with its exact `input`
-schema at the root (`allOf`/`if`/`then`) and additionally discloses every
-action's shape under `input.oneOf`. Both surfaces reach the Chat Completions
-and Responses wires; the Responses builder rewrites nested `oneOf` to `anyOf`
-but preserves the root correlation.
+schema through one root `oneOf` branch per action; each child schema appears
+exactly once. The union reaches the Chat Completions and Responses wires
+intact: the Responses builder rewrites only nested `oneOf` to `anyOf` and
+preserves the root correlation.
 
 Behavior is preserved exactly across the migration:
 

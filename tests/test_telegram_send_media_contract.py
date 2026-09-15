@@ -10,6 +10,7 @@ from lingtai.mcp_servers.telegram.manager import (
     TelegramManager,
 )
 from tests._notification_store_helpers import notification_store_for
+from tests._tool_family_schema_helpers import action_input_schema
 
 
 class _Account:
@@ -48,10 +49,7 @@ def _manager(tmp_path: Path) -> tuple[TelegramManager, _Account]:
 
 
 def test_send_schema_advertises_exactly_runtime_supported_media_types():
-    send = next(
-        branch for branch in SCHEMA["properties"]["input"].get("oneOf", SCHEMA["properties"]["input"]["anyOf"])
-        if branch.get("title") == "send input"
-    )
+    send = action_input_schema(SCHEMA, "send")
     # media is nullable (anyOf wrapper, object branch first) since #1237.
     media_schema = send["properties"]["media"]
     assert {"type": "null"} in media_schema["anyOf"]

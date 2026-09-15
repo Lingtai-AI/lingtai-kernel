@@ -2,27 +2,30 @@
 
 A ``ToolFamily`` groups cohesive child Tools (``ChildTool``) behind exactly
 one model-facing tool. The model sees one aggregate schema composed from
-each child's own canonical ``input_schema``: a root ``allOf`` of one
-``if``/``then`` condition per registered child correlates the sibling
-``action`` const with that exact child's ``input`` shape (schema-level
-correlation, not just dispatch-time), plus root ``input`` disclosure. Both
-surfaces are generated purely from the child registry — no name/schema
-mapping table — and both derive from the same deep-copied canonical child
-schemas. Root-level correlation via ``allOf``/``if``/``then`` was adopted
-after a live non-strict Codex Responses probe on 2026-07-27 accepted a raw
-root ``allOf``/``if``/``then`` schema without error on the current route,
-superseding the earlier, more conservative assumption that root combinators
-were universally rejected (see ``lingtai.llm.openai.adapter``'s
-``_scrub_responses_schema`` for the corresponding wire-level change).
+each child's own canonical ``input_schema``: a single root ``oneOf``
+discriminated union with exactly one branch per registered child, each
+branch correlating the sibling ``action`` const with that exact child's
+``input`` schema (schema-level correlation, not just dispatch-time). Every
+child schema appears exactly once in the composed schema — there is no
+second disclosure copy under ``properties.input`` — so the provider-facing
+schema is substantially smaller than the earlier duplicated
+``allOf``/``if``/``then`` plus ``input.oneOf`` composition, which embedded
+every child twice. The union is generated purely from the child
+registry — no name/schema mapping table — from deep-copied canonical child
+schemas. The OpenAI Responses scrubber preserves a root ``oneOf`` verbatim
+while still rewriting nested ones; live acceptance is route-specific and
+validated separately rather than inferred from adapter pass-through. The
+2026-07-27 non-strict Codex probe established only raw root
+``allOf``/``if``/``then`` acceptance on that route, not root ``oneOf``.
 Children never consume model tool
 slots. Dispatch remains the second, always-authoritative enforcement layer —
 an in-process handler lookup keyed by the child's own name, which rejects
 any ``input`` key outside the selected child's own declared schema before
 the handler runs, fail-closed with no guessing/fallback — so a provider that
-does not enforce ``allOf``/``if``/``then`` (or a call bypassing schema
-validation entirely) still cannot smuggle a mismatched ``action``/``input``
-pairing past dispatch. There is no transport, no external MCP surface, and
-no second registry.
+does not enforce the root ``oneOf`` (or a call bypassing schema validation
+entirely) still cannot smuggle a mismatched ``action``/``input`` pairing
+past dispatch. There is no transport, no external MCP surface, and no
+second registry.
 
 This module standardizes only the wire envelope and the composition/dispatch
 boilerplate every hand-migrated LTP v2 family (see
@@ -151,6 +154,12 @@ class ChildTool:
     validated ``input`` mapping (never ``action``, ``reasoning``, or
     ``summarize``) and returns the child's own raw, canonical result dict.
 
+    ``title`` (and the :meth:`branch_title` helper) is an optional,
+    human-readable label kept for source compatibility with existing
+    registrations. It is not emitted by ``build_schema()``: the composed root
+    ``oneOf`` branch is identified by its ``action`` const alone, and a
+    presentational title would only add provider-facing tokens.
+
     ``diagnostics`` is an optional, passive, non-wire sidecar: a mapping from
     structural trigger name (e.g. :data:`TRIGGER_UNSUPPORTED_INPUT_FIELD`) to
     the static :class:`DiagnosticDescriptor` this action owns for that
@@ -241,73 +250,62 @@ class ToolFamily:
         return RESERVED_MANUAL_NAME in self._children
 
     def build_schema(self) -> dict[str, Any]:
-        """Compose the model-facing schema.
+        """Compose the model-facing schema as one compact discriminated union.
 
-        Two enforcement layers, generated purely from the child registry (no
-        name/schema mapping table), both built from the same deep-copied
-        canonical child schemas so they cannot drift apart:
+        The root is a closed object carrying ``action``, ``input``, required
+        ``reasoning``, and optional ``summarize`` — exactly the four LTP v2
+        envelope fields (``tools/CONTRACT.md`` "Envelope"). Schema-level
+        ``action``/``input`` correlation is a single root ``oneOf``,
+        generated purely from the child registry (no name/schema mapping
+        table) in registration order: one branch per registered child whose
+        ``properties.action`` is that child's own name as a ``const`` and
+        whose ``properties.input`` is a deep copy of that exact child's
+        canonical ``input_schema``. Because every branch carries a distinct
+        ``const``, exactly one branch can ever match a well-formed call, so
+        ``oneOf`` is unambiguous even when two children (e.g. ``settings``
+        and ``manual``) declare identical strict-empty inputs — no
+        ``anyOf`` fallback is needed.
 
-        1. **Schema-level correlation (``allOf``):** one ``if``/``then``
-           condition per registered child. Each ``if`` tests root ``action``
-           against that child's own name via ``const`` (guarded by
-           ``required: ["action"]``, since a strict ``if`` with a missing
-           property vacuously matches); each ``then`` constrains root
-           ``input`` to that exact child's ``input_schema``. This lets a
-           provider that enforces ``allOf``/``if``/``then`` reject a
-           mismatched ``action``/``input`` pairing before the call is even
-           made — a live non-strict Codex Responses probe on 2026-07-27
-           showed this root construct is accepted, not rejected, by the
-           current backend route.
-        2. **Typed ``input`` disclosure:** the same per-action branches retained
-           for discoverability (``oneOf`` normally, ``anyOf`` with settings).
+        Each child schema appears exactly once. The earlier composition
+        embedded every child twice (once under ``properties.input.oneOf``
+        for disclosure and again under ``allOf[].then.properties.input`` for
+        correlation), which doubled the provider-facing schema tokens for no
+        additional constraint; the root ``input`` property now keeps only
+        its ``type: object`` and its unchanged description. A
+        root ``oneOf`` is deliberately used rather than a nested
+        ``input.oneOf``: the OpenAI Responses builder preserves a root
+        ``oneOf`` verbatim while rewriting nested ``oneOf`` to ``anyOf``;
+        live acceptance is validated separately on the exact route, and
+        Chat Completions passes the schema through untouched.
 
-        The root carries ``action``, ``input``, required ``reasoning``, and
-        optional ``summarize`` — exactly the four LTP v2 envelope fields
-        (``tools/CONTRACT.md`` "Envelope"); `allOf`'s conditions constrain
-        ``action``/``input`` without duplicating ``action`` inside ``input``
-        or adding a fifth public field. ``reasoning`` is Host
-        InvocationContext/audit metadata, never action input: it is declared
-        here as REQUIRED so every family built on this infrastructure is
-        model-visible-required by construction, not by relying on Agent
-        schema composition (``kernel/base_agent/tools.py:_build_tool_schemas``)
-        to add it — that step still re-injects the identical property text
-        for every tool uniformly, but only touches ``properties``, never
-        ``required``.
+        ``reasoning`` is Host InvocationContext/audit metadata, never action
+        input: it is declared here as REQUIRED so every family built on this
+        infrastructure is model-visible-required by construction, not by
+        relying on Agent schema composition
+        (``kernel/base_agent/tools.py:_build_tool_schemas``) to add it — that
+        step still re-injects the identical property text for every tool
+        uniformly, but only touches ``properties``, never ``required``.
 
-        Schema-level correlation is a second, additive layer, not a
-        replacement for dispatch: :meth:`handle` remains the always-
-        authoritative, fail-closed enforcement boundary regardless of
-        whether a given provider actually validates ``allOf``/``if``/``then``
-        before invocation.
+        Schema-level correlation is additive, not a replacement for
+        dispatch: :meth:`handle` remains the always-authoritative,
+        fail-closed enforcement boundary regardless of whether a given
+        provider actually validates the root ``oneOf`` before invocation.
         """
-        input_branches = []
-        all_of_conditions = []
+        branches = []
         for child_name in self._order:
             child = self._children[child_name]
-            # Deep-copy once per child so the disclosure branch and the
-            # ``allOf`` condition's ``then.input`` never share a mutable
-            # container with each other, the child's own canonical
-            # ``input_schema``, or a previous ``build_schema()`` call.
-            canonical_input_schema = copy.deepcopy(child.input_schema)
-
-            branch = {"title": child.branch_title()}
-            branch.update(copy.deepcopy(canonical_input_schema))
-            input_branches.append(branch)
-
-            all_of_conditions.append(
+            branches.append(
                 {
-                    "if": {
-                        "properties": {"action": {"const": child_name}},
-                        "required": ["action"],
-                    },
-                    "then": {
-                        "properties": {"input": copy.deepcopy(canonical_input_schema)},
+                    "properties": {
+                        "action": {"const": child_name},
+                        # Deep-copy per child and per call so a branch never
+                        # shares a mutable container with the child's own
+                        # canonical ``input_schema``, a sibling branch, or a
+                        # previous ``build_schema()`` result.
+                        "input": copy.deepcopy(child.input_schema),
                     },
                 }
             )
-        input_branches_keyword = (
-            "anyOf" if RESERVED_SETTINGS_NAME in self._children else "oneOf"
-        )
         return {
             "type": "object",
             "properties": {
@@ -322,7 +320,6 @@ class ToolFamily:
                         "Strict action-specific input; the selected action is "
                         "validated again at dispatch."
                     ),
-                    input_branches_keyword: input_branches,
                 },
                 "reasoning": {
                     "type": "string",
@@ -338,7 +335,7 @@ class ToolFamily:
             },
             "required": ["action", "input", "reasoning"],
             "additionalProperties": False,
-            "allOf": all_of_conditions,
+            "oneOf": branches,
         }
 
     def _allowed_input_keys(self, child: ChildTool) -> set[str]:

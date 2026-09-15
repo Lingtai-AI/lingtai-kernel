@@ -210,13 +210,9 @@ def whatsapp_schema() -> dict[str, Any]:
     schema = _SCHEMA_FAMILY.build_schema()
     # WhatsApp has intentionally overlapping optional fields (for example a
     # send/reply with text vs media vs template, or add_contact/remove_contact
-    # sharing wa_id/to). The root allOf discriminator still correlates each
-    # action to its exact closed branch; use anyOf for the model-discovery
-    # list so native JSON-Schema validators do not reject a valid input merely
-    # because another action's branch also fits.
-    input_schema = schema["properties"]["input"]
-    if "oneOf" in input_schema:
-        input_schema["anyOf"] = input_schema.pop("oneOf")
+    # sharing wa_id/to). The generic root ``oneOf`` is discriminated by each
+    # branch's ``action`` const, so overlapping input shapes never make it
+    # ambiguous; no rewrite is needed.
     schema["properties"]["action"]["description"] = (
         "WhatsApp action for one personal WhatsApp Web session through a local "
         "whatsapp-web.js bridge; each action owns a strict input branch. "
