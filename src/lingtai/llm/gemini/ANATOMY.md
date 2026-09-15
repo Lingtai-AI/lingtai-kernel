@@ -43,7 +43,6 @@ Gemini adapter — `google-genai` SDK with Chat API and Interactions API, thinki
 | `_sanitize_parameters_for_interactions` | 189 | Strip `"required": []` (Interactions API rejects empty array) |
 | `_build_interactions_tools` | 204 | `FunctionSchema` → Interactions API tool dicts (`type: "function"`) |
 | `_parse_interaction_response` | 221 | Interactions API response → `LLMResponse`; reads `function_call`, `text`, `thought` outputs |
-| `_convert_history_to_turns` | 274 | Chat API history dicts → Interactions `TurnParam` format |
 
 ## Connections
 
