@@ -22,15 +22,6 @@ from lingtai.kernel.services.mail import _new_mailbox_id  # noqa: F401
 from .settings import EMAIL_BODY_CHAR_LIMIT, EMAIL_UNREAD_MAX_ENTRIES
 
 
-def mode_field(lang: str = "en") -> dict:
-    """Schema field for the address-mode parameter."""
-    return {
-        "type": "string",
-        "enum": ["peer", "abs"],
-        "description": "Send routing: peer (default) uses this network; abs requires an explicitly authorized absolute cross-network path. Non-self POSIX delivery checks manifest presence and Core liveness (human exception); abs does not bypass checks. See email-manual.",
-    }
-
-
 def _mailbox_dir(agent) -> Path:
     return agent._working_dir / "mailbox"
 
@@ -155,7 +146,7 @@ def _message_summary(msg: dict, read_ids: set[str], truncate: int = 500,
         sender_id = identity.get("agent_id", "")
         # Disambiguate when sender is a different agent — always show
         # agent_id when it differs from ours, regardless of name match.
-        # This handles abs-mode emails where from is a full path.
+        # This handles emails where from is a full absolute path.
         if (recipient_agent_id and sender_id
                 and sender_id != recipient_agent_id):
             name = f"{name} (agent:{sender_id})"
@@ -176,15 +167,8 @@ def _message_summary(msg: dict, read_ids: set[str], truncate: int = 500,
 # ---------------------------------------------------------------------------
 
 def _is_self_send(agent, address: str) -> bool:
-    """Check if the address matches this agent."""
-    if address == agent._working_dir.name:
-        return True
-    if address == str(agent._working_dir):
-        return True
-    if agent._mail_service is not None and agent._mail_service.address:
-        if address == agent._mail_service.address:
-            return True
-    return False
+    """Check if the absolute address matches this agent's own workdir."""
+    return address == str(agent._working_dir)
 
 
 def _persist_to_inbox(agent, payload: dict) -> str:
@@ -208,7 +192,6 @@ def _persist_to_outbox(agent, payload: dict, deliver_at: datetime) -> str:
     msg_dir = _outbox_dir(agent) / msg_id
     msg_dir.mkdir(parents=True, exist_ok=True)
     payload = dict(payload)
-    payload.pop("_mode", None)
     payload.pop("_dispatch_to", None)
     payload["_mailbox_id"] = msg_id
     payload["deliver_at"] = deliver_at.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -251,8 +234,6 @@ def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
     if isinstance(address, list):
         address = address[0] if address else ""
 
-    mode = payload.pop("_mode", "peer")
-
     err = None
     try:
         if _is_self_send(agent, address):
@@ -260,7 +241,7 @@ def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
             agent._wake_nap("mail_arrived")
             status = "delivered"
         elif agent._mail_service is not None:
-            err = agent._mail_service.send(address, payload, mode=mode)
+            err = agent._mail_service.send(address, payload)
             status = "delivered" if err is None else "refused"
         else:
             err = "No mail service configured"

@@ -13,8 +13,6 @@ in the migration report.
 """
 from __future__ import annotations
 
-from .primitives import mode_field
-
 
 def get_description(lang: str = "en") -> str:
     return ("Internal .lingtai mailbox only, not internet email (use imap for external mail). "
@@ -50,7 +48,7 @@ def get_schema(lang: str = "en") -> dict:
                     {"type": "string"},
                     {"type": "array", "items": {"type": "string"}},
                 ],
-                "description": 'Peer name/path for send; abs needs explicit authorization.',
+                "description": 'Absolute agent-workdir path for send.',
             },
             "cc": {
                 "type": "array",
@@ -92,7 +90,6 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "integer",
                 "description": 'Delivery delay in seconds; default 0.',
             },
-            "mode": mode_field(lang),
             "type": {
                 "type": "string",
                 "enum": ["normal"],

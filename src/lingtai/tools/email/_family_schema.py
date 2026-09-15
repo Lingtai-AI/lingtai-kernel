@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .primitives import mode_field
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 
 # The canonical operational/manual action order. Identical to the pre-settings
@@ -32,7 +31,7 @@ ACTION_ORDER: tuple[str, ...] = (
 )
 
 # Short schema guidance routes depth to the installed email-manual.
-_ADDRESS_DESCRIPTION = "Peer name/path for send; string or list; abs needs explicit authorization."
+_ADDRESS_DESCRIPTION = "Absolute agent-workdir path for send; string or list."
 _CC_DESCRIPTION = "Visible CC addresses."
 _BCC_DESCRIPTION = "Hidden BCC addresses."
 _ATTACHMENTS_DESCRIPTION = "Authorized source paths to attach."
@@ -99,14 +98,6 @@ _FILTER_SCHEMA: dict[str, Any] = {
 }
 
 
-def _mode_property() -> dict[str, Any]:
-    """Return the shared nullable ``send.mode`` field without changing its enum."""
-    field = dict(mode_field())
-    field["type"] = ["string", "null"]
-    field["enum"] = [*field["enum"], None]
-    return field
-
-
 _SEND_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -135,7 +126,6 @@ _SEND_INPUT_SCHEMA: dict[str, Any] = {
             "description": _ATTACHMENTS_DESCRIPTION,
         },
         "delay": {"type": ["integer", "null"], "description": _DELAY_DESCRIPTION},
-        "mode": _mode_property(),
         "type": {
             "type": ["string", "null"],
             "enum": ["normal", None],
@@ -144,7 +134,7 @@ _SEND_INPUT_SCHEMA: dict[str, Any] = {
     },
     "required": [
         "address", "subject", "message", "cc", "bcc", "attachments",
-        "delay", "mode", "type",
+        "delay", "type",
     ],
     "additionalProperties": False,
 }
