@@ -187,6 +187,11 @@ def test_registered_description_is_a_concise_first_use_contract():
 
     assert len(description) < 943
     assert "Use the schema for routine calls" in description
+    assert (
+        "Before the first daemon send/emanate in a session, verify the resident "
+        "daemon manager's version/runtime identity unless already checked in that "
+        "session, to avoid a daemon-runner version mismatch."
+    ) in description
     assert "unfamiliar or high-consequence workflows" in description
     assert "complete objective" in description
     assert "tools grant capability only" in description

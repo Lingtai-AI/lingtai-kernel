@@ -1460,8 +1460,11 @@ class _ToolCollector:
 
 
 _DESCRIPTION = (
-    "Daemon — dispatch disposable subagents for bounded parallel work. Use "
-    "the schema for routine calls; read the daemon manual for unfamiliar or "
+    "Daemon — dispatch disposable subagents for bounded parallel work. Before "
+    "the first daemon send/emanate in a session, verify the resident daemon "
+    "manager's version/runtime identity unless already checked in that session, "
+    "to avoid a daemon-runner version mismatch. Use the schema for routine calls; "
+    "read the daemon manual for unfamiliar or "
     "high-consequence workflows. Put the complete objective, authority, safety "
     "boundary, collaboration rules, and deliverable in each task; tools grant "
     "capability only. Terminal outcomes are push-notified; do not poll for completion. "
