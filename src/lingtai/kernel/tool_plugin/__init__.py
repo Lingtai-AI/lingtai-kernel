@@ -57,7 +57,6 @@ __all__ = [
     "ConfigurationPort",
     "ActiveProviderPort",
     "ProviderIdentityPort",
-    "SoulRuntimePort",
     "SystemRuntimePort",
     "IdentityPort",
     "ShutdownPort",
@@ -99,7 +98,7 @@ def _settings_input_schema() -> dict[str, Any]:
 #: Earned, not enumerated: each name below is consumed by a real vertical
 #: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
 #: ``email``, ``plugin``, ``psyche``, ``notification``, ``shell``,
-#: ``soul``, ``system``, ``task_card``, ``vision``, or ``web``). Plugin
+#: ``system``, ``task_card``, ``vision``, or ``web``). Plugin
 #: consumes only the read-only ``plugin_catalog`` projection; Psyche consumes
 #: only its last-applied Pad and prompt-owner configuration through
 #: ``psyche_settings``; Shell consumes
@@ -134,7 +133,6 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "notification_state",
     "notifications",
     "configuration",
-    "soul_runtime",
     "system_runtime",
     "identity",
     "shutdown",
@@ -156,7 +154,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: import, or any knowledge of what the family does.
 OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
     "mcp", "avatar", "context", "daemon", "email", "plugin", "psyche",
-    "notification", "shell", "soul", "system", "task_card", "vision", "web",
+    "notification", "shell", "system", "task_card", "vision", "web",
 )
 
 
@@ -559,93 +557,6 @@ class ProviderIdentityPort(Protocol):
     @property
     def provider(self) -> str | None:
         """The current canonical provider name, or ``None`` when unavailable."""
-
-
-class SoulRuntimePort(Protocol):
-    """Soul's bounded live-self and soul-flow runtime surface.
-
-    This port exists because Soul's public actions are real self-state
-    operations, not signposts: they inspect the current conversation, mutate
-    only ``manifest.soul``-backed cadence/voice state, use the existing
-    consultation lock/timer, and publish or dismiss Soul's own notification.
-    The explicit members below are the complete vocabulary the Soul package
-    consumes; it receives neither the live Agent nor a generic attribute
-    escape hatch. The production adapter owns translations to the Agent's
-    private storage and kernel notification helpers.
-    """
-
-    @property
-    def working_dir(self) -> Path: ...
-
-    @property
-    def config(self) -> Any: ...
-
-    @property
-    def service(self) -> Any: ...
-
-    @property
-    def chat(self) -> Any: ...
-
-    @property
-    def session(self) -> Any: ...
-
-    @property
-    def agent_name(self) -> str: ...
-
-    @property
-    def state(self) -> Any: ...
-
-    @property
-    def idle_event(self) -> Any: ...
-
-    @property
-    def shutdown(self) -> Any: ...
-
-    @property
-    def soul_delay(self) -> float: ...
-
-    @soul_delay.setter
-    def soul_delay(self, value: float) -> None: ...
-
-    @property
-    def soul_timer(self) -> Any: ...
-
-    @soul_timer.setter
-    def soul_timer(self, value: Any) -> None: ...
-
-    @property
-    def fire_lock(self) -> Any: ...
-
-    @property
-    def notification_store(self) -> Any: ...
-
-    @property
-    def notification_fingerprint(self) -> Any: ...
-
-    @property
-    def appendix_ids_by_source(self) -> dict[str, str]: ...
-
-    def log(self, event: str, **fields: Any) -> None: ...
-
-    def restart_soul_timer(self) -> None: ...
-
-    def run_consultation_fire(self) -> None: ...
-
-    def sync_notifications(self) -> None: ...
-
-    def wake_nap(self, reason: str) -> None: ...
-
-    def persist_soul_entry(
-        self, result: dict, mode: str = "flow", source: str = "agent"
-    ) -> None: ...
-
-    def append_soul_flow_record(self, record: dict) -> None: ...
-
-    def publish_notification(self, channel: str, **kwargs: Any) -> None: ...
-
-    def clear_notification(self, channel: str) -> None: ...
-
-    def dismiss_notification(self, channel: str, *, invoked_by: str) -> dict: ...
 
 
 class SystemRuntimePort(Protocol):

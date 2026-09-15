@@ -36,9 +36,9 @@ TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
 # and focused historical tests. Fields that need archive/event/version tracking
 # belong to the retained test/maintenance migration surface.
 DEPRECATED_TOP_FIELDS: set[str] = {
-    # "soul" / "soul_file" — retired in v0.7.6. The soul-flow voice is
-    # now owned by the agent via soul(action='voice') and stored under
-    # manifest.soul.{voice,voice_prompt}.
+    # "soul" / "soul_file" — retired top-level prompt inputs. The Soul
+    # subsystem itself was later removed entirely; see MANIFEST_LEGACY_IGNORED
+    # for the retired ``manifest.soul`` block.
     "soul", "soul_file",
     # The retired brief prompt and its file selector are tolerated as generic
     # deprecated input, but are never typed, resolved, or consumed.
@@ -79,7 +79,6 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "language": str,
     "capabilities": dict,
     "disable": list,
-    "soul": dict,
     # NOTE: molt_notice / molt_pressure / molt_urgency / molt_prompt are
     # deliberately NOT here. They were retired as agent-configurable fields —
     # molt thresholds are kernel-fixed runtime constants (see config.py
@@ -134,6 +133,10 @@ MANIFEST_LEGACY_IGNORED: set[str] = {
     # schema/type failure, but no boot, refresh, or preset path reads them.
     "context_limit", "max_rpm", "streaming", "aed_timeout",
     "max_aed_attempts", "snapshot_interval", "activeness",
+    # The Soul subsystem (inner-voice inquiry/flow/config/voice) was removed.
+    # ``manifest.soul`` blocks written by older agents stay readable — any
+    # shape, no type-check, no warning — and are never honored or rewritten.
+    "soul",
 }
 
 MANIFEST_KNOWN: set[str] = (
@@ -141,14 +144,6 @@ MANIFEST_KNOWN: set[str] = (
 )
 
 NoneType = type(None)
-
-SOUL_OPTIONAL: dict[str, type | tuple[type, ...]] = {
-    "delay": (int, float),
-    "consultation_past_count": int,
-    "voice": str,
-    "voice_prompt": str,
-}
-SOUL_KNOWN: set[str] = set(SOUL_OPTIONAL)
 
 LLM_REQUIRED: dict[str, type | tuple[type, ...]] = {
     "provider": str,
@@ -258,9 +253,8 @@ def validate_init(data: dict) -> list[str]:
     # `prompt_file`; there is still NO legacy alias — a stale `prompt` remains an
     # unknown-field warning rather than being reintroduced.
     #
-    # Note: "soul" / "soul_file" was removed in v0.7.6 — the soul-flow
-    # voice lives at manifest.soul.{voice,voice_prompt} now. The legacy
-    # fields are kept in TOP_KNOWN for silent ignore (no warning).
+    # Note: top-level "soul" / "soul_file" are retired and kept in TOP_KNOWN
+    # for silent ignore (no warning); the Soul subsystem no longer exists.
     for key in ("pad",):
         file_key = f"{key}_file"
         has_inline = key in data
@@ -382,13 +376,6 @@ def validate_init(data: dict) -> list[str]:
             raise ValueError(
                 "manifest.summarize_notification_threshold: expected non-negative int"
             )
-
-    soul = manifest.get("soul")
-    if soul is not None:
-        _optional_keys(soul, SOUL_OPTIONAL, prefix="manifest.soul")
-        for key in soul:
-            if key not in SOUL_KNOWN:
-                warnings.append(f"unknown field in manifest.soul: {key}")
 
     llm = manifest["llm"]
     _require_keys(llm, LLM_REQUIRED, prefix="manifest.llm")

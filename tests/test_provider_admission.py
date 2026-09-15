@@ -30,7 +30,6 @@ from lingtai.kernel.provider_admission import (
 from lingtai.kernel.llm_utils import send_with_timeout, send_with_timeout_stream
 from lingtai.llm.api_gate import APICallGate
 from lingtai.llm.base import _GatedSession
-from lingtai.tools.soul.consultation import _send_with_timeout as soul_send_with_timeout
 
 
 class _InnerSession:
@@ -418,8 +417,6 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
         {
             ("src/lingtai/kernel/session.py", "SessionManager.__init__",
              "ThreadPoolExecutor"): 1,
-            ("src/lingtai/tools/soul/consultation.py", "_send_with_timeout",
-             "Thread"): 1,
         }
     )
     post_admission_provider_dispatch = collections.Counter(
@@ -445,8 +442,6 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
              "_DaemonManagerProcess.start_capsule_server", "Thread"): 1,
             ("src/lingtai/adapters/posix/mail.py",
              "PosixFilesystemMailAdapter.listen", "Thread"): 1,
-            ("src/lingtai/kernel/base_agent/lifecycle.py", "_heartbeat_loop",
-             "Thread"): 1,
             ("src/lingtai/kernel/base_agent/lifecycle.py", "_start", "Thread"): 1,
             ("src/lingtai/kernel/base_agent/lifecycle.py", "_start_heartbeat",
              "Thread"): 1,
@@ -537,9 +532,6 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
              "WindowsDaemonProcessPort.drain_stderr", "Thread"): 1,
             ("src/lingtai/tools/email/manager.py", "EmailManager._send",
              "Thread"): 1,
-            ("src/lingtai/tools/soul/__init__.py", "_handle_flow", "Thread"): 1,
-            ("src/lingtai/tools/soul/consultation.py",
-             "_run_consultation_batch", "Thread"): 1,
             ("src/lingtai/tools/task_card/__init__.py", "TaskCardManager._spawn",
              "Thread"): 1,
         }
@@ -658,29 +650,6 @@ def test_root_admission_reaches_rate_gated_provider_io_worker():
     assert inner.session._inner.calls == [("send", "through-rate-gate")]
     assert port.calls == [(root, ProviderCallClass.ROOT)]
 
-
-def test_root_admission_reaches_soul_consultation_worker_thread():
-    """Soul's production daemon-thread dispatch retains the admitted root."""
-
-    class _SoulRuntime:
-        config = SimpleNamespace(retry_timeout=1.0)
-
-        def log(self, *_args, **_kwargs):
-            return None
-
-    inner = _InnerService()
-    port = _RecordingAdmissionPort()
-    session = ProviderAdmittedLLMService(inner, port).create_session("system")
-    root = RootProviderAdmission("turn-soul-worker", "puffo-v0.test")
-    token = bind_provider_admission(root)
-    try:
-        result = soul_send_with_timeout(_SoulRuntime(), session, "soul-worker")
-    finally:
-        clear_provider_admission(token)
-
-    assert result == "soul-worker"
-    assert inner.session.calls == [("send", "soul-worker")]
-    assert port.calls == [(root, ProviderCallClass.ROOT)]
 
 
 def test_provider_worker_does_not_retain_admission_between_reused_tasks():

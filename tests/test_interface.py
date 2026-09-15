@@ -72,7 +72,7 @@ def test_pop_orphan_tool_call_noop_on_empty():
 # ---------------------------------------------------------------------------
 
 
-def _seed_strict_pair(iface: ChatInterface, call_id: str, name: str = "soul",
+def _seed_strict_pair(iface: ChatInterface, call_id: str, name: str = "demo",
                       args: dict | None = None, content=None) -> None:
     """Append the canonical strict (assistant{tool_call}, user{tool_result})
     pair shape that remove_pair_by_call_id is meant to recognize."""
@@ -159,7 +159,7 @@ def test_remove_pair_by_call_id_refuses_multiple_tool_calls():
 
 
 def test_remove_pair_by_call_id_only_first_match():
-    """Pair may appear at most once for the soul-flow use case, but defend
+    """Pair may appear at most once for the single-slot appendix use case, but defend
     against duplicates: only the first match is removed. (Caller can call
     again to remove subsequent matches if desired.)"""
     iface = ChatInterface()

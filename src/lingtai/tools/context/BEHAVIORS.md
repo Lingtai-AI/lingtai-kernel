@@ -81,7 +81,7 @@ self-contained and executable verbatim by an agent with the tools listed in its
      "manifest": {
        "agent_name": "integration-test", "language": "en",
        "llm": {"provider": "gemini", "model": "test-model", "api_key": "fake-key", "base_url": null},
-       "capabilities": {}, "soul": {"delay": 5}, "stamina": 10,
+       "capabilities": {}, "stamina": 10,
        "context_limit": null, "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 5,
        "admin": {}, "streaming": false
      },

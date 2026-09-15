@@ -426,7 +426,6 @@ def test_build_agent_config_with_policy_leaves_manifest_untouched():
     cfg = build_agent_config(manifest, max_rpm=policy.max_rpm, runtime_policy=policy)
     assert (cfg.context_limit, cfg.activeness, cfg.snapshot_interval) == (2, "policy", 6.0)
     assert (cfg.aed_timeout, cfg.max_aed_attempts, cfg.max_rpm) == (4.0, 5, 3)
-    assert cfg.soul_delay == 5
     assert json.dumps(manifest, sort_keys=True) == snapshot
     # A raw manifest is never an ordinary runtime-policy fallback.
     legacy = build_agent_config(manifest, max_rpm=0)

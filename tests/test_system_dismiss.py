@@ -9,10 +9,8 @@ Dismissal is atomic on the ``notification`` tool:
 * ``notification(action="dismiss_event", event_id=..., [channel="system"])``,
 * ``notification(action="dismiss_ref", ref_id=..., [channel="system"])``.
 
-The ``soul(action="dismiss")`` convenience alias still routes through the same
-shared helper with ``invoked_by="soul"``. Generic dismiss clears one
-``.notification/<channel>.json`` file while preserving producer-specific state
-semantics.
+Generic dismiss clears one ``.notification/<channel>.json`` file while
+preserving producer-specific state semantics.
 """
 from __future__ import annotations
 
@@ -66,15 +64,15 @@ def _dismiss_ref(agent, **kwargs):
 
 def test_dismiss_channel_clears_existing_file(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "cron", {"header": "cron"})
     _mark_delivered(agent)
 
-    res = _dismiss_channel(agent, "soul")
+    res = _dismiss_channel(agent, "cron")
 
-    assert res == {"status": "ok", "channel": "soul", "cleared": True, "forced": False}
+    assert res == {"status": "ok", "channel": "cron", "cleared": True, "forced": False}
     assert snapshot_notifications(tmp_path) == {}
     nd = _events(agent, "notification_dismiss")[0]
-    assert nd["channel"] == "soul"
+    assert nd["channel"] == "cron"
     assert nd["existed"] is True
     assert nd["invoked_by"] == "notification"
     # The system-tool extra log line is never emitted by the notification path.
@@ -84,13 +82,13 @@ def test_dismiss_channel_clears_existing_file(tmp_path: Path) -> None:
 def test_dismiss_channel_is_idempotent_when_absent(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
 
-    res = _dismiss_channel(agent, "soul")
+    res = _dismiss_channel(agent, "cron")
 
     assert res["status"] == "ok"
     assert res["cleared"] is False
     # Wire literal pinned alongside the Core constant that produces it.
     assert res["cause"] == DISMISS_CAUSE_ALREADY_EMPTY == "already_empty"
-    assert res["channel"] == "soul"
+    assert res["channel"] == "cron"
 
 
 def test_dismiss_mcp_dotted_channel(tmp_path: Path) -> None:
@@ -138,7 +136,7 @@ def test_email_registers_generic_dismiss_guard() -> None:
     assert "email(action='dismiss'" in suggestion
     assert "input={'email_id': [...]}" in suggestion
     assert "email_id=[...]" not in suggestion
-    assert is_generic_dismiss_guarded("soul") is None
+    assert is_generic_dismiss_guarded("cron") is None
 
 
 def test_guarded_email_refuses_without_force(tmp_path: Path) -> None:
@@ -196,29 +194,14 @@ def test_guarded_email_force_clears_surface_but_not_mail_state(tmp_path: Path) -
     assert check["emails"][0]["unread"] is True
 
 
-def test_soul_dismiss_alias_uses_shared_helper(tmp_path: Path) -> None:
-    from lingtai.tools import soul
-
-    agent = _StubAgent(tmp_path)
-    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
-    _mark_delivered(agent)
-
-    res = soul.handle(agent, {"action": "dismiss", "input": {}})
-
-    assert res["status"] == "ok"
-    assert res["channel"] == "soul"
-    assert "soul" not in snapshot_notifications(tmp_path)
-    assert _events(agent, "soul_dismiss") == [{}]
-    assert _events(agent, "notification_dismiss")[0]["invoked_by"] == "soul"
-
 
 def test_dismiss_one_channel_preserves_other_channels(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
     publish_test_payload(tmp_path, "email", {"header": "1 unread"})
-    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "cron", {"header": "cron"})
     _mark_delivered(agent)
 
-    res = _dismiss_channel(agent, "soul")
+    res = _dismiss_channel(agent, "cron")
 
     assert res["status"] == "ok"
     out = snapshot_notifications(tmp_path)
@@ -305,7 +288,7 @@ def test_force_bypasses_stale_version_guard(tmp_path: Path) -> None:
 
 def test_stale_other_channel_does_not_block_delivered_channel(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "cron", {"header": "cron"})
     publish_test_payload(tmp_path, "system", {"header": "one", "data": {"events": ["old"]}})
     _mark_delivered(agent)
     publish_test_payload(
@@ -314,7 +297,7 @@ def test_stale_other_channel_does_not_block_delivered_channel(tmp_path: Path) ->
         {"header": "two", "data": {"events": ["old", "new"], "extra": "changed"}},
     )
 
-    res = _dismiss_channel(agent, "soul")
+    res = _dismiss_channel(agent, "cron")
 
     assert res["status"] == "ok"
     assert res["cleared"] is True
@@ -858,13 +841,13 @@ def _agent_with_chat(tmp_path: Path):
 
 def test_real_channel_clear_signals_chat_for_ws_full_epoch(tmp_path: Path) -> None:
     agent = _agent_with_chat(tmp_path)
-    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "cron", {"header": "cron"})
     _mark_delivered(agent)
 
-    res = _dismiss_channel(agent, "soul")
+    res = _dismiss_channel(agent, "cron")
 
     assert res["cleared"] is True
-    assert agent._chat.dismiss_calls == ["soul"]
+    assert agent._chat.dismiss_calls == ["cron"]
 
 
 def test_real_event_dismiss_signals_chat_for_ws_full_epoch(tmp_path: Path) -> None:
@@ -874,7 +857,7 @@ def test_real_event_dismiss_signals_chat_for_ws_full_epoch(tmp_path: Path) -> No
         "system",
         {
             "header": "1 system notification",
-            "data": {"events": [{"event_id": "evt_a", "source": "btw"}]},
+            "data": {"events": [{"event_id": "evt_a", "source": "cron"}]},
         },
     )
     _mark_delivered(agent)
@@ -888,7 +871,7 @@ def test_real_event_dismiss_signals_chat_for_ws_full_epoch(tmp_path: Path) -> No
 def test_noop_dismiss_does_not_signal_chat(tmp_path: Path) -> None:
     agent = _agent_with_chat(tmp_path)
 
-    res = _dismiss_channel(agent, "soul")
+    res = _dismiss_channel(agent, "cron")
 
     assert res["cleared"] is False
     assert agent._chat.dismiss_calls == []

@@ -155,7 +155,7 @@ def is_apriori_summary(content: Any) -> bool:
 # ``src/lingtai/tools/CONTRACT.md`` Contract rules > Envelope).
 _LTP_V2_MIGRATED_FAMILIES = frozenset(
     {
-        "web", "mcp", "plugin", "vision", "avatar", "soul",
+        "web", "mcp", "plugin", "vision", "avatar",
         "shell", "notification", "system", "daemon", "email",
         "task_card",
         "context",
@@ -466,7 +466,7 @@ def maybe_summarize_result(
     # A migrated LTP v2 family may instead use its own canonical error status
     # (``web``'s, ``mcp``'s, and ``knowledge``'s envelope failures are exactly
     # ``"failed"``, and every family built on the generic ``ToolFamily``
-    # dispatcher — including ``avatar`` and ``soul`` — likewise returns
+    # dispatcher — including ``avatar`` — likewise returns
     # ``"failed"`` for its envelope-level errors; ``mcp``'s unknown-action
     # envelope uses the kernel-wide ``"error"`` above); recognizing it here is
     # scoped to migrated families only, so an unrelated tool's non-error

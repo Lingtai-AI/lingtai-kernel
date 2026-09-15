@@ -513,12 +513,6 @@ def test_invalid_psyche_owner_aborts_live_refresh_before_teardown(
             "covenant_mirror": (tmp_path / "system/covenant.md").read_bytes(),
             "system_mirror": (tmp_path / "system/system.md").read_bytes(),
         }
-        teardown_calls: list[str] = []
-        monkeypatch.setattr(
-            agent,
-            "_cancel_soul_timer",
-            lambda: teardown_calls.append("cancel_soul_timer"),
-        )
         real_read = psyche_settings.read_resolved_prompt_inputs
         owner_reads: list[Path] = []
 
@@ -536,7 +530,6 @@ def test_invalid_psyche_owner_aborts_live_refresh_before_teardown(
             agent._setup_from_init()
 
         assert owner_reads == [tmp_path]
-        assert teardown_calls == []
         assert agent._sealed is state["sealed"] is True
         assert agent.service is state["service"]
         assert agent._session is state["session"]

@@ -186,7 +186,7 @@ def test_system_rejects_unknown_and_retired_actions(tmp_path, action):
 
 
 # ---------------------------------------------------------------------------
-# nap removed — was broken (blocked notifications/soul flow while inside
+# nap removed — was broken (blocked notifications while inside
 # tool handler). _nap_wake / _wake_nap remain as general-purpose heartbeat
 # nudges used by notification sync.
 # ---------------------------------------------------------------------------

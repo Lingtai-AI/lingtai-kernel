@@ -46,7 +46,7 @@ bare `pip install` here as the normal installation path.
 ## What this repository owns
 
 - **The agent runtime** — the core turn loop, lifecycle, tool dispatch, mailbox,
-  soul (inner voice), molt, and notification machinery that make an agent run.
+  molt, and notification machinery that make an agent run.
 - **Two Python surfaces** — `lingtai.kernel`, the minimal runtime (`BaseAgent`,
   intrinsics, the LLM protocol, mail, and logging), and `lingtai`, the
   batteries-included runtime, CLI, and services that build `Agent(BaseAgent)` on top

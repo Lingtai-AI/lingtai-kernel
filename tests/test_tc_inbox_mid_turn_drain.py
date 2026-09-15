@@ -5,7 +5,7 @@ The hook fires inside each adapter's send() after the message has been
 committed to the canonical ChatInterface but before the API call. The
 kernel installs ``_drain_tc_inbox_for_hook`` as that hook, so any
 involuntary tool-call pair enqueued mid-task (mail notifications,
-soul.flow voices, future producers) is spliced into the wire chat
+demo.flow voices, future producers) is spliced into the wire chat
 within the next tool round rather than waiting for the outer turn to
 finish.
 
@@ -70,15 +70,15 @@ def _mail_pair(notif_id: str, body: str = "test") -> InvoluntaryToolCall:
     )
 
 
-def _soul_pair(fire_id: str, voice: str = "v") -> InvoluntaryToolCall:
-    """Build a coalescing+replace_in_history soul.flow pair."""
-    call = ToolCallBlock(id=fire_id, name="soul",
+def _demo_pair(fire_id: str, voice: str = "v") -> InvoluntaryToolCall:
+    """Build a coalescing+replace_in_history demo.flow pair."""
+    call = ToolCallBlock(id=fire_id, name="demo",
                          args={"action": "flow", "input": {},
                                "reasoning": "involuntary"})
-    result = ToolResultBlock(id=fire_id, name="soul", content={"voice": voice})
+    result = ToolResultBlock(id=fire_id, name="demo", content={"voice": voice})
     return InvoluntaryToolCall(
         call=call, result=result,
-        source="soul.flow",
+        source="demo.flow",
         enqueued_at=time.time(),
         coalesce=True,
         replace_in_history=True,
@@ -424,14 +424,14 @@ class TestDrainHookSplices:
 
 
 # ---------------------------------------------------------------------------
-# 5. Replace-in-history mid-turn (soul.flow semantics)
+# 5. Replace-in-history mid-turn (demo.flow semantics)
 # ---------------------------------------------------------------------------
 
 
 class TestReplaceInHistoryMidTurn:
-    """soul.flow uses replace_in_history=True to keep at most one
+    """demo.flow uses replace_in_history=True to keep at most one
     consultation pair in wire history. The mid-turn drain must honor
-    this — splicing a fresh soul.flow pair removes the prior one."""
+    this — splicing a fresh demo.flow pair removes the prior one."""
 
     def test_replace_removes_prior_pair(self, tmp_path):
         agent = BaseAgent(
@@ -450,8 +450,8 @@ class TestReplaceInHistoryMidTurn:
 
         agent._install_drain_hook()
 
-        # First soul.flow firing
-        first = _soul_pair("fire_1", voice="first voice")
+        # First demo.flow firing
+        first = _demo_pair("fire_1", voice="first voice")
         agent._tc_inbox.enqueue(first)
         agent._chat.pre_request_hook(iface)
         first_call_id = first.call.id
@@ -462,10 +462,10 @@ class TestReplaceInHistoryMidTurn:
             for entry in iface.entries for b in entry.content
         )
         assert first_call_present
-        assert agent._appendix_ids_by_source.get("soul.flow") == first_call_id
+        assert agent._appendix_ids_by_source.get("demo.flow") == first_call_id
 
-        # Second soul.flow firing (e.g. timer fired again on next round)
-        second = _soul_pair("fire_2", voice="second voice")
+        # Second demo.flow firing (e.g. timer fired again on next round)
+        second = _demo_pair("fire_2", voice="second voice")
         agent._tc_inbox.enqueue(second)
         agent._chat.pre_request_hook(iface)
         second_call_id = second.call.id
@@ -483,7 +483,7 @@ class TestReplaceInHistoryMidTurn:
             for entry in iface.entries for b in entry.content
         )
         assert second_call_present
-        assert agent._appendix_ids_by_source.get("soul.flow") == second_call_id
+        assert agent._appendix_ids_by_source.get("demo.flow") == second_call_id
 
 
 # ---------------------------------------------------------------------------

@@ -80,7 +80,7 @@
     // shape guidance, not a migration registry or a runtime history file.
     // The kernel boots the `lingtai.core.*` floor by default on every
     // agent: knowledge, skills, shell, avatar, daemon, and mcp — plus
-    // the always-on system, context, pad, lingtai, soul, notification, and email
+    // the always-on system, context, pad, lingtai, notification, and email
     // intrinsics.
     // You do NOT need to list those here unless you want to OVERRIDE
     // their default kwargs (e.g. give `shell` a deny-list policy file
@@ -134,11 +134,6 @@
       // "compose"/"video"/"draw"/"talk" — use the `media-creation` skill + an MCP server.
       // "listen"          — use the `listen` skill (faster-whisper + librosa).
     },
-
-    // -------------------------------------------------------
-    // Soul flow is opt-in via LINGTAI_SOUL_FLOW_ENABLED (for example, through /setup).
-    // soul.delay is only the cadence after opt-in; omit it to inherit the kernel default.
-    // Add "soul": { "delay": <seconds> } only when overriding cadence.
 
     // -------------------------------------------------------
     // Pseudo-agent outbox subscriptions

@@ -293,7 +293,7 @@ SHOW fully redacts the env-selected and fallback paths.
 These classifications are tested against the canonical schemas/registry so
 future fields cannot vanish silently:
 
-- Concrete ToolPlugin owners stay out of System: Soul; Shell; Daemon;
+- Concrete ToolPlugin owners stay out of System: Shell; Daemon;
   Notification; Vision; Web; Task Card; Plugin/Psyche;
   Skills; LingTai character; MCP, curated addons, and their config/session
   paths. Psyche owns the live Pad prompt inputs at root `pad`/`pad_file` and
@@ -305,7 +305,8 @@ future fields cannot vanish silently:
   `manifest.max_aed_attempts`, `manifest.aed_timeout`, `manifest.streaming`,
   `manifest.activeness`, `manifest.llm.codex_thread_salt`, and nested init
   `manifest.llm.context_limit`, `manifest.max_turns`, context-serialization
-  template fields, retired molt/stamina fields, and retired prompt/soul fields.
+  template fields, retired molt/stamina fields, retired prompt fields, and the
+  retired `manifest.soul` block of the removed Soul subsystem.
 - Kernel-fixed context-pressure thresholds, the hidden idle-sleep timeout, and
   fixed tool-loop safety limits are code policy rather than settings.
 
@@ -329,7 +330,6 @@ not System:
 - `LINGTAI_NOTIFICATION_MAX_CHARS`
 - `LINGTAI_PUFFO_V0_REGISTRY`
 - `LINGTAI_SHELL`
-- `LINGTAI_SOUL_FLOW_ENABLED`
 - `LINGTAI_TASKCARD_POLL_INTERVAL`
 - `LINGTAI_TELEGRAM_CONFIG`
 - `LINGTAI_TOOL_TIMEOUT_MAX_SECONDS`

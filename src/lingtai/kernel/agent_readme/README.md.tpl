@@ -11,7 +11,7 @@ folder; mechanism details live in `system/substrate.md`.
 
 | Path | What it is | Open when |
 |---|---|---|
-| [`system/substrate.md`](system/substrate.md) | How an agent's body works: extensions, lifecycle, communication, memory/molt, idle/soul, tool tiers | You want the mechanism — main entrance |
+| [`system/substrate.md`](system/substrate.md) | How an agent's body works: extensions, lifecycle, communication, memory/molt, idle behavior, tool tiers | You want the mechanism — main entrance |
 | [`system/lingtai.md`](system/lingtai.md) | Who this agent is: specialties, working style, relationships | You want to know the agent |
 | [`system/pad.md`](system/pad.md) | Current state: active tasks, handoff notes | You want to know what it is doing now |
 | [`knowledge/`](knowledge/) | Private long-term memory entries | You want the facts it remembers |

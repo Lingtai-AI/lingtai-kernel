@@ -334,9 +334,7 @@ related_files:
   - tests/test_skills.py
   - tests/test_manual_cleanup_routes.py
   - tests/test_snapshot.py
-  - tests/test_soul.py
-  - tests/test_soul_consultation.py
-  - tests/test_soul_settings.py
+  - tests/test_soul_removed.py
   - tests/test_source_drift.py
   - tests/test_status_snapshot.py
   - tests/test_streaming.py
@@ -404,7 +402,6 @@ related_files:
   - tests/test_tool_family_knowledge_migration_parity.py
   - tests/test_tool_family_manual_contract.py
   - tests/test_tool_family_mcp_migration_parity.py
-  - tests/test_tool_family_soul_migration.py
   - tests/test_tool_family_system_migration.py
   - tests/test_tool_family_vision_migration.py
   - tests/test_tool_family_wire_parity.py

@@ -375,8 +375,9 @@ def test_tc_wake_is_not_a_daemon_entry():
     """tc_wake is an involuntary splice in the agent's own context, NOT a daemon.
 
     Guards against the easy mistake of treating every non-'main' source as
-    daemon spend. tc_wake/heal/soul/notification_sync run in the parent's own
-    context and must survive a main-agent-only filter.
+    daemon spend. tc_wake/heal/notification_sync run in the parent's own
+    context and must survive a main-agent-only filter; legacy ``soul`` rows
+    written before the Soul subsystem was removed stay readable the same way.
     """
     for source in ("main", "tc_wake", "heal", "soul",
                    "notification_sync", "summarize"):

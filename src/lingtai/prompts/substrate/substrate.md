@@ -52,7 +52,6 @@ Choose the smallest form that fits the need:
 ACTIVE works; IDLE keeps listeners available. ASLEEP remains wakeable;
 SUSPENDED is process-dead and needs CPR or restart. Diagnose STUCK before
 choosing recovery. Routine waiting is IDLE, not repeated polling or timed sleep.
-Soul reflection is advice, not an external event or command.
 
 Messages belong to their producer channels. A notification is a hint, not the
 canonical message; plain text output is private diary, not a reply channel.

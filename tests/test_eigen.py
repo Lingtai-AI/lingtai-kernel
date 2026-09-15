@@ -300,7 +300,7 @@ def test_eigen_name_rejects_empty(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Molt snapshots — discrete pre-molt interface dumps for past-self consultation
+# Molt snapshots — discrete pre-molt interface dumps for audit and recovery
 # ---------------------------------------------------------------------------
 
 

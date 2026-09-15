@@ -195,7 +195,7 @@ class TestAvatarRulesActionRemoved:
         avatar_spawn/avatar_rules two-tool era). That shorthand was removed
         so the unified 'avatar' tool matches the schema-and-runtime-required
         'action' contract every other canonical action tool (knowledge, mcp,
-        skills, notification, system, soul, daemon) already follows — see
+        skills, notification, system, daemon) already follows — see
         avatar CONTRACT.md contract_version 4.
         """
         from lingtai.agent import Agent

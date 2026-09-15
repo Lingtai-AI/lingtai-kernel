@@ -325,7 +325,7 @@ def test_tc_id_is_isolated_to_the_molt_handler(tmp_path):
     """`_tc_id` is stripped from the closed root but still reaches the molt.
 
     Context is the one migrated family that genuinely *consumes* this transport
-    key rather than merely dropping it (`soul`/`notification`/`system` drop
+    key rather than merely dropping it (`notification`/`system` drop
     it). It must therefore neither break the closed-root check nor leak to any
     other action.
     """
@@ -517,7 +517,7 @@ def test_successful_molt_lifecycle_in_a_disposable_workdir(tmp_path):
         assert "source: agent" in summary_file.read_text()
         assert journal in summary_file.read_text()
 
-        # Snapshot persisted for past-self consultation.
+        # Snapshot persisted as a discrete audit/recovery artifact.
         snapshots = sorted((agent._working_dir / "history" / "snapshots").glob("*.json"))
         assert len(snapshots) == 1
         assert json.loads(snapshots[0].read_text())

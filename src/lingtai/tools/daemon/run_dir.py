@@ -1217,7 +1217,7 @@ class DaemonRunDir:
         }
 
         # Daemon's own ledger — tagged source=daemon for uniformity with
-        # parent's ledger and main/soul writes (every entry self-describes).
+        # parent's ledger and main writes (every entry self-describes).
         self._safe(
             "append_tokens.daemon_ledger",
             lambda: append_token_entry(

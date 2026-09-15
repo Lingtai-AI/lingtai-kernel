@@ -434,8 +434,10 @@ _ALL_PACKAGES = sorted(
 # ``pad + lingtai + knowledge + skills = psyche`` — adds the nineteenth, and
 # the intrinsic ``task_card`` producer adds the twentieth. ``plugin``, the
 # Agent Plugins flagpost twin of ``mcp``, was the twenty-first; the removed
-# public ``file`` family took its glossary with it, leaving twenty.
-assert len(_ALL_PACKAGES) == 20, _ALL_PACKAGES
+# public ``file`` family took its glossary with it, leaving twenty, and the
+# removed Soul subsystem took its glossary with it, leaving nineteen.
+assert len(_ALL_PACKAGES) == 19, _ALL_PACKAGES
+assert "soul" not in _ALL_PACKAGES
 assert "psyche" in _ALL_PACKAGES
 assert "plugin" in _ALL_PACKAGES
 assert "task_card" in _ALL_PACKAGES

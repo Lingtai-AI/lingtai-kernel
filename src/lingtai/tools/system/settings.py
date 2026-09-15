@@ -216,7 +216,6 @@ SYSTEM_INIT_CONCRETE_TOOL_EXCLUSIONS = frozenset(
         # Email owns these mail-adapter subscription paths. Its owner-local
         # discovery row fully redacts both current and default path lists.
         "/manifest/pseudo_agent_subscriptions",
-        "/manifest/soul",
     }
 )
 SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
@@ -240,6 +239,9 @@ SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
         "/substrate_file",
         "/brief",
         "/brief_file",
+        # The Soul subsystem was removed; ``manifest.soul`` is a recognized-
+        # and-ignored legacy block, never a System row.
+        "/manifest/soul",
         "/manifest/activeness",
         "/manifest/aed_timeout",
         "/manifest/context_limit",
@@ -433,7 +435,6 @@ SYSTEM_ENVIRONMENT_CLASSIFICATION: dict[str, frozenset[str]] = {
             "LINGTAI_NOTIFICATION_MAX_CHARS",
             "LINGTAI_PUFFO_V0_REGISTRY",
             "LINGTAI_SHELL",
-            "LINGTAI_SOUL_FLOW_ENABLED",
             "LINGTAI_TASKCARD_POLL_INTERVAL",
             "LINGTAI_TELEGRAM_CONFIG",
             "LINGTAI_TOOL_TIMEOUT_MAX_SECONDS",

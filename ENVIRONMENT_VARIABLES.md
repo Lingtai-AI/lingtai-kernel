@@ -44,7 +44,6 @@ related_files:
 - src/lingtai/tools/mcp/ANATOMY.md
 - src/lingtai/tools/notification/ANATOMY.md
 - src/lingtai/tools/notification/CONTRACT.md
-- src/lingtai/tools/soul/ANATOMY.md
 - src/lingtai/tools/system/ANATOMY.md
 - src/lingtai/tools/web_search/ANATOMY.md
 - tests/ANATOMY.md
@@ -107,7 +106,6 @@ reports, prompts, or this registry.
 | `LINGTAI_AGENT_DIR` | unset; normally launcher-injected | Existing local directory | Out-of-process MCP and client workdir | MCP/client process start; restart after change | Invalid path fails the MCP or client operation | `src/lingtai/mcp_servers/_config.py` | Keep private workdir contents out of model-facing output |
 | `LINGTAI_MCP_NAME` | unset | Registered MCP name | One MCP process identity | MCP process start; restart after change | Missing or unknown name fails closed | `src/lingtai/mcp_servers/_config.py` | Prevents arbitrary server selection; it is not a secret |
 | `LINGTAI_TUI_DIR` | expanded `~/.lingtai-tui` when unset | Any path string; the environment value wins and only `Path.expanduser` is applied, so relative paths stay relative and explicit empty means `.` | Base directory for the default Codex token and auth-pool paths | Codex adapter/account-source or default token-manager construction; change the launcher or `env_file` and fully relaunch | No eager directory validation; unexpandable `~` can fail construction, while missing/unreadable/invalid auth files fail the later account/request path closed | `system` catch-all — `src/lingtai/tools/system/settings.py`; canonical consumers in `src/lingtai/auth/codex.py` and `src/lingtai/auth/codex_pool.py` | SHOW fully redacts both current and default paths; never log the resolved directory or credential paths, and do not treat a path as authorization |
-| `LINGTAI_SOUL_FLOW_ENABLED` | disabled unless host enables it | `1`/`0` and documented component boolean forms | Optional soul-flow capability | Capability bootstrap; refresh or restart after change | Treated as disabled | `src/lingtai/tools/soul` | Not a command-execution or approval switch |
 | `LINGTAI_INJECT_REASONING_FALLBACK` | `on` | `1`/`0`, `true`/`false`, `on`/`off` (component boolean forms); explicit provider config param wins | Inject a per-turn-unique reasoning stub on assistant tool-call turns that lack preserved thinking (required by thinking-mode endpoints such as DeepSeek V4) | Adapter session construction; restart session after change | Invalid values fall back to `on` | `src/lingtai/llm/openai/adapter.py` | Reasoning stub only; not a capability or authorization switch |
 
 ## MCP and provider configuration

@@ -349,7 +349,7 @@ reason is not recorded.
 ## Behavior K003 — `eigen` is retired: LingTai identity lives in `context` + `psyche`, name changes are `system.name_set`
 
 - **id**: K003
-- **title**: the `eigen` intrinsic no longer exists; the identity/soul surface
+- **title**: the `eigen` intrinsic no longer exists; the identity surface
   is `context` (molt owns the identity summary in `input`) plus the
   manual-only `psyche` family, and the true name is set once via
   `system.name_set` / `system.name_nickname`

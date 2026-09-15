@@ -280,7 +280,6 @@ def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None
     address = manifest_data.get("address") or ""
     created = manifest_data.get("created_at") or ""
     admin = manifest_data.get("admin") or {}
-    soul_delay = manifest_data.get("soul_delay")
     molt_count = manifest_data.get("molt_count", 0)
 
     lines: list[str] = []
@@ -326,8 +325,6 @@ def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None
                 lines.append(f"You hold admin flags: {', '.join(flags)}.")
 
     # Resources.
-    if soul_delay is not None:
-        lines.append(f"Your soul flow fires {soul_delay}s after you go idle.")
     if mailbox_name:
         lines.append(f"You receive messages via {mailbox_name}.")
 
@@ -498,7 +495,7 @@ class BaseAgent:
         self.nickname: str | None = None  # mutable alias (别名)
         # A constrained composition injects one Core-owned provider-admission
         # Port. Wrap the service rather than only the main run loop: the root
-        # session, summaries, soul, and future calls through this Agent service
+        # session, summaries, and future calls through this Agent service
         # cross the same boundary. Detached daemon/avatar execution constructs
         # independent provider services and therefore requires the separate
         # host-mediated derived-admission adapter; it must not inherit this
@@ -670,9 +667,6 @@ class BaseAgent:
         if comment:
             self._prompt_manager.write_section("comment", comment)
 
-        # Soul delay — needed before manifest build
-        self._soul_delay = max(1.0, self._config.soul_delay)
-
         # Agent ID, created_at, and molt_count — persistent state restored
         from datetime import datetime, timezone
         import secrets
@@ -773,7 +767,7 @@ class BaseAgent:
 
         # _pending_mail_notifications removed — email arrivals now use
         # single-slot unread-digest (email.unread) instead of per-arrival
-        # notification pairs. Bounce/MCP/soul events publish their own
+        # notification pairs. Bounce/MCP events publish their own
         # `.notification/*.json` files and don't need per-ref tracking.
 
         # LLM worker poison state. Set when WorkerStillRunningError means the
@@ -907,16 +901,6 @@ class BaseAgent:
         self._idle.set()
         self._state = AgentState.IDLE
         self._sealed = False
-
-        # Soul — inner voice
-        self._soul_prompt = ""       # non-empty during inquiry
-        self._soul_oneshot = False    # True during pending inquiry
-        self._soul_timer: threading.Timer | None = None
-        # Held while a soul flow consultation fire is running. Voluntary
-        # soul(action='flow') calls try-acquire non-blocking — if held,
-        # the call is rejected with "soul flow ongoing".
-        self._soul_fire_lock: threading.Lock = threading.Lock()
-        self._insight_turn_counter: int = 0
 
         # Agent record — throttled by LINGTAI_SESSION_STATS_REFRESH_SECONDS;
         # see _write_session_stats_record. Sequence is process-local only
@@ -1075,7 +1059,7 @@ class BaseAgent:
         """Resolve a kernel-facing hook function from an injected intrinsic.
 
         The kernel used to reach into intrinsic modules by import (e.g.
-        ``from ..intrinsics.soul.flow import _start_soul_timer``). After the
+        ``from ..intrinsics.context import context_forget``). After the
         tools consolidation the kernel cannot import ``tools``, so every such
         touchpoint resolves through the injected registry instead: the
         intrinsic package re-exports its kernel-facing functions from its
@@ -1257,15 +1241,10 @@ class BaseAgent:
     def _set_state(self, new_state: AgentState, reason: str = "") -> None:
         """Transition to a new state.
 
-        Drives the soul cadence timer: the timer runs only while the
-        agent is IDLE.  Entering IDLE starts a fresh ``soul_delay``-second
-        timer; leaving IDLE (to ACTIVE, STUCK, ASLEEP, or SUSPENDED)
-        cancels it.  The timer does NOT reschedule itself after firing —
-        the next IDLE transition starts a fresh countdown.
+        Owns the hidden idle-timeout bookkeeping: entering IDLE stamps
+        ``_idle_since_monotonic``; leaving IDLE (to ACTIVE, STUCK, ASLEEP,
+        or SUSPENDED) clears it.
         """
-        _start_soul_timer = self._intrinsic_hook("soul", "_start_soul_timer")
-        _cancel_soul_timer = self._intrinsic_hook("soul", "_cancel_soul_timer")
-
         old = self._state
         if old == new_state:
             return
@@ -1275,16 +1254,12 @@ class BaseAgent:
         else:
             self._idle.set()
 
-        # Soul timer + hidden idle-timeout bookkeeping: IDLE-only.  Start on
-        # entering IDLE, cancel/clear on leaving. No-op when soul is absent.
+        # Hidden idle-timeout bookkeeping: IDLE-only.  Stamp on entering
+        # IDLE, clear on leaving.
         if new_state == AgentState.IDLE:
             self._idle_since_monotonic = self._lifecycle_clock.monotonic_seconds()
-            if _start_soul_timer is not None:
-                _start_soul_timer(self)
         elif old == AgentState.IDLE:
             self._idle_since_monotonic = None
-            if _cancel_soul_timer is not None:
-                _cancel_soul_timer(self)
 
         # Issue #164 — watchdog bookkeeping. A state transition is itself
         # forward progress, so reset the no-progress clock. The
@@ -1452,25 +1427,6 @@ class BaseAgent:
         from .messaging import _rescan_large_tool_results
         return _rescan_large_tool_results(self)
 
-    # ------------------------------------------------------------------
-    # Soul (pass-throughs to soul_flow.py)
-    # ------------------------------------------------------------------
-
-    def _start_soul_timer(self) -> None:
-        fn = self._intrinsic_hook("soul", "_start_soul_timer")
-        if fn is not None:
-            fn(self)
-
-    def _cancel_soul_timer(self) -> None:
-        fn = self._intrinsic_hook("soul", "_cancel_soul_timer")
-        if fn is not None:
-            fn(self)
-
-    def _soul_whisper(self) -> None:
-        fn = self._intrinsic_hook("soul", "_soul_whisper")
-        if fn is not None:
-            fn(self)
-
     def _drain_tc_inbox(self) -> None:
         """Splice queued involuntary tool-call pairs at a safe boundary.
 
@@ -1480,7 +1436,7 @@ class BaseAgent:
         (``base_agent/turn.py:_handle_request``) and the dedicated TC
         wake handler (``_handle_tc_wake``). The pre-request hook itself
         adds a third path: drain fires once per LLM round-trip inside
-        the tool-call loop, so mail notifications and soul.flow voices
+        the tool-call loop, so mail notifications and other involuntary pairs
         splice into the wire mid-task instead of waiting for the outer
         turn to end.
         """
@@ -1538,21 +1494,17 @@ class BaseAgent:
           (chat_history.jsonl, .status.json, /codex view) update
           immediately either way.
 
-        Subtle semantic for ``replace_in_history=True`` (soul.flow):
-        when the hook fires mid-turn, splicing in a replacement pair
-        removes the prior pair of the same source from the interface.
-        This is *almost* identical to the turn-boundary behavior that
-        already exists today, with one nuance: the LLM's reasoning in
-        the *current* turn was conditioned on a wire that contained
-        the prior pair, but its next API call (or its in-flight
-        reasoning continuation) may serialize a wire that doesn't.
-        For soul.flow's reflective voices this is harmless — they
-        don't drive tool calls and the model isn't building a chain
-        of reasoning that depends on the prior voice's exact text.
-        For any future producer that uses ``replace_in_history=True``
-        with content the agent might cite mid-turn, this is a
-        consideration; flagged here rather than buried in commit
-        history.
+        Subtle semantic for ``replace_in_history=True``: when the hook
+        fires mid-turn, splicing in a replacement pair removes the prior
+        pair of the same source from the interface. This is *almost*
+        identical to the turn-boundary behavior that already exists
+        today, with one nuance: the LLM's reasoning in the *current*
+        turn was conditioned on a wire that contained the prior pair,
+        but its next API call (or its in-flight reasoning continuation)
+        may serialize a wire that doesn't. No in-tree producer uses
+        ``replace_in_history=True`` today; for any future producer whose
+        content the agent might cite mid-turn, this is a consideration;
+        flagged here rather than buried in commit history.
 
         Idempotent: re-assigning the same callable to the same session
         attribute is a no-op. Called from :meth:`_drain_tc_inbox` so
@@ -2325,7 +2277,7 @@ class BaseAgent:
         # interface_converters.py and anthropic/adapter.py.
         content_dict = body
 
-        # Build a per-source summary: "3 email, 1 soul, 0 system".
+        # Build a per-source summary: "3 email, 1 daemon, 0 system".
         # Counts come from data.count / len(data.events) / len(data.voices)
         # depending on the producer; fall back to "?" if unparseable.
         summary_parts = []
@@ -2542,37 +2494,6 @@ class BaseAgent:
             )
         except Exception:
             pass
-
-    def _persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:
-        fn = self._intrinsic_hook("soul", "_persist_soul_entry")
-        if fn is not None:
-            fn(self, result, mode=mode, source=source)
-
-    def _append_soul_flow_record(self, record: dict) -> None:
-        fn = self._intrinsic_hook("soul", "_append_soul_flow_record")
-        if fn is not None:
-            fn(self, record)
-
-    def _run_inquiry(self, question: str, source: str = "agent") -> None:
-        fn = self._intrinsic_hook("soul", "_run_inquiry")
-        if fn is not None:
-            fn(self, question, source=source)
-
-    def _flatten_v3_for_pair(self, voice: dict) -> dict:
-        fn = self._intrinsic_hook("soul", "_flatten_v3_for_pair")
-        if fn is None:
-            return voice
-        return fn(self, voice)
-
-    def _run_consultation_fire(self) -> None:
-        fn = self._intrinsic_hook("soul", "_run_consultation_fire")
-        if fn is not None:
-            fn(self)
-
-    def _rehydrate_appendix_tracking(self) -> None:
-        fn = self._intrinsic_hook("soul", "_rehydrate_appendix_tracking")
-        if fn is not None:
-            fn(self)
 
     # ------------------------------------------------------------------
     # Heartbeat (pass-throughs to lifecycle.py)
@@ -3057,7 +2978,7 @@ class BaseAgent:
         ``ledger_source`` tags any token-ledger entry written for the
         most recent LLM round-trip. Default ``"main"`` covers the bulk
         of callers. Set to ``"tc_wake"`` from involuntary splice paths
-        so consultation cadence does not double-count splices as main turns.
+        so usage accounting and history distinguish involuntary splices from main turns.
         """
         history_dir = self._working_dir / "history"
         history_dir.mkdir(exist_ok=True)

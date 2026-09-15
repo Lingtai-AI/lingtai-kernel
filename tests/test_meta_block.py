@@ -3331,11 +3331,11 @@ def test_attach_active_notifications_uses_canonical_system_payload(tmp_path):
     ]
 
 
-def test_attach_active_notifications_uses_canonical_soul_payload(tmp_path):
+def test_attach_active_notifications_uses_canonical_producer_payload(tmp_path):
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)
-    (notif_dir / "soul.json").write_text(
-        '{"header": "soul flow", "icon": "🌊", "priority": "normal", '
+    (notif_dir / "cron.json").write_text(
+        '{"header": "cron", "icon": "⏰", "priority": "normal", '
         '"data": {"voices": ['
         '{"source": "insights", "voice": "Remember to verify by email."}'
         ']}}'
@@ -3345,7 +3345,7 @@ def test_attach_active_notifications_uses_canonical_soul_payload(tmp_path):
 
     attach_active_notifications(agent, [block], prior_holder=None)
 
-    payload = block.metadata["agent_meta"]["notifications"]["attention"]["soul"]
+    payload = block.metadata["agent_meta"]["notifications"]["attention"]["cron"]
     assert "_notifications" not in block.content
     assert payload["data"]["voices"] == [
         {"source": "insights", "voice": "Remember to verify by email."}

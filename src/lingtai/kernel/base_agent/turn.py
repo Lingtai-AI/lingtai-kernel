@@ -1130,9 +1130,8 @@ def _run_loop_body(agent) -> None:
 
     while True:
         while not agent._shutdown.is_set():
-            # --- Asleep: soul off, wait for inbox message ---
+            # --- Asleep: wait for inbox message ---
             if agent._asleep.is_set():
-                agent._cancel_soul_timer()
                 # Heal any dangling tool_calls on the wire BEFORE going to
                 # sleep. If we sleep with an unanswered tool_call, the next
                 # mail's _inject_notification_pair refuses to append (would
@@ -1894,8 +1893,8 @@ def _run_loop_body(agent) -> None:
                 except Exception as notif_err:
                     agent._log("idle_notification_check_error",
                                error=str(notif_err))
-            # Issue #655: the post-turn section (chat-history save and
-            # auto-insight) sits outside the AED try/except above, so an
+            # Issue #655: the post-turn chat-history save sits outside the
+            # AED try/except above, so an
             # exception here (e.g. OSError from a full disk during save) would
             # propagate out of _run_loop and silently kill the daemon run-loop
             # thread, leaving the agent unresponsive while status still shows
@@ -1908,17 +1907,6 @@ def _run_loop_body(agent) -> None:
                     )
                 else:
                     agent._save_chat_history()
-
-                # Auto-insight: fire after N turns
-                if not skip_post_turn_save and agent._config.insights_interval > 0:
-                    agent._insight_turn_counter += 1
-                    if agent._insight_turn_counter >= agent._config.insights_interval:
-                        agent._insight_turn_counter = 0
-                        from ..i18n import t as _ti
-                        agent._run_inquiry(
-                            _ti(agent._config.language, "insight.auto_question"),
-                            source="auto",
-                        )
             except Exception as e:  # noqa: BLE001 — post-turn must never kill the loop
                 agent._log(
                     "post_turn_error",
@@ -2400,7 +2388,7 @@ def _handle_tc_wake(agent, msg: Message) -> None:
             _process_response(agent, response, ledger_source="tc_wake")
             # Notification-driven turns also run turn-boundary housekeeping so molt
             # pressure / notification sync / large-result rescan fire even when the
-            # agent is woken by mail/soul (see _turn_boundary_housekeeping).
+            # agent is woken by mail (see _turn_boundary_housekeeping).
             _turn_boundary_housekeeping(agent)
         except Exception as e:
             from ..llm_utils import WorkerStillRunningError
@@ -2491,8 +2479,7 @@ def _record_apriori_summary_usage(agent, response, tool_name, tool_call_id) -> N
     ``usage`` would otherwise be invisible to the agent's lifetime totals / cost
     analytics. We attribute it with ``source="summarize_apriori"`` (see
     ``APRIORI_SUMMARY_LEDGER_SOURCE``), plus ``tool_name``/``tool_call_id`` so
-    the row is correlatable with the durable tool_result event. This mirrors the
-    soul one-shot accounting in ``intrinsics/soul/consultation._write_soul_tokens``.
+    the row is correlatable with the durable tool_result event.
 
     Fail-open on *accounting*: a ledger write failure must never break the
     summary path (content-side fail-closed is handled by the orchestrator),
@@ -2556,10 +2543,9 @@ def _build_apriori_summarizer_fn(agent):
     (observed live on PR #586). The supported one-shot path on this provider is
     the same Responses session the main agent uses: ``create_session(...)`` (which
     builds a ``CodexResponsesSession``) followed by ``session.send(...)``. This is
-    exactly how the kernel's other internal one-shot calls work — see
-    ``intrinsics/soul/inquiry.soul_inquiry`` and
-    ``intrinsics/soul/consultation``. Using it here makes the a-priori summary
-    work on every provider the main agent itself works on.
+    exactly how the kernel's other internal one-shot calls work. Using it here
+    makes the a-priori summary work on every provider the main agent itself
+    works on.
     """
     service = getattr(agent, "service", None)
     if service is None or not callable(getattr(service, "create_session", None)):

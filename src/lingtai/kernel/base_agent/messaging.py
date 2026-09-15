@@ -90,8 +90,8 @@ def _enqueue_system_notification(
     writes: the merge runs as a ``_mutator`` callback passed to
     ``store.compare_update_channel("system", UNCONDITIONAL, _mutator)``,
     which the notification store applies as a compare-and-update. Only
-    ``system.json`` needs this merge step because ``email.json`` and
-    ``soul.json`` recompute full state on every publish (no merge).
+    ``system.json`` needs this merge step because producers such as
+    ``email.json`` recompute full state on every publish (no merge).
 
     Args:
         agent: The agent instance.

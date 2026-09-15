@@ -310,13 +310,13 @@ def test_system_rejects_notification_action(tmp_path: Path) -> None:
 
 def test_system_rejects_dismiss_action(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "cron", {"header": "cron"})
     _mark_delivered(agent)
-    res = sys_intrinsic.handle(agent, {"action": "dismiss", "input": {"channel": "soul"}})
+    res = sys_intrinsic.handle(agent, {"action": "dismiss", "input": {"channel": "cron"}})
     assert res["status"] == "error"
     assert "Unknown system action" in res["message"]
     # The channel was NOT cleared — system can't dismiss anything.
-    assert "soul" in snapshot_notifications(tmp_path)
+    assert "cron" in snapshot_notifications(tmp_path)
 
 
 def test_system_module_has_no_dismiss_callable() -> None:
@@ -411,12 +411,12 @@ def test_check_returns_placeholder_dict(tmp_path: Path) -> None:
 
 def test_dismiss_channel_clears_surface(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "cron", {"header": "cron"})
     _mark_delivered(agent)
 
-    res = _call(agent, "dismiss_channel", channel="soul")
+    res = _call(agent, "dismiss_channel", channel="cron")
 
-    assert res == {"status": "ok", "channel": "soul", "cleared": True, "forced": False}
+    assert res == {"status": "ok", "channel": "cron", "cleared": True, "forced": False}
     assert snapshot_notifications(tmp_path) == {}
     # Provenance: invoked_by="notification"; no system_dismiss line.
     assert _events(agent, "notification_dismiss")[0]["invoked_by"] == "notification"
@@ -980,9 +980,9 @@ def test_every_action_dispatches_through_the_family(tmp_path: Path) -> None:
     _mark_delivered(agent)
     assert _call(agent, "dismiss_ref", ref_id="r2")["status"] == "ok"
 
-    publish_test_payload(tmp_path, "soul", {"header": "x"})
+    publish_test_payload(tmp_path, "cron", {"header": "x"})
     _mark_delivered(agent)
-    assert _call(agent, "dismiss_channel", channel="soul")["status"] == "ok"
+    assert _call(agent, "dismiss_channel", channel="cron")["status"] == "ok"
 
 
 def test_reserved_manual_collision_fails_loudly() -> None:
@@ -1901,7 +1901,6 @@ class TestWorkdirAwareHookPredicates:
         "site_name",
         [
             "karma_sleep",
-            "soul_flow",
             "nudge_current_entries",
             "nudge_goal_check",
             "worker_recovery",
@@ -1914,7 +1913,7 @@ class TestWorkdirAwareHookPredicates:
         monkeypatch: pytest.MonkeyPatch,
         site_name: str,
     ) -> None:
-        """R1/R5/R6/R7: each of the six call sites must consult the channel
+        """R1/R5/R6/R7: each of the five call sites must consult the channel
         allow predicate with the agent's workdir. A spy records the
         ``workdir`` argument; a reverted workdir-less predicate records
         ``None`` and fails this test."""
@@ -1928,20 +1927,6 @@ class TestWorkdirAwareHookPredicates:
 
         if site_name == "karma_sleep":
             agent = self._make_sleep_sync_agent(workdir)
-        elif site_name == "soul_flow":
-            agent = SimpleNamespace(
-                _state=AgentState.IDLE,
-                _soul_timer=None,
-                _working_dir=workdir,
-                _notification_store=notification_store_for(workdir),
-                _notification_fp=(),
-                _logs=[],
-            )
-            agent._log = lambda event_type, **fields: agent._logs.append(
-                (event_type, fields)
-            )
-            agent._sync_notifications = lambda: None
-            agent._run_consultation_fire = lambda: None
         elif site_name == "nudge_current_entries":
             agent = SimpleNamespace(
                 _working_dir=workdir,
@@ -1988,7 +1973,7 @@ class TestWorkdirAwareHookPredicates:
             seen.append(workdir)
             return real_gap(workdir)
 
-        if site_name in ("karma_sleep", "soul_flow", "telegram_task_card"):
+        if site_name in ("karma_sleep", "telegram_task_card"):
             monkeypatch.setattr(notif_mod, "is_channel_allowed", _spy_ica)
         elif site_name == "nudge_goal_check":
             # goal.py binds _get_allow_predicate at module import time.
@@ -2000,11 +1985,6 @@ class TestWorkdirAwareHookPredicates:
             from lingtai.tools.system.karma import _sleep as karma_sleep
 
             karma_sleep(agent, {"reason": "test"})
-        elif site_name == "soul_flow":
-            from lingtai.tools.soul.flow import _soul_whisper
-            from lingtai.adapters.tool_plugin_host import agent_soul_runtime
-
-            _soul_whisper(agent_soul_runtime(agent))
         elif site_name == "nudge_current_entries":
             from lingtai.kernel.nudge import _current_entries
 
@@ -2162,15 +2142,14 @@ def test_runtime_producer_instruction_templates_are_dispatchable(
 ) -> None:
     """Every runtime ``instructions`` string teaches an accepted call shape.
 
-    Covers the four producer strings the migration would otherwise strand:
-    post-molt (psyche), tool_loop_guard (turn loop), nudge, and btw (soul).
+    Covers the producer strings the migration would otherwise strand:
+    post-molt (psyche), tool_loop_guard (turn loop), and nudge.
     Each taught call is dispatched against its own published channel and must
     succeed — proving the guidance and the envelope agree.
     """
     cases = [
         ("tool_loop_guard", "handled"),
         ("nudge", None),
-        ("btw", None),
     ]
     for channel, reason in cases:
         workdir = tmp_path / f"producer-{channel}"

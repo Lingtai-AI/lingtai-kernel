@@ -7,7 +7,6 @@ from types import MappingProxyType, SimpleNamespace
 from lingtai.tools import daemon as daemon_tool
 from lingtai.tools import email as email_tool
 from lingtai.tools import context as context_tool
-from lingtai.tools import soul as soul_tool
 from lingtai.tools import system as system_tool
 from lingtai.tools import vision as vision_tool
 from lingtai.tools import web_search as web_tool
@@ -124,7 +123,6 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             "daemon",
             "email",
             "context-manual",
-            "soul-manual",
             "system-manual",
             "web",
             "vision",
@@ -171,7 +169,6 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         # envelope.
         "email": ("email", lambda: email_tool.handle(agent, {"action": "manual", "input": {}})),
         "context": ("context-manual", lambda: context_tool.handle(agent, {"action": "manual", "input": {}})),
-        "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual", "input": {}})),
         "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual", "input": {}})),
         "web": ("web", lambda: web_manager.handle({"action": "manual", "input": {}})),
         "vision": ("vision", lambda: vision_manager.handle({"action": "manual", "input": {}})),
@@ -223,7 +220,6 @@ def test_manual_schemas_keep_their_closed_roots() -> None:
         daemon_tool,
         email_tool,
         context_tool,
-        soul_tool,
         system_tool,
         web_tool,
         vision_tool,

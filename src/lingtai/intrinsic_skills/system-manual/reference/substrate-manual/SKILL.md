@@ -60,7 +60,7 @@ Common states:
 
 - **ACTIVE**: currently in a turn. Notifications may be mirrored but not yet
   acted on; some producers defer active-turn injection until the turn ends.
-- **IDLE**: awake and waiting. Listeners remain live; soul flow may fire.
+- **IDLE**: awake and waiting. Listeners remain live.
 - **STUCK**: runtime believes the agent may be blocked or unresponsive.
 - **ASLEEP**: quiet but wakeable by mailbox/listener events.
 - **SUSPENDED**: process-dead; requires CPR or external restart.
@@ -280,17 +280,12 @@ layer — read it rather than guessing field names. If you are an avatar without
 admin ownership of an MCP, do not reconfigure the orchestrator-owned
 integration; escalate or ask the orchestrator.
 
-## 9. Idle and soul
-
-Soul flow is advice, not command; verify external-event claims through the
-relevant channel.
+## 9. Idle
 
 With no concrete task, go idle/asleep rather than spinning, polling, or using
 timed sleeps — idle keeps listeners available (resident substrate's Life and
-communication section). `soul-manual` owns
-soul-flow mechanics in full: the `LINGTAI_SOUL_FLOW_ENABLED` gate, disabled-flow
-behavior, `delay_seconds` as cadence-not-off-switch, and the privacy/cost
-rationale.
+communication section). Nothing fires on an idle cadence by itself; wake
+comes from notifications, mail, or the operator.
 
 ## 10. Resident substrate maintenance
 
@@ -357,11 +352,9 @@ raw operator-owned init.json
   above — it is not a repository-wide inventory of every raw-`init.json`
   writer.** Other owner-local features persist their own settings to raw
   `init.json` outside this lifecycle; document those under their owning
-  tool/manual, not here. For example, `soul(action="config")` and
-  `soul(action="voice")` persist `manifest.soul.*` (delay,
-  consultation_past_count, voice, voice_prompt) directly to the agent's own
-  `init.json` via `tools/soul/config.py`'s `_persist_soul_config` /
-  `_persist_soul_voice`, independent of boot/refresh/preset-swap.
+  tool/manual, not here. (The removed Soul family used to persist a
+  `manifest.soul` block this way; that block is now inert legacy input that
+  boot, refresh, and preset swap read past without rewriting.)
 
 Top-level prompt/env/venv/addons/MCP/manifest field groups follow the same raw
 → derived shape but are owned elsewhere; do not duplicate their detail here:

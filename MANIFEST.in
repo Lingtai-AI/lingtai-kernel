@@ -37,7 +37,7 @@ recursive-include src/lingtai/tools *.json
 # contracts.
 recursive-include src/lingtai/tools CONTRACT.md
 # Per-tool glossary resources — mirror the package-data globs in
-# pyproject.toml so source releases carry the 60 files (exact filenames,
+# pyproject.toml so source releases carry the 57 files (exact filenames,
 # not a wildcard, to prevent accidental inclusion of extra files).
 recursive-include src/lingtai/tools glossary-en.md
 recursive-include src/lingtai/tools glossary-zh.md
@@ -46,7 +46,6 @@ graft src/lingtai/tools/email/manual
 graft src/lingtai/tools/context/manual
 graft src/lingtai/tools/system/manual
 graft src/lingtai/tools/psyche/manual
-graft src/lingtai/tools/soul/manual
 graft src/lingtai/tools/notification/manual
 graft src/lingtai/tools/knowledge/manual
 graft src/lingtai/tools/skills/manual

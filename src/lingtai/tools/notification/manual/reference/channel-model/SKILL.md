@@ -33,8 +33,8 @@ are ignored. A present but unregistered channel emits one deduplicated
 `notification_hook` warn-and-flag event with `ref_id:
 blocked_channel:<channel>` until registration.
 
-Built-ins include `email`, `system`, `soul`, `nudge`, `post-molt`, `tool_loop_guard`,
-`bash`, `btw`, `cron`, `molt`, `goal`, `daemon`, and `delay-alarm`. Runtime/configuration nudges use `nudge`; its System owner routes `kernel_version` to update checks. `source_drift` stays local, never release-migration routing. See `../../../system-manual/reference/runtime-update-checks/SKILL.md`.
+Built-ins include `email`, `system`, `nudge`, `post-molt`, `tool_loop_guard`,
+`bash`, `cron`, `molt`, `goal`, `daemon`, and `delay-alarm`. Runtime/configuration nudges use `nudge`; its System owner routes `kernel_version` to update checks. `source_drift` stays local, never release-migration routing. See `../../../system-manual/reference/runtime-update-checks/SKILL.md`.
 
 ## Payload and producer ownership
 

@@ -368,8 +368,8 @@ def _dispatch_summary(
     Uses the kernel's canonical ``.notification/`` filesystem-as-protocol
     instead of the legacy inbox queue.  The notification file is written as
     ``.notification/mcp.<mcp_name>.json`` and surfaces in the agent's
-    ``notification(action="check")`` wire block alongside email, soul,
-    and system events.
+    ``notification(action="check")`` wire block alongside email and
+    system events.
 
     No explicit wake is needed — ``_sync_notifications`` detects the
     fingerprint change on the next heartbeat tick and handles the
@@ -549,9 +549,9 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
             # and have a "from" field that looks like a username (not a system sender)
             if not has_human_messages:
                 sender = event.get("from", "")
-                # Check if this is a human message (not from system/soul/etc.)
+                # Check if this is a human message (not from system/etc.)
                 # Human senders typically have usernames or first names
-                if sender and not sender.startswith("system") and not sender.startswith("soul"):
+                if sender and not sender.startswith("system"):
                     has_human_messages = True
 
             try:

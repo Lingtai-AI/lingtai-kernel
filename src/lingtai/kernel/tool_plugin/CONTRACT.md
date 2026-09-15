@@ -39,9 +39,6 @@ related_files:
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/bash/manual/SKILL.md
-  - src/lingtai/tools/soul/__init__.py
-  - src/lingtai/tools/soul/CONTRACT.md
-  - src/lingtai/tools/soul/manual/SKILL.md
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/CONTRACT.md
   - src/lingtai/tools/system/plugin.py
@@ -177,7 +174,7 @@ Coding agents and LingTai agents MUST observe the following.
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
   vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
-  `daemon`, `email`, `plugin`, `psyche`, `notification`, `shell`, `soul`,
+  `daemon`, `email`, `plugin`, `psyche`, `notification`, `shell`,
   `system`, `task_card`, `vision`, and `web` are declared, in that official
   order; the former later-family target register is now empty. Task Card is a
   channel-neutral intrinsic dynamic capability: its one `TaskCardManager` is
@@ -241,7 +238,6 @@ capability.
 | `PsycheSettingsPort` | `read_snapshot() -> PsycheSettingsSnapshotPort` | Return only Psyche's last completely applied immutable structural snapshot: `pad` / `pad_file` plus `base_prompt`, `covenant`, and `comment` with their file pointers. It grants no Agent, owner-source read, prompt mutation, reconstruction, or settings write. |
 | `NotificationPort` | `publish_system(...) -> bool`; `publish_channel(channel, payload, ref_id=...) -> bool` | Publish an idempotent durable system event or a latest-channel payload without reaching an Agent/store. Shell uses exactly these two operations for its existing async watchdog and completion wake semantics. It is distinct from `NotificationStatePort`, which grants Notification Core's mirror/hook administration. |
 | `ConfigurationPort` | `values -> Mapping[str, Any]` | Immutable copied values explicitly selected by capability setup for this one bind (Shell policy and dialect override, and Vision's `VisionConfiguration` snapshot fields, today); no Agent configuration lookup or write operation. |
-| `SoulRuntimePort` | bounded self-state, consultation, cadence, and Soul-notification operations | Soul's explicit live-self vocabulary; no Agent, generic attribute escape hatch, tool mount, or unrelated capability API. |
 | `SystemRuntimePort` | Read/query `admin`, `language`, `token_usage()`, `load_preset()`; act through `log()`, preset activation, `retry_failed_mcps()`, `perform_refresh()`, `resuscitate()`; sleep evidence/effects via `sleep_attention_fingerprints()`, `transition_to_asleep()`, `sleep_alarm_lock()`, `arm_sleep_alarm()` | System's bounded runtime/lifecycle vocabulary. The four sleep members are translation-only evidence/effects: the one sleep policy (fingerprint comparison, refusal/force, receipts, audit) lives in `lingtai.tools.system.karma.sleep_use_case`, never in this port or its adapter. Identity is deliberately absent. |
 | `IdentityPort` | Read `name`; durably write `set_name()` and `set_nickname()` | System's separate naming vocabulary. The current name is read-only through the port; its two explicit writes may update durable identity, but cannot mutate address, workdir, or general runtime state. |
 | `ShutdownPort` | `is_set() -> bool` | Observe only whether the current Agent is stopping, so a Task Card watch thread ends promptly. It grants no lifecycle transition, join, or event mutation. |
@@ -256,7 +252,7 @@ capability.
 exactly twenty grantable names: `workdir`, `prompt_section`, `avatar_parent`,
 `context_runtime`,
 `daemon_runtime`, `email_runtime`, `plugin_catalog`,
-`psyche_settings`, `notification_state`, `notifications`, `configuration`, `soul_runtime`,
+`psyche_settings`, `notification_state`, `notifications`, `configuration`,
 `system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
 `task_card_notifications`, `active_provider`, `web_runtime`, and
 `provider_identity` (`file_io` is no longer grantable): `mcp`
@@ -267,8 +263,7 @@ Email-owned `email_runtime`; and Plugin consumes `workdir`, its own
 read-only `plugin_catalog` projection; Psyche consumes `workdir` plus only the
 read-only `psyche_settings` snapshot; Shell consumes `workdir` plus
 `notifications` and `configuration` for its existing durable async execution
-semantics; Soul consumes `workdir` plus its explicit `soul_runtime`
-live-self operations vocabulary; System consumes `workdir` plus its
+semantics; System consumes `workdir` plus its
 `system_runtime` lifecycle vocabulary and the durable naming `identity`
 port; Task Card consumes `workdir` plus `shutdown`,
 `task_card_lifecycle`, and `task_card_notifications`, built in the standard

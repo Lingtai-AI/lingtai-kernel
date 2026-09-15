@@ -21,8 +21,7 @@ related_files:
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/tools/context/__init__.py
   - src/lingtai/tools/context/manual/SKILL.md
-  - src/lingtai/tools/soul/CONTRACT.md
-  - src/lingtai/tools/soul/__init__.py
+  - tests/test_soul_removed.py
   - src/lingtai/tools/skills/CONTRACT.md
   - src/lingtai/tools/skills/__init__.py
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -67,7 +66,7 @@ maintenance: |
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
   `src/lingtai/mcp_catalog.json` in related_files with it. `mcp`, `avatar`,
   `context`, `daemon`, `email`, `plugin`, `psyche`, `notification`,
-  `shell`, `soul`, `system`, `task_card`, `vision`, and `web` are the fourteen
+  `shell`, `system`, `task_card`, `vision`, and `web` are the thirteen
   static declared families today, in that official order; do not widen that claim
   without another family's evidence. The former `file` family was removed
   outright (no filesystem family exists; durable filesystem changes go through
@@ -293,23 +292,22 @@ Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 
 **Status.** This section fixes the declaration, activation, dispatch, manual,
 host, identifier, and migration vocabulary that every official model-facing tool
-family shares. The accepted declared evidence is exactly the fourteen static
+family shares. The accepted declared evidence is exactly the thirteen static
 official families `mcp`, `avatar`, `context`, `daemon`, `email`,
-`plugin`, `psyche`, `notification`, `shell`, `soul`, `system`, `task_card`,
+`plugin`, `psyche`, `notification`, `shell`, `system`, `task_card`,
 `vision`, and `web`, in that order. `mcp` is the base reference; the remaining
-thirteen are accepted vertical slices with their narrow earned ports. The
-kernel's closed `GRANTABLE_HOST_PORTS` inventory has twenty grantable names:
+twelve are accepted vertical slices with their narrow earned ports. The
+kernel's closed `GRANTABLE_HOST_PORTS` inventory has nineteen grantable names:
 `workdir`, `prompt_section`, `avatar_parent`, `context_runtime`,
 `daemon_runtime`, `email_runtime`, `plugin_catalog`, `psyche_settings`,
-`notification_state`, `notifications`, `configuration`, `soul_runtime`,
+`notification_state`, `notifications`, `configuration`,
 `system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
 `task_card_notifications`, `active_provider`, `web_runtime`, and
 `provider_identity` (the former `file_io` port left with the removed `file`
 family). Email retains its call-time manager port,
 Plugin retains its protected prompt section and
 read-only `plugin_catalog` projection, and always-on Notification retains
-`workdir`/`notification_state` with Core-bound callbacks, Soul retains
-`workdir` plus its explicit `soul_runtime` live-self port, and System retains
+`workdir`/`notification_state` with Core-bound callbacks, and System retains
 `workdir` plus its `system_runtime` lifecycle vocabulary and durable naming
 `identity` port, and Task Card retains `workdir` plus `shutdown`, its
 current-Agent `task_card_lifecycle` manager slot, and the closed
@@ -347,8 +345,8 @@ this contract's classification:
 - **Registry families** — the intrinsics and built-in capability rows
   registered through `src/lingtai/tools/registry.py`. `mcp`, `avatar`,
   `context`, `daemon`, `email`, `plugin`, `psyche`, `notification`, `shell`,
-  `soul`, `system`, `task_card`, `vision`, and `web` are first-party families
-  in scope; all fourteen are declared under the selected form. Every other
+  `system`, `task_card`, `vision`, and `web` are first-party families
+  in scope; all thirteen are declared under the selected form. Every other
   family in this class is a future migration unit, and no family in this class
   is wrapped as an MCP plugin package today.
 - **Kernel-shipped MCP families** — the model-facing families this
@@ -454,7 +452,7 @@ register is family-generic rather than MCP-only.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical slice lands.
   `mcp` is the current base reference; Avatar, Context, Daemon, Email,
-  Plugin, Notification, Shell, Soul, System, Task Card, Vision, and Web are
+  Plugin, Notification, Shell, System, Task Card, Vision, and Web are
   accepted vertical evidence here. The former later-family target register is
   empty; a reserved name is never by itself a claim that a candidate slice has
   merged, and the reserved list is not an admission path.
@@ -619,14 +617,8 @@ non-goal for third-party-versus-third-party mounts.
 **Current evidence versus migration target.**
 
 - The selected form is generic. `mcp` is the base reference; Avatar, Context,
-  Daemon, Email, Plugin, Notification, Shell, Soul, System, Task Card,
-  Vision, and Web are accepted vertical evidence. Soul's declaration binds only
-  `workdir`/`soul_runtime`;
-  its focused suites (`tests/test_tool_family_soul_migration.py`,
-  `tests/test_soul_runtime_port_ab.py`, `tests/test_soul_settings.py`) prove the
-  explicit runtime port, exact grant, preserved six-action operational surface,
-  additive reserved SHOW child, one mount, and sole package manual body at
-  `soul-manual`. Email's declaration
+  Daemon, Email, Plugin, Notification, Shell, System, Task Card,
+  Vision, and Web are accepted vertical evidence. Email's declaration
   binds only `workdir`/`email_runtime`; its focused suite proves the typed port,
   one mount/no capability row, canonical manual, and call-time replacement
   manager. Task Card's
@@ -959,7 +951,7 @@ still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
 v2 family (`_LTP_V2_MIGRATED_FAMILIES`,
 `src/lingtai/kernel/tool_result_summary.py:156`, currently `web`, `mcp`,
-`plugin`, `vision`, `avatar`, `soul`, `shell`, `notification`, `system`,
+`plugin`, `vision`, `avatar`, `shell`, `notification`, `system`,
 `daemon`, `email`, `task_card`, `context`, and `psyche`), so
 an unmigrated tool's own field literally named `summarize` is never
 reinterpreted as this control. A family adopting this envelope MUST join that
@@ -989,15 +981,11 @@ addon decompression and unreachable from any action. That is why it is safe in
 `CORE_DEFAULTS`, and registration is registry-level only: registered, never
 running. See `src/lingtai/tools/plugin/CONTRACT.md`.
 
-`soul` (`inquiry | flow | config | voice | dismiss | settings | manual`) is the
-seventh family migrated to this contract, and the first migrated *intrinsic*.
-Its final model-facing root is exactly `action`, `input`, `reasoning`, and
-`summarize`; each action owns one strict closed `input` object, and its
-`summarize` guidance profile is **short-result** for every action (see
-`src/lingtai/tools/soul/CONTRACT.md`). The reserved `settings` child is a
-five-row SHOW over Soul's existing sources; `soul` still supports no settings
-file at either level and its manual says so explicitly. Being an intrinsic, it also
-proves one boundary `web` could not: `base_agent._dispatch_tool` injects the
+The seventh family migrated to this contract, and the first migrated
+*intrinsic*, was `soul`; the whole Soul subsystem has since been removed and
+no `soul` root, action, settings row, or manual exists. The intrinsic boundary
+it first proved still holds for every remaining intrinsic family and is what
+`web` could not prove: `base_agent._dispatch_tool` injects the
 transport-only `_tc_id` into every intrinsic's args, so a migrated intrinsic
 drops that key at its own Host boundary before the closed-root check rather
 than widening the shared envelope's admitted root fields.
@@ -1015,10 +1003,11 @@ family's exact pre-migration unknown-action result, the removed `file` family
 was its fourth, `vision` is its fifth, using it the same way while retaining
 its own outer `handle()` for the family's flat manual/error result shapes,
 `avatar` is its sixth, restoring its own pinned unknown-action error
-envelope the same way, `soul` is its seventh, composing `get_schema()`
-from a module-level schema-only family and building an agent-bound one per
-`handle(agent, args)` call because an intrinsic module has no per-Agent
-manager instance to hold one, `shell` is its eighth, using it the same
+envelope the same way, the removed `soul` was its seventh (the first to
+compose `get_schema()` from a module-level schema-only family and build an
+agent-bound one per `handle(agent, args)` call because an intrinsic module
+has no per-Agent manager instance to hold one — the shape every remaining
+intrinsic family still uses), `shell` is its eighth, using it the same
 way while retaining a thin outer `handle()` that narrows the generic
 unknown-action message to its own five actions, `skills` is its ninth,
 using it the same way but returning its canonical envelope failures
@@ -1027,7 +1016,7 @@ agent-hosted family through its static declared Host ports; generic composition
 injects its reserved `settings` child immediately before `manual`, and its outer
 adapter flattens the reserved `manual` child's canonical result to the pinned
 public shape and preserves Notification's own unknown-action result, while `context`
-is its eleventh, using `soul`'s module-level composition shape while threading the
+is its eleventh, using the intrinsic module-level composition shape while threading the
 `_tc_id` it actually consumes to its `molt` child out-of-band rather
 than widening the shared envelope. `avatar` reuses
 `ToolFamily` but not `build_manual_child`, because its manual ships inside
@@ -1098,18 +1087,12 @@ journal gate refusing before any shed, a full successful molt lifecycle in a
 disposable workdir, the synthesized system-forced pair carrying the current
 envelope, and the reserved `manual` child's no-double-wrap result.
 
-`soul`'s migration evidence (`tests/test_tool_family_soul_migration.py`, plus
-the updated `tests/test_soul.py`, `tests/test_soul_consultation.py`,
-`tests/test_system_dismiss.py`, `tests/test_intrinsic_manual_actions.py`, and
-`tests/test_soul_settings.py`) is likewise one family's local evidence: it
-covers the six existing children plus additive reserved `settings`, the closed
-root on both provider wires, wrong-branch rejection
-before any handler I/O, `reasoning`/`_reasoning`/`summarize`/`_tc_id`
-isolation from child input, the reserved `manual` child's
-full-body/`manual_path` result with no double wrap and no soul operation, and
-— specific to this family — that the opt-in `flow` env gate stays the only
-enable path and that a disabled `flow` is a stable status rather than an
-error.
+`tests/test_soul_removed.py` is the negative evidence for the removed `soul`
+family: no reserved name, port, adapter, intrinsic, config field, catalog
+string, or notification channel remains, while an older agent's
+`manifest.soul`, leftover `.notification/soul.json`/`btw.json` files,
+`source="soul"` ledger rows, and archived `soul` tool-call pairs stay
+readable, untouched, and unexecuted.
 
 `task_card` is a migrated intrinsic family as well, but with a narrower
 producer-first boundary than the channel adapters that may consume it. Its local

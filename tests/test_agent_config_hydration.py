@@ -164,10 +164,11 @@ def test_build_agent_config_ignores_runtime_manifest_values_and_stale_molt():
     # Legacy manifest stamina is ignored by the runtime.
     assert cfg.stamina == defaults.stamina
     assert cfg.max_aed_attempts == defaults.max_aed_attempts
-    assert cfg.soul_delay == 7.0
-    assert cfg.consultation_past_count == 2
-    assert cfg.soul_voice == "custom"
-    assert cfg.soul_voice_prompt == "speak plainly"
+    # The legacy ``manifest.soul`` block is tolerated input only: the removed
+    # Soul subsystem left no AgentConfig field behind for it to hydrate.
+    for retired in ("soul_delay", "consultation_past_count", "soul_voice",
+                    "soul_voice_prompt", "insights_interval"):
+        assert not hasattr(cfg, retired), retired
     assert cfg.thinking == "medium"
     assert cfg.language == "zh"
     assert cfg.activeness == defaults.activeness

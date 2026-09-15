@@ -4,6 +4,5 @@
   "system.context_unknown": "未知",
   "system.mail_bounce": "[系统] 消息投递失败：{error}\n  收件人：{address}\n  主题：{subject}",
   "system.stuck_revive": "[系统] LLM 调用于 {ts} 失败。最近错误：{err_desc}。正在重试。",
-  "insight.auto_question": "你正在为人类操作者生成洞察。基于本次对话中的一切——任务、背景、领域知识、风险和机会——给出恰好2-3条对人类有益的要点。每条应是具体的洞察：你注意到的规律、相关的背景知识、他们可能未察觉的风险、或值得探索的机会。格式：每条以'- '开头，独占一行。不要前言，不要总结——只给要点。",
   "system.refresh_successful": "[system] 沐浴成功。工具与配置已重新加载。可以继续。"
 }

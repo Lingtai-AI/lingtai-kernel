@@ -82,17 +82,17 @@ def task_card_agent(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_all_fourteen_official_families_mount_exactly_once_together(tmp_path):
+def test_all_thirteen_official_families_mount_exactly_once_together(tmp_path):
     """The cumulative composition keeps every landed family and no duplicate."""
     from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
 
     assert OFFICIAL_TOOL_PLUGIN_NAMES == (
         "mcp", "avatar", "context", "daemon", "email", "plugin", "psyche",
-        "notification", "shell", "soul", "system", "task_card", "vision", "web",
+        "notification", "shell", "system", "task_card", "vision", "web",
     )
     agent = Agent(
         service=make_gemini_mock_service(),
-        agent_name="all-fourteen-official-plugins",
+        agent_name="all-thirteen-official-plugins",
         working_dir=tmp_path / "agent",
         capabilities={
             "mcp": {},
@@ -314,27 +314,19 @@ def test_official_task_card_manager_holds_only_the_native_notification_operation
     assert not hasattr(manager._host, "task_card_lifecycle")
 
 
-def test_official_soul_mount_preserves_real_flow_and_packaged_manual(mcp_agent):
-    """Soul uses only its earned self/runtime port, without a second public root."""
-    from lingtai.tools.soul import DECLARATION
-
-    assert DECLARATION.public_actions == (
-        "inquiry", "flow", "config", "voice", "dismiss", "settings", "manual",
+def test_soul_family_is_absent_from_the_official_surface(mcp_agent):
+    """The Soul subsystem was removed: no reserved name, no port, no mount."""
+    from lingtai.kernel.tool_plugin import (
+        GRANTABLE_HOST_PORTS,
+        OFFICIAL_TOOL_PLUGIN_NAMES,
     )
-    assert DECLARATION.settings is True
-    assert DECLARATION.requires == ("workdir", "soul_runtime")
-    assert mcp_agent.official_tool_plugins["soul"] is DECLARATION
-    assert [schema.name for schema in mcp_agent._tool_schemas].count("soul") == 1
 
-    handler = mcp_agent._tool_handlers["soul"]
-    disabled = handler({"action": "flow", "input": {}, "reasoning": "health"})
-    assert disabled["status"] == "disabled"
-    assert disabled["enabled"] is False
-
-    manual = handler({"action": "manual", "input": {}, "reasoning": "guidance"})
-    assert manual["status"] == "ok"
-    assert manual["manual"]
-    assert manual["manual_path"].endswith("capabilities/soul-manual/SKILL.md")
+    assert "soul" not in OFFICIAL_TOOL_PLUGIN_NAMES
+    assert "soul_runtime" not in GRANTABLE_HOST_PORTS
+    assert "soul" not in mcp_agent.official_tool_plugins
+    assert "soul" not in mcp_agent._tool_handlers
+    assert "soul" not in [schema.name for schema in mcp_agent._tool_schemas]
+    assert "soul" not in mcp_agent._intrinsics
 
 
 def test_official_notification_mount_preserves_core_state_and_packaged_manual(

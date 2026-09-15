@@ -98,15 +98,8 @@ def _build_manifest(agent) -> dict:
         "admin": agent._admin,
         "language": agent._config.language,
         "state": agent._state.value,
-        "soul_delay": agent._soul_delay,
-        "soul_voice": getattr(agent._config, "soul_voice", "inner"),
         "molt_count": agent._molt_count,
     }
-    # Custom voice prompt is only meaningful when voice == "custom".
-    # Surface it so /kanban (and any consumer reading .agent.json)
-    # can show the active prompt without calling soul(action='voice').
-    if data["soul_voice"] == "custom":
-        data["soul_voice_prompt"] = getattr(agent._config, "soul_voice_prompt", "") or ""
     if agent._mail_service is not None and agent._mail_service.address:
         data["address"] = agent._mail_service.address
 

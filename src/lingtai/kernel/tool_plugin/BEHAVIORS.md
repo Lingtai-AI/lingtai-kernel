@@ -18,8 +18,6 @@ related_files:
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/bash/_tool_family.py
-  - src/lingtai/tools/soul/__init__.py
-  - src/lingtai/tools/soul/manual/SKILL.md
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/tools/task_card/__init__.py
@@ -59,7 +57,7 @@ maintenance: |
   than leaving a stale pass. The shared C register is family-generic and distinguishes
   target reserved names from candidate merge evidence. `mcp` is the shared-C base
   reference; Avatar, Context, Daemon, Email, Plugin, Notification, Shell,
-  Soul, System, Task Card, Vision, and Web are current
+  System, Task Card, Vision, and Web are current
   vertical evidence. Ports remain least-privilege and tool-specific, while registrar
   mounts are runtime-bound rather
   than per-call Agent dispatch.
@@ -150,7 +148,7 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 
    Expect `('workdir', 'prompt_section', 'avatar_parent', 'context_runtime',
    'daemon_runtime', 'email_runtime', 'plugin_catalog', 'psyche_settings',
-   'notification_state', 'notifications', 'configuration', 'soul_runtime',
+   'notification_state', 'notifications', 'configuration',
    'system_runtime', 'identity', 'shutdown', 'task_card_lifecycle',
    'task_card_notifications', 'active_provider', 'web_runtime',
    'provider_identity') ('workdir', 'notifications', 'configuration')` printed,

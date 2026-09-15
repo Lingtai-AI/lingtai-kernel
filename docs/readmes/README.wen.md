@@ -32,7 +32,7 @@ maintenance: |
 ## 本仓所辖
 
 - **器灵之运行时** —— 使器灵得以运转之核心轮次之环、生灭、工具之派发、信箱、
-  soul（内心之声）、molt 与通知诸机也。
+  molt 与通知诸机也。
 - **两 Python 之面** —— 其一 `lingtai.kernel`，至简之运行时（`BaseAgent`、固有之能、
   LLM 之约、书信、日志）；其二 `lingtai`，具足之运行时、CLI 与服务，于其上构
   `Agent(BaseAgent)`，且重导内核公开之 API。

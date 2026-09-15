@@ -101,7 +101,7 @@ Recommended fields live under `data`:
 - `objective`: what to accomplish.
 - `criteria`: what done means.
 - `reminder_delay_seconds`: optional idle delay before a reminder. If absent, the
-  runtime reuses the agent's soul delay; invalid values fall back safely.
+  runtime uses its fixed default (120 seconds); invalid values fall back safely.
 
 The top-level `instructions` field should explicitly say to read the goal data,
 that the `goal` channel is protected, and that this manual has the mechanism

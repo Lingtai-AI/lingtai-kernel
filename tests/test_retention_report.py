@@ -192,7 +192,10 @@ def test_footprint_reports_portal_logs_and_history_without_candidates(tmp_path):
     data = _report(root)
 
     assert data["totals"]["candidates"] == 0
-    assert data["totals"]["footprints"] == 8
+    # ``logs/soul_flow.jsonl`` is a record left behind by the removed Soul
+    # subsystem: it is no longer a classified footprint, and it is never a
+    # cleanup candidate either (asserted below) — the bytes stay untouched.
+    assert data["totals"]["footprints"] == 7
     assert data["totals"]["footprint_bytes"] == sum(
         path.stat().st_size
         for path in (
@@ -200,7 +203,6 @@ def test_footprint_reports_portal_logs_and_history_without_candidates(tmp_path):
             log_sqlite,
             events,
             token_ledger,
-            soul_flow,
             relaunch,
             archive,
             snap_a,
@@ -223,6 +225,7 @@ def test_footprint_reports_portal_logs_and_history_without_candidates(tmp_path):
     assert events not in candidate_paths
     assert token_ledger not in candidate_paths
     assert soul_flow not in candidate_paths
+    assert soul_flow.is_file()
 
 
 def test_footprints_do_not_bypass_lifecycle_candidate_protection(tmp_path):

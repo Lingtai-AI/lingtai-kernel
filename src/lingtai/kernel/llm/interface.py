@@ -694,7 +694,7 @@ class ChatInterface:
 
         The removable-shape requirement is intentional: this helper exists
         to maintain the single-slot invariant for synthesized appendix
-        pairs (soul flow), which always have exactly that shape. Refusing
+        pairs, which always have exactly that shape. Refusing
         to operate on mixed-content entries protects regular tool-call
         history from being corrupted by accidental id collisions.
 

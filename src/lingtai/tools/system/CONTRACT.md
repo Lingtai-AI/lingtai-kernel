@@ -79,8 +79,8 @@ model-facing root is exactly `action`, `input`, `reasoning`, and `summarize`
 with `additionalProperties: false`, and each action's arguments live only in
 that action's own strict `input` object — so `address` belongs to the six
 address verbs, `preset`/`revert_preset` only to `refresh`, and `content` only
-to the two name actions. It is the third migrated *intrinsic* (after `soul` and
-`notification`) and therefore composes its dispatching family per call rather
+to the two name actions. It is the third migrated *intrinsic* (after the
+since-removed `soul` and `notification`) and therefore composes its dispatching family per call rather
 than owning a per-Agent manager, and drops the kernel-injected `_tc_id` at its
 own Host boundary. The migration changed the argument shape only: the public
 tool name, every retained action value, every privilege gate, receipt, and error
@@ -165,7 +165,7 @@ apply timing, sensitivity notes, real change procedure, and second-SHOW
 verification live only in the manual section named by `comment`. Legacy
 `manifest.cache_miss_budget` remains ignored and is not hydrated.
 
-The owner-local classification explicitly excludes settings assigned to Soul,
+The owner-local classification explicitly excludes settings assigned to
 Shell, Daemon, Notification, Email, File, Vision, Web, Task Card,
 Plugin/Psyche, MCP, and curated-addon ToolPlugins. In particular,
 `manifest.pseudo_agent_subscriptions` is Email-owned and is projected only by

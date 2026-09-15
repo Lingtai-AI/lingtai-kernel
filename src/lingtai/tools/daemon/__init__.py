@@ -3355,7 +3355,7 @@ class DaemonManager:
             if name in EMANATION_BLACKLIST:
                 continue
             # Tolerate non-capability names (intrinsics like 'psyche',
-            # 'system', 'soul' — kernel always-on, not composable). The TUI
+            # 'system' — kernel always-on, not composable). The TUI
             # preset wizard writes these into manifest.capabilities and the
             # main Agent.__init__ tolerates them via try/except (agent.py:91-94);
             # the daemon sandbox must replicate that tolerance or "full" user

@@ -2,8 +2,8 @@
 
 Ownership: these catalogs hold the *human-facing manager prose* that concrete
 tools resolve through ``lingtai.kernel.i18n.t(lang, key)`` — runtime
-preambles, prompts, and system messages such as ``soul.system_prompt``,
-``psyche.context_forget_summary``, ``knowledge.preamble``, and
+preambles, prompts, and system messages such as
+``context.context_forget_summary``, ``knowledge.preamble``, and
 ``email.unread_digest``.
 
 They do **not** own model-facing schema or description text. Tool descriptions
@@ -14,8 +14,9 @@ resources (``glossary-{en,zh,wen}.md``). The kernel reasoning-description key
 ``lingtai/kernel/base_agent/tools.py``; it no longer resides in any catalog.
 
 Before consolidation the manager prose was split across
-``lingtai/kernel/i18n/*.json`` (the five intrinsics: ``email.*``, ``psyche.*``,
-``soul.*``, ``system_tool.*``, ``notification_tool.*``) and
+``lingtai/kernel/i18n/*.json`` (the intrinsics: ``email.*``, ``psyche.*``,
+``system_tool.*``, ``notification_tool.*``; the removed Soul family's
+``soul.*`` keys are gone) and
 ``lingtai/i18n/*.json`` (the wrapper tools: ``read.*``, ``write.*``, ``edit.*``,
 ``glob.*``, ``grep.*``, ``bash.*``, ``daemon.*``, ``avatar.*``, ``knowledge.*``,
 ``skills.*``, ``vision.*``, ``web_search.*``, and the shared

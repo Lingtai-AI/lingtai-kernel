@@ -438,7 +438,7 @@ def _ignored_paths(data: dict[str, Any], warnings: list[str]) -> list[str]:
             paths.append(key)
     manifest = data.get("manifest")
     if isinstance(manifest, dict):
-        for key in ("molt_notice", "molt_pressure", "molt_urgency", "molt_prompt", "stamina"):
+        for key in ("molt_notice", "molt_pressure", "molt_urgency", "molt_prompt", "stamina", "soul"):
             if key in manifest:
                 paths.append(f"manifest.{key}")
     for warning in warnings:

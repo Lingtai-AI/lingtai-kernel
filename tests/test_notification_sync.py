@@ -7,7 +7,7 @@ Covers the design's invariants and the patch's §13 test matrix:
 - §13.3 — ACTIVE-state deferral without ToolResultBlock mutation
 - §13.4 — ASLEEP-state wake on fingerprint change
 - §13.5 — voluntary `notification(action="check")` returns the dict
-- §13.6 — producer migrations: email, soul, system
+- §13.6 — producer migrations: email, system
 - §13.7 — molt clearing
 
 Where possible the tests use the real `notifications.py` module against
@@ -16,7 +16,7 @@ BaseAgent → SessionManager → ChatSession → ChatInterface hierarchy.
 
 The deeper integration paths (heartbeat → `_sync_notifications` → wire
 mutation under real adapters) are covered by the existing `test_tc_inbox*`
-suites and the soul/email integration tests, which continue to pass
+suites and the email integration tests, which continue to pass
 because `tc_inbox` is preserved during the migration window.
 """
 from __future__ import annotations
@@ -49,12 +49,12 @@ def test_fingerprint_empty_dir(tmp_path: Path) -> None:
 
 def test_fingerprint_with_files(tmp_path: Path) -> None:
     publish_test_payload(tmp_path, "email", {"count": 3})
-    publish_test_payload(tmp_path, "soul", {"voices": []})
+    publish_test_payload(tmp_path, "cron", {"voices": []})
     fp = fingerprint_notifications(tmp_path)
     names = [entry[0] for entry in fp]
     assert names == sorted(names)
     assert "email.json" in names
-    assert "soul.json" in names
+    assert "cron.json" in names
     # Each entry is (name, size, sha256).
     for name, size, digest in fp:
         assert size > 0
@@ -93,11 +93,11 @@ def test_collect_mixed_files(tmp_path: Path) -> None:
 
 
 def test_collect_skips_malformed_silently(tmp_path: Path) -> None:
-    publish_test_payload(tmp_path, "soul", {"x": 1})
+    publish_test_payload(tmp_path, "cron", {"x": 1})
     bad_path = tmp_path / ".notification" / "bad.json"
     bad_path.write_text("not json {")
     out = snapshot_notifications(tmp_path)
-    assert out == {"soul": {"x": 1}}
+    assert out == {"cron": {"x": 1}}
 
 
 def test_collect_skips_non_json_files(tmp_path: Path) -> None:
@@ -148,7 +148,7 @@ def test_large_result_acks_preserve_compact_json_bytes(tmp_path: Path) -> None:
 
 def test_clear_idempotent(tmp_path: Path) -> None:
     # Clearing a non-existent file should not raise.
-    clear_test_payload(tmp_path, "soul")
+    clear_test_payload(tmp_path, "cron")
     publish_test_payload(tmp_path, "email", {"x": 1})
     clear_test_payload(tmp_path, "email")
     assert not (tmp_path / ".notification" / "email.json").exists()
@@ -219,7 +219,7 @@ def test_check_action_returns_empty_when_nothing_published(
 def test_check_action_returns_placeholder(tmp_path: Path) -> None:
 
     publish_test_payload(tmp_path, "email", {"count": 5, "newest_received_at": "2026-05-05T00:00:00Z"})
-    publish_test_payload(tmp_path, "soul", {"voices": [{"source": "warmth", "voice": "..."}]})
+    publish_test_payload(tmp_path, "cron", {"voices": [{"source": "warmth", "voice": "..."}]})
 
     @dataclass
     class _Stub:
@@ -236,7 +236,7 @@ def test_check_action_returns_placeholder(tmp_path: Path) -> None:
     # there is only one live notification payload in conversation history.
     assert res.get("_notification_placeholder") is True
     assert "email" not in res
-    assert "soul" not in res
+    assert "cron" not in res
     assert "notifications" not in res
     assert "_meta" not in res
 
@@ -418,90 +418,7 @@ def test_system_publish_concurrent_no_lost_writes(tmp_path: Path) -> None:
     assert len(event_ids) == n_events  # all distinct
 
 
-def test_soul_voices_shape(tmp_path: Path) -> None:
-    """The soul producer's voice-shaping helper trims empty fields."""
-    from lingtai.tools.soul.flow import _shape_soul_voices
 
-    voices = [
-        {"source": "warmth", "voice": "remember to rest", "thinking": ["..."]},
-        {"source": "doubt", "voice": "are you sure?", "thinking": []},
-    ]
-    shaped = _shape_soul_voices(voices)
-    assert len(shaped) == 2
-    assert shaped[0]["source"] == "warmth"
-    assert shaped[0]["voice"] == "remember to rest"
-    assert shaped[0]["thinking"] == ["..."]
-    assert shaped[1]["voice"] == "are you sure?"
-    # Empty thinking is omitted from the entry.
-    assert "thinking" not in shaped[1]
-
-
-def test_human_soul_inquiry_publishes_btw_notification(tmp_path: Path) -> None:
-    """Human `/btw` inquiry results are mirrored to the agent as notification."""
-    from lingtai.tools.soul.inquiry import (
-        _publish_human_inquiry_notification,
-    )
-
-    agent = _ProducerStubAgent(_working_dir=tmp_path)
-    from lingtai.adapters.tool_plugin_host import agent_soul_runtime
-
-    _publish_human_inquiry_notification(
-        agent_soul_runtime(agent),
-        {
-            "prompt": "What should I know?",
-            "voice": "You asked a side question.",
-            "thinking": ["mirror thought"],
-        },
-        "What should I know?",
-    )
-
-    out = snapshot_notifications(tmp_path)
-    assert "btw" in out
-    payload = out["btw"]
-    assert payload["header"] == "/btw side inquiry answered"
-    assert payload["icon"] == "💭"
-    assert "not a direct new instruction" in payload["instructions"]
-    assert payload["data"] == {
-        "source": "human",
-        "mode": "inquiry",
-        "question": "What should I know?",
-        "answer": "You asked a side question.",
-        "thinking": ["mirror thought"],
-    }
-    assert any(evt == "btw_notification_published" for evt, _ in agent._logs)
-
-
-def test_non_human_soul_inquiry_does_not_publish_btw_notification(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    """Auto-insight / agent inquiries keep the existing log-only behavior."""
-    from lingtai.tools.soul import inquiry
-
-    agent = _ProducerStubAgent(_working_dir=tmp_path)
-    from lingtai.adapters.tool_plugin_host import agent_soul_runtime
-
-    monkeypatch.setattr(
-        inquiry,
-        "soul_inquiry",
-        lambda _agent, question: {
-            "prompt": question,
-            "voice": "auto answer",
-            "thinking": [],
-        },
-    )
-
-    inquiry._run_inquiry(agent_soul_runtime(agent), "auto?", source="insight")
-
-    out = snapshot_notifications(tmp_path)
-    assert "btw" not in out
-    assert any(evt == "insight" for evt, _ in agent._logs)
-    assert (tmp_path / "logs" / "soul_inquiry.jsonl").is_file()
-
-
-# ---------------------------------------------------------------------------
-# §13.6.bis — system.publish_notification (canonical helper)
-# ---------------------------------------------------------------------------
 
 
 def test_submit_writes_envelope(tmp_path: Path) -> None:
@@ -566,7 +483,7 @@ def test_molt_preserves_notification_dir(tmp_path: Path) -> None:
     system state, not conversation memory.  In-memory tracking is reset
     (block_id, pending_meta) but the on-disk files and fingerprint persist."""
     publish_test_payload(tmp_path, "email", {"count": 3})
-    publish_test_payload(tmp_path, "soul", {"voices": []})
+    publish_test_payload(tmp_path, "cron", {"voices": []})
     assert (tmp_path / ".notification").is_dir()
 
     # Stub agent with the bare minimum the molt reset logic needs.
@@ -584,7 +501,7 @@ def test_molt_preserves_notification_dir(tmp_path: Path) -> None:
     # .notification/ directory and files should still exist
     assert (tmp_path / ".notification").is_dir()
     assert (tmp_path / ".notification" / "email.json").is_file()
-    assert (tmp_path / ".notification" / "soul.json").is_file()
+    assert (tmp_path / ".notification" / "cron.json").is_file()
     # _notification_fp keeps its value (files still on disk)
     assert agent._notification_fp == (("email.json", 1, 12),)
     # Wire-level tracking is reset
@@ -1069,7 +986,7 @@ def test_sync_empty_state_commits_empty_fingerprint(tmp_path: Path) -> None:
             self._working_dir = workdir
             self._notification_store = notification_store_for(workdir)
             self._state = AgentState.ACTIVE
-            self._notification_fp = (("soul.json", 1, 1),)
+            self._notification_fp = (("cron.json", 1, 1),)
             self._notification_block_id = None
             self._chat_stub = chat
             self._logs = []
@@ -1178,7 +1095,6 @@ def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) ->
         language = "en"
         molt_pressure = 0.9
         molt_prompt = ""
-        insights_interval = 0
         max_aed_attempts = 1
 
     chat = _make_chat_stub()

@@ -76,7 +76,6 @@ class _LoopAgent:
             _rebuild_session=lambda _interface: None,
         )
         self._config = SimpleNamespace(
-            insights_interval=0,
             max_aed_attempts=10,
             language="en",
             time_awareness=True,
@@ -87,7 +86,6 @@ class _LoopAgent:
         self._preset_fallback_attempted = False
         self._task_card_manager = None
         self._llm_worker_interface_poisoned = False
-        self._insight_turn_counter = 0
         self.logs = []
 
     def _log(self, name, **fields):
@@ -95,9 +93,6 @@ class _LoopAgent:
 
     def _set_state(self, state, reason=""):
         self._state = state
-
-    def _cancel_soul_timer(self):
-        return None
 
     def _reset_uptime(self):
         return None

@@ -593,7 +593,7 @@ untrusted inbox event cannot reach provider dispatch under this profile policy.
 indeterminate provider admission cannot reach the underlying provider service;
 that each provider request needs a new decision rather than reusing a previous
 grant; that the typed call class is not inferred from request text; and that
-the real non-streaming, streaming, Soul consultation, rate-gated, and reused
+the real non-streaming, streaming, rate-gated, and reused
 worker dispatch boundaries preserve admission rather than treating a direct
 proxy test as production-path proof.
 `tests/test_execution_workspace.py`, `tests/test_turn_events.py`, `tests/test_turn_permissions.py`, `tests/test_tool_executor.py`, `tests/test_session_mcp.py`, and the ACP

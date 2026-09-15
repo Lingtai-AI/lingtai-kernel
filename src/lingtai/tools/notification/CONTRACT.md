@@ -161,7 +161,7 @@ Observable action contracts are:
   returns `{status: "ok", reason: "added", name}`; `duplicate_name` and
   `channel_in_use` are `status: "error"` results that leave the registry
   unchanged. A channel that is a built-in static channel
-  (`system`/`email`/`soul`/`goal`/`molt`/`nudge`/`post-molt`/`bash`/`btw`/`cron`/`daemon`/`delay-alarm`/`tool_loop_guard`)
+  (`system`/`email`/`goal`/`molt`/`nudge`/`post-molt`/`bash`/`cron`/`daemon`/`delay-alarm`/`tool_loop_guard`)
   or a Store-reserved non-channel stem (`hooks`/`large_result_acks`) is refused
   with `reason: "invalid_manifest"` and a clear message.
   Guards [N002](BEHAVIORS.md#behavior-n002) (registered channel passes through)

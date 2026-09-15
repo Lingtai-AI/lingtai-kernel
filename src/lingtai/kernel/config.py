@@ -111,7 +111,6 @@ CONTEXT_PRESSURE_RECOVERY_TARGET = MOLT_NOTICE_THRESHOLD  # 0.75
 
 MOLT_PRESSURE_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 MOLT_URGENCY_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
-DEFAULT_SOUL_DELAY_SECONDS = 999999999.0
 
 # Rendered system-prompt size pressure — distinct from the CONTEXT_PRESSURE_*
 # family above (which measures system + tools + history against the window).
@@ -162,7 +161,7 @@ def system_prompt_pressure_ratio() -> float:
 # Nested parameter/property descriptions are never affected either way.
 TOOL_PROSE_SECTION_ENABLED_ENV = "LINGTAI_TOOL_PROSE_SECTION_ENABLED"
 # Case-insensitive truthy set, matching the other kernel opt-in gates
-# (``LINGTAI_RISKY_ACTION_GATE``, ``LINGTAI_SOUL_FLOW_ENABLED``). Anything else
+# (``LINGTAI_RISKY_ACTION_GATE``). Anything else
 # — including unset and "" — is off.
 _TOOL_PROSE_SECTION_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -235,7 +234,6 @@ class AgentConfig:
     thinking_budget: int | None = None
     thinking: str = "high"  # reasoning/thinking tier passed to the main persistent LLM session
     data_dir: str | None = None  # for cache files (e.g., model context windows)
-    soul_delay: float = DEFAULT_SOUL_DELAY_SECONDS  # seconds idle before soul whispers; large value = effectively off
     language: str = "en"  # legacy language field retained for compatibility; prompt.py no longer injects prose from it
     activeness: str | None = "balanced"  # legacy responsiveness posture field; prompt.py no longer injects text from it
     stamina: float = IDLE_SLEEP_TIMEOUT_SECONDS  # legacy ignored constructor field; hidden idle timeout uses the kernel constant above
@@ -255,10 +253,6 @@ class AgentConfig:
     molt_pressure: float = MOLT_PRESSURE_THRESHOLD  # legacy alias; unused by the warning path
     molt_urgency: float = MOLT_URGENCY_THRESHOLD  # legacy alias; unused by the warning path
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes
-    insights_interval: int = 0  # turns between auto-insights; 0 = off
-    consultation_past_count: int = 0  # K random past-snapshot consultations per fire; default 0 = current-context soul flow only
-    soul_voice: str = "inner"  # consultation prompt profile — "inner" (terse, "you are the soul, speak as inner voice"), "observer" (structured stepped-back hook framing), or "custom" (use soul_voice_prompt). One unified prompt per profile; the per-fire cue text differentiates insights (current diary) vs past (future-self diary).
-    soul_voice_prompt: str = ""  # custom voice prompt — only used when soul_voice == "custom". Set/cleared by the agent via soul(action="voice", set="custom", prompt="..."). Length-capped at SOUL_VOICE_PROMPT_MAX in soul.py.
     snapshot_interval: float | None = None  # seconds between git snapshots; None = off
 
     def __post_init__(self):

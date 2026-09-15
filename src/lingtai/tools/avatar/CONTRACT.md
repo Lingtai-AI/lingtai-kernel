@@ -72,7 +72,7 @@ compatibility alias.
 (`"required": ["action"]`) and runtime-required — omitting `action` no longer
 defaults to `spawn`. This aligns `avatar` with the established action-tool
 contract already followed by `knowledge`, `mcp`, `skills`, `notification`,
-`system`, `soul`, and `daemon`: every action tool in this repository requires
+`system`, and `daemon`: every action tool in this repository requires
 an explicit `action`, with no implicit default action. A missing `action`
 returns the same deterministic unknown-action error envelope as any other
 unrecognized action value, and performs no spawn, rules, or manual side effect.
@@ -160,7 +160,7 @@ storage; detached-process launch -> §Cross-platform invariants.
   `summarize`, with `additionalProperties: false` and
   `required: ["action", "input", "reasoning"]`. `action` is the enum
   (`spawn` | `settings` | `manual`) — schema-required, the same convention as
-  `knowledge`, `mcp`, `skills`, `notification`, `system`, `soul`, and `daemon`.
+  `knowledge`, `mcp`, `skills`, `notification`, `system`, and `daemon`.
   Each action's own strict, closed `input` schema is exposed to the model
   before invocation two ways, both generated from the one child registry: an
   `input.anyOf` disclosure branch per action (required because `settings` and

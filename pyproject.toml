@@ -140,7 +140,7 @@ exclude = [
     "CONTRACT.md",
     "*/CONTRACT.md",
     # Per-tool glossary resources — exactly glossary-{en,zh,wen}.md per
-    # first-party package (20 packages × 3 languages = 60 files). The
+    # first-party package (19 packages × 3 languages = 57 files). The
     # renderer loads them via importlib.resources to append localized
     # terminology bodies to each tool's ## tools description.
     "*/glossary-en.md",

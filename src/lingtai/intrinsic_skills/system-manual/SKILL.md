@@ -57,7 +57,7 @@ read one route below for unfamiliar or consequential work.
 | Agent or Project address/workdir rename or relocation (mechanical cutover) | [migration-guide](reference/migration-guide/SKILL.md) |
 | External attach diagnostics | [external-attach diagnostic](reference/external-attach-diagnostic/SKILL.md) |
 | ToolFamily/plugin settings | [ToolFamily settings](reference/tool-plugin-settings/SKILL.md) |
-| Context, notification, MCP, shell, daemon, avatar, soul, skills, or knowledge | Read that owning tool's manual; System does not own its procedure. |
+| Context, notification, MCP, shell, daemon, avatar, skills, or knowledge | Read that owning tool's manual; System does not own its procedure. |
 
 ## Everyday use
 

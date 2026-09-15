@@ -66,11 +66,16 @@ def _run_loop_spy(tmp_path, *, max_aed_attempts=1, can_fallback=False,
     agent._reset_uptime = lambda: None
     agent._save_chat_history = lambda *a, **kw: None
     agent._logs = []
-    agent._log = lambda ev, **kw: agent._logs.append((ev, kw))
+
+    def _log(ev, **kw):
+        agent._logs.append((ev, kw))
+        # Break the loop once the terminal ASLEEP boundary is reached.
+        if ev == "sleep":
+            agent._shutdown.set()
+
+    agent._log = _log
     agent._set_state = lambda s, reason="": setattr(agent, "_state", s)
-    # Break the loop once the terminal ASLEEP boundary is reached.
-    agent._cancel_soul_timer = lambda: agent._shutdown.set()
-    agent._config = _NS(insights_interval=0, max_aed_attempts=max_aed_attempts,
+    agent._config = _NS(max_aed_attempts=max_aed_attempts,
                         language="en", time_awareness=True, timezone_awareness=True)
     agent._session = _NS(chat=_NS(interface=_SpyIface()),
                          _rebuild_session=lambda interface: None)
@@ -98,8 +103,6 @@ def _drive(agent, monkeypatch, exc):
         raise exc
     monkeypatch.setattr(_turnmod, "_handle_message", fake_handle)
     monkeypatch.setattr(_turnmod.time, "sleep", lambda _s: None)
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
     _turnmod._run_loop(agent)
 
 

@@ -172,7 +172,7 @@ def test_instantiate_skips_unknown_capability_names(tmp_path):
 
 
 def test_instantiate_skips_intrinsic_names_in_capabilities(tmp_path):
-    """email/psyche/system/soul in manifest.capabilities are intrinsics, not
+    """email/psyche/system in manifest.capabilities are intrinsics, not
     capabilities — the daemon must skip them silently (not abort the batch).
     Mirrors the main Agent.__init__ tolerance for legacy/wizard-written
     presets that mix intrinsic names into the capabilities map.
@@ -185,7 +185,6 @@ def test_instantiate_skips_intrinsic_names_in_capabilities(tmp_path):
             "email": {},      # intrinsic — should skip
             "psyche": {},     # intrinsic (also blacklisted) — should skip
             "system": {},     # intrinsic — should skip
-            "soul": {},       # intrinsic — should skip
         },
         {"provider": "mock", "model": "mock"},
     )
@@ -193,7 +192,6 @@ def test_instantiate_skips_intrinsic_names_in_capabilities(tmp_path):
     assert "email" not in schemas
     assert "psyche" not in schemas
     assert "system" not in schemas
-    assert "soul" not in schemas
 
 
 def test_instantiate_still_raises_on_broken_known_capability(tmp_path, monkeypatch):

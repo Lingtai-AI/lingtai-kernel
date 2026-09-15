@@ -19,8 +19,6 @@ _GITIGNORE = (
     ".refresh.taken\n"
     ".prompt\n"
     ".clear\n"
-    ".inquiry\n"
-    ".inquiry.taken\n"
     ".rules\n"
     ".interrupt\n"
 )

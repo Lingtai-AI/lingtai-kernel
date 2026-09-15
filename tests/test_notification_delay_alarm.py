@@ -99,7 +99,7 @@ def test_delay_schema_and_allowlist_expose_alarm_but_forbid_target(tmp_path: Pat
     assert "cannot be delayed" in bad_alarm["message"]
 
     assert _call(agent, "email", 600)["status"] == "ok"
-    too_long = _call(agent, "soul", 601)
+    too_long = _call(agent, "cron", 601)
     assert too_long["status"] == "error"
     assert too_long["reason"] == "invalid_delay"
 
@@ -170,7 +170,7 @@ def test_delay_uses_the_lock_port_composed_with_the_store(tmp_path: Path) -> Non
 def test_delay_hides_only_target_from_coherent_and_voluntary_check_reads(tmp_path: Path) -> None:
     agent = _DelayAgent(tmp_path)
     publish_test_payload(tmp_path, "email", {"data": {"count": 2}})
-    publish_test_payload(tmp_path, "soul", {"data": {"voices": ["remain"]}})
+    publish_test_payload(tmp_path, "cron", {"data": {"voices": ["remain"]}})
     original_email = (tmp_path / ".notification" / "email.json").read_bytes()
 
     delayed = _call(agent, "email", 30)
@@ -181,13 +181,13 @@ def test_delay_hides_only_target_from_coherent_and_voluntary_check_reads(tmp_pat
 
     observed = _observed(agent)
     assert "email" not in observed.payloads
-    assert observed.payloads["soul"]["data"]["voices"] == ["remain"]
+    assert observed.payloads["cron"]["data"]["voices"] == ["remain"]
 
     # The voluntary check collection uses the same coherent read/filter.
     payload, versions = _collect_active_notifications(agent)
     assert versions is not None
     assert "email" not in payload["notifications"]
-    assert "soul" in payload["notifications"]
+    assert "cron" in payload["notifications"]
 
 
 def test_zero_cancels_matching_delay_and_reexposes_target(tmp_path: Path) -> None:
@@ -207,15 +207,15 @@ def test_zero_cancels_matching_delay_and_reexposes_target(tmp_path: Path) -> Non
 def test_nonzero_replaces_the_one_live_delay(tmp_path: Path) -> None:
     agent = _DelayAgent(tmp_path)
     publish_test_payload(tmp_path, "email", {"data": {"count": 1}})
-    publish_test_payload(tmp_path, "soul", {"data": {"voices": ["x"]}})
+    publish_test_payload(tmp_path, "cron", {"data": {"voices": ["x"]}})
     assert _call(agent, "email", 30)["status"] == "ok"
 
-    replacement = _call(agent, "soul", 30)
+    replacement = _call(agent, "cron", 30)
     assert replacement["status"] == "ok"
     assert replacement["replaced_channel"] == "email"
     payloads = _observed(agent).payloads
     assert "email" in payloads
-    assert "soul" not in payloads
+    assert "cron" not in payloads
 
 
 def test_expiry_reexposes_unchanged_target_and_writes_one_conservative_alarm(tmp_path: Path) -> None:
@@ -255,7 +255,7 @@ def test_expiry_does_not_reuse_prelock_stats_after_delay_identity_replacement(tm
     def replace_delay_identity(workdir, _store):
         state_path = Path(workdir) / ".notification" / ".delay_state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        state["target"] = "soul"
+        state["target"] = "cron"
         state["request_id"] = "replacement-request"
         state_path.write_text(json.dumps(state), encoding="utf-8")
         yield
@@ -264,7 +264,7 @@ def test_expiry_does_not_reuse_prelock_stats_after_delay_identity_replacement(tm
     assert reconcile_notification_delay(tmp_path, agent._notification_store) is True
 
     alarm = snapshot_notifications(tmp_path)[DELAY_ALARM_CHANNEL]["data"]["delay_alarm"]
-    assert alarm["target"] == "soul"
+    assert alarm["target"] == "cron"
     assert alarm["current"] == {"present": None}
 
 
@@ -293,7 +293,7 @@ def test_expiry_marks_changed_without_claiming_capped_event_total(tmp_path: Path
 def test_delay_core_rejects_mismatched_early_cancel(tmp_path: Path) -> None:
     agent = _DelayAgent(tmp_path)
     assert delay_notification_channel(agent, "email", 30)["status"] == "ok"
-    mismatch = delay_notification_channel(agent, "soul", 0)
+    mismatch = delay_notification_channel(agent, "cron", 0)
     assert mismatch["reason"] == "delay_target_mismatch"
     assert "email" not in _observed(agent).payloads  # delay remains active
 
@@ -301,13 +301,13 @@ def test_delay_core_rejects_mismatched_early_cancel(tmp_path: Path) -> None:
 def test_replacement_recovers_an_overdue_alarm_before_overwriting_state(tmp_path: Path) -> None:
     agent = _expired_delay(tmp_path, payload={"data": {"count": 1}})
 
-    replacement = _call(agent, "soul", 30)
+    replacement = _call(agent, "cron", 30)
     assert replacement["status"] == "ok"
     assert snapshot_notifications(tmp_path)[DELAY_ALARM_CHANNEL]["data"]["delay_alarm"]["target"] == "email"
-    # The new request is now the only live delay; it hides soul, not email.
+    # The new request is now the only live delay; it hides cron, not email.
     payloads = _observed(agent).payloads
     assert "email" in payloads
-    assert "soul" not in payloads
+    assert "cron" not in payloads
 
 
 def test_process_timer_prompts_expiry_recovery(monkeypatch, tmp_path: Path) -> None:

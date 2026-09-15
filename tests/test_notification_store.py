@@ -161,7 +161,7 @@ class TestEightFamilyConformance:
         assert store.snapshot(_allow_all)["email"]["nested"]["count"] == 1
         entry = store.fingerprint(_allow_all)[0]
         assert entry[0] == "email.json"
-        assert store.snapshot(lambda channel: channel == "soul") == {}
+        assert store.snapshot(lambda channel: channel == "cron") == {}
         assert store.clear("email") is True
         assert store.clear("email") is False
 
@@ -757,10 +757,10 @@ class TestAtomicCoreRedCounterexamples:
     def test_stale_expected_absence_refusal_at_core_boundary(self):
         store = FakeNotificationStore()
         agent = _CoreAgent(store, _notification_fp=())
-        store.publish("soul", {"header": "arrived after delivery"})
-        result = dismiss_channel(agent, "soul", invoked_by="notification")
+        store.publish("cron", {"header": "arrived after delivery"})
+        result = dismiss_channel(agent, "cron", invoked_by="notification")
         assert result["reason"] == "stale_channel_version"
-        assert store.snapshot(_allow_all)["soul"]["header"] == "arrived after delivery"
+        assert store.snapshot(_allow_all)["cron"]["header"] == "arrived after delivery"
 
     def test_nudge_updates_share_store_serialization_and_interact_with_dismiss(self):
         store = FakeNotificationStore()
@@ -1061,24 +1061,6 @@ class TestCompositionAndProvenance:
         assert Path(port_module.__file__).resolve() == (
             repo / "src/lingtai/kernel/notification_store/__init__.py"
         )
-
-    def test_soul_inquiry_uses_runtime_publication_port(self):
-        from lingtai.tools.soul.inquiry import _publish_human_inquiry_notification
-
-        calls = []
-        runtime = SimpleNamespace(
-            publish_notification=lambda channel, **kwargs: calls.append(
-                (channel, kwargs)
-            ),
-            log=lambda *_args, **_kwargs: None,
-            wake_nap=lambda _reason: None,
-        )
-        _publish_human_inquiry_notification(
-            runtime,
-            {"voice": "answer", "thinking": []},
-            "question",
-        )
-        assert calls and calls[0][0] == "btw"
 
     def test_telegram_server_composes_one_store_and_injects_same_instance(
         self, tmp_path, monkeypatch

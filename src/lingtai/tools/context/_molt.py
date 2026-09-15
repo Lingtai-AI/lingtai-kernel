@@ -393,8 +393,8 @@ def _context_molt(agent, args: dict) -> dict:
         ]
 
 
-    # Snapshot the pre-molt interface to a discrete file so future
-    # past-self consultation can load it as cached substrate. Best-effort.
+    # Snapshot the pre-molt interface as a discrete audit/recovery artifact.
+    # It is preserved for generic history inspection, not reloaded as live context.
     # Orphan tool_calls (including the molt's own) are closed with
     # synthetic failure results inside _write_molt_snapshot.
     from . import _write_molt_snapshot
@@ -428,8 +428,8 @@ def _context_molt(agent, args: dict) -> dict:
         pass
 
     # Drop appendix tracking — the wire chat is rebuilt from scratch
-    # below, so any prior soul.flow pair indexed by call_id is gone.
-    # Next consultation fire will append a fresh pair without trying to
+    # below, so any prior single-slot pair indexed by call_id is gone.
+    # The next producer will append a fresh pair without trying to
     # remove a stale one.
     if hasattr(agent, "_appendix_ids_by_source"):
         agent._appendix_ids_by_source.clear()

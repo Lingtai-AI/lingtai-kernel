@@ -18,7 +18,6 @@ related_files:
   - src/lingtai/tools/knowledge/ANATOMY.md
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/avatar/settings.py
-  - src/lingtai/tools/soul/ANATOMY.md
   - src/lingtai/tools/skills/ANATOMY.md
   - src/lingtai/tools/psyche/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
@@ -122,7 +121,7 @@ provider wire. See `CONTRACT.md` "Diagnostics sidecar" for the full rules and
   strict-empty input literal it registers is exported as `MANUAL_INPUT_SCHEMA`
   so a family composing a schema-only `ToolFamily` alongside its dispatching
   one reuses the same object instead of hand-copying it and drifting (`mcp`,
-  `knowledge`, `vision`, and `soul` all do; `manual.py:1-89`) — and a
+  `knowledge`, `vision`, and `system` all do; `manual.py:1-89`) — and a
   family supplying its own `manual` child entirely, like `avatar`, can
   reference it the same way instead of restating the literal. `web` predates
   the export and still declares its own local `_MANUAL_INPUT_SCHEMA`, which
@@ -206,23 +205,11 @@ it restores avatar's pinned unknown-action error string in place of the generic
 mission brief) to the `spawn` handler out-of-band, since `ToolFamily` correctly
 passes no envelope field to any child.
 
-`soul/__init__.py` is a declared-host-plugin consumer and the first
-*intrinsic* one in this composition account. Production binding is through
-`_bind(host)`: the five operational children receive only the granted
-`host.soul_runtime` (`SoulRuntimePort`), while the reserved `manual` child gets
-the granted `host.workdir` through `build_manual_child(host.workdir,
-DECLARATION.manual)`. The declaration-owned action registry and schemas are the
-single source for the schema-only and bound families; duplicate or reserved
-child names fail loudly rather than being resolved by order.
-
-Whole-Agent `handle(agent, args)` and `_coerce_runtime()` remain compatibility
-bridges at Soul's package root for kernel lifecycle and legacy callers only;
-they are not the production composition model. After dispatch, Soul's
-`_adapt_manual_result` intentionally restores the historical flat
-`status`/`manual`/`manual_path` result, while the bound operational
-implementation continues to consume only `SoulRuntimePort`. Soul also drops
-the kernel-injected `_tc_id` at this root compatibility boundary; it must not
-widen the shared envelope or leak transport metadata into a child.
+The seventh consumer, `soul/__init__.py`, was the first *intrinsic* one in
+this composition account; the Soul subsystem was removed and that package no
+longer exists. Its module-level division (a schema-only family built at
+import, an agent-bound family built per call, `_tc_id` dropped at the Host
+boundary) survives in the remaining intrinsic consumers below.
 
 `skills/__init__.py` ([`../skills/ANATOMY.md`](../skills/ANATOMY.md)) is the
 ninth consumer and uses the same division with no shared code beyond this
@@ -240,7 +227,7 @@ and, unlike `web`, keeps this package's canonical envelope-failure result
 verbatim — it has no family-specific diagnostic block to stamp on.
 
 `system/__init__.py` ([`../system/ANATOMY.md`](../system/ANATOMY.md)) is the
-eleventh consumer and the third *intrinsic* one, reusing `soul`'s module-level
+eleventh consumer and the third *intrinsic* one, reusing the intrinsic module-level
 division verbatim: a schema-only family built at import (which is also the
 registry's collision check) behind `get_schema()`, an agent-bound family per
 `handle(agent, args)` call, `build_manual_child(agent, "system-manual")`
@@ -310,9 +297,9 @@ belongs to the consuming family, as `WebManager` demonstrates.
 
 A fake `widget` family in `tests/test_tool_family_generic.py` and
 `tests/test_tool_family_wire_parity.py` proves this package is generic, not
-Web-specific; `soul`'s migration
-(`tests/test_tool_family_soul_migration.py`) proves it a second time against a
-real intrinsic with a different composition shape. Building a family on
+Web-specific; the intrinsic migrations (`system`, `notification`, `email`,
+`context`) prove it again against real intrinsics with a different composition
+shape. Building a family on
 `ToolFamily` is optional: a family may hand-write an equivalent
 `handle()`/schema composition instead, exactly as `web` did before adopting
 this package.

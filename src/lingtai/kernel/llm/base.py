@@ -276,7 +276,7 @@ class ChatSession(ABC):
     # Optional pre-request hook fired after the message is committed to the
     # canonical ChatInterface but before the API call is made. The kernel
     # installs ``_drain_tc_inbox`` here so involuntary tool-call pairs
-    # (mail notifications, soul.flow voices) splice into the wire chat
+    # (mail notifications) splice into the wire chat
     # mid-turn — between tool rounds within a single _handle_request —
     # rather than waiting for the outer turn to finish.
     #

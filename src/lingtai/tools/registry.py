@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 # ``handle(agent, args)``, and optionally ``boot(agent)``. ``BaseAgent`` iterates
 # this mapping in ``_wire_intrinsics``; membership here is the mandatory-include
 # mechanism (there is no manifest gate for intrinsics).
-from . import email, system, context, soul  # noqa: E402  (lingtai.tools.<pkg>)
+from . import email, system, context  # noqa: E402  (lingtai.tools.<pkg>)
 # ``psyche`` is the single model-visible root for the four durable domains:
 # ``pad + lingtai + knowledge + skills = psyche``. It replaced the four former
 # public roots as a clean break: those tool names are unknown and fail loudly,
@@ -76,7 +76,6 @@ INTRINSICS: dict[str, dict[str, Any]] = {
     "system": {"module": system, "official_plugin": True},
     "context": {"module": context, "official_plugin": True},
     "psyche": {"module": psyche, "official_plugin": True},
-    "soul": {"module": soul},
 }
 
 

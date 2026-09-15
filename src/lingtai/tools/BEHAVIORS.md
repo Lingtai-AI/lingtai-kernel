@@ -38,8 +38,8 @@ maintenance: |
   verifies only what is true today (the section's scope-qualified status
   wording — current `mcp` base evidence and the separately landed `avatar`,
   `context`, `daemon`, `email`, `plugin`, `psyche`, `notification`, `shell`,
-  `soul`, `system`, `task_card`, `vision`, and `web` vertical evidence; the
-  exact twenty-name grantable-host inventory; and the empty former later-family
+  `system`, `task_card`, `vision`, and `web` vertical evidence; the
+  exact nineteen-name grantable-host inventory; and the empty former later-family
   target register — its two-class governed surface, its single selected form as
   the kernel-owned declared host-plugin contract, the retained and reclassified
   curated transport route, the resolved official-name collision decision and
@@ -82,10 +82,10 @@ repo root with the project's Python.
 ### Pass / Fail
 Pass when the suite passes and the closed-envelope observation holds for a real migrated family. Fail on an extra root property, on `reasoning`/`summarize` leaking into `input`, or on a summary replacing the recorded raw output; record the evidence trail in the task report.
 
-## Behavior LP002 — the shared declared host-plugin contract matches the current fourteen-family and twenty-grant inventory
+## Behavior LP002 — the shared declared host-plugin contract matches the current thirteen-family and nineteen-grant inventory
 
 - **id**: LP002
-- **title**: the shared declared host-plugin contract matches the current fourteen-family and twenty-grant inventory
+- **title**: the shared declared host-plugin contract matches the current thirteen-family and nineteen-grant inventory
 - **guards**: `lingtai-tool-protocol` §
   [Tool-to-MCP Plugin Contract](CONTRACT.md#tool-to-mcp-plugin-contract)
 - **runner**: any LingTai agent with `shell` access to a clean
@@ -103,13 +103,13 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 1. Read `src/lingtai/tools/CONTRACT.md`, section `### Tool-to-MCP Plugin
    Contract` (it sits under `## Contract rules`, between `### Non-goals` and
    `### Relationship to current runtime`). Confirm its opening **Status**
-   paragraph names exactly the fourteen static official families: `mcp`,
+   paragraph names exactly the thirteen static official families: `mcp`,
    `avatar`, `context`, `daemon`, `email`, `plugin`, `psyche`,
-   `notification`, `shell`, `soul`, `system`, `task_card`, `vision`, and `web`, in that order;
-   identifies `mcp` as the base reference; names the exact twenty grantable host
+   `notification`, `shell`, `system`, `task_card`, `vision`, and `web`, in that order;
+   identifies `mcp` as the base reference; names the exact nineteen grantable host
    names (`workdir`, `prompt_section`, `avatar_parent`, `context_runtime`,
    `daemon_runtime`, `email_runtime`, `plugin_catalog`,
-   `psyche_settings`, `notification_state`, `notifications`, `configuration`, `soul_runtime`,
+   `psyche_settings`, `notification_state`, `notifications`, `configuration`,
    `system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
    `task_card_notifications`, `active_provider`, `web_runtime`, and
    `provider_identity`); and says the former later-family target register is
@@ -165,34 +165,34 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
    Expect no output and shell exit status 1.
 
-   Then prove all fourteen landed declarations — the current base `mcp`, Avatar,
-   Context, Daemon, Email, Plugin, Psyche, Notification, Shell, Soul, System,
+   Then prove all thirteen landed declarations — the current base `mcp`, Avatar,
+   Context, Daemon, Email, Plugin, Psyche, Notification, Shell, System,
    Task Card, Vision, and Web — none of which goes through packaging:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.avatar import DECLARATION as avatar; from lingtai.tools.context import DECLARATION as context; from lingtai.tools.daemon import DECLARATION as daemon; from lingtai.tools.email import DECLARATION as email; from lingtai.tools.plugin import DECLARATION as plugin; from lingtai.tools.psyche import DECLARATION as psyche; from lingtai.tools.notification import DECLARATION as notification; from lingtai.tools.bash._tool_family import DECLARATION as shell; from lingtai.tools.soul import DECLARATION as soul; from lingtai.tools.system import DECLARATION as system; from lingtai.tools.task_card import DECLARATION as task_card; from lingtai.tools.vision import DECLARATION as vision; from lingtai.tools.web_search import DECLARATION as web; from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES; declarations=(mcp, avatar, context, daemon, email, plugin, psyche, notification, shell, soul, system, task_card, vision, web); print(tuple((d.name, d.requires) for d in declarations)); print(OFFICIAL_TOOL_PLUGIN_NAMES); print(tuple(d.name for d in declarations) == OFFICIAL_TOOL_PLUGIN_NAMES)"
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.avatar import DECLARATION as avatar; from lingtai.tools.context import DECLARATION as context; from lingtai.tools.daemon import DECLARATION as daemon; from lingtai.tools.email import DECLARATION as email; from lingtai.tools.plugin import DECLARATION as plugin; from lingtai.tools.psyche import DECLARATION as psyche; from lingtai.tools.notification import DECLARATION as notification; from lingtai.tools.bash._tool_family import DECLARATION as shell; from lingtai.tools.system import DECLARATION as system; from lingtai.tools.task_card import DECLARATION as task_card; from lingtai.tools.vision import DECLARATION as vision; from lingtai.tools.web_search import DECLARATION as web; from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES; declarations=(mcp, avatar, context, daemon, email, plugin, psyche, notification, shell, system, task_card, vision, web); print(tuple((d.name, d.requires) for d in declarations)); print(OFFICIAL_TOOL_PLUGIN_NAMES); print(tuple(d.name for d in declarations) == OFFICIAL_TOOL_PLUGIN_NAMES)"
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
      tests/test_plugin_tool.py tests/test_task_card_notifications.py \
      tests/test_tool_family_vision_migration.py \
      tests/test_web_official_plugin.py tests/test_web_composition_port.py
    ```
 
-   Expect fourteen ordered pairs whose names are `mcp, avatar, context, daemon,
-   email, plugin, psyche, notification, shell, soul, system, task_card,
+   Expect thirteen ordered pairs whose names are `mcp, avatar, context, daemon,
+   email, plugin, psyche, notification, shell, system, task_card,
    vision, web`,
    with requires respectively `workdir/prompt_section`, `workdir/avatar_parent`,
    `workdir/context_runtime`, `workdir/daemon_runtime`,
    `workdir/email_runtime`,
    `workdir/prompt_section/plugin_catalog`, `workdir/psyche_settings`,
    `workdir/notification_state`,
-   `workdir/notifications/configuration`, `workdir/soul_runtime`,
+   `workdir/notifications/configuration`,
    `workdir/system_runtime/identity`,
    `workdir/shutdown/task_card_lifecycle/task_card_notifications`,
    `workdir/active_provider/configuration`, and
    `workdir/web_runtime/provider_identity`; then expect
    exactly `('mcp', 'avatar', 'context', 'daemon', 'email', 'plugin', 'psyche',
-   'notification', 'shell', 'soul', 'system', 'task_card', 'vision', 'web')`,
-   then `True`. All fourteen declarations construct at import with no Agent,
+   'notification', 'shell', 'system', 'task_card', 'vision', 'web')`,
+   then `True`. All thirteen declarations construct at import with no Agent,
    server, transport, or catalog record. No `file` declaration, `file_io`
    port, or `lingtai.tools.file` module exists (`import lingtai.tools.file`
    must raise `ModuleNotFoundError`);
@@ -317,8 +317,8 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
 ### Expected evidence
 
-- [ ] Step 1: the Status paragraph names the fourteen static official families
-      in official order, the exact twenty grantable host names, and the empty
+- [ ] Step 1: the Status paragraph names the thirteen static official families
+      in official order, the exact nineteen grantable host names, and the empty
       former later-family target register; its remaining claims stay scoped to
       their current declaration, registry, transport, or LTP-envelope owner.
 - [ ] Step 2: no unqualified "No LingTai-owned family ships as an MCP plugin"
@@ -329,7 +329,7 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
       Plugins and raw third-party schemas, and introduces no generic manifest
       compiler, admission engine, or wrapper runtime.
 - [ ] Step 4: `registry.py` contains no MCP-server packaging reference; all
-      fourteen declarations import without an Agent; their names and narrow
+      thirteen declarations import without an Agent; their names and narrow
       requirements match the exact `OFFICIAL_TOOL_PLUGIN_NAMES` tuple; and the
       selected focused suites pass.
 - [ ] Step 5: the curated descriptor/catalog route agrees with the governed
@@ -354,8 +354,8 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 Pass when every box above is observed. **Fail loudly** — do not soften the
 report — if the contract section does not name exactly `mcp`, `avatar`,
 `context`, `daemon`, `email`, `plugin`, `psyche`, `notification`, `shell`,
-`soul`, `system`, `task_card`, `vision`, and `web` as the static official
-families, does not name the exact twenty grantable host names, or leaves the
+`system`, `task_card`, `vision`, and `web` as the static official
+families, does not name the exact nineteen grantable host names, or leaves the
 former later-family target register nonempty; if any `file` declaration,
 `file_io` grant, or `lingtai.tools.file` module reappears; if Plugin does not require exactly
 `workdir`/`prompt_section`/`plugin_catalog`, gains registration/prune/launch/

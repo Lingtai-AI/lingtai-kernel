@@ -271,13 +271,17 @@ def test_unknown_manifest_llm_fields_warn(key, value):
     assert f"unknown field in manifest.llm: {key}" in warnings
 
 
-def test_unknown_manifest_soul_field_warns():
+def test_legacy_manifest_soul_block_is_tolerated_without_warning():
+    """``manifest.soul`` belongs to the removed Soul subsystem: any shape an
+    older agent wrote still validates, silently, and is never type-checked."""
     data = _valid_init()
     data["manifest"]["soul"]["voice_promt"] = "speak plainly"
+    data["manifest"]["soul"]["delay"] = "not-a-number"
 
-    warnings = validate_init(data)
+    assert validate_init(data) == []
 
-    assert "unknown field in manifest.soul: voice_promt" in warnings
+    data["manifest"]["soul"] = "inner"
+    assert validate_init(data) == []
 
 
 @pytest.mark.parametrize(
@@ -731,14 +735,13 @@ def test_llm_known_fields_compose_from_schema_sets():
     assert LLM_KNOWN == expected
 
 
-def test_soul_optional_fields_all_in_known():
-    from lingtai.init_schema import SOUL_KNOWN, SOUL_OPTIONAL
+def test_manifest_soul_is_legacy_ignored_not_optional():
+    from lingtai import init_schema
 
-    missing = set(SOUL_OPTIONAL) - SOUL_KNOWN
-    assert not missing, (
-        f"Fields in SOUL_OPTIONAL but not in SOUL_KNOWN "
-        f"(would trigger unknown-field warning): {sorted(missing)}"
-    )
+    assert "soul" in init_schema.MANIFEST_LEGACY_IGNORED
+    assert "soul" not in init_schema.MANIFEST_OPTIONAL
+    assert not hasattr(init_schema, "SOUL_OPTIONAL")
+    assert not hasattr(init_schema, "SOUL_KNOWN")
 
 
 def test_provider_default_manifest_llm_keys_are_known():

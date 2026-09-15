@@ -50,7 +50,6 @@ _BUILTIN_TOOLS = [
     "pad",
     "plugin",
     "skills",
-    "soul",
     "psyche",
     "system",
     "task_card",

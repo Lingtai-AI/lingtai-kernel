@@ -38,7 +38,7 @@ def _write_molt_summary(
     (any future digest-injection layer can split on the leading `---`).
 
     Complementary to `history/snapshots/snapshot_<count>_<ts>.json`:
-    - snapshot = frozen substrate (full ChatInterface for past-self consultation)
+    - snapshot = frozen pre-molt record (full ChatInterface for audit/recovery)
     - summary  = curated retrospective (agent-authored prose)
     Both share molt_count so they can be paired by index.
     """
@@ -146,12 +146,11 @@ def _write_molt_snapshot(
 ) -> Path | None:
     """Serialize the pre-molt ChatInterface to a discrete snapshot file.
 
-    The snapshot is the substrate a future "past self" consultation can
-    load — full message history at the moment the agent decided to molt.
-    Unanswered tool_calls are closed with synthetic failure results so
-    the snapshot is self-contained: every tool_call has a matching
-    tool_result, and the LLM protocol is satisfied when the snapshot is
-    later loaded as consultation substrate.
+    The snapshot preserves the full message history at the moment the agent
+    decided to molt as a discrete audit/recovery artifact. Unanswered
+    tool_calls are closed with synthetic failure results so the snapshot is
+    self-contained: every tool_call has a matching tool_result and remains
+    protocol-complete for generic history readers.
 
     Returns the snapshot path on success, or None if the write failed
     (best-effort — a failed snapshot must not block the molt itself).

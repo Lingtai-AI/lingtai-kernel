@@ -657,8 +657,7 @@ class TelegramAccount:
         elif layer_key == "4":
             # Layer 4: Mind / durable stores
             lines.append("🧠 *Layer 4 · Mind & Memory*")
-            soul_text = f"{int(float(data['soul_delay']) // 60)}m" if data["soul_delay"] else "off"
-            lines.append(f"  Language: {data['language']}  |  Soul delay: {soul_text}")
+            lines.append(f"  Language: {data['language']}")
             store_parts = [
                 f"knowledge={data['knowledge_count']}",
                 f"custom skills={data['skill_count']}",

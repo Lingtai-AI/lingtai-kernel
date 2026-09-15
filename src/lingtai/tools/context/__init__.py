@@ -57,7 +57,7 @@ from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration, T
 
 # --- Re-exports from sub-modules for backward compatibility ---
 
-# Snapshots (used by consultation, inquiry, etc.)
+# Molt archive helpers.
 from ._snapshots import SNAPSHOT_SCHEMA_VERSION, _write_molt_snapshot, _write_molt_summary  # noqa: F401
 
 # Molt (the public surface and kernel-facing forced-molt hook)

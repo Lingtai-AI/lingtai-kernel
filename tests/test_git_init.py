@@ -64,8 +64,6 @@ def test_start_creates_gitignore(tmp_path):
             ".refresh.taken\n"
             ".prompt\n"
             ".clear\n"
-            ".inquiry\n"
-            ".inquiry.taken\n"
             ".rules\n"
             ".interrupt\n"
         )

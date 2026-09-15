@@ -15,7 +15,7 @@ protocol.
 Naming convention:
 
 * Kernel intrinsics write ``<intrinsic_name>.json`` (e.g. ``email.json``,
-  ``soul.json``, ``system.json``).
+  ``system.json``, ``daemon.json``).
 * MCP-loaded servers write ``mcp.<server_name>.json`` (e.g.
   ``mcp.imap.json``, ``mcp.telegram.json``).
 
@@ -46,7 +46,6 @@ _CHANNEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 # because server names are dynamic but still owned by the MCP inbox contract.
 _NOTIFICATION_CHANNEL_ALLOWLIST: set[str] = {
     "bash",
-    "btw",
     "cron",
     "daemon",
     "delay-alarm",
@@ -55,7 +54,6 @@ _NOTIFICATION_CHANNEL_ALLOWLIST: set[str] = {
     "molt",
     "nudge",
     "post-molt",
-    "soul",
     "system",
     "tool_loop_guard",
 }
@@ -1578,7 +1576,7 @@ def submit(
 
     Args:
         agent: The agent instance.
-        tool_name: The producer's namespace key — ``email``, ``soul``,
+        tool_name: The producer's namespace key — ``email``, ``daemon``,
             ``system``, ``mcp.<server>``, …  This becomes both the file
             basename (``<tool_name>.json``) AND the dict key the agent
             sees when it reads ``notification(action="check")``.
@@ -1587,7 +1585,7 @@ def submit(
         header: One-line glanceable summary used by frontends (TUI
             status bar, portal cards) for compact rendering.
         icon: Optional glyph for status indicators.  Defaults to 🔔;
-            common conventions: 📧 (mail), 🌊 (soul), 💬 (chat), …
+            common conventions: 📧 (mail), 💬 (chat), …
         priority: ``"low"``, ``"normal"``, or ``"high"``.  Frontends
             may surface high-priority notifications more prominently.
         instructions: Optional agent-facing directive describing how to
@@ -1888,8 +1886,8 @@ def dismiss_channel(
 
     Used by the standalone ``notification`` tool's atomic dismiss verbs
     (``dismiss_channel``/``dismiss_event``/``dismiss_ref``, all with
-    ``invoked_by="notification"``) and the ``soul(action="dismiss")``
-    convenience alias.
+    ``invoked_by="notification"``) and the System family's dismiss route
+    (``invoked_by="system"``).
 
     Generic dismiss clears only the notification surface; producer-owned state
     is untouched.
@@ -2096,8 +2094,6 @@ def dismiss_channel(
                     forced=bool(force),
                     reason=ack_reason or None,
                 )
-            elif invoked_by == "soul":
-                agent._log("soul_dismiss")
         except Exception:
             pass
 

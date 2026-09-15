@@ -98,7 +98,7 @@ dispatch key — there is no mapping layer.
 
 `action` has no default — it is required both by the schema and at runtime,
 matching the established action-tool convention already used by `knowledge`,
-`mcp`, `skills`, `notification`, `system`, `soul`, and `daemon`. Omitting
+`mcp`, `skills`, `notification`, `system`, and `daemon`. Omitting
 `action` fails deterministically with avatar's own pinned unknown-action
 envelope; it never falls through to `spawn`.
 

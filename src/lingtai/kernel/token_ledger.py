@@ -6,13 +6,15 @@ Written alongside chat_history after every LLM call.
 Reporting-scope contract
 -------------------------
 One agent's ledger is a *mixed* stream: ordinary main-chat turns
-(``source="main"``), soul fan-out (``source="soul"``), involuntary
+(``source="main"``), involuntary
 control-flow splices (``source="tc_wake"``, ``"heal"``,
 ``"notification_sync"``, ``"retroactive_compaction"``, ``"summarize"``),
 one-shot a-priori tool-result summarizer calls (``source="summarize_apriori"``;
 the ``summary=true`` tool option — written from
 ``base_agent/turn._record_apriori_summary_usage``, carrying ``tool_name`` and
-``tool_call_id``), legacy untagged rows, and — on a *parent* agent's ledger —
+``tool_call_id``), legacy untagged rows, rows tagged by retired producers
+(``source="soul"`` from the removed Soul subsystem — historical bytes that
+readers keep tolerating), and — on a *parent* agent's ledger —
 rows emitted by
 the daemons it spawned (``source="daemon"`` plus ``em_id``/``run_id``;
 written by ``lingtai.tools.daemon.run_dir.RunDir.append_tokens``). The daemon
@@ -125,8 +127,8 @@ def is_daemon_entry(entry: dict) -> bool:
 
     This is the row-level filter a **main-agent-only** report applies to
     exclude daemon spend. ``source="tc_wake"`` (and other involuntary splices
-    such as ``"heal"``/``"soul"``) are **not** daemon rows — they run in the
-    agent's own context — so this returns False for them.
+    such as ``"heal"``, plus legacy ``"soul"`` rows) are **not** daemon rows —
+    they ran in the agent's own context — so this returns False for them.
 
     Reads only; never mutates the entry or the durable ledger.
     """
@@ -153,8 +155,8 @@ def append_token_entry(
     `model` and `endpoint` are first-class attribution fields written to the
     top level of the entry when provided. They identify which model produced
     the tokens and which API endpoint (base_url) served the call — useful for
-    cost analytics across providers and for distinguishing the soul session
-    from the main agent session.
+    cost analytics across providers and for distinguishing one-shot helper
+    sessions from the main agent session.
 
     `extra` is an optional dict of additional fields merged into the entry.
     Required fields (ts/input/output/thinking/cached/model/endpoint) take
@@ -189,12 +191,11 @@ def count_main_api_calls(path: Path | str) -> int:
     diagnostic helper. Reading
     the ledger is the single source of truth: an in-memory turn counter
     drifts whenever an involuntary tool-call splice (mail, MCP
-    notifications, soul-flow's own appendix landing) calls a
-    "post-LLM-call" hook, which is wrong because those splices are not
-    main-chat turns. The ledger is already tagged at write time
-    (``source="main"`` for ``_session.send`` from the main loop,
-    ``source="soul"`` for soul consultation fan-out), so counting
-    matching entries is unambiguous.
+    notifications) calls a "post-LLM-call" hook, which is wrong because
+    those splices are not main-chat turns. The ledger is already tagged
+    at write time (``source="main"`` for ``_session.send`` from the main
+    loop; other sources for every non-main call), so counting matching
+    entries is unambiguous.
 
     Untagged entries (older agents whose ledger predates the source
     tag) are treated as "not main" and skipped — conservative drift,

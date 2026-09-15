@@ -18,7 +18,7 @@ maintenance: |
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.
 
-The kernel's message catalog — a flat key-value string table covering system notifications, soul prompts, molt instructions, and runtime manager prose in three locales (en / zh / wen). Model-facing tool schema/description text is no longer catalog-owned; it lives in canonical English tool source code and per-package glossary resources (`glossary-{en,zh,wen}.md`). The sole entry point is `t(lang, key, **kwargs)` which resolves a dotted key against the agent's configured language, falling back to English and then to the raw key itself.
+The kernel's message catalog — a flat key-value string table covering system notifications, molt instructions, and runtime manager prose in three locales (en / zh / wen). Model-facing tool schema/description text is no longer catalog-owned; it lives in canonical English tool source code and per-package glossary resources (`glossary-{en,zh,wen}.md`). The sole entry point is `t(lang, key, **kwargs)` which resolves a dotted key against the agent's configured language, falling back to English and then to the raw key itself.
 
 ## Components
 
@@ -29,7 +29,7 @@ The kernel's message catalog — a flat key-value string table covering system n
   - `_load(lang)` (`i18n/__init__.py:28-45`) — loads and caches a locale file (registered strings win over on-disk defaults for the same key); returns `{}` if the JSON file is missing.
   - `register_strings(lang, strings)` (`i18n/__init__.py:48-58`) — additive merge of external strings into `_CACHE`; its docstring names the wrapper as the caller.
   - `t(lang, key, **kwargs)` (`i18n/__init__.py:61-77`) — loads the locale, looks up the key, falls back to English, then to the raw key string, and formats with `defaultdict(str, kwargs)`.
-- `en.json` — English (baseline). **7 keys across 2 prefixes**: `system.`, `insight.`. Other prefixes referenced by callers below (`soul.`, `context.`, `system_tool.`, `email.`) are not in this file — they are registered into the shared `_CACHE` at runtime by the tools bridge (see "Inbound — tools bridge" below), not shipped as kernel-owned disk defaults.
+- `en.json` — English (baseline). **6 keys under 1 prefix**: `system.` (the `insight.` prefix left with the removed auto-insight path). Other prefixes referenced by callers below (`context.`, `system_tool.`, `email.`) are not in this file — they are registered into the shared `_CACHE` at runtime by the tools bridge (see "Inbound — tools bridge" below), not shipped as kernel-owned disk defaults.
 - `zh.json` — 中文. Mirror of en.json; same key set.
 - `wen.json` — 文言. Mirror of en.json in Classical Chinese register; same key set.
 
@@ -42,7 +42,6 @@ The kernel's message catalog — a flat key-value string table covering system n
 | `meta_block.py` | `meta_block.py:3243`, `meta_block.py:3264-3265` | `system.current_time`, `system.context_unknown`, context fragments |
 | `lingtai/tools/system/` | `src/lingtai/tools/system/preset.py:202`, `src/lingtai/tools/system/karma.py:98`, `src/lingtai/tools/system/karma.py:117` | `system_tool.*` runtime manager prose |
 | `lingtai/tools/context/` | `src/lingtai/tools/context/_molt.py:551`, `src/lingtai/tools/context/_molt.py:599-603`, `src/lingtai/tools/context/_molt.py:780` | `context.*` runtime manager prose (renamed from `psyche.*`) |
-| `lingtai/tools/soul/` | `src/lingtai/tools/soul/config.py:374`, `src/lingtai/tools/soul/config.py:384`, `src/lingtai/tools/soul/consultation.py:389`, `src/lingtai/tools/soul/consultation.py:645` | `soul.*` runtime manager prose |
 | `lingtai/tools/email/` | `src/lingtai/tools/email/primitives.py:290` | `email.*` runtime manager prose |
 
 **Inbound — tools bridge.** The tools string catalog `src/lingtai/tools/i18n/__init__.py` loads every locale table (`src/lingtai/tools/i18n/__init__.py:39`) and pushes all keys into the kernel cache via `register_strings()` (`_register_all` at `src/lingtai/tools/i18n/__init__.py:46`, calling `register_strings` at `src/lingtai/tools/i18n/__init__.py:48`), triggered on import of `lingtai.tools.registry`. The kernel side is only the additive merge hook (`i18n/__init__.py:48-58`).

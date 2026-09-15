@@ -45,7 +45,6 @@ _TOOL_MANUAL_DESTINATION_NAMES: dict[str, str] = {
     "bash": "shell",
     "web_search": "web",
     "context": "context-manual",
-    "soul": "soul-manual",
 }
 
 
@@ -126,17 +125,12 @@ def build_agent_config(
     apply.  Raw manifest values are compatibility data, never configuration.
     """
     defaults = AgentConfig()
-    soul = manifest.get("soul", {})
     llm = manifest.get("llm", {})
     policy = runtime_policy.as_overrides() if runtime_policy is not None else {}
 
+    # ``manifest.soul`` is a retired, recognized-and-ignored legacy block: old
+    # init.json files still validate, but nothing here reads it.
     return AgentConfig(
-        soul_delay=soul.get("delay", defaults.soul_delay),
-        consultation_past_count=soul.get(
-            "consultation_past_count", defaults.consultation_past_count
-        ),
-        soul_voice=soul.get("voice", defaults.soul_voice),
-        soul_voice_prompt=soul.get("voice_prompt", defaults.soul_voice_prompt),
         # ``manifest.max_turns`` is a legacy/resolved-manifest field and is no
         # longer the authoritative tool-loop guard source. ACTIVE-turn
         # tool-call safety is kernel-owned in ``lingtai.kernel.safety_limits``.
@@ -388,15 +382,6 @@ class Agent(BaseAgent):
                 with contextlib.suppress(Exception):
                     owned_event_journal.close()
             raise
-
-        # Soul remains an injected intrinsic for kernel lifecycle hooks, but its
-        # model-facing root is an official declared plugin. Remove only the
-        # temporary intrinsic dispatcher entry and mount the static declaration
-        # before capability setup; the module remains available to hook lookup.
-        if "soul" in self._intrinsics:
-            from lingtai.tools import soul as _soul
-            self.override_intrinsic("soul")
-            _soul.setup(self)
 
         # Persist LLM config for revive (self-sufficient agents contract)
         self._persist_llm_config()
@@ -2142,9 +2127,9 @@ class Agent(BaseAgent):
         # Resolve only live init-owned Pad and LingTai seed pointers. Psyche's
         # six prompt pairs are compatibility-known but inert in init.json; the
         # prevalidated owner candidate is passed to final reconstruction below.
-        # Note: "soul" / "soul_file" were retired in v0.7.6 and remain
-        # compatibility-known; they are intentionally not resolved here;
-        # the shared reader reports them without rewriting init.json.
+        # Note: top-level "soul" / "soul_file" and "manifest.soul" are retired
+        # and remain compatibility-known; they are intentionally not resolved
+        # here; the shared reader reports them without rewriting init.json.
         for key in ("pad", "lingtai"):
             file_key = f"{key}_file"
             if file_key in data:
@@ -2158,9 +2143,6 @@ class Agent(BaseAgent):
             saved_interface = self._session.chat.interface
 
         # Tear down
-        # Cancel soul timer to prevent racing on config/service during rebuild
-        self._cancel_soul_timer()
-
         for client in getattr(self, "_mcp_clients", []):
             try:
                 client.close()
@@ -2195,13 +2177,6 @@ class Agent(BaseAgent):
         self._intrinsics.clear()
         self._intrinsic_modules.clear()
         self._wire_intrinsics()
-        # Refresh rebuilds the official surface from scratch. Soul's injected
-        # module remains for lifecycle hooks, while its public root is again
-        # mounted only through the static declaration/registrar route.
-        if "soul" in self._intrinsics:
-            from lingtai.tools import soul as _soul
-            self.override_intrinsic("soul")
-            _soul.setup(self)
 
         # Reset capability-owned flags (``email.boot``, run once by
         # ``_boot_official_intrinsics()`` below, resets to "email box"/"email")
@@ -2337,7 +2312,6 @@ class Agent(BaseAgent):
                 )
                 new_config.snapshot_interval = None
         self._config = new_config
-        self._soul_delay = max(1.0, self._config.soul_delay)
         self._session._config = self._config
         # Streaming is a per-request session flag, not a constructor-only
         # property: install the resolved value on every boot/refresh setup.

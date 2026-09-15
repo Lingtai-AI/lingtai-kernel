@@ -50,7 +50,7 @@ Guarded by: [AR001](BEHAVIORS.md#behavior-ar001)
         ┌───────────┼───────────────┐
         ▼           ▼               ▼
   system-manual  substrate-manual  各专项 manual
-  (router)       (扩展形态)        (context/soul/notification/...)
+  (router)       (扩展形态)        (context/notification/...)
 ```
 
 ## 5. 契约测试（最小）

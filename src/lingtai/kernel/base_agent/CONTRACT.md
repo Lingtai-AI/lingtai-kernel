@@ -200,7 +200,7 @@ Clause IDs are stable; each rule composes the linked normative source.
    runtime artifacts are `.agent.json` (manifest), `.agent.heartbeat`
    (liveness), `.agent.lock` (lease), the signal files
    (`.suspend`/`.sleep`/`.interrupt`/`.refresh`/`.refresh.taken`/`.prompt`/
-   `.clear`/`.inquiry`/`.rules`), `.alarm` (the one self-sleep absolute
+   `.clear`/`.rules`), `.alarm` (the one self-sleep absolute
    deadline), `.notification/`, `logs/`, and `history/`. Artifact names and
    meanings are frozen; observers may read,
    only the owning agent/watcher mutates.
@@ -550,8 +550,6 @@ Clause IDs are stable; each rule composes the linked normative source.
    session into the session timeout worker under a copy of the submitting
    context. Main-turn retries, recovery, tool-result continuation, and stream
    continuation all return through one of those two `SessionManager` paths.
-   Soul consultation/inquiry creates an independently timed daemon thread and
-   likewise copies the submitting context before its wrapped `session.send()`.
    If provider RPM gating is configured, `APICallGate` runs *after* the outer
    admitted-session proxy has made its Port decision; it never performs an
    additional admission lookup. `ProviderAdmittedLLMService.generate()` makes
@@ -563,8 +561,8 @@ Clause IDs are stable; each rule composes the linked normative source.
    at that concrete boundary; no inferred coverage is sufficient. The source
    creation-point inventory in `tests/test_provider_admission.py` independently
    enumerates direct `Thread`, executor, `to_thread`, and `run_in_executor`
-   calls under `src/lingtai/**`. It classifies the session timeout pool and
-   Soul worker as context-propagation boundaries, `APICallGate` as
+   calls under `src/lingtai/**`. It classifies the session timeout pool as a context-propagation boundary,
+   `APICallGate` as
    post-admission dispatch, and every other current point as outside root
    provider dispatch. A new direct creation point therefore fails until it is
    classified; this structural tripwire is not a whole-program proof over

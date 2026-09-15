@@ -24,7 +24,6 @@ class _GoalAgent:
     _working_dir: Path
     _state: AgentState = AgentState.IDLE
     _state_changed_at: float = field(default_factory=lambda: time.time() - 10)
-    _soul_delay: float = 1.0
     _logs: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     _notification_store: object = field(init=False)
 

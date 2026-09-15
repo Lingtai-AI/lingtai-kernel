@@ -448,7 +448,7 @@ def handle(agent, args: dict) -> dict:
     ``_tc_id`` is stripped first. ``base_agent.tools._dispatch_tool`` injects
     it into **every** intrinsic's args (only ``psyche`` molt consumes it), so
     it is kernel plumbing that predates and is invisible to the LTP v2
-    envelope — the same boundary ``soul`` and ``notification`` own.
+    envelope — the same boundary ``notification`` owns.
 
     Two Email-specific results are rendered here, before/after the generic
     dispatcher, rather than by changing its canonical shapes:

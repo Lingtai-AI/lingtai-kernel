@@ -1,7 +1,7 @@
 """Lifecycle — start, stop, heartbeat, signal-file detection, refresh, preset fallback.
 
 The agent's life support: starting, stopping, breathing, detecting signal
-files (.sleep, .suspend, .refresh, .prompt, .clear, .inquiry, .rules,
+files (.sleep, .suspend, .refresh, .prompt, .clear, .rules,
 .interrupt), tracking uptime, managing AED timeout, and running periodic
 snapshots.
 """
@@ -359,7 +359,6 @@ def _start(agent) -> None:
             ]
             agent.restore_chat({"messages": messages})
             agent._log("session_restored")
-            agent._rehydrate_appendix_tracking()
         except Exception as e:
             from ..logging import get_logger
             get_logger().warning(f"[{agent.agent_name}] Failed to restore chat history: {e}")
@@ -467,8 +466,6 @@ def _start(agent) -> None:
     )
     agent._thread.start()
     agent._heartbeat_runtime_ready = True
-    # Boot state is IDLE (fire-eligible) — start the timer here.
-    agent._start_soul_timer()
 
 
 def _reset_uptime(agent) -> None:
@@ -491,7 +488,6 @@ def _stop(agent, timeout: float = 5.0) -> StopResult:
     the lease, so a cleanup exception cannot wedge a dead Agent's workdir.
     """
     agent._log("agent_stop")
-    agent._cancel_soul_timer()
     agent._shutdown.set()
     # Process teardown is terminal for every correlated caller, but caller
     # settlement is deliberately not treated as execution quiescence.
@@ -786,50 +782,6 @@ def _heartbeat_loop(agent) -> None:
                     get_logger().error(
                         f"[{agent.agent_name}] .clear signal failed: {clear_err}",
                     )
-
-            # .inquiry = soul inquiry (from TUI /btw or auto-insight)
-            inquiry_file = agent._working_dir / ".inquiry"
-            taken_file = agent._working_dir / ".inquiry.taken"
-            if inquiry_file.is_file() and not taken_file.is_file():
-                try:
-                    inquiry_file.rename(taken_file)
-                except OSError:
-                    pass
-                else:
-                    try:
-                        content = taken_file.read_text(encoding="utf-8").strip()
-                    except OSError:
-                        content = ""
-                    if content:
-                        lines = content.split("\n", 1)
-                        if len(lines) == 2 and lines[0] in ("human", "insight", "agent"):
-                            source, question = lines[0], lines[1].strip()
-                        else:
-                            source, question = "human", content.strip()
-                        if question:
-                            def _inquiry_done(q: str, s: str, tf) -> None:
-                                try:
-                                    agent._run_inquiry(q, source=s)
-                                finally:
-                                    try:
-                                        tf.unlink()
-                                    except OSError:
-                                        pass
-                            threading.Thread(
-                                target=_inquiry_done,
-                                args=(question, source, taken_file),
-                                daemon=True,
-                            ).start()
-                        else:
-                            try:
-                                taken_file.unlink()
-                            except OSError:
-                                pass
-                    else:
-                        try:
-                            taken_file.unlink()
-                        except OSError:
-                            pass
 
             # .rules = network rules signal
             _check_rules_file(agent)

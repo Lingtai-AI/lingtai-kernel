@@ -1,14 +1,15 @@
 """Regression tests for the post-refresh livelock in _handle_tc_wake.
 
 Background: after `refresh` the agent's _session.chat is torn down (None)
-and re-created lazily on the next _session.send() call. If a soul-flow
-consultation fires while in this transient None-chat state, it posts
+and re-created lazily on the next _session.send() call. If an involuntary
+producer fires while in this transient None-chat state, it posts
 MSG_TC_WAKE which routes to _handle_tc_wake. The original handler bailed
 with `tc_wake_noop reason=chat_not_ready` and re-enqueued the items —
 WITHOUT posting another MSG_TC_WAKE. The next consultation_fire would post
 its own wake, fire the same bail, re-enqueue again, and the cycle never
-made progress. Production observed: agent stuck idle, soul flow firing
-every 2.5 minutes for hours, never producing a turn.
+made progress. Production observed (with the since-removed soul-flow
+producer): agent stuck idle, a timer firing every 2.5 minutes for hours,
+never producing a turn.
 
 Fix: when _chat is None, call _session.ensure_session() to create it
 inline rather than re-enqueueing. ensure_session is idempotent. If session

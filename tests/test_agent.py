@@ -66,7 +66,8 @@ def test_intrinsics_enabled_by_default(tmp_path):
     assert "psyche" in agent._intrinsics
     assert "pad" not in agent._intrinsics
     assert "lingtai" not in agent._intrinsics
-    assert len(agent._intrinsics) == 5  # email, system, context, psyche, soul
+    assert "soul" not in agent._intrinsics  # the Soul subsystem was removed
+    assert len(agent._intrinsics) == 4  # email, system, context, psyche
 
 
 # ---------------------------------------------------------------------------

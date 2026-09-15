@@ -88,7 +88,7 @@ def test_activate_preset_substitutes_llm_and_capabilities(tmp_path):
 
 
 def test_activate_preset_preserves_other_manifest_fields(tmp_path):
-    """admin, soul, agent_name, etc. survive; legacy stamina is removed."""
+    """admin, agent_name, and the inert legacy soul block survive; legacy stamina is removed."""
     wd, plib = _make_workdir_and_lib(tmp_path)
     a = _make_probe_agent(wd)
     a._activate_preset(str(plib / "minimax.json"))

@@ -5,7 +5,7 @@ name_definition: >
   `## tools`. The kernel owns its slot and rendering mechanics while the Psyche plan
   supplies the packaged body. It is named for the substrate it describes: the
   agent's own architecture — bodies, lifecycle states, communication channels,
-  memory layers, idle/soul, and system operations — the operational wisdom that
+  memory layers, idle behavior, and system operations — the operational wisdom that
   spans multiple tools.
 purpose: >
   Exists as a compact resident layer so the agent carries a stable model of how
@@ -16,7 +16,7 @@ scope:
   owns:
     - The stable model of bodies, tool tiers, and data-flow topology.
     - Life states / lifecycle, channel discipline, and the attention model.
-    - Memory layers and idle/soul behavior at the model level.
+    - Memory layers and idle behavior at the model level.
     - System-operations concepts, routing expanded detail to the system-manual skill.
   does_not_own:
     - Step-by-step action playbooks (owned by procedures).
@@ -50,7 +50,7 @@ related_files:
     why: >
       Owns the expanded stable-model semantics this resident section only summarizes:
       body/extensions, bash vs daemon vs avatar vs MCP, lifecycle states, the system
-      tool, communication channels, memory layers, molt model, and idle/soul behavior.
+      tool, communication channels, memory layers, molt model, and idle behavior.
       Crawl here (via the system-manual router) when the compact substrate section is
       not enough — keep expanded detail here, not in the resident body.
   - path: src/lingtai/prompts/principle/principle.yaml

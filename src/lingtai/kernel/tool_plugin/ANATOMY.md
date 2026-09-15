@@ -46,9 +46,6 @@ related_files:
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/bash/manual/SKILL.md
-  - src/lingtai/tools/soul/ANATOMY.md
-  - src/lingtai/tools/soul/__init__.py
-  - src/lingtai/tools/soul/manual/SKILL.md
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/karma.py
@@ -77,7 +74,6 @@ related_files:
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
   - tests/test_shell_tool_plugin_declaration.py
-  - tests/test_soul_runtime_port_ab.py
   - tests/test_system_declared_plugin.py
   - tests/test_task_card_controller.py
   - tests/test_task_card_notifications.py
@@ -129,7 +125,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     `PluginCatalogState`), read-only `PsycheSettingsPort` (returning the
     structural `PsycheSettingsSnapshotPort`),
     `NotificationStatePort`, Shell's narrow durable `NotificationPort` and
-    setup-only `ConfigurationPort`, Soul's explicit live-self `SoulRuntimePort`,
+    setup-only `ConfigurationPort`,
     System's bounded lifecycle `SystemRuntimePort` and durable naming
     `IdentityPort`, Task Card's one-predicate `ShutdownPort`, current-Agent
     `TaskCardLifecyclePort`, and closed operation-native
@@ -171,9 +167,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   and Notification Core's dismissal, delay, hook, and logging operations,
   alongside the existing MCP, Avatar, Context, Daemon, and Email adapters,
   plus `AgentPsycheSettingsAdapter` for the one read-through applied Psyche
-  owner-input snapshot, and `AgentSoulRuntimeAdapter`/`agent_soul_runtime` for
-  Soul's explicit
-  live-self runtime operations and
+  owner-input snapshot, and
   `AgentSystemRuntimeAdapter`/`AgentIdentityAdapter`/`agent_system_runtime`
   for System's lifecycle and naming vocabularies (whose sleep members are
   translation-only evidence/effects for `karma.sleep_use_case`), and
@@ -201,7 +195,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   Its static declaration opts into the reserved SHOW-only settings child and
   binds the per-host family and protected prompt
   section; Avatar, Context, Daemon, Email, Plugin, Psyche, Notification, Shell,
-  Soul, System, Task Card, Vision, and Web are separately accepted vertical
+  System, Task Card, Vision, and Web are separately accepted vertical
   slices. The later-family target register is now empty; the reserved list is
   not an admission path.
 - `src/lingtai/tools/avatar/__init__.py` — separately landed vertical evidence,
@@ -258,17 +252,10 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `StaticConfigurationAdapter` carries only copied setup values.
   `bash/__init__.py` `setup(agent, ...)` only supplies that configuration through
   `extra_ports_for` and calls the registrar.
-- `src/lingtai/tools/soul/__init__.py` is the tenth accepted vertical slice.
-  Its static `DECLARATION` preserves the public
-  `inquiry | flow | config | voice | dismiss | manual` family and binds the
-  five operational children only to the earned, explicit `soul_runtime` port;
-  the reserved manual child receives only the granted `workdir`.
-  `AgentSoulRuntimeAdapter` stores individual read closures and bound
-  operations — never the Agent — for Soul's real conversation, cadence,
-  consultation-lock, and notification semantics. Soul stays an injected
-  intrinsic for kernel lifecycle hooks while its model-facing root mounts only
-  through the registrar; the package manual is the sole operational body,
-  installed at the historical `soul-manual` destination.
+- The tenth accepted vertical slice was the `soul` family; the Soul subsystem
+  was removed outright, taking its declaration, `SoulRuntimePort`,
+  `AgentSoulRuntimeAdapter`, and `soul_runtime` grant with it. Its slot is not
+  reused and nothing about the removal widened another family's grant.
 - `src/lingtai/tools/system/__init__.py` is the eleventh accepted vertical
   slice. Its static `DECLARATION` preserves the public
   `refresh | sleep | lull | interrupt | suspend | cpr | clear | nirvana |
@@ -355,11 +342,6 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   lazy `_bind` sees a `ToolPluginHost`, never an Agent. The retained Shell
   manager receives only the granted workdir/notification ports, while copied
   setup values arrive through `ConfigurationPort`.
-- `lingtai.tools.soul` imports `lingtai.kernel.tool_plugin`; its `_bind` sees a
-  `ToolPluginHost`, never an Agent, and its five operational children receive
-  only the granted `SoulRuntimePort`. `Agent` re-mounts the declaration through
-  `override_intrinsic("soul")` plus `soul.setup(agent)` on construction and on
-  every refresh.
 - `lingtai.tools.system` imports `lingtai.kernel.tool_plugin`; its `_bind` sees
   a `ToolPluginHost`, never an Agent, and its handlers reach the body only
   through the granted `system_runtime`/`identity` ports (plus `workdir` for the
@@ -531,8 +513,8 @@ component does not own.
   reviewed contract change), build its module-level `DECLARATION`, and route
   its approved composition hook through `register_agent_tool_plugins`; do not
   infer that every official family must be a dynamic `setup()` capability.
-  The fourteen actual slices are `mcp`, `avatar`, `context`, `daemon`, `email`,
-  `plugin`, `psyche`, `notification`, `shell`, `soul`, `system`, `task_card`,
+  The thirteen actual slices are `mcp`, `avatar`, `context`, `daemon`, `email`,
+  `plugin`, `psyche`, `notification`, `shell`, `system`, `task_card`,
   `vision`, and `web`;
   Notification demonstrates an always-on injected family rather than a
   later-family target or normal opt-in capability, Task Card demonstrates a

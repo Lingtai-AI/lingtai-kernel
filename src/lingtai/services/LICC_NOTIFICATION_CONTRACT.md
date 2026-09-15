@@ -91,7 +91,7 @@ Scope:
   channel without changing its LICC event/inbox/producer file or persistent state.
 
 Non-scope: the low-level Telegram Bot API, IMAP protocol semantics, frontend UI
-rendering, and unrelated notification producers such as `soul` or `goal` except
+rendering, and unrelated notification producers such as `daemon` or `goal` except
 where they share the `.notification/` filesystem protocol.
 
 ## Components
