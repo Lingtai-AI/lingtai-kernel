@@ -385,30 +385,20 @@ def _python_selection_policy() -> _PythonSelectionPolicy:
             "compatible venv_path."
         )
 
-    if architecture == "arm64" and macos_major >= 14:
-        # Managed-runtime support window: the kernel is a pure-Python
-        # universal wheel, but its declared/tested interpreter window is
-        # 3.11-3.13 (pyproject classifiers and CI), so the managed selector
-        # keeps a 3.13 cap even though onnxruntime 1.28.0 ships a cp314 ARM
-        # wheel; a user who installs lingtai under 3.14 remains free to do so
-        # outside the managed selector. (Jason review P1-1, 2026-08-08.)
-        maximum = (3, 13)
-        candidate_names = (
-            "python3.13",
-            "python3.12",
-            "python3.11",
-            "python3",
-            "python",
-        )
-    else:
-        maximum = (3, 13)
-        candidate_names = (
-            "python3.13",
-            "python3.12",
-            "python3.11",
-            "python3",
-            "python",
-        )
+    # Managed-runtime support window: the kernel is a pure-Python
+    # universal wheel, but its declared/tested interpreter window is
+    # 3.11-3.13 (pyproject classifiers and CI), so the managed selector
+    # keeps a 3.13 cap even though onnxruntime 1.28.0 ships a cp314 ARM
+    # wheel; a user who installs lingtai under 3.14 remains free to do so
+    # outside the managed selector. (Jason review P1-1, 2026-08-08.)
+    maximum = (3, 13)
+    candidate_names = (
+        "python3.13",
+        "python3.12",
+        "python3.11",
+        "python3",
+        "python",
+    )
     return _PythonSelectionPolicy(
         target_os=target_os,
         architecture=architecture,
