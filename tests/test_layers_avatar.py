@@ -636,19 +636,20 @@ class TestMissionQualityGate:
         """The dry_run/confirm gates stay model-visible after the LTP v2 migration.
 
         Under the action-separated envelope they live inside the ``spawn``
-        branch of ``input.anyOf`` rather than at the root, but they must still
-        be declared with their gate types so the model can actually reach
-        them.
+        branch of the root ``oneOf`` rather than at the root, but they must
+        still be declared with their gate types so the model can actually
+        reach them.
         """
         from lingtai.tools.avatar import get_schema
+        from tests._tool_family_schema_helpers import action_input_schemas
         sch = get_schema("en")
-        branches = {b["title"]: b for b in sch["properties"]["input"]["anyOf"]}
-        spawn_props = branches["spawn input"]["properties"]
+        branches = action_input_schemas(sch)
+        spawn_props = branches["spawn"]["properties"]
         assert "dry_run" in spawn_props
         assert spawn_props["dry_run"]["type"] == ["boolean", "null"]
         assert "confirm" in spawn_props
         assert spawn_props["confirm"]["type"] == ["boolean", "null"]
-        assert "rules input" not in branches
+        assert "rules" not in branches
         assert sch["required"] == ["action", "input", "reasoning"]
         assert sch["properties"]["action"]["enum"] == [
             "spawn", "settings", "manual"
@@ -662,6 +663,7 @@ class TestMissionQualityGate:
         schema still exposes the dry_run/confirm gates in its input branch.
         """
         from lingtai.tools.avatar import get_description, get_schema
+        from tests._tool_family_schema_helpers import action_input_schema
         desc = get_description("en")
         schema = get_schema("en")
         assert "avatar-manual" in desc
@@ -675,9 +677,7 @@ class TestMissionQualityGate:
         assert "do not load this manual as a ritual" in manual
         assert "reference/spawn.md" in manual
         assert "reference/lifecycle.md" in manual
-        spawn_props = {
-            b["title"]: b for b in schema["properties"]["input"]["anyOf"]
-        }["spawn input"]["properties"]
+        spawn_props = action_input_schema(schema, "spawn")["properties"]
         assert "confirm" in spawn_props
         assert "dry_run" in spawn_props
         assert "action" in schema["properties"]
@@ -746,9 +746,10 @@ class TestUnifiedAvatarTool:
         Pre-migration the schema was a plain object with every action's fields
         merged at the root and no top-level combinators. It is now the
         action-separated envelope: four root fields, three of them required,
-        closed to anything else, with one ``input.anyOf`` branch per action.
+        closed to anything else, with one root ``oneOf`` branch per action.
         """
         from lingtai.tools.avatar import get_schema
+        from tests._tool_family_schema_helpers import assert_compact_envelope
         sch = get_schema("en")
         assert sch["type"] == "object"
         assert set(sch["properties"]) == {"action", "input", "reasoning", "summarize"}
@@ -758,7 +759,7 @@ class TestUnifiedAvatarTool:
         assert sch["properties"]["action"]["enum"] == [
             "spawn", "settings", "manual"
         ]
-        assert len(sch["properties"]["input"]["anyOf"]) == 3
+        assert_compact_envelope(sch, ["spawn", "settings", "manual"])
 
     def test_spawn_dispatch_preserves_behavior_and_reasoning(self, tmp_path, fake_avatar_launch):
         """action='spawn' preserves outputs and _reasoning → first-prompt propagation."""

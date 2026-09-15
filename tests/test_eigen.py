@@ -14,6 +14,7 @@ from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_re
 from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
+from tests._tool_family_schema_helpers import action_input_schema
 
 
 # ---------------------------------------------------------------------------
@@ -150,8 +151,8 @@ def test_eigen_schema_has_molt(tmp_path):
 
     Pre-migration the schema was deliberately combinator-free (#114) and
     `summary` sat on the shared flat root. The LTP v2 envelope moved it into
-    the one action that consumes it, behind the composed `allOf`/`oneOf`
-    correlation.
+    the one action that consumes it, behind the composed root `oneOf`
+    discriminated union.
     """
     from lingtai.tools.context import get_schema
     s = get_schema("en")
@@ -160,11 +161,7 @@ def test_eigen_schema_has_molt(tmp_path):
     # `summarize` post-processing control, which is a separate boolean.
     assert "summary" not in s["properties"]
     assert s["properties"]["summarize"]["type"] == "boolean"
-    molt_branch = next(
-        cond["then"]["properties"]["input"]
-        for cond in s["allOf"]
-        if cond["if"]["properties"]["action"]["const"] == "molt"
-    )
+    molt_branch = action_input_schema(s, "molt")
     assert "summary" in molt_branch["properties"]
     assert {"action", "input", "reasoning"} == set(s["required"])
 

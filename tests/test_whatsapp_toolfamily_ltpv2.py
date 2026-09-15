@@ -28,6 +28,11 @@ from lingtai.mcp_servers.whatsapp._family import (
     handle_whatsapp,
 )
 from lingtai.mcp_servers.whatsapp.manager import WhatsAppManager
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 
 class _CountingManager:
@@ -62,11 +67,8 @@ class _StubBridge:
 
 
 def _branches(schema: dict) -> dict[str, dict]:
-    inputs = schema["properties"]["input"]
-    branches = inputs.get("oneOf") or inputs.get("anyOf")
-    result = {branch["title"].removesuffix(" input"): branch for branch in branches}
-    result["settings"] = result.pop("settings inventory")
-    return result
+    """Map each action to the ``input`` schema its root ``oneOf`` branch carries."""
+    return action_input_schemas(schema)
 
 
 def _real_manager(tmp_path: Path, *, bridge: _StubBridge | None = None) -> WhatsAppManager:
@@ -123,7 +125,21 @@ def test_root_schema_shape_requires_action_input_reasoning():
     assert WHATSAPP_SCHEMA["additionalProperties"] is False
     assert "summarize" in WHATSAPP_SCHEMA["properties"]
     assert "summarize" not in WHATSAPP_SCHEMA["required"]
-    assert len(WHATSAPP_SCHEMA["allOf"]) == len(WHATSAPP_ACTIONS)
+    # One root ``oneOf`` branch per action, discriminated by action const;
+    # no root allOf/anyOf and no duplicate branch list under ``input``.
+    assert_compact_envelope(WHATSAPP_SCHEMA, list(WHATSAPP_ACTIONS))
+    branches = _branches(WHATSAPP_SCHEMA)
+    canonical = _whatsapp_input_schemas()
+    for action in WHATSAPP_ACTIONS:
+        if action == "settings":
+            assert branches[action] == {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            }
+            continue
+        assert branches[action] == canonical[action], action
 
 
 def test_every_action_dispatches_with_its_valid_input():
@@ -597,14 +613,53 @@ def test_bridge_inbound_event_unaffected_by_tool_envelope(tmp_path, monkeypatch)
 
 
 def test_openai_responses_scrub_preserves_family_root_and_action_branches():
+    """The root ``oneOf`` discriminated union survives the Responses scrub
+    as ``oneOf`` with the same per-action mapping; only a ``oneOf`` nested
+    inside a child input (send's to-XOR-wa_id recipient choice) is rewritten
+    to ``anyOf`` on that wire."""
     from lingtai.llm.openai.adapter import _scrub_responses_schema
 
     wire = _scrub_responses_schema(copy.deepcopy(WHATSAPP_SCHEMA), is_root=True)
     assert wire["required"] == WHATSAPP_SCHEMA["required"]
     assert wire["properties"]["action"]["enum"] == list(WHATSAPP_ACTIONS)
-    assert wire["properties"]["input"]["anyOf"]
-    assert len(wire["allOf"]) == len(WHATSAPP_ACTIONS)
     assert wire["additionalProperties"] is False
+    assert "allOf" not in wire and "anyOf" not in wire
+    assert branch_actions(wire) == list(WHATSAPP_ACTIONS)
+    # The typed root ``input`` only gains an empty ``properties`` map on the
+    # Responses wire; it never regains a duplicate branch list.
+    root_input = wire["properties"]["input"]
+    assert root_input["properties"] == {}
+    assert "oneOf" not in root_input and "anyOf" not in root_input
+    # Identical per-action correlation on the wire: same order, same input
+    # fields and required lists, every branch still closed, and no nested
+    # ``oneOf`` left anywhere below the root.
+    wire_branches = action_input_schemas(wire)
+    canonical_branches = action_input_schemas(WHATSAPP_SCHEMA)
+    assert list(wire_branches) == list(canonical_branches) == list(WHATSAPP_ACTIONS)
+    for action in WHATSAPP_ACTIONS:
+        assert set(wire_branches[action]["properties"]) == set(
+            canonical_branches[action]["properties"]
+        ), action
+        assert wire_branches[action].get("required", []) == canonical_branches[action].get(
+            "required", []
+        ), action
+        assert wire_branches[action]["additionalProperties"] is False, action
+        assert "oneOf" not in wire_branches[action], action
+    # Exactly these children carry a nested recipient/target ``oneOf``; each
+    # is rewritten to ``anyOf`` on this wire while the root ``oneOf`` above
+    # is preserved verbatim.
+    nested_one_of = {a for a, b in canonical_branches.items() if "oneOf" in b}
+    assert nested_one_of == {"send", "add_contact", "remove_contact"}
+    assert canonical_branches["send"]["oneOf"] == [
+        {"required": ["to"]}, {"required": ["wa_id"]},
+    ]
+    for action in ("add_contact", "remove_contact"):
+        assert "anyOf" not in canonical_branches[action], action
+        assert wire_branches[action]["anyOf"] == canonical_branches[action]["oneOf"], action
+    # send carries both a message-variant ``anyOf`` and the recipient
+    # ``oneOf``; the scrub's key-for-key rewrite keeps a single ``anyOf``
+    # node (dispatch, not the wire, remains the authoritative XOR check).
+    assert "anyOf" in wire_branches["send"]
 
 
 # ---------------------------------------------------------------------------

@@ -27,22 +27,17 @@ from lingtai.llm.openai.adapter import (
     _scrub_responses_schema,
 )
 from lingtai.tools.notification import get_schema
+from tests._tool_family_schema_helpers import action_input_schema, branch_actions
 
 
 def _notification_schema() -> dict:
     return get_schema("en")
 
 
-def _any_branch_input(schema: dict, title: str) -> dict:
-    inputs = schema["properties"]["input"]
-    branches = inputs.get("oneOf") or inputs.get("anyOf")
-    return next(b for b in branches if b["title"] == f"{title} input")
-
-
 def test_scrub_does_not_inject_type_into_description_property_map():
     """A properties map containing a ``description`` key stays a pure map."""
     # Canonical branch for ``add`` has a property literally named description.
-    branch = _any_branch_input(_notification_schema(), "add")
+    branch = action_input_schema(_notification_schema(), "add")
     assert "description" in branch["properties"]
     scrubbed = _scrub_responses_schema(copy.deepcopy(branch))
     assert "type" not in scrubbed["properties"], (
@@ -102,15 +97,18 @@ def test_notification_chat_wire_parameters_is_object():
 
 
 def test_scrub_preserves_add_edit_branches_without_type_key():
-    """Branches 4 (add) and 6 (edit) keep no stray ``type`` property."""
+    """The ``add`` and ``edit`` root ``oneOf`` branches keep no stray ``type`` property."""
     schema = FunctionSchema(
         name="notification",
         description="x",
         parameters=_notification_schema(),
     )
     params = _build_responses_tools([schema])[0]["parameters"]
-    branches = params["properties"]["input"]["anyOf"]
-    for idx in (4, 6):
-        assert "type" not in branches[idx]["properties"], (
-            f"branch {idx} ({branches[idx]['title']}) must not gain a type property"
+    # The hook-registry branches sit at root-oneOf positions 4 and 6.
+    assert branch_actions(params)[4] == "add"
+    assert branch_actions(params)[6] == "edit"
+    for action in ("add", "edit"):
+        branch = action_input_schema(params, action)
+        assert "type" not in branch["properties"], (
+            f"branch {action} must not gain a type property"
         )

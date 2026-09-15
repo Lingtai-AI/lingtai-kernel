@@ -135,9 +135,9 @@ Guarded by: [S002](BEHAVIORS.md#behavior-s002)
 default — it must be stated. The composed schema is built by the generic
 `tool_family` infrastructure in `src/lingtai/tools/bash/_tool_family.py`
 (`get_schema`), which correlates each `action` const to that child's own
-`input` schema at the root via `allOf`/`if`/`then` and additionally discloses
-every branch under `input.anyOf` (the two strict-empty settings/manual branches
-intentionally overlap).
+`input` schema through one root `oneOf` branch per action (the two
+strict-empty settings/manual inputs overlap, but their distinct `action`
+consts keep the union unambiguous).
 
 Run-only fields (`command`, `timeout`, `working_dir`, `async`, `reminder`) exist
 only in `run`'s `input`; `job_id` exists only in `poll`'s and `cancel`'s.

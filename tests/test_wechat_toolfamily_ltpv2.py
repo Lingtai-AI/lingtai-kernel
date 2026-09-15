@@ -1,8 +1,8 @@
 """Focused WeChat LTP-v2 family strict-schema and dispatch-routing tests.
 
 Mirrors ``tests/test_telegram_toolfamily_ltpv2.py``: proves the composed root
-schema shape (``action``/``input``/``reasoning``/``summarize``), the
-``allOf``/``if``/``then`` action<->input correlation, and that
+schema shape (``action``/``input``/``reasoning``/``summarize``), the root
+``oneOf`` discriminated-union action<->input correlation, and that
 ``handle_wechat``/``WechatManager.handle`` reject malformed envelopes,
 cross-action field leakage, missing required root fields, and unknown
 actions/params (``ACTION_REQUIRED`` / ``INVALID_ARGUMENT``) before any
@@ -23,10 +23,16 @@ from lingtai.mcp_servers.wechat._family import (
     WECHAT_ACTIONS,
     WECHAT_SCHEMA,
     _basic_validate,
+    _wechat_input_schemas,
     handle_wechat,
 )
 from lingtai.mcp_servers.wechat.manager import WechatManager
 from lingtai.mcp_servers.wechat.plugin import WECHAT_PLUGIN
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 
 class _CountingManager:
@@ -41,9 +47,10 @@ class _CountingManager:
 
 
 def _branches(schema: dict) -> dict[str, dict]:
-    inputs = schema["properties"]["input"]
-    branches = inputs.get("oneOf") or inputs.get("anyOf")
-    return dict(zip(WECHAT_ACTIONS, branches, strict=True))
+    """Map each action to the ``input`` schema its root ``oneOf`` branch carries."""
+    branches = action_input_schemas(schema)
+    assert list(branches) == list(WECHAT_ACTIONS)
+    return branches
 
 
 # ---------------------------------------------------------------------------
@@ -68,23 +75,27 @@ def test_action_enum_is_exactly_the_eleven_wechat_actions():
     )
 
 
-def test_root_allof_correlates_every_action_with_its_own_input_branch():
-    all_of = WECHAT_SCHEMA["allOf"]
-    assert len(all_of) == len(WECHAT_ACTIONS)
+def test_root_oneof_correlates_every_action_with_its_own_input_branch():
+    """The root ``oneOf`` is the single action<->input correlation: exactly
+    one branch per action in registration order, each pairing the action
+    const with that action's own canonical input schema — and nothing else
+    (no root allOf/anyOf, no duplicate branch list under ``properties.input``)."""
+    assert_compact_envelope(WECHAT_SCHEMA, list(WECHAT_ACTIONS))
+    assert branch_actions(WECHAT_SCHEMA) == list(WECHAT_ACTIONS)
     branches = _branches(WECHAT_SCHEMA)
-    seen_actions = set()
-    for condition in all_of:
-        action = condition["if"]["properties"]["action"]["const"]
-        assert condition["if"]["required"] == ["action"]
-        assert action in WECHAT_ACTIONS
-        seen_actions.add(action)
-        # then.input must be exactly that action's own canonical branch,
-        # modulo the branch-only "title" key the oneOf disclosure adds.
-        then_input = dict(condition["then"]["properties"]["input"])
-        own_branch = dict(branches[action])
-        own_branch.pop("title", None)
-        assert then_input == own_branch
-    assert seen_actions == set(WECHAT_ACTIONS)
+    canonical = _wechat_input_schemas()
+    for action in WECHAT_ACTIONS:
+        if action == "settings":
+            # The plugin-injected settings child is the exact strict-empty
+            # inventory input (its own ``required: []`` included).
+            assert branches[action] == {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            }
+            continue
+        assert branches[action] == canonical[action], action
 
 
 def test_no_audit_or_presentation_field_leaks_into_any_action_branch():
@@ -439,44 +450,92 @@ def test_schema_is_deep_copy_safe_between_calls():
 
 
 def test_openai_responses_scrub_preserves_family_root_and_action_branches():
+    """The root ``oneOf`` discriminated union survives the Responses scrub
+    as ``oneOf`` (only nested ``oneOf`` is rewritten to ``anyOf``), with the
+    identical per-action ``input`` correlation as the canonical schema."""
     from lingtai.llm.openai.adapter import _scrub_responses_schema
 
     wire = _scrub_responses_schema(copy.deepcopy(WECHAT_SCHEMA), is_root=True)
     assert wire["required"] == WECHAT_SCHEMA["required"]
     assert wire["properties"]["action"]["enum"] == list(WECHAT_ACTIONS)
-    assert wire["properties"]["input"]["anyOf"] or wire["properties"]["input"]["oneOf"]
-    assert len(wire["allOf"]) == len(WECHAT_ACTIONS)
     assert wire["additionalProperties"] is False
+    assert "allOf" not in wire and "anyOf" not in wire
+    assert branch_actions(wire) == list(WECHAT_ACTIONS)
+    # The typed root ``input`` only gains an empty ``properties`` map on the
+    # Responses wire; it never regains a duplicate branch list.
+    root_input = wire["properties"]["input"]
+    assert root_input["properties"] == {}
+    assert "oneOf" not in root_input and "anyOf" not in root_input
+    # Identical per-action correlation on the wire: same order, same input
+    # fields and required lists, every branch still closed, and no nested
+    # ``oneOf`` left anywhere below the root.
+    wire_branches = action_input_schemas(wire)
+    canonical_branches = action_input_schemas(WECHAT_SCHEMA)
+    assert list(wire_branches) == list(canonical_branches) == list(WECHAT_ACTIONS)
+    for action in WECHAT_ACTIONS:
+        assert set(wire_branches[action]["properties"]) == set(
+            canonical_branches[action]["properties"]
+        ), action
+        assert wire_branches[action].get("required", []) == canonical_branches[action].get(
+            "required", []
+        ), action
+        assert wire_branches[action]["additionalProperties"] is False, action
+        assert "oneOf" not in wire_branches[action], action
+    # send's text/media_path combination is a non-exclusive ``anyOf`` and
+    # passes through; only remove_contact's alias-XOR-user_id is a nested
+    # ``oneOf``, rewritten to ``anyOf`` on this wire while the root survives.
+    nested_one_of = {a for a, b in canonical_branches.items() if "oneOf" in b}
+    assert nested_one_of == {"remove_contact"}
+    assert canonical_branches["remove_contact"]["oneOf"] == [
+        {"required": ["alias"]}, {"required": ["user_id"]},
+    ]
+    assert wire_branches["remove_contact"]["anyOf"] == [
+        {"required": ["alias"]}, {"required": ["user_id"]},
+    ]
+    assert wire_branches["send"]["anyOf"] == canonical_branches["send"]["anyOf"]
 
 
 # ---------------------------------------------------------------------------
-# B3 regression: check/contacts/accounts/settings/manual publish empty-object
-# input branch, so a oneOf discovery list makes {} match more than one
-# branch — the same "instance is valid under each of ..." collision the
-# telegram schema documents. The published discovery list must be anyOf, not
-# oneOf, even though the root allOf/if/then still discriminates by action.
+# B3 regression: check/contacts/accounts/settings/manual publish an
+# empty-object input, so {} satisfies five branch inputs at once. Under the
+# old ``input.oneOf`` discovery list that was an "instance is valid under
+# each of ..." collision. The compact shape has no discovery list at all:
+# the single root ``oneOf`` discriminates by the ``action`` const, so a
+# well-formed call matches exactly one branch even when several inputs are
+# identical.
 # ---------------------------------------------------------------------------
 
-def test_input_discovery_branch_is_anyof_not_oneof():
-    assert "oneOf" not in WECHAT_SCHEMA["properties"]["input"]
-    assert "anyOf" in WECHAT_SCHEMA["properties"]["input"]
+def test_root_input_carries_no_discovery_list_and_root_union_is_oneof():
+    root_input = WECHAT_SCHEMA["properties"]["input"]
+    assert "oneOf" not in root_input
+    assert "anyOf" not in root_input
+    assert "properties" not in root_input
+    assert "anyOf" not in WECHAT_SCHEMA and "allOf" not in WECHAT_SCHEMA
+    assert len(WECHAT_SCHEMA["oneOf"]) == len(WECHAT_ACTIONS)
 
 
 def test_zero_input_action_schema_is_decisive_not_ambiguous():
-    """{} legitimately satisfies five empty-object branches at once.
+    """{} legitimately satisfies five empty-object branch inputs at once.
 
-    Under oneOf that is an ambiguous
-    "matches more than one schema" rejection; under anyOf it is a clean,
-    decisive accept — exactly what a real MCP client validating against the
-    published discovery schema needs for a zero-input action to be usable."""
-    branches = WECHAT_SCHEMA["properties"]["input"]["anyOf"]
-    empty_branches = [b for b in branches if b.get("properties") == {}]
-    assert {b["title"] for b in empty_branches} == {
-        "check input", "contacts input", "accounts input",
-        "settings inventory input", "manual input",
+    Under a bare ``input.oneOf`` that was an ambiguous "matches more than
+    one schema" rejection. With the root ``oneOf`` keyed by ``action``
+    const, exactly one branch can match a well-formed zero-input call —
+    a clean, decisive accept for a real MCP client validating against the
+    published schema."""
+    branches = _branches(WECHAT_SCHEMA)
+    empty_actions = {
+        action for action, b in branches.items() if b.get("properties") == {}
     }
-    matches = sum(1 for b in empty_branches if _basic_validate({}, b))
-    assert matches == len(empty_branches) == 5
+    assert empty_actions == {"check", "contacts", "accounts", "settings", "manual"}
+    for action in empty_actions:
+        assert _basic_validate({}, branches[action]), action
+        # Only the branch whose const equals this action can match the call.
+        matching = [
+            branch for branch in WECHAT_SCHEMA["oneOf"]
+            if branch["properties"]["action"]["const"] == action
+            and _basic_validate({}, branch["properties"]["input"])
+        ]
+        assert len(matching) == 1, action
 
 
 # ---------------------------------------------------------------------------

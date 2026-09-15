@@ -327,7 +327,8 @@ and the legacy `notification`/`dismiss` aliases are **not** in the enum and
 dispatch to the unknown-action error.
 
 Envelope enforcement is two-layered. The composed schema correlates `action`
-with `input` via a root `allOf`/`if`/`then` per action, and dispatch is the
+with `input` via one root `oneOf` branch per action (the branch's `action`
+const paired with that action's exact `input` schema), and dispatch is the
 always-authoritative, fail-closed second layer: it validates `action` before
 child lookup, type-checks and strips root `summarize`, rejects unknown root
 fields, and rejects `input` keys outside the selected action's own declared

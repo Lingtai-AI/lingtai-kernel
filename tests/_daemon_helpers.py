@@ -194,26 +194,15 @@ def daemon_action_input_schema(action: str, lang: str = "en") -> dict[str, Any]:
     Post-ToolFamily-migration the public ``daemon`` schema is the LTP v2
     envelope (``action``/``input``/``reasoning``/``summarize``), so a field
     that used to sit on the flat root now lives in exactly one action's
-    branch. This resolves the ``input.oneOf`` or settings-enabled
-    ``input.anyOf`` branch by its ``title``, which
-    ``ToolFamily.build_schema`` derives from the child's own registry name —
-    so a test navigating here is asserting against the same canonical child
-    schema dispatch validates.
+    branch. This resolves the root ``oneOf`` branch whose ``action`` const is
+    the child's own registry name — the branch ``ToolFamily.build_schema``
+    composes from that child's canonical ``input_schema`` — so a test
+    navigating here is asserting against the same schema dispatch validates.
     """
     from lingtai.tools.daemon import get_schema
+    from tests._tool_family_schema_helpers import action_input_schema
 
-    schema = get_schema(lang)
-    branches = schema["properties"]["input"].get("oneOf")
-    if branches is None:
-        branches = schema["properties"]["input"]["anyOf"]
-    expected_title = (
-        "settings inventory input" if action == "settings" else f"{action} input"
-    )
-    return next(
-        branch
-        for branch in branches
-        if branch["title"] == expected_title
-    )
+    return action_input_schema(get_schema(lang), action)
 
 
 def daemon_emanate_task_schema(lang: str = "en") -> dict[str, Any]:

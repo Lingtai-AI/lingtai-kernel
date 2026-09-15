@@ -9,6 +9,7 @@ from lingtai.tools.browser.core import BrowserEngine
 from lingtai.tools.browser.port import ResolvedTarget, TransportResponse
 from lingtai.tools.web_search import get_schema
 from tests._service_helpers import make_gemini_mock_service
+from tests._tool_family_schema_helpers import action_input_schemas, branch_actions
 
 
 @dataclass
@@ -81,7 +82,7 @@ def test_web_browse_vertical_slice(tmp_path):
             "reasoning" not in branch["properties"]
             and "_reasoning" not in branch["properties"]
             and "summarize" not in branch["properties"]
-            for branch in web_schema.parameters["properties"]["input"]["anyOf"]
+            for branch in action_input_schemas(web_schema.parameters).values()
         )
         first = agent._tool_handlers["web"]({
             "action": "browse",
@@ -297,14 +298,12 @@ def test_web_schema_includes_strict_action_input():
     ]
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["additionalProperties"] is False
-    branches = schema["properties"]["input"]["anyOf"]
-    assert [branch["title"] for branch in branches] == [
-        "search input", "browse input", "settings inventory input", "manual input",
-    ]
-    for branch in branches:
+    assert branch_actions(schema) == ["search", "browse", "settings", "manual"]
+    branches = action_input_schemas(schema)
+    for branch in branches.values():
         assert branch["additionalProperties"] is False
         assert set(branch["required"]) == set(branch["properties"])
-    browse = branches[1]["properties"]
+    browse = branches["browse"]["properties"]
     assert browse["url"]["type"] == ["string", "null"]
     assert browse["extract"]["enum"] == ["article", None]
-    assert branches[3]["properties"] == {}
+    assert branches["manual"]["properties"] == {}

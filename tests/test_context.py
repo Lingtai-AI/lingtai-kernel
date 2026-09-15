@@ -14,6 +14,11 @@ import pytest
 from lingtai.agent import Agent
 from lingtai.kernel.base_agent import BaseAgent
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._tool_family_schema_helpers import (
+    action_input_schema,
+    action_input_schemas,
+    branch_actions,
+)
 
 
 
@@ -231,14 +236,16 @@ def test_context_schema_exposes_the_exact_action_surface():
 def test_context_schema_is_the_closed_ltp_v2_envelope():
     # The pre-migration schema was deliberately flat with no combinators
     # (#114). The generic ToolFamily composer now supplies the closed root
-    # plus the `allOf` action/input correlation adopted after the 2026-07-27
-    # Responses probe, so both of those old assertions are inverted here.
+    # plus a root `oneOf` action/input discriminated union. Current-route
+    # `oneOf` acceptance is validated separately from the 2026-07-27 probe,
+    # which covered root `allOf`/`if`/`then`; both old assertions invert here.
     from lingtai.tools.context import get_schema
     SCHEMA = get_schema("en")
     assert set(SCHEMA["properties"]) == {"action", "input", "reasoning", "summarize"}
     assert SCHEMA["required"] == ["action", "input", "reasoning"]
     assert SCHEMA["additionalProperties"] is False
-    assert len(SCHEMA["allOf"]) == len(SCHEMA["properties"]["action"]["enum"])
+    assert branch_actions(SCHEMA) == SCHEMA["properties"]["action"]["enum"]
+    assert "allOf" not in SCHEMA and "anyOf" not in SCHEMA
     # `object` is gone as a public root field — no compatibility alias.
     assert "object" not in SCHEMA["properties"]
 
@@ -248,9 +255,9 @@ def test_context_schema_has_no_files_field_after_the_pad_split():
     from lingtai.tools.context import get_schema
     SCHEMA = get_schema("en")
     with_files = {
-        cond["if"]["properties"]["action"]["const"]
-        for cond in SCHEMA["allOf"]
-        if "files" in cond["then"]["properties"]["input"]["properties"]
+        action
+        for action, input_schema in action_input_schemas(SCHEMA).items()
+        if "files" in input_schema["properties"]
     }
     assert with_files == set()
 
@@ -262,10 +269,10 @@ def test_context_schema_has_session_journal_path_only_on_molt():
     """
     from lingtai.tools.context import get_schema
     SCHEMA = get_schema("en")
-    owners = {}
-    for cond in SCHEMA["allOf"]:
-        action = cond["if"]["properties"]["action"]["const"]
-        owners[action] = cond["then"]["properties"]["input"]["properties"]
+    owners = {
+        action: input_schema["properties"]
+        for action, input_schema in action_input_schemas(SCHEMA).items()
+    }
     assert "session_journal_path" not in owners["summarize"]
     assert "session_journal_path" not in owners["rebuild"]
     prop = owners["molt"]["session_journal_path"]
@@ -275,11 +282,7 @@ def test_context_schema_has_session_journal_path_only_on_molt():
     # Look the branch up by its `action` const rather than by position — the
     # pad/lingtai split shifted every index, and position was never the fact
     # under test.
-    molt_branch = next(
-        cond for cond in SCHEMA["allOf"]
-        if cond["if"]["properties"]["action"]["const"] == "molt"
-    )
-    molt_required = molt_branch["then"]["properties"]["input"]["required"]
+    molt_required = action_input_schema(SCHEMA, "molt")["required"]
     assert "summary" in molt_required and "session_journal_path" in molt_required
 
 

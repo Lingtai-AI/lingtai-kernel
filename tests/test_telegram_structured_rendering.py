@@ -14,6 +14,7 @@ from lingtai.mcp_servers.telegram.render import (
     plain_text_preview,
 )
 from tests._notification_store_helpers import FakeNotificationStore
+from tests._tool_family_schema_helpers import action_input_schema
 
 
 STRUCTURED_MESSAGE = {
@@ -138,11 +139,7 @@ def _manager(tmp_path: Path) -> tuple[TelegramManager, _Account]:
 
 
 def test_public_schema_exposes_rich_message_without_requiring_text():
-    send = next(
-        branch
-        for branch in SCHEMA["properties"]["input"]["anyOf"]
-        if branch.get("title") == "send input"
-    )
+    send = action_input_schema(SCHEMA, "send")
     assert "structured_message" in send["properties"]
     assert "rich" in send["properties"]["rendering_mode"]["enum"]
     assert {"required": ["structured_message"]} in send["anyOf"]

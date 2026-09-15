@@ -223,7 +223,9 @@ def test_no_authoring_search_or_edit_capability_survives():
     assert actions.isdisjoint(forbidden)
     # And no child accepts an input field at all, so no authoring payload can
     # be smuggled through one.
-    for branch in schema["properties"]["input"]["anyOf"]:
+    from tests._tool_family_schema_helpers import action_input_schemas
+
+    for branch in action_input_schemas(schema).values():
         assert branch["properties"] == {}
 
 

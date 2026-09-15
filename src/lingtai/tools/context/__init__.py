@@ -378,8 +378,9 @@ def get_schema(lang: str = "en") -> dict:
     # Composed by the generic ToolFamily infra from each child's own canonical
     # ``input_schema`` above, rather than hand-assembled: root ``action`` +
     # per-action ``input`` + required ``reasoning`` + optional ``summarize``,
-    # with a root ``allOf`` correlating each ``action`` const to that exact
-    # action's ``input`` shape on both the Chat and Responses wires.
+    # with one root ``oneOf`` branch per action correlating its ``action``
+    # const to that exact action's ``input`` shape on both the Chat and
+    # Responses wires.
     #
     # ``lang`` is accepted for source compatibility and ignored: schema prose
     # is canonical English and language-independent.

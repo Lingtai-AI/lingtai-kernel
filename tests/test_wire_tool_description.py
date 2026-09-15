@@ -27,6 +27,11 @@ import pytest
 from lingtai.kernel.config import TOOL_PROSE_SECTION_ENABLED_ENV
 from lingtai.kernel.llm.base import WIRE_TOOL_DESCRIPTION, FunctionSchema
 from lingtai.kernel.base_agent.tools import _refresh_tool_inventory_section
+from tests._tool_family_schema_helpers import (
+    action_input_schema,
+    action_input_schemas,
+    branch_actions,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -165,9 +170,9 @@ def test_web_action_input_schema_survives_chat_and_responses_wires():
     schema = FunctionSchema(name="web", description="web", parameters=get_schema())
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
-    # The injected settings child makes the disclosure branches overlap at
-    # ``input={}``, so the family deliberately emits nested ``anyOf`` on both
-    # wires. The branches themselves remain identical.
+    # The injected settings child shares ``manual``'s strict-empty input; the
+    # root ``oneOf`` stays unambiguous because each branch is discriminated
+    # by its ``action`` const, so both wires carry the identical union.
     for wire in (chat, responses):
         assert wire["type"] == "object"
         # ``reasoning`` is REQUIRED Host InvocationContext/audit metadata —
@@ -179,29 +184,26 @@ def test_web_action_input_schema_survives_chat_and_responses_wires():
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert wire["properties"]["reasoning"]["type"] == "string"
         assert wire["properties"]["summarize"]["type"] == "boolean"
-        branches = wire["properties"]["input"]["anyOf"]
-        assert [branch["title"] for branch in branches] == [
-            "search input", "browse input", "settings inventory input", "manual input",
-        ]
-        for branch in branches:
+        assert branch_actions(wire) == ["search", "browse", "settings", "manual"]
+        branches = action_input_schemas(wire)
+        for branch in branches.values():
             assert branch["additionalProperties"] is False
             assert set(branch["required"]) == set(branch["properties"])
             assert "summarize" not in branch["properties"]
             assert "reasoning" not in branch["properties"]
             assert "_reasoning" not in branch["properties"]
-        assert branches[1]["properties"]["cursor"]["type"] == ["string", "null"]
-        assert branches[3]["properties"] == {}
+        assert branches["browse"]["properties"]["cursor"]["type"] == ["string", "null"]
+        assert branches["manual"]["properties"] == {}
 
 
-def test_web_root_all_of_correlation_survives_chat_and_responses_wires():
-    """Root ``allOf`` schema-level action/input correlation must survive on
-    BOTH wires — Chat Completions (which never strips any root key) and the
-    Responses adapter (which, after this candidate's live-evidence-driven
-    fix, preserves root ``allOf``/``oneOf`` instead of unconditionally
-    stripping them). Responses may still normalize the nested ``input``
-    disclosure surface's ``oneOf`` to ``anyOf``, but the root ``allOf``
-    condition itself — and its exact per-action correlation — must remain
-    identical on both wires, with no child leakage into the root."""
+def test_web_root_one_of_correlation_survives_chat_and_responses_wires():
+    """The root ``oneOf`` discriminated union — one branch per action pairing
+    its ``action`` const with its exact ``input`` schema — must survive on
+    BOTH wires: Chat Completions (which never strips any root key) and the
+    Responses adapter (whose root-aware scrub preserves a root ``oneOf``
+    verbatim while still rewriting only *nested* ``oneOf`` to ``anyOf``).
+    The per-action correlation must be identical on both wires, each child
+    schema must appear exactly once, and no child may leak into the root."""
     from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
     from lingtai.tools.web_search import get_schema
 
@@ -210,27 +212,27 @@ def test_web_root_all_of_correlation_survives_chat_and_responses_wires():
     responses = _build_responses_tools([schema])[0]["parameters"]
 
     for wire in (chat, responses):
-        assert "allOf" in wire
-        conditions = wire["allOf"]
-        assert [c["if"]["properties"]["action"]["const"] for c in conditions] == [
-            "search", "browse", "settings", "manual",
-        ]
-        for condition in conditions:
-            assert condition["if"]["required"] == ["action"]
-            then_input = condition["then"]["properties"]["input"]
-            assert then_input["additionalProperties"] is False
-            assert "reasoning" not in then_input.get("properties", {})
-            assert "_reasoning" not in then_input.get("properties", {})
-            assert "summarize" not in then_input.get("properties", {})
+        assert "oneOf" in wire
+        assert "allOf" not in wire and "anyOf" not in wire
+        assert branch_actions(wire) == ["search", "browse", "settings", "manual"]
+        for branch in wire["oneOf"]:
+            assert set(branch["properties"]) == {"action", "input"}
+            correlated = branch["properties"]["input"]
+            assert correlated["additionalProperties"] is False
+            assert "reasoning" not in correlated.get("properties", {})
+            assert "_reasoning" not in correlated.get("properties", {})
+            assert "summarize" not in correlated.get("properties", {})
         # No child leakage into the root: only the four public envelope
-        # fields, exactly as before this correlation was added.
+        # fields, and the root ``input`` carries no duplicate branch list.
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert wire["required"] == ["action", "input", "reasoning"]
+        for duplicate in ("oneOf", "anyOf", "allOf"):
+            assert duplicate not in wire["properties"]["input"]
 
-    # The two wires' allOf conditions carry identical per-action correlation
-    # (Chat Completions' allOf is untouched; Responses' allOf is preserved
-    # verbatim by the root-aware scrub).
-    assert chat["allOf"] == responses["allOf"]
+    # The two wires' branches carry identical per-action correlation
+    # (Chat Completions' oneOf is untouched; Responses' root oneOf is
+    # preserved verbatim by the root-aware scrub).
+    assert chat["oneOf"] == responses["oneOf"]
 
 
 def test_web_final_agent_schema_root_is_exactly_action_input_reasoning_summarize(tmp_path):
@@ -263,7 +265,7 @@ def test_web_final_agent_schema_root_is_exactly_action_input_reasoning_summarize
         assert params["additionalProperties"] is False
         assert set(params["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert "summary" not in params["properties"]
-        for branch in params["properties"]["input"]["anyOf"]:
+        for branch in action_input_schemas(params).values():
             assert "reasoning" not in branch["properties"]
             assert "_reasoning" not in branch["properties"]
             assert "summarize" not in branch["properties"]
@@ -280,12 +282,8 @@ def test_openai_responses_preserves_daemon_backend_options_passthrough_schema():
         FunctionSchema(name="daemon", description="daemon", parameters=get_schema())
     ])
     # Post-ToolFamily migration ``tasks`` lives inside ``emanate``'s own
-    # ``input`` branch; the nested passthrough schema below is unchanged.
-    emanate_branch = next(
-        branch
-        for branch in tools[0]["parameters"]["properties"]["input"]["anyOf"]
-        if branch["title"] == "emanate input"
-    )
+    # root ``oneOf`` branch; the nested passthrough schema below is unchanged.
+    emanate_branch = action_input_schema(tools[0]["parameters"], "emanate")
     backend_options = emanate_branch["properties"]["tasks"]["items"][
         "properties"
     ]["backend_options"]

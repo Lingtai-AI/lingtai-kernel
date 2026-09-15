@@ -23,6 +23,7 @@ from lingtai.mcp_servers.feishu.manager import (
     FeishuManager,
 )
 from lingtai.mcp_servers.feishu import manager as feishu_manager_mod
+from tests._tool_family_schema_helpers import action_input_schemas
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _FEISHU_PKG = _REPO_ROOT / "src" / "lingtai" / "mcp_servers" / "feishu"
@@ -205,10 +206,9 @@ def test_live_schema_action_description_mentions_full_notification_no_reread():
 
 def test_live_schema_reply_message_id_describes_exact_id_origin():
     schema = feishu_schema()
-    reply_branches = schema["properties"]["input"]["anyOf"]
     reply_branch = next(
         branch
-        for branch in reply_branches
+        for branch in action_input_schemas(schema).values()
         if "message_id" in branch.get("properties", {})
         and "reply_in_thread" in branch.get("properties", {})
     )

@@ -349,7 +349,7 @@ than dispatched, so it is not a second inbound adapter.
 
 `tests/test_tool_plugin_declaration.py` proves the live official mount, package manual, and Core-backed dismissal; `tests/test_notification_tool.py` proves the
 ordered eleven-action schema, the closed LTP v2 root, each action's strict input
-branch and its `allOf` action/input correlation, Chat/Responses wire parity,
+branch and its root `oneOf` action/input correlation, Chat/Responses wire parity,
 the `manual` branch matching the shared ManualTool child, canonical
 description, absent aggregate actions, manual success/degraded envelopes, delay schema ordering, and
 fixed path, no-double-wrap flattening, read-only state/log behavior, check
