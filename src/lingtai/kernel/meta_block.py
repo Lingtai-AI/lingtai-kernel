@@ -789,20 +789,6 @@ def current_tool_result_chars(agent, extra_results=()) -> dict:
     }
 
 
-def _meta_block(result: dict) -> dict:
-    """Return ``result["_meta"]``, creating an empty dict if absent.
-
-    Centralizes the envelope so the per-result ``tool_meta`` writer and the
-    current ``agent_meta``/``guidance`` updater and notification merger all share
-    one container.
-    """
-    meta = result.get(META_ENVELOPE_KEY)
-    if not isinstance(meta, dict):
-        meta = {}
-        result[META_ENVELOPE_KEY] = meta
-    return meta
-
-
 def build_meta_readme() -> dict:
     """Self-describing readme for the two canonical ``_meta`` axes.
 
