@@ -839,6 +839,39 @@ def test_windows_venv_launcher_stub_is_not_a_duplicate(tmp_path, monkeypatch):
     _check_duplicate_process(working_dir)
 
 
+@pytest.mark.parametrize("marker_shape", ["regular", "symlink", "directory"])
+def test_run_refuses_change_name_incomplete_before_signal_cleanup_or_agent_construction(
+    marker_shape, monkeypatch, tmp_path, capsys
+):
+    from lingtai import cli
+
+    marker = tmp_path / cli.CHANGE_NAME_INCOMPLETE_MARKER
+    if marker_shape == "regular":
+        marker.write_text("incomplete\n", encoding="utf-8")
+    elif marker_shape == "symlink":
+        target = tmp_path / "marker-target"
+        target.write_text("sentinel\n", encoding="utf-8")
+        marker.symlink_to(target)
+    else:
+        marker.mkdir()
+    suspend = tmp_path / ".suspend"
+    suspend.write_text("must remain\n", encoding="utf-8")
+
+    calls = []
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda root: calls.append("process"))
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda root: calls.append("cleanup"))
+    monkeypatch.setattr(cli, "load_init", lambda root: calls.append("init"))
+    monkeypatch.setattr(cli, "build_agent", lambda *args, **kwargs: calls.append("Agent"))
+
+    with pytest.raises(SystemExit) as raised:
+        cli.run(tmp_path)
+    assert raised.value.code == 1
+    assert "incomplete name change" in capsys.readouterr().err
+    assert calls == []
+    assert marker.lstat()
+    assert suspend.read_text(encoding="utf-8") == "must remain\n"
+
+
 def test_run_wires_file_logging(monkeypatch, tmp_path):
     """run() must wire setup_logging(log_dir=working_dir/logs) into boot.
 

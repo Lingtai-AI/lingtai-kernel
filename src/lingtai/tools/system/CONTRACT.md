@@ -15,6 +15,7 @@ related_files:
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/system/BEHAVIORS.md
+  - src/lingtai/tools/context/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
@@ -22,7 +23,13 @@ related_files:
   - src/lingtai/kernel/malloc_relief.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
   - src/lingtai/intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md
+  - src/lingtai/cli.py
+  - tests/test_how_to_change_name.py
+  - tests/test_how_to_change_name_e2e.py
+  - tests/test_cli.py
   - tests/test_tool_family_system_migration.py
   - tests/test_system_sleep_alarm.py
   - tests/test_system_declared_plugin.py
@@ -248,7 +255,8 @@ is guarded by [B008](BEHAVIORS.md#behavior-b008) and pinned by
   karma-gated verbs (`lull`/`suspend`/`cpr`/`interrupt`/`clear`/`nirvana`).
 - You are editing the agent's name: `name_set` (once, immutable) or
   `name_nickname` (mutable). Neither renames the agent's address or working
-  directory — that is the operator migration workflow in `system-manual`.
+  directory — that operator migration workflow is specified in `system-manual`
+  and guarded by [L006](../context/BEHAVIORS.md#behavior-l006).
 - You are reviewing preset listing/connectivity or the karma/nirvana authz gate.
 
 **Do not use this for:**

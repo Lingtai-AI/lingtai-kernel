@@ -70,8 +70,16 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   `migration-guide`, `llm-adapters`, `procedures-manual`,
   `refresh-precheck`, `runtime-update-checks`, `sqlite-log-query`,
   `substrate-manual`, `trajectory-mining`). Migration-guide ships separate
-  Agent-name and Project-root helpers, with root lifecycle and temporary-process
-  proofs in `src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/move_project.py:1-704`
+  Agent-name and Project-root helpers. The Agent-name helper owns one planned,
+  fenced same-parent cutover
+  (`src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py:563-974`);
+  `src/lingtai/cli.py:242-266` owns
+  its early incomplete-target launch gate, with unit/CLI/real-process evidence
+  in `tests/test_how_to_change_name.py:501-579`, `tests/test_cli.py:843-876`, and
+  `tests/test_how_to_change_name_e2e.py:88-224`. The migration guide owns the
+  procedure and acceptance boundary. The Project-root helper retains
+  its root lifecycle and temporary-process proofs in
+  `src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/move_project.py:1-704`
   and `tests/test_move_project.py:1-864`; sqlite-log-query ships `scripts/event_summary.py`. This bundle remains the
   canonical System operational manual: the declared official `system` family
   derives its reserved `manual` child from `DECLARATION.manual ==

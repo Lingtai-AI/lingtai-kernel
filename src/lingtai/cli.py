@@ -236,6 +236,32 @@ def build_agent(
     return agent
 
 
+CHANGE_NAME_INCOMPLETE_MARKER = ".change-name-incomplete"
+
+
+def _refuse_incomplete_name_change(working_dir: Path) -> None:
+    """Fail closed while a name-change transaction is not proven complete.
+
+    Presence is intentionally shape-agnostic: a regular file, symlink,
+    directory, or other object cannot be treated as an absent fence. The CLI
+    never consumes this transaction-owned marker.
+    """
+    marker = working_dir / CHANGE_NAME_INCOMPLETE_MARKER
+    try:
+        marker.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        print(f"error: cannot inspect incomplete name-change fence {marker}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(
+        f"error: refusing to run an Agent with an incomplete name change: {marker}\n"
+        "  Inspect the retained target and use a separately authorized recovery.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 def _clean_signal_files(working_dir: Path) -> None:
     """Remove stale .suspend / .sleep files left over from a previous run."""
     for name in (".suspend", ".sleep", ".refresh"):
@@ -347,6 +373,7 @@ def _derived_avatar_requires_admission(working_dir: Path) -> bool:
 
 def run(working_dir: Path) -> None:
     """Boot agent into ASLEEP — wakes on external messages (mail/imap/telegram)."""
+    _refuse_incomplete_name_change(working_dir)
     _check_duplicate_process(working_dir)
     _clean_signal_files(working_dir)
     # Durable file logging for daemonized agents: stderr alone is DEVNULL for

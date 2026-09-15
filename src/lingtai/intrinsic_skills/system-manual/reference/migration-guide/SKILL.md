@@ -4,8 +4,8 @@ description: >
   Canonical system-manual migration guide for authorizing and verifying a
   mechanical Agent workdir/address or whole-Project path move. Runtime/source
   migration routes outward; the bundled helpers are narrow POSIX options.
-version: 2.2.4
-last_changed_at: "2026-09-14T19:22:00Z"
+version: 2.2.7
+last_changed_at: "2026-09-15T02:08:00Z"
 tags: [lingtai, system-manual, migration-guide, agent, project, workdir, address, rename, relocation, cutover, recovery, posix]
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
@@ -13,13 +13,17 @@ related_files:
 - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/refresh-precheck/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
+- src/lingtai/cli.py
 - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/move_project.py
 - src/lingtai/tools/system/CONTRACT.md
+- src/lingtai/tools/system/ANATOMY.md
+- src/lingtai/tools/context/BEHAVIORS.md
 - src/lingtai/kernel/project/ANATOMY.md
 - src/lingtai/kernel/workdir_lease/CONTRACT.md
 - src/lingtai/kernel/agent_presence/CONTRACT.md
 - tests/test_how_to_change_name.py
 - tests/test_how_to_change_name_e2e.py
+- tests/test_cli.py
 - tests/test_move_project.py
 maintenance: |
   Keep migration-guide aligned with System identity, Project, presence/lease, runtime-update, and refresh owners.
@@ -160,17 +164,81 @@ local same-volume filesystem:
 python <installed-change_name.py> <canonical-absolute-agent-workdir> <new-basename>
 ```
 
-Its strict preflight and supervisor require the expected Agent metadata,
-heartbeat, lease, process, runtime, safe absent destination, and supported
-no-replace primitive. It suspends that Agent, waits for process/heartbeat/lease
-release, performs one Linux `RENAME_NOREPLACE` or macOS `RENAME_EXCL` rename,
-updates only its documented in-workdir fields, and launches/checks the target.
-Those lifecycle, filesystem, config, logging, and launch effects still require
-explicit authority.
+Its strict preflight and supervisor require expected Agent metadata, heartbeat,
+lease, process, runtime, an absent `.suspend` and
+`.change-name-incomplete`, an absent destination, and a supported no-replace
+primitive, rejecting unsupported POSIX/libc cells before suspension. It parses
+selected JSON with duplicate-key and non-standard `NaN`/infinity rejection and
+snapshots the complete relevant `bin/`, `.pth`, and
+`direct_url.json` inventory. Under the acquired migration lease it fingerprints
+that inventory again immediately before cutover, so a new or changed in-scope
+binding refuses while the source is still authoritative.
+
+For a venv lexically and canonically inside this Agent only, the plan rebases
+executable regular `bin/` launcher shebangs whose entire interpreter field is an
+existing old-root path, absolute path lines in site-packages `.pth` files, and
+local `file:` URLs in `direct_url.json` (including case-insensitive `localhost`;
+query and fragment are retained). A rewritten shebang, including `#!` and its
+line ending, must be at most 255 encoded bytes, a conservative limit below the
+supported Linux executable-header bound and Darwin's larger bound. An editable
+import from outside the venv must be covered by one exact `.pth` path;
+unsupported executable/finder bindings refuse before suspension. An external
+venv receives no runtime metadata writes, and if its observed import origin is
+inside the old Agent root the helper refuses before suspension because external
+metadata repair is outside this lane. The background supervisor, clean source
+probes, and gated resumed Agent all use one explicit Python environment:
+`PYTHONPATH`/`PYTHONHOME` are absent, bytecode writes and user-site imports are
+disabled, and other operator environment values are preserved. This makes the
+accepted target origin and the process actually resumed use the same import lane.
+
+The same plan validates the registry first, then rebases only `command` in
+ordinary supported stdio entries: top-level `init.json.mcp` entries whose `type`
+is `"stdio"` (or omitted), and validated stdio records in workdir
+`mcp_registry.jsonl`. A matching registry record with
+`source == "lingtai-curated"` makes its init entry activation-only, so every
+legacy init launcher field remains unchanged and the running Agent continues to
+derive the launcher from its current catalog. HTTP commands, args, env, secrets,
+prompts, arbitrary strings, external paths, and other files/registries are not
+rewritten. When one selected init object or registry line must change, decoded
+JSON values are preserved semantically, not byte-for-byte formatting, whitespace,
+or escape spelling; duplicate keys and malformed in-scope data refuse before
+suspension.
+
+The supervisor creates `.suspend` with exclusive/no-follow regular mode-0600
+semantics and parent fsync. After the Agent stops and the migration lease is
+held, it likewise creates and verifies a durable mode-0600
+`.change-name-incomplete` fence before rename; the fence moves atomically with
+the root. A pre-rename failure removes only that proven helper-created source
+fence durably, leaving the source (possibly suspended) authoritative. After one
+Linux `RENAME_NOREPLACE` or macOS `RENAME_EXCL` rename, it immediately fsyncs the
+shared parent. From that publication onward the target is authoritative and no
+automatic move, rollback, or deletion occurs.
+
+Still holding the migration lease and target fence, the helper applies every
+planned mode-preserving atomic rewrite with file and parent-directory fsync,
+requires the clean target probe to equal the exact planned import origin,
+verifies immutable identity, writes only `.agent.json.address`, removes the
+suspend request, and prepares/checks a pipe-gated child launch while the fence remains present.
+Only at that coherent prepared boundary does it remove the proven fence, release
+the lease, and send the launch byte. This ordering prevents a normal
+`lingtai run <new>` from clearing `.suspend` and constructing an Agent against
+partial target state; it does not claim to eliminate every same-privilege
+process race. Before any gate commit, launch-setup, fence-removal,
+lease-release, or gate-write failure durably restores the target fence, closes
+the gate, and reaps the helper-owned child; post-commit liveness remains an
+inspection boundary. Any other unproven post-rename failure likewise leaves or
+durably restores the fence. The normal CLI refuses any
+shape at that marker before signal cleanup, init loading, or Agent construction
+and never consumes it; clearing it is separately authorized recovery.
 
 The helper has no Windows, network-filesystem, cross-parent, cross-volume, or
-whole-Project lane and no copy/delete, rollback, peer rewrite, symlink,
-integration, or cleanup support. Its own success does not prove a target-held
-lease, isolated target origin, or affected integrations; run the acceptance
-checks above. On failure follow the phase table and `HOLD` rather than retrying,
-restarting, repairing, rolling back, or deleting without current authority.
+whole-Project lane and no copy/delete, rollback, peer rewrite, broad descriptor
+rewrite, integration, communication, or cleanup support. Its own success proves
+only its bounded filesystem/import/identity/process/heartbeat checks; it does
+**not** prove configured Telegram, IMAP, MCP, or any other integration health,
+nor the complete acceptance bundle above. Those owner-selected external
+acceptance checks remain required and must be recorded separately (or as
+`not authorized / not run`); the generic helper invents no channel-health
+protocol and performs no real-network test. On failure follow the phase table
+and `HOLD` rather than retrying, restarting, repairing, clearing the fence,
+rolling back, or deleting without current authority.
