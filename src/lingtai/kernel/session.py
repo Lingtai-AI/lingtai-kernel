@@ -263,11 +263,6 @@ class SessionManager:
         self._latest_input_tokens = 0
         self._latest_token_usage_snapshot: dict[str, Any] | None = None
 
-        # Process-local runtime reasoning-effort control. The controller is
-        # agent-owned, survives in-process session rebuilds, and is intentionally
-        # not persisted across refresh/restart/molt.
-        self._reasoning_effort = ReasoningEffortController()
-
         # Sustained context-pressure / molt reminder (channel B). Transient
         # runtime state — not persisted, since a fresh/restored session has
         # fresh pressure. The streak state machine, warn decision, and reminder
