@@ -141,36 +141,6 @@
     // Add "soul": { "delay": <seconds> } only when overriding cadence.
 
     // -------------------------------------------------------
-    // Lifecycle limits
-    // -------------------------------------------------------
-
-    // Per-wake loop budget: max iterations of the LLM/tool-call loop per
-    // wake cycle. Every tool call counts as a turn, not just LLM requests.
-    // Safety limit — agent sleeps once the budget is exhausted.
-    "max_turns": 500,
-
-    // Whether to serialize chat history into system/context.md mid-session.
-    // When true (default), every Nth idle flush rebuilds context.md and
-    // nukes the live wire chat — the serialized replay becomes the agent's
-    // memory of prior turns. When false, history stays on the wire until
-    // molt.
-    // The serializer strips inline <think>/<thought>/<thinking> reasoning
-    // tags emitted by OpenAI-compat providers, so serialization is safe
-    // regardless of adapter. Set to false only if you want wire-only
-    // history (e.g. to maximize the cacheable growing-prefix shape, trading
-    // off restart durability since context.md won't survive a crash).
-    "context_serialization_enabled": true,
-
-    // When context_serialization_enabled is true, number of idle flushes
-    // between context.md rebuild+nuke pairs. Each idle always appends new
-    // turns to chat_history.jsonl (cheap); only every Nth idle rebuilds
-    // context.md and wipes the live chat. Larger N = wire chat carries
-    // the tail across more idles, keeping Batch 3 of the system prompt
-    // byte-stable longer (higher prompt-cache hit rate) at the cost of a
-    // slightly larger wire chat between rebuilds. Default 3.
-    "context_rebuild_every_n_idles": 3,
-
-    // -------------------------------------------------------
     // Pseudo-agent outbox subscriptions
     // -------------------------------------------------------
     // Paths (relative to this agent's working directory) of pseudo-agent
