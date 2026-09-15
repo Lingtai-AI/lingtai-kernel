@@ -1083,13 +1083,6 @@ class AcpStdioServer:
             "error": {"code": code, "message": message},
         },))
 
-    def _write_notification(self, method: str, params: dict[str, Any]) -> bool:
-        return self._enqueue_messages(({
-            "jsonrpc": JSONRPC_VERSION,
-            "method": method,
-            "params": params,
-        },))
-
     def _enqueue_messages(
         self,
         messages,
