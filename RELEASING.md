@@ -56,13 +56,13 @@ which:
    ```json
    {
      "schema": "lingtai.kernel.release/v1",
-     "kernel_version": "1.0.5",
-     "kernel_tag": "v1.0.5",
+     "kernel_version": "1.0.6",
+     "kernel_tag": "v1.0.6",
      "commit": "<full 40-char sha>",
      "generated_at": "2026-09-14T00:00:00Z",
      "artifacts": [
        {
-         "filename": "lingtai-1.0.5-py3-none-any.whl",
+         "filename": "lingtai-1.0.6-py3-none-any.whl",
          "sha256": "<64-char hex>",
          "kind": "wheel",
          "python_tag": "py3",
@@ -70,7 +70,7 @@ which:
          "platform_tag": "any"
        },
        {
-         "filename": "lingtai-1.0.5.tar.gz",
+         "filename": "lingtai-1.0.6.tar.gz",
          "sha256": "<64-char hex>",
          "kind": "sdist",
          "python_tag": null,
@@ -78,7 +78,7 @@ which:
          "platform_tag": null
        }
      ],
-     "sdist_fallback": "lingtai-1.0.5.tar.gz"
+     "sdist_fallback": "lingtai-1.0.6.tar.gz"
    }
    ```
 
@@ -158,7 +158,7 @@ receiving side's contract.
 # ./release-assets (or build them locally with `uv build --out-dir release-assets`), then:
 python scripts/generate_release_manifest.py \
   --assets-dir release-assets \
-  --kernel-version 1.0.5 --kernel-tag v1.0.5 \
+  --kernel-version 1.0.6 --kernel-tag v1.0.6 \
   --commit "$(git rev-parse HEAD)" \
   --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --out-manifest release-assets/lingtai-kernel-release-manifest.json \
