@@ -71,11 +71,6 @@ from .lifecycle import StopResult, StopStatus
 
 logger = get_logger()
 
-# Retained legacy literal for the retired kernel-driven Telegram Task Card
-# reverse channel. The current public ``task_card`` capability is intrinsic in
-# ``lingtai.tools.task_card``; Telegram only projects its artifact read-only.
-# Keep this only while legacy cleanup paths still reference the historical name.
-_TASK_CARD_TOOL = "_lingtai_telegram_task_card"
 
 
 def _notification_source_signatures(payloads: Mapping[str, object]) -> dict[str, str]:
