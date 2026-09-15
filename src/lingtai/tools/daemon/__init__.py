@@ -3159,10 +3159,9 @@ class DaemonManager:
         preset's pre-instantiated sandbox supplies the child LLM's
         provider-specific capabilities (``preset_surface =
         (schemas_by_name, handlers_by_name)``), but it does NOT replace the
-        parent's always-on host tool floor. Only that narrow floor — ``shell``
-        and ``file`` (whose actions are read/write/edit/glob/grep), which the
-        preset wizard omits from ``manifest.capabilities`` — stays available
-        from the parent,
+        parent's always-on host tool floor. Only that narrow floor — exactly
+        ``shell``, which the preset wizard omits from
+        ``manifest.capabilities`` — stays available from the parent,
         so requested host tools are not rejected as unknown just because a
         preset was supplied. Optional/provider parent tools (vision,
         web_search, …) are NOT borrowable; they must come from the preset's own

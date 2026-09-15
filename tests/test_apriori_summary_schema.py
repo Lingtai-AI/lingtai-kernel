@@ -1,8 +1,9 @@
 """The legacy a-priori ``summary`` boolean on unmigrated tool schemas.
 
-``glob`` used to be covered here too. It is now an action of the migrated
-``file`` family, whose canonical control is the root ``summarize`` boolean —
-covered by ``tests/test_file_tool_family.py``, not by this legacy-flag test.
+``glob`` used to be covered here too. It later became an action of the
+migrated ``file`` family, whose canonical control was the root ``summarize``
+boolean, and that whole family has since been removed (durable filesystem
+work goes through ``shell``), so nothing ``glob``-shaped is covered here.
 
 ``daemon`` used to be covered here as the last unmigrated holder of the literal
 ``summary`` field. It is now a migrated LTP v2 family whose canonical control is

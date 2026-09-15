@@ -107,7 +107,7 @@ through a validator that would silently discard a human's broken line.
   `src/lingtai/services/plugin_registry.py`.
 - Code navigation only: read `src/lingtai/tools/plugin/ANATOMY.md`.
 - Actually running a plugin's MCP server: that is `src/lingtai/tools/mcp/CONTRACT.md`
-  plus editing `mcp_registry.jsonl` with `write`/`edit`, then
+  plus editing `mcp_registry.jsonl` through `shell`, then
   `system(action="refresh")`.
 
 **Fast paths:** tool schema and the LTP v2 envelope -> §Tool surface; where

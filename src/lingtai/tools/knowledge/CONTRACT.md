@@ -135,7 +135,7 @@ nothing to configure and no file is ever read.
 
 The previous JSON-database actions (`submit`, `view`, `consolidate`, `delete`)
 are intentionally removed: knowledge is now authored by writing `KNOWLEDGE.md`
-files with the regular `write`/`edit` tools, just like skills. There is no
+files through `shell`, just like skills. There is no
 in-tool capacity limit; the historical `knowledge_limit` kwarg is accepted but
 ignored.
 
@@ -169,7 +169,7 @@ description: <one or more sentences; prompt-visible>
 version: <optional>
 ---
 
-<body — read on demand via the `read` tool>
+<body — read on demand via `shell`>
 ```
 
 Required frontmatter fields are `name` and `description`. Entries missing
@@ -179,7 +179,7 @@ with loose files but no `KNOWLEDGE.md` are reported as corrupted.
 
 Entries may carry supporting files (scripts, assets, notes, raw logs,
 attachments). Those files are not parsed by the capability; the agent opens
-them via the regular `read`/`bash` tools when it loads an entry.
+them via `shell` when it loads an entry.
 
 The agent is the sole long-term author of `knowledge/`. The only capability
 write is a one-time legacy migration: if `knowledge/knowledge.json` or old `codex/codex.json` exists, entries are converted to `knowledge/<slug>/KNOWLEDGE.md`, each legacy `supplementary` field is written to `references/supplementary.md`, and the source JSON is renamed to `<name>.json.migrated` to prevent repeat work.

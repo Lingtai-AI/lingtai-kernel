@@ -189,10 +189,10 @@ def summary_requested(args: dict | None, tool_name: str | None = None) -> bool:
     behavior exactly for either spelling.
 
     This is only the opt-in control. It says nothing about which results are
-    worth summarizing: ``file``'s own manual carries that per-action guidance
-    (bulky-result for ``read``/``grep``/``glob``, short-result for the
-    ``write``/``edit`` receipts a caller should read exactly), and the
-    summarizer never rewrites a recorded raw result or an error either way.
+    worth summarizing: callers should opt in when raw output is bulky and
+    the retention contract is precise, while short receipts should be read
+    exactly. The summarizer never rewrites a recorded raw result or an error
+    either way.
     """
     if not isinstance(args, dict):
         return False

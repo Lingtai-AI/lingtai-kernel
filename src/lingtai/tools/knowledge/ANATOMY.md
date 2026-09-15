@@ -31,7 +31,7 @@ filesystem-backed: each immediate subdirectory of `<agent>/knowledge/` with a
 `KNOWLEDGE.md` file is one entry. The frontmatter `name` + `description` are
 injected as a compact YAML catalog in the system prompt's
 `knowledge` section. Bodies and supporting files are loaded on demand through
-the regular `read` tool.
+`shell` (bounded reads).
 
 ## Components
 
