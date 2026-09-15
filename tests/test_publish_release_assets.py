@@ -92,7 +92,7 @@ def test_plan_github_uploads_same_byte_collision_skips_without_upload(tmp_path, 
     existing_names = {manifest.artifacts[0].filename}
     calls = []
 
-    def fake_run(cmd, capture_output=True, text=True, check=False):
+    def fake_run(cmd, **kwargs):
         calls.append(cmd)
         if cmd[:2] == ["gh", "release"] and cmd[2] == "view":
             return _FakeCompletedProcess(
@@ -100,8 +100,8 @@ def test_plan_github_uploads_same_byte_collision_skips_without_upload(tmp_path, 
                 stdout=json.dumps({"assets": [{"name": n, "apiUrl": "https://api.github.test/assets/1"} for n in existing_names]}),
             )
         if cmd[:2] == ["gh", "api"]:
-            output = Path(cmd[cmd.index("--output") + 1])
-            output.write_bytes((assets_dir / manifest.artifacts[0].filename).read_bytes())
+            assert "--output" not in cmd
+            kwargs["stdout"].write((assets_dir / manifest.artifacts[0].filename).read_bytes())
             return _FakeCompletedProcess()
         raise AssertionError(cmd)
 
@@ -121,8 +121,9 @@ def test_plan_github_uploads_mismatch_fails_before_upload(tmp_path, monkeypatch)
     def fake_run(cmd, **kwargs):
         if cmd[:2] == ["gh", "release"]:
             return _FakeCompletedProcess(stdout=json.dumps({"assets": [{"name": manifest.artifacts[0].filename, "apiUrl": "https://api.github.test/assets/1"}]}))
-        output = Path(cmd[cmd.index("--output") + 1])
-        output.write_bytes(b"different")
+        assert cmd[:2] == ["gh", "api"]
+        assert "--output" not in cmd
+        kwargs["stdout"].write(b"different")
         return _FakeCompletedProcess()
     monkeypatch.setattr(pub.subprocess, "run", fake_run)
     with pytest.raises(pub.AssetConflict, match="GitHub asset"):

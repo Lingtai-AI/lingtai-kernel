@@ -166,10 +166,12 @@ def _download_github_asset(asset: dict, filename: str) -> Path:
     if not isinstance(url, str) or not url:
         raise PublishError(f"GitHub asset {filename!r} has no usable download URL")
     destination = _comparison_path("github", filename)
-    result = subprocess.run(
-        ["gh", "api", url, "--header", "Accept: application/octet-stream", "--output", str(destination)],
-        capture_output=True, text=True,
-    )
+    with destination.open("xb") as output:
+        result = subprocess.run(
+            ["gh", "api", url, "--header", "Accept: application/octet-stream"],
+            stdout=output,
+            stderr=subprocess.PIPE,
+        )
     if result.returncode != 0 or not destination.is_file():
         raise PublishError(f"GitHub asset {filename!r} download failed; refusing to trust a name collision")
     return destination
