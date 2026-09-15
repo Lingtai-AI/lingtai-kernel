@@ -26,7 +26,6 @@ import yaml
 from lingtai.services import plugin_registry as _plugin_registry
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from types import MappingProxyType
@@ -6112,28 +6111,9 @@ class DaemonManager:
         return {k: v for k, v in info.items() if v is not None}
 
     @staticmethod
-    def _utc_iso_from_timestamp(ts: float) -> str:
-        return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    @staticmethod
-    def _started_at_from_run_id(run_id: str) -> str | None:
-        match = re.match(r"^em-\d+-(\d{8}-\d{6})-[0-9a-fA-F]+$", run_id)
-        if not match:
-            return None
-        try:
-            dt = datetime.strptime(match.group(1), "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
-        except ValueError:
-            return None
-        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    @staticmethod
     def _handle_from_run_id(run_id: str) -> str | None:
         match = re.match(r"^(em-\d+)-", run_id)
         return match.group(1) if match else None
-
-    @staticmethod
-    def _atomic_write_daemon_json(path: Path, state: dict) -> None:
-        atomic_write_json(path, state, ensure_ascii=False, indent=2)
 
     @staticmethod
     def _looks_like_daemon_run_dir(run_path: Path) -> bool:
@@ -6150,27 +6130,6 @@ class DaemonManager:
                 or (run_path / "logs" / "events.jsonl").exists()
             )
         )
-
-    def _read_daemon_events_tail(self, run_path: Path, max_lines: int = 80) -> list[dict]:
-        events_path = run_path / "logs" / "events.jsonl"
-        try:
-            size = events_path.stat().st_size
-            with open(events_path, "rb") as f:
-                f.seek(max(0, size - 65536))
-                raw = f.read()
-            text = raw.decode("utf-8", errors="replace")
-            lines = text.splitlines()[-max_lines:]
-        except OSError:
-            return []
-        events: list[dict] = []
-        for line in lines:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(event, dict):
-                events.append(event)
-        return events
 
     def _infer_task_from_prompt(self, run_path: Path) -> str | None:
         prompt_path = run_path / ".prompt"
@@ -6193,33 +6152,6 @@ class DaemonManager:
         if not task:
             return None
         return str(self._truncate_list_string(task, 2000))
-
-    def _infer_terminal_state_from_events(self, events: list[dict]) -> tuple[str | None, str | None, object | None]:
-        for event in reversed(events):
-            name = event.get("event")
-            if name == "daemon_done":
-                return "done", event.get("ts"), None
-            if name == "daemon_error":
-                error = {
-                    "type": event.get("exception") or "DaemonError",
-                    "message": event.get("message") or "daemon failed",
-                }
-                return "failed", event.get("ts"), error
-            if name == "daemon_cancelled":
-                return "cancelled", event.get("ts"), None
-            if name == "daemon_timeout":
-                return "timeout", event.get("ts"), None
-        return None, None, None
-
-    def _result_preview_from_file(self, run_path: Path) -> tuple[str | None, str | None]:
-        result_path = run_path / "result.txt"
-        try:
-            with open(result_path, encoding="utf-8") as f:
-                text = f.read(201)
-        except (OSError, UnicodeDecodeError):
-            return None, None
-        preview = text[:200]
-        return preview, str(result_path)
 
     def _handle_list_from_ledger(
         self,
@@ -6296,17 +6228,6 @@ class DaemonManager:
             "showing": len(selected),
             "warnings": warnings,
         }
-
-    def _handle_list_without_query(
-        self,
-        *,
-        wanted_status: str,
-        include_done: bool,
-        limit_int: int,
-    ) -> dict:
-        return self._handle_list_from_ledger(
-            query="", wanted_status=wanted_status, include_done=include_done, limit_int=limit_int
-        )
 
     def _handle_list(
         self,
