@@ -280,39 +280,6 @@ def _ensure_alternation(messages: list[dict]) -> list[dict]:
     return merged
 
 
-def _response_to_messages(raw) -> list[dict]:
-    """Convert an Anthropic response into message dicts for the history."""
-    result: dict[str, Any] = {"role": "assistant", "content": []}
-
-    for block in raw.content:
-        if block.type == "text":
-            result["content"].append({"type": "text", "text": block.text})
-        elif block.type == "tool_use":
-            result["content"].append(
-                {
-                    "type": "tool_use",
-                    "id": block.id,
-                    "name": block.name,
-                    "input": block.input if isinstance(block.input, dict) else {},
-                }
-            )
-        elif block.type == "thinking":
-            # Include thinking blocks so history round-trips correctly
-            result["content"].append(
-                {
-                    "type": "thinking",
-                    "thinking": getattr(block, "thinking", ""),
-                    # Anthropic requires a signature for thinking blocks in history
-                    "signature": getattr(block, "signature", ""),
-                }
-            )
-
-    if not result["content"]:
-        result["content"] = [{"type": "text", "text": ""}]
-
-    return [result]
-
-
 # ---------------------------------------------------------------------------
 # AnthropicChatSession
 # ---------------------------------------------------------------------------

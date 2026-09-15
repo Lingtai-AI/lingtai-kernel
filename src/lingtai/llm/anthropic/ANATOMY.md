@@ -42,7 +42,6 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 | `_parse_response` | 136 | Raw response → `LLMResponse`; extracts `text`, `tool_use`, `thinking` blocks |
 | `_tool_result_to_dict` | 192 | `ToolResultBlock` → Anthropic `tool_result` dict |
 | `_ensure_alternation` | 201 | Merge consecutive same-role messages (Anthropic requires strict alternation) |
-| `_response_to_messages` | 241 | Raw response → Anthropic message dicts for history (round-trips thinking signatures) |
 
 ## Connections
 
