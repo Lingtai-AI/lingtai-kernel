@@ -436,11 +436,6 @@ def _module_from_source_checkout(module_file: str) -> bool:
     return any((parent / ".git").exists() and (parent / "pyproject.toml").exists() for parent in path.parents)
 
 
-def _remote_check_due(kernel_state: dict[str, Any], installed_version: str, today: str) -> bool:
-    """Bounded probe gate; repeat/dismiss semantics are global, never daily."""
-    return True
-
-
 def _fetch_latest_version() -> _ReleaseObservation:
     """Read the latest manifest asset from both official release mirrors.
 
