@@ -39,7 +39,7 @@ text.
 
 | Backend (aliases) | Initial runner / native MCP | `ask` / completion |
 |---|---|---|
-| `lingtai` | in-process; task-scoped stdio + HTTP | live ask is ID-bound `queued`, then delivered by checkpoint or legal text-only boundary; no terminal resume; `finish(done)` enforced |
+| `lingtai` | in-process; task-scoped stdio + HTTP | marked/current live ask is ID-bound `queued`, then delivered by checkpoint or a legal text-only boundary; an unmarked/pre-upgrade live owner returns only `{status:"sent",id}` after durable legacy control-spool submission, not shared-inbox admission; no terminal resume; `finish(done)` enforced |
 | `claude-p` (`claude-code`) | `claude --print ... --mcp-config ... --strict-mcp-config` (stdio) | async resume; checkpoint + `finish(done)` |
 | `codex` | `codex exec --json` with `mcp_servers.*` overrides (stdio) | async resume; checkpoint + `finish(done)` |
 | `opencode` | `opencode run --format json`, `OPENCODE_CONFIG_CONTENT` (stdio) | async resume; checkpoint + `finish(done)` |

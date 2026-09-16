@@ -4356,34 +4356,34 @@ class DaemonManager:
                             # Recovery tool calls must complete before the
                             # buffered follow-up is drained or sent.
                             continue
-                    # Shell events are delivered only after the provider has
-                    # returned a text-only response, so the canonical interface
-                    # has no pending assistant tool-call pair. Drain only events
-                    # already durable now; never wait, auto-poll, or keep a
-                    # terminal daemon alive for a future Shell completion.
+                    # At each legal text-only boundary, Shell events retain
+                    # priority over parent messages. After a bounded follow-up
+                    # receives another text-only response, cross this boundary
+                    # again so a durable legacy/current tail cannot be stranded
+                    # by the terminal transition. Never wait for future input.
                     while not response.tool_calls:
-                        shell_event_response = _deliver_one_shell_prompt_event()
-                        if shell_event_response is None:
-                            break
-                        response = shell_event_response
-                        turns += 1
-                        run_dir.bump_turn(
-                            turn=turns + 1, response_text=response.text or ""
-                        )
-                        response = _recover_empty_response(
-                            response, in_tool_loop=False
-                        )
-                        if response is None:
+                        if cancel_event.is_set():
                             return _mark_cancelled_or_timeout(run_dir, timeout_event)
-                        recovery_tool_batch_pending = bool(response.tool_calls)
-                    if response.tool_calls:
-                        # A model-chosen poll (or any other tool) must complete
-                        # through the ordinary loop before another event/followup
-                        # can be inserted.
-                        continue
+                        shell_event_response = _deliver_one_shell_prompt_event()
+                        if shell_event_response is not None:
+                            response = shell_event_response
+                            turns += 1
+                            run_dir.bump_turn(
+                                turn=turns + 1, response_text=response.text or ""
+                            )
+                            response = _recover_empty_response(
+                                response, in_tool_loop=False
+                            )
+                            if response is None:
+                                return _mark_cancelled_or_timeout(
+                                    run_dir, timeout_event
+                                )
+                            recovery_tool_batch_pending = bool(response.tool_calls)
+                            continue
 
-                    followup = self._drain_followup(em_id)
-                    if followup:
+                        followup = self._drain_followup(em_id)
+                        if not followup:
+                            break
                         # A buffered follow-up is a new daemon request turn;
                         # reset only the empty-response recovery budget, not
                         # the normal tool-loop turn counter.
@@ -4394,10 +4394,19 @@ class DaemonManager:
                         daemon_meta_state.note_response(response, session)
                         _accum(response)
                         turns += 1
-                        run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
-                        response = _recover_empty_response(response, in_tool_loop=False)
+                        run_dir.bump_turn(
+                            turn=turns + 1, response_text=response.text or ""
+                        )
+                        response = _recover_empty_response(
+                            response, in_tool_loop=False
+                        )
                         if response is None:
                             return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                    if response.tool_calls:
+                        # A model-chosen poll (or any other tool) must complete
+                        # through the ordinary loop before another event/followup
+                        # can be inserted.
+                        continue
 
             if response.tool_calls and turns >= effective_max_turns:
                 raise RuntimeError(
