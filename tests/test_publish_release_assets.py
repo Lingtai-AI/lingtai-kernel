@@ -595,3 +595,22 @@ def test_publisher_has_no_delete_replace_or_github_mutation_path():
     assert "gh release replace" not in text
     assert "gitee_delete" not in text
     assert "gitee_replace" not in text
+
+
+@pytest.mark.parametrize("version,prerelease", [("1.0.6", False), ("1.0.6a1", True), ("1.0.6rc1", True)])
+def test_missing_github_release_creation_preserves_version_channel(tmp_path, monkeypatch, version, prerelease):
+    from dataclasses import replace
+
+    manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
+    manifest = replace(manifest, kernel_version=version, kernel_tag=f"v{version}")
+    monkeypatch.setattr(pub, "load_manifest", lambda _: manifest)
+    monkeypatch.setattr(pub, "gh_release_exists", lambda *args: False)
+    monkeypatch.setattr(pub, "plan_github_uploads", lambda *args: [])
+    calls = []
+    monkeypatch.setattr(pub.subprocess, "run", lambda command, **kwargs: calls.append(command))
+    assert pub.main(["--manifest", str(manifest_path), "--assets-dir", str(assets_dir), "--skip-gitee", "--execute"]) == 0
+    command, = calls
+    assert command[:4] == ["gh", "release", "create", f"v{version}"]
+    assert command[command.index("--target") + 1] == manifest.commit
+    assert ("--prerelease" in command) is prerelease
+    assert ("--latest=false" in command) is prerelease
