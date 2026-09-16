@@ -67,7 +67,11 @@ from lingtai.adapters.posix.process_identity import (
     process_identity,
     process_identity_matches,
 )
-from .run_dir import DaemonRunDir
+from .run_dir import (
+    DaemonRunDir,
+    MAX_PARENT_MESSAGE_CHARS,
+    NATIVE_PARENT_MESSAGE_PROTOCOL,
+)
 from . import dispatch_ledger
 from .system_prompt import (
     DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
@@ -6295,6 +6299,20 @@ class DaemonManager:
         }
 
     def _handle_ask(self, em_id: str, message: str) -> dict:
+        if not isinstance(message, str) or not message.strip():
+            return {
+                "status": "error",
+                "id": em_id,
+                "message": "ask message must be a non-blank string",
+            }
+        if len(message) > MAX_PARENT_MESSAGE_CHARS:
+            return {
+                "status": "error",
+                "id": em_id,
+                "message": (
+                    f"ask message exceeds {MAX_PARENT_MESSAGE_CHARS} characters"
+                ),
+            }
         entry = self._emanations.get(em_id)
         if not entry:
             entry = self._durable_detached_entry(em_id)
@@ -6343,14 +6361,14 @@ class DaemonManager:
         return {"status": "sent", "id": em_id}
 
     def _handle_ask_detached(self, em_id: str, entry: dict, message: str) -> dict:
-        """Follow-up for a detached lingtai run: submit via the control spool.
+        """Route one validated detached follow-up without adopting execution.
 
-        The facade has no in-process ``followup_buffer``/session to write
-        into — the supervisor process owns those. This writes a durable
-        ``ask`` control request the supervisor's control-and-deadline watcher
-        thread drains (see ``lingtai.tools.daemon.supervisor_runtime``),
-        mirroring the in-process followup_buffer mechanism across the process
-        boundary.
+        A live native owner that advertised the launch-time shared-inbox
+        protocol receives direct durable admission.  An unmarked native owner
+        may be a surviving pre-upgrade supervisor, so it receives only a
+        durable legacy control-spool request and the response does not claim
+        inbox admission.  Supported active CLI runs use their mounted common
+        MCP inbox; terminal resumable CLI runs launch a separate resume owner.
         """
         run_dir = entry.get("run_dir")
         if run_dir is None:
@@ -6368,9 +6386,22 @@ class DaemonManager:
                 pid, state.get("supervisor_start_identity")
             ):
                 return {"status": "error", "message": "detached supervisor identity is not live"}
+            if state.get("native_parent_message_protocol") != NATIVE_PARENT_MESSAGE_PROTOCOL:
+                from lingtai.kernel.daemon_supervisor import control
+
+                try:
+                    control.submit_request(run_dir.path, "ask", {"message": message})
+                except (OSError, ValueError) as exc:
+                    return {"status": "error", "id": em_id, "message": str(exc)}
+                self._log(
+                    "daemon_ask_detached_legacy_control",
+                    em_id=em_id,
+                    message_length=len(message),
+                )
+                return {"status": "sent", "id": em_id}
             try:
                 message_id = run_dir.enqueue_checkpoint_message(message)
-            except (ValueError, RuntimeError) as exc:
+            except (OSError, ValueError, RuntimeError) as exc:
                 return {"status": "error", "id": em_id, "message": str(exc)}
             if not message_id:
                 state = self._read_run_dir_state_from_disk(run_dir)
@@ -6399,7 +6430,7 @@ class DaemonManager:
             if _cli_backend_loads_common_mcp(backend):
                 try:
                     message_id = run_dir.enqueue_checkpoint_message(message)
-                except (ValueError, RuntimeError) as exc:
+                except (OSError, ValueError, RuntimeError) as exc:
                     return {"status": "error", "id": em_id, "message": str(exc)}
                 if message_id:
                     self._log(

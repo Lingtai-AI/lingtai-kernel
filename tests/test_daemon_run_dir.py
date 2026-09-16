@@ -9,7 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.tools.daemon.run_dir import DaemonRunDir
+from lingtai.tools.daemon.run_dir import (
+    DaemonRunDir,
+    MAX_PARENT_MESSAGE_CHARS,
+    PARENT_MESSAGE_INBOX_CAP,
+)
 
 
 def _make_run_dir(tmp_path: Path, **overrides) -> DaemonRunDir:
@@ -85,6 +89,9 @@ def test_initial_daemon_json_fields(tmp_path):
     assert data["tokens"] == {"input": 0, "output": 0, "thinking": 0, "cached": 0, "calls": 0}
     assert data["result_preview"] is None
     assert data["error"] is None
+    # The shared-inbox marker is stamped by the code-owning supervisor at
+    # launch, never inferred from the creating parent's version.
+    assert "native_parent_message_protocol" not in data
     # started_at is ISO 8601 UTC
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", data["started_at"])
 
@@ -1092,6 +1099,85 @@ def test_legacy_followup_is_id_bound_and_delivered_at_checkpoint(tmp_path):
     assert state["delivered_messages_total"] == 1
     assert state["last_message_delivery"]["via"] == "checkpoint"
     assert state["latest_checkpoint"]["delivered_message_ids"] == [delivered["id"]]
+
+
+@pytest.mark.parametrize("delivery", ["checkpoint", "native_text_boundary"])
+def test_legacy_parent_message_migration_is_batched_bounded_and_lossless(
+    tmp_path, delivery,
+):
+    """>20 legacy rows plus one oversized row drain in bounded later batches."""
+    rd = _make_run_dir(tmp_path, backend="lingtai")
+    ordinary = [f"legacy row {index:02d}" for index in range(23)]
+    oversized = "OVERSIZED:" + ("x" * (MAX_PARENT_MESSAGE_CHARS + 17))
+    rd._state["pending_followups"] = [*ordinary, oversized]
+    rd._atomic_write_json(rd.daemon_json_path, rd._state)
+
+    batches = []
+    while True:
+        if delivery == "checkpoint":
+            result = rd.record_checkpoint({
+                "state": "working",
+                "summary": f"legacy batch {len(batches) + 1}",
+            })
+            batch = result["messages"]
+        else:
+            batch = rd.drain_parent_messages(via="native_text_boundary")
+        if not batch:
+            break
+        batches.append(batch)
+        assert 1 <= len(batch) <= PARENT_MESSAGE_INBOX_CAP
+        assert all(
+            0 < len(item["message"]) <= MAX_PARENT_MESSAGE_CHARS
+            for item in batch
+        )
+        state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+        assert len(state["last_message_delivery"]["message_ids"]) <= PARENT_MESSAGE_INBOX_CAP
+        if delivery == "checkpoint":
+            assert len(state["latest_checkpoint"]["delivered_message_ids"]) <= PARENT_MESSAGE_INBOX_CAP
+
+    assert [len(batch) for batch in batches] == [PARENT_MESSAGE_INBOX_CAP, 5]
+    delivered_messages = [item["message"] for batch in batches for item in batch]
+    assert delivered_messages[:23] == ordinary
+    assert "".join(delivered_messages[23:]) == oversized
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["pending_followups"] == []
+    assert state["pending_checkpoint_messages"] == []
+    assert state["delivered_messages_total"] == 25
+    assert len(state["delivered_message_ids"]) == 25
+
+
+def test_native_followup_projection_stays_bounded_while_legacy_tail_drains(tmp_path):
+    """The joined native prompt never absorbs more than one bounded batch."""
+    rd = _make_run_dir(tmp_path, backend="lingtai")
+    oversized = "y" * (MAX_PARENT_MESSAGE_CHARS + 9)
+    rd._state["pending_followups"] = [
+        *[f"native row {index:02d}" for index in range(21)],
+        oversized,
+    ]
+    rd._atomic_write_json(rd.daemon_json_path, rd._state)
+
+    first = rd.drain_followups()
+    first_state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert first is not None
+    assert len(first_state["last_message_delivery"]["message_ids"]) == PARENT_MESSAGE_INBOX_CAP
+    assert len(first) <= (
+        PARENT_MESSAGE_INBOX_CAP * MAX_PARENT_MESSAGE_CHARS
+        + 2 * (PARENT_MESSAGE_INBOX_CAP - 1)
+    )
+    assert len(first_state["pending_followups"]) == 2
+
+    second = rd.drain_followups()
+    assert second is not None
+    assert second.count("y") == len(oversized)
+    assert len(second) <= (
+        PARENT_MESSAGE_INBOX_CAP * MAX_PARENT_MESSAGE_CHARS
+        + 2 * (PARENT_MESSAGE_INBOX_CAP - 1)
+    )
+    assert rd.drain_followups() is None
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["pending_followups"] == []
+    assert state["pending_checkpoint_messages"] == []
+    assert state["delivered_messages_total"] == 23
 
 
 def test_mark_failed_handles_pathological_str_exc(tmp_path):

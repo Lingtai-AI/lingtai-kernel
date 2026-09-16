@@ -29,8 +29,9 @@ from lingtai.kernel.token_ledger import (
 from . import dispatch_ledger
 
 
-_MAX_CHECKPOINT_MESSAGE_CHARS = 50_000
-_MAX_PENDING_CHECKPOINT_MESSAGES = 20
+MAX_PARENT_MESSAGE_CHARS = 50_000
+PARENT_MESSAGE_INBOX_CAP = 20
+NATIVE_PARENT_MESSAGE_PROTOCOL = "shared-inbox-v1"
 _MAX_DELIVERED_MESSAGE_IDS = 128
 
 
@@ -809,20 +810,48 @@ class DaemonRunDir:
             self.heartbeat_path.touch()
             return [dict(event) for event in events]
 
-    def _pending_parent_messages_locked(self) -> list[dict]:
-        """Normalize both current and legacy parent-message queues under lock."""
+    def _claim_parent_messages_locked(self) -> list[dict]:
+        """Claim one bounded batch from legacy and current queues under lock.
+
+        Pre-checkpoint ``pending_followups`` had neither a row cap nor a message
+        size cap.  Migrate only what this delivery can safely expose, split an
+        oversized legacy row into bounded chunks, and leave the unclaimed tail
+        durable for a later checkpoint/text boundary.  Current inbox rows are
+        already admission-bounded; the defensive split below also keeps a
+        manually written or corrupt oversized row from escaping that bound.
+        """
         messages: list[dict] = []
         legacy = self._state.get("pending_followups")
-        for item in legacy if isinstance(legacy, list) else []:
-            if isinstance(item, str) and item:
+        legacy_rows = legacy if isinstance(legacy, list) else []
+        remaining_legacy: list = []
+        for index, item in enumerate(legacy_rows):
+            if len(messages) >= PARENT_MESSAGE_INBOX_CAP:
+                remaining_legacy.extend(legacy_rows[index:])
+                break
+            if not isinstance(item, str) or not item:
+                continue
+            remainder = item
+            while remainder and len(messages) < PARENT_MESSAGE_INBOX_CAP:
                 messages.append({
                     "id": f"legacy-msg-{secrets.token_hex(8)}",
-                    "message": item,
+                    "message": remainder[:MAX_PARENT_MESSAGE_CHARS],
                 })
+                remainder = remainder[MAX_PARENT_MESSAGE_CHARS:]
+            if remainder:
+                remaining_legacy.append(remainder)
+                remaining_legacy.extend(legacy_rows[index + 1:])
+                break
+        self._state["pending_followups"] = remaining_legacy
+
         queue = self._state.get("pending_checkpoint_messages")
+        current_rows = queue if isinstance(queue, list) else []
+        remaining_current: list = []
         seen_ids = {item["id"] for item in messages}
-        for item in queue if isinstance(queue, list) else []:
-            if (
+        for index, item in enumerate(current_rows):
+            if len(messages) >= PARENT_MESSAGE_INBOX_CAP:
+                remaining_current.extend(current_rows[index:])
+                break
+            if not (
                 isinstance(item, dict)
                 and isinstance(item.get("id"), str)
                 and item.get("id")
@@ -830,17 +859,34 @@ class DaemonRunDir:
                 and isinstance(item.get("message"), str)
                 and item.get("message")
             ):
-                messages.append({"id": item["id"], "message": item["message"]})
-                seen_ids.add(item["id"])
+                continue
+            message = item["message"]
+            message_id = item["id"]
+            while message and len(messages) < PARENT_MESSAGE_INBOX_CAP:
+                messages.append({
+                    "id": message_id,
+                    "message": message[:MAX_PARENT_MESSAGE_CHARS],
+                })
+                seen_ids.add(message_id)
+                message = message[MAX_PARENT_MESSAGE_CHARS:]
+                if message:
+                    message_id = f"legacy-msg-{secrets.token_hex(8)}"
+            if message:
+                remaining_current.append({
+                    "id": message_id,
+                    "message": message,
+                    "queued_at": item.get("queued_at") or self._now_iso(),
+                })
+                remaining_current.extend(current_rows[index + 1:])
+                break
+        self._state["pending_checkpoint_messages"] = remaining_current
         return messages
 
     def _record_parent_message_delivery_locked(
         self, messages: list[dict], *, via: str, at: str,
     ) -> None:
-        """Commit queue consumption and bounded delivery evidence under lock."""
+        """Commit bounded delivery evidence after queues were claimed under lock."""
         message_ids = [item["id"] for item in messages]
-        self._state["pending_followups"] = []
-        self._state["pending_checkpoint_messages"] = []
         if not message_ids:
             return
         delivered = self._state.get("delivered_message_ids")
@@ -866,7 +912,7 @@ class DaemonRunDir:
         with self._state_transaction():
             if self._state.get("state") not in {"running", "active"}:
                 return []
-            messages = self._pending_parent_messages_locked()
+            messages = self._claim_parent_messages_locked()
             if not messages:
                 return []
             at = self._now_iso()
@@ -897,9 +943,9 @@ class DaemonRunDir:
         """
         if not isinstance(message, str) or not message.strip():
             return None
-        if len(message) > _MAX_CHECKPOINT_MESSAGE_CHARS:
+        if len(message) > MAX_PARENT_MESSAGE_CHARS:
             raise ValueError(
-                f"checkpoint message exceeds {_MAX_CHECKPOINT_MESSAGE_CHARS} characters"
+                f"checkpoint message exceeds {MAX_PARENT_MESSAGE_CHARS} characters"
             )
         if message_id is None:
             message_id = f"msg-{secrets.token_hex(8)}"
@@ -929,7 +975,7 @@ class DaemonRunDir:
                 for item in queue
             ):
                 return message_id
-            if len(queue) >= _MAX_PENDING_CHECKPOINT_MESSAGES:
+            if len(queue) >= PARENT_MESSAGE_INBOX_CAP:
                 raise RuntimeError("checkpoint message inbox is full")
             queue.append({
                 "id": message_id,
@@ -954,7 +1000,7 @@ class DaemonRunDir:
             raw_sequence = self._state.get("checkpoint_sequence", 0)
             sequence = raw_sequence + 1 if isinstance(raw_sequence, int) else 1
             at = self._now_iso()
-            valid_messages = self._pending_parent_messages_locked()
+            valid_messages = self._claim_parent_messages_locked()
             checkpoint = {
                 "sequence": sequence,
                 "at": at,

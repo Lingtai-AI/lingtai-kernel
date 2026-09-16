@@ -31,7 +31,10 @@ import sys
 import time
 from pathlib import Path
 
-from lingtai.tools.daemon.run_dir import DaemonRunDir
+from lingtai.tools.daemon.run_dir import (
+    DaemonRunDir,
+    NATIVE_PARENT_MESSAGE_PROTOCOL,
+)
 from lingtai.kernel.daemon_supervisor.manifest import (
     build_manifest,
     write_manifest,
@@ -841,6 +844,10 @@ def test_real_manager_handle_emanate_capsule_and_fresh_active_control(tmp_path, 
     em_id = result["ids"][0]
     run_dir = mgr._emanations[em_id]["run_dir"]
     _poll_until(lambda: _disk_state(run_dir).get("supervisor_pid"), timeout=10)
+    assert (
+        _disk_state(run_dir).get("native_parent_message_protocol")
+        == NATIVE_PARENT_MESSAGE_PROTOCOL
+    )
 
     # A fresh manager resolves the exact run directory, checks supervisor
     # identity, and submits control without adopting the process.
@@ -2810,6 +2817,44 @@ def test_drain_followups_delivers_single_ask_exactly_once(tmp_path):
         "message_ids": [message_id],
     }
     assert run_dir.drain_followups() is None
+
+
+def test_legacy_control_watcher_rejects_blank_ask_without_false_terminal_claim(tmp_path):
+    """A legacy-spool whitespace ask reports invalid input while run stays live."""
+    from lingtai.kernel.daemon_supervisor import control
+    from lingtai.tools.daemon import supervisor_runtime
+
+    run_dir = _make_run_dir(tmp_path, task="stay-running", timeout_s=120.0)
+    run_dir.update_state(state="running")
+    req_path = control.submit_request(run_dir.path, "ask", {"message": "  \n\t"})
+
+    cancel_event = threading.Event()
+    timeout_event = threading.Event()
+    watcher = threading.Thread(
+        target=supervisor_runtime._control_and_deadline_watcher,
+        args=(run_dir, cancel_event, timeout_event, time.monotonic() + 120.0, ()),
+        daemon=True,
+    )
+    original_poll_interval = supervisor_runtime._CONTROL_POLL_INTERVAL_S
+    supervisor_runtime._CONTROL_POLL_INTERVAL_S = 0.01
+    try:
+        watcher.start()
+        _poll_until(lambda: control.done_path(req_path).exists(), timeout=5.0)
+    finally:
+        cancel_event.set()
+        watcher.join(timeout=5.0)
+        supervisor_runtime._CONTROL_POLL_INTERVAL_S = original_poll_interval
+
+    receipt = json.loads(control.done_path(req_path).read_text(encoding="utf-8"))
+    assert receipt == {
+        "request_id": receipt["request_id"],
+        "status": "error",
+        "error": "ask message must be a non-blank string",
+    }
+    state = _disk_state(run_dir)
+    assert state["state"] == "running"
+    assert state["pending_followups"] == []
+    assert state["pending_checkpoint_messages"] == []
 
 
 def test_control_receipt_stays_coherent_when_terminal_state_races_ask(tmp_path):

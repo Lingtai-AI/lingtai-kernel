@@ -1039,9 +1039,18 @@ terminal state, result/artifact files, and one idempotent terminal notification.
 Agent stop and `system.refresh` shut down only parent-local resources; they do
 not inspect or terminate a detached supervisor or its backend child. Explicit
 `daemon(action="reclaim")` is the only parent control that requests run
-cancellation. `daemon(action="ask")` uses the run-local control spool and is
-accepted only while durable state is running. The ownership transition is
-unconditional; detached supervision is not gated behind a production flag.
+cancellation. For a live native run, the execution owner stamps a durable
+launch-time `native_parent_message_protocol` capability; only that marker lets
+a parent admit an ask directly to the bounded shared RunDir inbox. A surviving
+pre-upgrade native supervisor has no marker, so a refreshed parent submits the
+ask to the legacy run-local control spool and reports only that submission, not
+a new-inbox admission or delivery ID. Supported active common-MCP CLI runs also
+use direct shared-inbox admission. Terminal resumable CLI runs instead dispatch
+one detached resume owner; the control spool remains the reclaim path and the
+version-skew compatibility path for unmarked live native runs. All ask routes
+are accepted only under their existing durable live/terminal gates. The
+ownership transition is unconditional; detached supervision is not gated
+behind a production flag.
 
 The detached execution child is not currently given derived-launch authority.
 Its production composition root sets only the restrictive
