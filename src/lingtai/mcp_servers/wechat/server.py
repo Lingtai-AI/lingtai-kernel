@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import Server, ServerRequestContext
+from mcp.server import NotificationOptions, Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 
 from .._results import json_tool_result as _tool_result
@@ -53,7 +53,7 @@ from .._results import unknown_resource_error as _unknown_resource
 from .._results import unknown_tool_error as _unknown_tool
 
 from . import api
-from .._disclosure import DisclosingServer, ToolDisclosure, disclose_after_call
+from .._disclosure import ToolDisclosure
 from ._family import handle_wechat
 from .licc import push_inbox_event
 from .manager import WechatManager, SCHEMA, DESCRIPTION
@@ -785,39 +785,6 @@ def load_config_and_credentials() -> tuple[dict, dict, Path]:
 # Manager construction
 # ---------------------------------------------------------------------------
 
-def build_inbound_callback(disclosure: ToolDisclosure | None):
-    """The manager's ``on_inbound``: disclose first, then deliver via LICC.
-
-    Trigger (b): the disclosure flip happens *before* the LICC write, so the
-    same host turn the event wakes already sees the full ``tools/list``.
-    Factored out so it is directly testable without constructing a manager.
-    """
-
-    def _on_inbound(event: dict) -> bool | None:
-        if disclosure is not None:
-            try:
-                disclosure.expand("inbound")
-            except Exception as exc:  # disclosure must never block delivery
-                log.warning("tool disclosure on inbound failed: %s", exc)
-        metadata = event.get("metadata") or {}
-        local_id = metadata.get("message_id")
-        event_id = (
-            f"wechat-{local_id}"
-            if isinstance(local_id, str) and local_id
-            else None
-        )
-        return push_inbox_event(
-            sender=event["from"],
-            subject=event["subject"],
-            body=event["body"],
-            metadata=metadata,
-            wake=event.get("wake", True),
-            event_id=event_id,
-        )
-
-    return _on_inbound
-
-
 def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[WechatManager, Path]:
     """Construct manager from env + config.json + credentials.json."""
     file_cfg, creds, config_path = load_config_and_credentials()
@@ -843,6 +810,26 @@ def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[WechatManag
     working_dir = Path(agent_dir_raw) if agent_dir_raw else Path.cwd()
     working_dir.mkdir(parents=True, exist_ok=True)
 
+    def _on_inbound(event: dict) -> bool | None:
+        # Disclose the full schema before the LICC write that wakes the host.
+        if disclosure is not None:
+            disclosure.expand("inbound")
+        metadata = event.get("metadata") or {}
+        local_id = metadata.get("message_id")
+        event_id = (
+            f"wechat-{local_id}"
+            if isinstance(local_id, str) and local_id
+            else None
+        )
+        return push_inbox_event(
+            sender=event["from"],
+            subject=event["subject"],
+            body=event["body"],
+            metadata=metadata,
+            wake=event.get("wake", True),
+            event_id=event_id,
+        )
+
     mgr = WechatManager(
         base_url=base_url,
         cdn_base_url=cdn_base_url,
@@ -851,7 +838,7 @@ def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[WechatManag
         poll_interval=poll_interval,
         allowed_users=allowed_users,
         working_dir=working_dir,
-        on_inbound=build_inbound_callback(disclosure),
+        on_inbound=_on_inbound,
         config_source=os.environ.get("LINGTAI_WECHAT_CONFIG"),
         credentials_source=str(config_dir / "credentials.json"),
         settings_config_path=str(config_path),
@@ -871,16 +858,9 @@ def build_server(
     disclosure: ToolDisclosure | None = None,
 ) -> Server:
     """``disclosure`` is the compact→full ``tools/list`` state shared with the
-    inbound path; a fresh compact one is created when omitted."""
+    inbound path (``serve()`` supplies it)."""
     if disclosure is None:
-        # No caller-shared disclosure: preserve the historical always-full
-        # ``tools/list`` for any caller that does not opt into the compact-
-        # start behavior (only ``serve()`` does, explicitly, below).
-        disclosure = ToolDisclosure(
-            WECHAT_PLUGIN,
-            types.Tool(name=WECHAT_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA),
-            start_expanded=True,
-        )
+        disclosure = ToolDisclosure(WECHAT_PLUGIN, _full_tool())
 
     async def _list_resources(
         _ctx: ServerRequestContext,
@@ -967,11 +947,10 @@ def build_server(
                 "error": str(e),
                 "error_type": type(e).__name__,
             }
-        # Trigger (a): a successful manual call discloses the full schema.
-        await disclose_after_call(disclosure, arguments, result)
+        await disclosure.after_call(arguments, result)
         return _tool_result(result)
 
-    server: Server = DisclosingServer(
+    server: Server = Server(
         WECHAT_PLUGIN.server_name,
         instructions=_SERVER_INSTRUCTIONS,
         on_list_tools=_list_tools,
@@ -983,6 +962,10 @@ def build_server(
     return server
 
 
+def _full_tool() -> types.Tool:
+    return types.Tool(name=WECHAT_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -990,14 +973,8 @@ def build_server(
 async def serve() -> None:
     """Run the MCP server over stdio. Eagerly starts the iLink long-poll
     so inbound messages flow before the host expects them."""
-    disclosure = ToolDisclosure(
-        WECHAT_PLUGIN,
-        types.Tool(name=WECHAT_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA),
-    )
-    # Bind before starting the long-poll, so a very first inbound event's
-    # disclosure can schedule its tools/list_changed signal.
-    disclosure.bind_loop()
-
+    disclosure = ToolDisclosure(WECHAT_PLUGIN, _full_tool())
+    disclosure.bind_loop()  # before the long-poll starts
     manager: WechatManager | None = None
     started = False
     startup_error: str | None = None
@@ -1026,7 +1003,7 @@ async def serve() -> None:
             await server.run(
                 read_stream,
                 write_stream,
-                server.create_initialization_options(),
+                server.create_initialization_options(NotificationOptions(tools_changed=True)),
             )
     finally:
         if manager is not None and started:
@@ -1034,4 +1011,4 @@ async def serve() -> None:
                 manager.stop()
             except Exception:
                 pass
-        disclosure.unbind_loop()
+        disclosure.unbind()

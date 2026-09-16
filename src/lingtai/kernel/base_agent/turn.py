@@ -2439,31 +2439,6 @@ def _get_guard_limits(agent) -> tuple[int, int, int]:
     return (ACTIVE_TURN_TOOL_CALL_EMERGENCY_LIMIT, 3, 8)
 
 
-class _LiveKnownTools:
-    """Set-like live view of the callable tool names (intrinsics + handlers).
-
-    The executor is built once per turn, but an MCP client's catalog may be
-    reconciled mid-turn (``tools/list_changed``). A frozen snapshot would then
-    reject a tool the provider was just shown as unknown; this view reads the
-    live surface on every membership test instead.
-    """
-
-    def __init__(self, agent) -> None:
-        self._agent = agent
-
-    def _names(self) -> set[str]:
-        return set(self._agent._intrinsics) | set(self._agent._tool_handlers)
-
-    def __contains__(self, name: object) -> bool:
-        return name in self._agent._intrinsics or name in self._agent._tool_handlers
-
-    def __iter__(self):
-        return iter(sorted(self._names()))
-
-    def __len__(self) -> int:
-        return len(self._names())
-
-
 def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
     """Construct the per-turn ``ToolExecutor`` with the shared wiring.
 
@@ -2479,7 +2454,7 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
             name, result, provider=agent._config.provider, **kw
         ),
         guard=guard,
-        known_tools=_LiveKnownTools(agent),
+        known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
         parallel_safe_tools=agent._PARALLEL_SAFE_TOOLS,
         logger_fn=agent._log,
         meta_fn=lambda: build_meta(agent),

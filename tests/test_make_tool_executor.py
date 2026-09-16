@@ -58,8 +58,7 @@ def test_make_tool_executor_wires_shared_fields(tmp_path):
     assert ex._guard is guard
     # Bound methods are re-created per attribute access, so compare by equality.
     assert ex._dispatch_fn == agent._dispatch_tool
-    assert isinstance(ex._known_tools, turn._LiveKnownTools)
-    assert set(ex._known_tools) == {"system", "context", "custom_tool"}
+    assert ex._known_tools == {"system", "context", "custom_tool"}
     assert ex._parallel_safe_tools == {"read"}
     assert ex._logger_fn == agent._log
     assert ex._working_dir == Path(tmp_path)

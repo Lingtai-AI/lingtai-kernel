@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import Server, ServerRequestContext
+from mcp.server import NotificationOptions, Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 from lingtai.mcp_servers.local_commands import LocalCommandCore
 
@@ -47,7 +47,7 @@ from .._results import unknown_resource_error as _unknown_resource
 from .._results import unknown_tool_error as _unknown_tool
 
 from .. import _config
-from .._disclosure import DisclosingServer, ToolDisclosure, disclose_after_call
+from .._disclosure import ToolDisclosure
 from .licc import push_inbox_event
 from .manager import FeishuManager, SCHEMA, DESCRIPTION
 from ._family import FEISHU_ACTIONS, handle_feishu
@@ -606,31 +606,6 @@ def _accounts_from_config(cfg: dict) -> list[dict]:
 # Manager construction
 # ---------------------------------------------------------------------------
 
-def build_inbound_callback(disclosure: ToolDisclosure | None):
-    """The manager's ``on_inbound``: disclose first, then deliver via LICC.
-
-    Trigger (b): the disclosure flip happens *before* the LICC write, so the
-    same host turn the event wakes already sees the full ``tools/list``.
-    Factored out so it is directly testable without constructing a manager.
-    """
-
-    def _on_inbound(event: dict) -> None:
-        if disclosure is not None:
-            try:
-                disclosure.expand("inbound")
-            except Exception as exc:  # disclosure must never block delivery
-                log.warning("tool disclosure on inbound failed: %s", exc)
-        push_inbox_event(
-            sender=event["from"],
-            subject=event["subject"],
-            body=event["body"],
-            metadata=event.get("metadata"),
-            wake=event.get("wake", True),
-        )
-
-    return _on_inbound
-
-
 def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[FeishuManager, Path]:
     """Construct manager + service from env + config."""
     cfg = load_config()
@@ -639,6 +614,18 @@ def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[FeishuManag
     agent_dir_raw = os.environ.get("LINGTAI_AGENT_DIR")
     working_dir = Path(agent_dir_raw) if agent_dir_raw else Path.cwd()
     working_dir.mkdir(parents=True, exist_ok=True)
+
+    def _on_inbound(event: dict) -> None:
+        # Disclose the full schema before the LICC write that wakes the host.
+        if disclosure is not None:
+            disclosure.expand("inbound")
+        push_inbox_event(
+            sender=event["from"],
+            subject=event["subject"],
+            body=event["body"],
+            metadata=event.get("metadata"),
+            wake=event.get("wake", True),
+        )
 
     mgr_ref: list[FeishuManager | None] = [None]
 
@@ -656,7 +643,7 @@ def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[FeishuManag
     mgr = FeishuManager(
         service=svc,
         working_dir=working_dir,
-        on_inbound=build_inbound_callback(disclosure),
+        on_inbound=_on_inbound,
         local_command_core=LocalCommandCore(working_dir),
     )
     mgr_ref[0] = mgr
@@ -668,21 +655,12 @@ def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[FeishuManag
 # ---------------------------------------------------------------------------
 
 def build_server(
-    manager: FeishuManager | None,
-    *,
-    disclosure: ToolDisclosure | None = None,
+    manager: FeishuManager | None, *, disclosure: ToolDisclosure | None = None,
 ) -> Server:
     """``disclosure`` is the compact→full ``tools/list`` state shared with the
-    inbound path; a fresh compact one is created when omitted."""
+    inbound path (``serve()`` supplies it)."""
     if disclosure is None:
-        # No caller-shared disclosure: preserve the historical always-full
-        # ``tools/list`` for any caller that does not opt into the compact-
-        # start behavior (only ``serve()`` does, explicitly, below).
-        disclosure = ToolDisclosure(
-            FEISHU_PLUGIN,
-            types.Tool(name=FEISHU_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA),
-            start_expanded=True,
-        )
+        disclosure = ToolDisclosure(FEISHU_PLUGIN, _full_tool())
 
     async def _list_resources(
         _ctx: ServerRequestContext,
@@ -746,11 +724,10 @@ def build_server(
                     "error": str(e),
                     "error_type": type(e).__name__,
                 }
-        # Trigger (a): a successful manual call discloses the full schema.
-        await disclose_after_call(disclosure, arguments, result)
+        await disclosure.after_call(arguments, result)
         return _tool_result(result)
 
-    server: Server = DisclosingServer(
+    server: Server = Server(
         FEISHU_PLUGIN.server_name,
         instructions=_SERVER_INSTRUCTIONS,
         on_list_tools=_list_tools,
@@ -762,6 +739,10 @@ def build_server(
     return server
 
 
+def _full_tool() -> types.Tool:
+    return types.Tool(name=FEISHU_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -769,14 +750,8 @@ def build_server(
 async def serve() -> None:
     """Run the MCP server over stdio. Eagerly starts the WebSocket clients
     so inbound messages flow before the host expects them."""
-    disclosure = ToolDisclosure(
-        FEISHU_PLUGIN,
-        types.Tool(name=FEISHU_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA),
-    )
-    # Bind before starting the WS clients, so a very first inbound event's
-    # disclosure can schedule its tools/list_changed signal.
-    disclosure.bind_loop()
-
+    disclosure = ToolDisclosure(FEISHU_PLUGIN, _full_tool())
+    disclosure.bind_loop()  # before the WS clients start
     manager: FeishuManager | None = None
     manager_started = False
     try:
@@ -796,7 +771,7 @@ async def serve() -> None:
             await server.run(
                 read_stream,
                 write_stream,
-                server.create_initialization_options(),
+                server.create_initialization_options(NotificationOptions(tools_changed=True)),
             )
     finally:
         if manager is not None and manager_started:
@@ -804,4 +779,4 @@ async def serve() -> None:
                 manager.stop()
             except Exception:
                 pass
-        disclosure.unbind_loop()
+        disclosure.unbind()

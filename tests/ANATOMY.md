@@ -23,7 +23,6 @@ related_files:
   - tests/_migration_workspace_helpers.py
   - tests/_molt_helpers.py
   - tests/_notification_helpers.py
-  - tests/_mcp_catalog_server.py
   - tests/_notification_store_helpers.py
   - tests/_refresh_watcher_helpers.py
   - tests/_service_helpers.py
@@ -241,10 +240,10 @@ related_files:
   - tests/test_make_tool_executor.py
   - tests/test_max_rpm_plumbing.py
   - tests/test_mcp_capability.py
-  - tests/test_mcp_catalog_reconcile.py
   - tests/test_mcp_client_close_kills_subprocess.py
   - tests/test_mcp_closed_resource_restart.py
   - tests/test_mcp_config_helper.py
+  - tests/test_mcp_dynamic_tool_catalog.py
   - tests/test_mcp_identity_discovery.py
   - tests/test_mcp_inbox.py
   - tests/test_mcp_licc_client.py

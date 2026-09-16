@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import Server, ServerRequestContext
+from mcp.server import NotificationOptions, Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 
 from .._results import json_tool_result as _tool_result
@@ -50,7 +50,7 @@ from .._results import unknown_tool_error as _unknown_tool
 from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
 
 from .. import _config
-from .._disclosure import DisclosingServer, ToolDisclosure, disclose_after_call
+from .._disclosure import ToolDisclosure
 from .licc import push_inbox_event
 from .manager import TelegramManager, SCHEMA, DESCRIPTION
 from ._family import handle_telegram
@@ -636,34 +636,6 @@ def _accounts_from_config(cfg: dict) -> list[dict]:
 # Manager construction
 # ---------------------------------------------------------------------------
 
-def build_inbound_callback(disclosure: ToolDisclosure | None):
-    """The manager's ``on_inbound``: disclose first, then deliver via LICC.
-
-    Trigger (b): the disclosure flip happens *before* the LICC write, so the
-    same host turn the event wakes already sees the full ``tools/list``. LICC
-    delivery and reply-on-origin-channel behavior are unchanged: the event
-    payload is forwarded exactly as before. Factored out (rather than a
-    closure inline in :func:`build_manager`) so it is directly testable
-    without constructing a full manager.
-    """
-
-    def _on_inbound(event: dict) -> bool:
-        if disclosure is not None:
-            try:
-                disclosure.expand("inbound")
-            except Exception as exc:  # disclosure must never block delivery
-                log.warning("tool disclosure on inbound failed: %s", exc)
-        return push_inbox_event(
-            sender=event["from"],
-            subject=event["subject"],
-            body=event["body"],
-            metadata=event.get("metadata"),
-            wake=event.get("wake", True),
-        )
-
-    return _on_inbound
-
-
 def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[TelegramManager, Path]:
     """Construct manager + service from env + config. Returns (manager, working_dir)."""
     cfg, config_path = _load_config_with_source()
@@ -672,6 +644,18 @@ def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[TelegramMan
     agent_dir_raw = os.environ.get("LINGTAI_AGENT_DIR")
     working_dir = Path(agent_dir_raw) if agent_dir_raw else Path.cwd()
     working_dir.mkdir(parents=True, exist_ok=True)
+
+    def _on_inbound(event: dict) -> bool:
+        # Disclose the full schema before the LICC write that wakes the host.
+        if disclosure is not None:
+            disclosure.expand("inbound")
+        return push_inbox_event(
+            sender=event["from"],
+            subject=event["subject"],
+            body=event["body"],
+            metadata=event.get("metadata"),
+            wake=event.get("wake", True),
+        )
 
     # Forward declare the manager so the service's on_message callback can
     # reach it. Same pattern as the legacy addon's lambda + mgr_ref dance.
@@ -689,7 +673,7 @@ def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[TelegramMan
         service=svc,
         working_dir=working_dir,
         notification_store=notification_store,
-        on_inbound=build_inbound_callback(disclosure),
+        on_inbound=_on_inbound,
     )
     mgr_ref[0] = mgr
     return mgr, working_dir
@@ -700,27 +684,16 @@ def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[TelegramMan
 # ---------------------------------------------------------------------------
 
 def build_server(
-    manager: TelegramManager | None,
-    *,
-    disclosure: ToolDisclosure | None = None,
+    manager: TelegramManager | None, *, disclosure: ToolDisclosure | None = None,
 ) -> Server:
     """Construct the MCP server.
 
     ``manager`` is None when eager start failed; in that case every tool call
-    returns an error explaining why (``manual`` still answers from the
-    packaged skill regardless). ``disclosure`` is the compact→full
-    ``tools/list`` state shared with the inbound path; a fresh compact one is
-    created when omitted.
+    returns an error explaining why. ``disclosure`` is the compact→full
+    ``tools/list`` state shared with the inbound path (``serve()`` supplies it).
     """
     if disclosure is None:
-        # No caller-shared disclosure: preserve the historical always-full
-        # ``tools/list`` for any caller that does not opt into the compact-
-        # start behavior (only ``serve()`` does, explicitly, below).
-        disclosure = ToolDisclosure(
-            TELEGRAM_PLUGIN,
-            types.Tool(name=TELEGRAM_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA),
-            start_expanded=True,
-        )
+        disclosure = ToolDisclosure(TELEGRAM_PLUGIN, _full_tool())
 
     async def _list_resources(
         _ctx: ServerRequestContext,
@@ -754,16 +727,14 @@ def build_server(
         _params: types.PaginatedRequestParams | None,
     ) -> types.ListToolsResult:
         disclosure.observe(ctx)
-        # Stable single-tool order is part of the raw MCP contract; the
-        # disclosure state decides compact vs full atomically.
+        # Stable single-tool order is part of the raw MCP contract.
         return types.ListToolsResult(tools=disclosure.tools())
 
     # The SDK has already validated the typed request envelope (``params.name``
     # is a ``str``, ``params.arguments`` a ``dict | None``), but it never applies
     # the advertised per-tool ``input_schema``. The listed family therefore
     # arrives here without per-tool argument checking, and this handler owns the
-    # routing decision — the full family is dispatchable whether or not it has
-    # been disclosed yet.
+    # routing decision (the full family is dispatchable before disclosure too).
     async def _call_tool(
         ctx: ServerRequestContext,
         params: types.CallToolRequestParams,
@@ -800,22 +771,23 @@ def build_server(
                 "error": str(e),
                 "error_type": type(e).__name__,
             }
-        # Trigger (a): a successful manual call discloses the full schema.
-        await disclose_after_call(disclosure, arguments, result)
+        await disclosure.after_call(arguments, result)
         return _tool_result(result)
 
-    server: Server = DisclosingServer(
+    server: Server = Server(
         TELEGRAM_PLUGIN.server_name,
         instructions=_SERVER_INSTRUCTIONS,
         on_list_tools=_list_tools,
         on_call_tool=_call_tool,
         on_list_resources=_list_resources,
         on_read_resource=_read_resource,
-        # 2026-07-28 change notifications ride subscriptions/listen streams;
-        # the SDK's own handler serves them from the disclosure's bus.
         on_subscriptions_listen=disclosure.listen_handler,
     )
     return server
+
+
+def _full_tool() -> types.Tool:
+    return types.Tool(name=TELEGRAM_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA)
 
 
 # ---------------------------------------------------------------------------
@@ -825,14 +797,8 @@ def build_server(
 async def serve() -> None:
     """Run the MCP server over stdio. Eagerly starts the polling listeners
     so inbound messages flow before the host expects them."""
-    disclosure = ToolDisclosure(
-        TELEGRAM_PLUGIN,
-        types.Tool(name=TELEGRAM_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA),
-    )
-    # Bind the serving loop before starting the poll threads, so a very first
-    # inbound event's disclosure can schedule its tools/list_changed signal.
-    disclosure.bind_loop()
-
+    disclosure = ToolDisclosure(TELEGRAM_PLUGIN, _full_tool())
+    disclosure.bind_loop()  # before the poll threads start
     manager: TelegramManager | None = None
     service_started = False
     try:
@@ -854,7 +820,9 @@ async def serve() -> None:
             await server.run(
                 read_stream,
                 write_stream,
-                server.create_initialization_options(),
+                # Handshake-era capabilities are era-honest: this server does
+                # emit the direct tools/list_changed on that wire.
+                server.create_initialization_options(NotificationOptions(tools_changed=True)),
             )
     finally:
         if manager is not None and service_started:
@@ -862,4 +830,4 @@ async def serve() -> None:
                 manager.stop()
             except Exception:
                 pass
-        disclosure.unbind_loop()
+        disclosure.unbind()
