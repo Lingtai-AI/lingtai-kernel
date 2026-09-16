@@ -18,6 +18,66 @@ _REASONING_DESCRIPTION = (
 )
 
 
+def _disclosed_tools(agent) -> set[str]:
+    """The process-local set of disclosed stub-bearing tool names.
+
+    Defensive for partial test doubles that bypass ``BaseAgent.__init__``.
+    """
+    disclosed = getattr(agent, "_disclosed_tools", None)
+    if disclosed is None:
+        disclosed = agent._disclosed_tools = set()
+    return disclosed
+
+
+def _effective_tool_schema(agent, schema: FunctionSchema) -> FunctionSchema:
+    """The schema the provider sees: the stub until the tool is disclosed."""
+    if schema.stub is not None and schema.name not in _disclosed_tools(agent):
+        return schema.stub
+    return schema
+
+
+def _disclose_tool(agent, name: str, *, reason: str) -> bool:
+    """Make a stub-bearing tool's full schema provider-visible from the next round.
+
+    Returns True only on the transition. Tools without a stub are always fully
+    visible, so disclosing them is a no-op. Session-local by design: the set
+    lives on the agent, ``_build_tool_schemas`` re-reads it on every send, and a
+    relaunch starts collapsed again.
+    """
+    if name in _disclosed_tools(agent):
+        return False
+    schemas = getattr(agent, "_tool_schemas", None) or ()
+    if not any(s.name == name and s.stub is not None for s in schemas):
+        return False
+    _disclosed_tools(agent).add(name)
+    agent._token_decomp_dirty = True
+    log = getattr(agent, "_log", None)
+    if callable(log):
+        log("tool_schema_disclosed", tool=name, reason=reason)
+    return True
+
+
+def _disclose_tools_for_sources(agent, sources) -> list[str]:
+    """Disclose every stub-bearing tool that declared one of ``sources``.
+
+    ``sources`` are ``.notification/`` channel names about to be delivered to
+    the model; the registrant declared which channels reveal its tool via
+    ``FunctionSchema.disclosure_sources``. Core matches names only — it does
+    not know which technology stands behind a channel.
+    """
+    wanted = set(sources or ())
+    if not wanted:
+        return []
+    disclosed = []
+    # Defensive for partial test doubles that carry no tool surface at all.
+    for schema in list(getattr(agent, "_tool_schemas", None) or ()):
+        if schema.stub is None or wanted.isdisjoint(schema.disclosure_sources):
+            continue
+        if _disclose_tool(agent, schema.name, reason="notification"):
+            disclosed.append(schema.name)
+    return disclosed
+
+
 def _dispatch_tool(agent, tc) -> dict:
     """Dispatch a tool call to the appropriate handler.
 
@@ -35,6 +95,9 @@ def _dispatch_tool(agent, tc) -> dict:
         args["_tc_id"] = tc.id
         return agent._intrinsics[tc.name](args)
     elif tc.name in agent._tool_handlers:
+        # Any call to a stub-bearing tool (its stub exposes only ``manual``)
+        # discloses the full schema for the next provider round.
+        _disclose_tool(agent, tc.name, reason="called")
         return agent._tool_handlers[tc.name](tc.args or {})
     elif tc.name == "bash" and "shell" in agent._tool_handlers:
         # One-way rolling compatibility for historical/pending calls.  Do not
@@ -84,7 +147,9 @@ def _refresh_tool_inventory_section(agent) -> None:
             pkg = getattr(module, "__package__", None)
             rendered = append_tool_glossary(base, tool_package=pkg, language=lang)
             lines.append(f"### {name}\n{rendered}")
-    for s in agent._tool_schemas:
+    for registered in agent._tool_schemas:
+        # Prose follows the wire: an undisclosed tool renders its stub's text.
+        s = _effective_tool_schema(agent, registered)
         if s.description:
             rendered = append_tool_glossary(
                 s.description, tool_package=s.glossary_package, language=lang
@@ -102,6 +167,10 @@ def _build_tool_schemas(agent) -> list[FunctionSchema]:
     Every tool gets a 'reasoning' parameter injected — the agent must
     explain why it's calling this tool. Reasoning is logged as part of
     the agent's diary and stripped before the handler runs.
+
+    A stub-bearing dynamic tool contributes its compact stub until it is
+    disclosed (``_disclose_tool``); ``SessionManager`` calls this builder on
+    every send, so a disclosure is visible on the very next provider round.
     """
     reasoning_prop = {
         "reasoning": {
@@ -131,7 +200,8 @@ def _build_tool_schemas(agent) -> list[FunctionSchema]:
             )
 
     # Capability + MCP schemas — inject reasoning into each
-    for s in agent._tool_schemas:
+    for registered in agent._tool_schemas:
+        s = _effective_tool_schema(agent, registered)
         params = dict(s.parameters)
         props = dict(params.get("properties", {}))
         props.update(reasoning_prop)
@@ -156,6 +226,8 @@ def _add_tool(
     description: str = "",
     system_prompt: str = "",
     glossary_package: str | None = None,
+    stub: FunctionSchema | None = None,
+    disclosure_sources: tuple[str, ...] = (),
     _official_mount_token=None,
 ) -> None:
     """Register a dynamic tool at the common model-facing mount boundary.
@@ -163,6 +235,11 @@ def _add_tool(
     Official names are statically reserved by the kernel. Only the private
     registrar-owned mount route may publish one; ordinary ``add_tool`` callers
     retain the historical same-name replacement behavior for every other name.
+
+    ``stub`` (a compact same-name ``FunctionSchema``) defers provider
+    disclosure of ``schema``: the stub is advertised until the tool is called
+    or a notification from ``disclosure_sources`` is delivered. The handler
+    and the full ``schema`` are registered immediately either way.
     """
     from ..tool_plugin import (
         OFFICIAL_TOOL_PLUGIN_NAMES,
@@ -182,6 +259,10 @@ def _add_tool(
     if handler is not None:
         agent._tool_handlers[name] = handler
     if schema is not None:
+        if stub is not None and stub.name != name:
+            raise ValueError(
+                f"stub for tool {name!r} must carry the same name, got {stub.name!r}"
+            )
         # Remove any existing schema with same name
         agent._tool_schemas = [s for s in agent._tool_schemas if s.name != name]
         agent._tool_schemas.append(
@@ -191,6 +272,8 @@ def _add_tool(
                 parameters=schema,
                 system_prompt=system_prompt,
                 glossary_package=glossary_package,
+                stub=stub,
+                disclosure_sources=tuple(disclosure_sources),
             )
         )
     # Update the live session's tools if one exists
@@ -211,6 +294,8 @@ def _remove_tool(agent, name: str) -> None:
         raise RuntimeError("Cannot modify tools after start()")
     agent._tool_handlers.pop(name, None)
     agent._tool_schemas = [s for s in agent._tool_schemas if s.name != name]
+    # A later re-registration starts collapsed again.
+    _disclosed_tools(agent).discard(name)
     if agent._chat is not None:
         agent._chat.update_tools(_build_tool_schemas(agent))
     agent._token_decomp_dirty = True

@@ -4311,6 +4311,15 @@ def attach_active_notifications(
         # the IDLE synthesized-pair path.
         return prior_holder
 
+    # ACTIVE delivery: a channel whose tool is still collapsed to its stub
+    # becomes fully visible on the continuation send that carries this
+    # payload. ``payload[NOTIFICATIONS_KEY]`` is keyed by channel name; the
+    # agent decides which tools declared those channels. Optional for partial
+    # doubles.
+    disclose = getattr(agent, "_disclose_tools_for_notification_sources", None)
+    if callable(disclose):
+        disclose(payload.get(NOTIFICATIONS_KEY, {}).keys())
+
     # Signature and placeholder status remain delivery/accounting inputs only;
     # the current payload is always copied onto the final carrier.
     signature = notification_payload_signature(payload)

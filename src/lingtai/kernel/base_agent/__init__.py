@@ -722,6 +722,10 @@ class BaseAgent:
         # Non-intrinsic tool handlers (capabilities, MCP, add_tool)
         self._tool_handlers: dict[str, Callable[[dict], dict]] = {}
         self._tool_schemas: list[FunctionSchema] = []
+        # Names of stub-bearing tools whose full schema is now provider-visible.
+        # Process-local and never persisted: a relaunch starts collapsed again.
+        # See ``base_agent/tools.py`` (``_disclose_tool``).
+        self._disclosed_tools: set[str] = set()
 
         # The live official model-facing namespace: reserved plugin name → the
         # one declaration that claimed it. Owned here because the kernel owns
@@ -1922,6 +1926,9 @@ class BaseAgent:
                 # read the notification state directly. Commit the
                 # fingerprint so the same failure does not replay.
                 sources = sorted(notifications.keys())
+                # The degraded request still asks the model to handle these
+                # channels; give it their full tool schemas on that round.
+                self._disclose_tools_for_notification_sources(sources)
                 from ..message import _make_message, MSG_REQUEST
                 degraded_text = (
                     "[system] Notification delivery could not be injected onto "
@@ -2348,6 +2355,13 @@ class BaseAgent:
         # Freshness/novelty against byte-equality is carried on the result
         # side instead (``result_block.content["injection_seq"]`` /
         # ``result_block.metadata``), which is never fed back as call args.
+        # A channel whose tool schema is still collapsed to its stub must be
+        # fully visible in the same provider round that delivers its
+        # notification, so the model can reply without an extra loader call.
+        # Disclosure precedes the append; the wake's ``session.send`` rebuilds
+        # the tool list from the updated disclosure set.
+        self._disclose_tools_for_notification_sources(notifications.keys())
+
         call_block = ToolCallBlock(
             id=call_id,
             name="notification",
@@ -2676,9 +2690,19 @@ class BaseAgent:
         description: str = "",
         system_prompt: str = "",
         glossary_package: str | None = None,
+        stub: FunctionSchema | None = None,
+        disclosure_sources: tuple[str, ...] = (),
     ) -> None:
         from .tools import _add_tool
-        _add_tool(self, name, schema=schema, handler=handler, description=description, system_prompt=system_prompt, glossary_package=glossary_package)
+        _add_tool(
+            self, name, schema=schema, handler=handler, description=description,
+            system_prompt=system_prompt, glossary_package=glossary_package,
+            stub=stub, disclosure_sources=disclosure_sources,
+        )
+
+    def _disclose_tools_for_notification_sources(self, sources) -> list[str]:
+        from .tools import _disclose_tools_for_sources
+        return _disclose_tools_for_sources(self, sources)
 
     def remove_tool(self, name: str) -> None:
         from .tools import _remove_tool
