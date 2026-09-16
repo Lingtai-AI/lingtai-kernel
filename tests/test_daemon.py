@@ -3118,6 +3118,121 @@ def test_run_emanation_delivers_shell_events_only_at_safe_provider_boundary(tmp_
     assert run_dir.state_snapshot()["pending_shell_prompt_events"] == []
 
 
+def test_detached_host_drains_all_bounded_legacy_followup_batches_before_done(
+    tmp_path, monkeypatch,
+):
+    """Text-only follow-up replies re-enter the real native safe boundary."""
+    from lingtai.kernel.daemon_supervisor.manifest import build_manifest
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    legacy_rows = [f"legacy correction {index:02d}" for index in range(20)]
+    legacy_rows.append("legacy correction 20: " + "x" * 50_010)
+    expected_chunks = [
+        *legacy_rows[:20],
+        legacy_rows[20][:50_000],
+        legacy_rows[20][50_000:],
+    ]
+    run_dir = _make_run_dir(
+        agent,
+        em_id="em-legacy-tail",
+        task="drain every durable legacy correction",
+        tools=[],
+        max_turns=1,
+        call_parameters={"mcp": [{"name": "daemon_common"}]},
+    )
+    with run_dir._state_transaction():
+        run_dir._state["pending_followups"] = list(legacy_rows)
+        run_dir._persist_daemon_state()
+
+    finish_call = ToolCall(
+        name="finish",
+        args={
+            "action": "finish",
+            "input": {"status": "done", "summary": "native tail drained"},
+            "reasoning": "record the required terminal completion",
+        },
+        id="finish-before-legacy-tail",
+    )
+    service = _CanonicalFakeService([[
+        _resp(tool_calls=[finish_call]),
+        _resp("finish accepted; inspect queued parent corrections"),
+        _resp("first bounded correction batch handled"),
+        _resp("second bounded correction batch handled"),
+    ]])
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **_kwargs: service)
+
+    manifest = build_manifest(
+        run_id=run_dir.run_id,
+        backend="lingtai",
+        parent_working_dir=str(agent._working_dir),
+        run_dir=str(run_dir.path),
+        task="drain every durable legacy correction",
+        tools=[],
+        max_turns=1,
+        timeout_s=30,
+        group_id=None,
+        llm={"provider": "mock", "model": "mock-model"},
+        mcp=[],
+    )
+    host = DetachedDaemonExecutionHost(
+        run_dir,
+        manifest,
+        threading.Event(),
+        threading.Event(),
+        capsule={"task": manifest["task"], "mcp": []},
+    )
+
+    result = host.run()
+
+    assert result == "second bounded correction batch handled"
+    provider_messages = [
+        message
+        for message in service.sessions[0].sent_messages
+        if isinstance(message, str) and message.startswith("legacy correction")
+    ]
+    assert provider_messages == [
+        "\n\n".join(expected_chunks[:20]),
+        "\n\n".join(expected_chunks[20:]),
+    ]
+    visible_batches = [message.split("\n\n") for message in provider_messages]
+    assert [len(batch) for batch in visible_batches] == [20, 2]
+    assert [item for batch in visible_batches for item in batch] == expected_chunks
+    assert all(len(item) <= 50_000 for batch in visible_batches for item in batch)
+    assert "".join(visible_batches[1]) == legacy_rows[20]
+
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    assert state["state"] == "done"
+    assert state["pending_followups"] == []
+    assert state["pending_checkpoint_messages"] == []
+    assert state["delivered_messages_total"] == 22
+    assert state["last_message_delivery"]["via"] == "native_text_boundary"
+    assert len(state["delivered_message_ids"]) == 22
+    assert run_dir.result_path.read_text(encoding="utf-8") == result
+    completion = json.loads(
+        (run_dir.path / "daemon_completion.json").read_text(encoding="utf-8")
+    )
+    assert completion["status"] == "done"
+
+    events = [
+        json.loads(line)
+        for line in run_dir.events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    deliveries = [
+        event for event in events
+        if event.get("event") == "daemon_parent_messages_delivered"
+    ]
+    assert [len(event["message_ids"]) for event in deliveries] == [20, 2]
+    assert state["delivered_message_ids"] == [
+        message_id
+        for event in deliveries
+        for message_id in event["message_ids"]
+    ]
+    assert sum(event.get("event") == "daemon_done" for event in events) == 1
+
+
 def test_run_emanation_uses_prompt_as_first_user_without_task_duplication(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["daemon"])
     service = _CanonicalFakeService([[ _resp("done") ]])
